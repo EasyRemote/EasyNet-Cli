@@ -70,7 +70,7 @@ use crate::daemon::invocation::admission::target_gate::{
     TargetGate,
 };
 use crate::daemon::invocation::bidi::session_wire::{
-    build_canonical_dispatch_frame, require_canonical_dispatch_session,
+    build_canonical_dispatch_frame, require_canonical_dispatch_session, SessionRequestError,
 };
 use crate::daemon::invocation::bidi::state::pending_dispatch::DispatchResult;
 use crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonUnaryRoute;
@@ -839,12 +839,13 @@ impl UnaryDispatcher {
 
         let selection = self
             .gate
-            .route_resolver()
-            .await
             .resolve_canonical_route(&target_ura, ability, CallMode::Rpc)
+            .await
             .map_err(route_negative_status)?;
 
-        if let CanonicalRouteDispatch::Local(selected_route) = selection.dispatch() {
+        if let CanonicalRouteDispatch::Local(selected_route)
+        | CanonicalRouteDispatch::HubSession(selected_route) = selection.dispatch()
+        {
             if !selected_route.is_authoritative_local_or_better() {
                 return Err(route_profile_blocked_status(selected_route));
             }
@@ -872,6 +873,13 @@ impl UnaryDispatcher {
             CanonicalRouteDispatch::Peer(route) => {
                 return (
                     self.dispatch_peer_canonical_invoke(request, &route).await,
+                    false,
+                )
+            }
+            CanonicalRouteDispatch::HubSession(route) => {
+                return (
+                    self.dispatch_hub_session_canonical_invoke(request, &route)
+                        .await,
                     false,
                 )
             }
@@ -1985,6 +1993,57 @@ impl UnaryDispatcher {
                     "remote Invoke peer delegation to `{endpoint}` failed: {err}"
                 )))
             }
+        }
+    }
+
+    async fn dispatch_hub_session_canonical_invoke(
+        &self,
+        request: &InvokeRequest,
+        route: &SelectedInvokeRoute,
+    ) -> Result<Response<InvokeResponse>, Status> {
+        require_complete_signed_remote_request(request)?;
+        let Some(handle) = self.sessions.escalation.as_ref() else {
+            return Err(Status::failed_precondition(
+                "remote Invoke selected HubSession route but session escalation is not configured",
+            ));
+        };
+        let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
+        let receipt_resolver = self.admission.receipt_key_resolver();
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = canonical_invoke_hub_session_selected_route,
+            callee_ura = route.callee_ura.as_str(),
+            execution_host_ura = route.execution_host_ura.as_str(),
+            route_ura = route.route_ura.as_str(),
+        );
+        match handle.escalate_invoke(request.clone()).await {
+            Ok(response) => {
+                ensure_forwarded_response_receipt_signer_keys(
+                    receipt_resolver.as_ref(),
+                    self.sessions.device_trust_sync.as_ref(),
+                    &response,
+                    "remote Invoke HubSession dispatch",
+                )
+                .await?;
+                let finalized = ForwardedFinalizedInvocation::verify_response(
+                    &forwarded_binding,
+                    response,
+                    receipt_resolver.as_ref(),
+                )?;
+                Ok(Response::new(finalized.into_response()))
+            }
+            Err(SessionRequestError::TargetOffline) => {
+                Err(Status::unavailable("remote Invoke target is offline"))
+            }
+            Err(SessionRequestError::PermissionDenied { reason }) => {
+                Err(Status::permission_denied(reason))
+            }
+            Err(SessionRequestError::UpstreamFailure { reason }) => Err(Status::unavailable(
+                format!("remote Invoke HubSession dispatch failed: {reason}"),
+            )),
+            Err(SessionRequestError::UpstreamTimeout) => Err(Status::deadline_exceeded(
+                "remote Invoke HubSession dispatch timed out",
+            )),
         }
     }
 

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axon_sdk::pb::axon::v1::{invocation_client::InvocationClient, InvokeRequest};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use tonic::{transport::Channel, Status};
 
 use super::heartbeat::spawn_federation_heartbeat;
@@ -1061,26 +1062,27 @@ async fn sync_paired_user_trust_prelude(
             message: error.to_string(),
         }
     })?;
+    let signer_public_key_b64 =
+        paired_user_signer_public_key_b64(user_signer.as_ref()).map_err(|error| {
+            UserTrustBootstrapError::SignerUnavailable {
+                user_ura: user_ura.clone(),
+                message: error.to_string(),
+            }
+        })?;
     let local_public_keys = paired_user_public_keys(sync, &user_ura);
-    if !local_public_keys.is_empty() {
-        publish_paired_user_keys_prelude(
-            client,
-            user_signer.as_ref(),
-            &user_ura,
-            &local_public_keys,
-        )
-        .await?;
-    }
+    let publish_public_keys = paired_user_publish_public_keys(&signer_public_key_b64);
+    publish_paired_user_keys_prelude(
+        client,
+        user_signer.as_ref(),
+        &user_ura,
+        &publish_public_keys,
+    )
+    .await?;
 
-    let mut resolve_inputs: Vec<Option<&str>> = local_public_keys
-        .iter()
-        .map(|public_key| Some(public_key.as_str()))
-        .collect();
-    if resolve_inputs.is_empty() {
-        resolve_inputs.push(None);
-    }
+    let resolve_inputs =
+        paired_user_resolve_public_keys(&signer_public_key_b64, &local_public_keys);
     let mut pubkeys = Vec::new();
-    for presented_pubkey_b64 in resolve_inputs {
+    for presented_pubkey_b64 in &resolve_inputs {
         let args =
             paired_user_resolve_key_args(&user_ura, presented_pubkey_b64).map_err(|err| {
                 UserTrustBootstrapError::ResolveFailed {
@@ -1224,23 +1226,16 @@ fn resolved_public_keys(result: &[u8]) -> anyhow::Result<Vec<String>> {
 
 fn paired_user_resolve_key_args(
     user_ura: &str,
-    presented_pubkey_b64: Option<&str>,
-) -> serde_json::Result<Vec<u8>> {
-    let mut args = serde_json::Map::new();
-    args.insert(
-        "agent_ura".to_string(),
-        serde_json::Value::String(user_ura.to_string()),
-    );
-    if let Some(public_key) = presented_pubkey_b64
-        .map(str::trim)
-        .filter(|public_key| !public_key.is_empty())
-    {
-        args.insert(
-            "presented_pubkey_b64".to_string(),
-            serde_json::Value::String(public_key.to_string()),
-        );
+    presented_pubkey_b64: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let presented_pubkey_b64 = presented_pubkey_b64.trim();
+    if presented_pubkey_b64.is_empty() {
+        anyhow::bail!("paired_user_resolve_key_presented_pubkey_empty");
     }
-    serde_json::to_vec(&serde_json::Value::Object(args))
+    crate::daemon::federation::wire_contract::ResolveKeyRequest::new(user_ura)
+        .with_presented_pubkey_b64(presented_pubkey_b64)
+        .to_arguments_bytes()
+        .map_err(Into::into)
 }
 
 fn paired_user_trust_present(sync: &UserTrustSync, user_ura: &str) -> bool {
@@ -1256,6 +1251,37 @@ fn paired_user_public_keys(sync: &UserTrustSync, user_ura: &str) -> Vec<String> 
         .filter(|key| !key.is_empty())
         .map(ToString::to_string)
         .collect()
+}
+
+fn paired_user_signer_public_key_b64(
+    signer: &dyn CanonicalSigner,
+) -> Result<String, SelfIdentityError> {
+    signer
+        .signing_public_key()
+        .map(|key| BASE64_STANDARD.encode(key.to_bytes()))
+}
+
+fn paired_user_publish_public_keys(signer_public_key_b64: &str) -> Vec<String> {
+    vec![signer_public_key_b64.trim().to_string()]
+}
+
+fn paired_user_resolve_public_keys(
+    signer_public_key_b64: &str,
+    local_public_keys: &[String],
+) -> Vec<String> {
+    let mut keys = Vec::with_capacity(local_public_keys.len() + 1);
+    push_unique_public_key(&mut keys, signer_public_key_b64);
+    for public_key in local_public_keys {
+        push_unique_public_key(&mut keys, public_key);
+    }
+    keys
+}
+
+fn push_unique_public_key(keys: &mut Vec<String>, public_key_b64: &str) {
+    let public_key = public_key_b64.trim();
+    if !public_key.is_empty() && !keys.iter().any(|existing| existing == public_key) {
+        keys.push(public_key.to_string());
+    }
 }
 
 async fn publish_paired_user_keys_prelude(
@@ -1351,7 +1377,9 @@ pub(super) fn committed_owner_ability_descriptors(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_federation_join_receipt, paired_user_resolve_key_args, paired_user_trust_present,
+        apply_federation_join_receipt, paired_user_publish_public_keys,
+        paired_user_resolve_key_args, paired_user_resolve_public_keys,
+        paired_user_signer_public_key_b64, paired_user_trust_present,
         resolve_hosted_agent_user_segment, resolved_public_keys,
         run_hosted_agent_advertise_prelude, signed_prelude_request, sync_paired_user_trust_prelude,
         HostedAgentPreludePublicationPlan, PairedUserTrustSigner, RegisterPubkeyRequest,
@@ -1693,7 +1721,7 @@ mod tests {
     fn paired_user_resolve_key_args_carries_presented_pubkey() {
         let body = paired_user_resolve_key_args(
             "easynet:///r/realm/user/user-dev",
-            Some(" AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= "),
+            " AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= ",
         )
         .expect("encode paired user resolve args");
         let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json");
@@ -1702,6 +1730,41 @@ mod tests {
         assert_eq!(
             parsed["presented_pubkey_b64"],
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        );
+    }
+
+    #[test]
+    fn paired_user_resolve_key_args_rejects_missing_presented_pubkey() {
+        let error = paired_user_resolve_key_args("easynet:///r/realm/user/user-dev", "   ")
+            .expect_err("paired user resolve_key must pin the local signer key");
+
+        assert!(
+            error
+                .to_string()
+                .contains("paired_user_resolve_key_presented_pubkey_empty"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn paired_user_trust_bootstrap_publishes_only_current_signer_key() {
+        let user_ura = "easynet:///r/realm/user/user-dev";
+        let signer = TestCanonicalSigner::new(user_ura, [0x33; 32]);
+        let signer_key = paired_user_signer_public_key_b64(&signer).expect("signer key");
+        let stale_or_browser_key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string();
+
+        assert_eq!(
+            paired_user_publish_public_keys(&signer_key),
+            vec![signer_key.clone()],
+            "current signer may only self-register its own public key"
+        );
+        assert_eq!(
+            paired_user_resolve_public_keys(
+                &signer_key,
+                &[stale_or_browser_key.clone(), signer_key.clone()],
+            ),
+            vec![signer_key, stale_or_browser_key],
+            "non-signer local user keys may be resolved/imported, but must not be signer-published"
         );
     }
 

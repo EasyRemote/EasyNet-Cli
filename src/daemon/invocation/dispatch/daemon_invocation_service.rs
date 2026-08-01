@@ -712,6 +712,7 @@ impl DaemonInvocationService {
             self.admission_plane.verifier(),
             self.directory.clone(),
             self.federation.clone(),
+            self.sessions.clone(),
             self.identity.clone(),
         )
     }

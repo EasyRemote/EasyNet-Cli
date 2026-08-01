@@ -1703,3 +1703,38 @@ The V2 gate now verifies both the timing harness and allocation harness, plus
 their baseline rows. This closes the Rust `LocalRuntime` benchmark coverage
 gap for acceptance gate 9, but it does not complete RF-4 globally because full
 cross-language lifecycle transition-vector cutover remains open.
+
+## Current Slice: Canonical Session Stability And Lifecycle Control
+
+The live device session has one state-machine owner. `run_session_preludes`
+publishes the baseline directory facts and commits the online projection. The
+ability-catalogue readiness hook is limited to later dynamic catalogue
+refreshes; replaying baseline publication from that hook creates a second
+session side effect and can displace a newly opened carrier.
+
+Cancellation follows the canonical runtime path:
+
+```text
+provider cancel request
+  -> descriptor-bound invocation.cancel draft
+  -> explicit caller signer / daemon KeyService
+  -> LocalRuntime admission as generic lifecycle control
+  -> InvocationCancellationRegistry ownership check
+  -> Axon lifecycle handle cancel
+  -> cancellation acknowledgement + target terminal receipt
+```
+
+The policy engine classifies only the exact `invocation.cancel` + `manage`
+pair as lifecycle control. This classification does not grant cancellation by
+itself: the handler's registry lookup binds the command to the target canonical
+lifecycle hash and rejects caller, authority, and invocation-id mismatches.
+Product scopes such as `terminal.*` therefore remain product policy and do not
+grow a duplicated list of generic runtime controls.
+
+The cancellation registry is assembled once with the daemon ability catalogue
+and is injected into both the invocation gRPC service and every
+`LocalAxonSessionDispatcher`. The dispatcher has no `Default` implementation
+and its constructor requires that registry explicitly. This makes a second
+process-local lifecycle authority unrepresentable: BIDI admission registers
+the target lifecycle in the same registry later queried by
+`invocation.cancel`.

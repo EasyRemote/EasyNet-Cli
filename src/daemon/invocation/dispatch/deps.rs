@@ -106,9 +106,10 @@ pub(crate) struct SessionPlane {
     /// Streaming correlation for remote bidi bridges that need chunked
     /// replies; same-hub `fs.transfer` is the first consumer.
     pub(crate) pending_stream: Option<Arc<PendingStreamDispatchMap>>,
-    /// Device-mode escalation handle: when `Some`, federation
-    /// canonical_invoke routes through the existing `session.open`
-    /// bidi to the hub instead of the (empty) local PresenceRegistry.
+    /// Device-mode hub session handle. Public invocations may use this
+    /// carrier only after [`TargetGate`] obtains a positive Hub
+    /// `namespace.resolve` final-route decision; a local resolver
+    /// miss by itself is terminal.
     pub(crate) escalation: Option<Arc<SessionEscalationHandle>>,
     /// On-miss device trust sync shared with the device's
     /// `session.open` dispatcher; warms the local anchor for

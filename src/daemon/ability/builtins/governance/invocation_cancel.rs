@@ -36,11 +36,21 @@ fn execute(
     )?;
     let runtime = tokio::runtime::Handle::try_current()
         .map_err(|error| anyhow::anyhow!("invocation.cancel: runtime unavailable: {error}"))?;
-    let result = runtime.block_on(cancellations.request_cancel(
-        command,
-        envelope.caller(),
-        envelope.callee(),
-    ))?;
+    let target_lifecycle_hash = command.target_lifecycle_hash.clone();
+    let result = runtime
+        .block_on(cancellations.request_cancel(command, envelope.caller(), envelope.callee()))
+        .map_err(|error| {
+            let detail = error.to_string();
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = invocation_cancel_request_rejected,
+                target_lifecycle_hash = target_lifecycle_hash.as_str(),
+                caller_ura = envelope.caller(),
+                authority_ura = envelope.callee(),
+                detail = detail.as_str(),
+            );
+            error
+        })?;
     serde_json::to_value(result)
         .map_err(|error| anyhow::anyhow!("invocation.cancel: encode result: {error}"))
 }

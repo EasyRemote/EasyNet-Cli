@@ -142,6 +142,7 @@ pub enum PolicyDecisionOutcome {
 pub enum PolicyDecisionReason {
     OwnerAllow,
     ExplicitGrantAllow,
+    InvocationLifecycleControlAllow,
     FederationForwardAllow,
     ExplicitDeny,
     HubTokenReadAllow,

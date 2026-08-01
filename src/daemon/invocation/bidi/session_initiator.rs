@@ -288,6 +288,16 @@ pub fn claimant_boot_nonce() -> &'static [u8; 16] {
 
 #[async_trait::async_trait]
 pub trait SessionFrameDispatcher: Send + Sync + 'static {
+    /// Register one live carrier attempt before any down-frame can dispatch.
+    /// `scope_id` is process-local and unique for the lifetime of this daemon;
+    /// wire call ids are only unique inside this scope.
+    fn session_started(&self, _scope_id: u64) {}
+
+    /// Retire all dispatch state owned by one carrier attempt. Implementations
+    /// must make this idempotent because every exit path (clean close, fault,
+    /// timeout, or reconnect displacement) converges here.
+    fn session_ended(&self, _scope_id: u64) {}
+
     /// Handle one inbound frame. The dispatcher writes any reply
     /// frames into the supplied `outbound` channel (which is the
     /// device's bidi up sender). Returning an error from this
@@ -321,6 +331,10 @@ pub trait SessionFrameDispatcher: Send + Sync + 'static {
 #[derive(Clone, Debug)]
 pub struct SessionUpSender {
     tx: mpsc::Sender<InvokeBidiUp>,
+    /// Process-local identity for this one `session.open` attempt. Hub call ids
+    /// restart on reconnect, so dispatcher registries must key by
+    /// `(scope_id, call_id)` rather than treating a wire call id as global.
+    scope_id: u64,
     /// Sequence allocation and channel insertion must be one atomic
     /// step: the hub validates a strictly monotonic up-sequence and
     /// resets the whole session on violation, so two producers that
@@ -359,8 +373,18 @@ pub enum SessionUpSendError {
 impl SessionUpSender {
     #[must_use]
     pub fn new(tx: mpsc::Sender<InvokeBidiUp>) -> Self {
+        static NEXT_SESSION_SCOPE_ID: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(1);
+        let scope_id = NEXT_SESSION_SCOPE_ID
+            .fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |current| current.checked_add(1),
+            )
+            .expect("process-local session scope id space exhausted");
         Self {
             tx,
+            scope_id,
             // Frame 0 is EnvelopeOpen. First post-frame-0 producer
             // therefore owns sequence = 1.
             sequence_gate: Arc::new(tokio::sync::Mutex::new(1)),
@@ -370,6 +394,12 @@ impl SessionUpSender {
                 fault: Mutex::new(None),
             }),
         }
+    }
+
+    /// Process-local identity of the carrier attempt that owns this sender.
+    #[must_use]
+    pub fn scope_id(&self) -> u64 {
+        self.scope_id
     }
 
     /// Supervisor-only: record the hub's negotiated session contract.
@@ -398,6 +428,14 @@ impl SessionUpSender {
             return Err(fault);
         }
         let sequence = *next;
+        let payload_kind = match &payload {
+            UpPayload::EnvelopeOpen(_) => "EnvelopeOpen",
+            UpPayload::BinaryChunk(_) => "BinaryChunk",
+            UpPayload::Control(_) => "Control",
+            UpPayload::DispatchResult(_) => "DispatchResult",
+            UpPayload::ReverseDispatchCall(_) => "ReverseDispatchCall",
+            UpPayload::ReverseBidiInput(_) => "ReverseBidiInput",
+        };
         let permit = match tokio::time::timeout(SESSION_UP_SEND_TIMEOUT, self.tx.reserve()).await {
             Ok(Ok(permit)) => permit,
             Ok(Err(_closed)) => return Err(self.record_fault(SessionUpSendError::Closed)),
@@ -412,6 +450,12 @@ impl SessionUpSender {
             payload: Some(payload),
             ..InvokeBidiUp::default()
         });
+        crate::op_event!(
+            component = session,
+            kind = session_up_payload_queued,
+            sequence = sequence,
+            payload = payload_kind,
+        );
         *next += 1;
         Ok(())
     }
@@ -1109,10 +1153,26 @@ mod tests {
     #[derive(Default)]
     struct RecordingDispatcher {
         received: tokio::sync::Mutex<Vec<InvokeBidiDown>>,
+        started_scopes: std::sync::Mutex<Vec<u64>>,
+        ended_scopes: std::sync::Mutex<Vec<u64>>,
     }
 
     #[async_trait::async_trait]
     impl SessionFrameDispatcher for RecordingDispatcher {
+        fn session_started(&self, scope_id: u64) {
+            self.started_scopes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(scope_id);
+        }
+
+        fn session_ended(&self, scope_id: u64) {
+            self.ended_scopes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(scope_id);
+        }
+
         async fn handle_down(
             &self,
             frame: InvokeBidiDown,
@@ -1976,7 +2036,7 @@ mod tests {
                 format!("http://{addr}"),
                 TestSessionSigner::random("easynet:///r/realm/device/n1"),
                 None,
-                dispatcher,
+                Arc::clone(&dispatcher),
                 None,
                 SessionPreludeInputs::new(&[], authority_store()),
             ),
@@ -1990,6 +2050,21 @@ mod tests {
             stats.uptime < SESSION_HEALTHY_MIN_UPTIME,
             "immediate close cannot count as healthy uptime, got {:?}",
             stats.uptime
+        );
+        let started = dispatcher
+            .started_scopes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let ended = dispatcher
+            .ended_scopes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        assert_eq!(started.len(), 1, "one carrier scope must be registered");
+        assert_eq!(
+            ended, started,
+            "every carrier exit must retire its exact scope"
         );
     }
 
@@ -2208,6 +2283,17 @@ mod tests {
         let device_ura = "easynet:///r/realm/device/n1";
         let user_ura = "easynet:///r/realm/user/user-dev";
         let user_pubkey_b64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        let user_signer = TestSessionSigner::random(user_ura);
+        let signer_pubkey_b64 = {
+            use base64::Engine as _;
+
+            base64::engine::general_purpose::STANDARD.encode(
+                user_signer
+                    .signing_public_key()
+                    .expect("paired user signer public key")
+                    .to_bytes(),
+            )
+        };
         crate::daemon::persistence::config::save_credentials(
             &crate::daemon::persistence::config::Credentials {
                 node_id: "n1".to_string(),
@@ -2241,9 +2327,7 @@ mod tests {
             daemon_realm: "realm".to_string(),
             trust_anchor_path: trust_dir.path().join("realm-trust.toml"),
             cell: crate::daemon::trust::cell::SharedTrustAnchor::new(Arc::new(user_anchor)),
-            user_signer: super::prelude::PairedUserTrustSigner::fixed(TestSessionSigner::random(
-                user_ura,
-            )),
+            user_signer: super::prelude::PairedUserTrustSigner::fixed(Arc::clone(&user_signer)),
         };
 
         let result = dial_and_run_session_with_liveness_timeout(
@@ -2274,24 +2358,43 @@ mod tests {
             "recording hub returns an empty resolve_key response, got {result:?}"
         );
         let calls = invokes.lock().await.clone();
-        assert!(
-            calls
-                .iter()
-                .any(|(name, body)| name == "identity.register_pubkey"
+        let publish_index = calls
+            .iter()
+            .position(|(name, body)| {
+                name == "identity.register_pubkey"
                     && body.get("principal_ura").and_then(Value::as_str) == Some(user_ura)
-                    && body.get("public_key_b64").and_then(Value::as_str) == Some(user_pubkey_b64)
-                    && body.get("__caller_ura").and_then(Value::as_str) == Some(user_ura)),
-            "prelude must publish the paired user key as the paired User before resolving it: {calls:#?}"
-        );
-        assert!(
-            calls
-                .iter()
-                .any(|(name, body)| name == "federation.resolve_key"
+                    && body.get("public_key_b64").and_then(Value::as_str)
+                        == Some(signer_pubkey_b64.as_str())
+                    && body.get("__caller_ura").and_then(Value::as_str) == Some(user_ura)
+            })
+            .expect("prelude must publish the paired user key as the paired User");
+        let user_resolves = calls
+            .iter()
+            .enumerate()
+            .filter(|(_, (name, body))| {
+                name == "federation.resolve_key"
                     && body.get("agent_ura").and_then(Value::as_str) == Some(user_ura)
-                    && body.get("presented_pubkey_b64").and_then(Value::as_str)
-                        == Some(user_pubkey_b64)
-                    && body.get("__caller_ura").and_then(Value::as_str) == Some(user_ura)),
-            "paired user resolve_key must pin the presented public key as the paired User: {calls:#?}"
+            })
+            .map(|(index, (_, body))| {
+                assert!(
+                    index > publish_index,
+                    "paired User key publication must precede resolve_key: {calls:#?}"
+                );
+                assert_eq!(
+                    body.get("__caller_ura").and_then(Value::as_str),
+                    Some(user_ura),
+                    "paired user resolve_key must pin the presented public key as the paired User"
+                );
+                body.get("presented_pubkey_b64")
+                    .and_then(Value::as_str)
+                    .expect("every paired User resolve_key request must pin one local key")
+                    .to_string()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            user_resolves,
+            std::collections::BTreeSet::from([signer_pubkey_b64, user_pubkey_b64.to_string(),]),
+            "paired User trust bootstrap must pin the current signer and each locally known key"
         );
     }
 

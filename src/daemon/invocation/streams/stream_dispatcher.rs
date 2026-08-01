@@ -64,6 +64,7 @@ use crate::daemon::invocation::dispatch::invocation_wire::{
     BoxedDownStream, FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::daemon::invocation::dispatch::remote_failure::status_from_remote_failure;
+use crate::daemon::invocation::dispatch::unary_dispatcher::require_complete_signed_remote_request;
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, SelectedInvokeRoute,
 };
@@ -152,6 +153,11 @@ impl StreamDispatcher {
                     route.hub_ura, route.query_name,
                 )));
             }
+            CanonicalRouteDispatch::HubSession(route) => {
+                return self
+                    .dispatch_hub_session_stream_selected_route(request, route)
+                    .await;
+            }
         };
         let execution_host_is_self = self
             .gate
@@ -166,6 +172,56 @@ impl StreamDispatcher {
         } else {
             self.dispatch_remote_selected_route(request, selected_route, call_mode)
                 .await
+        }
+    }
+
+    async fn dispatch_hub_session_stream_selected_route(
+        &self,
+        request: &InvokeServerStreamRequest,
+        selected_route: SelectedInvokeRoute,
+    ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
+        let Some(handle) = self.sessions.escalation.as_ref() else {
+            return Err(Status::failed_precondition(
+                "InvokeStream selected HubSession route but session escalation is not configured",
+            ));
+        };
+        let forwarded_request = stream_request_as_invoke_request(request);
+        require_complete_signed_remote_request(&forwarded_request)?;
+        let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
+        let receipt_resolver = self.admission.receipt_key_resolver();
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = canonical_invoke_stream_hub_session_selected_route,
+            callee_ura = selected_route.callee_ura.as_str(),
+            execution_host_ura = selected_route.execution_host_ura.as_str(),
+            route_ura = selected_route.route_ura.as_str(),
+        );
+        match handle.escalate_stream(request.clone()).await {
+            Ok(stream) => {
+                project_forwarded_remote_stream(
+                    RemoteStreamEventSource::Session(stream),
+                    forwarded_binding,
+                    receipt_resolver,
+                    request_timeout(request),
+                )
+                .await
+            }
+            Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::TargetOffline) => {
+                Err(Status::unavailable("remote InvokeStream target is offline"))
+            }
+            Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::PermissionDenied {
+                reason,
+            }) => Err(Status::permission_denied(reason)),
+            Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::UpstreamFailure {
+                reason,
+            }) => Err(Status::unavailable(format!(
+                "remote InvokeStream HubSession dispatch failed: {reason}"
+            ))),
+            Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::UpstreamTimeout) => {
+                Err(Status::deadline_exceeded(
+                    "remote InvokeStream HubSession dispatch timed out",
+                ))
+            }
         }
     }
 
@@ -390,12 +446,14 @@ impl StreamDispatcher {
 
 enum RemoteStreamEventSource {
     Presence(PendingStreamHandle),
+    Session(crate::daemon::invocation::bidi::session_escalation::EscalatedStreamHandle),
 }
 
 impl RemoteStreamEventSource {
     async fn recv(&mut self) -> Option<DispatchStreamEvent> {
         match self {
             Self::Presence(handle) => handle.recv().await,
+            Self::Session(handle) => handle.recv().await,
         }
     }
 }
@@ -983,11 +1041,12 @@ impl StreamDispatcher {
 
         let selection = self
             .gate
-            .route_resolver()
-            .await
             .resolve_canonical_route(&target_ura, ability, CallMode::Stream)
+            .await
             .map_err(route_negative_status)?;
-        if let CanonicalRouteDispatch::Local(selected_route) = selection.dispatch() {
+        if let CanonicalRouteDispatch::Local(selected_route)
+        | CanonicalRouteDispatch::HubSession(selected_route) = selection.dispatch()
+        {
             if !selected_route.is_authoritative_local_or_better() {
                 return Err(route_profile_blocked_status(selected_route));
             }
@@ -1202,6 +1261,21 @@ fn daemon_route_initial_sequence(
 
 fn local_stream_target_ura(request: &InvokeServerStreamRequest) -> Result<String, Status> {
     callee_ura_from_envelope(request.envelope.as_ref(), "InvokeStream")
+}
+
+fn stream_request_as_invoke_request(
+    request: &InvokeServerStreamRequest,
+) -> axon_sdk::pb::axon::v1::InvokeRequest {
+    axon_sdk::pb::axon::v1::InvokeRequest {
+        envelope: request.envelope.clone(),
+        target: request.target.clone(),
+        arguments: request.arguments.clone(),
+        content_type: request.content_type.clone(),
+        timeout_seconds: request.timeout_seconds,
+        metadata: request.metadata.clone(),
+        payload_ref: request.payload_ref.clone(),
+        content_envelope: request.content_envelope.clone(),
+    }
 }
 
 fn request_timeout(request: &InvokeServerStreamRequest) -> Option<Duration> {

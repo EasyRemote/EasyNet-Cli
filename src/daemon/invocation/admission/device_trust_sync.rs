@@ -37,15 +37,17 @@ use crate::daemon::trust::cell::SharedTrustAnchor;
 /// same URA. Long enough to bound storms, short enough that a freshly
 /// joined device becomes admissible without operator action.
 const NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(30);
+const HUB_RESOLVE_KEY_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct DeviceTrustSync {
     daemon_realm: String,
     trust_anchor_path: PathBuf,
     cell: SharedTrustAnchor,
-    /// Single-flight + authoritative negative cache. Holding the lock across
-    /// the resolve serializes concurrent misses; entries record only explicit
-    /// hub "no keys" answers per caller cache key.
-    state: tokio::sync::Mutex<HashMap<String, Instant>>,
+    /// Single-flight + authoritative negative cache. The lock only protects
+    /// lifecycle state; hub resolve_key is always awaited outside the lock so
+    /// session dispatch cannot self-deadlock while waiting for a reply carried
+    /// by the same session.
+    state: tokio::sync::Mutex<HashMap<String, TrustSyncState>>,
     /// Where hub-attested keys come from. Production uses the
     /// `session.open` escalation channel — the SAME authenticated
     /// hub channel the paired-user sync and hot-agent advertising
@@ -60,6 +62,11 @@ enum KeySource {
     /// Test seam: a pure function standing in for the hub.
     #[allow(dead_code)]
     Static(fn(&str) -> anyhow::Result<Vec<String>>),
+}
+
+enum TrustSyncState {
+    Resolving(Arc<tokio::sync::Notify>),
+    Negative(Instant),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -245,29 +252,58 @@ impl DeviceTrustSync {
         }
         let cache_key = role.cache_key(caller_ura);
 
-        let mut state = self.state.lock().await;
-        // Double-check under the lock: a concurrent miss may have
-        // synced while this one waited.
-        if self.anchor_has_caller_key(caller_ura, &role) {
-            return DeviceTrustSyncStatus::AlreadyTrusted;
-        }
-        if let Some(failed_at) = state.get(&cache_key) {
-            if failed_at.elapsed() < NEGATIVE_CACHE_TTL {
-                return DeviceTrustSyncStatus::NegativeCached;
+        loop {
+            let wait_for = {
+                let mut state = self.state.lock().await;
+                // Double-check under the lock: a concurrent miss may have
+                // synced while this one waited.
+                if self.anchor_has_caller_key(caller_ura, &role) {
+                    return DeviceTrustSyncStatus::AlreadyTrusted;
+                }
+                match state.get(&cache_key) {
+                    Some(TrustSyncState::Negative(failed_at))
+                        if failed_at.elapsed() < NEGATIVE_CACHE_TTL =>
+                    {
+                        return DeviceTrustSyncStatus::NegativeCached;
+                    }
+                    Some(TrustSyncState::Negative(_)) => {
+                        state.remove(&cache_key);
+                        None
+                    }
+                    Some(TrustSyncState::Resolving(notify)) => Some(Arc::clone(notify)),
+                    None => {
+                        state.insert(
+                            cache_key.clone(),
+                            TrustSyncState::Resolving(Arc::new(tokio::sync::Notify::new())),
+                        );
+                        None
+                    }
+                }
+            };
+            match wait_for {
+                Some(notify) => notify.notified().await,
+                None => break,
             }
         }
 
-        let resolved = match self
-            .resolve_from_hub(caller_ura, role.presented_pubkey_b64())
-            .await
-        {
+        let resolve_result = tokio::time::timeout(
+            HUB_RESOLVE_KEY_TIMEOUT,
+            self.resolve_from_hub(caller_ura, role.presented_pubkey_b64()),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("hub resolve_key timed out after {HUB_RESOLVE_KEY_TIMEOUT:?}"))
+        .and_then(|result| result);
+
+        let resolved = match resolve_result {
             Ok(resolved) if !resolved.public_keys_b64.is_empty() => resolved,
             Ok(_) => {
-                state.insert(cache_key, Instant::now());
+                self.finish_sync_state(&cache_key, Some(TrustSyncState::Negative(Instant::now())))
+                    .await;
                 return DeviceTrustSyncStatus::HubReturnedNoKeys;
             }
             Err(err) => {
                 let diagnostic = err.to_string();
+                self.finish_sync_state(&cache_key, None).await;
                 crate::op_event!(
                     component = device_trust_sync,
                     kind = resolve_failed,
@@ -280,7 +316,7 @@ impl DeviceTrustSync {
 
         let imported = self.import_caller_trust(caller_ura, &resolved, &role);
         if imported {
-            state.remove(&cache_key);
+            self.finish_sync_state(&cache_key, None).await;
             crate::op_event!(
                 component = device_trust_sync,
                 kind = caller_key_synced,
@@ -289,7 +325,25 @@ impl DeviceTrustSync {
             );
             DeviceTrustSyncStatus::Synced
         } else {
+            self.finish_sync_state(&cache_key, None).await;
             DeviceTrustSyncStatus::ImportDidNotTrust
+        }
+    }
+
+    async fn finish_sync_state(&self, cache_key: &str, replacement: Option<TrustSyncState>) {
+        let notify = {
+            let mut state = self.state.lock().await;
+            let notify = match state.remove(cache_key) {
+                Some(TrustSyncState::Resolving(notify)) => Some(notify),
+                _ => None,
+            };
+            if let Some(replacement) = replacement {
+                state.insert(cache_key.to_string(), replacement);
+            }
+            notify
+        };
+        if let Some(notify) = notify {
+            notify.notify_waiters();
         }
     }
 

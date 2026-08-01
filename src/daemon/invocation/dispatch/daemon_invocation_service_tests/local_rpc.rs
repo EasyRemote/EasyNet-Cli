@@ -1037,6 +1037,11 @@ async fn selected_route_binding_rejects_removed_control_plane_record_even_with_r
         crate::daemon::invocation::routing::route_resolver::CanonicalRouteDispatch::Peer(_) => {
             panic!("test route should dispatch locally")
         }
+        crate::daemon::invocation::routing::route_resolver::CanonicalRouteDispatch::HubSession(
+            _,
+        ) => {
+            panic!("test route should not dispatch through HubSession")
+        }
     };
     let catalog = svc
         .directory

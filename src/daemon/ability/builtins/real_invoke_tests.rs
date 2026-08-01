@@ -3269,6 +3269,31 @@ fn real_screen_snapshot_with_no_subject_returns_subject_required() {
 
 #[test]
 #[cfg(feature = "remote-desktop")]
+fn real_remote_desktop_grant_consent_binds_local_actor_and_resource() {
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let subject = seed_real_invoke_display_resource("remote-desktop-consent-real-invoke-display");
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
+    let d = dispatcher_for(reg);
+
+    let granted = d
+        .execute_rpc(target_for_subject(
+            "remote_desktop.grant_consent",
+            json!({ "intent": "remote_desktop_session" }),
+            subject.clone(),
+        ))
+        .expect("remote_desktop.grant_consent must dispatch");
+
+    assert_eq!(granted["consent"], "granted");
+    assert_eq!(granted["policy"], "local_user_consent");
+    assert_eq!(granted["subject_ura"], subject);
+    assert_eq!(
+        granted["approval_actor_ura"],
+        crate::core::ura::LOCAL_SYSTEM_AGENT_URA
+    );
+}
+
+#[test]
+#[cfg(feature = "remote-desktop")]
 fn real_remote_desktop_permission_status_reports_contract() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry_for_test_execution().expect("build executable test registry");

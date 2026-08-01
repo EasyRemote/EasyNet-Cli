@@ -32,6 +32,10 @@ pub struct PolicyInput {
     pub realm_authority_public_read: bool,
     pub device_self_publication_manage: bool,
     pub device_self_session_stream: bool,
+    /// Exact generic runtime lifecycle control. This admits the command to
+    /// the lifecycle authority; it does not authorize a target. The target
+    /// registry still binds caller, execution authority, and lifecycle hash.
+    pub invocation_lifecycle_control: bool,
     pub interactive_context_available: bool,
     pub canonical_hash: Option<String>,
     pub signature_key_id: Option<String>,
@@ -52,6 +56,19 @@ impl PolicyEngine {
             .clone()
             .filter(|owner| !owner.trim().is_empty());
         let matcher = PermissionGrantMatcher::new(&input.grants);
+
+        // Cleanup authority is inherited from an already-admitted Invocation,
+        // not from the product grant that originally opened it. Admit only the
+        // exact lifecycle-control classification here; the cancellation
+        // registry performs the target ownership check before signalling Axon.
+        if input.invocation_lifecycle_control && input.action == AccessAction::Manage {
+            return decision(
+                &input,
+                PolicyDecisionOutcome::Allow,
+                PolicyDecisionReason::InvocationLifecycleControlAllow,
+                None,
+            );
+        }
 
         if input.action == AccessAction::Manage
             && (input.authority_self_manage || input.device_self_publication_manage)
@@ -293,6 +310,7 @@ mod tests {
             realm_authority_public_read: false,
             device_self_publication_manage: false,
             device_self_session_stream: false,
+            invocation_lifecycle_control: false,
             interactive_context_available: false,
             canonical_hash: Some("sha256:test".to_string()),
             signature_key_id: Some("ed25519:key".to_string()),
@@ -328,6 +346,35 @@ mod tests {
         stream.action = AccessAction::Stream;
         stream.safe_read = false;
         let got = PolicyEngine::check(stream);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Deny);
+        assert_eq!(got.reason, PolicyDecisionReason::TokenScopeDenied);
+    }
+
+    #[test]
+    fn invocation_lifecycle_control_allows_hub_link_manage_without_product_grant() {
+        let mut input = base_input();
+        input.ability_ura = "easynet:///r/test/ability/device.dev.invocation.cancel".to_string();
+        input.action = AccessAction::Manage;
+        input.safe_read = false;
+        input.invocation_lifecycle_control = true;
+
+        let got = PolicyEngine::check(input);
+        assert_eq!(got.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(
+            got.reason,
+            PolicyDecisionReason::InvocationLifecycleControlAllow
+        );
+    }
+
+    #[test]
+    fn lifecycle_control_classification_does_not_admit_non_manage_action() {
+        let mut input = base_input();
+        input.ability_ura = "easynet:///r/test/ability/device.dev.invocation.cancel".to_string();
+        input.action = AccessAction::Stream;
+        input.safe_read = false;
+        input.invocation_lifecycle_control = true;
+
+        let got = PolicyEngine::check(input);
         assert_eq!(got.decision, PolicyDecisionOutcome::Deny);
         assert_eq!(got.reason, PolicyDecisionReason::TokenScopeDenied);
     }

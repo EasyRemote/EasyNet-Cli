@@ -1873,7 +1873,7 @@ fn register_files_rpc(
 }
 
 pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
-    let owner = OwnerKind::User(config.user.clone());
+    let owner = OwnerKind::Agent("files".to_string());
     register_files_rpc(reg, "files.put", owner.clone(), scope(), manifest(), put_handler);
     register_files_rpc(reg, "files.get", owner.clone(), scope(), manifest(), get_handler);
     register_files_rpc(reg, "files.list", owner, scope(), manifest(), list_handler);

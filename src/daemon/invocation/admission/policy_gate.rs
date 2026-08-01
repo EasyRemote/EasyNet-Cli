@@ -112,6 +112,8 @@ impl AdmissionPolicyGate {
             context.trusted_role,
             context.action,
         );
+        let invocation_lifecycle_control =
+            invocation_lifecycle_control_scope(context.ability, context.action);
         if remote_owner_forward_allowed(
             &caller_ura,
             &callee_ura,
@@ -172,6 +174,7 @@ impl AdmissionPolicyGate {
             realm_authority_public_read,
             device_self_publication_manage,
             device_self_session_stream,
+            invocation_lifecycle_control,
             interactive_context_available: false,
             canonical_hash: context.canonical_hash,
             signature_key_id: context.signature_key_id,
@@ -196,6 +199,11 @@ impl AdmissionPolicyGate {
             }
         }
     }
+}
+
+fn invocation_lifecycle_control_scope(ability: &str, action: AccessAction) -> bool {
+    action == AccessAction::Manage
+        && ability.trim() == crate::daemon::ability::names::governance::INVOCATION_CANCEL
 }
 
 #[derive(Debug, Clone)]
@@ -1455,6 +1463,82 @@ mod tests {
             "expected token scope denial, got: {}",
             err.message()
         );
+    }
+
+    #[test]
+    fn hub_link_can_submit_exact_invocation_lifecycle_cancel_without_product_grant() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let authority = "easynet:///r/test/authority";
+        let device = "easynet:///r/test/device/dev-1";
+        let envelope = Envelope {
+            caller: Some(identity(authority)),
+            callee: Some(identity(device)),
+            subject: Some(SubjectIdentity {
+                ura: "easynet:///r/test/resource/user.alice/invoke/terminal.attach".to_string(),
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+
+        let decision = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: crate::daemon::ability::names::governance::INVOCATION_CANCEL,
+            action: AccessAction::Manage,
+            safe_read: false,
+            trusted_role: TrustedAgentRole::Hub,
+            daemon_ura: Some(device),
+            trust_anchor: &empty_anchor(),
+            access_control_stores: &stores,
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: Some("ed25519:key".to_string()),
+            verified_authority_id: None,
+            rejector_ura: Some(device.to_string()),
+        })
+        .expect("exact generic lifecycle control reaches the target registry");
+
+        assert_eq!(decision.decision, PolicyDecisionOutcome::Allow);
+        assert_eq!(
+            decision.reason,
+            PolicyDecisionReason::InvocationLifecycleControlAllow
+        );
+        assert_eq!(
+            decision.ability_ura,
+            "easynet:///r/test/ability/device.dev-1.invocation.cancel"
+        );
+    }
+
+    #[test]
+    fn lifecycle_control_classifier_rejects_lookalike_ability() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let envelope = Envelope {
+            caller: Some(identity("easynet:///r/test/authority")),
+            callee: Some(identity("easynet:///r/test/device/dev-1")),
+            subject: Some(SubjectIdentity {
+                ura: "easynet:///r/test/resource/user.alice/invoke/terminal.attach".to_string(),
+                profile: String::new(),
+            }),
+            ..Envelope::default()
+        };
+
+        let error = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+            envelope: &envelope,
+            ability: "invocation.cancel.extra",
+            action: AccessAction::Manage,
+            safe_read: false,
+            trusted_role: TrustedAgentRole::Hub,
+            daemon_ura: Some("easynet:///r/test/device/dev-1"),
+            trust_anchor: &empty_anchor(),
+            access_control_stores: &stores,
+            canonical_hash: Some("sha256:test".to_string()),
+            signature_key_id: Some("ed25519:key".to_string()),
+            verified_authority_id: None,
+            rejector_ura: Some("easynet:///r/test/device/dev-1".to_string()),
+        })
+        .expect_err("a product ability lookalike must remain under normal grants");
+
+        assert!(error.message().contains("TOKEN_SCOPE_DENIED"));
     }
 
     #[test]

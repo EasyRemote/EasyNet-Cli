@@ -445,6 +445,12 @@ async fn dispatch_rpc(
 fn cancellation_error_outcome(
     error: crate::daemon::invocation::dispatch::cancellation::InvocationCancellationError,
 ) -> RpcDispatchOutcome {
+    let detail = error.to_string();
+    crate::op_event!(
+        component = daemon_invocation,
+        kind = invocation_cancel_request_failed,
+        error = detail.as_str(),
+    );
     RpcDispatchOutcome {
         invocation_id: None,
         state: InvocationState::Failed,
@@ -900,8 +906,36 @@ mod tests {
             InvocationCancellationError::OwnershipDenied
         ));
 
+        let wrong_authority = cancellations
+            .request_cancel(
+                command.clone(),
+                "easynet:///r/t/agent/u.alice",
+                "easynet:///r/t/device/other",
+            )
+            .await
+            .expect_err("a different execution authority cannot cancel the target");
+        assert!(matches!(
+            wrong_authority,
+            InvocationCancellationError::AuthorityMismatch
+        ));
+
+        let wrong_invocation = InvocationCancelCommand::new(
+            &lifecycle_hash,
+            Some("inv_not_the_target".to_string()),
+            "operator stop",
+        )
+        .expect("valid cancel command");
+        let mismatch = cancellations
+            .request_cancel(wrong_invocation, "easynet:///r/t/agent/u.alice", callee_ura)
+            .await
+            .expect_err("a mismatched invocation id cannot cancel the target");
+        assert!(matches!(
+            mismatch,
+            InvocationCancellationError::TargetInvocationMismatch
+        ));
+
         let accepted = cancellations
-            .request_cancel(command, "easynet:///r/t/agent/u.alice", callee_ura)
+            .request_cancel(command.clone(), "easynet:///r/t/agent/u.alice", callee_ura)
             .await
             .expect("target owner can request cancellation");
         assert!(accepted.accepted);
@@ -925,6 +959,14 @@ mod tests {
             Some(target_id)
         );
         assert!(outcome.admission_receipt.is_some());
+
+        let replay = cancellations
+            .request_cancel(command, "easynet:///r/t/agent/u.alice", callee_ura)
+            .await
+            .expect("terminal cancellation replay is idempotent");
+        assert!(replay.accepted);
+        assert!(replay.already_terminal);
+        assert_eq!(replay.target_invocation_id, target_id);
     }
 
     #[tokio::test]

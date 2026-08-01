@@ -783,3 +783,19 @@
   matrix validation while any runtime-core lifecycle vector action is missing.
   This prevents API-shape parity or partial provider-backed behavior from
   being promoted into cutover status.
+- Baseline directory publication belongs to the session prelude state machine.
+  Catalogue-ready hooks own only later dynamic refreshes; allowing both to
+  publish the baseline creates competing session authorities and reconnect
+  instability.
+- `invocation.cancel` is not appended to `terminal.*`, media, browser, or any
+  other product authority scope. It is a generic runtime lifecycle command and
+  is classified once in the canonical admission policy.
+- Lifecycle-control admission proves that a signed, descriptor-bound command
+  may reach the cancellation handler. The `InvocationCancellationRegistry`
+  remains the single authority for whether that caller and execution authority
+  own the referenced target lifecycle; this preserves fail-closed behavior
+  without a product-specific permission fork.
+- "Single authority" means object identity, not merely the same registry type.
+  The catalogue-built registry is injected into the gRPC invocation service
+  and `LocalAxonSessionDispatcher`; the dispatcher no longer has a default
+  constructor that can silently create a disconnected lifecycle registry.

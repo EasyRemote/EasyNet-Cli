@@ -300,6 +300,155 @@ impl SelectedInvokeRoute {
         })
     }
 
+    pub(crate) fn from_hub_final_route_answer_json(
+        answer: &Value,
+        target_ura: &str,
+        ability_ura: &str,
+    ) -> Result<Self, ResolveRouteFailure> {
+        let selector = match route_selector_from_query(ability_ura, "")? {
+            Some(selector) => selector,
+            None => route_selector_from_query(target_ura, ability_ura)?.ok_or_else(|| {
+                ResolveRouteFailure::new(
+                    ability_ura,
+                    NegativeReason::Refused,
+                    "Hub route provider requires a full canonical ability URA, target-bound descriptor ref, or an owner-local ability name with an explicit callee",
+                )
+            })?,
+        };
+        let answer_kind = json_string(answer, "answer_kind", &selector.query_name)?;
+        if ResolveAnswerKind::from_str_name(answer_kind) != Some(ResolveAnswerKind::FinalRoute) {
+            return Err(ResolveRouteFailure::new(
+                selector.query_name,
+                NegativeReason::Noroute,
+                format!("Hub route provider returned non-final answer_kind `{answer_kind}`"),
+            ));
+        }
+        let release_profile_text = json_string(answer, "release_profile", &selector.query_name)?;
+        let release_profile = ResolverReleaseProfile::from_str_name(release_profile_text)
+            .ok_or_else(|| {
+                ResolveRouteFailure::new(
+                    selector.query_name.clone(),
+                    NegativeReason::Refused,
+                    format!(
+                        "Hub route provider returned noncanonical release_profile `{release_profile_text}`"
+                    ),
+                )
+            })?;
+        if !matches!(
+            release_profile,
+            ResolverReleaseProfile::AuthoritativeLocal | ResolverReleaseProfile::Production
+        ) {
+            return Err(ResolveRouteFailure::new(
+                selector.query_name,
+                NegativeReason::Noroute,
+                format!(
+                    "Hub route provider returned non-dispatchable release_profile `{release_profile_text}`"
+                ),
+            ));
+        }
+        let owner_ura = json_string(answer, "owner_ura", &selector.query_name)?.to_string();
+        let answer_ability_ura =
+            json_string(answer, "ability_ura", &selector.query_name)?.to_string();
+        let route_ura = json_string(answer, "route_ura", &selector.query_name)?.to_string();
+        if owner_ura != selector.owner_ura {
+            return Err(ResolveRouteFailure::new(
+                selector.query_name,
+                NegativeReason::Refused,
+                format!(
+                    "Hub route owner `{owner_ura}` does not match selected target owner `{}`",
+                    selector.owner_ura
+                ),
+            ));
+        }
+        if answer_ability_ura != selector.ability_ura {
+            return Err(ResolveRouteFailure::new(
+                selector.query_name,
+                NegativeReason::Refused,
+                format!(
+                    "Hub route ability `{answer_ability_ura}` does not match requested ability `{}`",
+                    selector.ability_ura
+                ),
+            ));
+        }
+
+        let next_hop = answer
+            .get("selected_route")
+            .and_then(|selected| selected.get("next_hop"))
+            .or_else(|| answer.get("next_hop"))
+            .ok_or_else(|| {
+                ResolveRouteFailure::new(
+                    selector.query_name.clone(),
+                    NegativeReason::Noroute,
+                    "Hub final route omitted selected_route.next_hop",
+                )
+            })?;
+        let (kind, callee_ura, execution_host_ura, host_node_id, dispatch_name) =
+            parse_final_route_next_hop(next_hop, &selector.query_name)?;
+        if route_ura != json_string_from_next_hop(next_hop, "route_ura", &selector.query_name)? {
+            return Err(ResolveRouteFailure::new(
+                selector.query_name,
+                NegativeReason::Refused,
+                "Hub final route route_ura does not match selected next_hop route_ura",
+            ));
+        }
+        let target_matches = owner_ura == target_ura || execution_host_ura == target_ura;
+        if !target_matches {
+            return Err(ResolveRouteFailure::new(
+                selector.query_name,
+                NegativeReason::Refused,
+                route_owner_mismatch_detail(&execution_host_ura, &answer_ability_ura, target_ura),
+            ));
+        }
+        let route_evidence = answer.get("route_evidence").ok_or_else(|| {
+            ResolveRouteFailure::new(
+                answer_ability_ura.clone(),
+                NegativeReason::Nodata,
+                "Hub final route omitted route_evidence",
+            )
+        })?;
+        let owner_record = route_evidence
+            .get("identity")
+            .or_else(|| route_evidence.get("owner"))
+            .cloned()
+            .ok_or_else(|| {
+                ResolveRouteFailure::new(
+                    answer_ability_ura.clone(),
+                    NegativeReason::Nodata,
+                    "Hub final route omitted owner identity evidence",
+                )
+            })?;
+        let ability_record = route_evidence.get("ability").cloned().ok_or_else(|| {
+            ResolveRouteFailure::new(
+                answer_ability_ura.clone(),
+                NegativeReason::Nodata,
+                "Hub final route omitted ability evidence",
+            )
+        })?;
+        let route_record = route_evidence.get("route").cloned().ok_or_else(|| {
+            ResolveRouteFailure::new(
+                answer_ability_ura.clone(),
+                NegativeReason::Nodata,
+                "Hub final route omitted route evidence",
+            )
+        })?;
+
+        Ok(Self {
+            query_name: selector.query_name,
+            owner_ura,
+            callee_ura,
+            execution_host_ura,
+            host_node_id,
+            ability_ura: answer_ability_ura,
+            route_ura,
+            dispatch_name,
+            release_profile,
+            kind,
+            ability_record,
+            route_record,
+            owner_record,
+        })
+    }
+
     fn next_hop_json(&self) -> Value {
         match self.kind {
             SelectedRouteKind::RealmAuthorityOwned => json!({
@@ -331,6 +480,121 @@ impl SelectedInvokeRoute {
     }
 }
 
+fn json_string<'a>(
+    value: &'a Value,
+    field: &str,
+    query_name: &str,
+) -> Result<&'a str, ResolveRouteFailure> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| {
+            ResolveRouteFailure::new(
+                query_name,
+                NegativeReason::Nodata,
+                format!("Hub final route missing canonical `{field}`"),
+            )
+        })
+}
+
+fn json_string_from_next_hop<'a>(
+    next_hop: &'a Value,
+    field: &str,
+    query_name: &str,
+) -> Result<&'a str, ResolveRouteFailure> {
+    next_hop
+        .as_object()
+        .and_then(|object| object.values().next())
+        .and_then(|payload| payload.get(field))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| {
+            ResolveRouteFailure::new(
+                query_name,
+                NegativeReason::Nodata,
+                format!("Hub final route next_hop missing canonical `{field}`"),
+            )
+        })
+}
+
+fn parse_final_route_next_hop(
+    next_hop: &Value,
+    query_name: &str,
+) -> Result<(SelectedRouteKind, String, String, Option<String>, String), ResolveRouteFailure> {
+    let object = next_hop.as_object().ok_or_else(|| {
+        ResolveRouteFailure::new(
+            query_name,
+            NegativeReason::Nodata,
+            "Hub final route next_hop must be an object",
+        )
+    })?;
+    if object.len() != 1 {
+        return Err(ResolveRouteFailure::new(
+            query_name,
+            NegativeReason::Refused,
+            "Hub final route next_hop must contain exactly one dispatch arm",
+        ));
+    }
+    if let Some(device) = object.get("local_device_ability") {
+        let device_ura = json_string(device, "device_ura", query_name)?.to_string();
+        let dispatch_name = json_string(device, "dispatch_name", query_name)?.to_string();
+        return Ok((
+            SelectedRouteKind::SameRealmDevice,
+            device_ura.clone(),
+            device_ura,
+            None,
+            dispatch_name,
+        ));
+    }
+    if let Some(hub) = object.get("local_hub_ability") {
+        let ability_ura = json_string(hub, "ability_ura", query_name)?;
+        let owner_ura = crate::core::ura::AbilitySelector::parse(ability_ura)
+            .map_err(|error| {
+                ResolveRouteFailure::new(
+                    query_name,
+                    NegativeReason::Refused,
+                    format!("Hub final route hub ability selector parse failed: {error}"),
+                )
+            })?
+            .owner_ura()
+            .to_string();
+        let dispatch_name = json_string(hub, "dispatch_name", query_name)?.to_string();
+        return Ok((
+            SelectedRouteKind::RealmAuthorityOwned,
+            owner_ura.clone(),
+            owner_ura,
+            None,
+            dispatch_name,
+        ));
+    }
+    if let Some(agent) = object.get("hosted_agent_via_device") {
+        let agent_ura = json_string(agent, "agent_ura", query_name)?.to_string();
+        let host_device_ura = json_string(agent, "host_device_ura", query_name)?.to_string();
+        let host_node_id = agent
+            .get("host_node_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned);
+        let dispatch_name = json_string(agent, "dispatch_name", query_name)?.to_string();
+        return Ok((
+            SelectedRouteKind::HostedAgent,
+            agent_ura,
+            host_device_ura,
+            host_node_id,
+            dispatch_name,
+        ));
+    }
+    Err(ResolveRouteFailure::new(
+        query_name,
+        NegativeReason::Noroute,
+        "Hub final route next_hop did not select a daemon-dispatchable route",
+    ))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DelegatedInvokeRoute {
     pub query_name: String,
@@ -346,6 +610,7 @@ pub(crate) struct DelegatedInvokeRoute {
 pub(crate) enum CanonicalRouteDispatch {
     Local(SelectedInvokeRoute),
     Peer(DelegatedInvokeRoute),
+    HubSession(SelectedInvokeRoute),
 }
 
 /// Call-mode-bound result of the daemon's canonical route policy.
@@ -372,6 +637,13 @@ impl CanonicalRouteSelection {
         Self {
             call_mode,
             dispatch: CanonicalRouteDispatch::Peer(route),
+        }
+    }
+
+    pub(crate) fn hub_session(call_mode: CallMode, route: SelectedInvokeRoute) -> Self {
+        Self {
+            call_mode,
+            dispatch: CanonicalRouteDispatch::HubSession(route),
         }
     }
 
@@ -2393,6 +2665,54 @@ mod tests {
             }],
         ));
         ability_ura
+    }
+
+    #[test]
+    fn hub_final_route_answer_rehydrates_selected_route_facts() {
+        let registry = PresenceRegistry::default();
+        let advertised_agents = AdvertisedAgentStore::default();
+        let catalog = AbilityCatalogStore::default();
+        let owner_ura = device_owner_ura();
+        mark_online(&registry, &owner_ura);
+        let ability_ura =
+            publish_ability(&catalog, &owner_ura, &owner_ura, "meta", "list_resources");
+        let resolver = DaemonRouteResolver::new(&registry, Some(&advertised_agents), &catalog);
+        let route = resolver
+            .resolve_route(&ability_ura, "")
+            .expect("fixture route resolves");
+        let answer = route.final_route_answer_json();
+
+        let rehydrated = SelectedInvokeRoute::from_hub_final_route_answer_json(
+            &answer,
+            &owner_ura,
+            &ability_ura,
+        )
+        .expect("hub final route rehydrates");
+
+        assert_eq!(rehydrated.ability_ura, ability_ura);
+        assert_eq!(rehydrated.owner_ura, owner_ura);
+        assert_eq!(rehydrated.execution_host_ura, owner_ura);
+        assert_eq!(rehydrated.dispatch_name, "meta.list_resources");
+        assert_eq!(rehydrated.kind(), SelectedRouteKind::SameRealmDevice);
+    }
+
+    #[test]
+    fn hub_route_provider_rejects_non_final_answer() {
+        let owner_ura = device_owner_ura();
+        let ability_ura = crate::core::ura::owner_ability_ura(&owner_ura, "meta.list_resources")
+            .expect("test ability ura");
+        let answer = ResolveRouteFailure::owner_offline(&ability_ura, NegativeReason::Nxdomain)
+            .answer_json();
+
+        let error = SelectedInvokeRoute::from_hub_final_route_answer_json(
+            &answer,
+            &owner_ura,
+            &ability_ura,
+        )
+        .expect_err("negative hub answer must not rehydrate a route");
+
+        assert_eq!(error.reason, NegativeReason::Noroute);
+        assert!(error.detail.contains("non-final answer_kind"));
     }
 
     #[test]

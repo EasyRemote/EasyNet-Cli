@@ -237,6 +237,7 @@ fn check_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Re
         realm_authority_public_read: false,
         device_self_publication_manage: false,
         device_self_session_stream: false,
+        invocation_lifecycle_control: false,
         interactive_context_available: request.interactive_context_available,
         canonical_hash: request.canonical_hash,
         signature_key_id: request.signature_key_id,

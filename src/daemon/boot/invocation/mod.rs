@@ -582,7 +582,7 @@ pub fn start_daemon_invocation_transport(
     let mut service = DaemonInvocationService::new(Arc::clone(&presence), admission)
         .with_directory_read_models(advertised_agents, ability_catalog)
         .with_local_ability_catalog(Arc::clone(&local_ability_catalog))
-        .with_invocation_cancellation_registry(invocation_cancellations)
+        .with_invocation_cancellation_registry(invocation_cancellations.clone())
         .with_pending(Arc::clone(&pending))
         .with_pending_stream(Arc::clone(&pending_stream))
         .with_session_realm(config.realm().to_string())
@@ -737,10 +737,11 @@ pub fn start_daemon_invocation_transport(
             .with_federated_peers_cell(federated_peers_cell.clone());
     }
 
-    // **PR-N6 C4**. Device-mode daemon's `canonical_invoke` escalates
-    // up the long-lived `session.open` bidi to the hub instead of
-    // consulting its (always-empty) local PresenceRegistry. Three
-    // collaborators wired here:
+    // **PR-N6 C4**. Device-mode daemon owns a long-lived
+    // `session.open` control/session carrier. Public invocations use
+    // it only after the TargetGate obtains a positive Hub
+    // `namespace.resolve` final-route decision; a local route miss is
+    // not itself a dispatch policy. Three collaborators wired here:
     //
     //   1. `EscalationCorrelation` — call_id → oneshot table.
     //      Cloned into the service's `LocalAxonSessionDispatcher`
@@ -750,9 +751,9 @@ pub fn start_daemon_invocation_transport(
     //      supervisor on every successful dial, cleared on
     //      disconnect. The escalation consumer reads it
     //      per-Request.
-    //   3. `SessionEscalationHandle` — what the dispatcher's
-    //      `escalate_canonical_invoke` arm calls. Wired into the
-    //      service via `with_session_escalation`.
+    //   3. `SessionEscalationHandle` — route-provider control
+    //      requests plus HubSession-selected canonical carriers. Wired
+    //      into the service via `with_session_escalation`.
     //
     // Hub mode leaves `escalation_state = None`. Both mode is rejected by the
     // capability contract above until it owns an explicit local publication
@@ -782,7 +783,6 @@ pub fn start_daemon_invocation_transport(
             register_local_runtime_federation_republisher(
                 Arc::clone(&local_ability_catalog),
                 Arc::clone(&handle),
-                &outbox,
                 identity.caller_ura.clone(),
                 Arc::clone(&connection_state_sink),
             );
@@ -917,6 +917,7 @@ pub fn start_daemon_invocation_transport(
                 local_ability_catalog: Arc::clone(&local_ability_catalog),
                 ability_wire_registry: Arc::clone(&ability_wire_registry),
                 admission: session_admission.clone(),
+                invocation_cancellations: invocation_cancellations.clone(),
                 authority_published_abilities: Arc::clone(&authority_published_abilities),
                 user_trust_sync,
             })?;
@@ -971,7 +972,6 @@ pub(crate) fn register_purge_recovery_on_outbox_ready(
 fn register_local_runtime_federation_republisher(
     catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
     escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
-    outbox: &crate::daemon::invocation::bidi::session_escalation::SharedSessionOutbox,
     host_device_ura: String,
     connection_state_sink: Arc<
         dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
@@ -986,8 +986,16 @@ fn register_local_runtime_federation_republisher(
     let schedule: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
         republisher.schedule();
     });
+    // Baseline owner/hosted-agent projection publication is owned by the
+    // session prelude and runs before every `session.open` attempt. Do not also
+    // schedule a baseline publish from `SharedSessionOutbox::set`: that creates
+    // a second authority path over the just-opened reverse-dispatch carrier,
+    // races session heartbeat/liveness establishment, and can turn a healthy
+    // boot into a visible T09/T11 reconnect window. The catalog hook below is
+    // intentionally dynamic-only: live ability mutations still publish
+    // immediately over the current session, while reconnect/bootstrap recovery
+    // remains prelude-owned.
     catalog.register_dynamic_publication_hook(Arc::clone(&schedule));
-    outbox.register_ready_hook(schedule);
 }
 
 struct LocalRuntimeFederationRepublisher {
@@ -1675,6 +1683,8 @@ struct SessionSupervisorConfig {
     local_ability_catalog: Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>,
     ability_wire_registry: Arc<crate::daemon::ability::wire::AbilityWireRegistry>,
     admission: AdmissionFacade,
+    invocation_cancellations:
+        crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry,
     authority_published_abilities: Arc<
         crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore,
     >,
@@ -1691,6 +1701,7 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
         local_ability_catalog,
         ability_wire_registry,
         admission,
+        invocation_cancellations,
         authority_published_abilities,
         user_trust_sync,
     } = config;
@@ -1743,7 +1754,7 @@ fn spawn_session_supervisor(config: SessionSupervisorConfig) -> anyhow::Result<S
             (None, None, None, sink)
         }
     };
-    let mut local_dispatcher = LocalAxonSessionDispatcher::new();
+    let mut local_dispatcher = LocalAxonSessionDispatcher::new(invocation_cancellations);
     if let Some(correlation) = correlation {
         local_dispatcher = local_dispatcher.with_escalation_correlation(correlation);
     }

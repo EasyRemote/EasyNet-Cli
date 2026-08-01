@@ -48,6 +48,11 @@ pub(super) async fn run_live_session<D: SessionFrameDispatcher>(
 
     let (up_tx, up_rx) = mpsc::channel::<InvokeBidiUp>(SESSION_UP_CHANNEL_CAPACITY);
     let outbound_tx = SessionUpSender::new(up_tx.clone());
+    dispatcher.session_started(outbound_tx.scope_id());
+    let _dispatcher_session = DispatcherSessionGuard {
+        dispatcher: Arc::clone(&dispatcher),
+        scope_id: outbound_tx.scope_id(),
+    };
 
     let frame0 = build_session_envelope_open(signer.as_ref())
         .await
@@ -162,6 +167,17 @@ pub(super) async fn run_live_session<D: SessionFrameDispatcher>(
     })
 }
 
+struct DispatcherSessionGuard<D: SessionFrameDispatcher> {
+    dispatcher: Arc<D>,
+    scope_id: u64,
+}
+
+impl<D: SessionFrameDispatcher> Drop for DispatcherSessionGuard<D> {
+    fn drop(&mut self) {
+        self.dispatcher.session_ended(self.scope_id);
+    }
+}
+
 fn apply_session_contract(
     frame: &InvokeBidiDown,
     outbound: &SessionUpSender,
@@ -187,15 +203,17 @@ fn apply_session_contract(
         version = negotiated,
         displaced_prior = displaced_prior,
     );
-    // The hub accepted `session.open` and returned the session contract. This
-    // proves the transport is admitted, but product read models can still be
-    // missing the daemon's owner/ability projection. Keep the public product
-    // state suspect until the dynamic owner projection publishes and the T11
-    // read-model gate promotes the snapshot to FRONTEND_CONNECTED.
+    // The hub accepted `session.open` and returned the session contract. At
+    // this point the session prelude has already completed the baseline
+    // owner/hosted-agent projection publication for this attempt; reconnect
+    // recovery is therefore prelude-owned, not an outbox-ready side effect.
+    // Promote the public product state here so connection readiness follows one
+    // explicit state machine: prelude projection -> session contract -> T11
+    // read-model refetch.
     project_connection_state(
         connection_state_sink,
-        crate::daemon::boot::join_connection_state::JoinConnectionState::ConnectedSuspect,
-        crate::daemon::boot::join_connection_state::JoinTransition::AdmitPresence,
+        crate::daemon::boot::join_connection_state::JoinConnectionState::ConnectedOnline,
+        crate::daemon::boot::join_connection_state::JoinTransition::RefetchReadModel,
         "session.contract_negotiated",
     );
     true
@@ -247,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn session_contract_projection_waits_for_owner_projection() {
+    fn session_contract_projection_promotes_after_prelude_projection() {
         let _home = HomeGuard::new();
         let credentials = credentials();
         record_snapshot(JoinConnectionSnapshot::from_credentials(
@@ -259,17 +277,17 @@ mod tests {
 
         assert!(project_connection_state(
             &super::super::PersistentSessionConnectionStateSink,
-            JoinConnectionState::ConnectedSuspect,
-            JoinTransition::AdmitPresence,
+            JoinConnectionState::ConnectedOnline,
+            JoinTransition::RefetchReadModel,
             "session.contract_negotiated",
         ));
 
         let snapshot = load_snapshot().expect("snapshot");
-        assert_eq!(snapshot.state, "DEGRADED");
+        assert_eq!(snapshot.state, "FRONTEND_CONNECTED");
         assert_eq!(snapshot.state_code, "J800");
         assert_eq!(
             snapshot.transition_id.as_deref(),
-            Some("T10_ADMIT_PRESENCE")
+            Some("T11_REFETCH_READ_MODEL")
         );
         assert_eq!(snapshot.source, "session.contract_negotiated");
     }
