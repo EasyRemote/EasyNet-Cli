@@ -594,6 +594,26 @@ final class RuntimeCoreSeamTests: XCTestCase {
             .withSubjectURA("easynet:///r/example/resource/agent.alice.sdk/runtime-state/read")
             .withAuthorityMetadata(scopedSession.metadata())
             .inspect()
+
+        let readDescriptor = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+        let invokeOnlySession = try SessionAuthority.fromMetadata(
+            sessionMetadataValue(scopes: ["observe.health"], allowedActions: ["invoke"])
+        )
+        expectSyncSDKError(.authorityDenied, "session authority allowed_actions do not admit read") {
+            _ = try completeBuilder()
+                .withDescriptorRef(readDescriptor)
+                .withSubjectURA("easynet:///r/example/resource/user.alice/runtime-state/read")
+                .withAuthorityMetadata(invokeOnlySession.metadata())
+                .inspect()
+        }
+        let readSession = try SessionAuthority.fromMetadata(
+            sessionMetadataValue(scopes: ["observe.health"], allowedActions: ["read"])
+        )
+        _ = try completeBuilder()
+            .withDescriptorRef(readDescriptor)
+            .withSubjectURA("easynet:///r/example/resource/user.alice/runtime-state/read")
+            .withAuthorityMetadata(readSession.metadata())
+            .inspect()
         expectSyncSDKError(.authoritySubjectMismatch, "session authority subject does not admit invocation subject_ura") {
             _ = try completeBuilder()
                 .withSubjectURA("not-a-ura/resource/user.alice/runtime-state/read")
@@ -1397,6 +1417,10 @@ final class RuntimeCoreSeamTests: XCTestCase {
     }
 
     private func sessionMetadataValue(scopes: [String]) throws -> String {
+        try sessionMetadataValue(scopes: scopes, allowedActions: ["invoke"])
+    }
+
+    private func sessionMetadataValue(scopes: [String], allowedActions: [String]) throws -> String {
         try authorityMetadataValue([
             "issuer_ura": caller,
             "session_id": "session-1",
@@ -1406,7 +1430,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
             "subject_ura": "easynet:///r/example/user/alice",
             "audience": callee,
             "scopes": scopes,
-            "allowed_actions": ["invoke"],
+            "allowed_actions": allowedActions,
             "allowed_followup_abilities": ["observe.health"],
             "issued_at_ms": 10,
             "expires_at_ms": 20,

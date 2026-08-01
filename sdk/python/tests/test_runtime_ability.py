@@ -238,7 +238,9 @@ def test_runtime_ability_descriptor_binds_authority_subject() -> None:
     )
 
 
-def test_runtime_ability_catalogue_read_resolves_descriptor_with_governance_read_subject() -> None:
+def test_runtime_ability_catalogue_read_resolves_descriptor_with_governance_read_subject() -> (
+    None
+):
     client, transport = _client()
     call = replace(
         _call(),
@@ -248,7 +250,10 @@ def test_runtime_ability_catalogue_read_resolves_descriptor_with_governance_read
 
     draft = client._build_catalogue_read(call, "meta.list_abilities", {})
 
-    assert draft.subject_ura == "easynet:///r/example/resource/user.alice/runtime-state/read"
+    assert (
+        draft.subject_ura
+        == "easynet:///r/example/resource/user.alice/runtime-state/read"
+    )
     assert transport.descriptor_requests[-1]["subject_ura"] == (
         "easynet:///r/example/resource/user.alice/runtime-state/read"
     )
@@ -257,7 +262,9 @@ def test_runtime_ability_catalogue_read_resolves_descriptor_with_governance_read
     )
 
 
-def test_runtime_ability_catalogue_read_uses_session_owner_for_governance_subject() -> None:
+def test_runtime_ability_catalogue_read_uses_session_owner_for_governance_subject() -> (
+    None
+):
     class CatalogueDescriptorTransport(RuntimeTransportFake):
         def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
             request = json.loads(request_json)
@@ -283,9 +290,7 @@ def test_runtime_ability_catalogue_read_uses_session_owner_for_governance_subjec
         subject_ura="easynet:///r/example/user/alice",
     )
     authority = replace(
-        _runtime_session_authority(
-            call, "c658f249-e5b5-4126-8a5e-79d1d2322885"
-        ),
+        _runtime_session_authority(call, "c658f249-e5b5-4126-8a5e-79d1d2322885"),
         scopes=("meta.list_resources",),
         allowed_followup_abilities=("meta.list_resources",),
     )
@@ -303,13 +308,18 @@ def test_runtime_ability_catalogue_read_uses_session_owner_for_governance_subjec
 
 
 def test_runtime_governance_read_subject_public_helper_projects_user_subject() -> None:
-    assert easynet_sdk.runtime_governance_read_subject_ura(
-        "easynet:///r/example/user/alice",
-        "easynet:///r/example/device/device-1",
-    ) == "easynet:///r/example/resource/user.alice/runtime-state/read"
+    assert (
+        easynet_sdk.runtime_governance_read_subject_ura(
+            "easynet:///r/example/user/alice",
+            "easynet:///r/example/device/device-1",
+        )
+        == "easynet:///r/example/resource/user.alice/runtime-state/read"
+    )
 
 
-def test_runtime_ability_rejects_all_zero_runtime_call_principal_before_descriptor_resolution() -> None:
+def test_runtime_ability_rejects_all_zero_runtime_call_principal_before_descriptor_resolution() -> (
+    None
+):
     client, transport = _client()
     call = RuntimeCallContext(
         caller_ura=_call().caller_ura,
@@ -326,7 +336,9 @@ def test_runtime_ability_rejects_all_zero_runtime_call_principal_before_descript
     assert transport.descriptor_requests == []
 
 
-def test_runtime_ability_rejects_invocation_history_public_route_before_descriptor_resolution() -> None:
+def test_runtime_ability_rejects_invocation_history_public_route_before_descriptor_resolution() -> (
+    None
+):
     client, transport = _client()
 
     with pytest.raises(SDKError, match="RuntimeReceiptProvider"):
@@ -335,7 +347,9 @@ def test_runtime_ability_rejects_invocation_history_public_route_before_descript
     assert transport.descriptor_requests == []
 
 
-def test_runtime_ability_rejects_catalogue_read_public_route_before_descriptor_resolution() -> None:
+def test_runtime_ability_rejects_catalogue_read_public_route_before_descriptor_resolution() -> (
+    None
+):
     client, transport = _client()
 
     for ability_name in ("meta.list_abilities", "meta.list_resources"):
@@ -481,7 +495,9 @@ def test_runtime_ability_materializes_typed_authority() -> None:
     assert SESSION_AUTHORITY_METADATA_KEY not in call.metadata
 
 
-def test_runtime_ability_rejects_authority_subject_mismatch_after_descriptor_projection() -> None:
+def test_runtime_ability_rejects_authority_subject_mismatch_after_descriptor_projection() -> (
+    None
+):
     client, transport = _client()
     call = replace(
         _call(),
@@ -535,6 +551,21 @@ def test_runtime_ability_authority_scope_admits_canonical_ability_ura() -> None:
     client.build(replace(call, authority=authority), "namespace.resolve", {})
 
 
+def test_runtime_ability_rejects_session_authority_action_mismatch() -> None:
+    client, _ = _client()
+    call = _call()
+    authority = replace(
+        _runtime_session_authority(call, "alice"),
+        allowed_actions=("invoke",),
+    )
+
+    with pytest.raises(
+        SDKError,
+        match="runtime session authority allowed_actions do not admit read",
+    ):
+        client.build(replace(call, authority=authority), "namespace.resolve", {})
+
+
 def test_runtime_ability_rejects_short_scope_for_descriptor_owner_mismatch() -> None:
     class MismatchedOwnerDescriptorTransport(RuntimeTransportFake):
         def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
@@ -557,7 +588,9 @@ def test_runtime_ability_rejects_short_scope_for_descriptor_owner_mismatch() -> 
     call = replace(_call(), callee_ura="easynet:///r/example/device/device-a")
     authority = _runtime_session_authority(call, "alice")
 
-    with pytest.raises(SDKError, match="runtime session authority scopes do not admit ability"):
+    with pytest.raises(
+        SDKError, match="runtime session authority scopes do not admit ability"
+    ):
         client.build(replace(call, authority=authority), "namespace.resolve", {})
 
     assert transport.descriptor_requests == [
@@ -591,7 +624,9 @@ def test_runtime_ability_rejects_descriptor_ref_without_canonical_ability_ura() 
         AddressingClient(AxonAddressingTransport()),
     )
 
-    with pytest.raises(SDKError, match="descriptor_ref must contain a canonical Ability URA"):
+    with pytest.raises(
+        SDKError, match="descriptor_ref must contain a canonical Ability URA"
+    ):
         client.build(_call(), "namespace.resolve", {})
 
 

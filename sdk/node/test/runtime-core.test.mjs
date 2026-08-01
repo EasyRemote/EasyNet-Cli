@@ -158,7 +158,7 @@ const historySessionValue = (override = {}) =>
     subject_ura: "easynet:///r/example/resource/user.alice/session/session-1",
     audience: callee,
     scopes: ["invocation.history.list"],
-    allowed_actions: ["invoke"],
+    allowed_actions: ["read"],
     allowed_followup_abilities: ["invocation.history.list"],
     issued_at_ms: 10,
     expires_at_ms: 20,
@@ -1147,6 +1147,77 @@ test("runtime ability projection is canonical for authority scope admission", ()
       error.code === sdk.ErrorCode.INVALID_ARGUMENT &&
       error.message.includes("descriptor_ref must contain a canonical Ability URA"),
   );
+});
+
+test("session authority allowed_actions follow descriptor action", () => {
+  const readDescriptor =
+    "easynet:///r/example/ability/device.dev-a.skill.tree@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+  const subjectURA = "easynet:///r/example/resource/user.alice/invoke/skill.tree";
+  const invokeOnlySession = sdk.SessionAuthority.fromMetadata(
+    authorityValue({
+      issuer_ura: caller,
+      session_id: "session-1",
+      session_owner_user_id: "alice",
+      creator_principal_id: caller,
+      callee_ura: callee,
+      subject_ura: "easynet:///r/example/resource/user.alice/session/session-1",
+      audience: callee,
+      scopes: ["skill.tree"],
+      allowed_actions: ["invoke"],
+      allowed_followup_abilities: ["skill.tree"],
+      issued_at_ms: 10,
+      expires_at_ms: 20,
+    }),
+  );
+
+  assert.throws(
+    () =>
+      new sdk.InvocationBuilder()
+        .withCallerURA(caller)
+        .withCalleeURA(callee)
+        .withDescriptorRef(readDescriptor)
+        .withSubjectURA(subjectURA)
+        .withNonceBase64(nonce)
+        .withCausalContext({ form: "none" })
+        .withJSONArgs({})
+        .withContentType("application/json")
+        .withAuthorityMetadata(invokeOnlySession.metadata())
+        .build(),
+    (error) =>
+      error instanceof sdk.SDKError &&
+      error.code === sdk.ErrorCode.AUTHORITY_DENIED &&
+      /session authority allowed_actions do not admit read/.test(error.message),
+  );
+
+  const readSession = sdk.SessionAuthority.fromMetadata(
+    authorityValue({
+      issuer_ura: caller,
+      session_id: "session-1",
+      session_owner_user_id: "alice",
+      creator_principal_id: caller,
+      callee_ura: callee,
+      subject_ura: "easynet:///r/example/resource/user.alice/session/session-1",
+      audience: callee,
+      scopes: ["skill.tree"],
+      allowed_actions: ["read"],
+      allowed_followup_abilities: ["skill.tree"],
+      issued_at_ms: 10,
+      expires_at_ms: 20,
+    }),
+  );
+
+  const draft = new sdk.InvocationBuilder()
+    .withCallerURA(caller)
+    .withCalleeURA(callee)
+    .withDescriptorRef(readDescriptor)
+    .withSubjectURA(subjectURA)
+    .withNonceBase64(nonce)
+    .withCausalContext({ form: "none" })
+    .withJSONArgs({})
+    .withContentType("application/json")
+    .withAuthorityMetadata(readSession.metadata())
+    .build();
+  assert.equal(draft.metadata[sdk.SESSION_AUTHORITY_METADATA_KEY], readSession.metadataValue);
 });
 
 test("runtime ability projection strips canonical authority owner prefix", () => {

@@ -903,6 +903,29 @@ public final class RuntimeCoreSeamTest {
         .subject("easynet:///r/example/resource/agent.alice.sdk/runtime-state/read")
         .authorityMetadata(scopedSession.metadata())
         .inspect();
+
+    String readDescriptor =
+        "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+    SessionAuthority invokeOnlySession =
+        SessionAuthority.fromMetadata(
+            sessionMetadataValue(List.of("observe.health"), List.of("invoke")));
+    expectSDKError(
+        ErrorCode.AUTHORITY_DENIED,
+        "session authority allowed_actions do not admit read",
+        () ->
+            completeBuilder()
+                .descriptor(readDescriptor)
+                .subject("easynet:///r/example/resource/user.alice/runtime-state/read")
+                .authorityMetadata(invokeOnlySession.metadata())
+                .inspect());
+    SessionAuthority readSession =
+        SessionAuthority.fromMetadata(
+            sessionMetadataValue(List.of("observe.health"), List.of("read")));
+    completeBuilder()
+        .descriptor(readDescriptor)
+        .subject("easynet:///r/example/resource/user.alice/runtime-state/read")
+        .authorityMetadata(readSession.metadata())
+        .inspect();
     expectSDKError(
         ErrorCode.AUTHORITY_SUBJECT_MISMATCH,
         "session authority subject does not admit invocation subject_ura",
@@ -1788,6 +1811,10 @@ public final class RuntimeCoreSeamTest {
   }
 
   private static String sessionMetadataValue(List<String> scopes) {
+    return sessionMetadataValue(scopes, List.of("invoke"));
+  }
+
+  private static String sessionMetadataValue(List<String> scopes, List<String> allowedActions) {
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("issuer_ura", CALLER);
     payload.put("session_id", "session-1");
@@ -1797,7 +1824,7 @@ public final class RuntimeCoreSeamTest {
     payload.put("subject_ura", "easynet:///r/example/user/alice");
     payload.put("audience", CALLEE);
     payload.put("scopes", scopes);
-    payload.put("allowed_actions", List.of("invoke"));
+    payload.put("allowed_actions", allowedActions);
     payload.put("allowed_followup_abilities", List.of("observe.health"));
     payload.put("issued_at_ms", 10);
     payload.put("expires_at_ms", 20);

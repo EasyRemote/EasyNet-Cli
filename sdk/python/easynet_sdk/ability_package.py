@@ -55,6 +55,7 @@ class RuntimeAbilityPackageManifest:
     input_schema: Mapping[str, Any]
     exec: HostStreamExec
     output_schema: Mapping[str, Any] | None = None
+    exposure: str | None = None
     descriptor_version: str | None = None
     timeout_seconds: int | None = None
     schema_version: str = "1"
@@ -80,6 +81,13 @@ class RuntimeAbilityPackageManifest:
                 self.output_schema,
                 "output_schema",
             )
+        if self.exposure is not None:
+            exposure = _required_text(self.exposure, "exposure")
+            if exposure not in {"task", "operator", "internal"}:
+                raise _invalid_manifest(
+                    "exposure must be one of task, operator, or internal"
+                )
+            manifest["exposure"] = exposure
         if self.descriptor_version is not None:
             manifest["descriptor_version"] = _required_text(
                 self.descriptor_version,

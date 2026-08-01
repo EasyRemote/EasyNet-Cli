@@ -15,11 +15,14 @@ final class RuntimeAbilityProjection {
   private final String abilityURA;
   private final String publicName;
   private final String intrinsicName;
+  private final String action;
 
-  private RuntimeAbilityProjection(String abilityURA, String publicName, String intrinsicName) {
+  private RuntimeAbilityProjection(
+      String abilityURA, String publicName, String intrinsicName, String action) {
     this.abilityURA = abilityURA;
     this.publicName = publicName;
     this.intrinsicName = intrinsicName;
+    this.action = action;
   }
 
   static RuntimeAbilityProjection fromTuple(InvocationTuple tuple) {
@@ -36,6 +39,10 @@ final class RuntimeAbilityProjection {
 
   String intrinsicName() {
     return intrinsicName;
+  }
+
+  String action() {
+    return action;
   }
 
   static String runtimeGovernanceReadAbility(String calleeURA, String descriptorRef) {
@@ -58,7 +65,8 @@ final class RuntimeAbilityProjection {
   private static RuntimeAbilityProjection fromDescriptorRef(String calleeURA, String descriptorRef) {
     DescriptorAbilityProjection projection = descriptorAbilityProjection(descriptorRef);
     String publicName = publicAbilityName(calleeURA, projection.intrinsicName());
-    return new RuntimeAbilityProjection(projection.abilityURA(), publicName, projection.intrinsicName());
+    return new RuntimeAbilityProjection(
+        projection.abilityURA(), publicName, projection.intrinsicName(), projection.action());
   }
 
   static String runtimeGovernanceDescriptorProviderForAbility(String ability) {
@@ -95,7 +103,8 @@ final class RuntimeAbilityProjection {
     if (intrinsicName.isBlank() || intrinsicName.contains("/")) {
       throw SDKError.validation("authority", "descriptor_ref must contain a canonical Ability URA");
     }
-    return new DescriptorAbilityProjection(ability, intrinsicName);
+    String action = bang >= 0 ? clean.substring(bang + 1).trim() : "invoke";
+    return new DescriptorAbilityProjection(ability, intrinsicName, action.isBlank() ? "invoke" : action);
   }
 
   private static String runtimeGovernanceReadAbility(String value) {
@@ -158,5 +167,5 @@ final class RuntimeAbilityProjection {
     return rest.substring(slash + 1).trim();
   }
 
-  private record DescriptorAbilityProjection(String abilityURA, String intrinsicName) {}
+  private record DescriptorAbilityProjection(String abilityURA, String intrinsicName, String action) {}
 }

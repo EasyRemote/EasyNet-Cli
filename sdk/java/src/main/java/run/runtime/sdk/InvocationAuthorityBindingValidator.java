@@ -20,7 +20,9 @@ final class InvocationAuthorityBindingValidator {
             "subject_ura",
             tuple.subject(),
             "descriptor_ref",
-            tuple.descriptor());
+            tuple.descriptor(),
+            "descriptor_action",
+            ability.action());
   }
 
   static void validate(InvocationTuple tuple) {
@@ -89,9 +91,9 @@ final class InvocationAuthorityBindingValidator {
         ErrorCode.AUTHORITY_DENIED,
         "session authority audience does not admit invocation callee_ura");
     require(
-        listAdmits(authority.allowedActions(), "invoke"),
+        actionListAdmits(authority.allowedActions(), ability.action()),
         ErrorCode.AUTHORITY_DENIED,
-        "session authority allowed_actions do not admit invoke");
+        "session authority allowed_actions do not admit " + ability.action());
     require(
         scopesAdmit(authority.allowedFollowupAbilities(), ability),
         ErrorCode.AUTHORITY_DENIED,
@@ -125,13 +127,9 @@ final class InvocationAuthorityBindingValidator {
     return false;
   }
 
-  private static boolean listAdmits(List<String> patterns, String value) {
-    for (String pattern : patterns) {
-      if (scopeMatches(pattern, value)) {
-        return true;
-      }
-    }
-    return false;
+  private static boolean actionListAdmits(List<String> actions, String value) {
+    String expected = value == null ? "" : value.trim();
+    return !expected.isBlank() && actions.stream().anyMatch(action -> action.trim().equals(expected));
   }
 
   private static boolean scopeMatches(String pattern, String value) {

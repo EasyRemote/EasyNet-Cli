@@ -10,9 +10,13 @@ import (
 )
 
 const (
-	DefaultDirectoryPageLimit uint32 = 50
-	MaxDirectoryPageLimit     uint32 = 500
-	maxDirectoryCursorLen            = 4096
+	DefaultDirectoryPageLimit      uint32 = 50
+	MaxDirectoryPageLimit          uint32 = 500
+	DefaultDirectoryScanMaxPages   uint32 = 64
+	DefaultDirectoryScanMaxRecords uint32 = 25_000
+	MaxDirectoryScanPages          uint32 = 1_024
+	MaxDirectoryScanRecords        uint32 = 500_000
+	maxDirectoryCursorLen                 = 4096
 )
 
 type DirectoryResolveKind = directorycore.ResolveKind
@@ -30,6 +34,8 @@ type DirectoryResolveRequest struct {
 	RealmHint        string               `json:"realm_hint,omitempty"`
 	AbilityName      string               `json:"ability_name,omitempty"`
 	Kind             DirectoryResolveKind `json:"kind,omitempty"`
+	Limit            uint32               `json:"limit,omitempty"`
+	Cursor           string               `json:"cursor,omitempty"`
 	IncludeAbilities *bool                `json:"include_abilities,omitempty"`
 }
 
@@ -71,6 +77,26 @@ type DirectoryPage struct {
 	Records    []DirectoryRecord `json:"records"`
 	NextCursor string            `json:"next_cursor,omitempty"`
 	Limit      uint32            `json:"limit"`
+}
+
+// DirectoryScanOptions bounds one complete Directory listing walk. Zero values
+// select the SDK defaults; callers may tighten bounds but cannot remove them.
+type DirectoryScanOptions struct {
+	MaxPages   uint32 `json:"max_pages,omitempty"`
+	MaxRecords uint32 `json:"max_records,omitempty"`
+	// NextPageCall issues a fresh Invocation context for every continuation
+	// page. The SDK owns the cursor walk, while the product remains the issuer
+	// of nonce and causal authority for each canonical Invocation.
+	NextPageCall func(context.Context, uint32, RuntimeCallContext) (RuntimeCallContext, error) `json:"-"`
+}
+
+// DirectorySnapshot is returned only after the continuation cursor reaches a
+// terminal empty value. Partial pages are never represented as complete facts.
+type DirectorySnapshot struct {
+	Resolution  DirectoryResolution `json:"resolution"`
+	Pages       uint32              `json:"pages"`
+	RecordCount uint32              `json:"record_count"`
+	Complete    bool                `json:"complete"`
 }
 
 type DirectoryCursor struct {
@@ -132,14 +158,104 @@ func (c *DirectoryClient) Resolve(ctx context.Context, request DirectoryResolveR
 	if c == nil || c.provider == nil {
 		return DirectoryResolution{}, invalidDirectory("Directory client is not initialized", nil)
 	}
-	return c.provider.Resolve(ctx, request)
+	normalized, err := normalizeDirectoryResolveRequest(request)
+	if err != nil {
+		return DirectoryResolution{}, err
+	}
+	return c.provider.Resolve(ctx, normalized)
 }
 
 func (c *DirectoryClient) List(ctx context.Context, request DirectoryListRequest) (DirectoryPage, error) {
 	if c == nil || c.provider == nil {
 		return DirectoryPage{}, invalidDirectory("Directory client is not initialized", nil)
 	}
+	limit, err := directoryLimit(request.Limit)
+	if err != nil {
+		return DirectoryPage{}, err
+	}
+	cursor, err := directoryCursor(request.Cursor)
+	if err != nil {
+		return DirectoryPage{}, err
+	}
+	request.Limit = limit
+	request.Cursor = cursor
 	return c.provider.List(ctx, request)
+}
+
+// Scan resolves every page of one Directory listing under explicit hard
+// bounds. The provider owns cursor interpretation; the SDK rejects repeated
+// cursors and any walk that cannot prove completion within the configured
+// limits.
+func (c *DirectoryClient) Scan(ctx context.Context, request DirectoryResolveRequest, options DirectoryScanOptions) (DirectorySnapshot, error) {
+	if c == nil || c.provider == nil {
+		return DirectorySnapshot{}, invalidDirectory("Directory client is not initialized", nil)
+	}
+	if request.Kind != DirectoryResolveListing {
+		return DirectorySnapshot{}, invalidDirectory("Directory scan requires a directory listing request", nil)
+	}
+	normalized, err := normalizeDirectoryResolveRequest(request)
+	if err != nil {
+		return DirectorySnapshot{}, err
+	}
+	if normalized.Limit == 0 {
+		normalized.Limit = DefaultDirectoryPageLimit
+	}
+	maxPages, maxRecords, err := directoryScanBounds(options)
+	if err != nil {
+		return DirectorySnapshot{}, err
+	}
+	seen := map[string]struct{}{}
+	if normalized.Cursor != "" {
+		seen[normalized.Cursor] = struct{}{}
+	}
+	var snapshot DirectoryResolution
+	for pageNumber := uint32(1); pageNumber <= maxPages; pageNumber++ {
+		if pageNumber > 1 && options.NextPageCall != nil {
+			normalized.Call, err = options.NextPageCall(ctx, pageNumber, normalized.Call)
+			if err != nil {
+				return DirectorySnapshot{}, invalidDirectory("Directory scan could not issue the next page call", err)
+			}
+		}
+		page, resolveErr := c.provider.Resolve(ctx, normalized)
+		if resolveErr != nil {
+			return DirectorySnapshot{}, resolveErr
+		}
+		if pageNumber == 1 {
+			snapshot = page
+			snapshot.Records = nil
+		} else if page.AnswerKind != snapshot.AnswerKind {
+			return DirectorySnapshot{}, invalidDirectory("Directory scan answer_kind changed between pages", nil)
+		}
+		if pageNumber > 1 && len(page.Negative) > 0 {
+			return DirectorySnapshot{}, invalidDirectory("Directory scan returned a negative answer after a partial snapshot", nil)
+		}
+		if uint64(len(snapshot.Records))+uint64(len(page.Records)) > uint64(maxRecords) {
+			return DirectorySnapshot{}, invalidDirectory("Directory scan exceeds the maximum record bound", nil)
+		}
+		snapshot.Records = append(snapshot.Records, page.Records...)
+		next, cursorErr := directoryCursor(page.NextCursor)
+		if cursorErr != nil {
+			return DirectorySnapshot{}, cursorErr
+		}
+		if next == "" || len(page.Negative) > 0 {
+			snapshot.NextCursor = ""
+			return DirectorySnapshot{
+				Resolution:  snapshot,
+				Pages:       pageNumber,
+				RecordCount: uint32(len(snapshot.Records)),
+				Complete:    true,
+			}, nil
+		}
+		if _, duplicate := seen[next]; duplicate {
+			return DirectorySnapshot{}, invalidDirectory("Directory scan received a repeated continuation cursor", nil)
+		}
+		seen[next] = struct{}{}
+		if pageNumber == maxPages {
+			return DirectorySnapshot{}, invalidDirectory("Directory scan exceeds the maximum page bound", nil)
+		}
+		normalized.Cursor = next
+	}
+	return DirectorySnapshot{}, invalidDirectory("Directory scan did not reach a terminal cursor", nil)
 }
 
 func (c *DirectoryClient) Subscribe(ctx context.Context, request DirectorySubscribeRequest) (*DirectorySubscription, error) {
@@ -381,6 +497,40 @@ func directoryCursor(value string) (string, error) {
 		return "", invalidDirectory("Directory cursor exceeds the maximum bound", nil)
 	}
 	return cursor, nil
+}
+
+func normalizeDirectoryResolveRequest(request DirectoryResolveRequest) (DirectoryResolveRequest, error) {
+	if request.Limit > 0 {
+		limit, err := directoryLimit(request.Limit)
+		if err != nil {
+			return DirectoryResolveRequest{}, err
+		}
+		request.Limit = limit
+	}
+	cursor, err := directoryCursor(request.Cursor)
+	if err != nil {
+		return DirectoryResolveRequest{}, err
+	}
+	request.Cursor = cursor
+	return request, nil
+}
+
+func directoryScanBounds(options DirectoryScanOptions) (uint32, uint32, error) {
+	maxPages := options.MaxPages
+	if maxPages == 0 {
+		maxPages = DefaultDirectoryScanMaxPages
+	}
+	if maxPages > MaxDirectoryScanPages {
+		return 0, 0, invalidDirectory("Directory scan max_pages exceeds the hard bound", nil)
+	}
+	maxRecords := options.MaxRecords
+	if maxRecords == 0 {
+		maxRecords = DefaultDirectoryScanMaxRecords
+	}
+	if maxRecords > MaxDirectoryScanRecords {
+		return 0, 0, invalidDirectory("Directory scan max_records exceeds the hard bound", nil)
+	}
+	return maxPages, maxRecords, nil
 }
 
 func directoryNegativeDetail(resolution DirectoryResolution) string {

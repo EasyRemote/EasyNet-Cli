@@ -4116,6 +4116,7 @@ class InvocationAuthorityBindingValidator {
       callee_ura: draft.calleeURA,
       subject_ura: draft.subjectURA,
       descriptor_ref: draft.descriptorRef,
+      descriptor_action: this.ability.action,
       authority_session_subject: authority.subjectURA,
     };
   }
@@ -4173,9 +4174,9 @@ class InvocationAuthorityBindingValidator {
       "session authority audience does not admit invocation callee_ura",
     );
     this.require(
-      authorityListAdmits(this.authority.allowedActions, "invoke"),
+      authorityListAdmits(this.authority.allowedActions, this.ability.action),
       ErrorCode.AUTHORITY_DENIED,
-      "session authority allowed_actions do not admit invoke",
+      `session authority allowed_actions do not admit ${this.ability.action}`,
     );
     this.require(
       authorityScopesAdmit(this.authority.allowedFollowupAbilities, this.ability),
@@ -4470,7 +4471,8 @@ function authorityScopesAdmit(patterns, ability) {
 }
 
 function authorityListAdmits(patterns, value) {
-  return patterns.some((pattern) => authorityScopeMatches(pattern, value));
+  const expected = String(value ?? "").trim();
+  return Boolean(expected) && patterns.some((pattern) => String(pattern ?? "").trim() === expected);
 }
 
 function authorityScopeMatchesList(patterns, value) {
@@ -4494,10 +4496,12 @@ function authorityScopeMatches(pattern, value) {
 }
 
 class RuntimeAbilityProjection {
-  constructor({ abilityURA, publicName, intrinsicName }) {
+  constructor({ descriptorRef, abilityURA, publicName, intrinsicName, action }) {
+    this.descriptorRef = descriptorRef;
     this.abilityURA = abilityURA;
     this.publicName = publicName;
     this.intrinsicName = intrinsicName;
+    this.action = action;
     Object.freeze(this);
   }
 
@@ -4532,7 +4536,13 @@ class RuntimeAbilityProjection {
     if (!intrinsicName || intrinsicName.includes("/")) {
       throw invalidAuthority("descriptor_ref must contain a canonical Ability URA");
     }
-    return { abilityURA, intrinsicName };
+    const action = bang >= 0 ? clean.slice(bang + 1).trim() : "invoke";
+    return {
+      descriptorRef: clean,
+      abilityURA,
+      intrinsicName,
+      action: action || "invoke",
+    };
   }
 
   static publicAbilityName(calleeURA, intrinsicName) {
@@ -4756,7 +4766,7 @@ function runtimeAbilityMetadata(call, ability, subjectURA) {
     callerURA: call.callerURA,
     calleeURA: call.calleeURA,
     subjectURA,
-    descriptorRef: ability.abilityURA,
+    descriptorRef: ability.descriptorRef,
     metadata,
   };
   validateInvocationAuthorityBinding(draft);

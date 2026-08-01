@@ -914,6 +914,34 @@ func TestRuntimeAbilityClientAuthorityScopeAdmitsCanonicalAbilityURA(t *testing.
 	}
 }
 
+func TestRuntimeAbilityClientSessionAuthorityUsesDescriptorAction(t *testing.T) {
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: testResolveDescriptorRef(t),
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	call := runtimeAbilityTestContext()
+	authority := runtimeAbilitySessionAuthority(t, call, "alice")
+	authority.AllowedActions = []string{"invoke"}
+	call.Authority = &authority
+
+	_, err = client.Build(context.Background(), call, "namespace.resolve", map[string]any{})
+	if err == nil || !strings.Contains(err.Error(), "allowed_actions do not admit read") {
+		t.Fatalf("descriptor action mismatch error = %v", err)
+	}
+
+	authority.AllowedActions = []string{"read"}
+	call.Authority = &authority
+	if _, err := client.Build(context.Background(), call, "namespace.resolve", map[string]any{}); err != nil {
+		t.Fatalf("Build with descriptor action: %v", err)
+	}
+}
+
 func TestRuntimeAbilityClientRejectsShortScopeForDescriptorOwnerMismatch(t *testing.T) {
 	var descriptorRequests []RuntimeDescriptorRefRequest
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{

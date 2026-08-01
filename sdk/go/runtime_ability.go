@@ -486,6 +486,7 @@ type runtimeAbilityProjection struct {
 	descriptorRef string
 	abilityURA    string
 	publicName    string
+	action        string
 }
 
 func newRuntimeAbilityProjection(
@@ -506,9 +507,10 @@ func newRuntimeAbilityProjection(
 	}
 	abilityURA := strings.TrimSpace(projection.AbilityURA)
 	canonicalRef := strings.TrimSpace(projection.DescriptorRef)
-	if abilityURA == "" || canonicalRef == "" {
+	action := strings.TrimSpace(projection.Action)
+	if abilityURA == "" || canonicalRef == "" || action == "" {
 		return runtimeAbilityProjection{}, invalidRuntimePayload(
-			"descriptor_ref must contain a canonical Ability URA",
+			"descriptor_ref must contain a canonical Ability URA and admission action",
 			nil,
 		)
 	}
@@ -531,6 +533,7 @@ func newRuntimeAbilityProjection(
 		descriptorRef: canonicalRef,
 		abilityURA:    abilityURA,
 		publicName:    strings.TrimSpace(publicName),
+		action:        action,
 	}, nil
 }
 
@@ -710,10 +713,26 @@ func validateRuntimeSessionBinding(
 	if !runtimeSessionAuthorityAdmitsSubject(authority, subjectURA) {
 		return invalidRuntimePayload("runtime session authority does not admit descriptor-bound subject_ura", nil)
 	}
+	if !runtimeAuthorityListAdmits(authority.AllowedActions, ability.action) {
+		return invalidRuntimePayload("runtime session authority allowed_actions do not admit "+ability.action, nil)
+	}
 	if !ability.matchesScope(authority.MatchesScope) {
 		return invalidRuntimePayload("runtime session authority scopes do not admit ability", nil)
 	}
 	return nil
+}
+
+func runtimeAuthorityListAdmits(patterns []string, value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, pattern := range patterns {
+		if strings.TrimSpace(pattern) == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (c AbilityChildContext) childCall(call RuntimeCallContext) (RuntimeCallContext, error) {

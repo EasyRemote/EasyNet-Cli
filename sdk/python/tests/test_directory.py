@@ -13,6 +13,8 @@ from easynet_sdk.directory import (
     DirectoryResolveKind,
     DirectoryResolveRequest,
     DirectoryResolution,
+    DirectoryScanOptions,
+    DirectorySnapshot,
     DirectorySubscribeRequest,
     DirectorySubscription,
     DirectorySubscriptionState,
@@ -66,6 +68,106 @@ def test_directory_client_delegates_resolve_to_injected_provider() -> None:
     assert provider.resolve_request.query_ura == "easynet:///r/example/user/alice"
     assert provider.resolve_request.kind == DirectoryResolveKind.CANONICAL_IDENTITY
     assert provider.resolve_request.include_abilities is False
+
+
+def test_directory_client_scan_collects_every_page() -> None:
+    class PagedDirectoryProvider(FakeDirectoryProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.requests: list[DirectoryResolveRequest] = []
+
+        def resolve(self, request: DirectoryResolveRequest) -> DirectoryResolution:
+            self.requests.append(request)
+            if not request.cursor:
+                return DirectoryResolution(
+                    answer_kind="RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
+                    records=tuple(
+                        directory_module.DirectoryRecord(
+                            kind="ABILITY",
+                            ability_ura=f"easynet:///r/example/ability/device.dev-a.test.{index:02d}",
+                            raw={},
+                        )
+                        for index in range(50)
+                    ),
+                    next_cursor="page-2",
+                )
+            assert request.cursor == "page-2"
+            return DirectoryResolution(
+                answer_kind="RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
+                records=(
+                    directory_module.DirectoryRecord(
+                        kind="ABILITY",
+                        ability_ura="easynet:///r/example/ability/device.dev-a.observe.health",
+                        raw={},
+                    ),
+                ),
+            )
+
+    provider = PagedDirectoryProvider()
+    snapshot: DirectorySnapshot = DirectoryClient(provider).scan(
+        DirectoryResolveRequest(
+            call=_call(),
+            query_ura="easynet:///r/example/device/",
+            kind=DirectoryResolveKind.DIRECTORY_LISTING,
+            limit=50,
+        ),
+        DirectoryScanOptions(max_pages=4, max_records=60),
+    )
+
+    assert snapshot.complete is True
+    assert snapshot.pages == 2
+    assert snapshot.record_count == 51
+    assert len(snapshot.resolution.records) == 51
+    assert snapshot.resolution.records[-1].ability_ura.endswith("observe.health")
+    assert provider.requests[1].cursor == "page-2"
+    assert provider.requests[1].limit == 50
+
+
+def test_directory_client_scan_rejects_repeated_cursor_and_record_bound() -> None:
+    class RepeatingDirectoryProvider(FakeDirectoryProvider):
+        def resolve(self, request: DirectoryResolveRequest) -> DirectoryResolution:
+            del request
+            return DirectoryResolution(
+                answer_kind="RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
+                records=(
+                    directory_module.DirectoryRecord(
+                        kind="ID",
+                        ura="easynet:///r/example/device/dev-a",
+                        raw={},
+                    ),
+                ),
+                next_cursor="same-cursor",
+            )
+
+    client = DirectoryClient(RepeatingDirectoryProvider())
+    request = DirectoryResolveRequest(
+        call=_call(),
+        query_ura="easynet:///r/example/device/",
+        kind=DirectoryResolveKind.DIRECTORY_LISTING,
+    )
+    with pytest.raises(SDKError, match="repeated continuation cursor"):
+        client.scan(request, DirectoryScanOptions(max_pages=4, max_records=4))
+    with pytest.raises(SDKError, match="maximum record bound"):
+        client.scan(request, DirectoryScanOptions(max_pages=4, max_records=1))
+
+
+def test_directory_client_list_normalizes_page_bounds_before_provider() -> None:
+    provider = FakeDirectoryProvider()
+    page = DirectoryClient(provider).list(
+        DirectoryListRequest(call=_call(), ura_prefix="easynet:///r/example/device/")
+    )
+    assert page.records == ()
+    assert provider.list_request is not None
+    assert provider.list_request.limit == directory_module.DEFAULT_DIRECTORY_PAGE_LIMIT
+
+    with pytest.raises(SDKError, match="maximum page bound"):
+        DirectoryClient(provider).list(
+            DirectoryListRequest(
+                call=_call(),
+                ura_prefix="easynet:///r/example/device/",
+                limit=directory_module.MAX_DIRECTORY_PAGE_LIMIT + 1,
+            )
+        )
 
 
 def test_project_directory_resolution_preserves_resolver_facts() -> None:
@@ -166,7 +268,9 @@ def test_project_directory_record_does_not_promote_legacy_aliases() -> None:
     assert record.raw["canonical_name"] == "easynet:///r/example/user/alice"
 
 
-def test_directory_helpers_reject_unbounded_cursor_and_surface_negative_detail() -> None:
+def test_directory_helpers_reject_unbounded_cursor_and_surface_negative_detail() -> (
+    None
+):
     with pytest.raises(SDKError, match="cursor exceeds"):
         directory_module._directory_cursor("x" * 4097)
     with pytest.raises(SDKError, match="limit exceeds"):
@@ -223,7 +327,9 @@ def test_directory_subscription_requires_snapshot_then_live_deltas() -> None:
     subscription = DirectorySubscription(
         _stream(
             [
-                _stream_event(1, {"type": "snapshot", "agents": [], "snapshot_unix_ms": 1}),
+                _stream_event(
+                    1, {"type": "snapshot", "agents": [], "snapshot_unix_ms": 1}
+                ),
                 _stream_event(2, {"type": "heartbeat", "unix_ms": 2}),
             ]
         )

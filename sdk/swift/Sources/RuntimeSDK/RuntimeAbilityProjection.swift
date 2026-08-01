@@ -15,11 +15,13 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
     let abilityURA: String
     let publicName: String
     let intrinsicName: String
+    let action: String
 
-    private init(abilityURA: String, publicName: String, intrinsicName: String) {
+    private init(abilityURA: String, publicName: String, intrinsicName: String, action: String) {
         self.abilityURA = abilityURA
         self.publicName = publicName
         self.intrinsicName = intrinsicName
+        self.action = action
     }
 
     init(tuple: InvocationTuple) throws {
@@ -56,7 +58,8 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
         return RuntimeAbilityProjection(
             abilityURA: projection.abilityURA,
             publicName: publicAbilityName(calleeURA: calleeURA, intrinsicName: projection.intrinsicName),
-            intrinsicName: projection.intrinsicName
+            intrinsicName: projection.intrinsicName,
+            action: projection.action
         )
     }
 
@@ -86,7 +89,16 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
         guard !intrinsicName.isEmpty, !intrinsicName.contains("/") else {
             throw SDKError.validation("authority", "descriptor_ref must contain a canonical Ability URA")
         }
-        return AbilityDescriptorProjection(abilityURA: ability, intrinsicName: intrinsicName)
+        let action = if let bang {
+            String(clean[clean.index(after: bang)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            "invoke"
+        }
+        return AbilityDescriptorProjection(
+            abilityURA: ability,
+            intrinsicName: intrinsicName,
+            action: action.isEmpty ? "invoke" : action
+        )
     }
 
     private static func runtimeGovernanceReadAbility(_ value: String) -> String? {
@@ -134,5 +146,6 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
     private struct AbilityDescriptorProjection: Sendable, Equatable {
         let abilityURA: String
         let intrinsicName: String
+        let action: String
     }
 }

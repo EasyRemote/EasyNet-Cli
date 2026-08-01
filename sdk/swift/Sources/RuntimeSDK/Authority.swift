@@ -615,6 +615,7 @@ private struct InvocationAuthorityBindingValidator {
             "callee_ura": tuple.callee,
             "subject_ura": tuple.subject,
             "descriptor_ref": tuple.descriptorRef,
+            "descriptor_action": ability.action,
         ]
     }
 
@@ -667,9 +668,9 @@ private struct InvocationAuthorityBindingValidator {
             "session authority audience does not admit invocation callee_ura"
         )
         try require(
-            listAdmits(authority.allowedActions, "invoke"),
+            actionListAdmits(authority.allowedActions, ability.action),
             .authorityDenied,
-            "session authority allowed_actions do not admit invoke"
+            "session authority allowed_actions do not admit \(ability.action)"
         )
         try require(
             scopesAdmit(authority.allowedFollowupAbilities, ability),
@@ -706,8 +707,11 @@ private func scopesAdmit(_ patterns: [String], _ ability: RuntimeAbilityProjecti
     return false
 }
 
-private func listAdmits(_ patterns: [String], _ value: String) -> Bool {
-    patterns.contains { scopeMatches($0, value) }
+private func actionListAdmits(_ actions: [String], _ value: String) -> Bool {
+    let expected = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return !expected.isEmpty && actions.contains {
+        $0.trimmingCharacters(in: .whitespacesAndNewlines) == expected
+    }
 }
 
 private func scopeMatches(_ pattern: String, _ value: String) -> Bool {

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Mapping, Protocol
 
@@ -13,6 +13,8 @@ from .stream import StreamHandle
 
 __all__ = [
     "DEFAULT_DIRECTORY_PAGE_LIMIT",
+    "DEFAULT_DIRECTORY_SCAN_MAX_PAGES",
+    "DEFAULT_DIRECTORY_SCAN_MAX_RECORDS",
     "MAX_DIRECTORY_PAGE_LIMIT",
     "DirectoryClient",
     "DirectoryCursor",
@@ -23,6 +25,8 @@ __all__ = [
     "DirectoryProvider",
     "DirectoryRecord",
     "DirectoryResolution",
+    "DirectoryScanOptions",
+    "DirectorySnapshot",
     "DirectoryResolveKind",
     "DirectoryResolveRequest",
     "DirectorySubscribeRequest",
@@ -34,6 +38,10 @@ __all__ = [
 DEFAULT_DIRECTORY_PAGE_LIMIT = 50
 MAX_DIRECTORY_PAGE_LIMIT = 500
 MAX_DIRECTORY_CURSOR_LENGTH = 4096
+DEFAULT_DIRECTORY_SCAN_MAX_PAGES = 64
+DEFAULT_DIRECTORY_SCAN_MAX_RECORDS = 25_000
+MAX_DIRECTORY_SCAN_PAGES = 1_024
+MAX_DIRECTORY_SCAN_RECORDS = 500_000
 
 
 @dataclass(frozen=True)
@@ -43,6 +51,8 @@ class DirectoryResolveRequest:
     realm_hint: str = ""
     ability_name: str = ""
     kind: DirectoryResolveKind = DirectoryResolveKind.ROUTE
+    limit: int = 0
+    cursor: str = ""
     include_abilities: bool | None = None
 
 
@@ -91,6 +101,20 @@ class DirectoryPage:
 
 
 @dataclass(frozen=True)
+class DirectoryScanOptions:
+    max_pages: int = 0
+    max_records: int = 0
+
+
+@dataclass(frozen=True)
+class DirectorySnapshot:
+    resolution: DirectoryResolution
+    pages: int
+    record_count: int
+    complete: bool
+
+
+@dataclass(frozen=True)
 class DirectoryCursor:
     sequence: int
     token: str
@@ -131,7 +155,9 @@ class DirectoryEventEnvelope:
 class DirectoryProvider(Protocol):
     def resolve(self, request: DirectoryResolveRequest) -> DirectoryResolution: ...
     def list(self, request: DirectoryListRequest) -> DirectoryPage: ...
-    def subscribe(self, request: DirectorySubscribeRequest) -> "DirectorySubscription": ...
+    def subscribe(
+        self, request: DirectorySubscribeRequest
+    ) -> "DirectorySubscription": ...
 
 
 class DirectoryClient:
@@ -141,10 +167,61 @@ class DirectoryClient:
         self._provider = provider
 
     def resolve(self, request: DirectoryResolveRequest) -> DirectoryResolution:
-        return self._provider.resolve(request)
+        return self._provider.resolve(_normalize_resolve_request(request))
 
     def list(self, request: DirectoryListRequest) -> DirectoryPage:
-        return self._provider.list(request)
+        return self._provider.list(
+            replace(
+                request,
+                limit=_directory_limit(request.limit),
+                cursor=_directory_cursor(request.cursor),
+            )
+        )
+
+    def scan(
+        self,
+        request: DirectoryResolveRequest,
+        options: DirectoryScanOptions = DirectoryScanOptions(),
+    ) -> DirectorySnapshot:
+        if request.kind != DirectoryResolveKind.DIRECTORY_LISTING:
+            raise _invalid("Directory scan requires a directory listing request")
+        normalized = _normalize_resolve_request(request)
+        if normalized.limit == 0:
+            normalized = replace(normalized, limit=DEFAULT_DIRECTORY_PAGE_LIMIT)
+        max_pages, max_records = _directory_scan_bounds(options)
+        seen = {normalized.cursor} if normalized.cursor else set()
+        records: list[DirectoryRecord] = []
+        first: DirectoryResolution | None = None
+        for page_number in range(1, max_pages + 1):
+            page = self._provider.resolve(normalized)
+            if first is None:
+                first = page
+            elif page.answer_kind != first.answer_kind:
+                raise _invalid("Directory scan answer_kind changed between pages")
+            if page_number > 1 and page.negative:
+                raise _invalid(
+                    "Directory scan returned a negative answer after a partial snapshot"
+                )
+            if len(records) + len(page.records) > max_records:
+                raise _invalid("Directory scan exceeds the maximum record bound")
+            records.extend(page.records)
+            next_cursor = _directory_cursor(page.next_cursor)
+            if not next_cursor or page.negative:
+                assert first is not None
+                resolution = replace(first, records=tuple(records), next_cursor="")
+                return DirectorySnapshot(
+                    resolution=resolution,
+                    pages=page_number,
+                    record_count=len(records),
+                    complete=True,
+                )
+            if next_cursor in seen:
+                raise _invalid("Directory scan received a repeated continuation cursor")
+            seen.add(next_cursor)
+            if page_number == max_pages:
+                raise _invalid("Directory scan exceeds the maximum page bound")
+            normalized = replace(normalized, cursor=next_cursor)
+        raise _invalid("Directory scan did not reach a terminal cursor")
 
     def subscribe(self, request: DirectorySubscribeRequest) -> "DirectorySubscription":
         return self._provider.subscribe(request)
@@ -226,7 +303,9 @@ def _project_resolution(output: Mapping[str, object]) -> DirectoryResolution:
         ability_ura=_mapping_text(output, "ability_ura"),
         route_ura=_mapping_text(output, "route_ura"),
         next_hop=_optional_mapping(output.get("next_hop"), "next_hop"),
-        selected_route=_optional_mapping(output.get("selected_route"), "selected_route"),
+        selected_route=_optional_mapping(
+            output.get("selected_route"), "selected_route"
+        ),
         route_candidates=_optional_mapping_sequence(
             output.get("route_candidates"), "route_candidates"
         ),
@@ -282,6 +361,41 @@ def _directory_cursor(value: object) -> str:
     if len(cursor) > MAX_DIRECTORY_CURSOR_LENGTH:
         raise _invalid("Directory cursor exceeds the maximum bound")
     return cursor
+
+
+def _normalize_resolve_request(
+    request: DirectoryResolveRequest,
+) -> DirectoryResolveRequest:
+    limit = request.limit
+    if limit:
+        limit = _directory_limit(limit)
+    elif not isinstance(limit, int) or isinstance(limit, bool) or limit < 0:
+        raise _invalid("Directory limit must be non-negative")
+    return replace(
+        request,
+        limit=limit,
+        cursor=_directory_cursor(request.cursor),
+    )
+
+
+def _directory_scan_bounds(options: DirectoryScanOptions) -> tuple[int, int]:
+    max_pages = options.max_pages or DEFAULT_DIRECTORY_SCAN_MAX_PAGES
+    if (
+        not isinstance(max_pages, int)
+        or isinstance(max_pages, bool)
+        or max_pages < 1
+        or max_pages > MAX_DIRECTORY_SCAN_PAGES
+    ):
+        raise _invalid("Directory scan max_pages is outside the hard bound")
+    max_records = options.max_records or DEFAULT_DIRECTORY_SCAN_MAX_RECORDS
+    if (
+        not isinstance(max_records, int)
+        or isinstance(max_records, bool)
+        or max_records < 1
+        or max_records > MAX_DIRECTORY_SCAN_RECORDS
+    ):
+        raise _invalid("Directory scan max_records is outside the hard bound")
+    return max_pages, max_records
 
 
 def _negative_detail(resolution: DirectoryResolution) -> str:

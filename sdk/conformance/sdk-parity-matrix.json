@@ -10131,7 +10131,7 @@
         },
         {
           "item": "RuntimeAbilityPackageManifest",
-          "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+          "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
         },
         {
           "item": "AbilityCallRequest.ability_ura",
@@ -10490,6 +10490,10 @@
           "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
         },
         {
+          "item": "RuntimeAbilityPackageManifest.exposure",
+          "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+        },
+        {
           "item": "RuntimeAbilityPackageManifest.input_schema",
           "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
         },
@@ -10519,7 +10523,7 @@
         },
         {
           "item": "RuntimeAbilityPackageManifest.to_mapping",
-          "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+          "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
         }
       ],
       "step_shape_evidence": [
@@ -10558,7 +10562,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -10917,6 +10921,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -10946,7 +10954,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -10985,7 +10993,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -11344,6 +11352,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -11373,7 +11385,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -11412,7 +11424,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -11771,6 +11783,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -11800,7 +11816,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -11839,7 +11855,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -12198,6 +12214,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -12227,7 +12247,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -12266,7 +12286,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -12625,6 +12645,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -12654,7 +12678,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -12693,7 +12717,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -13052,6 +13076,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -13081,7 +13109,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -13120,7 +13148,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -13479,6 +13507,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -13508,7 +13540,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -13547,7 +13579,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -13906,6 +13938,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -13935,7 +13971,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -13974,7 +14010,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -14333,6 +14369,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -14362,7 +14402,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -14401,7 +14441,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -14760,6 +14800,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -14789,7 +14833,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -14828,7 +14872,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -15187,6 +15231,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -15216,7 +15264,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -15255,7 +15303,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -15614,6 +15662,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -15643,7 +15695,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -15682,7 +15734,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -16041,6 +16093,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -16070,7 +16126,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -16109,7 +16165,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -16468,6 +16524,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -16497,7 +16557,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -16536,7 +16596,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -16895,6 +16955,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -16924,7 +16988,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -16963,7 +17027,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -17322,6 +17386,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -17351,7 +17419,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -17390,7 +17458,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -17749,6 +17817,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -17778,7 +17850,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -17817,7 +17889,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -18176,6 +18248,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -18205,7 +18281,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -18244,7 +18320,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -18603,6 +18679,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -18632,7 +18712,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -18671,7 +18751,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -19030,6 +19110,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -19059,7 +19143,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -19098,7 +19182,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -19457,6 +19541,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -19486,7 +19574,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -19525,7 +19613,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -19884,6 +19972,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -19913,7 +20005,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         },
@@ -19952,7 +20044,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest",
-              "sha256": "abd462a37770c724992b232d29ca19f9819a0b046326028c2c676791cbfea549"
+              "sha256": "85bc5c64582b0c8a57085a2626f320eb400b9aab35c1223adb1c42304c431518"
             },
             {
               "item": "AbilityCallRequest.ability_ura",
@@ -20311,6 +20403,10 @@
               "sha256": "ed6b5bdfd01e0f00558181a9d892ea6b054abd17957bb589eaba2fc25466fd18"
             },
             {
+              "item": "RuntimeAbilityPackageManifest.exposure",
+              "sha256": "2faf490b5c3fc8d786283fc98d4b8714a3a607a48a1bf37794cbde96ba4dda73"
+            },
+            {
               "item": "RuntimeAbilityPackageManifest.input_schema",
               "sha256": "0fe9362a3e179417f8a72614fe5c1cc78410fcdaac23999c2276b5e1ef7b4a53"
             },
@@ -20340,7 +20436,7 @@
             },
             {
               "item": "RuntimeAbilityPackageManifest.to_mapping",
-              "sha256": "4ec4ba7128a191d9caea2d43e1619ba9acb09cd6a80cde09af1e56ad864bb42a"
+              "sha256": "711529877473899c5877e5601d51478d9513d2af4c57b5a89ed95573c687b70f"
             }
           ]
         }
@@ -126616,6 +126712,14 @@
       "unproven_requirement_ids": [],
       "shape_evidence": [
         {
+          "item": "DefaultDirectoryScanMaxPages",
+          "sha256": "92b0d817c20b1f1bf23a47bf27a00f549a0e08f44cbae06fcd5d1b320db3d951"
+        },
+        {
+          "item": "DefaultDirectoryScanMaxRecords",
+          "sha256": "4f5fc3e0b06e2fca7721e94274cd5be50958eaa902f694b19af02310d3c0d750"
+        },
+        {
           "item": "DirectoryClient",
           "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
         },
@@ -126669,11 +126773,19 @@
         },
         {
           "item": "DirectoryResolveRequest",
-          "sha256": "528bf5c4b68a690e8450cf2899019cf38f50ec5c845bde43592604ccdbc0eb85"
+          "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
         },
         {
           "item": "DirectoryResolveRoute",
           "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
+        },
+        {
+          "item": "DirectoryScanOptions",
+          "sha256": "aad707bd5af82ace8f6729e24689a3a7906bc4b107dcbfa4608fc4b04069ad9b"
+        },
+        {
+          "item": "DirectorySnapshot",
+          "sha256": "fb619e5d0d07faa3d951ec5c631007ab114c233370353e3fdd5490f563d975c3"
         },
         {
           "item": "DirectorySubscribeRequest",
@@ -126702,6 +126814,14 @@
         {
           "item": "DirectorySubscriptionState",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
+          "item": "MaxDirectoryScanPages",
+          "sha256": "1c3e57e4baaf0865403ddcbd32b81c3de5b3cc51bbbdf16b228a875a249f1c43"
+        },
+        {
+          "item": "MaxDirectoryScanRecords",
+          "sha256": "952522716a8fd2b6877101874d483c7549aaaa73d6fc3f7996b994d5bc43de1c"
         },
         {
           "item": "NewDirectoryClient",
@@ -126738,6 +126858,10 @@
         {
           "item": "DirectoryClient.Resolve",
           "sha256": "64f80526f50cf989eeec20bbe66a7dc89558d0ba6aaa547728c19d579307156a"
+        },
+        {
+          "item": "DirectoryClient.Scan",
+          "sha256": "ae70c7e68904a85554a3a98358e0bafa6a8121dd03f344f3e6cb3ae274ea54ce"
         },
         {
           "item": "DirectoryClient.Subscribe",
@@ -126904,6 +127028,10 @@
           "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
         },
         {
+          "item": "DirectoryResolveRequest.Cursor",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
           "item": "DirectoryResolveRequest.IncludeAbilities",
           "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
         },
@@ -126912,12 +127040,40 @@
           "sha256": "0af24b0d4b28fa10f6422639070d80873560f348b1d2f43a6bdab7820235a9b1"
         },
         {
+          "item": "DirectoryResolveRequest.Limit",
+          "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+        },
+        {
           "item": "DirectoryResolveRequest.QueryURA",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
           "item": "DirectoryResolveRequest.RealmHint",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
+          "item": "DirectoryScanOptions.MaxPages",
+          "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+        },
+        {
+          "item": "DirectoryScanOptions.MaxRecords",
+          "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+        },
+        {
+          "item": "DirectorySnapshot.Complete",
+          "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
+        },
+        {
+          "item": "DirectorySnapshot.Pages",
+          "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+        },
+        {
+          "item": "DirectorySnapshot.RecordCount",
+          "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+        },
+        {
+          "item": "DirectorySnapshot.Resolution",
+          "sha256": "95528bf560a49e90fc75e7c48f085825410993bd727b51849fffe67c0ac677c4"
         },
         {
           "item": "DirectorySubscribeRequest.Call",
@@ -126955,6 +127111,14 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DefaultDirectoryScanMaxPages",
+              "sha256": "92b0d817c20b1f1bf23a47bf27a00f549a0e08f44cbae06fcd5d1b320db3d951"
+            },
+            {
+              "item": "DefaultDirectoryScanMaxRecords",
+              "sha256": "4f5fc3e0b06e2fca7721e94274cd5be50958eaa902f694b19af02310d3c0d750"
+            },
+            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -127008,11 +127172,19 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "528bf5c4b68a690e8450cf2899019cf38f50ec5c845bde43592604ccdbc0eb85"
+              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
             },
             {
               "item": "DirectoryResolveRoute",
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "aad707bd5af82ace8f6729e24689a3a7906bc4b107dcbfa4608fc4b04069ad9b"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "fb619e5d0d07faa3d951ec5c631007ab114c233370353e3fdd5490f563d975c3"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -127041,6 +127213,14 @@
             {
               "item": "DirectorySubscriptionState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "MaxDirectoryScanPages",
+              "sha256": "1c3e57e4baaf0865403ddcbd32b81c3de5b3cc51bbbdf16b228a875a249f1c43"
+            },
+            {
+              "item": "MaxDirectoryScanRecords",
+              "sha256": "952522716a8fd2b6877101874d483c7549aaaa73d6fc3f7996b994d5bc43de1c"
             },
             {
               "item": "NewDirectoryClient",
@@ -127077,6 +127257,10 @@
             {
               "item": "DirectoryClient.Resolve",
               "sha256": "64f80526f50cf989eeec20bbe66a7dc89558d0ba6aaa547728c19d579307156a"
+            },
+            {
+              "item": "DirectoryClient.Scan",
+              "sha256": "ae70c7e68904a85554a3a98358e0bafa6a8121dd03f344f3e6cb3ae274ea54ce"
             },
             {
               "item": "DirectoryClient.Subscribe",
@@ -127243,6 +127427,10 @@
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
             },
             {
+              "item": "DirectoryResolveRequest.Cursor",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "DirectoryResolveRequest.IncludeAbilities",
               "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
@@ -127251,12 +127439,40 @@
               "sha256": "0af24b0d4b28fa10f6422639070d80873560f348b1d2f43a6bdab7820235a9b1"
             },
             {
+              "item": "DirectoryResolveRequest.Limit",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
               "item": "DirectoryResolveRequest.QueryURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxPages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxRecords",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Complete",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
+            },
+            {
+              "item": "DirectorySnapshot.Pages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.RecordCount",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Resolution",
+              "sha256": "95528bf560a49e90fc75e7c48f085825410993bd727b51849fffe67c0ac677c4"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -127294,6 +127510,14 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DefaultDirectoryScanMaxPages",
+              "sha256": "92b0d817c20b1f1bf23a47bf27a00f549a0e08f44cbae06fcd5d1b320db3d951"
+            },
+            {
+              "item": "DefaultDirectoryScanMaxRecords",
+              "sha256": "4f5fc3e0b06e2fca7721e94274cd5be50958eaa902f694b19af02310d3c0d750"
+            },
+            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -127347,11 +127571,19 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "528bf5c4b68a690e8450cf2899019cf38f50ec5c845bde43592604ccdbc0eb85"
+              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
             },
             {
               "item": "DirectoryResolveRoute",
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "aad707bd5af82ace8f6729e24689a3a7906bc4b107dcbfa4608fc4b04069ad9b"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "fb619e5d0d07faa3d951ec5c631007ab114c233370353e3fdd5490f563d975c3"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -127380,6 +127612,14 @@
             {
               "item": "DirectorySubscriptionState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "MaxDirectoryScanPages",
+              "sha256": "1c3e57e4baaf0865403ddcbd32b81c3de5b3cc51bbbdf16b228a875a249f1c43"
+            },
+            {
+              "item": "MaxDirectoryScanRecords",
+              "sha256": "952522716a8fd2b6877101874d483c7549aaaa73d6fc3f7996b994d5bc43de1c"
             },
             {
               "item": "NewDirectoryClient",
@@ -127416,6 +127656,10 @@
             {
               "item": "DirectoryClient.Resolve",
               "sha256": "64f80526f50cf989eeec20bbe66a7dc89558d0ba6aaa547728c19d579307156a"
+            },
+            {
+              "item": "DirectoryClient.Scan",
+              "sha256": "ae70c7e68904a85554a3a98358e0bafa6a8121dd03f344f3e6cb3ae274ea54ce"
             },
             {
               "item": "DirectoryClient.Subscribe",
@@ -127582,6 +127826,10 @@
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
             },
             {
+              "item": "DirectoryResolveRequest.Cursor",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "DirectoryResolveRequest.IncludeAbilities",
               "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
@@ -127590,12 +127838,40 @@
               "sha256": "0af24b0d4b28fa10f6422639070d80873560f348b1d2f43a6bdab7820235a9b1"
             },
             {
+              "item": "DirectoryResolveRequest.Limit",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
               "item": "DirectoryResolveRequest.QueryURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxPages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxRecords",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Complete",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
+            },
+            {
+              "item": "DirectorySnapshot.Pages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.RecordCount",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Resolution",
+              "sha256": "95528bf560a49e90fc75e7c48f085825410993bd727b51849fffe67c0ac677c4"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -127633,6 +127909,14 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DefaultDirectoryScanMaxPages",
+              "sha256": "92b0d817c20b1f1bf23a47bf27a00f549a0e08f44cbae06fcd5d1b320db3d951"
+            },
+            {
+              "item": "DefaultDirectoryScanMaxRecords",
+              "sha256": "4f5fc3e0b06e2fca7721e94274cd5be50958eaa902f694b19af02310d3c0d750"
+            },
+            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -127686,11 +127970,19 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "528bf5c4b68a690e8450cf2899019cf38f50ec5c845bde43592604ccdbc0eb85"
+              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
             },
             {
               "item": "DirectoryResolveRoute",
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "aad707bd5af82ace8f6729e24689a3a7906bc4b107dcbfa4608fc4b04069ad9b"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "fb619e5d0d07faa3d951ec5c631007ab114c233370353e3fdd5490f563d975c3"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -127719,6 +128011,14 @@
             {
               "item": "DirectorySubscriptionState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "MaxDirectoryScanPages",
+              "sha256": "1c3e57e4baaf0865403ddcbd32b81c3de5b3cc51bbbdf16b228a875a249f1c43"
+            },
+            {
+              "item": "MaxDirectoryScanRecords",
+              "sha256": "952522716a8fd2b6877101874d483c7549aaaa73d6fc3f7996b994d5bc43de1c"
             },
             {
               "item": "NewDirectoryClient",
@@ -127755,6 +128055,10 @@
             {
               "item": "DirectoryClient.Resolve",
               "sha256": "64f80526f50cf989eeec20bbe66a7dc89558d0ba6aaa547728c19d579307156a"
+            },
+            {
+              "item": "DirectoryClient.Scan",
+              "sha256": "ae70c7e68904a85554a3a98358e0bafa6a8121dd03f344f3e6cb3ae274ea54ce"
             },
             {
               "item": "DirectoryClient.Subscribe",
@@ -127921,6 +128225,10 @@
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
             },
             {
+              "item": "DirectoryResolveRequest.Cursor",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "DirectoryResolveRequest.IncludeAbilities",
               "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
@@ -127929,12 +128237,40 @@
               "sha256": "0af24b0d4b28fa10f6422639070d80873560f348b1d2f43a6bdab7820235a9b1"
             },
             {
+              "item": "DirectoryResolveRequest.Limit",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
               "item": "DirectoryResolveRequest.QueryURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxPages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxRecords",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Complete",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
+            },
+            {
+              "item": "DirectorySnapshot.Pages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.RecordCount",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Resolution",
+              "sha256": "95528bf560a49e90fc75e7c48f085825410993bd727b51849fffe67c0ac677c4"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -127972,6 +128308,14 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DefaultDirectoryScanMaxPages",
+              "sha256": "92b0d817c20b1f1bf23a47bf27a00f549a0e08f44cbae06fcd5d1b320db3d951"
+            },
+            {
+              "item": "DefaultDirectoryScanMaxRecords",
+              "sha256": "4f5fc3e0b06e2fca7721e94274cd5be50958eaa902f694b19af02310d3c0d750"
+            },
+            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -128025,11 +128369,19 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "528bf5c4b68a690e8450cf2899019cf38f50ec5c845bde43592604ccdbc0eb85"
+              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
             },
             {
               "item": "DirectoryResolveRoute",
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "aad707bd5af82ace8f6729e24689a3a7906bc4b107dcbfa4608fc4b04069ad9b"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "fb619e5d0d07faa3d951ec5c631007ab114c233370353e3fdd5490f563d975c3"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -128058,6 +128410,14 @@
             {
               "item": "DirectorySubscriptionState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "MaxDirectoryScanPages",
+              "sha256": "1c3e57e4baaf0865403ddcbd32b81c3de5b3cc51bbbdf16b228a875a249f1c43"
+            },
+            {
+              "item": "MaxDirectoryScanRecords",
+              "sha256": "952522716a8fd2b6877101874d483c7549aaaa73d6fc3f7996b994d5bc43de1c"
             },
             {
               "item": "NewDirectoryClient",
@@ -128094,6 +128454,10 @@
             {
               "item": "DirectoryClient.Resolve",
               "sha256": "64f80526f50cf989eeec20bbe66a7dc89558d0ba6aaa547728c19d579307156a"
+            },
+            {
+              "item": "DirectoryClient.Scan",
+              "sha256": "ae70c7e68904a85554a3a98358e0bafa6a8121dd03f344f3e6cb3ae274ea54ce"
             },
             {
               "item": "DirectoryClient.Subscribe",
@@ -128260,6 +128624,10 @@
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
             },
             {
+              "item": "DirectoryResolveRequest.Cursor",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "DirectoryResolveRequest.IncludeAbilities",
               "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
@@ -128268,12 +128636,40 @@
               "sha256": "0af24b0d4b28fa10f6422639070d80873560f348b1d2f43a6bdab7820235a9b1"
             },
             {
+              "item": "DirectoryResolveRequest.Limit",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
               "item": "DirectoryResolveRequest.QueryURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxPages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxRecords",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Complete",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
+            },
+            {
+              "item": "DirectorySnapshot.Pages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.RecordCount",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Resolution",
+              "sha256": "95528bf560a49e90fc75e7c48f085825410993bd727b51849fffe67c0ac677c4"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -128311,6 +128707,14 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DefaultDirectoryScanMaxPages",
+              "sha256": "92b0d817c20b1f1bf23a47bf27a00f549a0e08f44cbae06fcd5d1b320db3d951"
+            },
+            {
+              "item": "DefaultDirectoryScanMaxRecords",
+              "sha256": "4f5fc3e0b06e2fca7721e94274cd5be50958eaa902f694b19af02310d3c0d750"
+            },
+            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -128364,11 +128768,19 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "528bf5c4b68a690e8450cf2899019cf38f50ec5c845bde43592604ccdbc0eb85"
+              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
             },
             {
               "item": "DirectoryResolveRoute",
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "aad707bd5af82ace8f6729e24689a3a7906bc4b107dcbfa4608fc4b04069ad9b"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "fb619e5d0d07faa3d951ec5c631007ab114c233370353e3fdd5490f563d975c3"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -128397,6 +128809,14 @@
             {
               "item": "DirectorySubscriptionState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "MaxDirectoryScanPages",
+              "sha256": "1c3e57e4baaf0865403ddcbd32b81c3de5b3cc51bbbdf16b228a875a249f1c43"
+            },
+            {
+              "item": "MaxDirectoryScanRecords",
+              "sha256": "952522716a8fd2b6877101874d483c7549aaaa73d6fc3f7996b994d5bc43de1c"
             },
             {
               "item": "NewDirectoryClient",
@@ -128433,6 +128853,10 @@
             {
               "item": "DirectoryClient.Resolve",
               "sha256": "64f80526f50cf989eeec20bbe66a7dc89558d0ba6aaa547728c19d579307156a"
+            },
+            {
+              "item": "DirectoryClient.Scan",
+              "sha256": "ae70c7e68904a85554a3a98358e0bafa6a8121dd03f344f3e6cb3ae274ea54ce"
             },
             {
               "item": "DirectoryClient.Subscribe",
@@ -128599,6 +129023,10 @@
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
             },
             {
+              "item": "DirectoryResolveRequest.Cursor",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "DirectoryResolveRequest.IncludeAbilities",
               "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
@@ -128607,12 +129035,40 @@
               "sha256": "0af24b0d4b28fa10f6422639070d80873560f348b1d2f43a6bdab7820235a9b1"
             },
             {
+              "item": "DirectoryResolveRequest.Limit",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
               "item": "DirectoryResolveRequest.QueryURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxPages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxRecords",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Complete",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
+            },
+            {
+              "item": "DirectorySnapshot.Pages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.RecordCount",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Resolution",
+              "sha256": "95528bf560a49e90fc75e7c48f085825410993bd727b51849fffe67c0ac677c4"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -128650,6 +129106,14 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DefaultDirectoryScanMaxPages",
+              "sha256": "92b0d817c20b1f1bf23a47bf27a00f549a0e08f44cbae06fcd5d1b320db3d951"
+            },
+            {
+              "item": "DefaultDirectoryScanMaxRecords",
+              "sha256": "4f5fc3e0b06e2fca7721e94274cd5be50958eaa902f694b19af02310d3c0d750"
+            },
+            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -128703,11 +129167,19 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "528bf5c4b68a690e8450cf2899019cf38f50ec5c845bde43592604ccdbc0eb85"
+              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
             },
             {
               "item": "DirectoryResolveRoute",
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "aad707bd5af82ace8f6729e24689a3a7906bc4b107dcbfa4608fc4b04069ad9b"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "fb619e5d0d07faa3d951ec5c631007ab114c233370353e3fdd5490f563d975c3"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -128736,6 +129208,14 @@
             {
               "item": "DirectorySubscriptionState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "MaxDirectoryScanPages",
+              "sha256": "1c3e57e4baaf0865403ddcbd32b81c3de5b3cc51bbbdf16b228a875a249f1c43"
+            },
+            {
+              "item": "MaxDirectoryScanRecords",
+              "sha256": "952522716a8fd2b6877101874d483c7549aaaa73d6fc3f7996b994d5bc43de1c"
             },
             {
               "item": "NewDirectoryClient",
@@ -128772,6 +129252,10 @@
             {
               "item": "DirectoryClient.Resolve",
               "sha256": "64f80526f50cf989eeec20bbe66a7dc89558d0ba6aaa547728c19d579307156a"
+            },
+            {
+              "item": "DirectoryClient.Scan",
+              "sha256": "ae70c7e68904a85554a3a98358e0bafa6a8121dd03f344f3e6cb3ae274ea54ce"
             },
             {
               "item": "DirectoryClient.Subscribe",
@@ -128938,6 +129422,10 @@
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
             },
             {
+              "item": "DirectoryResolveRequest.Cursor",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "DirectoryResolveRequest.IncludeAbilities",
               "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
@@ -128946,12 +129434,40 @@
               "sha256": "0af24b0d4b28fa10f6422639070d80873560f348b1d2f43a6bdab7820235a9b1"
             },
             {
+              "item": "DirectoryResolveRequest.Limit",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
               "item": "DirectoryResolveRequest.QueryURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxPages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxRecords",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Complete",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
+            },
+            {
+              "item": "DirectorySnapshot.Pages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.RecordCount",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Resolution",
+              "sha256": "95528bf560a49e90fc75e7c48f085825410993bd727b51849fffe67c0ac677c4"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -128989,6 +129505,14 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DefaultDirectoryScanMaxPages",
+              "sha256": "92b0d817c20b1f1bf23a47bf27a00f549a0e08f44cbae06fcd5d1b320db3d951"
+            },
+            {
+              "item": "DefaultDirectoryScanMaxRecords",
+              "sha256": "4f5fc3e0b06e2fca7721e94274cd5be50958eaa902f694b19af02310d3c0d750"
+            },
+            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -129042,11 +129566,19 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "528bf5c4b68a690e8450cf2899019cf38f50ec5c845bde43592604ccdbc0eb85"
+              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
             },
             {
               "item": "DirectoryResolveRoute",
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "aad707bd5af82ace8f6729e24689a3a7906bc4b107dcbfa4608fc4b04069ad9b"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "fb619e5d0d07faa3d951ec5c631007ab114c233370353e3fdd5490f563d975c3"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -129075,6 +129607,14 @@
             {
               "item": "DirectorySubscriptionState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "MaxDirectoryScanPages",
+              "sha256": "1c3e57e4baaf0865403ddcbd32b81c3de5b3cc51bbbdf16b228a875a249f1c43"
+            },
+            {
+              "item": "MaxDirectoryScanRecords",
+              "sha256": "952522716a8fd2b6877101874d483c7549aaaa73d6fc3f7996b994d5bc43de1c"
             },
             {
               "item": "NewDirectoryClient",
@@ -129111,6 +129651,10 @@
             {
               "item": "DirectoryClient.Resolve",
               "sha256": "64f80526f50cf989eeec20bbe66a7dc89558d0ba6aaa547728c19d579307156a"
+            },
+            {
+              "item": "DirectoryClient.Scan",
+              "sha256": "ae70c7e68904a85554a3a98358e0bafa6a8121dd03f344f3e6cb3ae274ea54ce"
             },
             {
               "item": "DirectoryClient.Subscribe",
@@ -129277,6 +129821,10 @@
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
             },
             {
+              "item": "DirectoryResolveRequest.Cursor",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "DirectoryResolveRequest.IncludeAbilities",
               "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
@@ -129285,12 +129833,40 @@
               "sha256": "0af24b0d4b28fa10f6422639070d80873560f348b1d2f43a6bdab7820235a9b1"
             },
             {
+              "item": "DirectoryResolveRequest.Limit",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
               "item": "DirectoryResolveRequest.QueryURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxPages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxRecords",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Complete",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
+            },
+            {
+              "item": "DirectorySnapshot.Pages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.RecordCount",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Resolution",
+              "sha256": "95528bf560a49e90fc75e7c48f085825410993bd727b51849fffe67c0ac677c4"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -129328,6 +129904,14 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DefaultDirectoryScanMaxPages",
+              "sha256": "92b0d817c20b1f1bf23a47bf27a00f549a0e08f44cbae06fcd5d1b320db3d951"
+            },
+            {
+              "item": "DefaultDirectoryScanMaxRecords",
+              "sha256": "4f5fc3e0b06e2fca7721e94274cd5be50958eaa902f694b19af02310d3c0d750"
+            },
+            {
               "item": "DirectoryClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -129381,11 +129965,19 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "528bf5c4b68a690e8450cf2899019cf38f50ec5c845bde43592604ccdbc0eb85"
+              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
             },
             {
               "item": "DirectoryResolveRoute",
               "sha256": "fa14a8e3f17bdfaf9fd75b5befe703888923c6cedbcb316a3efa95a86ef57c78"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "aad707bd5af82ace8f6729e24689a3a7906bc4b107dcbfa4608fc4b04069ad9b"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "fb619e5d0d07faa3d951ec5c631007ab114c233370353e3fdd5490f563d975c3"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -129414,6 +130006,14 @@
             {
               "item": "DirectorySubscriptionState",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "MaxDirectoryScanPages",
+              "sha256": "1c3e57e4baaf0865403ddcbd32b81c3de5b3cc51bbbdf16b228a875a249f1c43"
+            },
+            {
+              "item": "MaxDirectoryScanRecords",
+              "sha256": "952522716a8fd2b6877101874d483c7549aaaa73d6fc3f7996b994d5bc43de1c"
             },
             {
               "item": "NewDirectoryClient",
@@ -129450,6 +130050,10 @@
             {
               "item": "DirectoryClient.Resolve",
               "sha256": "64f80526f50cf989eeec20bbe66a7dc89558d0ba6aaa547728c19d579307156a"
+            },
+            {
+              "item": "DirectoryClient.Scan",
+              "sha256": "ae70c7e68904a85554a3a98358e0bafa6a8121dd03f344f3e6cb3ae274ea54ce"
             },
             {
               "item": "DirectoryClient.Subscribe",
@@ -129616,6 +130220,10 @@
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
             },
             {
+              "item": "DirectoryResolveRequest.Cursor",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "DirectoryResolveRequest.IncludeAbilities",
               "sha256": "31f02903a9b7a4aae055be65580891b51d1a4c5a9e0fcf397e07bc0abfc93104"
             },
@@ -129624,12 +130232,40 @@
               "sha256": "0af24b0d4b28fa10f6422639070d80873560f348b1d2f43a6bdab7820235a9b1"
             },
             {
+              "item": "DirectoryResolveRequest.Limit",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
               "item": "DirectoryResolveRequest.QueryURA",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.RealmHint",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxPages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectoryScanOptions.MaxRecords",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Complete",
+              "sha256": "b760f44fa5965c2474a3b471467a22c43185152129295af588b022ae50b50903"
+            },
+            {
+              "item": "DirectorySnapshot.Pages",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.RecordCount",
+              "sha256": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91"
+            },
+            {
+              "item": "DirectorySnapshot.Resolution",
+              "sha256": "95528bf560a49e90fc75e7c48f085825410993bd727b51849fffe67c0ac677c4"
             },
             {
               "item": "DirectorySubscribeRequest.Call",
@@ -129676,8 +130312,16 @@
       "unproven_requirement_ids": [],
       "shape_evidence": [
         {
+          "item": "DEFAULT_DIRECTORY_SCAN_MAX_PAGES",
+          "sha256": "8a92062ce732bf9a87f2593f51d534d98d6db2543acf7e66e5db46d9c2ab4e29"
+        },
+        {
+          "item": "DEFAULT_DIRECTORY_SCAN_MAX_RECORDS",
+          "sha256": "6a460f3523b07761a07cb7838b9199a8f6fb383159029f45f5b9ecf44f280503"
+        },
+        {
           "item": "DirectoryClient",
-          "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
+          "sha256": "48534480c5074d13ee34a2617a896ca274d34c783b7b4b370bff23b75fdc0e4f"
         },
         {
           "item": "DirectoryCursor",
@@ -129717,7 +130361,15 @@
         },
         {
           "item": "DirectoryResolveRequest",
-          "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
+          "sha256": "e745603f934a8459e4e9e8050c1d5590927ee23518feaa779cb21fe4c59c5299"
+        },
+        {
+          "item": "DirectoryScanOptions",
+          "sha256": "323804252c5fbfa8365c5027e604e1c1d58fcb3f2ce3b2d763e525c4dc3055bf"
+        },
+        {
+          "item": "DirectorySnapshot",
+          "sha256": "15c8f02fa29ec4cdff691fb50f1777186d70fc00ce7fe82bfbc23ab8d4211939"
         },
         {
           "item": "DirectorySubscribeRequest",
@@ -129737,11 +130389,15 @@
         },
         {
           "item": "DirectoryClient.list",
-          "sha256": "5273f9fd9c8aa63d7249eb2ee437b6d90ea2bb1d5b7b839aa795348124f10d9d"
+          "sha256": "3c142198c11e2bc44cbdab6c4c01dac1f155c475a6a21cba42c3bb871c3f9ddf"
         },
         {
           "item": "DirectoryClient.resolve",
-          "sha256": "0883ca53df1fb421877073f97267c45c48169678aba8ba7ec92a91cef7547ef0"
+          "sha256": "6c0d8d0b248ef49a506f582098542bdf147d025e249089ed601f454e81ea9592"
+        },
+        {
+          "item": "DirectoryClient.scan",
+          "sha256": "a98726d26b1dbf5b7a7e5becc8fddb307165f8acb964b29095a69591c32b91e2"
         },
         {
           "item": "DirectoryClient.subscribe",
@@ -129928,6 +130584,10 @@
           "sha256": "59fdb6f46ebc6a27fcc21407b38ed16820cdfe06fe94c74dc75357f128ffd767"
         },
         {
+          "item": "DirectoryResolveRequest.cursor",
+          "sha256": "f9d0bb967c48570091682aa7afb54ec43882ab9bf7f49f31054d916a98e94134"
+        },
+        {
           "item": "DirectoryResolveRequest.include_abilities",
           "sha256": "9ea01afce904f155c617a94409de3942f837788834bcd9bb8afe85362d8fb87b"
         },
@@ -129936,12 +130596,40 @@
           "sha256": "dcb233ea09c1fc3077c17a99b9dc8d3fa1d3b0cbea1280893ed677358b416c02"
         },
         {
+          "item": "DirectoryResolveRequest.limit",
+          "sha256": "0c7154f27a35e822710747c6173adda3f6280570f91782300aba5b339aa716c6"
+        },
+        {
           "item": "DirectoryResolveRequest.query_ura",
           "sha256": "8da5d04f6e4488cbbb874328768e825efe606d65e0748b3e7d228bde28a66cdd"
         },
         {
           "item": "DirectoryResolveRequest.realm_hint",
           "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
+        },
+        {
+          "item": "DirectoryScanOptions.max_pages",
+          "sha256": "38195848fa8aa93e26b330bcab12e07ccb195a367214b49313d45ab2967bf897"
+        },
+        {
+          "item": "DirectoryScanOptions.max_records",
+          "sha256": "22e5c81b7b2ee42f8f5eee0318427c9e252a7620adebba5ad192710db547e589"
+        },
+        {
+          "item": "DirectorySnapshot.complete",
+          "sha256": "a694d263945ffc9904489df4ddbd01c91c32265d66db4f6fce704a4977b9cefd"
+        },
+        {
+          "item": "DirectorySnapshot.pages",
+          "sha256": "2bd3c02f47db939abfe605640ee06d3bdb246894ac78a21dd63ba06059ebb80d"
+        },
+        {
+          "item": "DirectorySnapshot.record_count",
+          "sha256": "168383843283b413ef0b4bab6bc4508c4d63282f21d8a7c1fe7ec33d6aa5ed60"
+        },
+        {
+          "item": "DirectorySnapshot.resolution",
+          "sha256": "8f1e0e98fec31680e02b6a5124d1fbfd584a761f4ffa48a394769eb4954e1bf7"
         },
         {
           "item": "DirectorySubscribeRequest.call",
@@ -129995,8 +130683,16 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_PAGES",
+              "sha256": "8a92062ce732bf9a87f2593f51d534d98d6db2543acf7e66e5db46d9c2ab4e29"
+            },
+            {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_RECORDS",
+              "sha256": "6a460f3523b07761a07cb7838b9199a8f6fb383159029f45f5b9ecf44f280503"
+            },
+            {
               "item": "DirectoryClient",
-              "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
+              "sha256": "48534480c5074d13ee34a2617a896ca274d34c783b7b4b370bff23b75fdc0e4f"
             },
             {
               "item": "DirectoryCursor",
@@ -130036,7 +130732,15 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
+              "sha256": "e745603f934a8459e4e9e8050c1d5590927ee23518feaa779cb21fe4c59c5299"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "323804252c5fbfa8365c5027e604e1c1d58fcb3f2ce3b2d763e525c4dc3055bf"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "15c8f02fa29ec4cdff691fb50f1777186d70fc00ce7fe82bfbc23ab8d4211939"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -130056,11 +130760,15 @@
             },
             {
               "item": "DirectoryClient.list",
-              "sha256": "5273f9fd9c8aa63d7249eb2ee437b6d90ea2bb1d5b7b839aa795348124f10d9d"
+              "sha256": "3c142198c11e2bc44cbdab6c4c01dac1f155c475a6a21cba42c3bb871c3f9ddf"
             },
             {
               "item": "DirectoryClient.resolve",
-              "sha256": "0883ca53df1fb421877073f97267c45c48169678aba8ba7ec92a91cef7547ef0"
+              "sha256": "6c0d8d0b248ef49a506f582098542bdf147d025e249089ed601f454e81ea9592"
+            },
+            {
+              "item": "DirectoryClient.scan",
+              "sha256": "a98726d26b1dbf5b7a7e5becc8fddb307165f8acb964b29095a69591c32b91e2"
             },
             {
               "item": "DirectoryClient.subscribe",
@@ -130247,6 +130955,10 @@
               "sha256": "59fdb6f46ebc6a27fcc21407b38ed16820cdfe06fe94c74dc75357f128ffd767"
             },
             {
+              "item": "DirectoryResolveRequest.cursor",
+              "sha256": "f9d0bb967c48570091682aa7afb54ec43882ab9bf7f49f31054d916a98e94134"
+            },
+            {
               "item": "DirectoryResolveRequest.include_abilities",
               "sha256": "9ea01afce904f155c617a94409de3942f837788834bcd9bb8afe85362d8fb87b"
             },
@@ -130255,12 +130967,40 @@
               "sha256": "dcb233ea09c1fc3077c17a99b9dc8d3fa1d3b0cbea1280893ed677358b416c02"
             },
             {
+              "item": "DirectoryResolveRequest.limit",
+              "sha256": "0c7154f27a35e822710747c6173adda3f6280570f91782300aba5b339aa716c6"
+            },
+            {
               "item": "DirectoryResolveRequest.query_ura",
               "sha256": "8da5d04f6e4488cbbb874328768e825efe606d65e0748b3e7d228bde28a66cdd"
             },
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
+            },
+            {
+              "item": "DirectoryScanOptions.max_pages",
+              "sha256": "38195848fa8aa93e26b330bcab12e07ccb195a367214b49313d45ab2967bf897"
+            },
+            {
+              "item": "DirectoryScanOptions.max_records",
+              "sha256": "22e5c81b7b2ee42f8f5eee0318427c9e252a7620adebba5ad192710db547e589"
+            },
+            {
+              "item": "DirectorySnapshot.complete",
+              "sha256": "a694d263945ffc9904489df4ddbd01c91c32265d66db4f6fce704a4977b9cefd"
+            },
+            {
+              "item": "DirectorySnapshot.pages",
+              "sha256": "2bd3c02f47db939abfe605640ee06d3bdb246894ac78a21dd63ba06059ebb80d"
+            },
+            {
+              "item": "DirectorySnapshot.record_count",
+              "sha256": "168383843283b413ef0b4bab6bc4508c4d63282f21d8a7c1fe7ec33d6aa5ed60"
+            },
+            {
+              "item": "DirectorySnapshot.resolution",
+              "sha256": "8f1e0e98fec31680e02b6a5124d1fbfd584a761f4ffa48a394769eb4954e1bf7"
             },
             {
               "item": "DirectorySubscribeRequest.call",
@@ -130314,8 +131054,16 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_PAGES",
+              "sha256": "8a92062ce732bf9a87f2593f51d534d98d6db2543acf7e66e5db46d9c2ab4e29"
+            },
+            {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_RECORDS",
+              "sha256": "6a460f3523b07761a07cb7838b9199a8f6fb383159029f45f5b9ecf44f280503"
+            },
+            {
               "item": "DirectoryClient",
-              "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
+              "sha256": "48534480c5074d13ee34a2617a896ca274d34c783b7b4b370bff23b75fdc0e4f"
             },
             {
               "item": "DirectoryCursor",
@@ -130355,7 +131103,15 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
+              "sha256": "e745603f934a8459e4e9e8050c1d5590927ee23518feaa779cb21fe4c59c5299"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "323804252c5fbfa8365c5027e604e1c1d58fcb3f2ce3b2d763e525c4dc3055bf"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "15c8f02fa29ec4cdff691fb50f1777186d70fc00ce7fe82bfbc23ab8d4211939"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -130375,11 +131131,15 @@
             },
             {
               "item": "DirectoryClient.list",
-              "sha256": "5273f9fd9c8aa63d7249eb2ee437b6d90ea2bb1d5b7b839aa795348124f10d9d"
+              "sha256": "3c142198c11e2bc44cbdab6c4c01dac1f155c475a6a21cba42c3bb871c3f9ddf"
             },
             {
               "item": "DirectoryClient.resolve",
-              "sha256": "0883ca53df1fb421877073f97267c45c48169678aba8ba7ec92a91cef7547ef0"
+              "sha256": "6c0d8d0b248ef49a506f582098542bdf147d025e249089ed601f454e81ea9592"
+            },
+            {
+              "item": "DirectoryClient.scan",
+              "sha256": "a98726d26b1dbf5b7a7e5becc8fddb307165f8acb964b29095a69591c32b91e2"
             },
             {
               "item": "DirectoryClient.subscribe",
@@ -130566,6 +131326,10 @@
               "sha256": "59fdb6f46ebc6a27fcc21407b38ed16820cdfe06fe94c74dc75357f128ffd767"
             },
             {
+              "item": "DirectoryResolveRequest.cursor",
+              "sha256": "f9d0bb967c48570091682aa7afb54ec43882ab9bf7f49f31054d916a98e94134"
+            },
+            {
               "item": "DirectoryResolveRequest.include_abilities",
               "sha256": "9ea01afce904f155c617a94409de3942f837788834bcd9bb8afe85362d8fb87b"
             },
@@ -130574,12 +131338,40 @@
               "sha256": "dcb233ea09c1fc3077c17a99b9dc8d3fa1d3b0cbea1280893ed677358b416c02"
             },
             {
+              "item": "DirectoryResolveRequest.limit",
+              "sha256": "0c7154f27a35e822710747c6173adda3f6280570f91782300aba5b339aa716c6"
+            },
+            {
               "item": "DirectoryResolveRequest.query_ura",
               "sha256": "8da5d04f6e4488cbbb874328768e825efe606d65e0748b3e7d228bde28a66cdd"
             },
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
+            },
+            {
+              "item": "DirectoryScanOptions.max_pages",
+              "sha256": "38195848fa8aa93e26b330bcab12e07ccb195a367214b49313d45ab2967bf897"
+            },
+            {
+              "item": "DirectoryScanOptions.max_records",
+              "sha256": "22e5c81b7b2ee42f8f5eee0318427c9e252a7620adebba5ad192710db547e589"
+            },
+            {
+              "item": "DirectorySnapshot.complete",
+              "sha256": "a694d263945ffc9904489df4ddbd01c91c32265d66db4f6fce704a4977b9cefd"
+            },
+            {
+              "item": "DirectorySnapshot.pages",
+              "sha256": "2bd3c02f47db939abfe605640ee06d3bdb246894ac78a21dd63ba06059ebb80d"
+            },
+            {
+              "item": "DirectorySnapshot.record_count",
+              "sha256": "168383843283b413ef0b4bab6bc4508c4d63282f21d8a7c1fe7ec33d6aa5ed60"
+            },
+            {
+              "item": "DirectorySnapshot.resolution",
+              "sha256": "8f1e0e98fec31680e02b6a5124d1fbfd584a761f4ffa48a394769eb4954e1bf7"
             },
             {
               "item": "DirectorySubscribeRequest.call",
@@ -130633,8 +131425,16 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_PAGES",
+              "sha256": "8a92062ce732bf9a87f2593f51d534d98d6db2543acf7e66e5db46d9c2ab4e29"
+            },
+            {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_RECORDS",
+              "sha256": "6a460f3523b07761a07cb7838b9199a8f6fb383159029f45f5b9ecf44f280503"
+            },
+            {
               "item": "DirectoryClient",
-              "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
+              "sha256": "48534480c5074d13ee34a2617a896ca274d34c783b7b4b370bff23b75fdc0e4f"
             },
             {
               "item": "DirectoryCursor",
@@ -130674,7 +131474,15 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
+              "sha256": "e745603f934a8459e4e9e8050c1d5590927ee23518feaa779cb21fe4c59c5299"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "323804252c5fbfa8365c5027e604e1c1d58fcb3f2ce3b2d763e525c4dc3055bf"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "15c8f02fa29ec4cdff691fb50f1777186d70fc00ce7fe82bfbc23ab8d4211939"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -130694,11 +131502,15 @@
             },
             {
               "item": "DirectoryClient.list",
-              "sha256": "5273f9fd9c8aa63d7249eb2ee437b6d90ea2bb1d5b7b839aa795348124f10d9d"
+              "sha256": "3c142198c11e2bc44cbdab6c4c01dac1f155c475a6a21cba42c3bb871c3f9ddf"
             },
             {
               "item": "DirectoryClient.resolve",
-              "sha256": "0883ca53df1fb421877073f97267c45c48169678aba8ba7ec92a91cef7547ef0"
+              "sha256": "6c0d8d0b248ef49a506f582098542bdf147d025e249089ed601f454e81ea9592"
+            },
+            {
+              "item": "DirectoryClient.scan",
+              "sha256": "a98726d26b1dbf5b7a7e5becc8fddb307165f8acb964b29095a69591c32b91e2"
             },
             {
               "item": "DirectoryClient.subscribe",
@@ -130885,6 +131697,10 @@
               "sha256": "59fdb6f46ebc6a27fcc21407b38ed16820cdfe06fe94c74dc75357f128ffd767"
             },
             {
+              "item": "DirectoryResolveRequest.cursor",
+              "sha256": "f9d0bb967c48570091682aa7afb54ec43882ab9bf7f49f31054d916a98e94134"
+            },
+            {
               "item": "DirectoryResolveRequest.include_abilities",
               "sha256": "9ea01afce904f155c617a94409de3942f837788834bcd9bb8afe85362d8fb87b"
             },
@@ -130893,12 +131709,40 @@
               "sha256": "dcb233ea09c1fc3077c17a99b9dc8d3fa1d3b0cbea1280893ed677358b416c02"
             },
             {
+              "item": "DirectoryResolveRequest.limit",
+              "sha256": "0c7154f27a35e822710747c6173adda3f6280570f91782300aba5b339aa716c6"
+            },
+            {
               "item": "DirectoryResolveRequest.query_ura",
               "sha256": "8da5d04f6e4488cbbb874328768e825efe606d65e0748b3e7d228bde28a66cdd"
             },
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
+            },
+            {
+              "item": "DirectoryScanOptions.max_pages",
+              "sha256": "38195848fa8aa93e26b330bcab12e07ccb195a367214b49313d45ab2967bf897"
+            },
+            {
+              "item": "DirectoryScanOptions.max_records",
+              "sha256": "22e5c81b7b2ee42f8f5eee0318427c9e252a7620adebba5ad192710db547e589"
+            },
+            {
+              "item": "DirectorySnapshot.complete",
+              "sha256": "a694d263945ffc9904489df4ddbd01c91c32265d66db4f6fce704a4977b9cefd"
+            },
+            {
+              "item": "DirectorySnapshot.pages",
+              "sha256": "2bd3c02f47db939abfe605640ee06d3bdb246894ac78a21dd63ba06059ebb80d"
+            },
+            {
+              "item": "DirectorySnapshot.record_count",
+              "sha256": "168383843283b413ef0b4bab6bc4508c4d63282f21d8a7c1fe7ec33d6aa5ed60"
+            },
+            {
+              "item": "DirectorySnapshot.resolution",
+              "sha256": "8f1e0e98fec31680e02b6a5124d1fbfd584a761f4ffa48a394769eb4954e1bf7"
             },
             {
               "item": "DirectorySubscribeRequest.call",
@@ -130952,8 +131796,16 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_PAGES",
+              "sha256": "8a92062ce732bf9a87f2593f51d534d98d6db2543acf7e66e5db46d9c2ab4e29"
+            },
+            {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_RECORDS",
+              "sha256": "6a460f3523b07761a07cb7838b9199a8f6fb383159029f45f5b9ecf44f280503"
+            },
+            {
               "item": "DirectoryClient",
-              "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
+              "sha256": "48534480c5074d13ee34a2617a896ca274d34c783b7b4b370bff23b75fdc0e4f"
             },
             {
               "item": "DirectoryCursor",
@@ -130993,7 +131845,15 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
+              "sha256": "e745603f934a8459e4e9e8050c1d5590927ee23518feaa779cb21fe4c59c5299"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "323804252c5fbfa8365c5027e604e1c1d58fcb3f2ce3b2d763e525c4dc3055bf"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "15c8f02fa29ec4cdff691fb50f1777186d70fc00ce7fe82bfbc23ab8d4211939"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -131013,11 +131873,15 @@
             },
             {
               "item": "DirectoryClient.list",
-              "sha256": "5273f9fd9c8aa63d7249eb2ee437b6d90ea2bb1d5b7b839aa795348124f10d9d"
+              "sha256": "3c142198c11e2bc44cbdab6c4c01dac1f155c475a6a21cba42c3bb871c3f9ddf"
             },
             {
               "item": "DirectoryClient.resolve",
-              "sha256": "0883ca53df1fb421877073f97267c45c48169678aba8ba7ec92a91cef7547ef0"
+              "sha256": "6c0d8d0b248ef49a506f582098542bdf147d025e249089ed601f454e81ea9592"
+            },
+            {
+              "item": "DirectoryClient.scan",
+              "sha256": "a98726d26b1dbf5b7a7e5becc8fddb307165f8acb964b29095a69591c32b91e2"
             },
             {
               "item": "DirectoryClient.subscribe",
@@ -131204,6 +132068,10 @@
               "sha256": "59fdb6f46ebc6a27fcc21407b38ed16820cdfe06fe94c74dc75357f128ffd767"
             },
             {
+              "item": "DirectoryResolveRequest.cursor",
+              "sha256": "f9d0bb967c48570091682aa7afb54ec43882ab9bf7f49f31054d916a98e94134"
+            },
+            {
               "item": "DirectoryResolveRequest.include_abilities",
               "sha256": "9ea01afce904f155c617a94409de3942f837788834bcd9bb8afe85362d8fb87b"
             },
@@ -131212,12 +132080,40 @@
               "sha256": "dcb233ea09c1fc3077c17a99b9dc8d3fa1d3b0cbea1280893ed677358b416c02"
             },
             {
+              "item": "DirectoryResolveRequest.limit",
+              "sha256": "0c7154f27a35e822710747c6173adda3f6280570f91782300aba5b339aa716c6"
+            },
+            {
               "item": "DirectoryResolveRequest.query_ura",
               "sha256": "8da5d04f6e4488cbbb874328768e825efe606d65e0748b3e7d228bde28a66cdd"
             },
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
+            },
+            {
+              "item": "DirectoryScanOptions.max_pages",
+              "sha256": "38195848fa8aa93e26b330bcab12e07ccb195a367214b49313d45ab2967bf897"
+            },
+            {
+              "item": "DirectoryScanOptions.max_records",
+              "sha256": "22e5c81b7b2ee42f8f5eee0318427c9e252a7620adebba5ad192710db547e589"
+            },
+            {
+              "item": "DirectorySnapshot.complete",
+              "sha256": "a694d263945ffc9904489df4ddbd01c91c32265d66db4f6fce704a4977b9cefd"
+            },
+            {
+              "item": "DirectorySnapshot.pages",
+              "sha256": "2bd3c02f47db939abfe605640ee06d3bdb246894ac78a21dd63ba06059ebb80d"
+            },
+            {
+              "item": "DirectorySnapshot.record_count",
+              "sha256": "168383843283b413ef0b4bab6bc4508c4d63282f21d8a7c1fe7ec33d6aa5ed60"
+            },
+            {
+              "item": "DirectorySnapshot.resolution",
+              "sha256": "8f1e0e98fec31680e02b6a5124d1fbfd584a761f4ffa48a394769eb4954e1bf7"
             },
             {
               "item": "DirectorySubscribeRequest.call",
@@ -131271,8 +132167,16 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_PAGES",
+              "sha256": "8a92062ce732bf9a87f2593f51d534d98d6db2543acf7e66e5db46d9c2ab4e29"
+            },
+            {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_RECORDS",
+              "sha256": "6a460f3523b07761a07cb7838b9199a8f6fb383159029f45f5b9ecf44f280503"
+            },
+            {
               "item": "DirectoryClient",
-              "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
+              "sha256": "48534480c5074d13ee34a2617a896ca274d34c783b7b4b370bff23b75fdc0e4f"
             },
             {
               "item": "DirectoryCursor",
@@ -131312,7 +132216,15 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
+              "sha256": "e745603f934a8459e4e9e8050c1d5590927ee23518feaa779cb21fe4c59c5299"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "323804252c5fbfa8365c5027e604e1c1d58fcb3f2ce3b2d763e525c4dc3055bf"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "15c8f02fa29ec4cdff691fb50f1777186d70fc00ce7fe82bfbc23ab8d4211939"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -131332,11 +132244,15 @@
             },
             {
               "item": "DirectoryClient.list",
-              "sha256": "5273f9fd9c8aa63d7249eb2ee437b6d90ea2bb1d5b7b839aa795348124f10d9d"
+              "sha256": "3c142198c11e2bc44cbdab6c4c01dac1f155c475a6a21cba42c3bb871c3f9ddf"
             },
             {
               "item": "DirectoryClient.resolve",
-              "sha256": "0883ca53df1fb421877073f97267c45c48169678aba8ba7ec92a91cef7547ef0"
+              "sha256": "6c0d8d0b248ef49a506f582098542bdf147d025e249089ed601f454e81ea9592"
+            },
+            {
+              "item": "DirectoryClient.scan",
+              "sha256": "a98726d26b1dbf5b7a7e5becc8fddb307165f8acb964b29095a69591c32b91e2"
             },
             {
               "item": "DirectoryClient.subscribe",
@@ -131523,6 +132439,10 @@
               "sha256": "59fdb6f46ebc6a27fcc21407b38ed16820cdfe06fe94c74dc75357f128ffd767"
             },
             {
+              "item": "DirectoryResolveRequest.cursor",
+              "sha256": "f9d0bb967c48570091682aa7afb54ec43882ab9bf7f49f31054d916a98e94134"
+            },
+            {
               "item": "DirectoryResolveRequest.include_abilities",
               "sha256": "9ea01afce904f155c617a94409de3942f837788834bcd9bb8afe85362d8fb87b"
             },
@@ -131531,12 +132451,40 @@
               "sha256": "dcb233ea09c1fc3077c17a99b9dc8d3fa1d3b0cbea1280893ed677358b416c02"
             },
             {
+              "item": "DirectoryResolveRequest.limit",
+              "sha256": "0c7154f27a35e822710747c6173adda3f6280570f91782300aba5b339aa716c6"
+            },
+            {
               "item": "DirectoryResolveRequest.query_ura",
               "sha256": "8da5d04f6e4488cbbb874328768e825efe606d65e0748b3e7d228bde28a66cdd"
             },
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
+            },
+            {
+              "item": "DirectoryScanOptions.max_pages",
+              "sha256": "38195848fa8aa93e26b330bcab12e07ccb195a367214b49313d45ab2967bf897"
+            },
+            {
+              "item": "DirectoryScanOptions.max_records",
+              "sha256": "22e5c81b7b2ee42f8f5eee0318427c9e252a7620adebba5ad192710db547e589"
+            },
+            {
+              "item": "DirectorySnapshot.complete",
+              "sha256": "a694d263945ffc9904489df4ddbd01c91c32265d66db4f6fce704a4977b9cefd"
+            },
+            {
+              "item": "DirectorySnapshot.pages",
+              "sha256": "2bd3c02f47db939abfe605640ee06d3bdb246894ac78a21dd63ba06059ebb80d"
+            },
+            {
+              "item": "DirectorySnapshot.record_count",
+              "sha256": "168383843283b413ef0b4bab6bc4508c4d63282f21d8a7c1fe7ec33d6aa5ed60"
+            },
+            {
+              "item": "DirectorySnapshot.resolution",
+              "sha256": "8f1e0e98fec31680e02b6a5124d1fbfd584a761f4ffa48a394769eb4954e1bf7"
             },
             {
               "item": "DirectorySubscribeRequest.call",
@@ -131590,8 +132538,16 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_PAGES",
+              "sha256": "8a92062ce732bf9a87f2593f51d534d98d6db2543acf7e66e5db46d9c2ab4e29"
+            },
+            {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_RECORDS",
+              "sha256": "6a460f3523b07761a07cb7838b9199a8f6fb383159029f45f5b9ecf44f280503"
+            },
+            {
               "item": "DirectoryClient",
-              "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
+              "sha256": "48534480c5074d13ee34a2617a896ca274d34c783b7b4b370bff23b75fdc0e4f"
             },
             {
               "item": "DirectoryCursor",
@@ -131631,7 +132587,15 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
+              "sha256": "e745603f934a8459e4e9e8050c1d5590927ee23518feaa779cb21fe4c59c5299"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "323804252c5fbfa8365c5027e604e1c1d58fcb3f2ce3b2d763e525c4dc3055bf"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "15c8f02fa29ec4cdff691fb50f1777186d70fc00ce7fe82bfbc23ab8d4211939"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -131651,11 +132615,15 @@
             },
             {
               "item": "DirectoryClient.list",
-              "sha256": "5273f9fd9c8aa63d7249eb2ee437b6d90ea2bb1d5b7b839aa795348124f10d9d"
+              "sha256": "3c142198c11e2bc44cbdab6c4c01dac1f155c475a6a21cba42c3bb871c3f9ddf"
             },
             {
               "item": "DirectoryClient.resolve",
-              "sha256": "0883ca53df1fb421877073f97267c45c48169678aba8ba7ec92a91cef7547ef0"
+              "sha256": "6c0d8d0b248ef49a506f582098542bdf147d025e249089ed601f454e81ea9592"
+            },
+            {
+              "item": "DirectoryClient.scan",
+              "sha256": "a98726d26b1dbf5b7a7e5becc8fddb307165f8acb964b29095a69591c32b91e2"
             },
             {
               "item": "DirectoryClient.subscribe",
@@ -131842,6 +132810,10 @@
               "sha256": "59fdb6f46ebc6a27fcc21407b38ed16820cdfe06fe94c74dc75357f128ffd767"
             },
             {
+              "item": "DirectoryResolveRequest.cursor",
+              "sha256": "f9d0bb967c48570091682aa7afb54ec43882ab9bf7f49f31054d916a98e94134"
+            },
+            {
               "item": "DirectoryResolveRequest.include_abilities",
               "sha256": "9ea01afce904f155c617a94409de3942f837788834bcd9bb8afe85362d8fb87b"
             },
@@ -131850,12 +132822,40 @@
               "sha256": "dcb233ea09c1fc3077c17a99b9dc8d3fa1d3b0cbea1280893ed677358b416c02"
             },
             {
+              "item": "DirectoryResolveRequest.limit",
+              "sha256": "0c7154f27a35e822710747c6173adda3f6280570f91782300aba5b339aa716c6"
+            },
+            {
               "item": "DirectoryResolveRequest.query_ura",
               "sha256": "8da5d04f6e4488cbbb874328768e825efe606d65e0748b3e7d228bde28a66cdd"
             },
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
+            },
+            {
+              "item": "DirectoryScanOptions.max_pages",
+              "sha256": "38195848fa8aa93e26b330bcab12e07ccb195a367214b49313d45ab2967bf897"
+            },
+            {
+              "item": "DirectoryScanOptions.max_records",
+              "sha256": "22e5c81b7b2ee42f8f5eee0318427c9e252a7620adebba5ad192710db547e589"
+            },
+            {
+              "item": "DirectorySnapshot.complete",
+              "sha256": "a694d263945ffc9904489df4ddbd01c91c32265d66db4f6fce704a4977b9cefd"
+            },
+            {
+              "item": "DirectorySnapshot.pages",
+              "sha256": "2bd3c02f47db939abfe605640ee06d3bdb246894ac78a21dd63ba06059ebb80d"
+            },
+            {
+              "item": "DirectorySnapshot.record_count",
+              "sha256": "168383843283b413ef0b4bab6bc4508c4d63282f21d8a7c1fe7ec33d6aa5ed60"
+            },
+            {
+              "item": "DirectorySnapshot.resolution",
+              "sha256": "8f1e0e98fec31680e02b6a5124d1fbfd584a761f4ffa48a394769eb4954e1bf7"
             },
             {
               "item": "DirectorySubscribeRequest.call",
@@ -131909,8 +132909,16 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_PAGES",
+              "sha256": "8a92062ce732bf9a87f2593f51d534d98d6db2543acf7e66e5db46d9c2ab4e29"
+            },
+            {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_RECORDS",
+              "sha256": "6a460f3523b07761a07cb7838b9199a8f6fb383159029f45f5b9ecf44f280503"
+            },
+            {
               "item": "DirectoryClient",
-              "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
+              "sha256": "48534480c5074d13ee34a2617a896ca274d34c783b7b4b370bff23b75fdc0e4f"
             },
             {
               "item": "DirectoryCursor",
@@ -131950,7 +132958,15 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
+              "sha256": "e745603f934a8459e4e9e8050c1d5590927ee23518feaa779cb21fe4c59c5299"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "323804252c5fbfa8365c5027e604e1c1d58fcb3f2ce3b2d763e525c4dc3055bf"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "15c8f02fa29ec4cdff691fb50f1777186d70fc00ce7fe82bfbc23ab8d4211939"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -131970,11 +132986,15 @@
             },
             {
               "item": "DirectoryClient.list",
-              "sha256": "5273f9fd9c8aa63d7249eb2ee437b6d90ea2bb1d5b7b839aa795348124f10d9d"
+              "sha256": "3c142198c11e2bc44cbdab6c4c01dac1f155c475a6a21cba42c3bb871c3f9ddf"
             },
             {
               "item": "DirectoryClient.resolve",
-              "sha256": "0883ca53df1fb421877073f97267c45c48169678aba8ba7ec92a91cef7547ef0"
+              "sha256": "6c0d8d0b248ef49a506f582098542bdf147d025e249089ed601f454e81ea9592"
+            },
+            {
+              "item": "DirectoryClient.scan",
+              "sha256": "a98726d26b1dbf5b7a7e5becc8fddb307165f8acb964b29095a69591c32b91e2"
             },
             {
               "item": "DirectoryClient.subscribe",
@@ -132161,6 +133181,10 @@
               "sha256": "59fdb6f46ebc6a27fcc21407b38ed16820cdfe06fe94c74dc75357f128ffd767"
             },
             {
+              "item": "DirectoryResolveRequest.cursor",
+              "sha256": "f9d0bb967c48570091682aa7afb54ec43882ab9bf7f49f31054d916a98e94134"
+            },
+            {
               "item": "DirectoryResolveRequest.include_abilities",
               "sha256": "9ea01afce904f155c617a94409de3942f837788834bcd9bb8afe85362d8fb87b"
             },
@@ -132169,12 +133193,40 @@
               "sha256": "dcb233ea09c1fc3077c17a99b9dc8d3fa1d3b0cbea1280893ed677358b416c02"
             },
             {
+              "item": "DirectoryResolveRequest.limit",
+              "sha256": "0c7154f27a35e822710747c6173adda3f6280570f91782300aba5b339aa716c6"
+            },
+            {
               "item": "DirectoryResolveRequest.query_ura",
               "sha256": "8da5d04f6e4488cbbb874328768e825efe606d65e0748b3e7d228bde28a66cdd"
             },
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
+            },
+            {
+              "item": "DirectoryScanOptions.max_pages",
+              "sha256": "38195848fa8aa93e26b330bcab12e07ccb195a367214b49313d45ab2967bf897"
+            },
+            {
+              "item": "DirectoryScanOptions.max_records",
+              "sha256": "22e5c81b7b2ee42f8f5eee0318427c9e252a7620adebba5ad192710db547e589"
+            },
+            {
+              "item": "DirectorySnapshot.complete",
+              "sha256": "a694d263945ffc9904489df4ddbd01c91c32265d66db4f6fce704a4977b9cefd"
+            },
+            {
+              "item": "DirectorySnapshot.pages",
+              "sha256": "2bd3c02f47db939abfe605640ee06d3bdb246894ac78a21dd63ba06059ebb80d"
+            },
+            {
+              "item": "DirectorySnapshot.record_count",
+              "sha256": "168383843283b413ef0b4bab6bc4508c4d63282f21d8a7c1fe7ec33d6aa5ed60"
+            },
+            {
+              "item": "DirectorySnapshot.resolution",
+              "sha256": "8f1e0e98fec31680e02b6a5124d1fbfd584a761f4ffa48a394769eb4954e1bf7"
             },
             {
               "item": "DirectorySubscribeRequest.call",
@@ -132228,8 +133280,16 @@
           "execution_case_bound": true,
           "items": [
             {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_PAGES",
+              "sha256": "8a92062ce732bf9a87f2593f51d534d98d6db2543acf7e66e5db46d9c2ab4e29"
+            },
+            {
+              "item": "DEFAULT_DIRECTORY_SCAN_MAX_RECORDS",
+              "sha256": "6a460f3523b07761a07cb7838b9199a8f6fb383159029f45f5b9ecf44f280503"
+            },
+            {
               "item": "DirectoryClient",
-              "sha256": "8fd22378cf1175ac0eef111124ba792faa5dbb2a48695975ff18c8de6adefbcd"
+              "sha256": "48534480c5074d13ee34a2617a896ca274d34c783b7b4b370bff23b75fdc0e4f"
             },
             {
               "item": "DirectoryCursor",
@@ -132269,7 +133329,15 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "7d39097f8d0441cd2847dc4d3148efe009150a0b728b8f69f040d19d895222b9"
+              "sha256": "e745603f934a8459e4e9e8050c1d5590927ee23518feaa779cb21fe4c59c5299"
+            },
+            {
+              "item": "DirectoryScanOptions",
+              "sha256": "323804252c5fbfa8365c5027e604e1c1d58fcb3f2ce3b2d763e525c4dc3055bf"
+            },
+            {
+              "item": "DirectorySnapshot",
+              "sha256": "15c8f02fa29ec4cdff691fb50f1777186d70fc00ce7fe82bfbc23ab8d4211939"
             },
             {
               "item": "DirectorySubscribeRequest",
@@ -132289,11 +133357,15 @@
             },
             {
               "item": "DirectoryClient.list",
-              "sha256": "5273f9fd9c8aa63d7249eb2ee437b6d90ea2bb1d5b7b839aa795348124f10d9d"
+              "sha256": "3c142198c11e2bc44cbdab6c4c01dac1f155c475a6a21cba42c3bb871c3f9ddf"
             },
             {
               "item": "DirectoryClient.resolve",
-              "sha256": "0883ca53df1fb421877073f97267c45c48169678aba8ba7ec92a91cef7547ef0"
+              "sha256": "6c0d8d0b248ef49a506f582098542bdf147d025e249089ed601f454e81ea9592"
+            },
+            {
+              "item": "DirectoryClient.scan",
+              "sha256": "a98726d26b1dbf5b7a7e5becc8fddb307165f8acb964b29095a69591c32b91e2"
             },
             {
               "item": "DirectoryClient.subscribe",
@@ -132480,6 +133552,10 @@
               "sha256": "59fdb6f46ebc6a27fcc21407b38ed16820cdfe06fe94c74dc75357f128ffd767"
             },
             {
+              "item": "DirectoryResolveRequest.cursor",
+              "sha256": "f9d0bb967c48570091682aa7afb54ec43882ab9bf7f49f31054d916a98e94134"
+            },
+            {
               "item": "DirectoryResolveRequest.include_abilities",
               "sha256": "9ea01afce904f155c617a94409de3942f837788834bcd9bb8afe85362d8fb87b"
             },
@@ -132488,12 +133564,40 @@
               "sha256": "dcb233ea09c1fc3077c17a99b9dc8d3fa1d3b0cbea1280893ed677358b416c02"
             },
             {
+              "item": "DirectoryResolveRequest.limit",
+              "sha256": "0c7154f27a35e822710747c6173adda3f6280570f91782300aba5b339aa716c6"
+            },
+            {
               "item": "DirectoryResolveRequest.query_ura",
               "sha256": "8da5d04f6e4488cbbb874328768e825efe606d65e0748b3e7d228bde28a66cdd"
             },
             {
               "item": "DirectoryResolveRequest.realm_hint",
               "sha256": "7fa3abfd485e7c3095f68be0e9e22f9ad77baae5a0a8800d6759938397ca116b"
+            },
+            {
+              "item": "DirectoryScanOptions.max_pages",
+              "sha256": "38195848fa8aa93e26b330bcab12e07ccb195a367214b49313d45ab2967bf897"
+            },
+            {
+              "item": "DirectoryScanOptions.max_records",
+              "sha256": "22e5c81b7b2ee42f8f5eee0318427c9e252a7620adebba5ad192710db547e589"
+            },
+            {
+              "item": "DirectorySnapshot.complete",
+              "sha256": "a694d263945ffc9904489df4ddbd01c91c32265d66db4f6fce704a4977b9cefd"
+            },
+            {
+              "item": "DirectorySnapshot.pages",
+              "sha256": "2bd3c02f47db939abfe605640ee06d3bdb246894ac78a21dd63ba06059ebb80d"
+            },
+            {
+              "item": "DirectorySnapshot.record_count",
+              "sha256": "168383843283b413ef0b4bab6bc4508c4d63282f21d8a7c1fe7ec33d6aa5ed60"
+            },
+            {
+              "item": "DirectorySnapshot.resolution",
+              "sha256": "8f1e0e98fec31680e02b6a5124d1fbfd584a761f4ffa48a394769eb4954e1bf7"
             },
             {
               "item": "DirectorySubscribeRequest.call",

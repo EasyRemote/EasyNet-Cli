@@ -88,6 +88,7 @@ class _RuntimeAbilityProjection:
     descriptor_ref: str
     ability_ura: str
     public_name: str
+    action: str
 
     @classmethod
     def from_descriptor_ref(
@@ -107,6 +108,7 @@ class _RuntimeAbilityProjection:
         canonical_ref = projection.descriptor_ref.strip()
         if not ability_ura or not canonical_ref:
             raise _invalid("descriptor_ref must contain a canonical Ability URA")
+        action = projection.action.strip() or "invoke"
         try:
             ability = addressing.project_ability_ura(ability_ura)
         except SDKError as exc:
@@ -121,6 +123,7 @@ class _RuntimeAbilityProjection:
             descriptor_ref=canonical_ref,
             ability_ura=ability_ura,
             public_name=public_name,
+            action=action,
         )
 
     def matches_scope(self, matcher: Callable[[str], bool]) -> bool:
@@ -471,6 +474,10 @@ def _validate_runtime_authority_binding(
         raise _invalid(
             "runtime session authority does not admit descriptor-bound subject_ura"
         )
+    if not _authority_list_admits(authority.allowed_actions, ability.action):
+        raise _invalid(
+            f"runtime session authority allowed_actions do not admit {ability.action}"
+        )
     if not ability.matches_scope(authority.matches_scope):
         raise _invalid("runtime session authority scopes do not admit ability")
 
@@ -479,6 +486,13 @@ def _required_text(value: object, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise _invalid(f"{field_name} is required")
     return value.strip()
+
+
+def _authority_list_admits(patterns: tuple[str, ...], value: str) -> bool:
+    clean_value = value.strip()
+    return bool(clean_value) and any(
+        pattern.strip() == clean_value for pattern in patterns
+    )
 
 
 def _invocation_failure(result: InvocationResult) -> SDKError:
