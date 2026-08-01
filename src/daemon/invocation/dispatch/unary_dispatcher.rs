@@ -70,7 +70,7 @@ use crate::daemon::invocation::admission::target_gate::{
     TargetGate,
 };
 use crate::daemon::invocation::bidi::session_wire::{
-    build_canonical_dispatch_frame, require_canonical_dispatch_session, SessionRequestError,
+    build_canonical_dispatch_frame, require_canonical_dispatch_session,
 };
 use crate::daemon::invocation::bidi::state::pending_dispatch::DispatchResult;
 use crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonUnaryRoute;
@@ -864,16 +864,7 @@ impl UnaryDispatcher {
         let arguments = request.arguments.as_slice();
         let selection = match self.resolve_canonical_rpc_route(request).await {
             Ok(selection) => selection,
-            Err(status) => {
-                if let Some(handle) = self.sessions.escalation.as_ref() {
-                    return (
-                        self.escalate_canonical_invoke(handle, request, status)
-                            .await,
-                        false,
-                    );
-                }
-                return (Err(status), false);
-            }
+            Err(status) => return (Err(status), false),
         };
         let call_mode = selection.call_mode();
         let selected_route = match selection.into_dispatch() {
@@ -1994,52 +1985,6 @@ impl UnaryDispatcher {
                     "remote Invoke peer delegation to `{endpoint}` failed: {err}"
                 )))
             }
-        }
-    }
-
-    async fn escalate_canonical_invoke(
-        &self,
-        handle: &Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
-        request: &InvokeRequest,
-        local_route_failure: Status,
-    ) -> Result<Response<InvokeResponse>, Status> {
-        if matches!(
-            local_route_failure.code(),
-            tonic::Code::InvalidArgument | tonic::Code::PermissionDenied
-        ) {
-            return Err(local_route_failure);
-        }
-        require_complete_signed_remote_request(request)?;
-        let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
-        let receipt_resolver = self.admission.receipt_key_resolver();
-        match handle.escalate_invoke(request.clone()).await {
-            Ok(response) => {
-                ensure_forwarded_response_receipt_signer_keys(
-                    receipt_resolver.as_ref(),
-                    self.sessions.device_trust_sync.as_ref(),
-                    &response,
-                    "remote Invoke session escalation",
-                )
-                .await?;
-                let finalized = ForwardedFinalizedInvocation::verify_response(
-                    &forwarded_binding,
-                    response,
-                    receipt_resolver.as_ref(),
-                )?;
-                Ok(Response::new(finalized.into_response()))
-            }
-            Err(SessionRequestError::TargetOffline) => Err(Status::failed_precondition(
-                "remote Invoke target is offline",
-            )),
-            Err(SessionRequestError::PermissionDenied { reason }) => {
-                Err(Status::permission_denied(reason))
-            }
-            Err(SessionRequestError::UpstreamFailure { reason }) => Err(Status::unavailable(
-                format!("remote Invoke session escalation failed: {reason}"),
-            )),
-            Err(SessionRequestError::UpstreamTimeout) => Err(Status::deadline_exceeded(
-                "remote Invoke session escalation timed out",
-            )),
         }
     }
 

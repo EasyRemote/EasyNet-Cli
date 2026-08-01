@@ -12770,6 +12770,77 @@ check_retired_edge_adapter_policy_absence_contract() {
 check_daemon_tuple_route_contract() {
   bash "$ROOT/tools/scripts/check-daemon-invocation-migration.sh" >/dev/null
   bash "$ROOT/tools/scripts/check-pending-dispatch-target-boundary.sh" >/dev/null
+  local cli_root="${CLI_ROOT:-$ROOT}"
+  local unary="$cli_root/src/daemon/invocation/dispatch/unary_dispatcher.rs"
+  local stream="$cli_root/src/daemon/invocation/streams/stream_dispatcher.rs"
+  local bidi="$cli_root/src/daemon/invocation/bidi/bidi_dispatcher.rs"
+
+  [[ -f "$unary" ]] || fail "unary dispatcher source is missing: ${unary#$cli_root/}"
+  [[ -f "$stream" ]] || fail "stream dispatcher source is missing: ${stream#$cli_root/}"
+  [[ -f "$bidi" ]] || fail "bidi dispatcher source is missing: ${bidi#$cli_root/}"
+
+  "$PYTHON_BIN" - "$unary" "$stream" "$bidi" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+paths = [Path(path) for path in sys.argv[1:]]
+texts = {path.name: path.read_text(encoding="utf-8", errors="replace") for path in paths}
+
+def production(text: str) -> str:
+    return text.split("\nmod tests {", 1)[0]
+
+for name, text in texts.items():
+    body = production(text)
+    for retired in (
+        "escalate_canonical_invoke(",
+        "escalate_canonical_stream(",
+        "dispatch_escalated_bidi(",
+        "invoke_bidi_escalated_after_route_negative",
+        "route negative after session escalation",
+        "remote Invoke session escalation",
+        "remote InvokeStream session escalation",
+    ):
+        if retired in body:
+            raise SystemExit(
+                f"daemon_tuple_route_contract:public_ingress_route_negative_escalation:{name}:{retired}"
+            )
+
+route_resolution_patterns = {
+    "unary_dispatcher.rs": (
+        r"let selection = match self\.resolve_canonical_rpc_route\(request\)\.await \{"
+        r".*?Err\(status\) => return \(Err\(status\), false\),"
+    ),
+    "stream_dispatcher.rs": (
+        r"let selection = match self\.resolve_stream_route\(request\)\.await \{"
+        r".*?Err\(status\) => return Err\(status\),"
+    ),
+    "bidi_dispatcher.rs": (
+        r"let selection = match self\.resolve_bidi_route\(envelope_open\)\.await \{"
+        r".*?Err\(status\) => return Err\(status\),"
+    ),
+}
+
+for name, pattern in route_resolution_patterns.items():
+    if not re.search(pattern, production(texts[name]), flags=re.S):
+        raise SystemExit(
+            f"daemon_tuple_route_contract:route_negative_not_fail_closed:{name}"
+        )
+
+bidi = production(texts["bidi_dispatcher.rs"])
+for required in (
+    "struct SessionControlLifecycle",
+    "session_control_lifecycle_from_wire",
+    "dispatch_session_control_request",
+    "SessionControlRequestKind::AdvertiseAgent",
+    "SessionControlRequestKind::AdvertiseAbilities",
+    "SessionControlRequestKind::ResolveKey",
+):
+    if required not in bidi:
+        raise SystemExit(
+            f"daemon_tuple_route_contract:session_control_state_machine_missing:{required}"
+        )
+PY
 }
 
 check_remote_invocation_subject_provenance_contract() {

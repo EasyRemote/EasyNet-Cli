@@ -64,7 +64,6 @@ use crate::daemon::invocation::dispatch::invocation_wire::{
     BoxedDownStream, FEDERATION_RESULT_CONTENT_TYPE,
 };
 use crate::daemon::invocation::dispatch::remote_failure::status_from_remote_failure;
-use crate::daemon::invocation::dispatch::unary_dispatcher::require_complete_signed_remote_request;
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, SelectedInvokeRoute,
 };
@@ -141,14 +140,7 @@ impl StreamDispatcher {
     ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
         let selection = match self.resolve_stream_route(request).await {
             Ok(selection) => selection,
-            Err(status) => {
-                if let Some(handle) = self.sessions.escalation.as_ref() {
-                    return self
-                        .escalate_canonical_stream(handle, request, status)
-                        .await;
-                }
-                return Err(status);
-            }
+            Err(status) => return Err(status),
         };
         let call_mode = selection.call_mode();
         let selected_route = match selection.into_dispatch() {
@@ -174,49 +166,6 @@ impl StreamDispatcher {
         } else {
             self.dispatch_remote_selected_route(request, selected_route, call_mode)
                 .await
-        }
-    }
-
-    async fn escalate_canonical_stream(
-        &self,
-        handle: &Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
-        request: &InvokeServerStreamRequest,
-        local_route_failure: Status,
-    ) -> Result<Response<BoxedDownStream<InvokeStreamChunk>>, Status> {
-        if matches!(
-            local_route_failure.code(),
-            tonic::Code::InvalidArgument | tonic::Code::PermissionDenied
-        ) {
-            return Err(local_route_failure);
-        }
-        let forwarded_request = stream_request_as_invoke_request(request);
-        require_complete_signed_remote_request(&forwarded_request)?;
-        let forwarded_binding = ForwardedInvocationBinding::from_request(&forwarded_request)?;
-        let receipt_resolver = self.admission.receipt_key_resolver();
-        match handle.escalate_stream(request.clone()).await {
-            Ok(stream) => project_forwarded_remote_stream(
-                RemoteStreamEventSource::Session(stream),
-                forwarded_binding,
-                receipt_resolver,
-                request_timeout(request),
-            )
-            .await,
-            Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::TargetOffline) => {
-                Err(Status::failed_precondition("remote InvokeStream target is offline"))
-            }
-            Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::PermissionDenied {
-                reason,
-            }) => Err(Status::permission_denied(reason)),
-            Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::UpstreamFailure {
-                reason,
-            }) => Err(Status::unavailable(format!(
-                "remote InvokeStream session escalation failed: {reason}"
-            ))),
-            Err(crate::daemon::invocation::bidi::session_wire::SessionRequestError::UpstreamTimeout) => {
-                Err(Status::deadline_exceeded(
-                    "remote InvokeStream session escalation timed out",
-                ))
-            }
         }
     }
 
@@ -441,14 +390,12 @@ impl StreamDispatcher {
 
 enum RemoteStreamEventSource {
     Presence(PendingStreamHandle),
-    Session(crate::daemon::invocation::bidi::session_escalation::EscalatedStreamHandle),
 }
 
 impl RemoteStreamEventSource {
     async fn recv(&mut self) -> Option<DispatchStreamEvent> {
         match self {
             Self::Presence(handle) => handle.recv().await,
-            Self::Session(handle) => handle.recv().await,
         }
     }
 }
@@ -1255,21 +1202,6 @@ fn daemon_route_initial_sequence(
 
 fn local_stream_target_ura(request: &InvokeServerStreamRequest) -> Result<String, Status> {
     callee_ura_from_envelope(request.envelope.as_ref(), "InvokeStream")
-}
-
-fn stream_request_as_invoke_request(
-    request: &InvokeServerStreamRequest,
-) -> axon_sdk::pb::axon::v1::InvokeRequest {
-    axon_sdk::pb::axon::v1::InvokeRequest {
-        envelope: request.envelope.clone(),
-        target: request.target.clone(),
-        arguments: request.arguments.clone(),
-        content_type: request.content_type.clone(),
-        timeout_seconds: request.timeout_seconds,
-        metadata: request.metadata.clone(),
-        payload_ref: request.payload_ref.clone(),
-        content_envelope: request.content_envelope.clone(),
-    }
 }
 
 fn request_timeout(request: &InvokeServerStreamRequest) -> Option<Duration> {
