@@ -22,9 +22,7 @@ use crate::daemon::plugins::remote_desktop::request::{
 };
 use crate::daemon::plugins::remote_desktop::resource::resolve_screen_resource;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
-use crate::daemon::plugins::remote_desktop::session_lifecycle::{
-    ensure_session_control_access, stop_direct_webrtc_endpoint,
-};
+use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
 use crate::daemon::plugins::remote_desktop::transport::{
     start_direct_webrtc_endpoint, StartDirectWebRtcEndpointRequest,
 };
@@ -70,21 +68,54 @@ pub(in crate::daemon::plugins::remote_desktop) fn negotiate_remote_offer(
     let target_bitrate_kbps = bitrate_kbps_from_video_constraints(&video);
     let max_frame_queue_depth = frame_queue_depth_from_video_constraints(&video);
     let input_policy = input_policy_for_entry(input_policy, &entry);
-    let answer = start_direct_webrtc_endpoint(StartDirectWebRtcEndpointRequest {
+    let epoch = request.plugin.transport_manager().allocate_epoch();
+    request
+        .plugin
+        .session_store()
+        .with_sessions(|sessions| -> anyhow::Result<()> {
+            let session = sessions.get_mut(&session_id).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{ABILITY_SET_DESCRIPTION}: session {session_id:?} disappeared before WebRTC negotiation; reason={REASON_SESSION_NOT_FOUND}"
+                )
+            })?;
+            ensure_session_control_access(
+                &request.plugin,
+                ABILITY_SET_DESCRIPTION,
+                &request.access_env,
+                &request.access_args,
+                session,
+            )?;
+            session.begin_webrtc_negotiation(epoch);
+            Ok(())
+        })?;
+    let answer = match start_direct_webrtc_endpoint(StartDirectWebRtcEndpointRequest {
         sessions: request.plugin.session_store(),
         transports: request.plugin.transport_manager(),
         session_id: session_id.clone(),
+        epoch,
         entry,
         options,
         target_bitrate_kbps,
         max_frame_queue_depth,
         input_policy,
         offer_sdp,
-    })?;
+    }) {
+        Ok(answer) => answer,
+        Err(error) => {
+            request.plugin.session_store().mark_direct_webrtc_failed(
+                &session_id,
+                epoch,
+                "webrtc_endpoint_setup_failed",
+                error.to_string(),
+            );
+            return Err(error);
+        }
+    };
 
     commit_started_endpoint(
         &request,
         &session_id,
+        epoch,
         answer,
         media_backend.backend_id(),
         media_backend.production_ready(),
@@ -154,6 +185,7 @@ fn mark_backend_unavailable(
 fn commit_started_endpoint(
     request: &RemoteOfferNegotiation,
     session_id: &str,
+    epoch: crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch,
     answer: Value,
     backend_id: &str,
     production_ready: bool,
@@ -165,7 +197,10 @@ fn commit_started_endpoint(
             let session = match sessions.get_mut(session_id) {
                 Some(session) => session,
                 None => {
-                    stop_direct_webrtc_endpoint(&request.plugin, session_id);
+                    request
+                        .plugin
+                        .transport_manager()
+                        .stop_endpoint_if_epoch(session_id, epoch);
                     anyhow::bail!(
                         "{ABILITY_SET_DESCRIPTION}: session {session_id:?} disappeared during WebRTC setup; reason={REASON_SESSION_NOT_FOUND}"
                     );
@@ -178,11 +213,25 @@ fn commit_started_endpoint(
                 &request.access_args,
                 session,
             ) {
-                stop_direct_webrtc_endpoint(&request.plugin, session_id);
+                request
+                    .plugin
+                    .transport_manager()
+                    .stop_endpoint_if_epoch(session_id, epoch);
                 return Err(err);
+            }
+            if session.transport_epoch() != Some(epoch.value()) {
+                request
+                    .plugin
+                    .transport_manager()
+                    .stop_endpoint_if_epoch(session_id, epoch);
+                anyhow::bail!(
+                    "{ABILITY_SET_DESCRIPTION}: transport epoch {} was superseded before answer commit",
+                    epoch.value()
+                );
             }
             session.set_description(&request.side, request.description.clone())?;
             session.set_local_webrtc_answer(
+                epoch,
                 answer,
                 backend_id,
                 production_ready,

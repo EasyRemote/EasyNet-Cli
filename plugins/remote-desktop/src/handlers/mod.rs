@@ -11,6 +11,7 @@ pub(in crate::daemon::plugins::remote_desktop) mod end_session;
 pub(in crate::daemon::plugins::remote_desktop) mod grant_consent;
 pub(in crate::daemon::plugins::remote_desktop) mod permission_status;
 pub(in crate::daemon::plugins::remote_desktop) mod refresh_lease;
+pub(in crate::daemon::plugins::remote_desktop) mod report_client_state;
 pub(in crate::daemon::plugins::remote_desktop) mod request_permission;
 pub(in crate::daemon::plugins::remote_desktop) mod set_description;
 pub(in crate::daemon::plugins::remote_desktop) mod show_session;
@@ -22,7 +23,7 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{add_ice_candidate, create_session, end_session, set_description, watch_events};
+    use super::{add_ice_candidate, end_session, set_description, watch_events};
     use crate::daemon::persistence::resources::{self, ResourcesFile};
     use crate::daemon::plugins::remote_desktop::constants::MAX_ATTACH_FPS;
     use crate::daemon::plugins::remote_desktop::media::{
@@ -42,7 +43,7 @@ mod tests {
         let ura = seed_display(&mut file, "remote-desktop-display");
         resources::save(&file).unwrap();
 
-        let created = create_session::handle(
+        let created = crate::daemon::plugins::remote_desktop::test_support::create_test_session(
             Arc::clone(&plugin),
             env_for(&ura),
             json!({

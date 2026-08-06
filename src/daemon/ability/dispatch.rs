@@ -20,19 +20,19 @@ use std::sync::{Arc, OnceLock};
 
 use anyhow::Context as _;
 use axon_sdk::invocation::{
-    make_ability, AbilityCallModes, AbilityContext, AbilityFn, AbilityOptions, AxonError,
-    CallMode as AxonCallMode, LocalRuntime,
+    AbilityCallModes, AbilityContext, AbilityFn, AbilityOptions, AxonError, AxonErrorKind,
+    CallMode as AxonCallMode, ErrorCode, ErrorStage, LocalRuntime, SecurityClass, make_ability,
 };
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::daemon::ability::{
-    public_route_ability_from_descriptor_ref, AbilityControlPlaneAuthorityModeLookupError,
-    AbilityControlPlaneError, AbilityControlPlaneLookupError, AbilityControlPlaneRecord,
-    AbilityControlPlaneRegistration, AbilityControlPlaneRegistry, AbilityDescriptor,
-    AbilityImplSource, AuthorityScope, CallMode as DescriptorCallMode,
+    AbilityControlPlaneAuthorityModeLookupError, AbilityControlPlaneError,
+    AbilityControlPlaneLookupError, AbilityControlPlaneRecord, AbilityControlPlaneRegistration,
+    AbilityControlPlaneRegistry, AbilityDescriptor, AbilityImplSource, AuthorityScope,
+    CallMode as DescriptorCallMode, HOSTED_AGENT_DELEGATION_METADATA_KEY,
     HostedAgentDelegationContext, HostedAgentDelegationEnvelopeBinding, ReceiptSemantics,
-    RuntimeEnv, HOSTED_AGENT_DELEGATION_METADATA_KEY,
+    RuntimeEnv, public_route_ability_from_descriptor_ref,
 };
 #[cfg(test)]
 use crate::daemon::invocation::routing::target::TargetScope;
@@ -66,6 +66,41 @@ where
 /// One in-process RPC handler. Boxed closure so the registry can
 /// hold heterogeneous handlers behind a uniform key.
 pub type LocalRpcHandler = Arc<dyn Fn(Value) -> anyhow::Result<Value> + Send + Sync>;
+
+/// Structured failure returned by a product ability handler.
+///
+/// Handler signatures remain `anyhow::Result` so plugins can attach ordinary
+/// implementation context internally, but a plugin must wrap its public
+/// failure in this type at its registration boundary. The runtime adapter then
+/// preserves Axon's machine-readable kind/code/stage instead of collapsing
+/// every product rejection into `INTERNAL_ERROR`.
+#[derive(Debug, thiserror::Error)]
+#[error("{error:?}")]
+pub(crate) struct AbilityHandlerFailure {
+    error: AxonError,
+}
+
+impl AbilityHandlerFailure {
+    pub(crate) fn new(error: AxonError) -> Self {
+        Self { error }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn axon_error(&self) -> &AxonError {
+        &self.error
+    }
+}
+
+fn project_handler_failure(error: anyhow::Error, adapter: &'static str) -> AxonError {
+    if let Some(failure) = error.downcast_ref::<AbilityHandlerFailure>() {
+        return failure.error.clone();
+    }
+    AxonError::new(AxonErrorKind::Internal)
+        .with_code(ErrorCode::ExecutionFailed)
+        .with_stage(ErrorStage::Execution)
+        .with_security_class(SecurityClass::Internal)
+        .with_message(format!("{adapter}: handler returned error: {error}"))
+}
 
 /// Error raised when constructing an envelope-aware handler context.
 ///
@@ -1000,11 +1035,7 @@ fn rpc_env_handler_to_ability_fn(
                         "local_runtime_adapter: env handler join error: {err}"
                     ))
                 })?
-                .map_err(|err| {
-                    AxonError::internal(format!(
-                        "local_runtime_adapter: env handler returned error: {err}"
-                    ))
-                })?;
+                .map_err(|err| project_handler_failure(err, "local_runtime_adapter: env rpc"))?;
             json_value_to_payload(&result).map_err(|e| *e)
         }
     })
@@ -1124,11 +1155,7 @@ fn stream_env_handler_to_ability_fn(
                         "local_runtime_adapter: env stream handler join error: {err}"
                     ))
                 })?
-                .map_err(|err| {
-                    AxonError::internal(format!(
-                        "local_runtime_adapter: env stream handler returned error: {err}"
-                    ))
-                })?;
+                .map_err(|err| project_handler_failure(err, "local_runtime_adapter: env stream"))?;
             emit_stream_source(ctx, source).await
         }
     })
@@ -1228,11 +1255,8 @@ fn bidi_env_handler_to_ability_fn(
         async move {
             let value = payload_to_json_value(&ctx.payload).map_err(|e| *e)?;
             let env = envelope_context_from_axon(&ctx, Some(runtime_host)).await?;
-            let source = handler(env, value).map_err(|err| {
-                AxonError::internal(format!(
-                    "local_runtime_adapter: env bidi handler returned error: {err}"
-                ))
-            })?;
+            let source = handler(env, value)
+                .map_err(|err| project_handler_failure(err, "local_runtime_adapter: env bidi"))?;
             run_bidi_source(ctx, source).await
         }
     })
@@ -1489,12 +1513,12 @@ impl PersistedHotAgentAuthority {
             HostedLlmAgentIdentity::Missing => {
                 return Err(HotAgentAuthorityInventoryError::IdentityMissing {
                     agent: agent.to_string(),
-                })
+                });
             }
             HostedLlmAgentIdentity::Ambiguous => {
                 return Err(HotAgentAuthorityInventoryError::IdentityAmbiguous {
                     agent: agent.to_string(),
-                })
+                });
             }
         };
 
@@ -3194,9 +3218,9 @@ impl StaticRegistration {
             )?;
                 if contract.call_mode != call_mode {
                     anyhow::bail!(
-                    "static ability {ability:?} handler mode {call_mode:?} disagrees with canonical descriptor mode {:?}",
-                    contract.call_mode
-                );
+                        "static ability {ability:?} handler mode {call_mode:?} disagrees with canonical descriptor mode {:?}",
+                        contract.call_mode
+                    );
                 }
                 let canonical_manifest = match manifest.take() {
                     Some(manifest) => manifest.as_ref().clone(),
@@ -6777,9 +6801,11 @@ mod tests {
         let error =
             hot_register_test_rpc(&catalog, "device.dynamic", OwnerKind::Device, ok_handler())
                 .expect_err("realm authority set must reject dynamic Device owner");
-        assert!(error
-            .to_string()
-            .contains("authority set \"realm-authority\""));
+        assert!(
+            error
+                .to_string()
+                .contains("authority set \"realm-authority\"")
+        );
         assert!(catalog.authority_ability_catalog_snapshot().is_empty());
         assert!(!catalog.has_dynamic("device.dynamic"));
 
@@ -6804,9 +6830,11 @@ mod tests {
         )
         .expect_err("Device authority set must reject dynamic RealmAuthority owner");
         assert!(error.to_string().contains("authority set \"device\""));
-        assert!(device_catalog
-            .authority_ability_catalog_snapshot()
-            .is_empty());
+        assert!(
+            device_catalog
+                .authority_ability_catalog_snapshot()
+                .is_empty()
+        );
         assert!(!device_catalog.has_dynamic("hub.dynamic"));
     }
 
@@ -6855,9 +6883,10 @@ mod tests {
 
         let rows = catalog.authority_ability_catalog_snapshot();
         assert!(rows.iter().any(|row| row.owner == OwnerKind::Device));
-        assert!(rows
-            .iter()
-            .any(|row| row.owner == OwnerKind::RealmAuthority));
+        assert!(
+            rows.iter()
+                .any(|row| row.owner == OwnerKind::RealmAuthority)
+        );
         assert!(catalog.static_authority_exclusion_snapshot().is_empty());
     }
 
@@ -6886,9 +6915,11 @@ mod tests {
                 .with_authority_scope(device_scope),
             )
             .expect_err("RealmAuthority owner with Device projection must fail closed");
-        assert!(error
-            .to_string()
-            .contains("does not match registration owner"));
+        assert!(
+            error
+                .to_string()
+                .contains("does not match registration owner")
+        );
         assert!(catalog.authority_ability_catalog_snapshot().is_empty());
     }
 
@@ -7060,9 +7091,10 @@ mod tests {
 
         let rows = catalog.authority_ability_catalog_snapshot();
         assert_eq!(rows.len(), 2);
-        assert!(rows
-            .iter()
-            .any(|row| row.descriptor.owner_ura == device_ura));
+        assert!(
+            rows.iter()
+                .any(|row| row.descriptor.owner_ura == device_ura)
+        );
         assert!(rows.iter().any(|row| row.descriptor.owner_ura == hub_ura));
     }
 
@@ -8810,9 +8842,10 @@ mod tests {
         // Returns false but does not panic — the contract callers
         // (B4 list_changed refresh diff) rely on for the
         // "tool went away mid-sync" race.
-        assert!(!reg
-            .unregister("never-was-there")
-            .expect("missing unregister is idempotent"));
+        assert!(
+            !reg.unregister("never-was-there")
+                .expect("missing unregister is idempotent")
+        );
     }
 
     #[test]
@@ -9339,9 +9372,10 @@ mod tests {
             "test setup must publish a canonical dynamic descriptor"
         );
 
-        assert!(reg
-            .hot_unregister("mcp_wikipedia__search")
-            .expect("dynamic RPC unregisters"));
+        assert!(
+            reg.hot_unregister("mcp_wikipedia__search")
+                .expect("dynamic RPC unregisters")
+        );
 
         assert!(
             !reg.authority_ability_catalog_snapshot()

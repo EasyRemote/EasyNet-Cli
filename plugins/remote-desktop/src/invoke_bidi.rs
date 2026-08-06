@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
@@ -23,7 +23,7 @@ use crate::daemon::plugins::remote_desktop::input::{
     apply_input_frame_with_policy, input_policy_allows, input_policy_for_entry, parse_input_frame,
 };
 use crate::daemon::plugins::remote_desktop::media::encode::{
-    spawn_builtin_h264_stream, BuiltinH264StreamTerminal, BuiltinH264TerminalCallback,
+    BuiltinH264StreamTerminal, BuiltinH264TerminalCallback, spawn_builtin_h264_stream,
 };
 use crate::daemon::plugins::remote_desktop::request::AttachEncoding;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
@@ -420,7 +420,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn h264_terminal_failure_marks_preview_session_failed() {
+    fn h264_terminal_failure_marks_diagnostic_preview_failed() {
         let session_store = Arc::new(RemoteDesktopSessionStore::new());
         install_h264_preview_session_for_test(&session_store, "rd-h264-failed");
 
@@ -436,11 +436,11 @@ mod tests {
         session_store.with_sessions(|sessions| {
             let session = sessions.get("rd-h264-failed").unwrap();
             assert!(!session.preview_attached());
-            assert_eq!(
-                session.end_reason(),
-                Some(REASON_PREVIEW_CAPTURE_FAILED),
-                "H.264 worker failure must be projected into session terminal state"
-            );
+            assert_eq!(session.end_reason(), None);
+            assert!(session.events().iter().any(|event| {
+                event["event_type"] == json!("DIAGNOSTIC_PREVIEW_FAILED")
+                    && event["payload"]["reason"] == json!(REASON_PREVIEW_CAPTURE_FAILED)
+            }));
         });
     }
 

@@ -6,14 +6,14 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::daemon::ability::dispatch::EnvelopeContext;
-use crate::daemon::plugins::remote_desktop::constants::{
-    ABILITY_SET_DESCRIPTION, REASON_INVALID_ARGUMENT, REASON_SESSION_NOT_FOUND,
-};
+use crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION;
+use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::request::require_str;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
+use crate::daemon::plugins::remote_desktop::sdp::validate_remote_offer_sdp;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
 use crate::daemon::plugins::remote_desktop::transport::{
-    negotiate_remote_offer, RemoteOfferNegotiation,
+    RemoteOfferNegotiation, negotiate_remote_offer,
 };
 use crate::daemon::plugins::remote_desktop::view::serialize_session;
 
@@ -26,15 +26,19 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
     let session_id = require_str(&args, "session_id", ABILITY_SET_DESCRIPTION)?.to_string();
     let side = require_str(&args, "side", ABILITY_SET_DESCRIPTION)?.to_string();
     if side != "local" && side != "remote" {
-        anyhow::bail!(
-            "{ABILITY_SET_DESCRIPTION}: side must be local or remote; reason={REASON_INVALID_ARGUMENT}"
-        );
+        return Err(RemoteDesktopError::InvalidArgument {
+            ability: ABILITY_SET_DESCRIPTION,
+            detail: "side must be local or remote".to_string(),
+        }
+        .into());
     }
-    let description = args.get("description").cloned().ok_or_else(|| {
-        anyhow::anyhow!(
-            "{ABILITY_SET_DESCRIPTION}: `description` is required; reason={REASON_INVALID_ARGUMENT}"
-        )
-    })?;
+    let description =
+        args.get("description")
+            .cloned()
+            .ok_or_else(|| RemoteDesktopError::InvalidArgument {
+                ability: ABILITY_SET_DESCRIPTION,
+                detail: "`description` is required".to_string(),
+            })?;
     let offer_sdp = if side == "remote" {
         description
             .get("sdp")
@@ -60,9 +64,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
             .session_store()
             .with_sessions(|sessions| -> anyhow::Result<Value> {
                 let session = sessions.get_mut(&session_id).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "{ABILITY_SET_DESCRIPTION}: session {session_id:?} not found; reason={REASON_SESSION_NOT_FOUND}"
-                    )
+                    RemoteDesktopError::SessionNotFound {
+                        ability: ABILITY_SET_DESCRIPTION,
+                        session_id: session_id.clone(),
+                    }
                 })?;
                 ensure_session_control_access(
                     &plugin,
@@ -75,11 +80,11 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                 Ok(serialize_session(session))
             });
     }
-    let offer_sdp = offer_sdp.ok_or_else(|| {
-        anyhow::anyhow!(
-            "{ABILITY_SET_DESCRIPTION}: remote offer SDP is required for direct WebRTC negotiation; reason={REASON_INVALID_ARGUMENT}"
-        )
+    let offer_sdp = offer_sdp.ok_or_else(|| RemoteDesktopError::InvalidArgument {
+        ability: ABILITY_SET_DESCRIPTION,
+        detail: "remote offer SDP is required for direct WebRTC negotiation".to_string(),
     })?;
+    validate_remote_offer_sdp(&offer_sdp)?;
 
     let session_id = negotiate_remote_offer(RemoteOfferNegotiation {
         plugin: Arc::clone(&plugin),
@@ -94,9 +99,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         .session_store()
         .with_sessions(|sessions| -> anyhow::Result<Value> {
             let session = sessions.get_mut(&session_id).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{ABILITY_SET_DESCRIPTION}: session {session_id:?} not found after direct WebRTC negotiation; reason={REASON_SESSION_NOT_FOUND}"
-                )
+                RemoteDesktopError::SessionNotFound {
+                    ability: ABILITY_SET_DESCRIPTION,
+                    session_id: session_id.clone(),
+                }
             })?;
             Ok(serialize_session(session))
         })
@@ -116,7 +122,7 @@ mod tests {
     };
 
     #[test]
-    fn signaling_accepts_caller_subject_with_session_token() {
+    fn signaling_requires_bound_resource_subject() {
         let _lock = test_lock();
         let plugin = test_plugin();
         reset_store(&plugin);
@@ -125,7 +131,7 @@ mod tests {
         let ura = seed_display(&mut file, "remote-desktop-caller-subject-display");
         resources::save(&file).unwrap();
 
-        let created = crate::daemon::plugins::remote_desktop::handlers::create_session::handle(
+        let created = crate::daemon::plugins::remote_desktop::test_support::create_test_session(
             Arc::clone(&plugin),
             env_for(&ura),
             json!({
@@ -137,9 +143,22 @@ mod tests {
         .unwrap();
         let token = created["session_token"].as_str().unwrap();
 
-        let signaled = handle(
+        let error = handle(
             Arc::clone(&plugin),
             env_for("easynet:///r/acme/user/dev"),
+            json!({
+                "session_id": "rd-caller-subject-test",
+                "session_token": token,
+                "side": "local",
+                "description": { "type": "answer", "sdp": "v=0" }
+            }),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("does not match session subject"));
+
+        let signaled = handle(
+            Arc::clone(&plugin),
+            env_for(&ura),
             json!({
                 "session_id": "rd-caller-subject-test",
                 "session_token": token,
@@ -154,7 +173,7 @@ mod tests {
 
         let ice = crate::daemon::plugins::remote_desktop::handlers::add_ice_candidate::handle(
             Arc::clone(&plugin),
-            env_for("easynet:///r/acme/user/dev"),
+            env_for(&ura),
             json!({
                 "session_id": "rd-caller-subject-test",
                 "session_token": token,
@@ -165,7 +184,7 @@ mod tests {
         assert_eq!(
             ice["signaling"]["ice_candidate_count"],
             json!(1),
-            "ICE signaling is session/token scoped, not resource-subject scoped"
+            "ICE signaling stays bound to the session resource subject"
         );
     }
 
@@ -183,7 +202,7 @@ mod tests {
         let ura = seed_window(&mut file, "remote-desktop-no-webrtc-backend");
         resources::save(&file).unwrap();
 
-        let created = crate::daemon::plugins::remote_desktop::handlers::create_session::handle(
+        let created = crate::daemon::plugins::remote_desktop::test_support::create_test_session(
             Arc::clone(&plugin),
             env_for(&ura),
             json!({
@@ -234,7 +253,7 @@ mod tests {
         let ura = seed_xcap_display(&mut file, "remote-desktop-bad-offer-display");
         resources::save(&file).unwrap();
 
-        let created = crate::daemon::plugins::remote_desktop::handlers::create_session::handle(
+        let created = crate::daemon::plugins::remote_desktop::test_support::create_test_session(
             Arc::clone(&plugin),
             env_for(&ura),
             json!({

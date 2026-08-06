@@ -46,6 +46,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn description_set(
 pub(in crate::daemon::plugins::remote_desktop) fn local_webrtc_answer_set(
     backend_id: &str,
     production_ready: bool,
+    transport_epoch: u64,
 ) -> RemoteDesktopEventProjection {
     (
         "DESCRIPTION_SET",
@@ -55,6 +56,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn local_webrtc_answer_set(
             "media_transport_ready": false,
             "backend_id": backend_id,
             "production_ready": production_ready,
+            "transport_epoch": transport_epoch,
         }),
     )
 }
@@ -62,14 +64,17 @@ pub(in crate::daemon::plugins::remote_desktop) fn local_webrtc_answer_set(
 /// Build a remote ICE candidate append payload.
 pub(in crate::daemon::plugins::remote_desktop) fn remote_ice_candidate_added(
     candidate_count: usize,
-    applied_to_live_endpoint: bool,
+    application_state: &str,
+    transport_epoch: Option<u64>,
     media_transport_ready: bool,
 ) -> RemoteDesktopEventProjection {
     (
         "ICE_CANDIDATE_ADDED",
         json!({
             "candidate_count": candidate_count,
-            "applied_to_live_endpoint": applied_to_live_endpoint,
+            "application_state": application_state,
+            "applied_to_live_endpoint": application_state == "applied",
+            "transport_epoch": transport_epoch,
             "media_transport_ready": media_transport_ready,
         }),
     )
@@ -110,7 +115,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn preview_transport_failed(
     message: String,
 ) -> RemoteDesktopEventProjection {
     (
-        "SESSION_FAILED",
+        "DIAGNOSTIC_PREVIEW_FAILED",
         json!({
             "transport_kind": TRANSPORT_INVOKE_BIDI,
             "reason": reason,
@@ -234,17 +239,39 @@ pub(in crate::daemon::plugins::remote_desktop) fn session_expired(
 }
 
 /// Build a production WebRTC connected payload.
-pub(in crate::daemon::plugins::remote_desktop) fn webrtc_connected(
+pub(in crate::daemon::plugins::remote_desktop) fn webrtc_sender_ready(
     endpoint_ura: String,
+    transport_epoch: u64,
 ) -> RemoteDesktopEventProjection {
     (
-        "TRANSPORT_CONNECTED",
+        "MEDIA_SENDER_READY",
         json!({
             "transport_kind": TRANSPORT_WEBRTC,
             "media_transport_ready": true,
+            "client_media_ready": false,
+            "transport_epoch": transport_epoch,
             "endpoint_ura": endpoint_ura,
             "codec": "h264",
             "carrier": "rtp_srtp",
+        }),
+    )
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn client_media_state_changed(
+    state: &str,
+    transport_epoch: u64,
+) -> RemoteDesktopEventProjection {
+    (
+        if state == "presenting" {
+            "TRANSPORT_CONNECTED"
+        } else {
+            "CLIENT_MEDIA_STALLED"
+        },
+        json!({
+            "transport_kind": TRANSPORT_WEBRTC,
+            "client_state": state,
+            "client_media_ready": state == "presenting",
+            "transport_epoch": transport_epoch,
         }),
     )
 }
@@ -253,6 +280,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_connected(
 pub(in crate::daemon::plugins::remote_desktop) fn webrtc_failed(
     reason: &str,
     message: String,
+    transport_epoch: u64,
 ) -> RemoteDesktopEventProjection {
     (
         "SESSION_FAILED",
@@ -261,6 +289,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_failed(
             "message": message,
             "transport_kind": TRANSPORT_WEBRTC,
             "media_transport_ready": false,
+            "transport_epoch": transport_epoch,
         }),
     )
 }
@@ -269,12 +298,12 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_failed(
 mod tests {
     use serde_json::json;
 
-    use super::{preview_transport_connected, webrtc_connected};
+    use super::{preview_transport_connected, webrtc_sender_ready};
 
     #[test]
     fn remote_desktop_event_payloads_keep_transport_kind_explicit() {
         let (_, preview_payload) = preview_transport_connected();
-        let (_, webrtc_payload) = webrtc_connected("easynet-rd://session".to_string());
+        let (_, webrtc_payload) = webrtc_sender_ready("easynet-rd://session".to_string(), 1);
 
         assert_eq!(preview_payload["transport_kind"], json!("invoke_bidi"));
         assert_eq!(webrtc_payload["transport_kind"], json!("webrtc"));

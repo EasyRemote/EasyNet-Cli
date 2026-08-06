@@ -19,6 +19,7 @@ use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenC
 use crate::daemon::persistence::resources::ResourceEntry;
 use crate::daemon::plugins::remote_desktop::media::encode::BuiltinH264Config;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
+use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 #[cfg(feature = "native-media")]
 use crate::daemon::plugins::remote_desktop::transport::webrtc_baseline_media::run_direct_webrtc_recorder_stream;
 use crate::daemon::plugins::remote_desktop::transport::webrtc_baseline_media::{
@@ -37,6 +38,7 @@ use crate::daemon::plugins::remote_desktop::transport::webrtc_native_media::{
 /// loop does not mutate session objects directly.
 pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcSession {
     pub(in crate::daemon::plugins::remote_desktop) session_id: String,
+    pub(in crate::daemon::plugins::remote_desktop) epoch: TransportEpoch,
     pub(in crate::daemon::plugins::remote_desktop) peer_connection: Arc<dyn PeerConnection>,
     pub(in crate::daemon::plugins::remote_desktop) track: Arc<TrackLocalStaticSample>,
     /// Payload type selected by the completed offer/answer negotiation.
@@ -55,6 +57,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
 ) {
     let DirectWebRtcSession {
         session_id,
+        epoch,
         peer_connection,
         track,
         payload_type,
@@ -89,6 +92,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
             &peer_connection,
             &native_inputs,
             &session_id,
+            epoch,
             &entry,
             &mut done_rx,
             &mut stop_rx,
@@ -108,6 +112,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
                 );
                 sessions.mark_direct_webrtc_failed(
                     &session_id,
+                    epoch,
                     "native_media_pipeline_failed",
                     message,
                 );
@@ -130,6 +135,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
             run_direct_webrtc_recorder_stream(
                 &sessions,
                 &session_id,
+                epoch,
                 &baseline_inputs,
                 recorder,
                 rx,
@@ -141,6 +147,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
             run_direct_webrtc_polling_stream(
                 &sessions,
                 &session_id,
+                epoch,
                 &baseline_inputs,
                 &entry,
                 &mut done_rx,
@@ -153,6 +160,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
     let result = run_direct_webrtc_polling_stream(
         &sessions,
         &session_id,
+        epoch,
         &baseline_inputs,
         &entry,
         &mut done_rx,
@@ -162,6 +170,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
     if let Err(err) = result {
         sessions.mark_direct_webrtc_failed(
             &session_id,
+            epoch,
             "baseline_media_pipeline_failed",
             err.to_string(),
         );

@@ -3,6 +3,23 @@
 //
 // File: plugins/remote-desktop/src/transport/webrtc_endpoint.rs
 // Description: Device-side direct WebRTC endpoint construction and startup.
+//
+// Protocol Responsibility:
+// - Answer a browser offer with one negotiated H.264 video sender and the
+//   remote-desktop input data channel on a shared ICE/DTLS transport.
+//
+// Implementation Approach:
+// - Apply the remote offer before attaching the local track so the sender is
+//   bound to the browser-offered video transceiver, then validate the answer
+//   before publishing the endpoint.
+//
+// Usage Contract:
+// - Callers provide a validated session/resource and must stop the endpoint
+//   when later session commit or authorization fails.
+//
+// Architectural Position:
+// - Device plugin transport boundary; session policy remains in the lifecycle
+//   service and Axon owns only invocation/receipt semantics.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,9 +54,10 @@ use crate::daemon::plugins::remote_desktop::constants::{
 use crate::daemon::plugins::remote_desktop::media::encode::build_direct_webrtc_h264_config;
 use crate::daemon::plugins::remote_desktop::network::direct_webrtc_udp_addrs;
 use crate::daemon::plugins::remote_desktop::sdp::{
-    normalize_browser_answer_sdp, normalize_remote_offer_sdp,
+    ensure_answer_sends_video, normalize_browser_answer_sdp, normalize_remote_offer_sdp,
 };
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
+use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::transport::{
     apply_pending_remote_ice_candidates, run_direct_webrtc_media_loop, DirectWebRtcEndpoint,
     DirectWebRtcHandler, DirectWebRtcSession, RemoteDesktopTransportManager,
@@ -51,6 +69,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct StartDirectWebRtcEndpointR
     pub(in crate::daemon::plugins::remote_desktop) sessions: Arc<RemoteDesktopSessionStore>,
     pub(in crate::daemon::plugins::remote_desktop) transports: Arc<RemoteDesktopTransportManager>,
     pub(in crate::daemon::plugins::remote_desktop) session_id: String,
+    pub(in crate::daemon::plugins::remote_desktop) epoch: TransportEpoch,
     pub(in crate::daemon::plugins::remote_desktop) entry: ResourceEntry,
     pub(in crate::daemon::plugins::remote_desktop) options: ScreenCaptureOptions,
     pub(in crate::daemon::plugins::remote_desktop) target_bitrate_kbps: u32,
@@ -66,6 +85,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn start_direct_webrtc_endpoint(
         sessions,
         transports,
         session_id,
+        epoch,
         entry,
         options,
         target_bitrate_kbps,
@@ -75,11 +95,12 @@ pub(in crate::daemon::plugins::remote_desktop) fn start_direct_webrtc_endpoint(
     } = request;
 
     let (stop_tx, stop_rx) = watch::channel(false);
-    let (answer, peer_connection) =
+    let (answer, peer_connection, completion) =
         transports.block_on(create_direct_webrtc_endpoint(DirectWebRtcEndpointConfig {
             sessions: Arc::clone(&sessions),
             transports: Arc::clone(&transports),
             session_id: session_id.clone(),
+            epoch,
             entry,
             options,
             target_bitrate_kbps,
@@ -88,18 +109,19 @@ pub(in crate::daemon::plugins::remote_desktop) fn start_direct_webrtc_endpoint(
             offer_sdp,
             stop_rx,
         }))?;
-    let old = transports.replace_endpoint(
+    transports.activate_endpoint(
         session_id.clone(),
         DirectWebRtcEndpoint {
-            stop_tx,
+            epoch,
             peer_connection,
         },
+        stop_tx,
+        completion,
     );
-    if let Some(old) = old {
-        let _ = old.stop_tx.send(true);
-    }
-    if let Err(err) = apply_pending_remote_ice_candidates(&sessions, &transports, &session_id) {
-        transports.stop_endpoint(&session_id);
+    if let Err(err) =
+        apply_pending_remote_ice_candidates(&sessions, &transports, &session_id, epoch)
+    {
+        transports.stop_endpoint_if_epoch(&session_id, epoch);
         return Err(err);
     }
     Ok(answer)
@@ -109,6 +131,7 @@ struct DirectWebRtcEndpointConfig {
     sessions: Arc<RemoteDesktopSessionStore>,
     transports: Arc<RemoteDesktopTransportManager>,
     session_id: String,
+    epoch: TransportEpoch,
     entry: ResourceEntry,
     options: ScreenCaptureOptions,
     target_bitrate_kbps: u32,
@@ -120,7 +143,7 @@ struct DirectWebRtcEndpointConfig {
 
 async fn create_direct_webrtc_endpoint(
     endpoint_config: DirectWebRtcEndpointConfig,
-) -> anyhow::Result<(Value, Arc<dyn PeerConnection>)> {
+) -> anyhow::Result<(Value, Arc<dyn PeerConnection>, std::thread::JoinHandle<()>)> {
     let media_config = build_direct_webrtc_h264_config(
         &endpoint_config.entry,
         &endpoint_config.options,
@@ -167,7 +190,9 @@ async fn create_direct_webrtc_endpoint(
         default_runtime().ok_or_else(|| anyhow::anyhow!("no WebRTC async runtime available"))?;
     let handler = Arc::new(DirectWebRtcHandler::new(
         Arc::clone(&endpoint_config.sessions),
+        Arc::clone(&endpoint_config.transports),
         endpoint_config.session_id.clone(),
+        endpoint_config.epoch,
         endpoint_config.input_policy.clone(),
         gather_complete_tx,
         connected_tx,
@@ -192,6 +217,16 @@ async fn create_direct_webrtc_endpoint(
             .await?,
     );
 
+    // Answerer ordering is load-bearing. Applying the offer first materializes
+    // the browser's recvonly video transceiver; add_track can then reuse it.
+    // Adding the track before set_remote_description creates an unassociated
+    // sender in rtc rc.4: ICE/data channels connect and RTP is written, but the
+    // browser never receives an ontrack event.
+    let offer_sdp = normalize_remote_offer_sdp(&endpoint_config.offer_sdp);
+    let offer: RTCSessionDescription =
+        serde_json::from_value(json!({ "type": "offer", "sdp": offer_sdp }))?;
+    peer_connection.set_remote_description(offer).await?;
+
     let track = Arc::new(TrackLocalStaticSample::new(MediaStreamTrack::new(
         format!("easynet-rd-stream-{}", endpoint_config.session_id),
         format!("easynet-rd-video-{}", endpoint_config.session_id),
@@ -210,11 +245,8 @@ async fn create_direct_webrtc_endpoint(
         .add_track(Arc::clone(&track) as Arc<dyn TrackLocal>)
         .await?;
 
-    let offer_sdp = normalize_remote_offer_sdp(&endpoint_config.offer_sdp);
-    let offer: RTCSessionDescription =
-        serde_json::from_value(json!({ "type": "offer", "sdp": offer_sdp }))?;
-    peer_connection.set_remote_description(offer).await?;
     let answer = peer_connection.create_answer(None).await?;
+    ensure_answer_sends_video(&answer.sdp)?;
     peer_connection.set_local_description(answer).await?;
     let _ = tokio::time::timeout(
         Duration::from_millis(DIRECT_WEBRTC_ICE_GATHER_TIMEOUT_MS),
@@ -253,15 +285,17 @@ async fn create_direct_webrtc_endpoint(
 
     let peer_connection_for_endpoint = Arc::clone(&peer_connection);
     let session_id = endpoint_config.session_id;
+    let epoch = endpoint_config.epoch;
     let sessions = Arc::clone(&endpoint_config.sessions);
     let transports = Arc::clone(&endpoint_config.transports);
-    std::thread::Builder::new()
+    let completion = std::thread::Builder::new()
         .name("easynet-remote-desktop-webrtc".into())
         .spawn(move || {
             transports.block_on(run_direct_webrtc_media_loop(
                 Arc::clone(&sessions),
                 DirectWebRtcSession {
                     session_id,
+                    epoch,
                     peer_connection,
                     track,
                     payload_type,
@@ -276,5 +310,5 @@ async fn create_direct_webrtc_endpoint(
         })
         .map_err(|err| anyhow::anyhow!("spawn direct WebRTC media loop: {err}"))?;
 
-    Ok((answer_value, peer_connection_for_endpoint))
+    Ok((answer_value, peer_connection_for_endpoint, completion))
 }

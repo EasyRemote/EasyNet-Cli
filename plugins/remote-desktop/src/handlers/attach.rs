@@ -7,13 +7,12 @@ use serde_json::Value;
 use tokio::sync::{mpsc, watch};
 
 use crate::daemon::ability::dispatch::{
-    BidiOutputFrame, BidiSource, EnvelopeContext, BIDI_CHANNEL_BOUND,
+    BIDI_CHANNEL_BOUND, BidiOutputFrame, BidiSource, EnvelopeContext,
 };
-use crate::daemon::plugins::remote_desktop::constants::{
-    ABILITY_ATTACH_SESSION, REASON_SESSION_NOT_FOUND,
-};
+use crate::daemon::plugins::remote_desktop::constants::ABILITY_ATTACH_SESSION;
+use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::invoke_bidi::{
-    spawn_bidi_capture_worker, BidiCaptureWorkerConfig,
+    BidiCaptureWorkerConfig, spawn_bidi_capture_worker,
 };
 use crate::daemon::plugins::remote_desktop::request::require_str;
 use crate::daemon::plugins::remote_desktop::request::{
@@ -35,9 +34,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
             .session_store()
             .with_sessions(|sessions| -> anyhow::Result<_> {
                 let session = sessions.get_mut(&session_id).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "{ABILITY_ATTACH_SESSION}: session {session_id:?} not found; reason={REASON_SESSION_NOT_FOUND}"
-                    )
+                    RemoteDesktopError::SessionNotFound {
+                        ability: ABILITY_ATTACH_SESSION,
+                        session_id: session_id.clone(),
+                    }
                 })?;
                 ensure_session_access(&plugin, ABILITY_ATTACH_SESSION, &env, &args, session)?;
                 let entry = resolve_screen_resource(ABILITY_ATTACH_SESSION, session.subject_ura())?;
@@ -90,8 +90,8 @@ mod tests {
     use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
     use crate::daemon::persistence::resources::{self, ResourceEntry, ResourcesFile};
     use crate::daemon::plugins::remote_desktop::constants::{
-        ABILITY_ATTACH_SESSION, ABILITY_CREATE_SESSION, REASON_PREVIEW_CAPTURE_FAILED,
-        REASON_PREVIEW_CLIENT_CLOSED, TRANSPORT_INVOKE_BIDI,
+        ABILITY_ATTACH_SESSION, ABILITY_CREATE_SESSION, ABILITY_GRANT_CONSENT,
+        REASON_PREVIEW_CAPTURE_FAILED, REASON_PREVIEW_CLIENT_CLOSED, TRANSPORT_INVOKE_BIDI,
     };
     use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopState;
@@ -158,6 +158,29 @@ mod tests {
         reg
     }
 
+    fn grant_consent_ticket(dispatcher: &AxonAbilityCatalog, subject: &str) -> String {
+        let granted = dispatcher
+            .execute_rpc(InvocationTarget {
+                scope: TargetScope::Local,
+                ability: ABILITY_GRANT_CONSENT.to_string(),
+                normalized_args: json!({"intent": "remote_desktop_session"}),
+                call_mode: CallMode::Rpc,
+                subject: crate::daemon::invocation::routing::target::InvocationSubject::explicit(
+                    subject.to_string(),
+                ),
+                causal_context:
+                    crate::daemon::invocation::routing::target::InvocationCausalContext::explicit(
+                        test_consent_causal_context(),
+                    ),
+                request_metadata: std::collections::HashMap::new(),
+            })
+            .expect("grant_consent issues a local test ticket");
+        granted["consent_ticket"]
+            .as_str()
+            .expect("grant_consent returns consent_ticket")
+            .to_string()
+    }
+
     #[test]
     fn attach_bidi_emits_synthetic_frame_and_closes_on_request() {
         let _lock = test_lock();
@@ -174,6 +197,7 @@ mod tests {
                 ability: ABILITY_CREATE_SESSION.to_string(),
                 normalized_args: json!({
                     "session_id": "rd-bidi-test",
+                    "consent_ticket": grant_consent_ticket(&dispatcher, &ura),
                     "mode": "view_only",
                     "lease_ttl_ms": 5000,
                     "video": { "max_width": 320, "max_height": 180, "max_fps": 144 },
@@ -262,17 +286,18 @@ mod tests {
             let mut file = ResourcesFile::default();
             let ura = seed_display(&mut file, "remote-desktop-close-detach-display");
             resources::save(&file).unwrap();
-            let created = crate::daemon::plugins::remote_desktop::handlers::create_session::handle(
-                Arc::clone(&plugin),
-                env_for(&ura),
-                json!({
-                    "session_id": "rd-close-detach",
-                    "mode": "view_only",
-                    "lease_ttl_ms": 5000,
-                    "video": { "max_width": 320, "max_height": 180, "max_fps": 144 },
-                }),
-            )
-            .unwrap();
+            let created =
+                crate::daemon::plugins::remote_desktop::test_support::create_test_session(
+                    Arc::clone(&plugin),
+                    env_for(&ura),
+                    json!({
+                        "session_id": "rd-close-detach",
+                        "mode": "view_only",
+                        "lease_ttl_ms": 5000,
+                        "video": { "max_width": 320, "max_height": 180, "max_fps": 144 },
+                    }),
+                )
+                .unwrap();
             let token = created["session_token"].as_str().unwrap().to_string();
             let mut bidi = handle(
                 Arc::clone(&plugin),
@@ -330,17 +355,18 @@ mod tests {
             let mut file = ResourcesFile::default();
             let ura = seed_display(&mut file, "remote-desktop-capture-failure-display");
             resources::save(&file).unwrap();
-            let created = crate::daemon::plugins::remote_desktop::handlers::create_session::handle(
-                Arc::clone(&plugin),
-                env_for(&ura),
-                json!({
-                    "session_id": "rd-capture-failed",
-                    "mode": "view_only",
-                    "lease_ttl_ms": 5000,
-                    "video": { "max_width": 320, "max_height": 180, "max_fps": 144 },
-                }),
-            )
-            .unwrap();
+            let created =
+                crate::daemon::plugins::remote_desktop::test_support::create_test_session(
+                    Arc::clone(&plugin),
+                    env_for(&ura),
+                    json!({
+                        "session_id": "rd-capture-failed",
+                        "mode": "view_only",
+                        "lease_ttl_ms": 5000,
+                        "video": { "max_width": 320, "max_height": 180, "max_fps": 144 },
+                    }),
+                )
+                .unwrap();
             let token = created["session_token"].as_str().unwrap().to_string();
             let mut bidi = handle(
                 Arc::clone(&plugin),
@@ -377,10 +403,10 @@ mod tests {
             plugin.session_store().with_sessions(|sessions| {
                 let session = sessions.get("rd-capture-failed").unwrap();
                 assert!(!session.preview_attached());
-                assert_eq!(session.state(), RemoteDesktopState::Failed);
-                assert_eq!(session.end_reason(), Some(REASON_PREVIEW_CAPTURE_FAILED));
+                assert_eq!(session.state(), RemoteDesktopState::Negotiating);
+                assert_eq!(session.end_reason(), None);
                 assert!(session.events().iter().any(|event| {
-                    event["event_type"] == json!("SESSION_FAILED")
+                    event["event_type"] == json!("DIAGNOSTIC_PREVIEW_FAILED")
                         && event["payload"]["transport_kind"] == json!(TRANSPORT_INVOKE_BIDI)
                         && event["payload"]["reason"] == json!(REASON_PREVIEW_CAPTURE_FAILED)
                 }));
@@ -405,6 +431,7 @@ mod tests {
                 ability: ABILITY_CREATE_SESSION.to_string(),
                 normalized_args: json!({
                     "session_id": "rd-bidi-subject-mismatch",
+                    "consent_ticket": grant_consent_ticket(&dispatcher, &ura),
                     "mode": "view_only",
                     "lease_ttl_ms": 5000,
                     "video": { "max_width": 320, "max_height": 180, "max_fps": 144 },
@@ -445,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn attach_bidi_requires_resource_subject() {
+    fn attach_bidi_rejects_daemon_derived_subject() {
         let _lock = test_lock();
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
@@ -460,6 +487,7 @@ mod tests {
                 ability: ABILITY_CREATE_SESSION.to_string(),
                 normalized_args: json!({
                     "session_id": "rd-bidi-missing-subject",
+                    "consent_ticket": grant_consent_ticket(&dispatcher, &ura),
                     "mode": "view_only",
                     "lease_ttl_ms": 5000,
                     "video": { "max_width": 320, "max_height": 180, "max_fps": 144 },
@@ -491,6 +519,6 @@ mod tests {
                 request_metadata: std::collections::HashMap::new(),
             })
             .unwrap_err();
-        assert!(err.to_string().contains("envelope subject is required"));
+        assert!(err.to_string().contains("does not match session subject"));
     }
 }

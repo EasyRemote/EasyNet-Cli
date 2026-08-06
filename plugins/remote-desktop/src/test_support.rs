@@ -58,6 +58,37 @@ pub(in crate::daemon::plugins::remote_desktop) fn env_for(subject: &str) -> Enve
     env_for_caller(subject, "easynet:///r/acme/user/test-caller")
 }
 
+pub(in crate::daemon::plugins::remote_desktop) fn with_consent_ticket(
+    plugin: &RemoteDesktopPlugin,
+    env: &EnvelopeContext,
+    mut args: serde_json::Value,
+) -> serde_json::Value {
+    let issued = plugin
+        .consent_registry()
+        .issue(
+            env.caller(),
+            env.subject(),
+            crate::daemon::plugins::remote_desktop::consent_registry::CONSENT_INTENT,
+        )
+        .expect("test consent ticket issues");
+    args.as_object_mut()
+        .expect("test create arguments must be an object")
+        .insert(
+            "consent_ticket".to_string(),
+            serde_json::json!(issued.ticket),
+        );
+    args
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn create_test_session(
+    plugin: Arc<RemoteDesktopPlugin>,
+    env: EnvelopeContext,
+    args: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let args = with_consent_ticket(&plugin, &env, args);
+    crate::daemon::plugins::remote_desktop::handlers::create_session::handle(plugin, env, args)
+}
+
 pub(in crate::daemon::plugins::remote_desktop) fn env_for_caller(
     subject: &str,
     caller: &str,

@@ -66,6 +66,12 @@ impl RemoteDesktopSessionStateMachine {
         self.set_non_terminal_state(RemoteDesktopState::Connected)
     }
 
+    /// Mark a production transport whose sender is live but whose client is not
+    /// currently presenting media.
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_degraded(&mut self) -> bool {
+        self.set_non_terminal_state(RemoteDesktopState::Degraded)
+    }
+
     /// Enter the caller-requested closing phase before final close.
     pub(in crate::daemon::plugins::remote_desktop) fn mark_closing(&mut self) -> bool {
         self.set_non_terminal_state(RemoteDesktopState::Closing)
@@ -98,6 +104,46 @@ impl RemoteDesktopSessionStateMachine {
 
     fn set_non_terminal_state(&mut self, state: RemoteDesktopState) -> bool {
         if self.is_terminal() {
+            return false;
+        }
+        if self.state == state {
+            return false;
+        }
+        let allowed = match self.state {
+            RemoteDesktopState::Negotiating => matches!(
+                state,
+                RemoteDesktopState::Connected
+                    | RemoteDesktopState::ConnectedPreview
+                    | RemoteDesktopState::Degraded
+                    | RemoteDesktopState::Closing
+            ),
+            RemoteDesktopState::ConnectedPreview => matches!(
+                state,
+                RemoteDesktopState::Negotiating
+                    | RemoteDesktopState::Connected
+                    | RemoteDesktopState::Degraded
+                    | RemoteDesktopState::Closing
+            ),
+            RemoteDesktopState::Connected => matches!(
+                state,
+                RemoteDesktopState::Negotiating
+                    | RemoteDesktopState::Degraded
+                    | RemoteDesktopState::Closing
+            ),
+            RemoteDesktopState::Degraded => matches!(
+                state,
+                RemoteDesktopState::Negotiating
+                    | RemoteDesktopState::Connected
+                    | RemoteDesktopState::ConnectedPreview
+                    | RemoteDesktopState::Closing
+            ),
+            RemoteDesktopState::Closing => matches!(state, RemoteDesktopState::Closed),
+            RemoteDesktopState::Closed | RemoteDesktopState::Failed => false,
+            RemoteDesktopState::Pending | RemoteDesktopState::Unspecified => {
+                matches!(state, RemoteDesktopState::Negotiating)
+            }
+        };
+        if !allowed {
             return false;
         }
         self.state = state;

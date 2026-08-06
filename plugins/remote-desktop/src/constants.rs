@@ -9,6 +9,7 @@ pub const ABILITY_GRANT_CONSENT: &str = "remote_desktop.grant_consent";
 pub const ABILITY_SHOW_SESSION: &str = "remote_desktop.show_session";
 pub const ABILITY_SET_DESCRIPTION: &str = "remote_desktop.set_description";
 pub const ABILITY_ADD_ICE_CANDIDATE: &str = "remote_desktop.add_ice_candidate";
+pub const ABILITY_REPORT_CLIENT_STATE: &str = "remote_desktop.report_client_state";
 pub const ABILITY_WATCH_EVENTS: &str = "remote_desktop.watch_events";
 pub const ABILITY_REFRESH_LEASE: &str = "remote_desktop.refresh_lease";
 pub const ABILITY_END_SESSION: &str = "remote_desktop.end_session";

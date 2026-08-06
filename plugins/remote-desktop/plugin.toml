@@ -30,6 +30,7 @@ activation_abilities = [
   "remote_desktop.create_session",
   "remote_desktop.set_description",
   "remote_desktop.add_ice_candidate",
+  "remote_desktop.report_client_state",
   "remote_desktop.attach",
   "remote_desktop.end_session",
   "remote_desktop.permission_status",
@@ -69,6 +70,11 @@ call_mode = "rpc"
 
 [[ability_metadata]]
 name = "remote_desktop.add_ice_candidate"
+layer = "control"
+call_mode = "rpc"
+
+[[ability_metadata]]
+name = "remote_desktop.report_client_state"
 layer = "control"
 call_mode = "rpc"
 

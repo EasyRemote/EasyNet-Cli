@@ -6,15 +6,12 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::daemon::ability::dispatch::EnvelopeContext;
-use crate::daemon::plugins::remote_desktop::constants::{
-    ABILITY_REFRESH_LEASE, REASON_SESSION_NOT_FOUND,
-};
+use crate::daemon::plugins::remote_desktop::constants::ABILITY_REFRESH_LEASE;
+use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::request::{parse_lease_ttl_ms, require_str};
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::now_ms;
-use crate::daemon::plugins::remote_desktop::session_lifecycle::{
-    ensure_session_control_access, spawn_session_lease_watchdog,
-};
+use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
 use crate::daemon::plugins::remote_desktop::view::serialize_session;
 
 /// Handle `remote_desktop.refresh_lease`.
@@ -30,16 +27,23 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
             .session_store()
             .with_sessions(|sessions| -> anyhow::Result<_> {
                 let session = sessions.get_mut(&session_id).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "{ABILITY_REFRESH_LEASE}: session {session_id:?} not found; reason={REASON_SESSION_NOT_FOUND}"
-                    )
+                    RemoteDesktopError::SessionNotFound {
+                        ability: ABILITY_REFRESH_LEASE,
+                        session_id: session_id.clone(),
+                    }
                 })?;
-                ensure_session_control_access(&plugin, ABILITY_REFRESH_LEASE, &env, &args, session)?;
+                ensure_session_control_access(
+                    &plugin,
+                    ABILITY_REFRESH_LEASE,
+                    &env,
+                    &args,
+                    session,
+                )?;
                 let now = now_ms();
                 let lease_expires_at_ms = session.refresh_lease(now, lease_ttl_ms);
                 let view = serialize_session(session);
                 Ok((lease_expires_at_ms, view))
             })?;
-    spawn_session_lease_watchdog(plugin, session_id, lease_expires_at_ms);
+    RemoteDesktopPlugin::schedule_session_lease(&plugin, session_id, lease_expires_at_ms);
     Ok(view)
 }

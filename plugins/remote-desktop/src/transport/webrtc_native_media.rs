@@ -27,6 +27,7 @@ use crate::daemon::plugins::remote_desktop::screencapturekit_capture::{
 };
 use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
+use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::videotoolbox_encoder::VideoToolboxEncoder;
 
 /// Immutable inputs for the macOS native direct-WebRTC strategy.
@@ -66,6 +67,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
     peer_connection: &Arc<dyn PeerConnection>,
     inputs: &NativeMediaInputs<'_>,
     session_id: &str,
+    epoch: TransportEpoch,
     entry: &ResourceEntry,
     done_rx: &mut webrtc::runtime::Receiver<()>,
     stop_rx: &mut watch::Receiver<bool>,
@@ -159,7 +161,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
             );
             if is_keyframe {
                 if !decoder_primed {
-                    sessions.mark_direct_webrtc_media_ready(session_id);
+                    sessions.mark_direct_webrtc_media_ready(session_id, epoch);
                 }
                 decoder_primed = true;
             }
@@ -194,6 +196,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
             record_media_pipeline_stats(
                 sessions,
                 session_id,
+                epoch,
                 json!({
                     "path": "native_webrtc",
                     "backend_id": config.backend.backend_id(),
@@ -244,6 +247,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
     record_media_pipeline_stats(
         sessions,
         session_id,
+        epoch,
         json!({
             "path": "native_webrtc",
             "backend_id": config.backend.backend_id(),
@@ -278,7 +282,8 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
 fn record_media_pipeline_stats(
     sessions: &RemoteDesktopSessionStore,
     session_id: &str,
+    epoch: TransportEpoch,
     stats: serde_json::Value,
 ) {
-    sessions.record_media_pipeline_stats(session_id, stats);
+    sessions.record_media_pipeline_stats(session_id, epoch, stats);
 }

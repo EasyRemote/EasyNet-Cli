@@ -156,6 +156,7 @@ mod tests {
     use super::RemoteDesktopTransportView;
     use crate::daemon::plugins::remote_desktop::constants::TRANSPORT_WEBRTC;
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+    use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
 
     #[test]
@@ -165,7 +166,9 @@ mod tests {
             "easynet:///r/acme/resource/display.01",
             vec![TRANSPORT_WEBRTC.to_string()],
         ));
+        session.begin_webrtc_negotiation(TransportEpoch::new(1));
         session.set_local_webrtc_answer(
+            TransportEpoch::new(1),
             json!({ "type": "answer", "sdp": "v=0" }),
             "native",
             true,

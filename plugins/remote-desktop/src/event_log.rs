@@ -43,7 +43,7 @@ impl RemoteDesktopEventRecord {
 #[derive(Debug, Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopEventLog {
     events: Vec<RemoteDesktopEventRecord>,
-    event_tx: broadcast::Sender<Value>,
+    event_tx: Option<broadcast::Sender<Value>>,
     next_sequence: u64,
 }
 
@@ -52,7 +52,7 @@ impl RemoteDesktopEventLog {
         let (event_tx, _) = broadcast::channel(MAX_EVENTS_PER_SESSION);
         Self {
             events: Vec::new(),
-            event_tx,
+            event_tx: Some(event_tx),
             next_sequence: 1,
         }
     }
@@ -66,8 +66,12 @@ impl RemoteDesktopEventLog {
 
     pub(in crate::daemon::plugins::remote_desktop) fn subscribe(
         &self,
-    ) -> broadcast::Receiver<Value> {
-        self.event_tx.subscribe()
+    ) -> Option<broadcast::Receiver<Value>> {
+        self.event_tx.as_ref().map(broadcast::Sender::subscribe)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn close(&mut self) {
+        self.event_tx.take();
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn push(
@@ -96,7 +100,9 @@ impl RemoteDesktopEventLog {
         }
         self.events
             .push(RemoteDesktopEventRecord::new(event.clone()));
-        let _ = self.event_tx.send(event);
+        if let Some(event_tx) = self.event_tx.as_ref() {
+            let _ = event_tx.send(event);
+        }
     }
 }
 

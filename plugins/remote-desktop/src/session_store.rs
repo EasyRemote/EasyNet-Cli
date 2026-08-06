@@ -12,6 +12,7 @@ use serde_json::Value;
 use crate::daemon::plugins::remote_desktop::constants::DIRECT_WEBRTC_ENDPOINT_PREFIX;
 use crate::daemon::plugins::remote_desktop::sdp::ice_candidate_text;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 
 /// Runtime-owned synchronized map of remote desktop sessions.
 ///
@@ -57,12 +58,16 @@ impl RemoteDesktopSessionStore {
     pub(in crate::daemon::plugins::remote_desktop) fn mark_direct_webrtc_media_ready(
         &self,
         session_id: &str,
+        epoch: TransportEpoch,
     ) {
         let mut sessions = self.lock();
         let Some(session) = sessions.get_mut(session_id) else {
             return;
         };
-        session.mark_webrtc_media_ready(format!("{DIRECT_WEBRTC_ENDPOINT_PREFIX}{session_id}"));
+        session.mark_webrtc_media_sending(
+            epoch,
+            format!("{DIRECT_WEBRTC_ENDPOINT_PREFIX}{session_id}"),
+        );
     }
 
     /// Mark a direct WebRTC endpoint failed for one non-terminal session.
@@ -72,6 +77,7 @@ impl RemoteDesktopSessionStore {
     pub(in crate::daemon::plugins::remote_desktop) fn mark_direct_webrtc_failed(
         &self,
         session_id: &str,
+        epoch: TransportEpoch,
         reason: &str,
         message: String,
     ) {
@@ -79,7 +85,9 @@ impl RemoteDesktopSessionStore {
         let Some(session) = sessions.get_mut(session_id) else {
             return;
         };
-        session.mark_webrtc_failed(reason, message);
+        if let Some(preview_stop) = session.mark_webrtc_failed(epoch, reason, message) {
+            let _ = preview_stop.send(true);
+        }
     }
 
     /// Append a local ICE candidate projected from the transport layer.
@@ -89,6 +97,7 @@ impl RemoteDesktopSessionStore {
     pub(in crate::daemon::plugins::remote_desktop) fn record_local_webrtc_candidate(
         &self,
         session_id: &str,
+        epoch: TransportEpoch,
         candidate: Value,
     ) -> anyhow::Result<()> {
         if ice_candidate_text(&candidate)?.trim().is_empty() {
@@ -98,6 +107,9 @@ impl RemoteDesktopSessionStore {
         let Some(session) = sessions.get_mut(session_id) else {
             return Ok(());
         };
+        if session.transport_epoch() != Some(epoch.value()) {
+            return Ok(());
+        }
         session.record_local_ice_candidate(candidate);
         Ok(())
     }
@@ -106,6 +118,7 @@ impl RemoteDesktopSessionStore {
     pub(in crate::daemon::plugins::remote_desktop) fn record_webrtc_diagnostic(
         &self,
         session_id: &str,
+        epoch: TransportEpoch,
         event_type: &str,
         error: Option<String>,
         payload: Value,
@@ -114,21 +127,24 @@ impl RemoteDesktopSessionStore {
         let Some(session) = sessions.get_mut(session_id) else {
             return;
         };
+        if session.transport_epoch() != Some(epoch.value()) {
+            return;
+        }
         session.record_webrtc_diagnostic(event_type, error, payload);
     }
 
     /// Store latest media stats for one non-terminal session.
-    #[cfg(target_os = "macos")]
     pub(in crate::daemon::plugins::remote_desktop) fn record_media_pipeline_stats(
         &self,
         session_id: &str,
+        epoch: TransportEpoch,
         stats: Value,
     ) {
         let mut sessions = self.lock();
         let Some(session) = sessions.get_mut(session_id) else {
             return;
         };
-        session.record_media_stats(stats);
+        session.record_media_stats(epoch, stats);
     }
 
     /// Detach the diagnostic InvokeBidi preview transport after a worker
@@ -171,14 +187,13 @@ mod tests {
 
     fn insert_test_session(store: &RemoteDesktopSessionStore, session_id: &str) {
         store.with_sessions(|sessions| {
-            sessions.insert(
-                session_id.to_string(),
-                RemoteDesktopSession::new(test_session_init(
-                    session_id,
-                    "easynet:///r/acme/resource/display.01",
-                    vec![TRANSPORT_WEBRTC.to_string()],
-                )),
-            );
+            let mut session = RemoteDesktopSession::new(test_session_init(
+                session_id,
+                "easynet:///r/acme/resource/display.01",
+                vec![TRANSPORT_WEBRTC.to_string()],
+            ));
+            session.begin_webrtc_negotiation(TransportEpoch::new(1));
+            sessions.insert(session_id.to_string(), session);
         });
     }
 
@@ -193,7 +208,11 @@ mod tests {
             (json!({"candidate": 7}), "must include string `candidate`"),
         ] {
             let err = store
-                .record_local_webrtc_candidate("rd-local-candidate-schema", candidate)
+                .record_local_webrtc_candidate(
+                    "rd-local-candidate-schema",
+                    TransportEpoch::new(1),
+                    candidate,
+                )
                 .expect_err("malformed local ICE candidate must fail closed")
                 .to_string();
             assert!(err.contains(expected), "expected {expected:?}; got {err}");
@@ -216,12 +235,14 @@ mod tests {
         store
             .record_local_webrtc_candidate(
                 "rd-local-candidate-ok",
+                TransportEpoch::new(1),
                 json!({"candidate": "", "sdpMid": "0", "sdpMLineIndex": 0}),
             )
             .expect("explicit end marker is accepted");
         store
             .record_local_webrtc_candidate(
                 "rd-local-candidate-ok",
+                TransportEpoch::new(1),
                 json!({
                     "candidate": "candidate:1 1 UDP 2122252543 abc.local 54400 typ host",
                     "sdpMid": "0",
@@ -246,8 +267,8 @@ mod tests {
         let store = RemoteDesktopSessionStore::new();
         insert_test_session(&store, "rd-media-ready");
 
-        store.mark_direct_webrtc_media_ready("rd-media-ready");
-        store.mark_direct_webrtc_media_ready("rd-media-ready");
+        store.mark_direct_webrtc_media_ready("rd-media-ready", TransportEpoch::new(1));
+        store.mark_direct_webrtc_media_ready("rd-media-ready", TransportEpoch::new(1));
 
         store.with_sessions(|sessions| {
             let session = sessions.get("rd-media-ready").unwrap();
@@ -255,7 +276,7 @@ mod tests {
             let connected_events = session
                 .events()
                 .into_iter()
-                .filter(|event| event["event_type"] == json!("TRANSPORT_CONNECTED"))
+                .filter(|event| event["event_type"] == json!("MEDIA_SENDER_READY"))
                 .count();
             assert_eq!(connected_events, 1);
         });
@@ -268,6 +289,7 @@ mod tests {
 
         store.record_webrtc_diagnostic(
             "rd-peer-connected-only",
+            TransportEpoch::new(1),
             "PEER_CONNECTION_STATE_CHANGED",
             None,
             json!({ "peer_connection_state": "connected" }),

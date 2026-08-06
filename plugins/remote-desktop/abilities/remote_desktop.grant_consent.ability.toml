@@ -17,6 +17,7 @@ receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
+required = ["intent"]
 additionalProperties = false
 
 [input_schema.properties.intent]

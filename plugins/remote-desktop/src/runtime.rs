@@ -33,6 +33,8 @@ use std::sync::Arc;
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenSnapshotBackend;
 use crate::daemon::plugins::remote_desktop::config::RemoteDesktopRuntimeConfig;
+use crate::daemon::plugins::remote_desktop::consent_registry::RemoteDesktopConsentRegistry;
+use crate::daemon::plugins::remote_desktop::lease_monitor::RemoteDesktopLeaseMonitor;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::transport::{
     DirectWebRtcEndpoint, RemoteDesktopTransportManager,
@@ -48,6 +50,8 @@ use crate::daemon::plugins::remote_desktop::transport::{
 #[derive(Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopPlugin {
     sessions: Arc<RemoteDesktopSessionStore>,
+    consent: Arc<RemoteDesktopConsentRegistry>,
+    lease_monitor: Arc<RemoteDesktopLeaseMonitor>,
     transports: Arc<RemoteDesktopTransportManager>,
     screen_backend: Arc<dyn ScreenSnapshotBackend>,
     config: RemoteDesktopRuntimeConfig,
@@ -60,6 +64,10 @@ impl RemoteDesktopPlugin {
     ) -> Arc<Self> {
         Arc::new(Self {
             sessions: Arc::new(RemoteDesktopSessionStore::new()),
+            consent: Arc::new(RemoteDesktopConsentRegistry::new(
+                config.max_sessions().saturating_mul(4),
+            )),
+            lease_monitor: Arc::new(RemoteDesktopLeaseMonitor::new()),
             transports: Arc::new(RemoteDesktopTransportManager::new()),
             screen_backend,
             config,
@@ -76,6 +84,29 @@ impl RemoteDesktopPlugin {
         &self,
     ) -> Arc<RemoteDesktopSessionStore> {
         Arc::clone(&self.sessions)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn consent_registry(
+        &self,
+    ) -> Arc<RemoteDesktopConsentRegistry> {
+        Arc::clone(&self.consent)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn schedule_session_lease(
+        plugin: &Arc<Self>,
+        session_id: String,
+        lease_expires_at_ms: u64,
+    ) {
+        plugin
+            .lease_monitor
+            .schedule(plugin, session_id, lease_expires_at_ms);
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn cancel_session_lease(
+        &self,
+        session_id: &str,
+    ) {
+        self.lease_monitor.cancel(session_id);
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn endpoint(

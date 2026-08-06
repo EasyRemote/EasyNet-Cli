@@ -6,9 +6,8 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::daemon::ability::dispatch::{EnvelopeContext, StreamSource};
-use crate::daemon::plugins::remote_desktop::constants::{
-    ABILITY_WATCH_EVENTS, REASON_SESSION_NOT_FOUND,
-};
+use crate::daemon::plugins::remote_desktop::constants::ABILITY_WATCH_EVENTS;
+use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::request::require_str;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
@@ -28,12 +27,12 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         .session_store()
         .with_sessions(|sessions| -> anyhow::Result<StreamSource> {
             let session = sessions.get_mut(session_id).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{ABILITY_WATCH_EVENTS}: session {session_id:?} not found; reason={REASON_SESSION_NOT_FOUND}"
-                )
+                RemoteDesktopError::SessionNotFound {
+                    ability: ABILITY_WATCH_EVENTS,
+                    session_id: session_id.to_string(),
+                }
             })?;
             ensure_session_control_access(&plugin, ABILITY_WATCH_EVENTS, &env, &args, session)?;
-            let live_rx = session.subscribe_events();
             let events = session
                 .events()
                 .iter()
@@ -46,6 +45,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                 })
                 .cloned()
                 .collect();
+            if session.is_terminal() {
+                return Ok(StreamSource::Snapshot(events));
+            }
+            let live_rx = session.subscribe_events().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{ABILITY_WATCH_EVENTS}: active session event stream is already closed"
+                )
+            })?;
             Ok(StreamSource::SnapshotThenLive(events, live_rx))
         })
 }

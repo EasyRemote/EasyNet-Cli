@@ -24,6 +24,7 @@ use crate::daemon::plugins::remote_desktop::media::encode::{
     build_openh264_encoder, even_rgb_frame, write_h264_sample, BuiltinH264Config,
 };
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
+use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 
 #[cfg(feature = "native-media")]
 const RECORDER_FRAME_TIMEOUT_MS: u64 = 250;
@@ -45,6 +46,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct BaselineMediaInputs<'a> {
 pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_recorder_stream(
     sessions: &RemoteDesktopSessionStore,
     session_id: &str,
+    epoch: TransportEpoch,
     inputs: &BaselineMediaInputs<'_>,
     recorder: xcap::VideoRecorder,
     rx: std::sync::mpsc::Receiver<xcap::Frame>,
@@ -82,7 +84,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_record
                 )
                 .await?;
                 if wrote_sample && !media_ready_reported {
-                    sessions.mark_direct_webrtc_media_ready(session_id);
+                    sessions.mark_direct_webrtc_media_ready(session_id, epoch);
                     media_ready_reported = true;
                 }
                 seq = seq.saturating_add(1);
@@ -101,6 +103,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_record
 pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_polling_stream(
     sessions: &RemoteDesktopSessionStore,
     session_id: &str,
+    epoch: TransportEpoch,
     inputs: &BaselineMediaInputs<'_>,
     entry: &ResourceEntry,
     done_rx: &mut webrtc::runtime::Receiver<()>,
@@ -134,7 +137,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_pollin
         )
         .await?;
         if wrote_sample && !media_ready_reported {
-            sessions.mark_direct_webrtc_media_ready(session_id);
+            sessions.mark_direct_webrtc_media_ready(session_id, epoch);
             media_ready_reported = true;
         }
         seq = seq.saturating_add(1);

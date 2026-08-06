@@ -22,7 +22,9 @@ use crate::daemon::plugins::remote_desktop::session_lease::RemoteDesktopLease;
 use crate::daemon::plugins::remote_desktop::session_signaling::RemoteDesktopSignalingState;
 use crate::daemon::plugins::remote_desktop::session_state::RemoteDesktopSessionStateMachine;
 pub(in crate::daemon::plugins::remote_desktop) use crate::daemon::plugins::remote_desktop::session_state::RemoteDesktopState;
-use crate::daemon::plugins::remote_desktop::session_transport_state::RemoteDesktopTransportState;
+use crate::daemon::plugins::remote_desktop::session_transport_state::{
+    PrimaryMediaPhase, RemoteDesktopTransportState, TransportEpoch,
+};
 
 /// Runtime state for one remote desktop session.
 ///
@@ -206,6 +208,18 @@ impl RemoteDesktopSession {
         self.transport.media_transport_ready()
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn client_media_ready(&self) -> bool {
+        self.transport.client_media_ready()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn transport_epoch(&self) -> Option<u64> {
+        self.transport.active_epoch().map(TransportEpoch::value)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn transport_state(&self) -> Value {
+        self.transport.projection()
+    }
+
     /// Negotiated media codec metadata.
     pub(in crate::daemon::plugins::remote_desktop) fn negotiated_codec(&self) -> Option<Value> {
         self.signaling.negotiated_codec()
@@ -229,7 +243,7 @@ impl RemoteDesktopSession {
     /// Subscribe to live session events without exposing the sender.
     pub(in crate::daemon::plugins::remote_desktop) fn subscribe_events(
         &self,
-    ) -> broadcast::Receiver<Value> {
+    ) -> Option<broadcast::Receiver<Value>> {
         self.event_log.subscribe()
     }
 
@@ -254,6 +268,27 @@ impl RemoteDesktopSession {
 
     fn touch(&mut self) {
         self.lease.touch(now_ms());
+    }
+
+    fn reconcile_lifecycle(&mut self) {
+        if self.lifecycle.is_terminal() {
+            return;
+        }
+        match self.transport.primary_phase() {
+            Some(PrimaryMediaPhase::ClientPresenting) => {
+                self.lifecycle.mark_connected();
+            }
+            Some(PrimaryMediaPhase::Degraded | PrimaryMediaPhase::Failed) => {
+                self.lifecycle.mark_degraded();
+            }
+            Some(PrimaryMediaPhase::Negotiating | PrimaryMediaPhase::DeviceSending) | None => {
+                if self.transport.preview_attached() {
+                    self.lifecycle.mark_preview_connected();
+                } else {
+                    self.lifecycle.mark_negotiating();
+                }
+            }
+        }
     }
 
     /// Commit a local or remote SDP description after validation.
@@ -281,7 +316,8 @@ impl RemoteDesktopSession {
     pub(in crate::daemon::plugins::remote_desktop) fn add_remote_ice_candidate(
         &mut self,
         candidate: Value,
-        applied_to_live_endpoint: bool,
+        application_state: &str,
+        transport_epoch: Option<TransportEpoch>,
     ) {
         if self.lifecycle.is_terminal() {
             return;
@@ -290,7 +326,8 @@ impl RemoteDesktopSession {
         self.touch();
         self.push_projected_event(session_events::remote_ice_candidate_added(
             candidate_count,
-            applied_to_live_endpoint,
+            application_state,
+            transport_epoch.map(TransportEpoch::value),
             self.transport.media_transport_ready(),
         ));
     }
@@ -304,7 +341,7 @@ impl RemoteDesktopSession {
             return None;
         }
         let old_stop = self.transport.attach_preview_transport(stop_tx);
-        self.lifecycle.mark_preview_connected();
+        self.reconcile_lifecycle();
         self.touch();
         self.push_projected_event(session_events::preview_transport_connected());
         old_stop
@@ -332,7 +369,6 @@ impl RemoteDesktopSession {
             return;
         }
         self.signaling.set_webrtc_error(reason);
-        self.transport.mark_media_pending();
         self.touch();
         self.push_projected_event(session_events::transport_blocked(reason, required_backend));
     }
@@ -342,22 +378,36 @@ impl RemoteDesktopSession {
     /// connectivity.
     pub(in crate::daemon::plugins::remote_desktop) fn set_local_webrtc_answer(
         &mut self,
+        epoch: TransportEpoch,
         answer: Value,
         backend_id: &str,
         production_ready: bool,
         endpoint_ura: String,
     ) {
-        if self.lifecycle.is_terminal() {
+        if self.lifecycle.is_terminal() || !self.transport.accepts_epoch(epoch) {
             return;
         }
         self.signaling
             .set_local_webrtc_answer(answer, backend_id, production_ready, endpoint_ura);
-        self.transport.mark_media_pending();
+        self.reconcile_lifecycle();
         self.touch();
         self.push_projected_event(session_events::local_webrtc_answer_set(
             backend_id,
             production_ready,
+            epoch.value(),
         ));
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn begin_webrtc_negotiation(
+        &mut self,
+        epoch: TransportEpoch,
+    ) {
+        if self.lifecycle.is_terminal() {
+            return;
+        }
+        self.transport.begin_primary(epoch);
+        self.reconcile_lifecycle();
+        self.touch();
     }
 
     /// Append a local ICE candidate produced by the device-side WebRTC endpoint.
@@ -416,12 +466,17 @@ impl RemoteDesktopSession {
     }
 
     /// Store latest media stats and emit a bounded event-log row.
-    #[cfg(target_os = "macos")]
-    pub(in crate::daemon::plugins::remote_desktop) fn record_media_stats(&mut self, stats: Value) {
+    pub(in crate::daemon::plugins::remote_desktop) fn record_media_stats(
+        &mut self,
+        epoch: TransportEpoch,
+        stats: Value,
+    ) {
         if self.lifecycle.is_terminal() {
             return;
         }
-        self.transport.record_media_stats(stats.clone());
+        if !self.transport.record_media_stats(epoch, stats.clone()) {
+            return;
+        }
         self.touch();
         self.push_projected_event(session_events::media_pipeline_stats(
             self.transport.media_transport_ready(),
@@ -445,22 +500,23 @@ impl RemoteDesktopSession {
             return None;
         }
         let stop_tx = self.transport.detach_preview_transport();
-        self.lifecycle.mark_negotiating();
+        self.reconcile_lifecycle();
         self.touch();
         self.push_projected_event(session_events::preview_transport_detached(reason));
         stop_tx
     }
 
-    /// Mark an InvokeBidi preview worker failure as a terminal session failure.
+    /// Record an InvokeBidi preview failure without failing production media.
     pub(in crate::daemon::plugins::remote_desktop) fn mark_preview_transport_failed(
         &mut self,
         reason: &str,
         message: String,
     ) -> Option<watch::Sender<bool>> {
-        if !self.lifecycle.fail(reason) {
+        if self.lifecycle.is_terminal() || !self.transport.preview_attached() {
             return None;
         }
         let stop_tx = self.transport.detach_preview_transport();
+        self.reconcile_lifecycle();
         self.touch();
         self.push_projected_event(session_events::preview_transport_failed(reason, message));
         stop_tx
@@ -492,6 +548,7 @@ impl RemoteDesktopSession {
         self.lifecycle.mark_closed(reason);
         self.touch();
         self.push_projected_event(session_events::session_closed(reason));
+        self.event_log.close();
     }
 
     /// Mark the session closed because its lease elapsed.
@@ -504,34 +561,75 @@ impl RemoteDesktopSession {
             REASON_SESSION_EXPIRED,
             self.lease.expires_at_ms(),
         ));
+        self.event_log.close();
     }
 
-    /// Mark the production WebRTC media plane ready.
-    pub(in crate::daemon::plugins::remote_desktop) fn mark_webrtc_media_ready(
+    /// Mark the active production endpoint as accepting encoded media.
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_webrtc_media_sending(
         &mut self,
+        epoch: TransportEpoch,
         endpoint_ura: String,
     ) {
-        if self.lifecycle.is_terminal() || !self.transport.mark_media_ready() {
+        if self.lifecycle.is_terminal() || !self.transport.mark_device_sending(epoch) {
             return;
         }
-        self.lifecycle.mark_connected();
+        self.reconcile_lifecycle();
         self.touch();
-        self.push_projected_event(session_events::webrtc_connected(endpoint_ura));
+        self.push_projected_event(session_events::webrtc_sender_ready(
+            endpoint_ura,
+            epoch.value(),
+        ));
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn report_client_media_state(
+        &mut self,
+        epoch: TransportEpoch,
+        state: &str,
+    ) -> bool {
+        if self.lifecycle.is_terminal() {
+            return false;
+        }
+        let changed = match state {
+            "presenting" => self.transport.mark_client_presenting(epoch),
+            "stalled" | "detached" => self.transport.mark_client_stalled(epoch),
+            _ => false,
+        };
+        if !changed {
+            return false;
+        }
+        self.reconcile_lifecycle();
+        self.touch();
+        self.push_projected_event(session_events::client_media_state_changed(
+            state,
+            epoch.value(),
+        ));
+        true
     }
 
     /// Mark a non-terminal session failed and record the failure event.
     pub(in crate::daemon::plugins::remote_desktop) fn mark_webrtc_failed(
         &mut self,
+        epoch: TransportEpoch,
         reason: &str,
         message: String,
-    ) {
-        if !self.lifecycle.fail(reason) {
-            return;
+    ) -> Option<watch::Sender<bool>> {
+        if !self.transport.accepts_epoch(epoch) {
+            return None;
         }
-        self.transport.mark_media_pending();
+        if !self.lifecycle.fail(reason) {
+            return None;
+        }
+        self.transport.mark_failed(epoch);
+        let preview_stop = self.transport.detach_preview_transport();
         self.signaling.set_webrtc_error(reason);
         self.touch();
-        self.push_projected_event(session_events::webrtc_failed(reason, message));
+        self.push_projected_event(session_events::webrtc_failed(
+            reason,
+            message,
+            epoch.value(),
+        ));
+        self.event_log.close();
+        preview_stop
     }
 }
 

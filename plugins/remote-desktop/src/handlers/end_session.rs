@@ -6,9 +6,8 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::EnvelopeContext;
-use crate::daemon::plugins::remote_desktop::constants::{
-    ABILITY_END_SESSION, REASON_SESSION_NOT_FOUND,
-};
+use crate::daemon::plugins::remote_desktop::constants::ABILITY_END_SESSION;
+use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::request::require_str;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session_access::ensure_session_control_identity;
@@ -31,9 +30,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         .session_store()
         .with_sessions(|sessions| -> anyhow::Result<Value> {
             let session = sessions.get_mut(&session_id).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{ABILITY_END_SESSION}: session {session_id:?} not found; reason={REASON_SESSION_NOT_FOUND}"
-                )
+                RemoteDesktopError::SessionNotFound {
+                    ability: ABILITY_END_SESSION,
+                    session_id: session_id.clone(),
+                }
             })?;
             ensure_session_control_identity(ABILITY_END_SESSION, &env, &args, session)?;
             if session.is_terminal() {

@@ -17,7 +17,13 @@ receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
+required = ["consent_ticket"]
 additionalProperties = false
+
+[input_schema.properties.consent_ticket]
+type = "string"
+minLength = 64
+maxLength = 64
 
 [input_schema.properties.input]
 type = "object"

@@ -18,6 +18,7 @@ use webrtc::data_channel::{DataChannel, DataChannelEvent};
 
 use crate::daemon::persistence::resources::{ResourceEntry, ResourceType};
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
+use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 
 pub const INPUT_DATA_CHANNEL_LABEL: &str = "easynet.remote_desktop.input.v1";
 pub const MAX_INPUT_FRAME_BYTES: usize = 16 * 1024;
@@ -222,6 +223,7 @@ pub fn request_input_injection_permission() -> bool {
 pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input_channel(
     sessions: Arc<RemoteDesktopSessionStore>,
     session_id: String,
+    epoch: TransportEpoch,
     input_policy: Value,
     data_channel: Arc<dyn DataChannel>,
 ) {
@@ -232,6 +234,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
             DataChannelEvent::OnOpen => record_input_channel_event(
                 &sessions,
                 &session_id,
+                epoch,
                 "INPUT_CHANNEL_OPENED",
                 json!({
                     "label": INPUT_DATA_CHANNEL_LABEL,
@@ -242,6 +245,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                 record_input_channel_event(
                     &sessions,
                     &session_id,
+                    epoch,
                     "INPUT_CHANNEL_CLOSED",
                     json!({
                         "accepted_count": accepted_count,
@@ -254,6 +258,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                 record_input_channel_event(
                     &sessions,
                     &session_id,
+                    epoch,
                     "INPUT_CHANNEL_ERROR",
                     json!({ "reason": "data_channel_error" }),
                 );
@@ -264,6 +269,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     record_input_channel_event(
                         &sessions,
                         &session_id,
+                        epoch,
                         "INPUT_FRAME_REJECTED",
                         json!({
                             "reason": "binary_input_frame_rejected",
@@ -277,6 +283,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     record_input_channel_event(
                         &sessions,
                         &session_id,
+                        epoch,
                         "INPUT_FRAME_REJECTED",
                         json!({
                             "reason": "invalid_utf8",
@@ -292,6 +299,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                         record_input_channel_event(
                             &sessions,
                             &session_id,
+                            epoch,
                             "INPUT_FRAME_REJECTED",
                             json!({
                                 "reason": "invalid_input_frame",
@@ -308,6 +316,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     record_input_channel_event(
                         &sessions,
                         &session_id,
+                        epoch,
                         "INPUT_FRAME_REJECTED",
                         json!({
                             "reason": "input_policy_denied",
@@ -325,6 +334,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                         record_input_channel_event(
                             &sessions,
                             &session_id,
+                            epoch,
                             "INPUT_FRAME_APPLIED",
                             json!({
                                 "kind": kind,
@@ -339,6 +349,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     record_input_channel_event(
                         &sessions,
                         &session_id,
+                        epoch,
                         "INPUT_FRAME_REJECTED",
                         json!({
                             "reason": outcome.reason.unwrap_or("input_injection_failed"),
@@ -371,6 +382,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn input_policy_allows(
 pub(in crate::daemon::plugins::remote_desktop) fn record_input_channel_event(
     sessions: &RemoteDesktopSessionStore,
     session_id: &str,
+    epoch: TransportEpoch,
     event_type: &str,
     payload: Value,
 ) {
@@ -379,6 +391,9 @@ pub(in crate::daemon::plugins::remote_desktop) fn record_input_channel_event(
         return;
     };
     if session.is_terminal() {
+        return;
+    }
+    if session.transport_epoch() != Some(epoch.value()) {
         return;
     }
     session.record_input_channel_event(event_type, payload);

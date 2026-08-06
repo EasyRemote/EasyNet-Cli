@@ -17,11 +17,9 @@ use crate::daemon::plugins::remote_desktop::session_consent::causal_context_cont
 /// Verify that a remote desktop session control-plane ability targets exactly
 /// one session and carries the session bearer token.
 ///
-/// Signaling and lifecycle calls are session-scoped, not media-resource
-/// operations. Their envelope subject may be the caller/user subject supplied
-/// by the Axon sidecar, so they must not require it to equal the captured
-/// resource URA. The resource binding remains inside the session row created
-/// by `create_session`.
+/// Every session operation remains bound to the resource EntityRef captured at
+/// creation. Adapters must preserve that subject instead of substituting the
+/// caller identity.
 pub(in crate::daemon::plugins::remote_desktop) fn ensure_session_control_identity(
     ability: &'static str,
     env: &EnvelopeContext,
@@ -42,6 +40,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn ensure_session_control_identit
         });
     }
     ensure_session_caller_consistent(ability, env, session)?;
+    ensure_session_subject_consistent(ability, env.subject(), session)?;
     ensure_session_consent_receipt_consistent(ability, env, session)?;
     Ok(())
 }

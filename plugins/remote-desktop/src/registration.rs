@@ -30,21 +30,26 @@ use crate::daemon::ability::builtins::resources::media::screen_snapshot::Synthet
 #[cfg(feature = "native-media")]
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::XcapBackend;
 use crate::daemon::ability::descriptors::AdmissionAction;
-use crate::daemon::ability::dispatch::{BidiSource, EnvelopeContext, StreamSource};
+use crate::daemon::ability::dispatch::{
+    AbilityHandlerFailure, BidiSource, EnvelopeContext, StreamSource,
+};
 use crate::daemon::ability::{AbilityImplSource, CallMode};
 use crate::daemon::plugins::package::BuiltinPluginAbilitySpec;
+use crate::daemon::plugins::remote_desktop::consent_registry::ConsentTicketError;
 use crate::daemon::plugins::remote_desktop::constants::{
     ABILITY_ADD_ICE_CANDIDATE, ABILITY_ATTACH_SESSION, ABILITY_CREATE_SESSION, ABILITY_END_SESSION,
     ABILITY_GRANT_CONSENT, ABILITY_PERMISSION_STATUS, ABILITY_REFRESH_LEASE,
-    ABILITY_REQUEST_PERMISSION, ABILITY_SET_DESCRIPTION, ABILITY_SHOW_SESSION,
-    ABILITY_WATCH_EVENTS,
+    ABILITY_REPORT_CLIENT_STATE, ABILITY_REQUEST_PERMISSION, ABILITY_SET_DESCRIPTION,
+    ABILITY_SHOW_SESSION, ABILITY_WATCH_EVENTS,
 };
+use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::handlers;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::schema;
 use crate::daemon::plugins::{
     PluginAbilityLayer, PluginBidiWireKind, PluginContributionBuilder, PluginRuntimeLimits, Result,
 };
+use axon_sdk::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, SecurityClass};
 
 type PluginRpcHandler =
     fn(Arc<RemoteDesktopPlugin>, EnvelopeContext, Value) -> anyhow::Result<Value>;
@@ -97,31 +102,94 @@ impl RemoteDesktopAbilityBinding {
                 manifest,
                 AbilityImplSource::BuiltinPlugin,
                 runtime_env,
-                Arc::new(move |env, args| handler(Arc::clone(&plugin), env, args)),
+                Arc::new(move |env, args| {
+                    classify_handler_result(handler(Arc::clone(&plugin), env, args))
+                }),
             ),
             Self::StatelessRpc { handler } => builder.rpc(
                 spec.name,
                 manifest,
                 AbilityImplSource::BuiltinPlugin,
                 runtime_env,
-                Arc::new(handler),
+                Arc::new(move |env, args| classify_handler_result(handler(env, args))),
             ),
             Self::Stream { handler } => builder.stream(
                 spec.name,
                 manifest,
                 AbilityImplSource::BuiltinPlugin,
                 runtime_env,
-                Arc::new(move |env, args| handler(Arc::clone(&plugin), env, args)),
+                Arc::new(move |env, args| {
+                    classify_handler_result(handler(Arc::clone(&plugin), env, args))
+                }),
             ),
             Self::Bidi { handler } => builder.bidi(
                 spec.name,
                 manifest,
                 AbilityImplSource::BuiltinPlugin,
                 runtime_env,
-                Arc::new(move |env, args| handler(Arc::clone(&plugin), env, args)),
+                Arc::new(move |env, args| {
+                    classify_handler_result(handler(Arc::clone(&plugin), env, args))
+                }),
             ),
         }
     }
+}
+
+fn classify_handler_result<T>(result: anyhow::Result<T>) -> anyhow::Result<T> {
+    result.map_err(|error| {
+        let axon_error = if let Some(error) = error.downcast_ref::<RemoteDesktopError>() {
+            error.to_axon()
+        } else if let Some(error) = error.downcast_ref::<ConsentTicketError>() {
+            consent_ticket_error_to_axon(error)
+        } else {
+            AxonError::new(AxonErrorKind::Internal)
+                .with_code(ErrorCode::ExecutionFailed)
+                .with_stage(ErrorStage::Execution)
+                .with_security_class(SecurityClass::Resource)
+                .with_message(error.to_string())
+        };
+        anyhow::Error::new(AbilityHandlerFailure::new(axon_error))
+    })
+}
+
+fn consent_ticket_error_to_axon(error: &ConsentTicketError) -> AxonError {
+    let (kind, code, stage, security_class) = match error {
+        ConsentTicketError::Full => (
+            AxonErrorKind::ResourceExhausted,
+            ErrorCode::ResourceExhausted,
+            ErrorStage::Quota,
+            SecurityClass::Resource,
+        ),
+        ConsentTicketError::Invalid => (
+            AxonErrorKind::PermissionDenied,
+            ErrorCode::AuthorityExpired,
+            ErrorStage::AuthorityValidation,
+            SecurityClass::Authority,
+        ),
+        ConsentTicketError::CallerMismatch => (
+            AxonErrorKind::PermissionDenied,
+            ErrorCode::AuthorityCallerMismatch,
+            ErrorStage::AuthorityValidation,
+            SecurityClass::Authority,
+        ),
+        ConsentTicketError::SubjectMismatch => (
+            AxonErrorKind::PermissionDenied,
+            ErrorCode::AuthoritySubjectMismatch,
+            ErrorStage::AuthorityValidation,
+            SecurityClass::Authority,
+        ),
+        ConsentTicketError::IntentMismatch => (
+            AxonErrorKind::PermissionDenied,
+            ErrorCode::AuthorityScopeViolation,
+            ErrorStage::AuthorityValidation,
+            SecurityClass::Authority,
+        ),
+    };
+    AxonError::new(kind)
+        .with_code(code)
+        .with_stage(stage)
+        .with_security_class(security_class)
+        .with_message(error.to_string())
 }
 
 /// Single runtime-side source for every exported remote desktop ability.
@@ -137,7 +205,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 description: schema::grant_consent_description,
                 input_schema: schema::grant_consent_input_schema,
             },
-            handler: RemoteDesktopAbilityBinding::StatelessRpc {
+            handler: RemoteDesktopAbilityBinding::Rpc {
                 handler: handlers::grant_consent::handle,
             },
         },
@@ -195,6 +263,20 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
             },
             handler: RemoteDesktopAbilityBinding::Rpc {
                 handler: handlers::add_ice_candidate::handle,
+            },
+        },
+        RemoteDesktopCompiledAbilityBinding {
+            spec: BuiltinPluginAbilitySpec {
+                name: ABILITY_REPORT_CLIENT_STATE,
+                layer: PluginAbilityLayer::Control,
+                call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Manage,
+                bidi_wire_kind: None,
+                description: schema::report_client_state_description,
+                input_schema: schema::report_client_state_input_schema,
+            },
+            handler: RemoteDesktopAbilityBinding::Rpc {
+                handler: handlers::report_client_state::handle,
             },
         },
         RemoteDesktopCompiledAbilityBinding {
@@ -336,9 +418,9 @@ pub(in crate::daemon::plugins::remote_desktop) fn contribute_with_screen_backend
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::ability::CallMode as DescriptorCallMode;
     use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
     use crate::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
-    use crate::daemon::ability::CallMode as DescriptorCallMode;
     use crate::daemon::plugins::{
         DaemonPluginBinder, PluginContributionSet, PluginKind, PluginRequirementSet,
     };
@@ -365,6 +447,40 @@ mod tests {
                 binding.spec.name
             );
         }
+    }
+
+    #[test]
+    fn consent_ticket_failures_are_machine_readable() {
+        let err =
+            classify_handler_result::<()>(Err(ConsentTicketError::Invalid.into())).unwrap_err();
+        let failure = err
+            .downcast_ref::<AbilityHandlerFailure>()
+            .expect("registration must preserve structured handler failure");
+        let axon_error = failure.axon_error();
+
+        assert_eq!(axon_error.kind, AxonErrorKind::PermissionDenied);
+        assert_eq!(axon_error.code, ErrorCode::AuthorityExpired);
+        assert_eq!(axon_error.stage, Some(ErrorStage::AuthorityValidation));
+        assert_eq!(axon_error.security_class, Some(SecurityClass::Authority));
+        assert!(
+            !axon_error.message.is_empty(),
+            "public ability errors must not collapse to an empty body"
+        );
+    }
+
+    #[test]
+    fn unknown_handler_failures_still_have_structured_payloads() {
+        let err = classify_handler_result::<()>(Err(anyhow::anyhow!("boom"))).unwrap_err();
+        let failure = err
+            .downcast_ref::<AbilityHandlerFailure>()
+            .expect("registration must wrap untyped errors for adapter projection");
+        let axon_error = failure.axon_error();
+
+        assert_eq!(axon_error.kind, AxonErrorKind::Internal);
+        assert_eq!(axon_error.code, ErrorCode::ExecutionFailed);
+        assert_eq!(axon_error.stage, Some(ErrorStage::Execution));
+        assert_eq!(axon_error.security_class, Some(SecurityClass::Resource));
+        assert_eq!(axon_error.message, "boom");
     }
 
     #[test]

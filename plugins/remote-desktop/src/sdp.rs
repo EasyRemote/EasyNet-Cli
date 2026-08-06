@@ -5,6 +5,18 @@
 // Description: Pure SDP and ICE candidate normalization for the direct WebRTC
 //              transport path.
 //
+// Protocol Responsibility:
+// - Preserve browser/device SDP semantics while enforcing one negotiated
+//   device-to-browser video sender.
+//
+// Implementation Approach:
+// - Normalize line endings/candidates and inspect media-section direction
+//   without owning peer-connection or session state.
+//
+// Usage Contract:
+// - Callers must validate a generated answer before publishing it as an
+//   active remote-desktop transport.
+//
 // Architectural Position:
 // - Transport parsing boundary. This module owns string/value normalization
 //   only; it does not touch session state, media encoders, or plugin stores.
@@ -53,6 +65,68 @@ pub(in crate::daemon::plugins::remote_desktop) fn normalize_browser_answer_sdp(
 /// where mDNS host plus srflx may be the only offered candidates.
 pub(in crate::daemon::plugins::remote_desktop) fn normalize_remote_offer_sdp(sdp: &str) -> String {
     ensure_sdp_end_of_candidates(sdp)
+}
+
+/// Reject plainly malformed browser offers before transport setup can mutate
+/// session state.
+pub(in crate::daemon::plugins::remote_desktop) fn validate_remote_offer_sdp(
+    sdp: &str,
+) -> anyhow::Result<()> {
+    let mut has_version = false;
+    let mut has_video = false;
+    for line in sdp.lines().map(str::trim_end) {
+        if line == "v=0" {
+            has_version = true;
+        }
+        if line.starts_with("m=video ") {
+            has_video = true;
+        }
+    }
+    if has_version && has_video {
+        return Ok(());
+    }
+    anyhow::bail!("remote WebRTC offer SDP must include v=0 and a video media section")
+}
+
+/// Require the answer's video media section to send device media.
+///
+/// A connected ICE/DTLS transport is not proof that remote desktop media was
+/// negotiated: data channels can connect while an unmatched local track leaves
+/// the video m-section `inactive` or `recvonly`. Publishing that answer would
+/// create a false-active session whose RTP writer has no browser receiver.
+pub(in crate::daemon::plugins::remote_desktop) fn ensure_answer_sends_video(
+    sdp: &str,
+) -> anyhow::Result<()> {
+    let mut in_video_section = false;
+    let mut video_direction = None;
+    for line in sdp.lines().map(str::trim_end) {
+        if line.starts_with("m=") {
+            if in_video_section {
+                break;
+            }
+            in_video_section = line.starts_with("m=video ");
+            continue;
+        }
+        if !in_video_section {
+            continue;
+        }
+        video_direction = match line {
+            "a=sendonly" => Some("sendonly"),
+            "a=sendrecv" => Some("sendrecv"),
+            "a=recvonly" => Some("recvonly"),
+            "a=inactive" => Some("inactive"),
+            _ => video_direction,
+        };
+    }
+
+    if matches!(video_direction, Some("sendonly" | "sendrecv")) {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "direct WebRTC answer has no device-to-browser video sender; \
+         direction={}; reason=webrtc_video_sender_not_negotiated",
+        video_direction.unwrap_or("missing")
+    )
 }
 
 fn is_rtcp_component_candidate(line: &str) -> bool {
@@ -142,6 +216,14 @@ mod tests {
     }
 
     #[test]
+    fn remote_offer_sdp_validation_rejects_non_sdp_before_transport_setup() {
+        let err = validate_remote_offer_sdp("not an sdp")
+            .expect_err("plain text must not reach WebRTC endpoint setup")
+            .to_string();
+        assert!(err.contains("video media section"));
+    }
+
+    #[test]
     fn ice_candidate_rows_reject_schema_incomplete_values() {
         for (candidate, expected) in [
             (json!("candidate:1"), "must be an object or null"),
@@ -162,5 +244,33 @@ mod tests {
         let decoded = remote_ice_candidate_inits(&empty).unwrap();
         assert_eq!(decoded[0].candidate, "");
         assert_eq!(ice_candidate_text(&empty).unwrap(), "");
+    }
+
+    #[test]
+    fn answer_requires_device_to_browser_video_direction() {
+        for direction in ["sendonly", "sendrecv"] {
+            let sdp = format!(
+                "v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n\
+                 a=sendrecv\r\nm=video 9 UDP/TLS/RTP/SAVPF 109\r\na={direction}\r\n"
+            );
+            ensure_answer_sends_video(&sdp).unwrap();
+        }
+
+        for direction in ["recvonly", "inactive"] {
+            let sdp = format!("v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 109\r\na={direction}\r\n");
+            let err = ensure_answer_sends_video(&sdp).unwrap_err().to_string();
+            assert!(err.contains("webrtc_video_sender_not_negotiated"));
+            assert!(err.contains(direction));
+        }
+    }
+
+    #[test]
+    fn answer_rejects_missing_video_media_section() {
+        let err = ensure_answer_sends_video(
+            "v=0\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\na=sendrecv\r\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("direction=missing"));
     }
 }

@@ -12,6 +12,7 @@ use crate::daemon::plugins::{
 };
 
 pub(crate) mod config;
+pub(crate) mod consent_registry;
 pub(crate) mod constants;
 pub(crate) mod contract;
 pub(crate) mod errors;
@@ -19,6 +20,7 @@ pub(crate) mod event_log;
 pub(crate) mod handlers;
 pub(crate) mod input;
 pub(crate) mod invoke_bidi;
+pub(crate) mod lease_monitor;
 pub(crate) mod media;
 pub(crate) mod network;
 pub(crate) mod permissions;

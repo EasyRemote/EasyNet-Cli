@@ -71,7 +71,7 @@
 
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::daemon::ability::builtins::{
     automation::{discuss as discuss_ability, loop_ability, schedule as schedule_ability},
@@ -967,9 +967,11 @@ fn real_voice_watch_call_returns_event_snapshot() {
     .expect("join");
     let w = invoke_voice(&reg, "voice.watch_call", json!({"call_id": cid})).expect("watch");
     let events = w.get("events").and_then(Value::as_array).unwrap();
-    assert!(events
-        .iter()
-        .any(|e| e.get("type") == Some(&json!("joined"))));
+    assert!(
+        events
+            .iter()
+            .any(|e| e.get("type") == Some(&json!("joined")))
+    );
 }
 
 #[test]
@@ -1128,8 +1130,8 @@ fn real_fs_write_round_trips_through_real_disk() {
 /// user would see if they ran the command at a shell prompt.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_process_exec_cats_etc_hosts() {
-    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
     if !std::path::Path::new("/etc/hosts").exists() {
         eprintln!("real_process_exec_cats_etc_hosts: /etc/hosts missing on this host, skipping");
@@ -1164,8 +1166,8 @@ async fn real_process_exec_cats_etc_hosts() {
 /// has to honor cwd, dispatch through bash -c, capture stdout.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_shell_run_executes_git_command_in_repo() {
-    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
     if !["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]
         .iter()
@@ -1608,9 +1610,11 @@ fn real_schedule_remove_routes_to_handler() {
     ));
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}")
-            .to_ascii_lowercase()
-            .contains("no rpc handler")),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler")
+        ),
     }
 }
 
@@ -1662,9 +1666,11 @@ fn real_loop_status_routes_for_unknown_id() {
     let r = d.execute_rpc(target("loop.status", json!({"loop_id": "none"})));
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}")
-            .to_ascii_lowercase()
-            .contains("no rpc handler")),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler")
+        ),
     }
 }
 
@@ -1678,9 +1684,11 @@ fn real_loop_cancel_routes_for_unknown_id() {
     let r = d.execute_rpc(target("loop.cancel", json!({"loop_id": "none"})));
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}")
-            .to_ascii_lowercase()
-            .contains("no rpc handler")),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler")
+        ),
     }
 }
 
@@ -1879,9 +1887,11 @@ fn real_device_skill_install_routes_with_realistic_source() {
     ));
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}")
-            .to_ascii_lowercase()
-            .contains("no rpc handler")),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler")
+        ),
     }
 }
 
@@ -1892,9 +1902,11 @@ fn real_device_skill_remove_routes_for_unknown_name() {
     let r = d.execute_rpc(target("skill.remove", json!({"name": "no-such-skill"})));
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}")
-            .to_ascii_lowercase()
-            .contains("no rpc handler")),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler")
+        ),
     }
 }
 
@@ -1905,9 +1917,11 @@ fn real_device_skill_upgrade_routes_for_unknown_name() {
     let r = d.execute_rpc(target("skill.upgrade", json!({"name": "no-such-skill"})));
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}")
-            .to_ascii_lowercase()
-            .contains("no rpc handler")),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler")
+        ),
     }
 }
 
@@ -2117,9 +2131,11 @@ fn real_skill_tree_lists_files_for_registered_agent_skill() {
         "easynet:///r/localhost/resource/agent.dev.tree/skill/inspectable"
     );
     let files = resp["files"].as_array().expect("files array");
-    assert!(files
-        .iter()
-        .any(|f| f["path"] == "SKILL.md" && f["type"] == "file"));
+    assert!(
+        files
+            .iter()
+            .any(|f| f["path"] == "SKILL.md" && f["type"] == "file")
+    );
     assert!(files.iter().any(|f| {
         f["path"] == "notes/guide.md"
             && f["type"] == "file"
@@ -2191,8 +2207,8 @@ fn real_skill_write_file_updates_skill_source() {
 // pattern requires.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_process_exec_runs_bin_echo() {
-    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
     let resp = tokio::task::spawn_blocking(|| {
         let (reg, _g) = registry_with_temp_home();
@@ -2218,8 +2234,8 @@ async fn real_process_exec_runs_bin_echo() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_shell_run_executes_echo_via_bash() {
-    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
     if !["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"]
         .iter()
@@ -2286,8 +2302,8 @@ fn real_http_request_hits_a_localhost_listener() {
     let _ = server.join();
     assert_eq!(resp["ok"], json!(true), "{resp}");
     assert_eq!(resp["status"], json!(200));
-    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     let body = BASE64_STANDARD
         .decode(resp["body"].as_str().unwrap())
         .unwrap();
@@ -2303,9 +2319,11 @@ fn real_mcp_client_list_routes_with_no_upstream_configured() {
     let r = dispatcher_for(reg).execute_rpc(target("mcp.client.list", json!({})));
     match r {
         Ok(v) => assert!(v.is_object()),
-        Err(e) => assert!(!format!("{e}")
-            .to_ascii_lowercase()
-            .contains("no rpc handler")),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler")
+        ),
     }
 }
 
@@ -2321,9 +2339,11 @@ fn real_mcp_client_call_routes_with_realistic_args() {
             // Common pattern: returns isError=true on unknown server.
             assert!(v.is_object());
         }
-        Err(e) => assert!(!format!("{e}")
-            .to_ascii_lowercase()
-            .contains("no rpc handler")),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler")
+        ),
     }
 }
 
@@ -2350,9 +2370,11 @@ fn real_mcp_bridge_call_tool_routes_to_local_dispatch() {
     ));
     match r {
         Ok(v) => assert!(v.is_object()),
-        Err(e) => assert!(!format!("{e}")
-            .to_ascii_lowercase()
-            .contains("no rpc handler")),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler")
+        ),
     }
 }
 
@@ -2374,9 +2396,11 @@ fn real_a2a_bridge_send_task_routes_with_realistic_args() {
     ));
     match r {
         Ok(v) => assert!(v.is_object()),
-        Err(e) => assert!(!format!("{e}")
-            .to_ascii_lowercase()
-            .contains("no rpc handler")),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler")
+        ),
     }
 }
 
@@ -2394,9 +2418,11 @@ fn real_a2a_client_send_task_routes_with_realistic_args() {
     ));
     match r {
         Ok(v) => assert!(v.is_object()),
-        Err(e) => assert!(!format!("{e}")
-            .to_ascii_lowercase()
-            .contains("no rpc handler")),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no rpc handler")
+        ),
     }
 }
 
@@ -2786,9 +2812,11 @@ fn real_discuss_subscribe_returns_a_stream_source() {
     // need to prove is the handler was reached.
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}")
-            .to_ascii_lowercase()
-            .contains("no stream handler")),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no stream handler")
+        ),
     }
 }
 
@@ -2804,9 +2832,11 @@ fn real_loop_subscribe_returns_a_stream_source() {
     let r = d.execute_stream(t);
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}")
-            .to_ascii_lowercase()
-            .contains("no stream handler")),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no stream handler")
+        ),
     }
 }
 
@@ -2822,9 +2852,11 @@ fn real_device_session_attach_returns_a_stream_source_for_unknown_id() {
     let r = d.execute_stream(t);
     match r {
         Ok(_) => {}
-        Err(e) => assert!(!format!("{e}")
-            .to_ascii_lowercase()
-            .contains("no stream handler")),
+        Err(e) => assert!(
+            !format!("{e}")
+                .to_ascii_lowercase()
+                .contains("no stream handler")
+        ),
     }
 }
 
@@ -3355,12 +3387,25 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let session_id = unique_call_id("remote-desktop");
+    let granted = d
+        .execute_rpc(explicit_target(
+            "remote_desktop.grant_consent",
+            json!({"intent": "remote_desktop_session"}),
+            subject.clone(),
+            remote_desktop_test_consent_causal_context(),
+        ))
+        .expect("remote_desktop.grant_consent must issue a ticket");
+    let consent_ticket = granted["consent_ticket"]
+        .as_str()
+        .expect("grant_consent must return consent_ticket")
+        .to_string();
 
     let created = d
         .execute_rpc(explicit_target(
             "remote_desktop.create_session",
             json!({
                 "session_id": session_id,
+                "consent_ticket": consent_ticket,
                 "mode": "view_only",
                 "lease_ttl_ms": 5000,
             }),
@@ -3505,20 +3550,22 @@ fn real_speaker_publish_is_not_published_without_media_provider() {
 fn real_voice_subscribe_is_not_published_without_media_provider() {
     let (reg, _g, _voice) = registry_with_voice_temp_home();
     assert!(!reg.has_stream("voice.subscribe"));
-    assert!(reg
-        .authority_ability_catalog_snapshot()
-        .iter()
-        .all(|row| row.name != "voice.subscribe"));
+    assert!(
+        reg.authority_ability_catalog_snapshot()
+            .iter()
+            .all(|row| row.name != "voice.subscribe")
+    );
 }
 
 #[test]
 fn real_voice_transcribe_is_not_published_without_media_provider() {
     let (reg, _g, _voice) = registry_with_voice_temp_home();
     assert!(!reg.has_bidi("voice.transcribe"));
-    assert!(reg
-        .authority_ability_catalog_snapshot()
-        .iter()
-        .all(|row| row.name != "voice.transcribe"));
+    assert!(
+        reg.authority_ability_catalog_snapshot()
+            .iter()
+            .all(|row| row.name != "voice.transcribe")
+    );
 }
 
 #[test]
@@ -3951,12 +3998,16 @@ fn real_context_clipboard_and_favorites_round_trip() {
 
     let catalog = invoke("context.catalog", json!({"limit": 10}));
     let catalog_items = catalog["items"].as_array().expect("context catalog items");
-    assert!(catalog_items
-        .iter()
-        .any(|item| item["id"] == json!("clipboard:clip-1")));
-    assert!(catalog_items
-        .iter()
-        .any(|item| item["kind"] == json!("favorite")));
+    assert!(
+        catalog_items
+            .iter()
+            .any(|item| item["id"] == json!("clipboard:clip-1"))
+    );
+    assert!(
+        catalog_items
+            .iter()
+            .any(|item| item["kind"] == json!("favorite"))
+    );
 
     let removed = invoke("context.favorites.remove", json!({"id": fav_id}));
     assert_eq!(removed["reference"], json!("clip-1"));

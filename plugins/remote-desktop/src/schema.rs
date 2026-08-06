@@ -30,6 +30,7 @@ pub fn grant_consent_input_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
+        "required": ["intent"],
         "properties": {
             "intent": { "type": "string", "enum": ["remote_desktop_session"] }
         }
@@ -50,7 +51,9 @@ pub fn create_session_input_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
+        "required": ["consent_ticket"],
         "properties": {
+            "consent_ticket": { "type": "string", "minLength": 64, "maxLength": 64 },
             "session_id": { "type": "string" },
             "mode": { "type": "string", "enum": ["view_only", "interactive"] },
             "lease_ttl_ms": { "type": "integer", "minimum": 1, "maximum": MAX_LEASE_TTL_MS },
@@ -156,6 +159,24 @@ pub fn add_ice_candidate_input_schema() -> Value {
             "session_id": { "type": "string" },
             "session_token": { "type": "string" },
             "candidate": { "type": "object" }
+        }
+    })
+}
+
+pub fn report_client_state_description() -> &'static str {
+    "Report browser-observed media presentation for the active remote desktop transport epoch."
+}
+
+pub fn report_client_state_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["session_id", "session_token", "transport_epoch", "state"],
+        "properties": {
+            "session_id": { "type": "string" },
+            "session_token": { "type": "string" },
+            "transport_epoch": { "type": "integer", "minimum": 1 },
+            "state": { "type": "string", "enum": ["presenting", "stalled", "detached"] }
         }
     })
 }

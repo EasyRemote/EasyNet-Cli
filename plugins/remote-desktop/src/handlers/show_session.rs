@@ -6,9 +6,8 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::daemon::ability::dispatch::EnvelopeContext;
-use crate::daemon::plugins::remote_desktop::constants::{
-    ABILITY_SHOW_SESSION, REASON_SESSION_NOT_FOUND,
-};
+use crate::daemon::plugins::remote_desktop::constants::ABILITY_SHOW_SESSION;
+use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::request::require_str;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
@@ -25,9 +24,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         .session_store()
         .with_sessions(|sessions| -> anyhow::Result<Value> {
             let session = sessions.get_mut(session_id).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{ABILITY_SHOW_SESSION}: session {session_id:?} not found; reason={REASON_SESSION_NOT_FOUND}"
-                )
+                RemoteDesktopError::SessionNotFound {
+                    ability: ABILITY_SHOW_SESSION,
+                    session_id: session_id.to_string(),
+                }
             })?;
             ensure_session_control_access(&plugin, ABILITY_SHOW_SESSION, &env, &args, session)?;
             Ok(serialize_session(session))
@@ -60,7 +60,7 @@ mod tests {
         let ura = seed_display(&mut file, "remote-desktop-token-display");
         resources::save(&file).unwrap();
 
-        let created = crate::daemon::plugins::remote_desktop::handlers::create_session::handle(
+        let created = crate::daemon::plugins::remote_desktop::test_support::create_test_session(
             Arc::clone(&plugin),
             env_for(&ura),
             json!({
@@ -113,7 +113,7 @@ mod tests {
 
         let creator = "easynet:///r/acme/user/alice";
         let attacker = "easynet:///r/acme/user/bob";
-        let created = crate::daemon::plugins::remote_desktop::handlers::create_session::handle(
+        let created = crate::daemon::plugins::remote_desktop::test_support::create_test_session(
             Arc::clone(&plugin),
             env_for_caller(&ura, creator),
             json!({
@@ -160,7 +160,7 @@ mod tests {
             "receipt_ura": "easynet:///r/acme/resource/alice.invocations/approve-rd",
             "receipt_hash": "aa",
         });
-        let created = crate::daemon::plugins::remote_desktop::handlers::create_session::handle(
+        let created = crate::daemon::plugins::remote_desktop::test_support::create_test_session(
             Arc::clone(&plugin),
             env_for_caller_with_causal(&ura, caller, consent_receipt.clone()),
             json!({

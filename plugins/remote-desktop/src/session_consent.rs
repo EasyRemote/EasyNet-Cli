@@ -7,6 +7,7 @@
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::EnvelopeContext;
+use crate::daemon::plugins::remote_desktop::consent_registry::RemoteDesktopConsentAuthorization;
 use crate::daemon::plugins::remote_desktop::errors::{RemoteDesktopError, RemoteDesktopResult};
 
 const POLICY_LOCAL_USER_CONSENT: &str = "local_user_consent";
@@ -54,6 +55,8 @@ impl RemoteDesktopConsentReceipt {
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopConsentGrant {
     policy: &'static str,
     approval_actor_ura: Option<String>,
+    consent_id: Option<String>,
+    subject_ura: Option<String>,
     approval_receipt: Option<RemoteDesktopConsentReceipt>,
 }
 
@@ -71,13 +74,16 @@ impl RemoteDesktopConsentGrant {
         ability: &'static str,
         session_id: &str,
         env: &EnvelopeContext,
+        authorization: RemoteDesktopConsentAuthorization,
     ) -> RemoteDesktopResult<Self> {
         if let Some(approval_receipt) =
             first_receipt_from_causal_context(ability, env.causal_context())?
         {
             return Ok(Self {
                 policy: POLICY_LOCAL_USER_CONSENT,
-                approval_actor_ura: Some(env.caller().to_string()),
+                approval_actor_ura: Some(authorization.caller_ura),
+                consent_id: Some(authorization.consent_id),
+                subject_ura: Some(authorization.subject_ura),
                 approval_receipt: Some(approval_receipt),
             });
         }
@@ -94,6 +100,8 @@ impl RemoteDesktopConsentGrant {
         Self {
             policy: POLICY_LOCAL_USER_CONSENT,
             approval_actor_ura: Some(env.caller().to_string()),
+            consent_id: Some("test-consent".to_string()),
+            subject_ura: Some(env.subject().to_string()),
             approval_receipt: first_receipt_from_causal_context(
                 "test.ability",
                 env.causal_context(),
@@ -112,6 +120,8 @@ impl RemoteDesktopConsentGrant {
         json!({
             "policy": self.policy,
             "approval_actor_ura": self.approval_actor_ura,
+            "consent_id": self.consent_id,
+            "subject_ura": self.subject_ura,
             "approval_receipt": self.approval_receipt.as_ref().map(RemoteDesktopConsentReceipt::to_value),
         })
     }
@@ -199,6 +209,14 @@ fn required_receipt_field(
 mod tests {
     use super::*;
 
+    fn authorization(env: &EnvelopeContext) -> RemoteDesktopConsentAuthorization {
+        RemoteDesktopConsentAuthorization {
+            consent_id: "test-consent".to_string(),
+            caller_ura: env.caller().to_string(),
+            subject_ura: env.subject().to_string(),
+        }
+    }
+
     #[test]
     fn causal_context_receipt_matching_accepts_scalar_and_list_forms() {
         // Borrowed receipt-URA shape (ledger.rs test convention,
@@ -275,8 +293,13 @@ mod tests {
             "receipt_ura": "easynet:///r/acme/resource/user-alice.invocations/1"
         }));
 
-        let err = RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s-bad", &env)
-            .expect_err("malformed causal context must fail before consent policy");
+        let err = RemoteDesktopConsentGrant::required_from_envelope(
+            "rd.create",
+            "s-bad",
+            &env,
+            authorization(&env),
+        )
+        .expect_err("malformed causal context must fail before consent policy");
         assert!(err
             .to_string()
             .contains("causal_context receipt requires non-empty receipt_hash"));
@@ -305,8 +328,13 @@ mod tests {
             "easynet:///r/acme/user/user-alice",
             "easynet:///r/acme/user/user-alice",
         );
-        let err =
-            RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s1", &env).unwrap_err();
+        let err = RemoteDesktopConsentGrant::required_from_envelope(
+            "rd.create",
+            "s1",
+            &env,
+            authorization(&env),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("consent_receipt_required"));
     }
 
@@ -318,8 +346,13 @@ mod tests {
             "easynet:///r/acme/device/dev-1",
             "easynet:///r/acme/device/dev-1",
         );
-        let err =
-            RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s2", &env).unwrap_err();
+        let err = RemoteDesktopConsentGrant::required_from_envelope(
+            "rd.create",
+            "s2",
+            &env,
+            authorization(&env),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("consent_receipt_required"));
     }
 
@@ -331,8 +364,13 @@ mod tests {
             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
             "easynet:///r/acme/resource/display-1",
         );
-        let err = RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s-local", &env)
-            .unwrap_err();
+        let err = RemoteDesktopConsentGrant::required_from_envelope(
+            "rd.create",
+            "s-local",
+            &env,
+            authorization(&env),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("consent_receipt_required"));
     }
 
@@ -343,9 +381,13 @@ mod tests {
             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
             "easynet:///r/acme/resource/display-1",
         );
-        let err =
-            RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s-unpaired", &env)
-                .unwrap_err();
+        let err = RemoteDesktopConsentGrant::required_from_envelope(
+            "rd.create",
+            "s-unpaired",
+            &env,
+            authorization(&env),
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("consent_receipt_required"));
     }
 
@@ -360,8 +402,13 @@ mod tests {
             "easynet:///r/acme/agent/user-alice.helper", // agents cannot authorize consent
         ] {
             let env = EnvelopeContext::for_test(caller, "easynet:///r/acme/device/dev-1");
-            let err = RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s3", &env)
-                .unwrap_err();
+            let err = RemoteDesktopConsentGrant::required_from_envelope(
+                "rd.create",
+                "s3",
+                &env,
+                authorization(&env),
+            )
+            .unwrap_err();
             assert!(
                 err.to_string().contains("consent_receipt_required"),
                 "caller {caller} must stay fail-closed; got: {err}"
@@ -382,8 +429,13 @@ mod tests {
             "receipt_ura": "easynet:///r/acme/resource/user-alice.invocations/1",
             "receipt_hash": "ab",
         }));
-        let grant =
-            RemoteDesktopConsentGrant::required_from_envelope("rd.create", "s4", &env).unwrap();
+        let grant = RemoteDesktopConsentGrant::required_from_envelope(
+            "rd.create",
+            "s4",
+            &env,
+            authorization(&env),
+        )
+        .unwrap();
         assert_eq!(grant.policy, POLICY_LOCAL_USER_CONSENT);
         assert!(grant.approval_receipt().is_some());
     }

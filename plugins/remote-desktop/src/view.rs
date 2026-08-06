@@ -31,6 +31,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
     let input_policy = session.input_policy().to_value();
     let remote_ice_candidates = session.remote_ice_candidates();
     let local_ice_candidates = session.local_ice_candidates();
+    let media_stats = session.media_stats();
     json!({
         "session_id": session.session_id(),
         "state": session.state().json_name(),
@@ -47,6 +48,9 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
         "input_policy": input_policy.clone(),
         "consent": session.consent().to_value(),
         "media_transport_ready": session.media_transport_ready(),
+        "client_media_ready": session.client_media_ready(),
+        "transport_epoch": session.transport_epoch(),
+        "transport_state": session.transport_state(),
         "input_plane": {
             "kind": "webrtc_data_channel",
             "label": INPUT_DATA_CHANNEL_LABEL,
@@ -58,8 +62,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
         "media_backends": backend_catalog_view(),
         "production_gate": production_gate_view(),
         "device_capabilities": device_capabilities_view(),
-        "latest_metrics": empty_pipeline_metrics(),
-        "media_stats": session.media_stats(),
+        "latest_metrics": media_stats.clone().unwrap_or_else(empty_pipeline_metrics),
+        "media_stats": media_stats,
         "negotiated_codec": session.negotiated_codec(),
         "transport": transport_view.summary(session),
         "transports": transport_view.transport_list(session),
