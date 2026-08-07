@@ -12,7 +12,7 @@ scope_agents_kind = "any"
 scope_agents_uras = []
 denied_agents = []
 output_receipt_schema_json = "{\"additionalProperties\":false,\"properties\":{\"items\":{\"items\":{\"type\":\"object\"},\"type\":\"array\"}},\"required\":[\"items\"],\"type\":\"object\"}"
-hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
 receipt_semantics = "operational"
 
 [input_schema]

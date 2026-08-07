@@ -779,6 +779,47 @@ fn agent_purge_descriptor_is_destructive_but_agent_stop_is_not() {
 }
 
 #[test]
+fn authority_lifecycle_contract_descriptors_use_canonical_destructive_hints() {
+    let contracts = system_ability_contract_inventory()
+        .into_iter()
+        .map(|contract| (contract.name.clone(), contract))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    for name in [
+        "federation.revoke",
+        "identity.revoke_user_pubkey",
+        "principal.lifecycle.delete",
+        "principal.lifecycle.revoke_key",
+        "principal.lifecycle.revoke_enrollment",
+        "principal.lifecycle.revoke_grant",
+    ] {
+        let contract = contracts
+            .get(name)
+            .unwrap_or_else(|| panic!("{name} contract descriptor"));
+        assert!(
+            contract.hints.destructive,
+            "{name} removes durable authority/trust material and must require destructive UI consent"
+        );
+    }
+
+    for name in [
+        "federation.join",
+        "identity.register_pubkey",
+        "principal.lifecycle.create",
+        "principal.lifecycle.issue_enrollment",
+        "principal.lifecycle.issue_grant",
+    ] {
+        let contract = contracts
+            .get(name)
+            .unwrap_or_else(|| panic!("{name} contract descriptor"));
+        assert!(
+            !contract.hints.destructive,
+            "{name} is effectful authority lifecycle work but not durable deletion"
+        );
+    }
+}
+
+#[test]
 fn build_registry_satisfies_device_baseline_contract() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();

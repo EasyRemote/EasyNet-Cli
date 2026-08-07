@@ -208,7 +208,7 @@ pub fn system_ability_contract_inventory_for_voice_assembly(
         if voice_contracts.contains_key(&contract.name) {
             continue;
         }
-        insert_descriptor_contract(&mut contracts, contract);
+        insert_descriptor_contract(&mut contracts, with_canonical_hints(contract));
     }
     for descriptor in published_system_abilities() {
         let name = descriptor.name.clone();
@@ -237,7 +237,7 @@ pub fn system_ability_contract_inventory_for_voice_assembly(
     }
 
     for contract in voice_contracts.into_values() {
-        insert_descriptor_contract(&mut contracts, contract);
+        insert_descriptor_contract(&mut contracts, with_canonical_hints(contract));
     }
 
     contracts.into_values().collect()
@@ -299,6 +299,17 @@ fn insert_descriptor_contract(
             contract.name
         ),
     }
+}
+
+fn with_canonical_hints(mut contract: SystemAbilityContract) -> SystemAbilityContract {
+    // Contract-only descriptors are parsed from their TOML so unsupported/seam
+    // surfaces can remain on disk without becoming live runtime rows. Hints are
+    // not a second TOML-owned truth, though: they are UI/admission policy
+    // projection derived from the same semantic classifier used by live
+    // registration. Normalizing here keeps generated static descriptor TOMLs,
+    // metadata-only catalogues, and runtime control-plane rows aligned.
+    contract.hints = registration_hints("", &contract.name);
+    contract
 }
 
 fn upsert_operational_contract(
