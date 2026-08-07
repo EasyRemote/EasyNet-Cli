@@ -424,9 +424,38 @@ pub(crate) fn registration_hints(owner_ura: &str, registry_name: &str) -> Abilit
     };
     AbilityHints {
         read_only,
-        destructive: public_name == agent_names::AGENT_PURGE,
+        destructive: is_destructive_public_ability(&public_name),
         idempotent,
     }
+}
+
+/// Public-contract destructive risk.
+///
+/// This is deliberately separate from `classify_ability`: the semantic layer
+/// answers purity/coalescing ("does this invoke mutate state?"), while this
+/// policy answers UI and consent risk ("does this invoke remove, revoke, or
+/// purge durable authority/data?"). Most Operational verbs are not
+/// destructive: `ability.deploy`, `ability.publish`, `terminal.input`, and
+/// `mission.run` all mutate state, but their contract is not deletion.
+pub(crate) fn is_destructive_public_ability(public_name: &str) -> bool {
+    matches!(
+        public_name,
+        // Principal / trust material removal.
+        governance_names::PRINCIPAL_DELETE
+            | governance_names::PRINCIPAL_REVOKE_KEY
+            | governance_names::PRINCIPAL_REVOKE_ENROLLMENT
+            | governance_names::PRINCIPAL_REVOKE_GRANT
+            | governance_names::AUTHORITY_BINDING_REVOKE
+            | federation_names::IDENTITY_REVOKE_USER_PUBKEY
+            | federation_names::REVOKE
+            // Device, agent, and package lifecycle deletion.
+            | device_names::NODE_REMOVE
+            | federation_names::ABILITY_UNINSTALL
+            | federation_names::ABILITY_UNPUBLISH
+            | agent_names::AGENT_PURGE
+            | resource_names::SKILL_REMOVE
+            | resource_names::SKILL_UNPUBLISH
+    )
 }
 
 /// Human-readable description for a published system ability name.

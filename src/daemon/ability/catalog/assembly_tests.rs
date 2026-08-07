@@ -263,6 +263,30 @@ fn discovery_hints_read_only_tracks_ability_layer() {
     assert!(!h.read_only && !h.idempotent, "operational verb: {h:?}");
     let h = discovery_hints_for(&reg, "remote_desktop.create_session");
     assert!(!h.read_only, "create_session must not be read_only: {h:?}");
+    // Operational creation/update is effectful but not destructive.
+    for name in ["ability.deploy", "ability.publish"] {
+        let h = discovery_hints_for(&reg, name);
+        assert!(
+            !h.read_only && !h.idempotent && !h.destructive,
+            "non-destructive lifecycle mutation: {name}: {h:?}",
+        );
+    }
+    // Durable deletion/removal is explicit destructive risk. This is
+    // intentionally not inferred from the broad Operational layer.
+    for name in [
+        "ability.uninstall",
+        "ability.unpublish",
+        "node.remove",
+        "agent.purge",
+        "skill.remove",
+        "skill.unpublish",
+    ] {
+        let h = discovery_hints_for(&reg, name);
+        assert!(
+            !h.read_only && !h.idempotent && h.destructive,
+            "destructive lifecycle mutation: {name}: {h:?}",
+        );
+    }
 }
 
 #[test]
