@@ -1208,7 +1208,7 @@ pub fn doctor() -> anyhow::Result<String> {
 // (JSON-RPC 2.0 over stdio, no usage today). They share a binary
 // but the on-wire shape differs enough to warrant a per-mode
 // adapter — the dispatch layer picks the right one via
-// `drivers::adapter_for(AgentType)`.
+// `drivers::adapter_for(RuntimeKind)`.
 
 use crate::daemon::execution::mission::adapter::{AgentAdapter, InvokeOpts};
 use crate::daemon::execution::mission::dispatch::AgentUsage;
@@ -1381,7 +1381,7 @@ mod tests {
             start,
         );
         handle_stream_line(
-            r#"{"type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"call_1","duration":{"secs":1,"nanos":731744417},"invocation":{"server":"easynet","tool":"demo_weather","arguments":{"city":"Singapore"}},"result":{"Ok":{"content":[{"type":"text","text":"{\"result\":\"26.5C\",\"x-easynet-invocation\":{\"ability\":\"demo.weather\",\"mcp_tool\":\"demo_weather\",\"request_id\":\"req-1\",\"ability_ura\":\"easynet:///r/localhost/ability/dev.demo.weather\",\"invocation_ura\":\"easynet:///r/localhost/resource/device.dev/invocation/req-1/history\",\"callee_ura\":\"easynet:///r/localhost/device/dev\"}}"}]}}}}"#,
+            r#"{"type":"event_msg","payload":{"type":"mcp_tool_call_end","call_id":"call_1","duration":{"secs":1,"nanos":731744417},"invocation":{"server":"easynet","tool":"demo_weather","arguments":{"city":"Singapore"}},"result":{"Ok":{"content":[{"type":"text","text":"{\"result\":\"26.5C\",\"x-easynet-invocation\":{\"ability\":\"demo.weather\",\"mcp_tool\":\"demo_weather\",\"request_id\":\"req-1\",\"ability_ura\":\"easynet:///r/localhost/ability/alice.weather.demo.weather\",\"invocation_ura\":\"easynet:///r/localhost/resource/device.dev/invocation/req-1/history\",\"callee_ura\":\"easynet:///r/localhost/agent/alice.weather\"}}"}]}}}}"#,
             &final_text,
             &stats,
             start,
@@ -1400,7 +1400,7 @@ mod tests {
         assert_eq!(call.request_id.as_deref(), Some("req-1"));
         assert_eq!(
             call.ability_ura.as_deref(),
-            Some("easynet:///r/localhost/ability/dev.demo.weather")
+            Some("easynet:///r/localhost/ability/alice.weather.demo.weather")
         );
         assert_eq!(
             call.invocation_ura.as_deref(),
@@ -1408,7 +1408,7 @@ mod tests {
         );
         assert_eq!(
             call.callee_ura.as_deref(),
-            Some("easynet:///r/localhost/device/dev")
+            Some("easynet:///r/localhost/agent/alice.weather")
         );
     }
 

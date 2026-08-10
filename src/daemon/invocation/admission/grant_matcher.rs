@@ -59,13 +59,20 @@ pub enum PermissionGrantState {
 #[serde(deny_unknown_fields)]
 pub struct PermissionGrant {
     pub grant_id: String,
-    pub owner_user_id: String,
+    /// Runtime field is a canonical User URA. The serialized `owner_user_id`
+    /// key is retained only for permission-grant durable/wire compatibility.
+    #[serde(rename = "owner_user_id")]
+    pub owner_user_ura: String,
     pub principal_kind: PrincipalKind,
     pub principal_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_class: Option<TokenClass>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_expires_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub callee_ura: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,12 +109,26 @@ impl PermissionGrant {
         if self.state != PermissionGrantState::Active {
             return false;
         }
+        if self.lifetime == PermissionGrantLifetime::Once && self.last_used_at.is_some() {
+            return false;
+        }
+        if self.lifetime == PermissionGrantLifetime::Session && !self.session_active_at(now) {
+            return false;
+        }
         match self.expires_at.as_deref() {
             Some(raw) => DateTime::parse_from_rfc3339(raw)
                 .map(|expiry| expiry.with_timezone(&Utc) > now)
                 .unwrap_or(false),
             None => true,
         }
+    }
+
+    #[must_use]
+    pub fn session_matches(&self, session_id: Option<&str>, now: DateTime<Utc>) -> bool {
+        if self.lifetime != PermissionGrantLifetime::Session {
+            return true;
+        }
+        self.active_at(now) && self.session_id.as_deref() == session_id
     }
 
     #[must_use]
@@ -166,6 +187,14 @@ impl PermissionGrant {
             _ => self.default_reconfirmation_deadline(),
         }
     }
+
+    fn session_active_at(&self, now: DateTime<Utc>) -> bool {
+        self.session_expires_at
+            .as_deref()
+            .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
+            .map(|expiry| expiry.with_timezone(&Utc) > now)
+            .unwrap_or(false)
+    }
 }
 
 fn review_interval_for_actions(actions: &[AccessAction]) -> Option<Duration> {
@@ -182,10 +211,12 @@ fn review_interval_for_actions(actions: &[AccessAction]) -> Option<Duration> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantMatchInput<'a> {
-    pub owner_user_id: &'a str,
+    pub owner_user_ura: &'a str,
     pub principal_kind: PrincipalKind,
     pub principal_id: &'a str,
     pub token_id: Option<&'a str>,
+    pub token_class: Option<TokenClass>,
+    pub session_id: Option<&'a str>,
     pub callee_ura: &'a str,
     pub subject_ura: &'a str,
     pub ability_ura: &'a str,
@@ -243,10 +274,12 @@ impl<'a> PermissionGrantMatcher<'a> {
             .iter()
             .filter(|grant| grant.effect == effect)
             .filter(|grant| grant.active_at(input.now))
-            .filter(|grant| grant.owner_user_id == input.owner_user_id)
+            .filter(|grant| grant.owner_user_ura == input.owner_user_ura)
             .filter(|grant| grant.principal_kind == input.principal_kind)
             .filter(|grant| grant.principal_id == input.principal_id)
             .filter(|grant| token_matches(grant.token_id.as_deref(), input.token_id))
+            .filter(|grant| token_class_matches(grant.token_class, input.token_class))
+            .filter(|grant| grant.session_matches(input.session_id, input.now))
             .filter(|grant| grant.actions.contains(&input.action))
             .filter(|grant| {
                 grant
@@ -282,35 +315,88 @@ fn token_matches(grant_token: Option<&str>, input_token: Option<&str>) -> bool {
     }
 }
 
+fn token_class_matches(grant_class: Option<TokenClass>, input_class: Option<TokenClass>) -> bool {
+    match grant_class {
+        Some(expected) => input_class == Some(expected),
+        None => true,
+    }
+}
+
 fn specificity(grant: &PermissionGrant, input: &GrantMatchInput<'_>) -> Option<GrantSpecificity> {
-    let subject = pattern_match(grant.subject_ura_pattern.as_deref(), input.subject_ura)?;
-    let ability = pattern_match(grant.ability_ura_pattern.as_deref(), input.ability_ura)?;
+    let subject =
+        GrantSelector::parse(grant.subject_ura_pattern.as_deref())?.matches(input.subject_ura)?;
+    let ability =
+        GrantSelector::parse(grant.ability_ura_pattern.as_deref())?.matches(input.ability_ura)?;
     Some(match (subject, ability) {
-        (PatternMatch::Exact, PatternMatch::Exact) => GrantSpecificity::ExactSubjectExactAbility,
-        (PatternMatch::Exact, PatternMatch::Prefix) => GrantSpecificity::ExactSubjectAbilityPrefix,
-        (PatternMatch::Prefix, PatternMatch::Exact) => GrantSpecificity::SubjectPrefixExactAbility,
-        (PatternMatch::Prefix, PatternMatch::Prefix) => {
+        (GrantSelectorMatch::Exact, GrantSelectorMatch::Exact) => {
+            GrantSpecificity::ExactSubjectExactAbility
+        }
+        (GrantSelectorMatch::Exact, GrantSelectorMatch::SegmentPrefix) => {
+            GrantSpecificity::ExactSubjectAbilityPrefix
+        }
+        (GrantSelectorMatch::SegmentPrefix, GrantSelectorMatch::Exact) => {
+            GrantSpecificity::SubjectPrefixExactAbility
+        }
+        (GrantSelectorMatch::SegmentPrefix, GrantSelectorMatch::SegmentPrefix) => {
             GrantSpecificity::SubjectPrefixAbilityPrefix
         }
-        (PatternMatch::Class, _) | (_, PatternMatch::Class) => GrantSpecificity::ClassLevel,
+        (GrantSelectorMatch::ClassScope, _) | (_, GrantSelectorMatch::ClassScope) => {
+            GrantSpecificity::ClassLevel
+        }
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PatternMatch {
-    Exact,
-    Prefix,
-    Class,
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GrantSelector<'a> {
+    Exact(&'a str),
+    SegmentPrefix { prefix: &'a str },
+    ClassScope,
 }
 
-fn pattern_match(pattern: Option<&str>, value: &str) -> Option<PatternMatch> {
-    let Some(pattern) = pattern.map(str::trim).filter(|p| !p.is_empty()) else {
-        return Some(PatternMatch::Class);
-    };
-    if let Some(prefix) = pattern.strip_suffix('*') {
-        return (!prefix.is_empty() && value.starts_with(prefix)).then_some(PatternMatch::Prefix);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GrantSelectorMatch {
+    Exact,
+    SegmentPrefix,
+    ClassScope,
+}
+
+impl<'a> GrantSelector<'a> {
+    fn parse(raw: Option<&'a str>) -> Option<Self> {
+        let Some(raw) = raw else {
+            return Some(Self::ClassScope);
+        };
+        if raw.is_empty() {
+            return Some(Self::ClassScope);
+        }
+        if raw.trim() != raw {
+            return None;
+        }
+        for suffix in ["/*", ".*"] {
+            if let Some(prefix) = raw.strip_suffix(suffix) {
+                return (!prefix.is_empty()).then_some(Self::SegmentPrefix { prefix });
+            }
+        }
+        if raw.ends_with('*') {
+            return None;
+        }
+        Some(Self::Exact(raw))
     }
-    (pattern == value).then_some(PatternMatch::Exact)
+
+    fn matches(&self, value: &str) -> Option<GrantSelectorMatch> {
+        match self {
+            Self::Exact(expected) => (*expected == value).then_some(GrantSelectorMatch::Exact),
+            Self::SegmentPrefix { prefix } => value
+                .get(prefix.len()..)
+                .and_then(|suffix| {
+                    suffix
+                        .strip_prefix('/')
+                        .or_else(|| suffix.strip_prefix('.'))
+                })
+                .filter(|suffix| !suffix.is_empty())
+                .map(|_| GrantSelectorMatch::SegmentPrefix),
+            Self::ClassScope => Some(GrantSelectorMatch::ClassScope),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -321,11 +407,13 @@ mod tests {
     fn grant(id: &str, effect: PermissionEffect, subject: &str, ability: &str) -> PermissionGrant {
         PermissionGrant {
             grant_id: id.to_string(),
-            owner_user_id: "alice".to_string(),
+            owner_user_ura: "easynet:///r/test/user/alice".to_string(),
             principal_kind: PrincipalKind::Token,
             principal_id: "token-principal".to_string(),
             token_id: Some("token-1".to_string()),
             token_class: Some(TokenClass::HubLink),
+            session_id: None,
+            session_expires_at: None,
             callee_ura: None,
             subject_ura_pattern: Some(subject.to_string()),
             ability_ura_pattern: Some(ability.to_string()),
@@ -349,12 +437,12 @@ mod tests {
     fn grant_json() -> serde_json::Value {
         json!({
             "grant_id": "grant-1",
-            "owner_user_id": "alice",
+            "owner_user_id": "easynet:///r/test/user/alice",
             "principal_kind": "token",
             "principal_id": "token-principal",
             "token_id": "token-1",
             "token_class": "hub_link",
-            "callee_ura": "easynet:///r/test/device/dev",
+            "callee_ura": "easynet:///r/test/agent/device.dev.terminal",
             "subject_ura_pattern": "easynet:///r/test/resource/user.alice/session/s1",
             "ability_ura_pattern": "terminal.attach",
             "actions": ["read"],
@@ -435,10 +523,12 @@ mod tests {
             ),
         ];
         let input = GrantMatchInput {
-            owner_user_id: "alice",
+            owner_user_ura: "easynet:///r/test/user/alice",
             principal_kind: PrincipalKind::Token,
             principal_id: "token-principal",
             token_id: Some("token-1"),
+            token_class: Some(TokenClass::HubLink),
+            session_id: None,
             callee_ura: "easynet:///r/a/device/dev",
             subject_ura: "easynet:///r/a/resource/x",
             ability_ura: "easynet:///r/a/ability/device.meta",
@@ -452,6 +542,34 @@ mod tests {
     }
 
     #[test]
+    fn bare_owner_user_id_does_not_match_realm_scoped_owner_key() {
+        let mut grant = grant(
+            "legacy-bare-owner",
+            PermissionEffect::Allow,
+            "easynet:///r/a/resource/x",
+            "easynet:///r/a/ability/device.meta",
+        );
+        grant.owner_user_ura = "alice".to_string();
+        let input = GrantMatchInput {
+            owner_user_ura: "easynet:///r/a/user/alice",
+            principal_kind: PrincipalKind::Token,
+            principal_id: "token-principal",
+            token_id: Some("token-1"),
+            token_class: Some(TokenClass::HubLink),
+            session_id: None,
+            callee_ura: "easynet:///r/a/device/dev",
+            subject_ura: "easynet:///r/a/resource/x",
+            ability_ura: "easynet:///r/a/ability/device.meta",
+            action: AccessAction::Read,
+            now: Utc::now(),
+        };
+
+        assert!(PermissionGrantMatcher::new(&[grant])
+            .find(&input, PermissionEffect::Allow)
+            .is_none());
+    }
+
+    #[test]
     fn overdue_permanent_stream_grant_requires_reconfirmation() {
         let mut grants = vec![grant(
             "stream-grant",
@@ -462,10 +580,12 @@ mod tests {
         grants[0].actions = vec![AccessAction::Stream];
         grants[0].review_required_after = Some("2026-07-01T00:00:00Z".to_string());
         let input = GrantMatchInput {
-            owner_user_id: "alice",
+            owner_user_ura: "easynet:///r/test/user/alice",
             principal_kind: PrincipalKind::Token,
             principal_id: "token-principal",
             token_id: Some("token-1"),
+            token_class: Some(TokenClass::HubLink),
+            session_id: None,
             callee_ura: "easynet:///r/a/device/dev",
             subject_ura: "easynet:///r/a/resource/x",
             ability_ura: "easynet:///r/a/ability/device.stream",
@@ -508,10 +628,12 @@ mod tests {
         broader.review_required_after = Some("2026-08-01T00:00:00Z".to_string());
         let grants = vec![specific, broader];
         let input = GrantMatchInput {
-            owner_user_id: "alice",
+            owner_user_ura: "easynet:///r/test/user/alice",
             principal_kind: PrincipalKind::Token,
             principal_id: "token-principal",
             token_id: Some("token-1"),
+            token_class: Some(TokenClass::HubLink),
+            session_id: None,
             callee_ura: "easynet:///r/a/device/dev",
             subject_ura: "easynet:///r/a/resource/x",
             ability_ura: "easynet:///r/a/ability/device.stream",
@@ -525,5 +647,41 @@ mod tests {
             .find_active(&input, PermissionEffect::Allow)
             .expect("active broader grant");
         assert_eq!(got.grant_id, "broader-active");
+    }
+
+    #[test]
+    fn token_class_constrained_grant_requires_matching_token_class() {
+        let grants = vec![grant(
+            "hub-link-only",
+            PermissionEffect::Allow,
+            "easynet:///r/a/resource/x",
+            "easynet:///r/a/ability/device.meta",
+        )];
+        let input = GrantMatchInput {
+            owner_user_ura: "easynet:///r/test/user/alice",
+            principal_kind: PrincipalKind::Token,
+            principal_id: "token-principal",
+            token_id: Some("token-1"),
+            token_class: Some(TokenClass::BrowserSession),
+            session_id: None,
+            callee_ura: "easynet:///r/a/device/dev",
+            subject_ura: "easynet:///r/a/resource/x",
+            ability_ura: "easynet:///r/a/ability/device.meta",
+            action: AccessAction::Read,
+            now: Utc::now(),
+        };
+        let matcher = PermissionGrantMatcher::new(&grants);
+
+        assert!(matcher.find(&input, PermissionEffect::Allow).is_none());
+
+        let mut matching = input.clone();
+        matching.token_class = Some(TokenClass::HubLink);
+        assert_eq!(
+            matcher
+                .find(&matching, PermissionEffect::Allow)
+                .expect("matching token class")
+                .grant_id,
+            "hub-link-only"
+        );
     }
 }

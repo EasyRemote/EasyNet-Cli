@@ -37,9 +37,8 @@ async fn matches_self_target_ura_accepts_hot_added_agent_only_for_local_identity
     // daemon's exact realm/user identity so a peer realm or peer user
     // cannot be collapsed into this process by sharing the same bare
     // agent name.
-    use crate::daemon::persistence::agent_registry::{
-        save_agents, AgentEntry, AgentRegistry, AgentType,
-    };
+    use crate::core::agent::spec::RuntimeKind;
+    use crate::daemon::persistence::agent_registry::{save_agents, AgentEntry, AgentRegistry};
     use crate::daemon::persistence::config::{save_credentials, Credentials};
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
     save_credentials(&Credentials {
@@ -68,7 +67,7 @@ async fn matches_self_target_ura_accepts_hot_added_agent_only_for_local_identity
     let mut registry = AgentRegistry::default();
     registry.agents.insert(
         "default/liangbing".to_string(),
-        AgentEntry::new(AgentType::ClaudeCode, None),
+        AgentEntry::new(RuntimeKind::ClaudeCode, None),
     );
     save_agents(&registry).expect("stage agents.json under HomeGuard");
 
@@ -105,9 +104,8 @@ async fn matches_self_target_ura_accepts_hot_added_agent_only_for_local_identity
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn matches_self_target_ura_rejects_registry_only_match_when_hosted_projection_is_invalid() {
-    use crate::daemon::persistence::agent_registry::{
-        save_agents, AgentEntry, AgentRegistry, AgentType,
-    };
+    use crate::core::agent::spec::RuntimeKind;
+    use crate::daemon::persistence::agent_registry::{save_agents, AgentEntry, AgentRegistry};
     use crate::daemon::persistence::config::{save_credentials, Credentials};
     use crate::daemon::persistence::local_agents::{save, HostedAgentEntry, LocalAgentsFile};
 
@@ -126,12 +124,12 @@ async fn matches_self_target_ura_rejects_registry_only_match_when_hosted_project
     let mut registry = AgentRegistry::default();
     registry.agents.insert(
         "default/liangbing".to_string(),
-        AgentEntry::new(AgentType::ClaudeCode, None),
+        AgentEntry::new(RuntimeKind::ClaudeCode, None),
     );
     save_agents(&registry).expect("stage agents.json under HomeGuard");
 
     save(&LocalAgentsFile {
-        host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
+        host_device_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
         hosted_agents: vec![HostedAgentEntry {
             profile: "llm".to_string(),
             name: "liangbing".to_string(),
@@ -159,7 +157,7 @@ async fn matches_self_target_ura_uses_exact_local_agents_identity() {
 
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
     let mut local = LocalAgentsFile {
-        host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
+        host_device_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
         hosted_agents: Vec::new(),
     };
     upsert_hosted_agent(
@@ -235,7 +233,9 @@ async fn axon_arm_must_not_intercept_calls_targeting_a_peer_device() {
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
+    let svc =
+        make_unregistered_service_for_route_owner_and_runtime(TEST_DAEMON_URA, runtime_assembly)
+            .with_session_realm("test-realm");
 
     // 1. THIS daemon's URA → self target.
     assert!(
@@ -284,9 +284,12 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
     let ledger = Arc::new(InvocationLedger::open(temp.path().join("inv.redb")).unwrap());
     let runtime_assembly = test_runtime_with_default_trust();
     let rt = runtime_assembly.runtime();
+    let system_agent_ura = test_dispatch_system_agent_ura();
+    let subject_ura =
+        crate::core::ura::resource_dot_ura("test-realm", "user.test-user", "camera-1");
     rt.set_ledger_sink(LedgerSink::new(Arc::clone(&ledger)));
     let runtime_ability =
-        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "demo.unary_via_axon").unwrap();
+        crate::core::ura::owner_ability_ura(&system_agent_ura, "demo.unary_via_axon").unwrap();
     rt.register_ability_with_options(
         runtime_ability.clone(),
         make_ability(|ctx| async move {
@@ -305,30 +308,32 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
-    publish_test_route(&svc, TEST_DAEMON_URA, "demo.unary_via_axon");
+    let svc =
+        make_unregistered_service_for_route_owner_and_runtime(TEST_DAEMON_URA, runtime_assembly)
+            .with_session_realm("test-realm");
+    publish_test_route(&svc, &system_agent_ura, "demo.unary_via_axon");
     sync_runtime_proof_from_catalog(
         &svc,
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         "demo.unary_via_axon",
         crate::daemon::ability::CallMode::Rpc,
     )
     .await;
 
     let mut request = invoke_request("demo.unary_via_axon", r#"{"k":"v"}"#).into_inner();
-    let external_caller = "easynet:///r/test-realm/device/client-1";
-    let signing_key = test_device_signing_key();
+    let external_caller = TEST_DISCOVER_USER_URA;
+    let signing_key = test_discover_user_signing_key();
     let descriptor_ref = catalog_test_descriptor_ref(
         svc.directory.local_ability_catalog.as_ref().unwrap(),
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         "demo.unary_via_axon",
         crate::daemon::ability::CallMode::Rpc,
     );
     bind_invoke_request_to_descriptor_ref(
         &mut request,
         external_caller,
-        TEST_DAEMON_URA,
-        "easynet:///r/test-realm/resource/camera-1",
+        &system_agent_ura,
+        &subject_ura,
         descriptor_ref.clone(),
         &signing_key,
     );
@@ -351,7 +356,7 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
         serde_json::from_slice(&body.result).expect("decode handler payload");
     assert_eq!(decoded["payload"], serde_json::json!({"k": "v"}));
     assert_eq!(
-        decoded["subject"], "easynet:///r/test-realm/resource/camera-1",
+        decoded["subject"], subject_ura,
         "external-signed Axon dispatch must preserve the wire envelope subject"
     );
     let header_request_id = body
@@ -388,11 +393,11 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
         "Axon-routed unary ledger row must preserve the external-signed wire caller"
     );
     assert_eq!(
-        records[0].callee_ura, TEST_DAEMON_URA,
+        records[0].callee_ura, system_agent_ura,
         "Axon-routed unary ledger row must preserve the external-signed wire callee"
     );
     assert_eq!(
-        records[0].subject_ura, "easynet:///r/test-realm/resource/camera-1",
+        records[0].subject_ura, subject_ura,
         "Axon-routed unary ledger row must preserve the external-signed wire subject"
     );
     assert_eq!(header_request_id, Some(records[0].request_id.as_str()));
@@ -406,7 +411,8 @@ async fn dispatch_local_rpc_terminal_failure_stays_in_band_with_receipts() {
     let runtime_assembly = test_runtime_with_default_trust();
     let rt = runtime_assembly.runtime();
     let ability = "demo.terminal_failure";
-    let runtime_ability = crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ability).unwrap();
+    let system_agent_ura = test_dispatch_system_agent_ura();
+    let runtime_ability = crate::core::ura::owner_ability_ura(&system_agent_ura, ability).unwrap();
     rt.register_ability_with_options(
         runtime_ability,
         make_ability(|_| async move {
@@ -417,11 +423,13 @@ async fn dispatch_local_rpc_terminal_failure_stays_in_band_with_receipts() {
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
-    publish_test_route(&svc, TEST_DAEMON_URA, ability);
+    let svc =
+        make_unregistered_service_for_route_owner_and_runtime(TEST_DAEMON_URA, runtime_assembly)
+            .with_session_realm("test-realm");
+    publish_test_route(&svc, &system_agent_ura, ability);
     sync_runtime_proof_from_catalog(
         &svc,
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         ability,
         crate::daemon::ability::CallMode::Rpc,
     )
@@ -429,17 +437,17 @@ async fn dispatch_local_rpc_terminal_failure_stays_in_band_with_receipts() {
     let mut request = invoke_request(ability, r#"{}"#).into_inner();
     let descriptor_ref = catalog_test_descriptor_ref(
         svc.directory.local_ability_catalog.as_ref().unwrap(),
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         ability,
         crate::daemon::ability::CallMode::Rpc,
     );
     bind_invoke_request_to_descriptor_ref(
         &mut request,
-        "easynet:///r/test-realm/device/client-1",
-        TEST_DAEMON_URA,
-        "easynet:///r/test-realm/resource/failure-probe",
+        TEST_DISCOVER_USER_URA,
+        &system_agent_ura,
+        &crate::core::ura::resource_dot_ura("test-realm", "user.test-user", "failure-probe"),
         descriptor_ref,
-        &test_device_signing_key(),
+        &test_discover_user_signing_key(),
     );
 
     let (result, runtime_started) = svc
@@ -478,7 +486,10 @@ async fn dispatch_local_rpc_selected_route_accepts_descriptor_ref_function_name(
     let runtime_assembly = test_runtime_with_default_trust();
     let rt = runtime_assembly.runtime();
     let ability = "demo.descriptor_bound_unary";
-    let runtime_ability = crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ability).unwrap();
+    let system_agent_ura = test_dispatch_system_agent_ura();
+    let subject_ura =
+        crate::core::ura::resource_dot_ura("test-realm", "user.test-user", "descriptor-bound");
+    let runtime_ability = crate::core::ura::owner_ability_ura(&system_agent_ura, ability).unwrap();
     rt.register_ability_with_options(
         runtime_ability,
         make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
@@ -487,11 +498,13 @@ async fn dispatch_local_rpc_selected_route_accepts_descriptor_ref_function_name(
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
-    publish_test_route(&svc, TEST_DAEMON_URA, ability);
+    let svc =
+        make_unregistered_service_for_route_owner_and_runtime(TEST_DAEMON_URA, runtime_assembly)
+            .with_session_realm("test-realm");
+    publish_test_route(&svc, &system_agent_ura, ability);
     sync_runtime_proof_from_catalog(
         &svc,
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         ability,
         crate::daemon::ability::CallMode::Rpc,
     )
@@ -499,18 +512,18 @@ async fn dispatch_local_rpc_selected_route_accepts_descriptor_ref_function_name(
 
     let descriptor_ref = catalog_test_descriptor_ref(
         svc.directory.local_ability_catalog.as_ref().unwrap(),
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         ability,
         crate::daemon::ability::CallMode::Rpc,
     );
     let mut request = invoke_request(ability, r#"{"descriptor":"function-name"}"#).into_inner();
     bind_invoke_request_to_descriptor_ref(
         &mut request,
-        TEST_DAEMON_URA,
-        TEST_DAEMON_URA,
-        TEST_DAEMON_URA,
+        TEST_DISCOVER_USER_URA,
+        &system_agent_ura,
+        &subject_ura,
         descriptor_ref,
-        &test_device_signing_key(),
+        &test_discover_user_signing_key(),
     );
     let (result, axon_took_it) = svc
         .unary_dispatcher()
@@ -531,9 +544,11 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_local_system_request
     let ledger = Arc::new(InvocationLedger::open(temp.path().join("inv.redb")).unwrap());
     let runtime_assembly = test_runtime_with_default_trust();
     let rt = runtime_assembly.runtime();
+    let system_agent_ura = test_dispatch_system_agent_ura();
     rt.set_ledger_sink(LedgerSink::new(Arc::clone(&ledger)));
     let runtime_ability =
-        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "demo.local_system_unsigned").unwrap();
+        crate::core::ura::owner_ability_ura(&system_agent_ura, "demo.local_system_unsigned")
+            .unwrap();
     rt.register_ability_with_options(
         runtime_ability.clone(),
         make_ability(|ctx| async move {
@@ -556,11 +571,13 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_local_system_request
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
-    publish_test_route(&svc, TEST_DAEMON_URA, "demo.local_system_unsigned");
+    let svc =
+        make_unregistered_service_for_route_owner_and_runtime(TEST_DAEMON_URA, runtime_assembly)
+            .with_session_realm("test-realm");
+    publish_test_route(&svc, &system_agent_ura, "demo.local_system_unsigned");
     sync_runtime_proof_from_catalog(
         &svc,
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         "demo.local_system_unsigned",
         crate::daemon::ability::CallMode::Rpc,
     )
@@ -569,7 +586,7 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_local_system_request
     let arguments = br#"{"k":"v"}"#.to_vec();
     let descriptor_ref = catalog_test_descriptor_ref(
         svc.directory.local_ability_catalog.as_ref().unwrap(),
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         "demo.local_system_unsigned",
         crate::daemon::ability::CallMode::Rpc,
     );
@@ -577,7 +594,7 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_local_system_request
         envelope: Some(
             ProtoEnvelope::from_target(
                 crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-                TEST_DAEMON_URA,
+                &system_agent_ura,
                 "easynet:///r/test-realm/resource/camera-1",
                 InvocationDerivationPolicy::FreshRoot,
             )
@@ -612,7 +629,7 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_local_system_request
         decoded["caller"],
         crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA
     );
-    assert_eq!(decoded["callee"], TEST_DAEMON_URA);
+    assert_eq!(decoded["callee"], system_agent_ura);
     assert_eq!(
         decoded["subject"],
         "easynet:///r/test-realm/resource/camera-1"
@@ -631,7 +648,7 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_local_system_request
         records[0].ability_name,
         catalog_test_descriptor_ref(
             svc.directory.local_ability_catalog.as_ref().unwrap(),
-            TEST_DAEMON_URA,
+            &system_agent_ura,
             "demo.local_system_unsigned",
             crate::daemon::ability::CallMode::Rpc,
         )
@@ -641,7 +658,7 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_local_system_request
         crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
         "local-system dispatch must be signed by daemon-local system identity"
     );
-    assert_eq!(records[0].callee_ura, TEST_DAEMON_URA);
+    assert_eq!(records[0].callee_ura, system_agent_ura);
     assert_eq!(
         records[0].subject_ura,
         "easynet:///r/test-realm/resource/camera-1"
@@ -675,14 +692,20 @@ async fn simple_local_rpc_invocation_concurrency_probe() {
         .unwrap_or_else(|| std::time::Duration::from_secs(60));
 
     let ability = "probe.concurrent_echo";
-    let rt =
-        runtime_with_json_echo(TEST_DAEMON_URA, ability, "handled_by", "concurrency-probe").await;
+    let system_agent_ura = test_dispatch_system_agent_ura();
+    let rt = runtime_with_json_echo(
+        &system_agent_ura,
+        ability,
+        "handled_by",
+        "concurrency-probe",
+    )
+    .await;
     let svc =
         std::sync::Arc::new(make_service_with_test_runtime(rt).with_session_realm("test-realm"));
-    publish_test_route(svc.as_ref(), TEST_DAEMON_URA, ability);
+    publish_test_route(svc.as_ref(), &system_agent_ura, ability);
     sync_runtime_proof_from_catalog(
         svc.as_ref(),
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         ability,
         crate::daemon::ability::CallMode::Rpc,
     )
@@ -692,6 +715,7 @@ async fn simple_local_rpc_invocation_concurrency_probe() {
     let started = std::time::Instant::now();
     for seq in 0..count {
         let svc = std::sync::Arc::clone(&svc);
+        let system_agent_ura = system_agent_ura.clone();
         tasks.spawn(async move {
             let request_started = std::time::Instant::now();
             let arguments = format!(r#"{{"seq":{seq}}}"#).into_bytes();
@@ -700,8 +724,8 @@ async fn simple_local_rpc_invocation_concurrency_probe() {
                     envelope: Some(
                         ProtoEnvelope::from_target(
                             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-                            TEST_DAEMON_URA,
-                            TEST_DAEMON_URA,
+                            &system_agent_ura,
+                            &system_agent_ura,
                             InvocationDerivationPolicy::FreshRoot,
                         )
                         .expect("valid concurrency probe envelope")
@@ -816,18 +840,19 @@ async fn simple_uds_invocation_concurrency_probe() {
         .unwrap_or_else(|| std::time::Duration::from_secs(120));
 
     let ability = "probe.uds_concurrent_echo";
+    let system_agent_ura = test_dispatch_system_agent_ura();
     let rt = runtime_with_json_echo(
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         ability,
         "handled_by",
         "uds-concurrency-probe",
     )
     .await;
     let service = make_service_with_test_runtime(rt).with_session_realm("test-realm");
-    publish_test_route(&service, TEST_DAEMON_URA, ability);
+    publish_test_route(&service, &system_agent_ura, ability);
     sync_runtime_proof_from_catalog(
         &service,
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         ability,
         crate::daemon::ability::CallMode::Rpc,
     )
@@ -869,6 +894,7 @@ async fn simple_uds_invocation_concurrency_probe() {
     let started = std::time::Instant::now();
     for seq in 0..count {
         let mut client = client.clone();
+        let system_agent_ura = system_agent_ura.clone();
         tasks.spawn(async move {
             let request_started = std::time::Instant::now();
             let arguments = format!(r#"{{"seq":{seq}}}"#).into_bytes();
@@ -877,8 +903,8 @@ async fn simple_uds_invocation_concurrency_probe() {
                     envelope: Some(
                         ProtoEnvelope::from_target(
                             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-                            TEST_DAEMON_URA,
-                            TEST_DAEMON_URA,
+                            &system_agent_ura,
+                            &system_agent_ura,
                             InvocationDerivationPolicy::FreshRoot,
                         )
                         .expect("valid UDS concurrency probe envelope")
@@ -973,10 +999,21 @@ async fn dispatch_local_rpc_selected_route_rejects_when_runtime_misses() {
     // projection as NotFound and must not start an Axon invocation.
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
     let runtime_assembly = test_runtime_with_default_trust();
-    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
-    publish_test_route(&svc, TEST_DAEMON_URA, "missing.ability");
+    let svc =
+        make_unregistered_service_for_route_owner_and_runtime(TEST_DAEMON_URA, runtime_assembly)
+            .with_session_realm("test-realm");
+    let system_agent_ura = test_dispatch_system_agent_ura();
+    publish_test_route(&svc, &system_agent_ura, "missing.ability");
 
-    let request = invoke_request("missing.ability", "{}").into_inner();
+    let request = signed_invoke_request(
+        TEST_DISCOVER_USER_URA,
+        &system_agent_ura,
+        &system_agent_ura,
+        "missing.ability",
+        "{}",
+        &test_discover_user_signing_key(),
+    )
+    .into_inner();
     let (result, axon_took_it) = svc
         .unary_dispatcher()
         .dispatch_local_rpc_selected_route(&request)
@@ -1005,8 +1042,9 @@ async fn selected_route_binding_rejects_removed_control_plane_record_even_with_r
     let runtime_assembly = test_runtime_with_default_trust();
     let rt = runtime_assembly.runtime();
     let ability = "demo.stale_catalog_proof";
-    let runtime_ability =
-        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ability).expect("runtime ability URA");
+    let system_agent_ura = test_dispatch_system_agent_ura();
+    let runtime_ability = crate::core::ura::owner_ability_ura(&system_agent_ura, ability)
+        .expect("runtime ability URA");
     rt.register_ability_with_options(
         runtime_ability.clone(),
         make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
@@ -1015,11 +1053,13 @@ async fn selected_route_binding_rejects_removed_control_plane_record_even_with_r
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
-    publish_test_route(&svc, TEST_DAEMON_URA, ability);
+    let svc =
+        make_unregistered_service_for_route_owner_and_runtime(TEST_DAEMON_URA, runtime_assembly)
+            .with_session_realm("test-realm");
+    publish_test_route(&svc, &system_agent_ura, ability);
     sync_runtime_proof_from_catalog(
         &svc,
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         ability,
         crate::daemon::ability::CallMode::Rpc,
     )
@@ -1028,7 +1068,7 @@ async fn selected_route_binding_rejects_removed_control_plane_record_even_with_r
         .target_gate()
         .route_resolver()
         .await
-        .resolve_canonical_route(TEST_DAEMON_URA, &runtime_ability, CallMode::Rpc)
+        .resolve_canonical_route(&system_agent_ura, &runtime_ability, CallMode::Rpc)
         .expect("selected route resolves before catalog removal");
     let selected_route = match selection.into_dispatch() {
         crate::daemon::invocation::routing::route_resolver::CanonicalRouteDispatch::Local(
@@ -1049,7 +1089,7 @@ async fn selected_route_binding_rejects_removed_control_plane_record_even_with_r
         .as_ref()
         .expect("test service has local ability catalog");
     assert!(catalog.remove_control_plane_record_for_authority_mode(
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         ability,
         crate::daemon::ability::CallMode::Rpc,
     ));
@@ -1091,8 +1131,9 @@ async fn dispatch_local_rpc_selected_route_returns_false_for_non_rpc_runtime_row
     let _hg = crate::cli::commands::test_support::HomeGuard::new();
     let runtime_assembly = test_runtime_with_default_trust();
     let rt = runtime_assembly.runtime();
+    let system_agent_ura = test_dispatch_system_agent_ura();
     let runtime_ability =
-        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, "demo.stream_only").unwrap();
+        crate::core::ura::owner_ability_ura(&system_agent_ura, "demo.stream_only").unwrap();
     rt.register_ability_with_options(
         runtime_ability,
         make_ability(|_ctx| async { Ok(Vec::new()) }),
@@ -1101,10 +1142,20 @@ async fn dispatch_local_rpc_selected_route_returns_false_for_non_rpc_runtime_row
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(runtime_assembly).with_session_realm("test-realm");
-    publish_test_route(&svc, TEST_DAEMON_URA, "demo.stream_only");
+    let svc =
+        make_unregistered_service_for_route_owner_and_runtime(TEST_DAEMON_URA, runtime_assembly)
+            .with_session_realm("test-realm");
+    publish_test_route(&svc, &system_agent_ura, "demo.stream_only");
 
-    let request = invoke_request("demo.stream_only", "{}").into_inner();
+    let request = signed_invoke_request(
+        TEST_DISCOVER_USER_URA,
+        &system_agent_ura,
+        &system_agent_ura,
+        "demo.stream_only",
+        "{}",
+        &test_discover_user_signing_key(),
+    )
+    .into_inner();
     let (result, axon_took_it) = svc
         .unary_dispatcher()
         .dispatch_local_rpc_selected_route(&request)

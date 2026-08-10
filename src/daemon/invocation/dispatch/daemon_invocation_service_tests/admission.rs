@@ -7,6 +7,7 @@ use axon_sdk::invocation::{
 };
 
 struct GeometryFixture {
+    owner_ura: String,
     ability: &'static str,
     mode: crate::daemon::ability::CallMode,
     descriptor_ref: String,
@@ -17,6 +18,7 @@ async fn generic_geometry_fixture() -> (DaemonInvocationService, Vec<GeometryFix
     let trust = SharedTrustAnchor::new(Arc::new(test_trust_anchor_without_principal_owners()));
     let runtime_assembly = test_runtime_assembly(trust.clone());
     let runtime = runtime_assembly.runtime();
+    let owner_ura = test_dispatch_system_agent_ura();
     let geometries = [
         (
             "test.rf7.policy_unary",
@@ -67,7 +69,7 @@ async fn generic_geometry_fixture() -> (DaemonInvocationService, Vec<GeometryFix
         };
         runtime
             .register_ability_with_options(
-                crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ability)
+                crate::core::ura::owner_ability_ura(&owner_ura, ability)
                     .expect("generic RF7 test ability URA"),
                 make_ability(move |_context| {
                     let handler_mutations = Arc::clone(&handler_mutations);
@@ -93,9 +95,10 @@ async fn generic_geometry_fixture() -> (DaemonInvocationService, Vec<GeometryFix
     );
     let mut fixtures = Vec::with_capacity(counters.len());
     for (ability, mode, mutations) in counters {
-        publish_test_route_with_mode(&service, TEST_DAEMON_URA, ability, mode);
-        sync_runtime_proof_from_catalog(&service, TEST_DAEMON_URA, ability, mode).await;
+        publish_test_route_with_mode(&service, &owner_ura, ability, mode);
+        sync_runtime_proof_from_catalog(&service, &owner_ura, ability, mode).await;
         fixtures.push(GeometryFixture {
+            owner_ura: owner_ura.clone(),
             ability,
             mode,
             descriptor_ref: catalog_test_descriptor_ref(
@@ -104,7 +107,7 @@ async fn generic_geometry_fixture() -> (DaemonInvocationService, Vec<GeometryFix
                     .local_ability_catalog
                     .as_ref()
                     .expect("RF7 test catalog"),
-                TEST_DAEMON_URA,
+                &owner_ura,
                 ability,
                 mode,
             ),
@@ -185,12 +188,12 @@ fn external_wire(
 ) -> crate::daemon::axon_bridge::descriptor_bound_dispatch::WireDispatch {
     let payload = b"{}".to_vec();
     let mut envelope = signed_test_envelope_with_descriptor_ref(
-        TEST_DAEMON_URA,
-        TEST_DAEMON_URA,
-        TEST_DAEMON_URA,
+        TEST_DISCOVER_USER_URA,
+        &geometry.owner_ura,
+        &geometry.owner_ura,
         geometry.descriptor_ref.clone(),
         &payload,
-        &test_device_signing_key(),
+        &test_discover_user_signing_key(),
     );
     if corrupt_signature {
         envelope
@@ -271,8 +274,8 @@ async fn canonical_replay_admission_executes_each_geometry_exactly_once() {
     for (index, geometry) in geometries.iter().enumerate() {
         let envelope = ProtoEnvelope::from_target(
             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-            TEST_DAEMON_URA,
-            TEST_DAEMON_URA,
+            &geometry.owner_ura,
+            &geometry.owner_ura,
             InvocationDerivationPolicy::Explicit {
                 invocation_nonce: [0xD0 + index as u8; 16],
                 causal_context: axon_sdk::invocation::CausalContext::None,

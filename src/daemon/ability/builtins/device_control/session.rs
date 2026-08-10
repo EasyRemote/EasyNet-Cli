@@ -2,8 +2,8 @@
 // =================================================================
 //
 // File: src/daemon/ability/builtins/device_control/session.rs
-// Description: The two device-level abilities a Client uses to
-//              discover and observe agent runs:
+// Description: The two device-sponsored session SystemAgent abilities a Client
+//              uses to discover and observe agent runs:
 //
 //   * `session.list`   (RPC)    — return every session known
 //                                        to this daemon (active +
@@ -56,14 +56,14 @@ pub fn register(reg: &mut AxonAbilityCatalog, sessions: Arc<SessionService>) {
     let s_for_list = Arc::clone(&sessions);
     reg.register_rpc_with_owner(
         ABILITY_LIST,
-        OwnerKind::Device,
+        OwnerKind::session_system(),
         Arc::new(move |args: Value| list_handler(&s_for_list, args)),
     );
     // attach is registered as a stream handler — see
     // daemon::ability::dispatch for the LocalStreamRegistry surface.
     reg.register_stream_with_owner(
-        "session.attach",
-        OwnerKind::Device,
+        ABILITY_ATTACH,
+        OwnerKind::session_system(),
         Arc::new(move |args: Value| attach_handler(&sessions, args)),
     );
 }

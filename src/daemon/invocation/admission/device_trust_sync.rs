@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 use crate::daemon::invocation::admission::register_device_pubkey::RegisterPubkeyRequest;
 use crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle;
 use crate::daemon::invocation::bidi::session_wire::RequestOutcome;
-use crate::daemon::trust::anchor::TrustedAgentRole;
+use crate::daemon::trust::anchor::TrustAnchorRole;
 use crate::daemon::trust::cell::SharedTrustAnchor;
 
 /// How long a hub "unknown caller" answer suppresses re-resolving the
@@ -121,10 +121,10 @@ impl SyncableCaller {
         }
     }
 
-    fn trusted_role(&self) -> TrustedAgentRole {
+    fn trusted_role(&self) -> TrustAnchorRole {
         match self {
-            Self::Device { .. } => TrustedAgentRole::Device,
-            Self::User { .. } => TrustedAgentRole::User,
+            Self::Device { .. } => TrustAnchorRole::Device,
+            Self::User { .. } => TrustAnchorRole::User,
         }
     }
 
@@ -502,7 +502,7 @@ mod tests {
     use ed25519_dalek::SigningKey;
 
     use super::*;
-    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole, TrustedAgent};
 
     fn empty_cell() -> SharedTrustAnchor {
         SharedTrustAnchor::new(Arc::new(
@@ -515,7 +515,7 @@ mod tests {
             RealmTrustAnchor::from_entries(vec![TrustedAgent {
                 agent_ura: user_ura.to_string(),
                 public_key_b64: public_key_b64.to_string(),
-                role: TrustedAgentRole::User,
+                role: TrustAnchorRole::User,
                 added_at_unix_ms: 1_700_000_000_000,
                 origin_realm: None,
                 hub_endpoint: None,
@@ -763,7 +763,7 @@ mod tests {
             RealmTrustAnchor::from_entries(vec![TrustedAgent {
                 agent_ura: ura.to_string(),
                 public_key_b64: stale,
-                role: TrustedAgentRole::Device,
+                role: TrustAnchorRole::Device,
                 added_at_unix_ms: 1_700_000_000_000,
                 origin_realm: None,
                 hub_endpoint: None,

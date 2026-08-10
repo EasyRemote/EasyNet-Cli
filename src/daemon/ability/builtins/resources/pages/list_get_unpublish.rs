@@ -89,7 +89,12 @@ pub fn handle_get(
 /// This is deliberately narrower than backend/public-route health: it proves
 /// the daemon pages management ability family is loaded and, when requested,
 /// that one published project is present in the local registry.
-pub fn handle_health(user: &str, realm: &str, args: Value) -> anyhow::Result<Value> {
+pub fn handle_health(
+    owner_user_id: &str,
+    user: &str,
+    realm: &str,
+    args: Value,
+) -> anyhow::Result<Value> {
     let surface_ref = args.get("surface_ref").and_then(Value::as_str);
     let project_id = args
         .get("project_id")
@@ -115,7 +120,7 @@ pub fn handle_health(user: &str, realm: &str, args: Value) -> anyhow::Result<Val
     }
     let ready = project_found;
     let state = if ready { "ready" } else { "degraded" };
-    let owner_ura = crate::core::ura::agent_ura(realm, user, "pages");
+    let owner_ura = super::management_agent_ura(realm, owner_user_id);
     let surface_ref = project_id
         .map(|project_id| {
             crate::core::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/")
@@ -348,19 +353,26 @@ mod tests {
 
     #[test]
     fn handle_health_reports_aggregate_ready_without_projects() {
-        let health = handle_health("health-aggregate-user", "example", json!({})).unwrap();
+        let health = handle_health(
+            "health-aggregate-owner",
+            "health-aggregate-user",
+            "example",
+            json!({}),
+        )
+        .unwrap();
 
         assert_eq!(health["state"], "ready");
         assert_eq!(health["ready"], true);
         assert_eq!(
             health["owner_ura"],
-            "easynet:///r/example/agent/health-aggregate-user.pages"
+            "easynet:///r/example/agent/health-aggregate-owner.pages"
         );
     }
 
     #[test]
     fn handle_health_reports_missing_project_as_degraded() {
         let health = handle_health(
+            "health-missing-owner",
             "health-missing-user",
             "example",
             json!({"project_id": "docs"}),
@@ -380,7 +392,13 @@ mod tests {
         let user = "health-ready-user";
         let (_root, key) = publish_test_project(user, "docs-health");
 
-        let health = handle_health(user, "example", json!({"project_id": "docs-health"})).unwrap();
+        let health = handle_health(
+            "health-ready-owner",
+            user,
+            "example",
+            json!({"project_id": "docs-health"}),
+        )
+        .unwrap();
         remove_test_project(&key);
 
         assert_eq!(health["state"], "ready");
@@ -402,6 +420,7 @@ mod tests {
     #[test]
     fn handle_health_rejects_foreign_surface_ref() {
         let err = handle_health(
+            "alice-owner",
             "alice",
             "example",
             json!({"surface_ref": "easynet:///r/example/resource/bob.docs/"}),

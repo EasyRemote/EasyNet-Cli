@@ -194,9 +194,7 @@ pub(crate) fn description_for(name: &str) -> Option<&'static str> {
         ABILITY_FEDERATION_RESOLVE_KEY => {
             "Resolve the Ed25519 verification key for a trusted federation Agent URA."
         }
-        ABILITY_FEDERATION_DISCOVER => {
-            "Read federated directory entries visible to this hub."
-        }
+        ABILITY_FEDERATION_DISCOVER => "Read federated directory entries visible to this hub.",
         ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2 => {
             "Subscribe to typed federation directory events."
         }
@@ -209,18 +207,14 @@ pub(crate) fn description_for(name: &str) -> Option<&'static str> {
         ABILITY_FEDERATION_REVOKE => {
             "Revoke a device or hosted Agent from federation presence and directory projections."
         }
-        ABILITY_FEDERATION_STATUS => {
-            "Return the daemon's canonical join/session state projection."
-        }
+        ABILITY_FEDERATION_STATUS => "Return the daemon's canonical join/session state projection.",
         ABILITY_IDENTITY_REGISTER_PUBKEY => {
             "Register a trusted public key row in the daemon runtime trust anchor."
         }
         ABILITY_IDENTITY_LIST_USER_PUBKEYS => {
             "List trusted public keys currently bound to a user URA."
         }
-        ABILITY_IDENTITY_REVOKE_USER_PUBKEY => {
-            "Revoke one trusted public key row for a user URA."
-        }
+        ABILITY_IDENTITY_REVOKE_USER_PUBKEY => "Revoke one trusted public key row for a user URA.",
         ABILITY_PRINCIPAL_CREATE => "Create a daemon runtime principal lifecycle record.",
         ABILITY_PRINCIPAL_BIND_FIRST_KEY => {
             "Bind the first active key to a pending daemon runtime principal."
@@ -295,7 +289,7 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
                 "since_abilities_revision": integer_prop("Device's last observed realm Authority-published ability revision."),
                 "refresh_owner_uras": {
                     "type": "array",
-                    "description": "Owner URAs whose published ability projection leases should be renewed.",
+                    "description": "Compatibility field for a legacy same-Device projection lease; current event-driven clients send an empty array.",
                     "items": { "type": "string" }
                 }
             }),

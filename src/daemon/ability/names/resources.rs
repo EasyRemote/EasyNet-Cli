@@ -12,6 +12,10 @@ pub const CONTEXT_CAPTURES_LIST: &str = "context.captures.list";
 pub const CONTEXT_CAPTURES_GET: &str = "context.captures.get";
 pub const CONTEXT_CAPTURES_READ: &str = "context.captures.read";
 
+/// Device-sponsored SystemAgent id for local context read-model abilities:
+/// clipboard, mapped folders, favorites, and captured artifacts.
+pub const CONTEXT_SYSTEM_AGENT_ID: &str = "context-management";
+
 pub const MEDIA_MIC_SUBSCRIBE: &str = "mic.subscribe";
 pub const MEDIA_CAMERA_SUBSCRIBE: &str = "camera.subscribe";
 pub const MEDIA_CAMERA_SNAPSHOT: &str = "camera.snapshot";
@@ -20,6 +24,11 @@ pub const MEDIA_CAMERA_RECORD_STOP: &str = "camera.record_stop";
 pub const MEDIA_SCREEN_SUBSCRIBE: &str = "screen.subscribe";
 pub const MEDIA_SCREEN_SNAPSHOT: &str = "screen.snapshot";
 pub const MEDIA_SPEAKER_PUBLISH: &str = "speaker.publish";
+
+/// Device-sponsored SystemAgent id for local microphone, camera, screen, and
+/// speaker hardware abilities. `voice.*` remains a realm Authority provider
+/// surface and is not owned by this SystemAgent.
+pub const MEDIA_SYSTEM_AGENT_ID: &str = "media";
 
 pub const META_LIST_RESOURCES: &str = "meta.list_resources";
 
@@ -32,6 +41,11 @@ pub const SKILL_LIST: &str = "skill.list";
 pub const SKILL_TREE: &str = "skill.tree";
 pub const SKILL_READ_FILE: &str = "skill.read_file";
 pub const SKILL_WRITE_FILE: &str = "skill.write_file";
+
+/// Device-sponsored SystemAgent id for local skill package management
+/// abilities. Skills are implementation resources; the callable management
+/// surface is owned by this restricted SystemAgent.
+pub const SKILL_MANAGEMENT_SYSTEM_AGENT_ID: &str = "skill-management";
 
 pub const VOICE_CREATE_CALL: &str = "voice.create_call";
 pub const VOICE_SHOW_CALL: &str = "voice.show_call";

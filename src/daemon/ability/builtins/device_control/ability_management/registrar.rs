@@ -1,23 +1,23 @@
-// EasyNet CLI — DeviceAbilityRegistrar
+// EasyNet CLI — AbilityDeploymentRegistrar
 // =================================================================
 //
 // File: src/daemon/ability/builtins/device_control/ability_management/registrar.rs
 //
 // The "runtime binding" leg of the `ability.deploy` transaction, and
-// the boot-time replay of the durable catalog. Turns a deployed
-// device-ability manifest into a LIVE, OwnerKind::Device row in the
-// Axon `LocalRuntime`, then verifies it is actually routable before
-// the deploy handler may report ACTIVE.
+// the boot-time replay of the durable catalog. Turns a deployed manifest whose
+// implementation is hosted by this Device into a LIVE ability-management
+// SystemAgent row in the Axon `LocalRuntime`, then verifies it is actually
+// routable before the deploy handler may report ACTIVE.
 //
 //     ability.deploy = manifest materialization     (device_ops_ability)
 //                    + runtime binding               (THIS FILE)
-//                    + durable catalog commit        (device_ability_store)
+//                    + durable catalog commit        (ability_deployment_store)
 //
 // Pending-runtime pattern: constructed at registry-build time without a
 // runtime (catalog is built before the runtime exists), boot calls
 // `set_runtime` once. Mirrors `HotAgentRegistrar`.
 //
-// Device call-mode resolution is an explicit registrar value object, not a
+// Ability deployment call-mode resolution is an explicit registrar value object, not a
 // duplicated install/uninstall/replay branch. `host_stream` is transport;
 // its manifest admission action selects the runtime geometry. Unsupported
 // exec kinds fail closed before runtime binding.
@@ -43,7 +43,8 @@ use crate::daemon::ability::builtins::agents::chat::{
     build_host_rpc_handler, build_host_stream_handler,
 };
 use crate::daemon::ability::builtins::device_control::ability_management::store::{
-    manifest_digest, DeviceAbilityRecord, DeviceAbilityStore,
+    manifest_digest, validate_ability_deployment_mutation_authority, AbilityDeploymentRecord,
+    AbilityDeploymentStore,
 };
 use crate::daemon::ability::dispatch::{
     rpc_env_ability_with_options, stream_env_ability_with_options, AxonAbilityCatalog,
@@ -80,8 +81,8 @@ impl InstallState {
     }
 }
 
-/// One installed device ability, ready to register.
-pub struct DeviceAbilityInstall {
+/// One installed ability deployment, ready to register.
+pub struct AbilityDeploymentInstall {
     /// Wire dispatch key (e.g. `er.generate`).
     key: String,
     namespace: String,
@@ -89,6 +90,8 @@ pub struct DeviceAbilityInstall {
     manifest_path: String,
     manifest_bytes: Vec<u8>,
     manifest: AbilityManifest,
+    mutated_by: String,
+    creator_invocation_id: String,
     /// Caller-supplied install timestamp (runtime forbids ambient clock).
     installed_at_unix_ms: u64,
     /// Process-owned implementations must renew this lease to remain routed.
@@ -98,7 +101,7 @@ pub struct DeviceAbilityInstall {
 const MIN_BINDING_LEASE_MS: u64 = 1_000;
 const MAX_BINDING_LEASE_MS: u64 = 300_000;
 
-impl DeviceAbilityInstall {
+impl AbilityDeploymentInstall {
     pub fn new(
         key: impl Into<String>,
         namespace: impl Into<String>,
@@ -107,11 +110,15 @@ impl DeviceAbilityInstall {
         manifest_bytes: Vec<u8>,
         manifest: AbilityManifest,
         installed_at_unix_ms: u64,
+        mutated_by: impl Into<String>,
+        creator_invocation_id: impl Into<String>,
     ) -> anyhow::Result<Self> {
         let key = key.into();
         let namespace = namespace.into();
         let ability_ura = ability_ura.into();
         let manifest_path = manifest_path.into();
+        let mutated_by = mutated_by.into();
+        let creator_invocation_id = creator_invocation_id.into();
         Self::validate(
             &key,
             &namespace,
@@ -120,6 +127,8 @@ impl DeviceAbilityInstall {
             &manifest_bytes,
             &manifest,
         )?;
+        validate_ability_deployment_mutation_authority(&mutated_by, &creator_invocation_id)
+            .context("ability.deploy mutation authority")?;
         Ok(Self {
             key,
             namespace,
@@ -127,6 +136,8 @@ impl DeviceAbilityInstall {
             manifest_path,
             manifest_bytes,
             manifest,
+            mutated_by,
+            creator_invocation_id,
             installed_at_unix_ms,
             binding_lease_ms: None,
         })
@@ -183,10 +194,14 @@ impl DeviceAbilityInstall {
             anyhow::bail!("ability.deploy: manifest snapshot does not match parsed manifest");
         }
         let selector = crate::core::ura::AbilitySelector::parse(ability_ura)?;
-        if selector.owner_kind() != "device" {
+        if selector.owner_kind() != "system-agent"
+            || selector.dispatch_target()
+                != crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID
+        {
             anyhow::bail!(
-                "ability.deploy: device install requires a device-owned Ability URA, got owner kind {:?}",
-                selector.owner_kind()
+                "ability.deploy: deployed descriptor must be owned by the ability-management SystemAgent, got owner kind {:?} and dispatch target {:?}",
+                selector.owner_kind(),
+                selector.dispatch_target()
             );
         }
         if selector.public_name() != key {
@@ -227,19 +242,27 @@ impl DeviceAbilityInstall {
         self.installed_at_unix_ms
     }
 
+    pub fn mutated_by(&self) -> &str {
+        &self.mutated_by
+    }
+
+    pub fn creator_invocation_id(&self) -> &str {
+        &self.creator_invocation_id
+    }
+
     pub fn binding_lease_ms(&self) -> Option<u64> {
         self.binding_lease_ms
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeviceAbilityUninstall {
+pub struct AbilityDeploymentUninstall {
     pub ability_ura: String,
     pub install_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeviceAbilityUninstallOutcome {
+pub struct AbilityDeploymentUninstallOutcome {
     pub public_names: Vec<String>,
     pub install_ids: Vec<String>,
     pub runtime_removed: usize,
@@ -247,7 +270,7 @@ pub struct DeviceAbilityUninstallOutcome {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeviceAbilityUninstallStep {
+enum AbilityDeploymentUninstallStep {
     Planned,
     DurableTombstoned,
     RuntimeCleared,
@@ -255,9 +278,9 @@ enum DeviceAbilityUninstallStep {
     StoreCommitted,
 }
 
-struct DeviceAbilityUninstallTransaction {
-    step: DeviceAbilityUninstallStep,
-    removed: Vec<DeviceAbilityRecord>,
+struct AbilityDeploymentUninstallTransaction {
+    step: AbilityDeploymentUninstallStep,
+    removed: Vec<AbilityDeploymentRecord>,
     public_names: Vec<String>,
     install_ids: Vec<String>,
     runtime_removed: usize,
@@ -265,8 +288,8 @@ struct DeviceAbilityUninstallTransaction {
     resumed_tombstone: bool,
 }
 
-impl DeviceAbilityUninstallTransaction {
-    fn new(removed: Vec<DeviceAbilityRecord>, resumed_tombstone: bool) -> Self {
+impl AbilityDeploymentUninstallTransaction {
+    fn new(removed: Vec<AbilityDeploymentRecord>, resumed_tombstone: bool) -> Self {
         let mut public_names = removed
             .iter()
             .map(|record| record.public_name().to_string())
@@ -278,7 +301,7 @@ impl DeviceAbilityUninstallTransaction {
             .map(|record| record.install_id().to_string())
             .collect::<Vec<_>>();
         Self {
-            step: DeviceAbilityUninstallStep::Planned,
+            step: AbilityDeploymentUninstallStep::Planned,
             removed,
             public_names,
             install_ids,
@@ -288,12 +311,12 @@ impl DeviceAbilityUninstallTransaction {
         }
     }
 
-    fn advance(&mut self, step: DeviceAbilityUninstallStep) {
+    fn advance(&mut self, step: AbilityDeploymentUninstallStep) {
         self.step = step;
     }
 
-    fn outcome(self) -> DeviceAbilityUninstallOutcome {
-        DeviceAbilityUninstallOutcome {
+    fn outcome(self) -> AbilityDeploymentUninstallOutcome {
+        AbilityDeploymentUninstallOutcome {
             public_names: self.public_names,
             install_ids: self.install_ids,
             runtime_removed: self.runtime_removed,
@@ -303,22 +326,23 @@ impl DeviceAbilityUninstallTransaction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct DeviceAbilityControlPlaneKey {
+struct DeployedAbilityControlPlaneKey {
     authority_root: String,
+    owner_projection: String,
     public_name: String,
     call_mode: DescriptorCallMode,
 }
 
-impl DeviceAbilityControlPlaneKey {
+impl DeployedAbilityControlPlaneKey {
     fn from_install(
-        install: &DeviceAbilityInstall,
+        install: &AbilityDeploymentInstall,
         call_mode: DescriptorCallMode,
     ) -> anyhow::Result<Self> {
         Self::from_ability_ura(install.ability_ura(), install.key(), call_mode)
     }
 
     fn from_record(
-        record: &DeviceAbilityRecord,
+        record: &AbilityDeploymentRecord,
         call_mode: DescriptorCallMode,
     ) -> anyhow::Result<Self> {
         Self::from_ability_ura(record.ability_ura(), record.public_name(), call_mode)
@@ -330,22 +354,26 @@ impl DeviceAbilityControlPlaneKey {
         call_mode: DescriptorCallMode,
     ) -> anyhow::Result<Self> {
         let selector = crate::core::ura::AbilitySelector::parse(ability_ura)?;
-        if selector.owner_kind() != "device" {
+        if selector.owner_kind() != "system-agent"
+            || selector.dispatch_target()
+                != crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID
+        {
             anyhow::bail!(
-                "device ability control-plane key requires device owner, got {:?} in {}",
+                "deployed ability control-plane key requires ability-management SystemAgent owner, got {:?} in {}",
                 selector.owner_kind(),
                 ability_ura
             );
         }
         if selector.public_name() != expected_public_name {
             anyhow::bail!(
-                "device ability control-plane key public name drift: URA has {:?}, record has {:?}",
+                "ability deployment control-plane key public name drift: URA has {:?}, record has {:?}",
                 selector.public_name(),
                 expected_public_name
             );
         }
         Ok(Self {
             authority_root: selector.owner_ura().to_string(),
+            owner_projection: format!("system-agent:{}", selector.dispatch_target()),
             public_name: expected_public_name.to_string(),
             call_mode,
         })
@@ -364,9 +392,9 @@ impl DeviceAbilityControlPlaneKey {
     }
 
     fn authority_scope(&self) -> anyhow::Result<AuthorityScope> {
-        AuthorityScope::new("device", self.authority_root.clone()).map_err(|error| {
+        AuthorityScope::new(&self.owner_projection, self.authority_root.clone()).map_err(|error| {
             anyhow::anyhow!(
-                "device ability control-plane authority scope rejected for {}: {error}",
+                "deployed ability control-plane authority scope rejected for {}: {error}",
                 self.public_name
             )
         })
@@ -391,14 +419,14 @@ struct DeviceRuntimeBinding {
 
 impl DeviceRuntimeBinding {
     fn from_install(
-        install: &DeviceAbilityInstall,
+        install: &AbilityDeploymentInstall,
         record: &AbilityControlPlaneRecord,
     ) -> anyhow::Result<Self> {
         Self::from_manifest(install.ability_ura(), install.manifest(), record)
     }
 
     fn from_record(
-        row: &DeviceAbilityRecord,
+        row: &AbilityDeploymentRecord,
         manifest: &AbilityManifest,
         record: &AbilityControlPlaneRecord,
     ) -> anyhow::Result<Self> {
@@ -411,11 +439,11 @@ impl DeviceRuntimeBinding {
         record: &AbilityControlPlaneRecord,
     ) -> anyhow::Result<Self> {
         let (ability_fn, options) = build_binding(manifest)?;
-        let call_mode =
-            DeviceAbilityCallModeResolution::from_runtime_modes(options.modes).descriptor_mode();
+        let call_mode = AbilityDeploymentCallModeResolution::from_runtime_modes(options.modes)
+            .descriptor_mode();
         if record.descriptor().call_mode() != call_mode {
             anyhow::bail!(
-                "device ability runtime binding mode drift for {:?}: manifest implies {:?}, \
+                "ability deployment runtime binding mode drift for {:?}: manifest implies {:?}, \
                  control-plane record has {:?}",
                 record.ability(),
                 call_mode,
@@ -424,7 +452,7 @@ impl DeviceRuntimeBinding {
         }
         if record.descriptor().version.as_str() != manifest.descriptor_version() {
             anyhow::bail!(
-                "device ability runtime binding version drift for {:?}: manifest has {}, \
+                "ability deployment runtime binding version drift for {:?}: manifest has {}, \
                  control-plane record has {}",
                 record.ability(),
                 manifest.descriptor_version(),
@@ -432,7 +460,7 @@ impl DeviceRuntimeBinding {
             );
         }
         let axon_call_mode =
-            DeviceAbilityCallModeResolution::from_descriptor_mode(call_mode).axon_mode();
+            AbilityDeploymentCallModeResolution::from_descriptor_mode(call_mode).axon_mode();
         let options = options.with_mode_descriptor_proof(
             axon_call_mode,
             record.descriptor().version.as_str(),
@@ -459,12 +487,16 @@ impl DeviceRuntimeBinding {
     }
 }
 
+/// Shared registrar cells are late-wired by catalog assembly: boot attaches
+/// the live `LocalRuntime` via [`AbilityDeploymentRegistrar::set_runtime`].
+pub type SharedAbilityDeploymentRegistrarCell = OnceLock<Arc<AbilityDeploymentRegistrar>>;
+
 /// Constructed pending at registry-build time; boot injects the runtime
-/// via [`DeviceAbilityRegistrar::set_runtime`]. Owns the durable store.
-pub struct DeviceAbilityRegistrar {
+/// via [`AbilityDeploymentRegistrar::set_runtime`]. Owns the durable store.
+pub struct AbilityDeploymentRegistrar {
     runtime: OnceLock<Arc<LocalRuntime>>,
     control_plane_catalog: OnceLock<Weak<AxonAbilityCatalog>>,
-    store: DeviceAbilityStore,
+    store: AbilityDeploymentStore,
     lifecycle: tokio::sync::Mutex<()>,
     active_leases: Mutex<HashMap<String, u64>>,
     next_lease_generation: AtomicU64,
@@ -472,13 +504,13 @@ pub struct DeviceAbilityRegistrar {
     fail_next_runtime_replace: AtomicBool,
 }
 
-impl DeviceAbilityRegistrar {
+impl AbilityDeploymentRegistrar {
     pub fn try_new_pending() -> anyhow::Result<Arc<Self>> {
         Ok(Arc::new(Self {
             runtime: OnceLock::new(),
             control_plane_catalog: OnceLock::new(),
-            store: DeviceAbilityStore::try_open_default()
-                .context("open canonical device ability store")?,
+            store: AbilityDeploymentStore::try_open_default()
+                .context("open canonical ability deployment store")?,
             lifecycle: tokio::sync::Mutex::new(()),
             active_leases: Mutex::new(HashMap::new()),
             next_lease_generation: AtomicU64::new(1),
@@ -489,7 +521,7 @@ impl DeviceAbilityRegistrar {
 
     /// Test seam: explicit store path.
     #[must_use]
-    pub fn new_pending_with_store(store: DeviceAbilityStore) -> Arc<Self> {
+    pub fn new_pending_with_store(store: AbilityDeploymentStore) -> Arc<Self> {
         Arc::new(Self {
             runtime: OnceLock::new(),
             control_plane_catalog: OnceLock::new(),
@@ -524,7 +556,7 @@ impl DeviceAbilityRegistrar {
     pub fn set_runtime(&self, runtime: Arc<LocalRuntime>) -> anyhow::Result<()> {
         self.runtime
             .set(runtime)
-            .map_err(|_| anyhow::anyhow!("device ability registrar: runtime already wired"))
+            .map_err(|_| anyhow::anyhow!("ability deployment registrar: runtime already wired"))
     }
 
     /// Attach the boot-built ability catalogue as the control-plane
@@ -538,14 +570,14 @@ impl DeviceAbilityRegistrar {
         catalog: Weak<AxonAbilityCatalog>,
     ) -> anyhow::Result<()> {
         self.control_plane_catalog.set(catalog).map_err(|_| {
-            anyhow::anyhow!("device ability registrar: control-plane catalog already wired")
+            anyhow::anyhow!("ability deployment registrar: control-plane catalog already wired")
         })
     }
 
     fn runtime(&self) -> anyhow::Result<&Arc<LocalRuntime>> {
         self.runtime
             .get()
-            .ok_or_else(|| anyhow::anyhow!("device ability registrar: runtime not wired yet"))
+            .ok_or_else(|| anyhow::anyhow!("ability deployment registrar: runtime not wired yet"))
     }
 
     fn control_plane_catalog(
@@ -565,10 +597,10 @@ impl DeviceAbilityRegistrar {
 
     async fn binding_is_current(
         &self,
-        candidate: &DeviceAbilityRecord,
+        candidate: &AbilityDeploymentRecord,
         runtime: &LocalRuntime,
         catalog: &AxonAbilityCatalog,
-        key: &DeviceAbilityControlPlaneKey,
+        key: &DeployedAbilityControlPlaneKey,
         want: AbilityCallModes,
     ) -> anyhow::Result<bool> {
         let Some(installed) = self
@@ -600,7 +632,7 @@ impl DeviceAbilityRegistrar {
             &descriptor,
             candidate.ability_ura(),
             want,
-            DeviceAbilityCallModeResolution::from_descriptor_mode(key.call_mode()).axon_mode(),
+            AbilityDeploymentCallModeResolution::from_descriptor_mode(key.call_mode()).axon_mode(),
             &control_plane_record,
         ))
     }
@@ -609,14 +641,14 @@ impl DeviceAbilityRegistrar {
         let Some(binding_lease_ms) = binding_lease_ms else {
             self.active_leases
                 .lock()
-                .expect("device ability lease mutex poisoned")
+                .expect("ability deployment lease mutex poisoned")
                 .remove(install_id);
             return;
         };
         let generation = self.next_lease_generation.fetch_add(1, Ordering::Relaxed);
         self.active_leases
             .lock()
-            .expect("device ability lease mutex poisoned")
+            .expect("ability deployment lease mutex poisoned")
             .insert(install_id.to_string(), generation);
 
         let registrar = Arc::downgrade(self);
@@ -631,7 +663,7 @@ impl DeviceAbilityRegistrar {
                 .await
             {
                 eprintln!(
-                    "[device-ability] failed to expire implementation binding {install_id}: {error:#}"
+                    "[ability-deployment] failed to expire implementation binding {install_id}: {error:#}"
                 );
             }
         });
@@ -641,7 +673,7 @@ impl DeviceAbilityRegistrar {
         let mut leases = self
             .active_leases
             .lock()
-            .expect("device ability lease mutex poisoned");
+            .expect("ability deployment lease mutex poisoned");
         for install_id in install_ids {
             leases.remove(install_id);
         }
@@ -653,7 +685,7 @@ impl DeviceAbilityRegistrar {
             let mut leases = self
                 .active_leases
                 .lock()
-                .expect("device ability lease mutex poisoned");
+                .expect("ability deployment lease mutex poisoned");
             if leases.get(install_id).copied() != Some(generation) {
                 return Ok(());
             }
@@ -673,7 +705,7 @@ impl DeviceAbilityRegistrar {
         }
 
         let runtime = self.runtime()?.clone();
-        let catalog = self.control_plane_catalog("device ability binding lease expiry")?;
+        let catalog = self.control_plane_catalog("ability deployment binding lease expiry")?;
         let control_plane_keys = Self::control_plane_removal_keys(std::slice::from_ref(&row))?;
         let _ = runtime.unregister_ability(row.ability_ura()).await;
         for key in control_plane_keys {
@@ -699,7 +731,7 @@ impl DeviceAbilityRegistrar {
     /// store row is removed.
     pub async fn install(
         self: &Arc<Self>,
-        install: DeviceAbilityInstall,
+        install: AbilityDeploymentInstall,
     ) -> anyhow::Result<InstallState> {
         let _lifecycle = self.lifecycle.lock().await;
         let runtime = self.runtime()?.clone();
@@ -708,23 +740,26 @@ impl DeviceAbilityRegistrar {
         if catalog.has_static_ability(&key) {
             anyhow::bail!(
                 "ability.deploy: refusing to shadow boot-time ability {key:?}; \
-                 choose a distinct device ability name"
+                 choose a distinct ability deployment name"
             );
         }
 
-        let mode_resolution = DeviceAbilityCallModeResolution::from_manifest(install.manifest())?;
+        let mode_resolution =
+            AbilityDeploymentCallModeResolution::from_manifest(install.manifest())?;
         let call_mode = mode_resolution.descriptor_mode();
         let want = mode_resolution.ability_modes();
-        let control_plane_key = DeviceAbilityControlPlaneKey::from_install(&install, call_mode)?;
+        let control_plane_key = DeployedAbilityControlPlaneKey::from_install(&install, call_mode)?;
 
         // ── durable installing intent (hidden from boot replay) ─────
-        let record = DeviceAbilityRecord::new_installing_with_manifest_bytes(
+        let record = AbilityDeploymentRecord::new_installing_with_manifest_bytes(
             key.clone(),
             install.namespace().to_string(),
             install.ability_ura().to_string(),
             install.manifest_path().to_string(),
             install.manifest_bytes(),
             install.installed_at_unix_ms(),
+            install.mutated_by().to_string(),
+            install.creator_invocation_id().to_string(),
         )
         .with_binding_lease_ms(install.binding_lease_ms());
 
@@ -769,7 +804,7 @@ impl DeviceAbilityRegistrar {
                         "restore prior control-plane records",
                     ),
                     rollback,
-                    "restore durable device ability store",
+                    "restore durable ability deployment store",
                 ));
             }
         };
@@ -790,7 +825,7 @@ impl DeviceAbilityRegistrar {
                             "ability.deploy: proof-bound runtime binding({key}) failed: {e}"
                         ),
                         rollback.and(live_restore.map(|_| ())),
-                        "restore durable device ability store and prior live runtime binding",
+                        "restore durable ability deployment store and prior live runtime binding",
                     ),
                     control_plane_restore,
                     "restore prior control-plane records",
@@ -822,7 +857,7 @@ impl DeviceAbilityRegistrar {
                         "ability.deploy: replace_ability({runtime_key}) for {key} failed: {e}"
                     ),
                     rollback.and(live_restore.map(|_| ())),
-                    "restore durable device ability store and prior live runtime binding",
+                    "restore durable ability deployment store and prior live runtime binding",
                 ),
                 control_plane_restore,
                 "restore prior control-plane records",
@@ -859,7 +894,7 @@ impl DeviceAbilityRegistrar {
                 append_cleanup_error(
                     anyhow::anyhow!("ability.deploy: commit installed({key}) failed: {e}"),
                     rollback.and(live_restore.map(|_| ())),
-                    "restore durable device ability store and prior live runtime binding",
+                    "restore durable ability deployment store and prior live runtime binding",
                 ),
                 control_plane_restore,
                 "restore prior control-plane records",
@@ -871,15 +906,15 @@ impl DeviceAbilityRegistrar {
         Ok(state)
     }
 
-    /// Remove a deployed device ability from durable store, live
+    /// Remove a deployed ability deployment from durable store, live
     /// LocalRuntime, and the daemon control-plane registry. This is the
     /// inverse of `install`; `ability.uninstall` must never report
     /// REMOVED while any of those three legs still advertises the
     /// binding.
     pub async fn uninstall(
         self: &Arc<Self>,
-        uninstall: DeviceAbilityUninstall,
-    ) -> anyhow::Result<DeviceAbilityUninstallOutcome> {
+        uninstall: AbilityDeploymentUninstall,
+    ) -> anyhow::Result<AbilityDeploymentUninstallOutcome> {
         let _lifecycle = self.lifecycle.lock().await;
         let runtime = self.runtime()?.clone();
         let catalog = self.control_plane_catalog("ability.uninstall")?;
@@ -889,7 +924,7 @@ impl DeviceAbilityRegistrar {
         if removal_plan.is_empty() {
             match uninstall.install_id.as_deref() {
                 Some(id) => anyhow::bail!(
-                    "ability.uninstall: no installed device ability matched ability_ura {:?} \
+                    "ability.uninstall: no installed ability deployment matched ability_ura {:?} \
                      and install_id {:?}",
                     uninstall.ability_ura,
                     id
@@ -901,9 +936,11 @@ impl DeviceAbilityRegistrar {
             }
         }
         let resumed_tombstone = removal_plan.resumed();
-        let mut transaction =
-            DeviceAbilityUninstallTransaction::new(removal_plan.into_records(), resumed_tombstone);
-        transaction.advance(DeviceAbilityUninstallStep::DurableTombstoned);
+        let mut transaction = AbilityDeploymentUninstallTransaction::new(
+            removal_plan.into_records(),
+            resumed_tombstone,
+        );
+        transaction.advance(AbilityDeploymentUninstallStep::DurableTombstoned);
         let control_plane_removals = match Self::control_plane_removal_keys(&transaction.removed) {
             Ok(keys) => keys,
             Err(err) => {
@@ -935,7 +972,7 @@ impl DeviceAbilityRegistrar {
                 runtime_still_advertised.push(runtime_key.clone());
             }
         }
-        transaction.advance(DeviceAbilityUninstallStep::RuntimeCleared);
+        transaction.advance(AbilityDeploymentUninstallStep::RuntimeCleared);
 
         for key in &control_plane_removals {
             if catalog.remove_control_plane_record_for_authority_mode(
@@ -956,7 +993,7 @@ impl DeviceAbilityRegistrar {
                 control_plane_still_advertised.push(key.label());
             }
         }
-        transaction.advance(DeviceAbilityUninstallStep::ControlPlaneCleared);
+        transaction.advance(AbilityDeploymentUninstallStep::ControlPlaneCleared);
 
         if !runtime_still_advertised.is_empty() || !control_plane_still_advertised.is_empty() {
             let live_restore = self.restore_live_records(&transaction.removed).await;
@@ -1000,16 +1037,19 @@ impl DeviceAbilityRegistrar {
                 transaction.resumed_tombstone
             );
         }
-        transaction.advance(DeviceAbilityUninstallStep::StoreCommitted);
+        transaction.advance(AbilityDeploymentUninstallStep::StoreCommitted);
         self.cancel_binding_leases(&transaction.install_ids);
         catalog.notify_dynamic_publication_hooks();
 
         Ok(transaction.outcome())
     }
 
-    async fn restore_live_records(&self, records: &[DeviceAbilityRecord]) -> anyhow::Result<usize> {
+    async fn restore_live_records(
+        &self,
+        records: &[AbilityDeploymentRecord],
+    ) -> anyhow::Result<usize> {
         let runtime = self.runtime()?.clone();
-        let catalog = self.control_plane_catalog("device ability restore")?;
+        let catalog = self.control_plane_catalog("ability deployment restore")?;
         let mut restored = 0;
         for row in records {
             let bytes = row.manifest_bytes().map_err(|e| {
@@ -1027,9 +1067,9 @@ impl DeviceAbilityRegistrar {
             let manifest = AbilityManifest::from_json_slice(&bytes).map_err(|e| {
                 anyhow::anyhow!("restore {}: parse manifest: {e}", row.public_name())
             })?;
-            let control_plane_key = DeviceAbilityControlPlaneKey::from_record(
+            let control_plane_key = DeployedAbilityControlPlaneKey::from_record(
                 row,
-                DeviceAbilityCallModeResolution::from_manifest(&manifest)?.descriptor_mode(),
+                AbilityDeploymentCallModeResolution::from_manifest(&manifest)?.descriptor_mode(),
             )?;
             let control_plane_txn =
                 Self::begin_control_plane_transaction(&catalog, &control_plane_key);
@@ -1060,8 +1100,8 @@ impl DeviceAbilityRegistrar {
     }
 
     fn control_plane_removal_keys(
-        records: &[DeviceAbilityRecord],
-    ) -> anyhow::Result<Vec<DeviceAbilityControlPlaneKey>> {
+        records: &[AbilityDeploymentRecord],
+    ) -> anyhow::Result<Vec<DeployedAbilityControlPlaneKey>> {
         let mut keys = Vec::new();
         for row in records {
             let bytes = row.manifest_bytes().map_err(|e| {
@@ -1076,9 +1116,9 @@ impl DeviceAbilityRegistrar {
                     row.public_name()
                 )
             })?;
-            let key = DeviceAbilityControlPlaneKey::from_record(
+            let key = DeployedAbilityControlPlaneKey::from_record(
                 row,
-                DeviceAbilityCallModeResolution::from_manifest(&manifest)?.descriptor_mode(),
+                AbilityDeploymentCallModeResolution::from_manifest(&manifest)?.descriptor_mode(),
             )?;
             if !keys.contains(&key) {
                 keys.push(key);
@@ -1127,7 +1167,7 @@ impl DeviceAbilityRegistrar {
                 ..ReplayReport::default()
             };
         }
-        let catalog = match self.control_plane_catalog("device ability replay") {
+        let catalog = match self.control_plane_catalog("ability deployment replay") {
             Ok(catalog) => catalog,
             Err(err) => {
                 let mut report = ReplayReport {
@@ -1191,7 +1231,7 @@ impl DeviceAbilityRegistrar {
             report.push_quarantined(
                 &row,
                 format!(
-                    "device ability owner {owner} is not hosted by current daemon authority {hosted_device_authority_root}; row hidden from boot replay"
+                    "ability deployment owner {owner} is not hosted by current daemon authority {hosted_device_authority_root}; row hidden from boot replay"
                 ),
             );
         }
@@ -1232,7 +1272,7 @@ impl DeviceAbilityRegistrar {
                 }
             };
             let descriptor_call_mode =
-                match DeviceAbilityCallModeResolution::from_manifest(&manifest) {
+                match AbilityDeploymentCallModeResolution::from_manifest(&manifest) {
                     Ok(resolution) => resolution.descriptor_mode(),
                     Err(err) => {
                         report.push_errored(&row, format!("resolve descriptor call mode: {err}"));
@@ -1240,7 +1280,7 @@ impl DeviceAbilityRegistrar {
                     }
                 };
             let control_plane_key =
-                match DeviceAbilityControlPlaneKey::from_record(&row, descriptor_call_mode) {
+                match DeployedAbilityControlPlaneKey::from_record(&row, descriptor_call_mode) {
                     Ok(key) => key,
                     Err(err) => {
                         report.push_errored(&row, format!("derive control-plane key: {err}"));
@@ -1317,7 +1357,7 @@ impl DeviceAbilityRegistrar {
 
     fn begin_control_plane_transaction<'a>(
         catalog: &'a AxonAbilityCatalog,
-        key: &DeviceAbilityControlPlaneKey,
+        key: &DeployedAbilityControlPlaneKey,
     ) -> ControlPlaneAuthorityModeTxn<'a> {
         catalog.begin_control_plane_authority_mode_transaction(
             key.authority_root(),
@@ -1328,7 +1368,7 @@ impl DeviceAbilityRegistrar {
 
     fn rebind_control_plane_record(
         catalog: &AxonAbilityCatalog,
-        key: &DeviceAbilityControlPlaneKey,
+        key: &DeployedAbilityControlPlaneKey,
         manifest: &AbilityManifest,
         impl_content_hash: &str,
     ) -> anyhow::Result<AbilityControlPlaneRecord> {
@@ -1339,7 +1379,7 @@ impl DeviceAbilityRegistrar {
             call_mode: key.call_mode(),
             implementation: ControlPlaneImplementation::new(
                 AbilityImplSource::DeviceDeploy,
-                RuntimeEnv::device_ability(deployed_exec_kind(manifest)),
+                RuntimeEnv::ability_deployment(deployed_exec_kind(manifest)),
             )
             .with_content_hash(impl_content_hash.to_string()),
         })
@@ -1368,7 +1408,7 @@ pub struct ReplayReport {
 }
 
 impl ReplayReport {
-    fn push_registered(&mut self, row: &DeviceAbilityRecord) {
+    fn push_registered(&mut self, row: &AbilityDeploymentRecord) {
         self.registered += 1;
         self.outcomes.push(ReplayOutcome::new(
             row,
@@ -1377,13 +1417,13 @@ impl ReplayReport {
         ));
     }
 
-    fn push_stale(&mut self, row: &DeviceAbilityRecord, detail: impl Into<String>) {
+    fn push_stale(&mut self, row: &AbilityDeploymentRecord, detail: impl Into<String>) {
         self.stale += 1;
         self.outcomes
             .push(ReplayOutcome::new(row, ReplayOutcomeStatus::Stale, detail));
     }
 
-    fn push_lease_pending(&mut self, row: &DeviceAbilityRecord, detail: impl Into<String>) {
+    fn push_lease_pending(&mut self, row: &AbilityDeploymentRecord, detail: impl Into<String>) {
         self.lease_pending += 1;
         self.outcomes.push(ReplayOutcome::new(
             row,
@@ -1392,7 +1432,7 @@ impl ReplayReport {
         ));
     }
 
-    fn push_quarantined(&mut self, row: &DeviceAbilityRecord, detail: impl Into<String>) {
+    fn push_quarantined(&mut self, row: &AbilityDeploymentRecord, detail: impl Into<String>) {
         self.quarantined += 1;
         self.outcomes.push(ReplayOutcome::new(
             row,
@@ -1401,7 +1441,7 @@ impl ReplayReport {
         ));
     }
 
-    fn push_errored(&mut self, row: &DeviceAbilityRecord, detail: impl Into<String>) {
+    fn push_errored(&mut self, row: &AbilityDeploymentRecord, detail: impl Into<String>) {
         self.errored += 1;
         self.outcomes.push(ReplayOutcome::new(
             row,
@@ -1428,7 +1468,7 @@ pub struct ReplayOutcome {
 
 impl ReplayOutcome {
     fn new(
-        row: &DeviceAbilityRecord,
+        row: &AbilityDeploymentRecord,
         status: ReplayOutcomeStatus,
         detail: impl Into<String>,
     ) -> Self {
@@ -1452,7 +1492,7 @@ pub enum ReplayOutcomeStatus {
     Errored,
 }
 
-/// Build the `(AbilityFn, AbilityOptions)` for a device ability from its
+/// Build the `(AbilityFn, AbilityOptions)` for a ability deployment from its
 /// manifest's exec kind. host_stream is the external host transport; its
 /// explicit admission action selects RPC or stream geometry. Shell exec is
 /// rejected until a permission broker and receipt-audited operator
@@ -1461,7 +1501,7 @@ pub enum ReplayOutcomeStatus {
 /// The single deployable device exec kind, with the deployability policy and
 /// its operator-facing rejection strings defined in exactly one place.
 ///
-/// `build_binding` (handler + options) and `DeviceAbilityCallModeResolution`
+/// `build_binding` (handler + options) and `AbilityDeploymentCallModeResolution`
 /// (call mode) both classify through here, so the "what may be deployed and why
 /// not" decision — a security-relevant gate — cannot diverge between the two
 /// consumers or grow two different error strings for the same condition.
@@ -1479,11 +1519,11 @@ impl<'a> DeployableExec<'a> {
                  abilities until that broker is wired"
             )),
             Some(other) => Err(anyhow::anyhow!(
-                "ability.deploy: device ability exec kind {other:?} is not deployable \
-                 (only host_stream is supported on the device deploy path)"
+                "ability.deploy: ability deployment exec kind {other:?} is not deployable \
+                 (only host_stream is supported on the ability deployment path)"
             )),
             None => Err(anyhow::anyhow!(
-                "ability.deploy: device ability manifest has no [exec] binding"
+                "ability.deploy: ability deployment manifest has no [exec] binding"
             )),
         }
     }
@@ -1491,12 +1531,12 @@ impl<'a> DeployableExec<'a> {
     fn call_mode_resolution(
         &self,
         admission_action: Option<&str>,
-    ) -> DeviceAbilityCallModeResolution {
+    ) -> AbilityDeploymentCallModeResolution {
         match self {
             Self::HostStream(_) if admission_action == Some("invoke") => {
-                DeviceAbilityCallModeResolution::Rpc
+                AbilityDeploymentCallModeResolution::Rpc
             }
-            Self::HostStream(_) => DeviceAbilityCallModeResolution::Stream,
+            Self::HostStream(_) => AbilityDeploymentCallModeResolution::Stream,
         }
     }
 }
@@ -1524,13 +1564,13 @@ fn rpc_only() -> AbilityCallModes {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeviceAbilityCallModeResolution {
+enum AbilityDeploymentCallModeResolution {
     Rpc,
     Stream,
     Bidi,
 }
 
-impl DeviceAbilityCallModeResolution {
+impl AbilityDeploymentCallModeResolution {
     fn from_manifest(manifest: &AbilityManifest) -> anyhow::Result<Self> {
         let exec = DeployableExec::classify(manifest)?;
         Ok(exec.call_mode_resolution(manifest.admission_action()))
@@ -1734,7 +1774,7 @@ mod tests {
         .unwrap()
     }
 
-    fn host_stream_install(store_dir: &std::path::Path, socket: &str) -> DeviceAbilityInstall {
+    fn host_stream_install(store_dir: &std::path::Path, socket: &str) -> AbilityDeploymentInstall {
         host_stream_install_with_version(store_dir, socket, None)
     }
 
@@ -1742,7 +1782,7 @@ mod tests {
         store_dir: &std::path::Path,
         socket: &str,
         descriptor_version: Option<&str>,
-    ) -> DeviceAbilityInstall {
+    ) -> AbilityDeploymentInstall {
         let mut manifest = host_stream_manifest(socket, "er.generate");
         if let Some(descriptor_version) = descriptor_version {
             manifest = manifest
@@ -1752,30 +1792,45 @@ mod tests {
         let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
         let manifest_path = store_dir.join("ability.json");
         std::fs::write(&manifest_path, &manifest_bytes).unwrap();
-        DeviceAbilityInstall::new(
+        AbilityDeploymentInstall::new(
             "er.generate",
             "er",
-            "easynet:///r/localhost/ability/device.d1.er.generate",
+            &deployed_ability_management_ability_ura("er.generate"),
             manifest_path.to_string_lossy().into_owned(),
             manifest_bytes,
             manifest,
             1,
+            "easynet:///r/localhost/user/test-user",
+            "test-deploy-invocation",
         )
         .unwrap()
     }
 
+    fn deployed_ability_management_owner_ura() -> String {
+        crate::core::ura::device_agent_ura(
+            "localhost",
+            "d1",
+            crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
+        )
+    }
+
+    fn deployed_ability_management_ability_ura(public_name: &str) -> String {
+        crate::core::ura::owner_ability_ura(&deployed_ability_management_owner_ura(), public_name)
+            .expect("ability-management SystemAgent ability URA")
+    }
+
     fn er_generate_runtime_key() -> &'static str {
-        "easynet:///r/localhost/ability/device.d1.er.generate"
+        "easynet:///r/localhost/ability/system-agent.d1.ability-management.er.generate"
     }
 
     fn wired_registrar(
-        store: DeviceAbilityStore,
+        store: AbilityDeploymentStore,
     ) -> (
-        Arc<DeviceAbilityRegistrar>,
+        Arc<AbilityDeploymentRegistrar>,
         Arc<LocalRuntime>,
         Arc<AxonAbilityCatalog>,
     ) {
-        let registrar = DeviceAbilityRegistrar::new_pending_with_store(store);
+        let registrar = AbilityDeploymentRegistrar::new_pending_with_store(store);
         let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
             None,
@@ -1795,35 +1850,37 @@ mod tests {
         ))
     }
 
-    fn pending_registrar_for_test() -> Arc<DeviceAbilityRegistrar> {
-        let directory = tempfile::tempdir().expect("create device ability registrar test store");
-        let store = DeviceAbilityStore::open_at(directory.path().join("device-abilities.json"));
+    fn pending_registrar_for_test() -> Arc<AbilityDeploymentRegistrar> {
+        let directory =
+            tempfile::tempdir().expect("create ability deployment registrar test store");
+        let store =
+            AbilityDeploymentStore::open_at(directory.path().join("ability-deployments.json"));
         std::mem::forget(directory);
-        DeviceAbilityRegistrar::new_pending_with_store(store)
+        AbilityDeploymentRegistrar::new_pending_with_store(store)
     }
 
     fn stream_control_plane_record(catalog: &AxonAbilityCatalog) -> AbilityControlPlaneRecord {
         catalog
             .control_plane_record_for_mode("er.generate", DescriptorCallMode::Stream)
-            .expect("device ability control-plane lookup is unambiguous")
-            .expect("device ability control-plane record")
+            .expect("ability deployment control-plane lookup is unambiguous")
+            .expect("ability deployment control-plane record")
     }
 
     #[test]
-    fn device_ability_call_mode_resolution_maps_manifest_geometry() {
+    fn ability_deployment_call_mode_resolution_maps_manifest_geometry() {
         let manifest = host_stream_manifest("/tmp/er-host.sock", "er.generate");
-        let resolution =
-            DeviceAbilityCallModeResolution::from_manifest(&manifest).expect("host_stream mode");
+        let resolution = AbilityDeploymentCallModeResolution::from_manifest(&manifest)
+            .expect("host_stream mode");
 
-        assert_eq!(resolution, DeviceAbilityCallModeResolution::Stream);
+        assert_eq!(resolution, AbilityDeploymentCallModeResolution::Stream);
         assert_eq!(resolution.descriptor_mode(), DescriptorCallMode::Stream);
         assert_eq!(resolution.axon_mode(), AxonCallMode::Stream);
 
         let unary =
             host_stream_manifest_with_action("/tmp/er-host.sock", "er.ai_inference", "invoke");
-        let resolution =
-            DeviceAbilityCallModeResolution::from_manifest(&unary).expect("host_stream RPC mode");
-        assert_eq!(resolution, DeviceAbilityCallModeResolution::Rpc);
+        let resolution = AbilityDeploymentCallModeResolution::from_manifest(&unary)
+            .expect("host_stream RPC mode");
+        assert_eq!(resolution, AbilityDeploymentCallModeResolution::Rpc);
         assert_eq!(resolution.descriptor_mode(), DescriptorCallMode::Rpc);
         assert_eq!(resolution.axon_mode(), AxonCallMode::Rpc);
 
@@ -1832,18 +1889,20 @@ mod tests {
     }
 
     #[test]
-    fn device_ability_call_mode_resolution_projects_runtime_modes() {
+    fn ability_deployment_call_mode_resolution_projects_runtime_modes() {
         assert_eq!(
-            DeviceAbilityCallModeResolution::from_runtime_modes(rpc_only()).descriptor_mode(),
+            AbilityDeploymentCallModeResolution::from_runtime_modes(rpc_only()).descriptor_mode(),
             DescriptorCallMode::Rpc
         );
         assert_eq!(
-            DeviceAbilityCallModeResolution::from_runtime_modes(AbilityOptions::streaming().modes)
-                .descriptor_mode(),
+            AbilityDeploymentCallModeResolution::from_runtime_modes(
+                AbilityOptions::streaming().modes
+            )
+            .descriptor_mode(),
             DescriptorCallMode::Stream
         );
         assert_eq!(
-            DeviceAbilityCallModeResolution::from_runtime_modes(AbilityCallModes {
+            AbilityDeploymentCallModeResolution::from_runtime_modes(AbilityCallModes {
                 rpc: false,
                 stream: true,
                 bidi: true,
@@ -1854,25 +1913,51 @@ mod tests {
     }
 
     #[test]
-    fn device_ability_call_mode_resolution_projects_descriptor_modes_to_axon() {
+    fn ability_deployment_call_mode_resolution_projects_descriptor_modes_to_axon() {
         assert_eq!(
-            DeviceAbilityCallModeResolution::from_descriptor_mode(DescriptorCallMode::Rpc)
+            AbilityDeploymentCallModeResolution::from_descriptor_mode(DescriptorCallMode::Rpc)
                 .axon_mode(),
             AxonCallMode::Rpc
         );
         assert_eq!(
-            DeviceAbilityCallModeResolution::from_descriptor_mode(DescriptorCallMode::Stream)
+            AbilityDeploymentCallModeResolution::from_descriptor_mode(DescriptorCallMode::Stream)
                 .axon_mode(),
             AxonCallMode::Stream
         );
         assert_eq!(
-            DeviceAbilityCallModeResolution::from_descriptor_mode(DescriptorCallMode::Bidi)
+            AbilityDeploymentCallModeResolution::from_descriptor_mode(DescriptorCallMode::Bidi)
                 .axon_mode(),
             AxonCallMode::Bidi
         );
     }
 
     // ── Negative test matrix (plan §"必测四个失败态") ──────────────
+
+    #[test]
+    fn install_rejects_direct_device_owned_dynamic_ability_ura() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = host_stream_install(dir.path(), "/tmp/er-host.sock");
+        let result = AbilityDeploymentInstall::new(
+            install.key(),
+            install.namespace(),
+            "easynet:///r/localhost/ability/device.d1.er.generate",
+            install.manifest_path(),
+            install.manifest_bytes().to_vec(),
+            install.manifest().clone(),
+            install.installed_at_unix_ms(),
+            install.mutated_by(),
+            install.creator_invocation_id(),
+        );
+
+        let err = match result {
+            Ok(_) => panic!("dynamic deploy must not accept direct Device owner URA"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("ability-management SystemAgent"),
+            "{err}"
+        );
+    }
 
     /// Failure 1 (invariant 1e): durable commit fails before binding,
     /// so the existing live binding is preserved instead of being
@@ -1884,8 +1969,8 @@ mod tests {
         // (create_dir_all on a file) fails → commit fails.
         let bogus_parent = dir.path().join("not-a-dir");
         std::fs::write(&bogus_parent, b"x").unwrap();
-        let store = DeviceAbilityStore::open_at(bogus_parent.join("device-abilities.json"));
-        let registrar = DeviceAbilityRegistrar::new_pending_with_store(store);
+        let store = AbilityDeploymentStore::open_at(bogus_parent.join("ability-deployments.json"));
+        let registrar = AbilityDeploymentRegistrar::new_pending_with_store(store);
         let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
             None,
@@ -1922,9 +2007,9 @@ mod tests {
     #[tokio::test]
     async fn runtime_replace_failure_removes_new_store_row() {
         let dir = tempfile::tempdir().unwrap();
-        let store_path = dir.path().join("device-abilities.json");
-        let store = DeviceAbilityStore::open_at(store_path.clone());
-        let registrar = DeviceAbilityRegistrar::new_pending_with_store(store);
+        let store_path = dir.path().join("ability-deployments.json");
+        let store = AbilityDeploymentStore::open_at(store_path.clone());
+        let registrar = AbilityDeploymentRegistrar::new_pending_with_store(store);
         let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
             None,
@@ -1936,7 +2021,7 @@ mod tests {
             .unwrap();
 
         let install = host_stream_install(dir.path(), "/tmp/er-host.sock");
-        let result = DeviceAbilityInstall::new(
+        let result = AbilityDeploymentInstall::new(
             "",
             install.namespace(),
             install.ability_ura(),
@@ -1944,13 +2029,15 @@ mod tests {
             install.manifest_bytes().to_vec(),
             install.manifest().clone(),
             install.installed_at_unix_ms(),
+            install.mutated_by(),
+            install.creator_invocation_id(),
         );
 
         assert!(
             result.is_err(),
             "invalid runtime key must fail construction"
         );
-        let rows = DeviceAbilityStore::open_at(store_path).load().unwrap();
+        let rows = AbilityDeploymentStore::open_at(store_path).load().unwrap();
         assert!(
             rows.is_empty(),
             "invalid install construction must not create a durable row"
@@ -1988,7 +2075,7 @@ mod tests {
     #[tokio::test]
     async fn stream_ability_active_only_when_route_and_mode_match() {
         let dir = tempfile::tempdir().unwrap();
-        let store = DeviceAbilityStore::open_at(dir.path().join("device-abilities.json"));
+        let store = AbilityDeploymentStore::open_at(dir.path().join("ability-deployments.json"));
         let (registrar, rt, _catalog) = wired_registrar(store);
 
         let install = host_stream_install(dir.path(), "/tmp/er-host.sock");
@@ -2009,9 +2096,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn install_rebinds_device_ability_control_plane_record() {
+    async fn install_rebinds_ability_deployment_control_plane_record() {
         let dir = tempfile::tempdir().unwrap();
-        let store = DeviceAbilityStore::open_at(dir.path().join("device-abilities.json"));
+        let store = AbilityDeploymentStore::open_at(dir.path().join("ability-deployments.json"));
         let (registrar, _, catalog) = wired_registrar(store);
 
         let state = registrar
@@ -2022,9 +2109,12 @@ mod tests {
         assert_eq!(state, InstallState::Active);
         let record = catalog
             .control_plane_record_for_mode("er.generate", DescriptorCallMode::Stream)
-            .expect("device ability control-plane lookup is unambiguous")
-            .expect("device ability control-plane record");
-        assert_eq!(record.authority().scope().owner_projection(), "device");
+            .expect("ability deployment control-plane lookup is unambiguous")
+            .expect("ability deployment control-plane record");
+        assert_eq!(
+            record.authority().scope().owner_projection(),
+            "system-agent:ability-management"
+        );
         assert!(record.authority().predicate().governs_advertise());
         assert!(record.authority().predicate().governs_invoke());
         assert_eq!(record.descriptor().call_mode(), DescriptorCallMode::Stream);
@@ -2037,7 +2127,7 @@ mod tests {
                 .implementation()
                 .runtime_env()
                 .label()
-                .contains("device-ability:host_stream"),
+                .contains("ability-deployment:host_stream"),
             "runtime env should pin the deployed exec kind"
         );
         let content_hash = crate::daemon::ability::builtins::device_control::ability_management::store::manifest_digest(
@@ -2061,7 +2151,7 @@ mod tests {
     #[tokio::test]
     async fn install_and_uninstall_notify_dynamic_publication_hooks_after_commit() {
         let dir = tempfile::tempdir().unwrap();
-        let store = DeviceAbilityStore::open_at(dir.path().join("device-abilities.json"));
+        let store = AbilityDeploymentStore::open_at(dir.path().join("ability-deployments.json"));
         let (registrar, _, catalog) = wired_registrar(store);
         let notifications = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         catalog.register_dynamic_publication_hook(Arc::new({
@@ -2083,7 +2173,7 @@ mod tests {
         );
 
         registrar
-            .uninstall(DeviceAbilityUninstall {
+            .uninstall(AbilityDeploymentUninstall {
                 ability_ura,
                 install_id: None,
             })
@@ -2100,7 +2190,7 @@ mod tests {
     #[tokio::test]
     async fn install_binds_runtime_proof_to_manifest_descriptor_version() {
         let dir = tempfile::tempdir().unwrap();
-        let store = DeviceAbilityStore::open_at(dir.path().join("device-abilities.json"));
+        let store = AbilityDeploymentStore::open_at(dir.path().join("ability-deployments.json"));
         let (registrar, rt, catalog) = wired_registrar(store);
 
         let state = registrar
@@ -2123,8 +2213,8 @@ mod tests {
                 "2.3.0",
                 DescriptorCallMode::Stream,
             )
-            .expect("device ability control-plane lookup is unambiguous")
-            .expect("device ability control-plane record");
+            .expect("ability deployment control-plane lookup is unambiguous")
+            .expect("ability deployment control-plane record");
         let proof = runtime_desc
             .options
             .proof_for_mode(AxonCallMode::Stream)
@@ -2143,9 +2233,9 @@ mod tests {
     #[tokio::test]
     async fn uninstall_removes_store_runtime_and_control_plane() {
         let dir = tempfile::tempdir().unwrap();
-        let store_path = dir.path().join("device-abilities.json");
+        let store_path = dir.path().join("ability-deployments.json");
         let (registrar, rt, catalog) =
-            wired_registrar(DeviceAbilityStore::open_at(store_path.clone()));
+            wired_registrar(AbilityDeploymentStore::open_at(store_path.clone()));
 
         let install = host_stream_install(dir.path(), "/tmp/er-host.sock");
         let ability_ura = install.ability_ura().to_string();
@@ -2153,10 +2243,10 @@ mod tests {
         assert!(rt.has_ability(er_generate_runtime_key()).await);
         assert!(catalog
             .control_plane_record_for_mode("er.generate", DescriptorCallMode::Stream)
-            .expect("device ability control-plane lookup is unambiguous")
+            .expect("ability deployment control-plane lookup is unambiguous")
             .is_some());
         assert_eq!(
-            DeviceAbilityStore::open_at(store_path.clone())
+            AbilityDeploymentStore::open_at(store_path.clone())
                 .load()
                 .unwrap()
                 .len(),
@@ -2164,7 +2254,7 @@ mod tests {
         );
 
         let outcome = registrar
-            .uninstall(DeviceAbilityUninstall {
+            .uninstall(AbilityDeploymentUninstall {
                 ability_ura,
                 install_id: None,
             })
@@ -2177,9 +2267,9 @@ mod tests {
         assert!(!rt.has_ability(er_generate_runtime_key()).await);
         assert!(catalog
             .control_plane_record_for_mode("er.generate", DescriptorCallMode::Stream)
-            .expect("device ability control-plane lookup is unambiguous")
+            .expect("ability deployment control-plane lookup is unambiguous")
             .is_none());
-        assert!(DeviceAbilityStore::open_at(store_path)
+        assert!(AbilityDeploymentStore::open_at(store_path)
             .load()
             .unwrap()
             .is_empty());
@@ -2188,9 +2278,9 @@ mod tests {
     #[tokio::test]
     async fn uninstall_refuses_to_mutate_when_control_plane_catalog_is_gone() {
         let dir = tempfile::tempdir().unwrap();
-        let store_path = dir.path().join("device-abilities.json");
+        let store_path = dir.path().join("ability-deployments.json");
         let (registrar, rt, catalog) =
-            wired_registrar(DeviceAbilityStore::open_at(store_path.clone()));
+            wired_registrar(AbilityDeploymentStore::open_at(store_path.clone()));
 
         let install = host_stream_install(dir.path(), "/tmp/er-host.sock");
         let ability_ura = install.ability_ura().to_string();
@@ -2198,7 +2288,7 @@ mod tests {
         drop(catalog);
 
         let err = registrar
-            .uninstall(DeviceAbilityUninstall {
+            .uninstall(AbilityDeploymentUninstall {
                 ability_ura,
                 install_id: None,
             })
@@ -2215,7 +2305,7 @@ mod tests {
             "runtime binding must remain when REMOVED cannot be verified"
         );
         assert_eq!(
-            DeviceAbilityStore::open_at(store_path)
+            AbilityDeploymentStore::open_at(store_path)
                 .load()
                 .unwrap()
                 .len(),
@@ -2230,9 +2320,9 @@ mod tests {
     #[tokio::test]
     async fn repeat_deploy_is_idempotent_upsert() {
         let dir = tempfile::tempdir().unwrap();
-        let store_path = dir.path().join("device-abilities.json");
+        let store_path = dir.path().join("ability-deployments.json");
         let (registrar, rt, _catalog) =
-            wired_registrar(DeviceAbilityStore::open_at(store_path.clone()));
+            wired_registrar(AbilityDeploymentStore::open_at(store_path.clone()));
 
         registrar
             .install(host_stream_install(dir.path(), "/tmp/er-host.sock"))
@@ -2243,7 +2333,7 @@ mod tests {
             .await
             .unwrap();
 
-        let rows = DeviceAbilityStore::open_at(store_path).load().unwrap();
+        let rows = AbilityDeploymentStore::open_at(store_path).load().unwrap();
         assert_eq!(rows.len(), 1, "same manifest must upsert, not duplicate");
         assert!(rt.has_ability(er_generate_runtime_key()).await);
     }
@@ -2251,9 +2341,9 @@ mod tests {
     #[tokio::test]
     async fn control_plane_rebind_failure_restores_previous_live_binding() {
         let dir = tempfile::tempdir().unwrap();
-        let store_path = dir.path().join("device-abilities.json");
+        let store_path = dir.path().join("ability-deployments.json");
         let (registrar, rt, catalog) =
-            wired_registrar(DeviceAbilityStore::open_at(store_path.clone()));
+            wired_registrar(AbilityDeploymentStore::open_at(store_path.clone()));
 
         registrar
             .install(host_stream_install(dir.path(), "/tmp/old-er-host.sock"))
@@ -2277,7 +2367,7 @@ mod tests {
             "failed redeploy must leave the previous live runtime binding untouched"
         );
         assert_eq!(
-            DeviceAbilityStore::open_at(store_path)
+            AbilityDeploymentStore::open_at(store_path)
                 .load()
                 .unwrap()
                 .len(),
@@ -2289,9 +2379,9 @@ mod tests {
     #[tokio::test]
     async fn runtime_replace_failure_restores_prior_control_plane_record() {
         let dir = tempfile::tempdir().unwrap();
-        let store_path = dir.path().join("device-abilities.json");
+        let store_path = dir.path().join("ability-deployments.json");
         let (registrar, rt, catalog) =
-            wired_registrar(DeviceAbilityStore::open_at(store_path.clone()));
+            wired_registrar(AbilityDeploymentStore::open_at(store_path.clone()));
 
         registrar
             .install(host_stream_install_with_version(
@@ -2331,7 +2421,7 @@ mod tests {
             "failed redeploy must restore the previous implementation proof"
         );
         assert!(rt.has_ability(er_generate_runtime_key()).await);
-        let rows = DeviceAbilityStore::open_at(store_path).load().unwrap();
+        let rows = AbilityDeploymentStore::open_at(store_path).load().unwrap();
         assert_eq!(rows.len(), 1, "failed redeploy must leave one durable row");
         assert_eq!(
             rows[0].manifest_hash(),
@@ -2349,10 +2439,10 @@ mod tests {
     #[tokio::test]
     async fn boot_replay_uses_embedded_snapshot_when_source_manifest_drifts() {
         let dir = tempfile::tempdir().unwrap();
-        let store_path = dir.path().join("device-abilities.json");
+        let store_path = dir.path().join("ability-deployments.json");
         {
             let (registrar, _rt, _catalog) =
-                wired_registrar(DeviceAbilityStore::open_at(store_path.clone()));
+                wired_registrar(AbilityDeploymentStore::open_at(store_path.clone()));
             registrar
                 .install(host_stream_install(dir.path(), "/tmp/er-host.sock"))
                 .await
@@ -2360,8 +2450,9 @@ mod tests {
         }
         std::fs::write(dir.path().join("ability.json"), b"{\"name\":\"drifted\"}").unwrap();
 
-        let registrar2 =
-            DeviceAbilityRegistrar::new_pending_with_store(DeviceAbilityStore::open_at(store_path));
+        let registrar2 = AbilityDeploymentRegistrar::new_pending_with_store(
+            AbilityDeploymentStore::open_at(store_path),
+        );
         let rt2 = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
             None,
@@ -2385,17 +2476,18 @@ mod tests {
     #[tokio::test]
     async fn boot_replay_reregisters_unchanged_manifest() {
         let dir = tempfile::tempdir().unwrap();
-        let store_path = dir.path().join("device-abilities.json");
+        let store_path = dir.path().join("ability-deployments.json");
         {
             let (registrar, _rt, _catalog) =
-                wired_registrar(DeviceAbilityStore::open_at(store_path.clone()));
+                wired_registrar(AbilityDeploymentStore::open_at(store_path.clone()));
             registrar
                 .install(host_stream_install(dir.path(), "/tmp/er-host.sock"))
                 .await
                 .unwrap();
         }
-        let registrar2 =
-            DeviceAbilityRegistrar::new_pending_with_store(DeviceAbilityStore::open_at(store_path));
+        let registrar2 = AbilityDeploymentRegistrar::new_pending_with_store(
+            AbilityDeploymentStore::open_at(store_path),
+        );
         let rt2 = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
             None,
@@ -2417,10 +2509,10 @@ mod tests {
     #[tokio::test]
     async fn boot_replay_quarantines_previous_device_authority_rows() {
         let dir = tempfile::tempdir().unwrap();
-        let store_path = dir.path().join("device-abilities.json");
+        let store_path = dir.path().join("ability-deployments.json");
         {
             let (registrar, _rt, _catalog) =
-                wired_registrar(DeviceAbilityStore::open_at(store_path.clone()));
+                wired_registrar(AbilityDeploymentStore::open_at(store_path.clone()));
             registrar
                 .install(host_stream_install(dir.path(), "/tmp/current-host.sock"))
                 .await
@@ -2429,7 +2521,7 @@ mod tests {
 
         let previous_manifest = host_stream_manifest("/tmp/old-host.sock", "er.generate");
         let previous_manifest_bytes = serde_json::to_vec(&previous_manifest).unwrap();
-        let previous_row = DeviceAbilityRecord::new_with_manifest_bytes(
+        let previous_row = AbilityDeploymentRecord::new_with_manifest_bytes(
             "er.previous",
             "er",
             "easynet:///r/localhost/ability/device.old.er.previous",
@@ -2439,13 +2531,15 @@ mod tests {
                 .into_owned(),
             &previous_manifest_bytes,
             2,
+            "easynet:///r/localhost/user/test-user",
+            "test-previous-deploy",
         );
-        DeviceAbilityStore::open_at(store_path.clone())
+        AbilityDeploymentStore::open_at(store_path.clone())
             .upsert(previous_row.clone())
             .unwrap();
 
-        let registrar2 = DeviceAbilityRegistrar::new_pending_with_store(
-            DeviceAbilityStore::open_at(store_path.clone()),
+        let registrar2 = AbilityDeploymentRegistrar::new_pending_with_store(
+            AbilityDeploymentStore::open_at(store_path.clone()),
         );
         let rt2 = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
             crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
@@ -2469,9 +2563,9 @@ mod tests {
         assert!(
             !rt2.has_ability("easynet:///r/localhost/ability/device.old.er.previous")
                 .await,
-            "foreign device ability must never be registered"
+            "foreign ability deployment must never be registered"
         );
-        let replayable_rows = DeviceAbilityStore::open_at(store_path).load().unwrap();
+        let replayable_rows = AbilityDeploymentStore::open_at(store_path).load().unwrap();
         assert!(
             replayable_rows
                 .iter()
@@ -2483,9 +2577,9 @@ mod tests {
     #[tokio::test]
     async fn leased_binding_expiry_removes_route_but_preserves_durable_descriptor() {
         let dir = tempfile::tempdir().unwrap();
-        let store_path = dir.path().join("device-abilities.json");
+        let store_path = dir.path().join("ability-deployments.json");
         let (registrar, runtime, catalog) =
-            wired_registrar(DeviceAbilityStore::open_at(store_path.clone()));
+            wired_registrar(AbilityDeploymentStore::open_at(store_path.clone()));
         let install = host_stream_install(dir.path(), "/tmp/leased-host.sock")
             .with_binding_lease_ms(Some(MIN_BINDING_LEASE_MS))
             .unwrap();
@@ -2504,7 +2598,7 @@ mod tests {
             .control_plane_record_for_mode("er.generate", DescriptorCallMode::Stream)
             .unwrap()
             .is_none());
-        let rows = DeviceAbilityStore::open_at(store_path).load().unwrap();
+        let rows = AbilityDeploymentStore::open_at(store_path).load().unwrap();
         assert_eq!(
             rows.len(),
             1,
@@ -2516,8 +2610,8 @@ mod tests {
     #[tokio::test]
     async fn redeploy_renews_lease_generation_without_premature_expiry() {
         let dir = tempfile::tempdir().unwrap();
-        let (registrar, runtime, _catalog) = wired_registrar(DeviceAbilityStore::open_at(
-            dir.path().join("device-abilities.json"),
+        let (registrar, runtime, _catalog) = wired_registrar(AbilityDeploymentStore::open_at(
+            dir.path().join("ability-deployments.json"),
         ));
         let leased_install = || {
             host_stream_install(dir.path(), "/tmp/leased-host.sock")
@@ -2541,10 +2635,10 @@ mod tests {
     #[tokio::test]
     async fn boot_replay_keeps_leased_implementation_inactive_until_host_renews() {
         let dir = tempfile::tempdir().unwrap();
-        let store_path = dir.path().join("device-abilities.json");
+        let store_path = dir.path().join("ability-deployments.json");
         {
             let (registrar, _runtime, _catalog) =
-                wired_registrar(DeviceAbilityStore::open_at(store_path.clone()));
+                wired_registrar(AbilityDeploymentStore::open_at(store_path.clone()));
             registrar
                 .install(
                     host_stream_install(dir.path(), "/tmp/leased-host.sock")
@@ -2555,7 +2649,8 @@ mod tests {
                 .unwrap();
         }
 
-        let (replayed, runtime, catalog) = wired_registrar(DeviceAbilityStore::open_at(store_path));
+        let (replayed, runtime, catalog) =
+            wired_registrar(AbilityDeploymentStore::open_at(store_path));
         let report = replayed.replay_from_store().await;
 
         assert_eq!(report.registered, 0);

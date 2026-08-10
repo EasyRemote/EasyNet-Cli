@@ -14,7 +14,7 @@
 //
 //   1. `federation.resolve` against the realm directory.
 //   2. A signed canonical `InvokeRequest` for `observe.health` against
-//      each device-profile Agent.
+//      each device-sponsored runtime-health SystemAgent.
 //
 // Keeping the logic here gives one bounded, testable definition of
 // "what devices are visible" and "what counts as reachable" instead of
@@ -42,6 +42,10 @@ use crate::daemon::persistence::config;
 const DEVICE_HEALTH_ABILITY: &str = governance::OBSERVE_HEALTH;
 const DEVICE_NETWORK_HEALTH_ABILITY: &str = governance::OBSERVE_NETWORK_HEALTH;
 const MAX_DEVICE_PROBES: usize = 64;
+
+fn runtime_health_owner_ura(realm: &str, node_id: &str) -> String {
+    crate::core::ura::device_agent_ura(realm, node_id, governance::RUNTIME_HEALTH_SYSTEM_AGENT_ID)
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum LocalIdentity {
@@ -99,7 +103,7 @@ pub(crate) fn local_device_record(
     else {
         return Ok(None);
     };
-    let owner_ura = crate::core::ura::device_ura(&tenant_id, &node_id);
+    let owner_ura = runtime_health_owner_ura(&tenant_id, &node_id);
     let abilities =
         crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::capture(catalog)
             .owner_projection_values(&owner_ura)
@@ -108,7 +112,7 @@ pub(crate) fn local_device_record(
         node: DeviceNodeSnapshot {
             node_id: node_id.clone(),
             tenant_id: tenant_id.clone(),
-            agent_ura: Some(crate::core::ura::device_ura(&tenant_id, &node_id)),
+            agent_ura: Some(owner_ura),
             is_self: true,
             paired: true,
             hub_endpoint,
@@ -144,19 +148,18 @@ impl DeviceProbe for RemoteDeviceProbe {
 }
 
 #[derive(Debug, Default)]
-struct DeviceProfileAbilitySet {
+struct RuntimeHealthAbilitySet {
     has_health: bool,
     has_network: bool,
 }
 
-impl DeviceProfileAbilitySet {
+impl RuntimeHealthAbilitySet {
     fn observe(&mut self, public_name: &str) {
-        self.has_health |= public_name == expected_device_public_ability(DEVICE_HEALTH_ABILITY);
-        self.has_network |=
-            public_name == expected_device_public_ability(DEVICE_NETWORK_HEALTH_ABILITY);
+        self.has_health |= public_name == DEVICE_HEALTH_ABILITY;
+        self.has_network |= public_name == DEVICE_NETWORK_HEALTH_ABILITY;
     }
 
-    fn is_device_profile(&self) -> bool {
+    fn is_runtime_health_surface(&self) -> bool {
         self.has_health && self.has_network
     }
 }
@@ -205,7 +208,7 @@ fn collect_device_view_with_probe(
     let mut nodes = vec![DeviceNodeSnapshot {
         node_id: node_id.clone(),
         tenant_id: tenant_id.clone(),
-        agent_ura: Some(crate::core::ura::device_ura(&tenant_id, &node_id)),
+        agent_ura: Some(runtime_health_owner_ura(&tenant_id, &node_id)),
         is_self: true,
         paired: true,
         hub_endpoint: hub_endpoint.clone(),
@@ -251,10 +254,10 @@ fn collect_device_view_with_probe(
 
     let mut device_agents: BTreeMap<String, String> = BTreeMap::new();
     for agent in resolved {
-        if agent.status != "active" || !is_device_profile_agent(&agent) {
+        if agent.status != "active" || !is_runtime_health_system_agent(&agent) {
             continue;
         }
-        if let Some(node_id) = node_id_from_agent_ura(&agent.ura) {
+        if let Some(node_id) = node_id_from_runtime_health_owner_ura(&agent.ura) {
             device_agents.entry(node_id).or_insert(agent.ura);
         }
     }
@@ -387,10 +390,10 @@ fn resolve_device_record_with_filter(
         })?;
 
     for agent in resolved {
-        if agent.status != "active" || !is_device_profile_agent(&agent) {
+        if agent.status != "active" || !is_runtime_health_system_agent(&agent) {
             continue;
         }
-        let Some(resolved_node_id) = node_id_from_agent_ura(&agent.ura) else {
+        let Some(resolved_node_id) = node_id_from_runtime_health_owner_ura(&agent.ura) else {
             continue;
         };
         if resolved_node_id != node_id {
@@ -399,7 +402,7 @@ fn resolve_device_record_with_filter(
 
         let agent_realm = crate::core::ura::realm_from_ura(&agent.ura).ok_or_else(|| {
             anyhow::anyhow!(
-                "node.describe: resolved agent URA {:?} is not a canonical URA",
+                "node.describe: resolved runtime-health SystemAgent URA {:?} is not a canonical URA",
                 agent.ura
             )
         })?;
@@ -468,7 +471,7 @@ pub(crate) fn node_to_json(node: &DeviceNodeSnapshot) -> Value {
     })
 }
 
-/// Extract the node id from a canonical device-profile URA.
+/// Extract the node id from a canonical host Device URA.
 pub(crate) fn node_id_from_agent_ura(ura: &str) -> Option<String> {
     if let Ok(parsed) = crate::core::ura::parse_ura(ura) {
         return parsed.device_id().map(str::to_string);
@@ -476,23 +479,47 @@ pub(crate) fn node_id_from_agent_ura(ura: &str) -> Option<String> {
     None
 }
 
-fn is_device_profile_agent(agent: &ResolvedAgent) -> bool {
+fn node_id_from_runtime_health_owner_ura(ura: &str) -> Option<String> {
+    runtime_health_owner_host_device_ura(ura)
+        .as_deref()
+        .and_then(node_id_from_agent_ura)
+}
+
+fn runtime_health_owner_host_device_ura(ura: &str) -> Option<String> {
+    let parsed = crate::core::ura::parse_ura(ura).ok()?;
+    if parsed.kind != crate::core::ura::URAKind::Agent {
+        return None;
+    }
+    let agent_name = ura.trim().rsplit_once("/agent/")?.1;
+    if agent_name.contains('/') {
+        return None;
+    }
+    let host_device_id = agent_name
+        .strip_prefix("device.")?
+        .strip_suffix(&format!(".{}", governance::RUNTIME_HEALTH_SYSTEM_AGENT_ID))?;
+    if host_device_id.is_empty() {
+        return None;
+    }
+    Some(crate::core::ura::device_ura(&parsed.realm, host_device_id))
+}
+
+fn is_runtime_health_system_agent(agent: &ResolvedAgent) -> bool {
     let owner_ura = agent.ura.trim();
-    if node_id_from_agent_ura(owner_ura).is_none() {
+    if runtime_health_owner_host_device_ura(owner_ura).is_none() {
         return false;
     }
 
-    let mut abilities = DeviceProfileAbilitySet::default();
+    let mut abilities = RuntimeHealthAbilitySet::default();
     for desc in &agent.ability_summaries {
-        let Some(public_name) = device_profile_public_ability_name(owner_ura, desc) else {
+        let Some(public_name) = owner_public_ability_name(owner_ura, desc) else {
             continue;
         };
         abilities.observe(&public_name);
     }
-    abilities.is_device_profile()
+    abilities.is_runtime_health_surface()
 }
 
-fn device_profile_public_ability_name(owner_ura: &str, summary: &Value) -> Option<String> {
+fn owner_public_ability_name(owner_ura: &str, summary: &Value) -> Option<String> {
     let summary =
         crate::daemon::federation::read_model::owner_projection::summary_from_value(summary)?;
     let ability_ura = summary.ability_ura.trim();
@@ -500,10 +527,6 @@ fn device_profile_public_ability_name(owner_ura: &str, summary: &Value) -> Optio
         return None;
     }
     crate::core::ura::public_ability_name_from_ability_ura(owner_ura, ability_ura)
-}
-
-fn expected_device_public_ability(registry_key: &str) -> &str {
-    registry_key.strip_prefix("device.").unwrap_or(registry_key)
 }
 
 fn probe_remote_device(agent_ura: &str) -> ProbeOutcome {
@@ -651,15 +674,15 @@ mod tests {
     }
 
     #[test]
-    fn device_profile_detection_requires_health_plus_network_health() {
-        let device_ura = "easynet:///r/acme/device/dev-a";
+    fn runtime_health_detection_requires_health_plus_network_health() {
+        let device_ura = runtime_health_owner_ura("acme", "dev-a");
         let device = ResolvedAgent {
-            ura: device_ura.into(),
+            ura: device_ura.clone(),
             status: "active".into(),
             host_node_id: None,
             ability_summaries: vec![
-                ability_summary(device_ura, "observe", "health"),
-                ability_summary(device_ura, "observe", "network_health"),
+                ability_summary(&device_ura, "observe", "health"),
+                ability_summary(&device_ura, "observe", "network_health"),
             ],
         };
         let hosted_ura = "easynet:///r/acme/agent/u1.01LLM";
@@ -669,8 +692,8 @@ mod tests {
             host_node_id: None,
             ability_summaries: vec![ability_summary(hosted_ura, "", "chat")],
         };
-        assert!(is_device_profile_agent(&device));
-        assert!(!is_device_profile_agent(&hosted));
+        assert!(is_runtime_health_system_agent(&device));
+        assert!(!is_runtime_health_system_agent(&hosted));
     }
 
     #[test]
@@ -716,19 +739,15 @@ mod tests {
     fn collect_device_view_does_not_expose_unrouteable_directory_devices_as_nodes() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         save_paired_test_credentials();
-        let remote_device_ura = crate::core::ura::device_ura("acme", "remote-node");
+        let remote_device_ura = runtime_health_owner_ura("acme", "remote-node");
         let resolver = StaticResolver {
             agents: vec![ResolvedAgent {
-                ura: remote_device_ura,
+                ura: remote_device_ura.clone(),
                 status: "active".into(),
                 host_node_id: None,
                 ability_summaries: vec![
-                    ability_summary("easynet:///r/acme/device/remote-node", "observe", "health"),
-                    ability_summary(
-                        "easynet:///r/acme/device/remote-node",
-                        "observe",
-                        "network_health",
-                    ),
+                    ability_summary(&remote_device_ura, "observe", "health"),
+                    ability_summary(&remote_device_ura, "observe", "network_health"),
                 ],
             }],
         };
@@ -753,24 +772,16 @@ mod tests {
     fn resolve_device_record_rejects_unrouteable_directory_ability_facts() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         save_paired_test_credentials();
-        let remote_device_ura = crate::core::ura::device_ura("acme", "remote-node");
+        let remote_device_ura = runtime_health_owner_ura("acme", "remote-node");
         let resolver = StaticResolver {
             agents: vec![ResolvedAgent {
-                ura: remote_device_ura,
+                ura: remote_device_ura.clone(),
                 status: "active".into(),
                 host_node_id: None,
                 ability_summaries: vec![
-                    ability_summary("easynet:///r/acme/device/remote-node", "observe", "health"),
-                    ability_summary(
-                        "easynet:///r/acme/device/remote-node",
-                        "observe",
-                        "network_health",
-                    ),
-                    ability_summary(
-                        "easynet:///r/acme/device/remote-node",
-                        "browser",
-                        "open_session",
-                    ),
+                    ability_summary(&remote_device_ura, "observe", "health"),
+                    ability_summary(&remote_device_ura, "observe", "network_health"),
+                    ability_summary(&remote_device_ura, "browser", "open_session"),
                 ],
             }],
         };
@@ -792,17 +803,17 @@ mod tests {
 
     #[test]
     fn resolved_device_record_keeps_cross_tenant_realm_and_abilities() {
-        let device_ura = "easynet:///r/realm-b/device/dev-a";
+        let device_ura = runtime_health_owner_ura("realm-b", "dev-a");
         let agent = ResolvedAgent {
-            ura: device_ura.into(),
+            ura: device_ura.clone(),
             status: "active".into(),
             host_node_id: None,
             ability_summaries: vec![
-                ability_summary(device_ura, "observe", "health"),
-                ability_summary(device_ura, "shell", "run"),
+                ability_summary(&device_ura, "observe", "health"),
+                ability_summary(&device_ura, "shell", "run"),
             ],
         };
-        let resolved_node_id = node_id_from_agent_ura(&agent.ura).expect("node id");
+        let resolved_node_id = node_id_from_runtime_health_owner_ura(&agent.ura).expect("node id");
         let realm = crate::core::ura::realm_from_ura(&agent.ura).expect("canonical device realm");
         let record = ResolvedDeviceRecord {
             node: DeviceNodeSnapshot {
@@ -827,59 +838,59 @@ mod tests {
     }
 
     #[test]
-    fn device_profile_detection_uses_ability_ura_not_summary_names() {
-        let device_ura = "easynet:///r/acme/device/dev-a";
-        let mut health = ability_summary(device_ura, "wrong", "health");
+    fn runtime_health_detection_uses_ability_ura_not_summary_names() {
+        let device_ura = runtime_health_owner_ura("acme", "dev-a");
+        let mut health = ability_summary(&device_ura, "wrong", "health");
         health["ability_ura"] =
-            json!(crate::core::ura::owner_ability_ura(device_ura, "observe.health").unwrap());
-        let mut fleet = ability_summary(device_ura, "wrong", "network_health");
+            json!(crate::core::ura::owner_ability_ura(&device_ura, "observe.health").unwrap());
+        let mut fleet = ability_summary(&device_ura, "wrong", "network_health");
         fleet["ability_ura"] =
             json!(
-                crate::core::ura::owner_ability_ura(device_ura, "observe.network_health").unwrap()
+                crate::core::ura::owner_ability_ura(&device_ura, "observe.network_health").unwrap()
             );
         let device = ResolvedAgent {
-            ura: device_ura.into(),
+            ura: device_ura,
             status: "active".into(),
             host_node_id: None,
             ability_summaries: vec![health, fleet],
         };
 
-        assert!(is_device_profile_agent(&device));
+        assert!(is_runtime_health_system_agent(&device));
     }
 
     #[test]
-    fn device_profile_detection_rejects_wrong_owner_ability_uras() {
-        let device_ura = "easynet:///r/acme/device/dev-a";
-        let other_device_ura = "easynet:///r/acme/device/dev-b";
+    fn runtime_health_detection_rejects_wrong_owner_ability_uras() {
+        let device_ura = runtime_health_owner_ura("acme", "dev-a");
+        let other_device_ura = runtime_health_owner_ura("acme", "dev-b");
         let device = ResolvedAgent {
-            ura: device_ura.into(),
+            ura: device_ura,
             status: "active".into(),
             host_node_id: None,
             ability_summaries: vec![
-                ability_summary(other_device_ura, "observe", "health"),
-                ability_summary(other_device_ura, "observe", "network_health"),
+                ability_summary(&other_device_ura, "observe", "health"),
+                ability_summary(&other_device_ura, "observe", "network_health"),
             ],
         };
 
-        assert!(!is_device_profile_agent(&device));
+        assert!(!is_runtime_health_system_agent(&device));
     }
 
     #[test]
-    fn device_profile_detection_rejects_missing_ability_ura() {
-        let device_ura = "easynet:///r/acme/device/dev-a";
-        let mut health = ability_summary(device_ura, "observe", "health");
+    fn runtime_health_detection_rejects_missing_ability_ura() {
+        let device_ura = runtime_health_owner_ura("acme", "dev-a");
+        let mut health = ability_summary(&device_ura, "observe", "health");
         health["ability_ura"] = Value::Null;
         let device = ResolvedAgent {
-            ura: device_ura.into(),
+            ura: device_ura.clone(),
             status: "active".into(),
             host_node_id: None,
             ability_summaries: vec![
                 health,
-                ability_summary(device_ura, "observe", "network_health"),
+                ability_summary(&device_ura, "observe", "network_health"),
             ],
         };
 
-        assert!(!is_device_profile_agent(&device));
+        assert!(!is_runtime_health_system_agent(&device));
     }
 
     fn ability_summary(owner_ura: &str, namespace: &str, local_name: &str) -> Value {

@@ -413,14 +413,14 @@ mod tests {
 
     use super::*;
     use crate::core::agent::spec::AgentSpec;
+    use crate::core::agent::spec::RuntimeKind;
     use crate::daemon::ability::manifest::AbilityManifest;
     use crate::daemon::execution::mission::directory::{
         AgentDirectory, Location, ABILITY_MANIFEST_SUFFIX,
     };
-    use crate::daemon::persistence::agent_registry::AgentType;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    fn entry_named(name: &str, t: AgentType) -> AgentEntry {
+    fn entry_named(name: &str, t: RuntimeKind) -> AgentEntry {
         make_agent_on_disk(name, t).1
     }
 
@@ -429,7 +429,7 @@ mod tests {
         use crate::cli::commands::test_support::HomeGuard;
         let _g = HomeGuard::new();
 
-        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
         assert!(entry.root_path.is_none());
         let abilities = abilities_for("ghost-agent", &entry);
         assert!(
@@ -446,9 +446,9 @@ mod tests {
         // would break downstream consumers which assume a one-to-one
         // agent↔ability mapping.
         for t in [
-            AgentType::ClaudeCode,
-            AgentType::Codex,
-            AgentType::CodexAppServer,
+            RuntimeKind::ClaudeCode,
+            RuntimeKind::Codex,
+            RuntimeKind::CodexAppServer,
         ] {
             let entry = entry_named("test-agent", t);
             let abilities = abilities_for("test-agent", &entry);
@@ -464,7 +464,7 @@ mod tests {
 
     #[test]
     fn chat_manifest_schema_is_object_with_typed_entry_shapes() {
-        let entry = entry_named("claude", AgentType::ClaudeCode);
+        let entry = entry_named("claude", RuntimeKind::ClaudeCode);
         let manifests = manifests_for("claude", &entry);
         let params = manifests[0].input_schema();
         // Top-level type is an object — every LLM tool-use contract
@@ -501,7 +501,7 @@ mod tests {
 
     #[test]
     fn chat_manifest_parameters_declare_prompt_and_structured_inputs() {
-        let entry = entry_named("codex", AgentType::Codex);
+        let entry = entry_named("codex", RuntimeKind::Codex);
         let manifests = manifests_for("codex", &entry);
         let props = manifests[0]
             .input_schema()
@@ -533,8 +533,8 @@ mod tests {
         // right name. A broken template that hardcoded "agent.chat"
         // would silently alias every agent to the same tool name on
         // the wire, which would make discovery and dispatch ambiguous.
-        let claude = entry_named("claude", AgentType::ClaudeCode);
-        let codex = entry_named("codex", AgentType::Codex);
+        let claude = entry_named("claude", RuntimeKind::ClaudeCode);
+        let codex = entry_named("codex", RuntimeKind::Codex);
         let a = abilities_for("claude", &claude);
         let b = abilities_for("codex", &codex);
         assert_ne!(a[0].name(), b[0].name());
@@ -549,7 +549,7 @@ mod tests {
         // Ability names always contain a `.` because
         // `validate_agent_name` rejects dots inside agent names.
         // Together that makes a name collision structurally impossible.
-        let entry = entry_named("claude", AgentType::ClaudeCode);
+        let entry = entry_named("claude", RuntimeKind::ClaudeCode);
         let abilities = abilities_for("claude", &entry);
         assert!(abilities[0].name().contains('.'));
         // Mirror a subset of the reserved network-tool names so a
@@ -624,7 +624,7 @@ mod tests {
     /// on the registry. Compile-time check via a noop round-trip.
     #[test]
     fn spec_is_cloneable() {
-        let entry = entry_named("claude", AgentType::ClaudeCode);
+        let entry = entry_named("claude", RuntimeKind::ClaudeCode);
         let spec = abilities_for("claude", &entry).into_iter().next().unwrap();
         let _copy = spec.clone();
     }
@@ -640,7 +640,7 @@ mod tests {
     /// The temp root is leaked rather than tracked through a `TempDir`
     /// guard because these tests don't share state across cases and
     /// clutter from a few abandoned temp dirs is acceptable noise.
-    fn make_agent_on_disk(name: &str, agent_type: AgentType) -> (std::path::PathBuf, AgentEntry) {
+    fn make_agent_on_disk(name: &str, agent_type: RuntimeKind) -> (std::path::PathBuf, AgentEntry) {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let root = std::env::temp_dir()
@@ -648,8 +648,7 @@ mod tests {
             .join(format!("{name}-{n}-{}", std::process::id()));
         // Clean any leftover from a previous identical run.
         let _ = std::fs::remove_dir_all(&root);
-        let runtime = agent_type.runtime_kind();
-        let spec = AgentSpec::new(name.to_string(), runtime);
+        let spec = AgentSpec::new(name.to_string(), agent_type);
         AgentDirectory::create(&Location::Local { root: root.clone() }, spec)
             .expect("create agent directory");
         let mut entry = AgentEntry::new(agent_type, None);
@@ -662,7 +661,7 @@ mod tests {
         // The snapshot cache must never serve a stale catalog: editing
         // a manifest changes the stat signature (length and/or mtime)
         // and forces a rebuild on the next read.
-        let (root, entry) = make_agent_on_disk("editline", AgentType::ClaudeCode);
+        let (root, entry) = make_agent_on_disk("editline", RuntimeKind::ClaudeCode);
         let first = manifests_for("editline", &entry);
         assert_eq!(first.len(), 1, "seeded chat manifest visible");
 
@@ -688,7 +687,7 @@ mod tests {
         // A registry row whose name disagrees with the directory's
         // own agent.toml fails closed (empty list) — and must NOT
         // evict the rightful owner's snapshot while doing so.
-        let (_root, entry) = make_agent_on_disk("owner", AgentType::ClaudeCode);
+        let (_root, entry) = make_agent_on_disk("owner", RuntimeKind::ClaudeCode);
         assert_eq!(manifests_for("owner", &entry).len(), 1);
         assert!(
             manifests_for("impostor", &entry).is_empty(),
@@ -705,7 +704,7 @@ mod tests {
     fn manifest_driven_path_returns_chat_from_seeded_manifest() {
         // After `AgentDirectory::create`, `abilities/chat.ability.toml`
         // exists. `abilities_for` must read it — not synthesize.
-        let (_root, entry) = make_agent_on_disk("alice", AgentType::ClaudeCode);
+        let (_root, entry) = make_agent_on_disk("alice", RuntimeKind::ClaudeCode);
         let abilities = abilities_for("alice", &entry);
         assert_eq!(abilities.len(), 1);
         assert_eq!(abilities[0].name(), "alice.chat");
@@ -716,7 +715,7 @@ mod tests {
         // If the operator removes chat.ability.toml, discovery must not
         // recreate it through a migration seam. Ability identity is the
         // authored manifest set.
-        let (root, entry) = make_agent_on_disk("bob", AgentType::ClaudeCode);
+        let (root, entry) = make_agent_on_disk("bob", RuntimeKind::ClaudeCode);
         let chat_path = root
             .join("abilities")
             .join(format!("chat{ABILITY_MANIFEST_SUFFIX}"));
@@ -740,7 +739,7 @@ mod tests {
         // compatibility property the whole refactor exists for: an
         // operator who adds `voice.ability.toml` should see it
         // surface in discovery without recompiling the daemon.
-        let (root, entry) = make_agent_on_disk("carol", AgentType::ClaudeCode);
+        let (root, entry) = make_agent_on_disk("carol", RuntimeKind::ClaudeCode);
         let voice = AbilityManifest::new(
             "voice",
             "Speak a synthesized response.",
@@ -771,7 +770,7 @@ mod tests {
         // operator can edit description / schema without touching
         // code. Pin that the manifest's description wins over the
         // hardcoded fallback's interpolated string.
-        let (root, entry) = make_agent_on_disk("dave", AgentType::ClaudeCode);
+        let (root, entry) = make_agent_on_disk("dave", RuntimeKind::ClaudeCode);
         let edited = AbilityManifest::new(
             "chat",
             "Edited blurb that the operator typed by hand.",
@@ -792,7 +791,7 @@ mod tests {
 
     #[test]
     fn entry_without_root_path_publishes_no_abilities() {
-        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
         assert!(entry.root_path.is_none(), "precondition");
         let abilities = abilities_for("ephemeral", &entry);
         assert!(

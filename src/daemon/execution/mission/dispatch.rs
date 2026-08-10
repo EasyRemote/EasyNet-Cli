@@ -755,7 +755,7 @@ pub fn send_to_agent_with_depth_and_progress(
 
     let started_at = Local::now().to_rfc3339();
     // Dispatch through the trait. `adapter_for` is the single place
-    // the runtime layer matches on `AgentType`; adding a new runtime
+    // the runtime layer matches on `RuntimeKind`; adding a new runtime
     // is one arm there plus one `impl AgentAdapter` block, not a
     // sweep of this function. The `cwd` handed to the adapter is
     // the already-resolved workspace — we clone into `InvokeOpts`
@@ -1136,8 +1136,9 @@ fn check_mission_context_invariant() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::agent::spec::RuntimeKind;
     use crate::daemon::execution::mission::adapter::AgentAdapter;
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
+    use crate::daemon::persistence::agent_registry::AgentEntry;
 
     /// Construct a dummy `AgentEntry` for tests that exercise the
     /// dispatch guard logic in isolation.
@@ -1163,7 +1164,7 @@ mod tests {
     /// Claude Code is interactive-by-default and would wait on stdin
     /// for the full `timeout_secs` window.
     fn dummy_entry() -> AgentEntry {
-        let mut e = AgentEntry::new(AgentType::ClaudeCode, None);
+        let mut e = AgentEntry::new(RuntimeKind::ClaudeCode, None);
         e.command = "easynet-test-nonexistent-agent-binary".to_string();
         e.timeout_secs = 1;
         e
@@ -1619,15 +1620,15 @@ mod tests {
 
     #[test]
     fn adapter_for_returns_distinct_singletons_per_agent_type() {
-        // Each AgentType must map to its own adapter. The runtime_id
+        // Each RuntimeKind must map to its own adapter. The runtime_id
         // accessor is the visible fingerprint — if a future mapper
         // accidentally aliases two types to one adapter, the id's
         // drift from `agent_type.to_string()` immediately.
         use crate::daemon::execution::mission::drivers::adapter_for;
-        let a = adapter_for(AgentType::ClaudeCode);
-        let b = adapter_for(AgentType::Codex);
-        let c = adapter_for(AgentType::CodexAppServer);
-        let d = adapter_for(AgentType::External);
+        let a = adapter_for(RuntimeKind::ClaudeCode);
+        let b = adapter_for(RuntimeKind::Codex);
+        let c = adapter_for(RuntimeKind::CodexAppServer);
+        let d = adapter_for(RuntimeKind::External);
         assert_eq!(a.runtime_id(), "claude-code");
         assert_eq!(b.runtime_id(), "codex");
         assert_eq!(c.runtime_id(), "codex-app-server");

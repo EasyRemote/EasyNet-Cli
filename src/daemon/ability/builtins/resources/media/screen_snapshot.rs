@@ -841,7 +841,7 @@ pub fn register_with_backend(
     let snapshot_backend = Arc::clone(&backend);
     reg.register_rpc_with_envelope_and_spec(
         ABILITY_SCREEN_SNAPSHOT,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_SCREEN_SNAPSHOT),
         Arc::new(move |env: EnvelopeContext, args: Value| {
             snapshot_handler(&snapshot_backend, env, args)
@@ -849,7 +849,7 @@ pub fn register_with_backend(
     );
     reg.register_stream_with_envelope_and_spec(
         ABILITY_SCREEN_SUBSCRIBE,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_SCREEN_SUBSCRIBE),
         Arc::new(move |env: EnvelopeContext, args: Value| subscribe_handler(&backend, env, args)),
     );

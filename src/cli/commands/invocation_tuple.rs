@@ -346,26 +346,26 @@ mod tests {
 
     #[test]
     fn ability_invocation_ref_parses_plain_ability_ura() {
-        let parsed =
-            AbilityInvocationRef::parse("easynet:///r/acme/ability/device.node.observe.health")
-                .expect("plain ability URA");
+        let parsed = AbilityInvocationRef::parse(
+            "easynet:///r/acme/ability/system-agent.node.runtime-health.observe.health",
+        )
+        .expect("plain ability URA");
 
         assert_eq!(
             parsed.selector().ability_ura(),
-            "easynet:///r/acme/ability/device.node.observe.health"
+            "easynet:///r/acme/ability/system-agent.node.runtime-health.observe.health"
         );
         assert!(!parsed.is_descriptor_ref());
     }
 
     #[test]
     fn ability_invocation_ref_preserves_explicit_descriptor_ref() {
-        let descriptor_ref =
-            "easynet:///r/acme/ability/device.node.observe.health@2.1.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+        let descriptor_ref = "easynet:///r/acme/ability/system-agent.node.runtime-health.observe.health@2.1.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
         let parsed = AbilityInvocationRef::parse(descriptor_ref).expect("descriptor ref");
 
         assert_eq!(
             parsed.selector().ability_ura(),
-            "easynet:///r/acme/ability/device.node.observe.health"
+            "easynet:///r/acme/ability/system-agent.node.runtime-health.observe.health"
         );
         assert_eq!(parsed.descriptor_ref(), Some(descriptor_ref));
     }

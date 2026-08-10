@@ -9,6 +9,7 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct DaemonAgentRow {
     pub(crate) name: String,
+    pub(crate) ura: Option<String>,
     pub(crate) runtime: String,
     pub(crate) model: Option<String>,
     #[serde(default)]
@@ -100,6 +101,7 @@ mod tests {
     fn missing_root_path_is_a_projection_error_not_a_persistence_fallback() {
         let row = DaemonAgentRow {
             name: "alice".to_string(),
+            ura: Some("easynet:///r/acme/agent/alice.assistant".to_string()),
             runtime: "codex".to_string(),
             model: None,
             root_path: None,

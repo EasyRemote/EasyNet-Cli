@@ -869,10 +869,12 @@ mod tests {
             InvocationHistoryListQuery::from_list_args(&ListArgs {
                 limit: 25,
                 state: Some("completed".into()),
-                ability_ura: Some("easynet:///r/test/ability/device.callee.fs.read".into()),
+                ability_ura: Some(
+                    "easynet:///r/test/ability/system-agent.callee.locomotion.fs.read".into(),
+                ),
                 caller: Some("easynet:///r/test/device/caller".into()),
                 callee: None,
-                agent_ura: Some("easynet:///r/test/device/callee".into()),
+                agent_ura: Some("easynet:///r/test/agent/device.callee.locomotion".into()),
                 subject: Some("easynet:///r/test/user/alice".into()),
                 format: OutputFormat::Json,
             })
@@ -882,7 +884,7 @@ mod tests {
         assert_eq!(body["limit"], 25);
         assert_eq!(
             body["filter"]["ability_ura"],
-            "easynet:///r/test/ability/device.callee.fs.read"
+            "easynet:///r/test/ability/system-agent.callee.locomotion.fs.read"
         );
         assert_eq!(
             body["filter"]["caller_ura"],
@@ -890,7 +892,7 @@ mod tests {
         );
         assert_eq!(
             body["filter"]["callee_ura"],
-            "easynet:///r/test/device/callee"
+            "easynet:///r/test/agent/device.callee.locomotion"
         );
         assert_eq!(
             body["filter"]["subject_ura"],
@@ -994,9 +996,9 @@ mod tests {
                 "trace_id": "trace-1",
                 "span_id": "span-1",
                 "caller_ura": "easynet:///r/test/device/caller",
-                "callee_ura": "easynet:///r/test/device/callee",
+                "callee_ura": "easynet:///r/test/agent/device.callee.locomotion",
                 "subject_ura": "easynet:///r/test/resource/device.callee/item",
-                "ability_ura": "easynet:///r/test/ability/device.callee.fs.read",
+                "ability_ura": "easynet:///r/test/ability/system-agent.callee.locomotion.fs.read",
                 "ability_name": "fs.read",
                 "state": "cancelled",
                 "started_unix_ms": 1_700_000_000_000_i64,
@@ -1192,10 +1194,12 @@ mod tests {
         let body = InvocationHistoryListQuery::from_list_args(&ListArgs {
             limit: 25,
             state: Some("completed".into()),
-            ability_ura: Some("easynet:///r/test/ability/device.callee.fs.read".into()),
+            ability_ura: Some(
+                "easynet:///r/test/ability/system-agent.callee.locomotion.fs.read".into(),
+            ),
             caller: Some("easynet:///r/test/device/caller".into()),
             callee: None,
-            agent_ura: Some("easynet:///r/test/device/callee".into()),
+            agent_ura: Some("easynet:///r/test/agent/device.callee.locomotion".into()),
             subject: Some("easynet:///r/test/user/alice".into()),
             format: OutputFormat::Json,
         })
@@ -1205,7 +1209,7 @@ mod tests {
         assert_eq!(body["limit"], 25);
         assert_eq!(
             body["filter"]["ability_ura"],
-            "easynet:///r/test/ability/device.callee.fs.read"
+            "easynet:///r/test/ability/system-agent.callee.locomotion.fs.read"
         );
         assert_eq!(
             body["filter"]["caller_ura"],
@@ -1213,7 +1217,7 @@ mod tests {
         );
         assert_eq!(
             body["filter"]["callee_ura"],
-            "easynet:///r/test/device/callee"
+            "easynet:///r/test/agent/device.callee.locomotion"
         );
         assert_eq!(
             body["filter"]["subject_ura"],
@@ -1272,9 +1276,9 @@ mod tests {
             .invocation_ura("easynet:///r/test/resource/alice.invocations/i-1")
             .request_id("req-1")
             .caller_ura("easynet:///r/test/device/caller")
-            .callee_ura("easynet:///r/test/device/callee")
-            .subject_ura("easynet:///r/test/device/callee")
-            .ability_ura("easynet:///r/test/ability/device.callee.fs.read")
+            .callee_ura("easynet:///r/test/agent/device.callee.locomotion")
+            .subject_ura("easynet:///r/test/resource/user.alice/document/report")
+            .ability_ura("easynet:///r/test/ability/system-agent.callee.locomotion.fs.read")
             .ability_name(ability)
             .state(state)
             .started_unix_ms(1_700_000_000_000_i64)

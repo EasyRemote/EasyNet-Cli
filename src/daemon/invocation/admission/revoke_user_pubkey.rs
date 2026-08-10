@@ -150,7 +150,7 @@ fn decode_revoke_args(arguments: &[u8]) -> Result<RevokeArgs, Status> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole, TrustedAgent};
     use crate::daemon::trust::cell::SharedTrustAnchor;
     use base64::prelude::*;
     use serde_json::json;
@@ -176,7 +176,7 @@ mod tests {
             .append_agent(TrustedAgent {
                 agent_ura: "easynet:///r/realm/user/alice".to_string(),
                 public_key_b64: pubkey.clone(),
-                role: TrustedAgentRole::User,
+                role: TrustAnchorRole::User,
                 added_at_unix_ms: 1_714_000_000_000,
                 origin_realm: None,
                 hub_endpoint: None,

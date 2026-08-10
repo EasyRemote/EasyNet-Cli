@@ -38,8 +38,10 @@ mod backpressure;
 #[cfg(feature = "axon-pb")]
 use self::backpressure::{bidi_callback_backpressure_frame, stream_callback_backpressure_event};
 #[cfg(feature = "axon-pb")]
+use crate::daemon::ability::AbilityCatalogQuery;
+#[cfg(feature = "axon-pb")]
 use crate::daemon::axon_bridge::runtime_descriptor_provider::{
-    DescriptorResolutionError, RuntimeDescriptorResolutionProvider,
+    DescriptorResolutionError, RuntimeDescriptorCatalogReader, RuntimeDescriptorResolutionProvider,
 };
 #[cfg(feature = "axon-pb")]
 use crate::ffi::client::handle::{binding_for_handle, lib_runtime, ClientSessionBinding};
@@ -193,7 +195,7 @@ fn record_invocation_feature_disabled(function: &str) -> i32 {
 /// {
 ///   "caller_ura": "...",
 ///   "callee_ura": "...",
-///   "descriptor_ref": "easynet:///r/acme/ability/device.dev-a.observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+///   "descriptor_ref": "easynet:///r/acme/ability/system-agent.dev-a.runtime-health.observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 ///   "subject_ura": "...",
 ///   "nonce_base64": "<16 bytes, base64>",
 ///   "causal_context": {"form": "none"},
@@ -551,18 +553,26 @@ fn descriptor_resolution_abi_projection(
                 retry: "never",
             },
         ),
-        DescriptorResolutionError::RuntimeOwnerUnavailable(_) => (
-            ERR_PERMISSION_DENIED,
+        DescriptorResolutionError::RuntimeAttachmentUnavailable(_) => (
+            ERR_DAEMON_DOWN,
             ErrorProjection {
-                code: CALLER_SIGNER_UNAVAILABLE_CODE,
-                stage: "caller_identity",
-                retry: "never",
+                code: "RUNTIME_OFFLINE",
+                stage: "attachment",
+                retry: "safe",
             },
         ),
         DescriptorResolutionError::OwnerOffline(_) => (
             ERR_DAEMON_DOWN,
             ErrorProjection {
                 code: "DESCRIPTOR_OWNER_OFFLINE",
+                stage: "routing",
+                retry: "safe",
+            },
+        ),
+        DescriptorResolutionError::CatalogUnavailable(_) => (
+            ERR_DAEMON_DOWN,
+            ErrorProjection {
+                code: "PROVIDER_UNAVAILABLE",
                 stage: "routing",
                 retry: "safe",
             },
@@ -578,7 +588,15 @@ fn descriptor_resolution_abi_projection(
         DescriptorResolutionError::CallModeUnsupported(_) => (
             ERR_NOT_FOUND,
             ErrorProjection {
-                code: "DESCRIPTOR_CALL_MODE_UNSUPPORTED",
+                code: "DESCRIPTOR_MODE_UNSUPPORTED",
+                stage: "routing",
+                retry: "never",
+            },
+        ),
+        DescriptorResolutionError::DescriptorVersionAmbiguous(_) => (
+            ERR_INVALID_ARG,
+            ErrorProjection {
+                code: "VERSION_MISMATCH",
                 stage: "routing",
                 retry: "never",
             },
@@ -1767,9 +1785,11 @@ fn runtime_diagnostics_json(
 fn runtime_descriptor_catalog_json(
     session: &crate::ffi::client::handle::ClientSession,
 ) -> serde_json::Value {
-    RuntimeDescriptorResolutionProvider::diagnostics_catalog_json(runtime_owner_ura_from_session(
-        session,
-    ))
+    let catalog_reader = AttachedDaemonDescriptorCatalogReader::new(session);
+    RuntimeDescriptorResolutionProvider::diagnostics_catalog_json(
+        runtime_owner_ura_from_session(session),
+        &catalog_reader,
+    )
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1806,27 +1826,7 @@ fn runtime_owner_ura_from_discovery(
         .daemon_identity
         .as_ref()
         .ok_or_else(|| "control discovery has no daemon_identity".to_string())?;
-    let realm = identity.realm.trim();
-    if realm.is_empty() {
-        return Err("control discovery daemon_identity.realm is empty".to_string());
-    }
-    match identity.mode.trim() {
-        "hub" => Ok(crate::core::ura::hub_ura(realm)),
-        "device" | "both" => {
-            let node_id = identity
-                .node_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|node_id| !node_id.is_empty())
-                .ok_or_else(|| {
-                    "control discovery device daemon_identity.node_id is empty".to_string()
-                })?;
-            Ok(crate::core::ura::device_ura(realm, node_id))
-        }
-        other => Err(format!(
-            "control discovery daemon_identity.mode {other:?} cannot resolve a runtime owner URA"
-        )),
-    }
+    identity.runtime_owner_ura()
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2096,9 +2096,178 @@ fn runtime_resolve_descriptor_ref_json(
     session: &crate::ffi::client::handle::ClientSession,
     request_json: &str,
 ) -> Result<serde_json::Value, DescriptorResolutionError> {
-    RuntimeDescriptorResolutionProvider::resolve_json(request_json, || {
-        runtime_owner_ura_from_session(session)
-    })
+    let catalog_reader = AttachedDaemonDescriptorCatalogReader::new(session);
+    runtime_resolve_descriptor_ref_json_with_reader(session, request_json, &catalog_reader)
+}
+
+#[cfg(feature = "axon-pb")]
+fn runtime_resolve_descriptor_ref_json_with_reader(
+    session: &crate::ffi::client::handle::ClientSession,
+    request_json: &str,
+    catalog_reader: &dyn RuntimeDescriptorCatalogReader,
+) -> Result<serde_json::Value, DescriptorResolutionError> {
+    RuntimeDescriptorResolutionProvider::resolve_json(
+        request_json,
+        || runtime_owner_ura_from_session(session),
+        catalog_reader,
+    )
+}
+
+#[cfg(feature = "axon-pb")]
+struct AttachedDaemonDescriptorCatalogReader<'a> {
+    session: &'a crate::ffi::client::handle::ClientSession,
+}
+
+#[cfg(feature = "axon-pb")]
+impl<'a> AttachedDaemonDescriptorCatalogReader<'a> {
+    fn new(session: &'a crate::ffi::client::handle::ClientSession) -> Self {
+        Self { session }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+enum AttachedDescriptorCatalogRoute {
+    LocalRuntime {
+        catalog_owner_ura: String,
+    },
+    RemoteRuntime {
+        target: crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget,
+        caller_ura: String,
+    },
+}
+
+#[cfg(feature = "axon-pb")]
+fn attached_descriptor_catalog_route(
+    session: &crate::ffi::client::handle::ClientSession,
+    runtime_owner_ura: &str,
+    catalog_execution_target_ura: &str,
+) -> Result<AttachedDescriptorCatalogRoute, DescriptorResolutionError> {
+    if catalog_execution_target_ura == runtime_owner_ura {
+        let catalog_owner_ura = crate::daemon::ability::catalog::ownership::execution_target_owner_ura_for_public_ability(
+            runtime_owner_ura,
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+        )
+        .map_err(|error| {
+            DescriptorResolutionError::runtime_attachment_unavailable(format!(
+                "project local runtime descriptor catalogue owner: {error}"
+            ))
+        })?;
+        return Ok(AttachedDescriptorCatalogRoute::LocalRuntime { catalog_owner_ura });
+    }
+
+    let target = crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::for_catalogue_read(
+        catalog_execution_target_ura,
+    )
+    .map_err(|error| {
+        DescriptorResolutionError::runtime_attachment_unavailable(format!(
+            "build remote runtime descriptor catalogue target: {error}"
+        ))
+    })?;
+    let caller_ura = RuntimeSessionCallerAuthority::from_session(session)
+        .map_err(DescriptorResolutionError::runtime_attachment_unavailable)?
+        .paired_user_ura
+        .ok_or_else(|| {
+            DescriptorResolutionError::runtime_attachment_unavailable(
+                "remote descriptor catalogue reads require a paired User caller",
+            )
+        })?;
+    Ok(AttachedDescriptorCatalogRoute::RemoteRuntime { target, caller_ura })
+}
+
+#[cfg(feature = "axon-pb")]
+impl RuntimeDescriptorCatalogReader for AttachedDaemonDescriptorCatalogReader<'_> {
+    fn read_catalog(
+        &self,
+        runtime_owner_ura: &str,
+        query: &AbilityCatalogQuery,
+    ) -> Result<serde_json::Value, DescriptorResolutionError> {
+        let catalog_execution_target_ura = query
+            .owner_ura()
+            .map(
+                crate::daemon::ability::catalog::ownership::execution_host_ura_for_device_sponsored_system_agent,
+            )
+            .transpose()
+            .map_err(|error| {
+                DescriptorResolutionError::runtime_attachment_unavailable(format!(
+                    "project descriptor owner execution host: {error}"
+                ))
+            })?
+            .flatten()
+            .unwrap_or_else(|| runtime_owner_ura.to_string());
+        let route = attached_descriptor_catalog_route(
+            self.session,
+            runtime_owner_ura,
+            &catalog_execution_target_ura,
+        )?;
+        let endpoint = invocation_endpoint_for_session(self.session).map_err(|error| {
+            DescriptorResolutionError::runtime_attachment_unavailable(format!(
+                "descriptor catalog runtime endpoint is unavailable: {error}"
+            ))
+        })?;
+        let timeout = crate::support::platform::timeouts::catalogue_read_transport_guard(0)
+            .map_err(DescriptorResolutionError::catalog_unavailable)?;
+        match route {
+            AttachedDescriptorCatalogRoute::LocalRuntime { catalog_owner_ura } => {
+                crate::support::platform::local_daemon_grpc::invoke_attached_daemon_system_ability_targeted_root_timeout(
+                    endpoint,
+                    crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+                    query.to_request_json(),
+                    &catalog_owner_ura,
+                    &catalog_execution_target_ura,
+                    timeout,
+                )
+                .map_err(descriptor_catalog_read_error)
+            }
+            AttachedDescriptorCatalogRoute::RemoteRuntime { target, caller_ura } => {
+                let request = crate::daemon::invocation::routing::remote_invoke::RemoteCatalogueReadIssuer::catalogue_read_plan(
+                    &target,
+                    caller_ura.clone(),
+                    query.to_request_json(),
+                    timeout,
+                )
+                .and_then(|plan| plan.into_request())
+                .map_err(|error| {
+                    DescriptorResolutionError::catalog_unavailable(format!(
+                        "build signed descriptor catalogue read: {error}"
+                    ))
+                })?;
+                let signer = crate::daemon::invocation::routing::remote_invoke::load_remote_invocation_caller_signer(
+                    &caller_ura,
+                )
+                .map_err(|error| {
+                    DescriptorResolutionError::runtime_attachment_unavailable(format!(
+                        "load paired User descriptor catalogue signer: {error}"
+                    ))
+                })?;
+                crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_with_signer_at_endpoint(
+                    request,
+                    signer,
+                    endpoint,
+                )
+                .map_err(descriptor_catalog_read_error)
+            }
+        }
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn descriptor_catalog_read_error(error: anyhow::Error) -> DescriptorResolutionError {
+    use crate::support::platform::local_invoke::{
+        classify_invoke_failure, LocalInvokeFailureClass,
+    };
+
+    match classify_invoke_failure(&error) {
+        LocalInvokeFailureClass::DaemonOffline => {
+            DescriptorResolutionError::runtime_attachment_unavailable(format!(
+                "descriptor catalog runtime is offline: {error:#}"
+            ))
+        }
+        LocalInvokeFailureClass::AbilityUnregistered | LocalInvokeFailureClass::Failed => {
+            DescriptorResolutionError::catalog_unavailable(format!(
+                "read committed runtime descriptor catalog: {error:#}"
+            ))
+        }
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -5144,10 +5313,10 @@ impl InvocationJson {
             .as_object()
             .ok_or(InvocationJsonError::ExpectedObject)?;
 
-        let caller_ura = required_string(obj, "caller_ura")?;
-        let callee_ura = required_string(obj, "callee_ura")?;
+        let caller_ura = required_exact_string(obj, "caller_ura")?;
+        let callee_ura = required_exact_string(obj, "callee_ura")?;
         let descriptor_ref = required_string(obj, "descriptor_ref")?;
-        let subject_ura = required_string(obj, "subject_ura")?;
+        let subject_ura = required_exact_string(obj, "subject_ura")?;
         let nonce = decode_nonce(required_string(obj, "nonce_base64")?)?;
         let causal_context = parse_causal_context(
             obj.get("causal_context")
@@ -5248,6 +5417,8 @@ enum InvocationJsonError {
     InvalidString(&'static str),
     #[error("field `{field}` must be a canonical URA: {reason}")]
     InvalidUra { field: &'static str, reason: String },
+    #[error("field `{field}` has invalid invocation role: {reason}")]
+    InvalidInvocationRole { field: &'static str, reason: String },
     #[error("descriptor_ref is not a public invocation descriptor: {0}")]
     InvalidDescriptorRef(String),
     #[error(
@@ -5828,6 +5999,22 @@ fn required_string(
 }
 
 #[cfg(feature = "axon-pb")]
+fn required_exact_string(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    field: &'static str,
+) -> Result<String, InvocationJsonError> {
+    let value = obj
+        .get(field)
+        .ok_or(InvocationJsonError::MissingField(field))?
+        .as_str()
+        .ok_or(InvocationJsonError::InvalidString(field))?;
+    if value.is_empty() {
+        return Err(InvocationJsonError::InvalidString(field));
+    }
+    Ok(value.to_string())
+}
+
+#[cfg(feature = "axon-pb")]
 fn optional_string(
     obj: &serde_json::Map<String, serde_json::Value>,
     field: &'static str,
@@ -5926,9 +6113,9 @@ fn validate_public_invocation_tuple(
     subject_ura: &str,
     metadata: &std::collections::HashMap<String, String>,
 ) -> Result<(), InvocationJsonError> {
-    validate_public_tuple_ura("caller_ura", caller_ura)?;
-    validate_public_tuple_ura("callee_ura", callee_ura)?;
-    validate_public_tuple_ura("subject_ura", subject_ura)?;
+    validate_public_invocation_caller_ura(caller_ura, descriptor_ref)?;
+    validate_public_invocation_callee_ura(callee_ura)?;
+    validate_public_invocation_subject_ura(subject_ura)?;
     validate_public_invocation_descriptor_ref(descriptor_ref)?;
     validate_public_authority_binding(caller_ura, callee_ura, subject_ura, metadata)
 }
@@ -5941,9 +6128,9 @@ fn validate_governance_read_tuple(
     subject_ura: &str,
     metadata: &std::collections::HashMap<String, String>,
 ) -> Result<(), InvocationJsonError> {
-    validate_public_tuple_ura("caller_ura", caller_ura)?;
-    validate_public_tuple_ura("callee_ura", callee_ura)?;
-    validate_public_tuple_ura("subject_ura", subject_ura)?;
+    validate_public_invocation_caller_ura(caller_ura, descriptor_ref)?;
+    validate_public_invocation_callee_ura(callee_ura)?;
+    validate_public_invocation_subject_ura(subject_ura)?;
     let public_ability =
         crate::daemon::ability::public_route_ability_from_descriptor_ref(descriptor_ref)
             .map_err(|error| InvocationJsonError::InvalidDescriptorRef(error.to_string()))?;
@@ -5975,7 +6162,110 @@ fn validate_public_invocation_descriptor_ref(
 }
 
 #[cfg(feature = "axon-pb")]
-fn validate_public_tuple_ura(field: &'static str, value: &str) -> Result<(), InvocationJsonError> {
+fn validate_public_invocation_caller_ura(
+    value: &str,
+    descriptor_ref: &str,
+) -> Result<(), InvocationJsonError> {
+    validate_public_tuple_ura("caller_ura", value)?;
+    let public_ability =
+        crate::daemon::ability::public_route_ability_from_descriptor_ref(descriptor_ref)
+            .map_err(|error| InvocationJsonError::InvalidDescriptorRef(error.to_string()))?;
+    match crate::daemon::invocation::admission::device_caller::classify_public_invocation_caller(
+        value,
+        &public_ability,
+    ) {
+        Ok(_) => Ok(()),
+        Err(
+            crate::daemon::invocation::admission::device_caller::DeviceCallerAdmissionError::DeviceCallerNotAllowed {
+                public_ability,
+            },
+        ) => Err(InvocationJsonError::InvalidInvocationRole {
+                field: "caller_ura",
+                reason: format!(
+                    "Device caller is restricted to bootstrap, pairing, federation-publication custody, and session-control abilities; ordinary ability `{public_ability}` must be invoked by User, Agent, Authority, or a device-sponsored SystemAgent"
+                ),
+            }),
+        Err(
+            crate::daemon::invocation::admission::device_caller::DeviceCallerAdmissionError::NonActorCaller {
+                kind,
+            },
+        ) => match kind {
+            crate::core::ura::URAKind::Ability => Err(InvocationJsonError::InvalidInvocationRole {
+                field: "caller_ura",
+                reason: "caller_ura must be an actor identity, not an Ability URA".to_string(),
+            }),
+            crate::core::ura::URAKind::Resource => Err(InvocationJsonError::InvalidInvocationRole {
+                field: "caller_ura",
+                reason: "caller_ura must be an actor identity, not a Resource URA".to_string(),
+            }),
+            crate::core::ura::URAKind::Unknown => Err(InvocationJsonError::InvalidInvocationRole {
+                field: "caller_ura",
+                reason: "caller_ura has unknown URA role".to_string(),
+            }),
+            other => Err(InvocationJsonError::InvalidInvocationRole {
+                field: "caller_ura",
+                reason: format!("caller_ura has unsupported actor role {other:?}"),
+            }),
+        },
+        Err(
+            crate::daemon::invocation::admission::device_caller::DeviceCallerAdmissionError::InvalidCallerUra(
+                message,
+            ),
+        ) => Err(InvocationJsonError::InvalidUra {
+            field: "caller_ura",
+            reason: message,
+        }),
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn validate_public_invocation_callee_ura(value: &str) -> Result<(), InvocationJsonError> {
+    let parsed = validate_public_tuple_ura("callee_ura", value)?;
+    match parsed.kind {
+        crate::core::ura::URAKind::Agent | crate::core::ura::URAKind::Authority => Ok(()),
+        crate::core::ura::URAKind::Device => Err(InvocationJsonError::InvalidInvocationRole {
+            field: "callee_ura",
+            reason:
+                "device-native callees must be device-sponsored SystemAgent URAs, not Device URAs"
+                    .to_string(),
+        }),
+        crate::core::ura::URAKind::User => Err(InvocationJsonError::InvalidInvocationRole {
+            field: "callee_ura",
+            reason:
+                "callee_ura must advertise AbilityDescriptors; User is a principal, not a callee"
+                    .to_string(),
+        }),
+        crate::core::ura::URAKind::Ability => Err(InvocationJsonError::InvalidInvocationRole {
+            field: "callee_ura",
+            reason: "callee_ura must be an owner identity, not an Ability URA".to_string(),
+        }),
+        crate::core::ura::URAKind::Resource => Err(InvocationJsonError::InvalidInvocationRole {
+            field: "callee_ura",
+            reason: "callee_ura must be an owner identity, not a Resource URA".to_string(),
+        }),
+        crate::core::ura::URAKind::Unknown => Err(InvocationJsonError::InvalidInvocationRole {
+            field: "callee_ura",
+            reason: "callee_ura has unknown URA role".to_string(),
+        }),
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+fn validate_public_invocation_subject_ura(value: &str) -> Result<(), InvocationJsonError> {
+    validate_public_tuple_ura("subject_ura", value).map(|_| ())
+}
+
+#[cfg(feature = "axon-pb")]
+fn validate_public_tuple_ura(
+    field: &'static str,
+    value: &str,
+) -> Result<crate::core::ura::ParsedURA, InvocationJsonError> {
+    if value.trim() != value {
+        return Err(InvocationJsonError::InvalidUra {
+            field,
+            reason: "must not contain surrounding whitespace".to_string(),
+        });
+    }
     if crate::core::identity::contains_all_zero_principal_placeholder(value) {
         return Err(InvocationJsonError::AllZeroPrincipal(field));
     }
@@ -5984,12 +6274,10 @@ fn validate_public_tuple_ura(field: &'static str, value: &str) -> Result<(), Inv
     {
         return Err(InvocationJsonError::NoncanonicalSessionSubject(field));
     }
-    crate::core::ura::parse_ura(value.trim())
-        .map(|_| ())
-        .map_err(|error| InvocationJsonError::InvalidUra {
-            field,
-            reason: error.to_string(),
-        })
+    crate::core::ura::parse_ura(value).map_err(|error| InvocationJsonError::InvalidUra {
+        field,
+        reason: error.to_string(),
+    })
 }
 
 #[cfg(feature = "axon-pb")]
@@ -6046,8 +6334,8 @@ fn validate_public_authority_binding(
             }
             if !crate::daemon::invocation::admission::authority_metadata::session_authority_admits_subject(&payload, subject_ura) {
                 return Err(InvocationJsonError::AuthoritySubjectMismatch(format!(
-                    "session subject `{}` owned by `{}` does not admit invocation subject `{subject_ura}`",
-                    payload.subject_ura, payload.session_owner_user_id
+                    "session subject `{}` does not exactly match invocation subject `{subject_ura}`",
+                    payload.subject_ura
                 )));
             }
             if !crate::daemon::invocation::admission::authority_metadata::authority_audience_admits(&payload.audience, callee_ura) {
@@ -6703,35 +6991,35 @@ fn bidi_down_frame_json(
     let mac_base64 = base64::engine::general_purpose::STANDARD.encode(&frame.mac);
     match frame.payload {
         Some(Payload::Receipt(receipt)) => {
-            let state = axon_sdk::invocation::InvocationState::try_from(receipt.state)
-                .map_err(|error| {
+            let state = axon_sdk::invocation::InvocationState::try_from(receipt.state).map_err(
+                |error| {
                     CallbackFrameProjectionError::protocol(format!(
                         "bidi receipt state is invalid: {error}"
                     ))
-                })?;
-            let (summary, is_admission, is_terminal) = if state
-                == axon_sdk::invocation::InvocationState::Admitted
-            {
-                (
-                    verifier
-                        .verify_admission(receipt)
-                        .map_err(CallbackFrameProjectionError::receipt_verification)?,
-                    true,
-                    false,
-                )
-            } else if state.is_terminal() {
-                (
-                    verifier
-                        .verify_terminal(receipt)
-                        .map_err(CallbackFrameProjectionError::receipt_verification)?,
-                    false,
-                    true,
-                )
-            } else {
-                return Err(CallbackFrameProjectionError::protocol(
-                    "bidi receipt is neither admission nor terminal checkpoint",
-                ));
-            };
+                },
+            )?;
+            let (summary, is_admission, is_terminal) =
+                if state == axon_sdk::invocation::InvocationState::Admitted {
+                    (
+                        verifier
+                            .verify_admission(receipt)
+                            .map_err(CallbackFrameProjectionError::receipt_verification)?,
+                        true,
+                        false,
+                    )
+                } else if state.is_terminal() {
+                    (
+                        verifier
+                            .verify_terminal(receipt)
+                            .map_err(CallbackFrameProjectionError::receipt_verification)?,
+                        false,
+                        true,
+                    )
+                } else {
+                    return Err(CallbackFrameProjectionError::protocol(
+                        "bidi receipt is neither admission nor terminal checkpoint",
+                    ));
+                };
             let lifecycle = if is_terminal {
                 CallbackFrameLifecycle::StopAfterFrame
             } else {
@@ -6926,6 +7214,67 @@ mod tests {
         Arc, Barrier,
     };
 
+    struct TestCommittedCatalogReader {
+        entries: Vec<serde_json::Value>,
+    }
+
+    impl TestCommittedCatalogReader {
+        fn new(entries: Vec<serde_json::Value>) -> Self {
+            Self { entries }
+        }
+    }
+
+    impl RuntimeDescriptorCatalogReader for TestCommittedCatalogReader {
+        fn read_catalog(
+            &self,
+            _runtime_owner_ura: &str,
+            query: &AbilityCatalogQuery,
+        ) -> Result<serde_json::Value, DescriptorResolutionError> {
+            let abilities = self
+                .entries
+                .iter()
+                .filter(|entry| {
+                    query.owner_ura().is_none_or(|owner_ura| {
+                        entry.get("owner_ura").and_then(serde_json::Value::as_str)
+                            == Some(owner_ura)
+                    }) && query.ability_ura().is_none_or(|ability_ura| {
+                        entry.get("ability_ura").and_then(serde_json::Value::as_str)
+                            == Some(ability_ura)
+                    }) && query.descriptor_version().is_none_or(|version| {
+                        entry.get("version").and_then(serde_json::Value::as_str) == Some(version)
+                    })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            Ok(serde_json::json!({ "abilities": abilities }))
+        }
+    }
+
+    fn system_catalog_reader(owner_ura: &str) -> TestCommittedCatalogReader {
+        TestCommittedCatalogReader::new(
+            RuntimeDescriptorResolutionProvider::system_catalog_entries_for_test(owner_ura)
+                .expect("canonical system catalog entries"),
+        )
+    }
+
+    fn system_agent_callee_for(device_ura: &str, public_ability: &str) -> String {
+        let parsed = crate::core::ura::parse_ura(device_ura).expect("fixture Device URA");
+        let device_id = parsed.device_id().expect("fixture Device id");
+        let owner = crate::daemon::ability::catalog::ownership::device_sponsored_system_agent_owner_for_public_ability(
+            public_ability,
+        )
+        .unwrap_or_else(|| panic!("{public_ability} must have a declared SystemAgent owner"));
+        crate::core::ura::device_agent_ura(&parsed.realm, device_id, owner.system_agent_id())
+    }
+
+    fn system_ability_ura_for(device_ura: &str, public_ability: &str) -> String {
+        crate::core::ura::owner_ability_ura(
+            &system_agent_callee_for(device_ura, public_ability),
+            public_ability,
+        )
+        .expect("fixture SystemAgent ability URA")
+    }
+
     unsafe extern "C" fn ignore_stream_chunk(_: *mut c_void, _: *const c_char) {}
     unsafe extern "C" fn ignore_bidi_frame(_: *mut c_void, _: *const c_char) {}
 
@@ -7072,15 +7421,27 @@ mod tests {
         )
     }
 
+    fn test_device_ura() -> &'static str {
+        "easynet:///r/acme/device/dev-a"
+    }
+
+    fn test_user_ura() -> &'static str {
+        "easynet:///r/acme/user/user-alice"
+    }
+
+    fn test_system_agent_callee_ura() -> &'static str {
+        "easynet:///r/acme/agent/device.dev-a.agent-management"
+    }
+
     fn valid_invocation_json() -> CString {
-        let callee_ura = "easynet:///r/acme/device/dev-a";
+        let callee_ura = test_system_agent_callee_ura();
         let descriptor_ref = descriptor_ref(callee_ura, "observe.health", "2.4.0");
         CString::new(
             serde_json::json!({
-                "caller_ura": "easynet:///r/acme/device/dev-a",
+                "caller_ura": test_user_ura(),
                 "callee_ura": callee_ura,
                 "descriptor_ref": descriptor_ref,
-                "subject_ura": "easynet:///r/acme/device/dev-a",
+                "subject_ura": test_device_ura(),
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal_context": {"form": "none"},
                 "args": {"ping": true}
@@ -7156,14 +7517,14 @@ mod tests {
     }
 
     fn valid_bidi_invocation_json() -> CString {
-        let callee_ura = "easynet:///r/acme/device/dev-a";
+        let callee_ura = test_system_agent_callee_ura();
         let descriptor_ref = descriptor_ref(callee_ura, "device.pty.attach", "2.4.0");
         CString::new(
             serde_json::json!({
-                "caller_ura": "easynet:///r/acme/device/dev-a",
+                "caller_ura": test_user_ura(),
                 "callee_ura": callee_ura,
                 "descriptor_ref": descriptor_ref,
-                "subject_ura": "easynet:///r/acme/device/dev-a",
+                "subject_ura": test_device_ura(),
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal_context": {"form": "none"},
                 "args": {"session_id": "pty-1"},
@@ -7187,15 +7548,17 @@ mod tests {
 
     #[test]
     fn parse_invocation_json_requires_complete_axiom_fields() {
+        let callee_ura = test_system_agent_callee_ura();
         let err = InvocationJson::parse(
-            r#"{
-                "caller_ura": "easynet:///r/acme/device/dev-a",
-                "callee_ura": "easynet:///r/acme/device/dev-a",
-                "descriptor_ref": "easynet:///r/acme/ability/device.dev-a.observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
-                "subject_ura": "easynet:///r/acme/device/dev-a",
+            &serde_json::json!({
+                "caller_ura": test_user_ura(),
+                "callee_ura": callee_ura,
+                "descriptor_ref": descriptor_ref(callee_ura, "observe.health", "2.4.0"),
+                "subject_ura": test_device_ura(),
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "args": {}
-            }"#,
+            })
+            .to_string(),
         )
         .unwrap_err();
         assert!(
@@ -7218,8 +7581,127 @@ mod tests {
     }
 
     #[test]
+    fn parse_invocation_json_rejects_non_actor_caller_slots_before_daemon_io() {
+        for caller_ura in [
+            "easynet:///r/acme/ability/system-agent.dev-a.agent-management.observe.health",
+            "easynet:///r/acme/resource/device.dev-a/session/session-1",
+        ] {
+            let err = InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
+                "caller_ura": caller_ura
+            })))
+            .expect_err("non-actor caller slot must fail at public FFI ingress");
+
+            assert!(
+                matches!(
+                    &err,
+                    InvocationJsonError::InvalidInvocationRole {
+                        field: "caller_ura",
+                        ..
+                    }
+                ),
+                "unexpected caller slot rejection for {caller_ura}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_invocation_json_rejects_whitespace_padded_tuple_uras_before_daemon_io() {
+        for (field, value) in [
+            ("caller_ura", format!(" {}", test_user_ura())),
+            ("callee_ura", format!("{} ", test_system_agent_callee_ura())),
+            ("subject_ura", format!("\n{}", test_device_ura())),
+        ] {
+            let err = InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
+                field: value
+            })))
+            .expect_err("public tuple URAs must be exact canonical bytes");
+
+            assert!(
+                matches!(
+                    &err,
+                    InvocationJsonError::InvalidUra {
+                        field: rejected_field,
+                        ..
+                    } if *rejected_field == field
+                ),
+                "unexpected tuple URA canonical rejection for {field}: {err}"
+            );
+            assert!(
+                err.to_string().contains("surrounding whitespace"),
+                "error should name the exact canonicality violation: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_invocation_json_rejects_device_callee_before_daemon_io() {
+        let err = InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
+            "callee_ura": test_device_ura()
+        })))
+        .expect_err("Device callee must fail at public FFI ingress");
+
+        assert!(
+            matches!(
+                &err,
+                InvocationJsonError::InvalidInvocationRole {
+                    field: "callee_ura",
+                    ..
+                }
+            ),
+            "unexpected Device callee rejection: {err}"
+        );
+        assert!(
+            err.to_string().contains("SystemAgent"),
+            "Device callee rejection should explain the SystemAgent boundary: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_invocation_json_rejects_device_caller_for_ordinary_ability_before_daemon_io() {
+        let callee_ura = test_system_agent_callee_ura();
+        let err = InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
+            "caller_ura": test_device_ura(),
+            "descriptor_ref": descriptor_ref(callee_ura, "observe.health", "2.4.0")
+        })))
+        .expect_err("ordinary public ability must reject Device caller");
+
+        assert!(
+            matches!(
+                &err,
+                InvocationJsonError::InvalidInvocationRole {
+                    field: "caller_ura",
+                    ..
+                }
+            ),
+            "unexpected Device caller rejection: {err}"
+        );
+        assert!(
+            err.to_string().contains("SystemAgent")
+                && err
+                    .to_string()
+                    .contains("ordinary ability `observe.health`"),
+            "Device caller rejection should explain the actor boundary: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_invocation_json_allows_device_caller_for_explicit_session_control() {
+        let callee_ura = test_system_agent_callee_ura();
+        InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
+            "caller_ura": test_device_ura(),
+            "descriptor_ref": descriptor_ref(
+                callee_ura,
+                crate::daemon::ability::conformance::ABILITY_SESSION_OPEN,
+                "2.4.0"
+            ),
+            "args": {"session_id": "session-1"}
+        })))
+        .expect("explicit session-control ability admits Device caller at public ingress");
+    }
+
+    #[test]
     fn parse_invocation_json_rejects_receipt_history_descriptor_before_daemon_io() {
-        let callee_ura = "easynet:///r/acme/device/dev-a";
+        let callee_ura = test_system_agent_callee_ura();
         let history_descriptor_ref = history_descriptor_ref(callee_ura);
 
         let err = InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
@@ -7241,7 +7723,7 @@ mod tests {
 
     #[test]
     fn parse_governance_read_accepts_receipt_history_descriptor() {
-        let callee_ura = "easynet:///r/acme/device/dev-a";
+        let callee_ura = test_system_agent_callee_ura();
         let history_descriptor_ref = history_descriptor_ref(callee_ura);
 
         let parsed = InvocationJson::parse_with_policy(
@@ -7292,13 +7774,13 @@ mod tests {
     #[test]
     fn parse_invocation_json_rejects_session_authority_subject_mismatch_before_daemon_io() {
         let session_authority = signed_authority_metadata_value(serde_json::json!({
-            "issuer_ura": "easynet:///r/acme/device/dev-a",
+            "issuer_ura": test_user_ura(),
             "session_id": "session-1",
             "session_owner_user_id": "alice",
             "creator_principal_id": "easynet:///r/acme/device/dev-a",
-            "callee_ura": "easynet:///r/acme/device/dev-a",
+            "callee_ura": test_system_agent_callee_ura(),
             "subject_ura": "easynet:///r/acme/resource/user.alice/session/session-1",
-            "audience": "easynet:///r/acme/device/dev-a",
+            "audience": test_system_agent_callee_ura(),
             "scopes": ["invocation.history.list"],
             "allowed_actions": ["invoke"],
             "allowed_followup_abilities": ["invocation.history.list"],
@@ -7339,12 +7821,12 @@ mod tests {
     /// Canonical URA invocation JSON for tests that go past parse into
     /// `into_daemon_invocation`.
     fn canonical_invocation_json(extra: serde_json::Value) -> String {
-        let callee_ura = "easynet:///r/acme/device/dev-a";
+        let callee_ura = test_system_agent_callee_ura();
         let mut obj = serde_json::json!({
-            "caller_ura": "easynet:///r/acme/device/dev-a",
+            "caller_ura": test_user_ura(),
             "callee_ura": callee_ura,
             "descriptor_ref": descriptor_ref(callee_ura, "observe.health", "2.4.0"),
-            "subject_ura": "easynet:///r/acme/device/dev-a",
+            "subject_ura": test_device_ura(),
             "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
             "causal_context": {"form": "none"},
             "args": {}
@@ -7467,11 +7949,18 @@ mod tests {
                     .expect("test fixture must provision the runtime owner explicitly");
             let runtime_public_key_b64 =
                 base64::engine::general_purpose::STANDARD.encode(runtime_public_key.to_bytes());
-            let invocation =
-                InvocationJson::parse(&canonical_invocation_json(serde_json::json!({})))
-                    .expect("parse complete invocation")
-                    .into_daemon_invocation()
-                    .expect("build daemon invocation");
+            let invocation = InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
+                "caller_ura": test_device_ura(),
+                "descriptor_ref": descriptor_ref(
+                    test_system_agent_callee_ura(),
+                    crate::daemon::ability::conformance::ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
+                    "2.4.0"
+                ),
+                "subject_ura": test_device_ura(),
+            })))
+            .expect("parse complete invocation")
+            .into_daemon_invocation()
+            .expect("build daemon invocation");
             let canonical_bytes = invocation
                 .clone()
                 .into_draft()
@@ -7624,7 +8113,13 @@ mod tests {
             None,
         );
         let invocation = InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
-            "caller_ura": "easynet:///r/acme/device/dev-b"
+            "caller_ura": "easynet:///r/acme/device/dev-b",
+            "descriptor_ref": descriptor_ref(
+                test_system_agent_callee_ura(),
+                crate::daemon::ability::conformance::ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
+                "2.4.0"
+            ),
+            "subject_ura": "easynet:///r/acme/device/dev-b"
         })))
         .expect("parse complete invocation")
         .into_daemon_invocation()
@@ -7680,6 +8175,12 @@ mod tests {
         );
         let invocation = InvocationJson::parse(&canonical_invocation_json(serde_json::json!({
             "caller_ura": "easynet:///r/acme/device/dev-b",
+            "descriptor_ref": descriptor_ref(
+                test_system_agent_callee_ura(),
+                crate::daemon::ability::conformance::ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
+                "2.4.0"
+            ),
+            "subject_ura": "easynet:///r/acme/device/dev-b",
             "caller_signature": {
                 "algorithm": "ed25519",
                 "signature_base64": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBw==",
@@ -7765,8 +8266,8 @@ mod tests {
             make_ability, AbilityCallModes, AbilityOptions, AxonError, CallMode, CausalContext,
         };
 
-        let callee_ura = "easynet:///r/acme/device/dev-a";
-        let subject_ura = "easynet:///r/acme/device/dev-a";
+        let callee_ura = "easynet:///r/acme/agent/device.dev-a.locomotion";
+        let subject_ura = "easynet:///r/acme/resource/user.alice/ffi-result";
         let ability = match terminal_state {
             axon_sdk::invocation::InvocationState::Completed => "test.ffi.completed",
             axon_sdk::invocation::InvocationState::Cancelled => "test.ffi.cancelled",
@@ -7958,10 +8459,19 @@ mod tests {
                 .is_some_and(|value| !value.is_empty())
         );
         assert_eq!(
-            json["terminal_receipt"]["signer_binding"], json["terminal_receipt"]["callee_binding"],
-            "self-signed receipts expose the effective callee signer"
+            json["terminal_receipt"]["signer_binding"]["ura"], "easynet:///r/acme/device/dev-a",
+            "the sponsoring Device holds receipt-signing custody for its SystemAgent"
         );
-        assert_eq!(json["terminal_receipt"]["host_attestation_base64"], "");
+        assert_ne!(
+            json["terminal_receipt"]["signer_binding"], json["terminal_receipt"]["callee_binding"],
+            "receipt signer custody must not collapse the SystemAgent callee into its Device host"
+        );
+        assert!(
+            json["terminal_receipt"]["host_attestation_base64"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty()),
+            "Device custody for a SystemAgent receipt must carry host attestation"
+        );
         assert_eq!(json["terminal_receipt"]["causal_binding_kind"], "none");
         assert_eq!(json["terminal_receipt"]["causal_binding"]["form"], "none");
         assert_eq!(json["terminal_receipt"]["authority_binding_kind"], "self");
@@ -8133,15 +8643,15 @@ mod tests {
     }
 
     fn set_complete_builder(builder_id: InvocationBuilderId) {
-        let callee_ura = CString::new("easynet:///r/acme/device/dev-a").unwrap();
-        let caller_ura = CString::new("easynet:///r/acme/device/dev-a").unwrap();
+        let callee_ura = CString::new(test_system_agent_callee_ura()).unwrap();
+        let caller_ura = CString::new(test_user_ura()).unwrap();
         let descriptor = CString::new(descriptor_ref(
-            "easynet:///r/acme/device/dev-a",
+            test_system_agent_callee_ura(),
             "observe.health",
             "2.4.0",
         ))
         .unwrap();
-        let subject = CString::new("easynet:///r/acme/device/dev-a").unwrap();
+        let subject = CString::new(test_device_ura()).unwrap();
         let nonce = CString::new("AQIDBAUGBwgJCgsMDQ4PEA==").unwrap();
         let causal = CString::new(serde_json::json!({"form": "none"}).to_string()).unwrap();
         let args = CString::new(serde_json::json!({"probe": true}).to_string()).unwrap();
@@ -8422,18 +8932,11 @@ mod tests {
 
         // Non-positive and non-integer values are typed parse errors.
         for bad in ["0", "-3", "\"45\"", "1.5"] {
-            let raw = format!(
-                r#"{{
-                    "caller_ura": "easynet:///r/acme/device/dev-a",
-                    "callee_ura": "easynet:///r/acme/device/dev-a",
-                    "descriptor_ref": "easynet:///r/acme/ability/device.dev-a.observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
-                    "subject_ura": "easynet:///r/acme/device/dev-a",
-                    "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
-                    "causal_context": {{"form": "none"}},
-                    "args": {{}},
-                    "timeout_seconds": {bad}
-                }}"#
-            );
+            let mut value: serde_json::Value =
+                serde_json::from_str(&canonical_invocation_json(serde_json::json!({})))
+                    .expect("canonical invocation JSON");
+            value["timeout_seconds"] = serde_json::from_str(bad).expect("bad fixture value");
+            let raw = value.to_string();
             let err = InvocationJson::parse(&raw).expect_err("must reject");
             assert!(
                 matches!(err, InvocationJsonError::InvalidTimeoutSeconds),
@@ -8734,6 +9237,11 @@ mod tests {
             let (handle, _session) = alloc(test_session());
             let raw = CString::new(canonical_invocation_json(serde_json::json!({
                 "caller_ura": caller,
+                "descriptor_ref": descriptor_ref(
+                    test_system_agent_callee_ura(),
+                    crate::daemon::ability::conformance::ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
+                    "2.4.0"
+                ),
                 "subject_ura": caller,
                 "args": {"probe": true}
             })))
@@ -8808,6 +9316,11 @@ mod tests {
             let (handle, _session) = alloc(test_session());
             let raw = CString::new(canonical_invocation_json(serde_json::json!({
                 "caller_ura": caller,
+                "descriptor_ref": descriptor_ref(
+                    test_system_agent_callee_ura(),
+                    crate::daemon::ability::conformance::ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
+                    "2.4.0"
+                ),
                 "subject_ura": caller,
                 "args": {"probe": true}
             })))
@@ -9588,16 +10101,18 @@ mod tests {
 
     #[test]
     fn parse_invocation_json_rejects_zero_nonce() {
+        let callee_ura = test_system_agent_callee_ura();
         let err = InvocationJson::parse(
-            r#"{
-                "caller_ura": "easynet:///r/acme/device/dev-a",
-                "callee_ura": "easynet:///r/acme/device/dev-a",
-                "descriptor_ref": "easynet:///r/acme/ability/device.dev-a.observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
-                "subject_ura": "easynet:///r/acme/device/dev-a",
+            &serde_json::json!({
+                "caller_ura": test_user_ura(),
+                "callee_ura": callee_ura,
+                "descriptor_ref": descriptor_ref(callee_ura, "observe.health", "2.4.0"),
+                "subject_ura": test_device_ura(),
                 "nonce_base64": "AAAAAAAAAAAAAAAAAAAAAA==",
                 "causal_context": {"form": "none"},
                 "args": {}
-            }"#,
+            })
+            .to_string(),
         )
         .unwrap_err();
         assert!(
@@ -9608,19 +10123,16 @@ mod tests {
 
     #[test]
     fn parse_invocation_json_supports_raw_payloads() {
-        let spec = InvocationJson::parse(
-            r#"{
-                "caller_ura": "easynet:///r/acme/device/dev-a",
-                "callee_ura": "easynet:///r/acme/device/dev-a",
-                "descriptor_ref": "easynet:///r/acme/ability/device.dev-a.observe.health@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
-                "subject_ura": "easynet:///r/acme/device/dev-a",
-                "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
-                "causal_context": {"form": "none"},
-                "arguments_base64": "aGVsbG8=",
-                "content_type": "text/plain"
-            }"#,
-        )
-        .unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_str(&canonical_invocation_json(serde_json::json!({})))
+                .expect("canonical invocation JSON");
+        value
+            .as_object_mut()
+            .expect("canonical invocation object")
+            .remove("args");
+        value["arguments_base64"] = serde_json::Value::String("aGVsbG8=".to_string());
+        value["content_type"] = serde_json::Value::String("text/plain".to_string());
+        let spec = InvocationJson::parse(&value.to_string()).unwrap();
         assert_eq!(spec.args, b"hello");
         assert_eq!(spec.content_type, "text/plain");
     }
@@ -9631,11 +10143,7 @@ mod tests {
         let spec = InvocationJson::parse(raw.to_str().unwrap()).unwrap();
         assert_eq!(
             spec.descriptor_ref,
-            descriptor_ref(
-                "easynet:///r/acme/device/dev-a",
-                "device.pty.attach",
-                "2.4.0"
-            )
+            descriptor_ref(test_system_agent_callee_ura(), "device.pty.attach", "2.4.0")
         );
         assert_eq!(spec.metadata["x-easynet-test-producer"], "producer");
         let signature = spec.caller_signature.expect("caller signature required");
@@ -9871,7 +10379,7 @@ mod tests {
 
     #[cfg(feature = "axon-pb")]
     #[test]
-    fn runtime_diagnostics_catalog_includes_device_meta_descriptor_ref() {
+    fn runtime_diagnostics_catalog_reports_attached_daemon_unavailability() {
         let dir = tempfile::tempdir().expect("tempdir");
         let control_path = dir.path().join("control.json");
         let device_ura =
@@ -9903,25 +10411,19 @@ mod tests {
         );
 
         let diagnostics = runtime_diagnostics_json(&session);
-        let entries = diagnostics["descriptor_catalog"]["entries"]
+        let descriptor_catalog = &diagnostics["descriptor_catalog"];
+        assert_eq!(descriptor_catalog["owner_ura"], device_ura);
+        assert_eq!(
+            descriptor_catalog["source"],
+            "runtime_committed_descriptor_catalog"
+        );
+        assert_eq!(
+            descriptor_catalog["entries"].as_array().map(Vec::len),
+            Some(0)
+        );
+        assert!(descriptor_catalog["diagnostics"]
             .as_array()
-            .expect("descriptor catalog entries");
-        let meta = entries
-            .iter()
-            .find(|entry| {
-                entry["owner_ura"] == device_ura
-                    && entry["name"]
-                        == crate::daemon::ability::names::governance::META_LIST_ABILITIES
-                    && entry["call_mode"] == "rpc"
-            })
-            .unwrap_or_else(|| panic!("device meta.list_abilities missing: {entries:?}"));
-
-        let descriptor_ref = meta["descriptor_ref"].as_str().expect("descriptor_ref");
-        assert!(descriptor_ref.starts_with(&format!(
-            "{}/ability/device.386b1258-3c89-494a-90a2-2321c29bf992.meta.list_abilities@",
-            "easynet:///r/localhost"
-        )));
-        assert!(descriptor_ref.ends_with("!read"));
+            .is_some_and(|items| !items.is_empty()));
     }
 
     #[cfg(feature = "axon-pb")]
@@ -9943,15 +10445,14 @@ mod tests {
 
     #[cfg(feature = "axon-pb")]
     #[test]
-    fn runtime_descriptor_resolver_prefers_local_catalog_for_runtime_owner() {
+    fn runtime_descriptor_resolver_uses_explicit_bootstrap_provider_for_runtime_owner() {
         let dir = tempfile::tempdir().expect("tempdir");
         let control_path = dir.path().join("control.json");
         let node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
         let device_ura = crate::core::ura::device_ura("localhost", node_id);
-        let ability_ura = format!(
-            "easynet:///r/localhost/ability/device.{node_id}.{}",
-            crate::daemon::ability::names::resources::META_LIST_RESOURCES
-        );
+        let public_ability = crate::daemon::ability::names::resources::META_LIST_RESOURCES;
+        let callee_ura = system_agent_callee_for(&device_ura, public_ability);
+        let ability_ura = system_ability_ura_for(&device_ura, public_ability);
         crate::daemon::control::discovery::write(
             &control_path,
             &crate::daemon::control::discovery::ControlDiscovery {
@@ -9978,10 +10479,11 @@ mod tests {
             Some(dir.path().join("offline-daemon.sock").display().to_string()),
         );
 
-        let resolved = runtime_resolve_descriptor_ref_json(
+        let reader = system_catalog_reader(&callee_ura);
+        let resolved = runtime_resolve_descriptor_ref_json_with_reader(
             &session,
             &serde_json::json!({
-                "callee_ura": device_ura,
+                "callee_ura": callee_ura,
                 "caller_ura": device_ura,
                 "subject_ura": device_ura,
                 "ability": ability_ura,
@@ -9989,17 +10491,18 @@ mod tests {
                 "provider": "ability_descriptor",
             })
             .to_string(),
+            &reader,
         )
         .expect("local runtime owner catalogue descriptor resolves through explicit provider");
 
         assert_eq!(resolved["ability_ura"], ability_ura);
-        assert_eq!(resolved["owner_ura"], device_ura);
+        assert_eq!(resolved["owner_ura"], callee_ura);
         assert_eq!(
             resolved["name"],
             crate::daemon::ability::names::resources::META_LIST_RESOURCES
         );
         assert_eq!(resolved["call_mode"], "rpc");
-        assert_eq!(resolved["source"], "runtime_local_descriptor_catalog");
+        assert_eq!(resolved["source"], "runtime_ability_descriptor_provider");
         assert!(resolved["descriptor_ref"]
             .as_str()
             .is_some_and(
@@ -10015,6 +10518,10 @@ mod tests {
         let control_path = dir.path().join("control.json");
         let node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
         let device_ura = crate::core::ura::device_ura("localhost", node_id);
+        let callee_ura = system_agent_callee_for(
+            &device_ura,
+            crate::daemon::ability::names::resources::META_LIST_RESOURCES,
+        );
         crate::daemon::control::discovery::write(
             &control_path,
             &crate::daemon::control::discovery::ControlDiscovery {
@@ -10044,7 +10551,7 @@ mod tests {
         let error = runtime_resolve_descriptor_ref_json(
             &session,
             &serde_json::json!({
-                "callee_ura": device_ura,
+                "callee_ura": callee_ura,
                 "caller_ura": device_ura,
                 "subject_ura": device_ura,
                 "ability": crate::daemon::ability::names::resources::META_LIST_RESOURCES,
@@ -10107,6 +10614,14 @@ mod tests {
         let control_path = dir.path().join("control.json");
         let node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
         let device_ura = crate::core::ura::device_ura("localhost", node_id);
+        let callee_ura = crate::core::ura::device_agent_ura(
+            "localhost",
+            node_id,
+            crate::daemon::ability::names::device_control::LOCOMOTION_SYSTEM_AGENT_ID,
+        );
+        let missing_ability_ura =
+            crate::core::ura::owner_ability_ura(&callee_ura, "missing.local.catalog")
+                .expect("missing fixture ability URA");
         crate::daemon::control::discovery::write(
             &control_path,
             &crate::daemon::control::discovery::ControlDiscovery {
@@ -10133,23 +10648,23 @@ mod tests {
             Some(dir.path().join("offline-daemon.sock").display().to_string()),
         );
 
-        let error = runtime_resolve_descriptor_ref_json(
+        let reader = TestCommittedCatalogReader::new(Vec::new());
+        let error = runtime_resolve_descriptor_ref_json_with_reader(
             &session,
             &serde_json::json!({
-                "callee_ura": device_ura,
+                "callee_ura": callee_ura,
                 "caller_ura": device_ura,
                 "subject_ura": device_ura,
-                "ability": format!(
-                    "easynet:///r/localhost/ability/device.{node_id}.missing.local.catalog"
-                ),
+                "ability": missing_ability_ura,
                 "call_mode": "rpc",
             })
             .to_string(),
+            &reader,
         )
-        .expect_err("local runtime owner descriptor miss must not remote probe");
+        .expect_err("committed catalog miss must not remote probe");
 
         let message = error.to_string();
-        assert!(message.contains("descriptor_ref not found in local runtime catalog"));
+        assert!(message.contains("descriptor_ref not found in committed runtime catalog"));
         assert!(!message.contains("offline-daemon.sock"));
         assert!(!message.contains("ROUTE_NEGATIVE"));
     }
@@ -10157,12 +10672,16 @@ mod tests {
     #[cfg(feature = "axon-pb")]
     #[test]
     fn descriptor_catalog_resolution_rejects_matching_row_without_descriptor_ref() {
-        let ability_ura = "easynet:///r/localhost/ability/device.dev-a.observe.health";
+        let ability_ura =
+            "easynet:///r/localhost/ability/system-agent.dev-a.runtime-health.observe.health";
         let entries = vec![serde_json::json!({
             "ability_ura": ability_ura,
-            "owner_ura": "easynet:///r/localhost/device/dev-a",
+            "owner_ura": "easynet:///r/localhost/agent/device.dev-a.runtime-health",
             "name": "observe.health",
-            "call_mode": "rpc"
+            "version": "1.0.0",
+            "descriptor_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "call_mode": "rpc",
+            "admission_action": "read"
         })];
 
         let error = RuntimeDescriptorResolutionProvider::resolve_catalog_entries_for_test(
@@ -10181,24 +10700,6 @@ mod tests {
 
     #[cfg(feature = "axon-pb")]
     #[test]
-    fn descriptor_catalog_dedupe_rejects_schema_incomplete_rows() {
-        let entries = vec![serde_json::json!({
-            "ability_ura": "easynet:///r/localhost/ability/device.dev-a.observe.health",
-            "owner_ura": "easynet:///r/localhost/device/dev-a",
-            "call_mode": "rpc"
-        })];
-
-        let error = RuntimeDescriptorResolutionProvider::dedupe_catalog_entries_for_test(entries)
-            .expect_err("dedupe must not silently drop schema-incomplete descriptor rows");
-
-        assert!(
-            error.contains("missing descriptor_ref before dedupe"),
-            "unexpected descriptor catalog dedupe error: {error}"
-        );
-    }
-
-    #[cfg(feature = "axon-pb")]
-    #[test]
     fn runtime_descriptor_resolver_rebinds_remote_system_action_descriptor_to_callee() {
         let dir = tempfile::tempdir().expect("tempdir");
         let control_path = dir.path().join("control.json");
@@ -10206,10 +10707,9 @@ mod tests {
         let remote_node_id = "remote-runtime-node";
         let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
         let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
-        let ability_ura = format!(
-            "easynet:///r/localhost/ability/device.{remote_node_id}.{}",
-            crate::daemon::ability::names::governance::OBSERVE_HEALTH
-        );
+        let public_ability = crate::daemon::ability::names::governance::OBSERVE_HEALTH;
+        let remote_callee_ura = system_agent_callee_for(&remote_device_ura, public_ability);
+        let ability_ura = system_ability_ura_for(&remote_device_ura, public_ability);
         crate::daemon::control::discovery::write(
             &control_path,
             &crate::daemon::control::discovery::ControlDiscovery {
@@ -10236,27 +10736,34 @@ mod tests {
             Some(dir.path().join("offline-daemon.sock").display().to_string()),
         );
 
-        let resolved = runtime_resolve_descriptor_ref_json(
+        let reader = TestCommittedCatalogReader::new(
+            RuntimeDescriptorResolutionProvider::system_catalog_entries_for_test(
+                &remote_callee_ura,
+            )
+            .expect("remote SystemAgent catalog entries"),
+        );
+        let resolved = runtime_resolve_descriptor_ref_json_with_reader(
             &session,
             &serde_json::json!({
-                "callee_ura": remote_device_ura,
+                "callee_ura": remote_callee_ura,
                 "caller_ura": local_device_ura,
                 "subject_ura": remote_device_ura,
                 "ability": crate::daemon::ability::names::governance::OBSERVE_HEALTH,
                 "call_mode": "rpc",
             })
             .to_string(),
+            &reader,
         )
-        .expect("remote system descriptor resolves without remote probing");
+        .expect("remote system descriptor resolves from committed catalog");
 
         assert_eq!(resolved["ability_ura"], ability_ura);
-        assert_eq!(resolved["owner_ura"], remote_device_ura);
+        assert_eq!(resolved["owner_ura"], remote_callee_ura);
         assert_eq!(
             resolved["name"],
             crate::daemon::ability::names::governance::OBSERVE_HEALTH
         );
         assert_eq!(resolved["call_mode"], "rpc");
-        assert_eq!(resolved["source"], "runtime_remote_descriptor_catalog");
+        assert_eq!(resolved["source"], "runtime_committed_descriptor_catalog");
         assert!(resolved["descriptor_ref"]
             .as_str()
             .is_some_and(
@@ -10274,10 +10781,9 @@ mod tests {
         let remote_node_id = "remote-runtime-node";
         let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
         let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
-        let ability_ura = format!(
-            "easynet:///r/localhost/ability/device.{remote_node_id}.{}",
-            crate::daemon::ability::names::resources::META_LIST_RESOURCES
-        );
+        let public_ability = crate::daemon::ability::names::resources::META_LIST_RESOURCES;
+        let remote_callee_ura = system_agent_callee_for(&remote_device_ura, public_ability);
+        let ability_ura = system_ability_ura_for(&remote_device_ura, public_ability);
         crate::daemon::control::discovery::write(
             &control_path,
             &crate::daemon::control::discovery::ControlDiscovery {
@@ -10304,10 +10810,11 @@ mod tests {
             Some(dir.path().join("offline-daemon.sock").display().to_string()),
         );
 
-        let resolved = runtime_resolve_descriptor_ref_json(
+        let reader = system_catalog_reader(&remote_callee_ura);
+        let resolved = runtime_resolve_descriptor_ref_json_with_reader(
             &session,
             &serde_json::json!({
-                "callee_ura": remote_device_ura,
+                "callee_ura": remote_callee_ura,
                 "caller_ura": local_device_ura,
                 "subject_ura": remote_device_ura,
                 "ability": crate::daemon::ability::names::resources::META_LIST_RESOURCES,
@@ -10315,11 +10822,12 @@ mod tests {
                 "provider": "ability_descriptor",
             })
             .to_string(),
+            &reader,
         )
         .expect("remote resource catalogue descriptor resolves through explicit provider");
 
         assert_eq!(resolved["ability_ura"], ability_ura);
-        assert_eq!(resolved["owner_ura"], remote_device_ura);
+        assert_eq!(resolved["owner_ura"], remote_callee_ura);
         assert_eq!(
             resolved["name"],
             crate::daemon::ability::names::resources::META_LIST_RESOURCES
@@ -10343,6 +10851,14 @@ mod tests {
         let remote_node_id = "remote-runtime-node";
         let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
         let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
+        let remote_callee_ura = crate::core::ura::device_agent_ura(
+            "localhost",
+            remote_node_id,
+            crate::daemon::ability::names::device_control::LOCOMOTION_SYSTEM_AGENT_ID,
+        );
+        let missing_ability_ura =
+            crate::core::ura::owner_ability_ura(&remote_callee_ura, "custom.not.system")
+                .expect("missing remote fixture ability URA");
         crate::daemon::control::discovery::write(
             &control_path,
             &crate::daemon::control::discovery::ControlDiscovery {
@@ -10369,24 +10885,24 @@ mod tests {
             Some(dir.path().join("offline-daemon.sock").display().to_string()),
         );
 
-        let error = runtime_resolve_descriptor_ref_json(
+        let reader = TestCommittedCatalogReader::new(Vec::new());
+        let error = runtime_resolve_descriptor_ref_json_with_reader(
             &session,
             &serde_json::json!({
-                "callee_ura": remote_device_ura,
+                "callee_ura": remote_callee_ura,
                 "caller_ura": "easynet:///r/localhost/user/missing-descriptor-probe-signer",
                 "subject_ura": remote_device_ura,
-                "ability": format!(
-                    "easynet:///r/localhost/ability/device.{remote_node_id}.custom.not.system"
-                ),
+                "ability": missing_ability_ura,
                 "call_mode": "rpc",
             })
             .to_string(),
+            &reader,
         )
-        .expect_err("remote catalog miss must not fall back to a remote descriptor probe");
+        .expect_err("committed catalog miss must not fall back to a remote descriptor probe");
 
         let message = error.to_string();
         assert!(
-            message.contains("descriptor_ref not found in remote runtime catalog"),
+            message.contains("descriptor_ref not found in committed runtime catalog"),
             "unexpected descriptor resolver error: {message}"
         );
         assert!(
@@ -10409,6 +10925,14 @@ mod tests {
         let missing_control_path = dir.path().join("missing-control.json");
         let remote_node_id = "remote-runtime-node";
         let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
+        let remote_callee_ura = crate::core::ura::device_agent_ura(
+            "localhost",
+            remote_node_id,
+            crate::daemon::ability::names::device_control::LOCOMOTION_SYSTEM_AGENT_ID,
+        );
+        let missing_ability_ura =
+            crate::core::ura::owner_ability_ura(&remote_callee_ura, "custom.not.system")
+                .expect("missing remote fixture ability URA");
         let caller_ura = crate::core::ura::device_ura("localhost", "local-runtime-node");
         let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
             missing_control_path.display().to_string(),
@@ -10418,12 +10942,10 @@ mod tests {
         let error = runtime_resolve_descriptor_ref_json(
             &session,
             &serde_json::json!({
-                "callee_ura": remote_device_ura,
+                "callee_ura": remote_callee_ura,
                 "caller_ura": caller_ura,
                 "subject_ura": remote_device_ura,
-                "ability": format!(
-                    "easynet:///r/localhost/ability/device.{remote_node_id}.custom.not.system"
-                ),
+                "ability": missing_ability_ura,
                 "call_mode": "rpc",
             })
             .to_string(),
@@ -10433,17 +10955,12 @@ mod tests {
         );
 
         let message = error.to_string();
-        assert!(
-            message.contains(CALLER_SIGNER_UNAVAILABLE_CODE)
-                && message.contains("descriptor resolution requires a caller signer"),
-            "unexpected descriptor resolver error: {message}"
-        );
+        assert!(message.contains("RUNTIME_OFFLINE"));
         assert!(
             !message.contains("resolve descriptor_ref runtime owner")
-                && !message.contains("control discovery")
                 && !message.contains("keyring")
                 && !message.contains("self-identity"),
-            "runtime owner failure must not expose custody implementation details: {message}"
+            "runtime attachment failure must not expose custody implementation details: {message}"
         );
         assert!(
             !message.contains("offline-daemon.sock"),
@@ -10456,6 +10973,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let missing_control_path = dir.path().join("missing-control.json");
         let remote_device_ura = crate::core::ura::device_ura("localhost", "remote-runtime-node");
+        let public_ability = crate::daemon::ability::names::device_control::FS_READ;
+        let remote_callee_ura = system_agent_callee_for(&remote_device_ura, public_ability);
         let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
             missing_control_path.display().to_string(),
             Some(dir.path().join("offline-daemon.sock").display().to_string()),
@@ -10463,10 +10982,10 @@ mod tests {
         runtime_resolve_descriptor_ref_json(
             &session,
             &serde_json::json!({
-                "callee_ura": remote_device_ura,
+                "callee_ura": remote_callee_ura,
                 "caller_ura": "easynet:///r/localhost/device/local-runtime-node",
                 "subject_ura": remote_device_ura,
-                "ability": "custom.not.system",
+                "ability": public_ability,
                 "call_mode": "rpc",
             })
             .to_string(),
@@ -10479,54 +10998,33 @@ mod tests {
     #[test]
     fn descriptor_resolution_errors_project_canonical_runtime_codes() {
         let not_found = DescriptorResolutionError::DescriptorNotFound(
-            "descriptor_ref not found in local runtime catalog".to_string(),
+            "descriptor_ref not found in committed runtime catalog".to_string(),
         );
         let (abi_code, projection) = descriptor_resolution_abi_projection(&not_found);
         assert_eq!(abi_code, ERR_NOT_FOUND);
         assert_eq!(projection.code, "DESCRIPTOR_NOT_FOUND");
         assert_eq!(projection.stage, "routing");
 
-        let runtime_owner_unavailable = DescriptorResolutionError::RuntimeOwnerUnavailable(
-            format!("{CALLER_SIGNER_UNAVAILABLE_CODE}: descriptor resolution requires a caller signer; load or provision that identity in the local key service"),
+        let runtime_owner_unavailable = DescriptorResolutionError::runtime_attachment_unavailable(
+            "runtime discovery is missing",
         );
         let (abi_code, projection) =
             descriptor_resolution_abi_projection(&runtime_owner_unavailable);
-        assert_eq!(abi_code, ERR_PERMISSION_DENIED);
-        assert_eq!(projection.code, CALLER_SIGNER_UNAVAILABLE_CODE);
-        assert_eq!(projection.stage, "caller_identity");
+        assert_eq!(abi_code, ERR_DAEMON_DOWN);
+        assert_eq!(projection.code, "RUNTIME_OFFLINE");
+        assert_eq!(projection.stage, "attachment");
 
         let message = runtime_descriptor_resolution_missing_owner_error_message();
-        assert!(message.contains(CALLER_SIGNER_UNAVAILABLE_CODE));
+        assert!(message.contains("RUNTIME_OFFLINE"));
         assert!(
             !message.contains("resolve descriptor_ref runtime owner")
                 && !message.contains("keyring entry not found"),
-            "descriptor resolver must not expose signer custody internals: {message}"
-        );
-
-        let leaked_remote_probe = DescriptorResolutionError::RuntimeOwnerUnavailable(
-            "self-identity: keyring rejected request: kind=not_found, \
-             msg=keyring entry not found: easynet:///r/localhost/user/alice"
-                .to_string(),
-        );
-        let (abi_code, projection) = descriptor_resolution_abi_projection(&leaked_remote_probe);
-        assert_eq!(abi_code, ERR_PERMISSION_DENIED);
-        assert_eq!(projection.code, CALLER_SIGNER_UNAVAILABLE_CODE);
-        assert_eq!(projection.stage, "caller_identity");
-        let message = format!(
-            "runtime_resolve_descriptor_ref: {}",
-            leaked_remote_probe.canonical_detail()
-        );
-        assert!(message.contains(CALLER_SIGNER_UNAVAILABLE_CODE));
-        assert!(
-            !message.contains("keyring entry not found")
-                && !message.contains("keyring rejected request")
-                && !message.contains("self-identity:"),
-            "descriptor resolver must sanitize leaked signer custody detail: {message}"
+            "descriptor resolver must report attachment state without signer custody internals: {message}"
         );
 
         let owner_offline = DescriptorResolutionError::owner_offline(
             "ROUTE_NEGATIVE: namespace.resolve negative for \
-             `easynet:///r/localhost/ability/device.dev-a.meta.list_abilities`: \
+             `easynet:///r/localhost/ability/system-agent.dev-a.runtime-introspection.meta.list_abilities`: \
              NEGATIVE_REASON_NXDOMAIN: owner is not online"
                 .to_string(),
         );
@@ -10539,8 +11037,17 @@ mod tests {
             "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online"
         );
 
+        let catalog_unavailable = DescriptorResolutionError::catalog_unavailable(
+            "read committed runtime descriptor catalog: provider failed",
+        );
+        let (abi_code, projection) = descriptor_resolution_abi_projection(&catalog_unavailable);
+        assert_eq!(abi_code, ERR_DAEMON_DOWN);
+        assert_eq!(projection.code, "PROVIDER_UNAVAILABLE");
+        assert_eq!(projection.stage, "routing");
+        assert_eq!(projection.retry, "safe");
+
         let not_found_with_route_words = DescriptorResolutionError::DescriptorNotFound(
-            "descriptor_ref not found in remote runtime catalog; previous route detail said owner is not online"
+            "descriptor_ref not found in committed runtime catalog; previous route detail said owner is not online"
                 .to_string(),
         );
         let (abi_code, projection) =
@@ -10556,12 +11063,37 @@ mod tests {
         );
 
         let invalid_catalog_payload = DescriptorResolutionError::InvalidCatalogPayload(
-            "descriptor catalog row for ability \"easynet:///r/localhost/ability/device.dev-a.observe.health\" from runtime_local_descriptor_catalog missing descriptor_ref".to_string(),
+            "descriptor catalog row for ability \"easynet:///r/localhost/ability/system-agent.dev-a.runtime-health.observe.health\" from runtime_committed_descriptor_catalog missing descriptor_ref".to_string(),
         );
         let (abi_code, projection) = descriptor_resolution_abi_projection(&invalid_catalog_payload);
         assert_eq!(abi_code, ERR_INVALID_ARG);
         assert_eq!(projection.code, "INVALID_ARGUMENT");
         assert_eq!(projection.stage, "provider_payload");
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn descriptor_catalog_transport_failures_preserve_typed_state() {
+        use crate::support::platform::local_invoke::{LocalInvokeFailure, LocalInvokeStatusCode};
+
+        let offline = descriptor_catalog_read_error(anyhow::Error::new(
+            LocalInvokeFailure::DaemonOffline("attached daemon is offline".to_string()),
+        ));
+        assert!(matches!(
+            offline,
+            DescriptorResolutionError::RuntimeAttachmentUnavailable(_)
+        ));
+
+        let rejected =
+            descriptor_catalog_read_error(anyhow::Error::new(LocalInvokeFailure::DaemonStatus {
+                ability: crate::daemon::ability::names::governance::META_LIST_ABILITIES.to_string(),
+                code: LocalInvokeStatusCode::Internal,
+                message: "catalog read failed".to_string(),
+            }));
+        assert!(matches!(
+            rejected,
+            DescriptorResolutionError::CatalogUnavailable(_)
+        ));
     }
 
     #[cfg(feature = "axon-pb")]
@@ -10573,6 +11105,10 @@ mod tests {
         let remote_node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
         let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
         let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
+        let remote_callee_ura = system_agent_callee_for(
+            &remote_device_ura,
+            crate::daemon::ability::builtins::governance::invocation_history::ABILITY_HISTORY_LIST,
+        );
         crate::daemon::control::discovery::write(
             &control_path,
             &crate::daemon::control::discovery::ControlDiscovery {
@@ -10602,7 +11138,7 @@ mod tests {
         let error = runtime_resolve_descriptor_ref_json(
             &session,
             &serde_json::json!({
-                "callee_ura": remote_device_ura,
+                "callee_ura": remote_callee_ura,
                 "caller_ura": local_device_ura,
                 "subject_ura": remote_device_ura,
                 "ability": crate::daemon::ability::builtins::governance::invocation_history::ABILITY_HISTORY_LIST,
@@ -10636,10 +11172,9 @@ mod tests {
         let remote_node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
         let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
         let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
-        let ability_ura = format!(
-            "easynet:///r/localhost/ability/device.{remote_node_id}.{}",
-            crate::daemon::ability::names::governance::META_LIST_ABILITIES
-        );
+        let public_ability = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
+        let remote_callee_ura = system_agent_callee_for(&remote_device_ura, public_ability);
+        let ability_ura = system_ability_ura_for(&remote_device_ura, public_ability);
         crate::daemon::control::discovery::write(
             &control_path,
             &crate::daemon::control::discovery::ControlDiscovery {
@@ -10666,10 +11201,11 @@ mod tests {
             Some(dir.path().join("offline-daemon.sock").display().to_string()),
         );
 
-        let resolved = runtime_resolve_descriptor_ref_json(
+        let reader = system_catalog_reader(&remote_callee_ura);
+        let resolved = runtime_resolve_descriptor_ref_json_with_reader(
             &session,
             &serde_json::json!({
-                "callee_ura": remote_device_ura,
+                "callee_ura": remote_callee_ura,
                 "caller_ura": local_device_ura,
                 "subject_ura": remote_device_ura,
                 "ability": crate::daemon::ability::names::governance::META_LIST_ABILITIES,
@@ -10677,11 +11213,12 @@ mod tests {
                 "provider": "ability_descriptor",
             })
             .to_string(),
+            &reader,
         )
         .expect("explicit ability descriptor provider resolves remote catalogue descriptor");
 
         assert_eq!(resolved["ability_ura"], ability_ura);
-        assert_eq!(resolved["owner_ura"], remote_device_ura);
+        assert_eq!(resolved["owner_ura"], remote_callee_ura);
         assert_eq!(
             resolved["name"],
             crate::daemon::ability::names::governance::META_LIST_ABILITIES
@@ -10702,6 +11239,10 @@ mod tests {
         let local_device_ura = crate::core::ura::device_ura("localhost", "local-runtime-node");
         let remote_device_ura =
             crate::core::ura::device_ura("localhost", "a364ba18-8961-4b31-838a-31c7d776c709");
+        let remote_callee_ura = system_agent_callee_for(
+            &remote_device_ura,
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+        );
         let cases = [
             (
                 Some(local_device_ura.as_str()),
@@ -10719,7 +11260,7 @@ mod tests {
 
         for (subject_ura, expected) in cases {
             let mut request = serde_json::json!({
-                "callee_ura": remote_device_ura,
+                "callee_ura": remote_callee_ura,
                 "caller_ura": local_device_ura,
                 "ability": crate::daemon::ability::names::governance::META_LIST_ABILITIES,
                 "call_mode": "rpc",
@@ -10755,10 +11296,9 @@ mod tests {
         let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
         let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
         let runtime_state_subject = "easynet:///r/localhost/resource/user.alice/runtime-state/read";
-        let ability_ura = format!(
-            "easynet:///r/localhost/ability/device.{remote_node_id}.{}",
-            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
-        );
+        let public_ability = crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST;
+        let remote_callee_ura = system_agent_callee_for(&remote_device_ura, public_ability);
+        let ability_ura = system_ability_ura_for(&remote_device_ura, public_ability);
         crate::daemon::control::discovery::write(
             &control_path,
             &crate::daemon::control::discovery::ControlDiscovery {
@@ -10785,10 +11325,11 @@ mod tests {
             Some(dir.path().join("offline-daemon.sock").display().to_string()),
         );
 
-        let resolved = runtime_resolve_descriptor_ref_json(
+        let reader = system_catalog_reader(&remote_callee_ura);
+        let resolved = runtime_resolve_descriptor_ref_json_with_reader(
             &session,
             &serde_json::json!({
-                "callee_ura": remote_device_ura,
+                "callee_ura": remote_callee_ura,
                 "caller_ura": local_device_ura,
                 "subject_ura": runtime_state_subject,
                 "ability": crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
@@ -10796,11 +11337,12 @@ mod tests {
                 "provider": "receipt_history",
             })
             .to_string(),
+            &reader,
         )
         .expect("explicit receipt provider resolves remote history descriptor");
 
         assert_eq!(resolved["ability_ura"], ability_ura);
-        assert_eq!(resolved["owner_ura"], remote_device_ura);
+        assert_eq!(resolved["owner_ura"], remote_callee_ura);
         assert_eq!(
             resolved["name"],
             crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
@@ -10847,7 +11389,8 @@ mod tests {
             Some(dir.path().join("offline-daemon.sock").display().to_string()),
         );
 
-        let resolved = runtime_resolve_descriptor_ref_json(
+        let reader = system_catalog_reader(&authority_ura);
+        let resolved = runtime_resolve_descriptor_ref_json_with_reader(
             &session,
             &serde_json::json!({
                 "callee_ura": authority_ura,
@@ -10858,6 +11401,7 @@ mod tests {
                 "provider": "receipt_history",
             })
             .to_string(),
+            &reader,
         )
         .expect("hub Authority receipt provider resolves local history descriptor");
 
@@ -10867,7 +11411,7 @@ mod tests {
             resolved["name"],
             crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
         );
-        assert_eq!(resolved["source"], "runtime_local_descriptor_catalog");
+        assert_eq!(resolved["source"], "runtime_receipt_provider");
     }
 
     #[cfg(feature = "axon-pb")]
@@ -10879,6 +11423,10 @@ mod tests {
         let remote_node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
         let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
         let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
+        let remote_callee_ura = system_agent_callee_for(
+            &remote_device_ura,
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+        );
         crate::daemon::control::discovery::write(
             &control_path,
             &crate::daemon::control::discovery::ControlDiscovery {
@@ -10923,12 +11471,14 @@ mod tests {
             ),
             (
                 "all-zero runtime-state subject",
-                Some("easynet:///r/localhost/resource/user.00000000-0000-0000-0000-000000000000/runtime-state/read"),
+                Some(
+                    "easynet:///r/localhost/resource/user.00000000-0000-0000-0000-000000000000/runtime-state/read",
+                ),
                 "subject_ura must not be all-zero",
             ),
         ] {
             let mut request = serde_json::json!({
-                "callee_ura": remote_device_ura,
+                "callee_ura": remote_callee_ura,
                 "caller_ura": local_device_ura,
                 "ability": crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
                 "call_mode": "rpc",
@@ -10948,7 +11498,8 @@ mod tests {
                 "{case} error must contain {expected:?}, got {message}"
             );
             assert!(
-                !message.contains("descriptor_ref not found") && !message.contains("ROUTE_NEGATIVE"),
+                !message.contains("descriptor_ref not found")
+                    && !message.contains("ROUTE_NEGATIVE"),
                 "{case} must fail before catalog or route state: {message}"
             );
         }
@@ -10963,6 +11514,10 @@ mod tests {
         let remote_node_id = "a364ba18-8961-4b31-838a-31c7d776c709";
         let local_device_ura = crate::core::ura::device_ura("localhost", local_node_id);
         let remote_device_ura = crate::core::ura::device_ura("localhost", remote_node_id);
+        let remote_callee_ura = system_agent_callee_for(
+            &remote_device_ura,
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+        );
         crate::daemon::control::discovery::write(
             &control_path,
             &crate::daemon::control::discovery::ControlDiscovery {
@@ -10992,7 +11547,7 @@ mod tests {
         let error = runtime_resolve_descriptor_ref_json(
             &session,
             &serde_json::json!({
-                "callee_ura": remote_device_ura,
+                "callee_ura": remote_callee_ura,
                 "caller_ura": local_device_ura,
                 "subject_ura": remote_device_ura,
                 "ability": crate::daemon::ability::names::governance::META_LIST_ABILITIES,
@@ -11062,20 +11617,66 @@ mod tests {
     #[cfg(feature = "axon-pb")]
     #[test]
     fn runtime_system_descriptor_catalog_keeps_user_files_out_of_system_plane() {
-        let device = crate::core::ura::device_ura("localhost", "host-a");
-        let entries = RuntimeDescriptorResolutionProvider::system_catalog_entries_for_test(&device)
-            .expect("Device system descriptor catalog");
-        let names = entries
+        fn catalog_names(owner_ura: &str) -> std::collections::BTreeSet<String> {
+            RuntimeDescriptorResolutionProvider::system_catalog_entries_for_test(owner_ura)
+                .expect("SystemAgent descriptor catalog")
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
+                .collect()
+        }
+
+        let locomotion_owner = crate::core::ura::device_agent_ura(
+            "localhost",
+            "host-a",
+            crate::daemon::ability::names::device_control::LOCOMOTION_SYSTEM_AGENT_ID,
+        );
+        let context_owner = crate::core::ura::device_agent_ura(
+            "localhost",
+            "host-a",
+            crate::daemon::ability::names::resources::CONTEXT_SYSTEM_AGENT_ID,
+        );
+        let skill_management_owner = crate::core::ura::device_agent_ura(
+            "localhost",
+            "host-a",
+            crate::daemon::ability::names::resources::SKILL_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
+
+        let locomotion_names = catalog_names(&locomotion_owner);
+        let context_names = catalog_names(&context_owner);
+        let skill_management_names = catalog_names(&skill_management_owner);
+        let all_system_names = locomotion_names
             .iter()
-            .filter_map(|entry| entry.get("name").and_then(serde_json::Value::as_str))
+            .chain(context_names.iter())
+            .chain(skill_management_names.iter())
+            .cloned()
             .collect::<std::collections::BTreeSet<_>>();
 
-        assert!(names.contains("fs.read"), "{names:?}");
-        assert!(names.contains("context.fs.list"), "{names:?}");
-        assert!(names.contains("skill.list"), "{names:?}");
-        assert!(!names.contains("files.put"), "{names:?}");
-        assert!(!names.contains("files.get"), "{names:?}");
-        assert!(!names.contains("files.list"), "{names:?}");
+        assert!(locomotion_names.contains("fs.read"), "{locomotion_names:?}");
+        assert!(
+            context_names.contains("context.fs.list"),
+            "{context_names:?}"
+        );
+        assert!(
+            skill_management_names.contains("skill.list"),
+            "{skill_management_names:?}"
+        );
+        assert!(
+            !all_system_names.contains("files.put"),
+            "{all_system_names:?}"
+        );
+        assert!(
+            !all_system_names.contains("files.get"),
+            "{all_system_names:?}"
+        );
+        assert!(
+            !all_system_names.contains("files.list"),
+            "{all_system_names:?}"
+        );
     }
 
     #[test]
@@ -11165,14 +11766,14 @@ mod tests {
         let owner = session.binding(handle);
         let raw = CString::new(
             serde_json::json!({
-                "caller_ura": "easynet:///r/acme/device/dev-a",
-                "callee_ura": "easynet:///r/acme/device/dev-a",
+                "caller_ura": test_user_ura(),
+                "callee_ura": test_system_agent_callee_ura(),
                 "descriptor_ref": descriptor_ref(
-                    "easynet:///r/acme/device/dev-a",
+                    test_system_agent_callee_ura(),
                     "device.pty.attach",
                     "2.4.0"
                 ),
-                "subject_ura": "easynet:///r/acme/device/dev-a",
+                "subject_ura": test_device_ura(),
                 "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
                 "causal_context": {"form": "none"},
                 "args": {"session_id": "pty-1"},
@@ -11213,14 +11814,14 @@ mod tests {
         let (handle, session) = alloc(test_session());
         let owner = session.binding(handle);
         let raw = serde_json::json!({
-            "caller_ura": "easynet:///r/acme/device/dev-a",
-            "callee_ura": "easynet:///r/acme/device/dev-a",
+            "caller_ura": test_user_ura(),
+            "callee_ura": test_system_agent_callee_ura(),
             "descriptor_ref": descriptor_ref(
-                "easynet:///r/acme/device/dev-a",
+                test_system_agent_callee_ura(),
                 "device.pty.attach",
                 "2.4.0"
             ),
-            "subject_ura": "easynet:///r/acme/device/dev-a",
+            "subject_ura": test_device_ura(),
             "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
             "causal_context": {"form": "none"},
             "args": {"session_id": "pty-1"},

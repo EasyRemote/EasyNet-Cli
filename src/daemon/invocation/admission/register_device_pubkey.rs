@@ -62,7 +62,7 @@ use serde::Deserialize;
 use tonic::Status;
 
 use crate::daemon::invocation::admission::runtime_trust::RuntimeTrust;
-use crate::daemon::trust::anchor::{TrustedAgentRole, TrustedPrincipalOwner};
+use crate::daemon::trust::anchor::{TrustAnchorRole, TrustedPrincipalOwner};
 use crate::daemon::trust::cell::SharedTrustAnchor;
 
 /// Canonical daemon identity/trust ability name.
@@ -70,7 +70,7 @@ pub const ABILITY_IDENTITY_REGISTER_PUBKEY: &str =
     crate::daemon::ability::names::federation::IDENTITY_REGISTER_PUBKEY;
 
 /// JSON-shaped argument tuple. `role` is a free string here (rather
-/// than `TrustedAgentRole` directly) so that an unknown role from a
+/// than `TrustAnchorRole` directly) so that an unknown trust-anchor role from a
 /// future protocol version surfaces as a clean `invalid_argument`
 /// rather than a serde decoder error.
 #[derive(Debug, Deserialize)]
@@ -91,7 +91,7 @@ struct RegisterArgs {
 pub(crate) struct RegisterPubkeyRequest {
     principal_ura: String,
     public_key_b64: String,
-    role: TrustedAgentRole,
+    role: TrustAnchorRole,
     principal_owner_ura: Option<String>,
 }
 
@@ -99,7 +99,7 @@ impl RegisterPubkeyRequest {
     pub(crate) fn new(
         principal_ura: impl Into<String>,
         public_key_b64: impl Into<String>,
-        role: TrustedAgentRole,
+        role: TrustAnchorRole,
     ) -> Self {
         Self {
             principal_ura: principal_ura.into(),
@@ -142,7 +142,7 @@ impl RegisterPubkeyRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RegisterPubkeyIntent {
     principal_ura: String,
-    role: TrustedAgentRole,
+    role: TrustAnchorRole,
 }
 
 impl RegisterPubkeyIntent {
@@ -150,12 +150,12 @@ impl RegisterPubkeyIntent {
         &self.principal_ura
     }
 
-    pub(crate) fn role(&self) -> TrustedAgentRole {
+    pub(crate) fn role(&self) -> TrustAnchorRole {
         self.role
     }
 
     #[cfg(test)]
-    pub(crate) fn for_test(principal_ura: String, role: TrustedAgentRole) -> Self {
+    pub(crate) fn for_test(principal_ura: String, role: TrustAnchorRole) -> Self {
         Self {
             principal_ura,
             role,
@@ -330,7 +330,7 @@ pub(crate) fn verify_user_register_pubkey_bootstrap_claim(
     arguments: &[u8],
 ) -> Result<RegisterPubkeyBootstrapClaim, Status> {
     let (args, role) = decode_register_args(arguments)?;
-    if role != TrustedAgentRole::User {
+    if role != TrustAnchorRole::User {
         return Err(Status::permission_denied(
             "identity.register_pubkey bootstrap is restricted to user role",
         ));
@@ -369,7 +369,7 @@ pub(crate) fn verify_user_register_pubkey_bootstrap_claim(
     })
 }
 
-fn decode_register_args(arguments: &[u8]) -> Result<(RegisterArgs, TrustedAgentRole), Status> {
+fn decode_register_args(arguments: &[u8]) -> Result<(RegisterArgs, TrustAnchorRole), Status> {
     let args: RegisterArgs = serde_json::from_slice(arguments).map_err(|err| {
         Status::invalid_argument(format!(
             "identity.register_pubkey: arguments JSON decode failed: {err}"
@@ -424,18 +424,18 @@ fn trusted_principal_owner_from_args(
     }))
 }
 
-/// Parse a `TrustedAgentRole` from a wire-string. The wire shape
+/// Parse a `TrustAnchorRole` from a wire-string. The wire shape
 /// uses lowercase strings (`device` / `backend` / `hub`) per
-/// `TrustedAgentRole`'s `serde(rename_all = "lowercase")`. We do
+/// `TrustAnchorRole`'s `serde(rename_all = "lowercase")`. We do
 /// not just `serde_json::from_value` here because the surrounding
 /// argument struct is already deserialised — a per-field hand
 /// match keeps error messages aimed at the caller.
-fn parse_role(raw: &str) -> Result<TrustedAgentRole, Status> {
+fn parse_role(raw: &str) -> Result<TrustAnchorRole, Status> {
     match raw {
-        "device" => Ok(TrustedAgentRole::Device),
-        "backend" => Ok(TrustedAgentRole::Backend),
-        "hub" => Ok(TrustedAgentRole::Hub),
-        "user" => Ok(TrustedAgentRole::User),
+        "device" => Ok(TrustAnchorRole::Device),
+        "backend" => Ok(TrustAnchorRole::Backend),
+        "hub" => Ok(TrustAnchorRole::Hub),
+        "user" => Ok(TrustAnchorRole::User),
         other => Err(Status::invalid_argument(format!(
             "identity.register_pubkey: role `{other}` is not one of \
              device|backend|hub|user",
@@ -443,12 +443,12 @@ fn parse_role(raw: &str) -> Result<TrustedAgentRole, Status> {
     }
 }
 
-fn role_wire(role: TrustedAgentRole) -> &'static str {
+fn role_wire(role: TrustAnchorRole) -> &'static str {
     match role {
-        TrustedAgentRole::Device => "device",
-        TrustedAgentRole::Backend => "backend",
-        TrustedAgentRole::Hub => "hub",
-        TrustedAgentRole::User => "user",
+        TrustAnchorRole::Device => "device",
+        TrustAnchorRole::Backend => "backend",
+        TrustAnchorRole::Hub => "hub",
+        TrustAnchorRole::User => "user",
     }
 }
 
@@ -509,7 +509,7 @@ mod tests {
         let args = RegisterPubkeyRequest::new(
             "easynet:///r/r1/device/alpha",
             test_pub_b64(),
-            TrustedAgentRole::Device,
+            TrustAnchorRole::Device,
         )
         .with_principal_owner("easynet:///r/r1/user/user-1")
         .to_arguments_bytes()
@@ -546,7 +546,7 @@ mod tests {
             .lookup("easynet:///r/r1/device/alpha")
             .expect("present");
         assert_eq!(entry.public_key_b64, test_pub_b64);
-        assert!(matches!(entry.role, TrustedAgentRole::Device));
+        assert!(matches!(entry.role, TrustAnchorRole::Device));
 
         // File on disk reflects the entry.
         let from_disk = RealmTrustAnchor::try_load_strict(&path).expect("disk load");
@@ -701,7 +701,7 @@ mod tests {
             RealmTrustAnchor::from_entries(vec![TrustedAgent {
                 agent_ura: r1_hub.clone(),
                 public_key_b64: old_key,
-                role: TrustedAgentRole::Hub,
+                role: TrustAnchorRole::Hub,
                 added_at_unix_ms: 1,
                 origin_realm: Some("r1".to_string()),
                 hub_endpoint: Some("https://127.0.0.1:50443".to_string()),
@@ -720,7 +720,7 @@ mod tests {
         let snap = cell.snapshot();
         let entry = snap.lookup(&r1_hub).expect("backend present");
         assert_eq!(entry.public_key_b64, new_key);
-        assert_eq!(entry.role, TrustedAgentRole::Hub);
+        assert_eq!(entry.role, TrustAnchorRole::Hub);
         assert_eq!(
             entry.hub_endpoint.as_deref(),
             Some("https://127.0.0.1:50443")
@@ -734,7 +734,7 @@ mod tests {
         let from_disk = RealmTrustAnchor::try_load_strict(&path).expect("disk load");
         let disk_entry = from_disk.lookup(&r1_hub).expect("backend present on disk");
         assert_eq!(disk_entry.public_key_b64, new_key);
-        assert_eq!(disk_entry.role, TrustedAgentRole::Hub);
+        assert_eq!(disk_entry.role, TrustAnchorRole::Hub);
         assert_eq!(
             disk_entry.hub_endpoint.as_deref(),
             Some("https://127.0.0.1:50443")

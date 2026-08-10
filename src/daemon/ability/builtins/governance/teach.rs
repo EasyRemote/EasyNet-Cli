@@ -207,14 +207,14 @@ fn forget_manifest() -> AbilityManifest {
 pub fn register(reg: &mut AxonAbilityCatalog, hot_registrar: Arc<SharedHotRegistrarCell>) {
     reg.register_rpc_with_envelope_and_spec(
         TEACH,
-        OwnerKind::Device,
+        OwnerKind::descriptor_transfer_system(),
         teach_manifest(),
         Arc::new(teach_handler),
     );
     let registrar_for_acquire = Arc::clone(&hot_registrar);
     reg.register_rpc_with_envelope_and_spec(
         ACQUIRE,
-        OwnerKind::Device,
+        OwnerKind::descriptor_transfer_system(),
         acquire_manifest(),
         Arc::new(move |env, args| {
             acquire_handler_with_hot_registrar(env, args, Some(&registrar_for_acquire))
@@ -223,7 +223,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, hot_registrar: Arc<SharedHotRegist
     let registrar_for_forget = Arc::clone(&hot_registrar);
     reg.register_rpc_with_envelope_and_spec(
         FORGET,
-        OwnerKind::Device,
+        OwnerKind::descriptor_transfer_system(),
         forget_manifest(),
         Arc::new(move |env, args| {
             forget_handler_with_hot_registrar(env, args, Some(&registrar_for_forget))
@@ -1729,7 +1729,24 @@ fn sync_learner_runtime_after_forget(
 mod tests {
     use super::*;
     use crate::cli::commands::test_support::HomeGuard;
-    use crate::daemon::persistence::agent_registry::{AgentRegistry, AgentType};
+    use crate::core::agent::spec::RuntimeKind;
+    use crate::daemon::persistence::agent_registry::AgentRegistry;
+
+    #[test]
+    fn registration_uses_descriptor_transfer_system_agent_owner() {
+        let mut reg = AxonAbilityCatalog::new_test_metadata_for_device_authority(
+            "easynet:///r/test/device/01DEV",
+        );
+        register(&mut reg, Arc::new(SharedHotRegistrarCell::new()));
+
+        for ability in [TEACH, ACQUIRE, FORGET] {
+            assert_eq!(
+                reg.control_plane_owner(ability),
+                Some(OwnerKind::descriptor_transfer_system()),
+                "{ability} must be owned by descriptor-transfer SystemAgent"
+            );
+        }
+    }
 
     /// Two agents on disk — mentor publishes executable `quote`,
     /// apprentice publishes nothing — both with minted URAs, all
@@ -1785,7 +1802,7 @@ mod tests {
             )
             .expect("agent.toml");
             let mut entry = crate::daemon::persistence::agent_registry::AgentEntry::new(
-                AgentType::ClaudeCode,
+                RuntimeKind::ClaudeCode,
                 None,
             );
             entry.root_path = Some(root);
@@ -1805,7 +1822,7 @@ mod tests {
         .expect("mentor manifest");
 
         let mut local = crate::daemon::persistence::local_agents::LocalAgentsFile {
-            host_device_agent_ura: crate::core::ura::device_ura("localhost", "dev"),
+            host_device_ura: crate::core::ura::device_ura("localhost", "dev"),
             ..Default::default()
         };
         let mentor_ura = crate::core::ura::agent_ura("localhost", "dev", "mentor");
@@ -1860,9 +1877,15 @@ mod tests {
     ) -> EnvelopeContext {
         use ed25519_dalek::Signer as _;
 
+        let host_device_ura = crate::core::ura::device_ura("localhost", "dev");
+        let descriptor_transfer_callee = crate::core::ura::device_agent_ura(
+            "localhost",
+            "dev",
+            crate::daemon::ability::names::governance::DESCRIPTOR_TRANSFER_SYSTEM_AGENT_ID,
+        );
         let env = EnvelopeContext::for_test_targeted_ability(
             caller,
-            crate::core::ura::device_ura("localhost", "dev"),
+            descriptor_transfer_callee,
             TEACH,
             subject_for(owner_ura, "quote"),
         );
@@ -1871,6 +1894,7 @@ mod tests {
         let envelope = crate::daemon::ability::HostedAgentDelegationEnvelopeBinding::new(
             env.caller(),
             env.callee(),
+            host_device_ura,
             env.subject(),
             nonce_hex.as_str(),
             TEACH,
@@ -2227,7 +2251,7 @@ mod tests {
         let resp = tokio_runtime
             .block_on(async {
                 acquire_handler_with_hot_registrar(
-                    acquire_env(apprentice_ura, &source_descriptor_ura),
+                    acquire_env(apprentice_ura.clone(), &source_descriptor_ura),
                     json!({ "ability_ura": source_descriptor_ura, "learner": "apprentice" }),
                     Some(&hot_cell),
                 )
@@ -2238,10 +2262,8 @@ mod tests {
         assert_eq!(resp["runtime_sync"]["failed"], 0, "response={resp}");
         assert_eq!(resp["descriptor_transaction_status"], "committed");
         assert_eq!(resp["runtime_sync"]["status"], "committed");
-        let fixture_device_ura = crate::core::ura::device_ura("default", "local");
-        let runtime_key =
-            crate::core::ura::owner_ability_ura(&fixture_device_ura, "apprentice.quote")
-                .expect("runtime key");
+        let runtime_key = crate::core::ura::owner_ability_ura(&apprentice_ura, "quote")
+            .expect("learner-owned runtime key");
         let live = crate::support::async_bridge::run_blocking(
             runtime.has_ability(&runtime_key),
             crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
@@ -2283,10 +2305,8 @@ mod tests {
                 .exists(),
             "precondition: acquire persisted the descriptor-import ledger row"
         );
-        let fixture_device_ura = crate::core::ura::device_ura("default", "local");
-        let runtime_key =
-            crate::core::ura::owner_ability_ura(&fixture_device_ura, "apprentice.quote")
-                .expect("runtime key");
+        let runtime_key = crate::core::ura::owner_ability_ura(&apprentice_ura, "quote")
+            .expect("learner-owned runtime key");
         assert!(
             !crate::support::async_bridge::run_blocking(
                 runtime.has_ability(&runtime_key),

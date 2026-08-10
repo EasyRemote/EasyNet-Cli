@@ -250,10 +250,11 @@ fn validate_transition_id(transition_id: &str) -> Result<(), StateTransitionErro
 /// "no restriction" — it means "explicit deny-all" (None).
 ///
 /// Uses serde `tag = "kind", content = "uras"` so the wire shape is
-/// unambiguous: `{"kind":"any"}`, `{"kind":"none"}`, or
-/// `{"kind":"only_matching","uras":["…"]}`. Adjacent-tagged because
-/// internally-tagged would conflict with the named-content shape
-/// for the OnlyMatching variant.
+/// unambiguous: `{"kind":"any"}`, `{"kind":"none"}`,
+/// `{"kind":"only_matching","uras":["…"]}`, or
+/// `{"kind":"only_ura_kinds","uras":["resource"]}`. Adjacent-tagged because
+/// internally-tagged would conflict with the named-content shape for the
+/// listed variants.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "uras", rename_all = "snake_case")]
 pub enum ScopeRule {
@@ -267,6 +268,13 @@ pub enum ScopeRule {
     /// `/` or end-of-string) so `easynet:///r/acme/user/alice`
     /// does NOT match `easynet:///r/acme/user/alice-evil`.
     OnlyMatching(Vec<String>),
+    /// Allow subjects whose canonical URA parses to one of the listed ontology
+    /// kinds. This is intentionally coarser than `OnlyMatching` and is used
+    /// only when the valid subject set is dynamic but still type-bounded at the
+    /// descriptor/admission layer, e.g. remote desktop screen resources. Caller
+    /// policy must use explicit URAs or authority bindings, never kind-wide
+    /// admission.
+    OnlyUraKinds(Vec<String>),
     /// Explicit deny-all. Use when a SCOPED ability is intentionally
     /// off-limits on this axis pending an operator gesture.
     None,
@@ -281,6 +289,12 @@ impl ScopeRule {
             ScopeRule::OnlyMatching(allowed) => allowed
                 .iter()
                 .any(|allow| ura_matches_with_path_boundary(allow, candidate_ura)),
+            ScopeRule::OnlyUraKinds(allowed) => crate::core::ura::parse_ura(candidate_ura)
+                .ok()
+                .is_some_and(|parsed| {
+                    let kind = crate::core::ura::ura_kind_scope_label(parsed.kind);
+                    allowed.iter().any(|allow| allow == kind)
+                }),
         }
     }
 
@@ -291,6 +305,7 @@ impl ScopeRule {
             ScopeRule::OnlyMatching(allowed) => allowed
                 .iter()
                 .any(|allow| agent_policy_identity_matches(allow, candidate)),
+            ScopeRule::OnlyUraKinds(_) => false,
         }
     }
 }
@@ -478,29 +493,32 @@ pub struct AbilitySchemaSummary {
 /// facts: transport selection never implies a state transition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AbilityDescriptor {
-    /// Callable owner-local public ability name. Device and realm Authority abilities
-    /// use a namespaced public name such as `agent.list` or
-    /// `federation.resolve`; agent-owned abilities use the local verb scoped
-    /// by `owner_ura`, such as `chat`.
+    /// Callable owner-local public ability name. Device-sponsored SystemAgent
+    /// and realm Authority abilities use namespaced public names such as
+    /// `agent.list` or `federation.resolve`; user-hosted Agent abilities use
+    /// the local verb scoped by `owner_ura`, such as `chat`.
     pub name: String,
-    /// Canonical URA of the entity that publishes this ability — the
-    /// `callee` in any Invoke targeting this name. Per AXON-RFC-001
-    /// v4.1.5 §9 (AXIOM seven-tuple), `callee ∈ {authority, device, agent}`,
-    /// and this field accepts any of those shapes:
+    /// Canonical URA of the entity that publishes this ability — the public
+    /// `callee` in any Invoke targeting this name. Per the current Invocation
+    /// ontology, ordinary public callees are Agent, device-sponsored
+    /// SystemAgent, or realm Authority. Device URAs may remain only as
+    /// bootstrap/self-maintenance/DeviceProfileProjection migration owners,
+    /// not ordinary device-native public callees.
     ///
-    ///   * `agent/<user-uuid>.<agent-id>` — hosted user agent
+    ///   * `agent/<user-uuid>.<agent-id>` — hosted user Agent
     ///     (consent / policy / mcp / llm sub-agent abilities).
-    ///   * `device/<device-uuid>`         — device-built-ins
-    ///     (`shell.run`, `fs.read`, `agent.list`, …).
+    ///   * `agent/device.<device-id>.<system-agent-id>` — device-sponsored
+    ///     SystemAgent for device-native governed surfaces.
     ///   * `authority`                    — realm Authority-published abilities
     ///     (`federation.advertise_*`, `voice.list_calls`, …).
     ///
     /// Field name kept as `owner_ura` for wire-compat with
     /// every existing daemon. §A.URA-5's agent-scoped ability URA
     /// rule applies to `/ability/<...>`-shaped URAs — it does not
-    /// constrain who may publish a descriptor for a
-    /// device-built-in or realm Authority-built-in verb. A device publishing
-    /// `shell.run` is the canonical pattern, not a violation.
+    /// constrain who may publish a descriptor for a realm Authority verb or for
+    /// explicitly gated bootstrap/migration Device projections. A migrated
+    /// device-native verb such as `shell.run` is owned by a device-sponsored
+    /// SystemAgent.
     pub owner_ura: String,
     /// Governed interface version. This is distinct from
     /// `AbilityManifest.schema_version`, which versions the TOML file
@@ -531,7 +549,7 @@ pub struct AbilityDescriptor {
     pub schema_summary: AbilitySchemaSummary,
     pub hints: AbilityHints,
     /// Open-ended metadata bag. P4.4 stores `agent_type` here when
-    /// the legacy `AgentType` enum is reshaped.
+    /// the legacy `RuntimeKind` enum is reshaped.
     pub metadata: HashMap<String, String>,
 }
 
@@ -908,7 +926,7 @@ impl AbilityDescriptor {
             .with_version(manifest.descriptor_version())?
             .with_description(manifest.description())
             .with_input_schema(manifest.input_schema().clone())
-            .with_scope_subjects(ScopeRule::Any)
+            .with_scope_subjects(scope_subjects_from_manifest(manifest))
             .with_scope_agents(scope_agents_from_manifest(&access))
             .with_denied_agents(access.deny_callers.unwrap_or_default());
         if let Some(output_schema) = manifest.output_schema() {
@@ -1259,10 +1277,25 @@ fn scope_agents_from_manifest(
     }
 }
 
+fn scope_subjects_from_manifest(
+    manifest: &crate::daemon::ability::manifest::AbilityManifest,
+) -> ScopeRule {
+    match manifest.subject_scope() {
+        Some(crate::daemon::ability::manifest::ManifestSubjectScope::OnlyUraKinds(kinds)) => {
+            ScopeRule::OnlyUraKinds(kinds.to_vec())
+        }
+        None => ScopeRule::Any,
+    }
+}
+
 fn governed_scope_rule_value(rule: &ScopeRule) -> Value {
     match rule {
         ScopeRule::OnlyMatching(values) => {
             serde_json::to_value(ScopeRule::OnlyMatching(sorted_scope_values(values)))
+                .expect("scope rule serializes")
+        }
+        ScopeRule::OnlyUraKinds(values) => {
+            serde_json::to_value(ScopeRule::OnlyUraKinds(sorted_scope_values(values)))
                 .expect("scope rule serializes")
         }
         other => serde_json::to_value(other).expect("scope rule serializes"),
@@ -2169,6 +2202,33 @@ mod tests {
             stream.descriptor_hash_prefixed(),
             bidi.descriptor_hash_prefixed(),
             "bidi descriptors must hash with Axon CallMode::Bidi, not Stream"
+        );
+    }
+
+    #[test]
+    fn scope_rule_can_admit_dynamic_subjects_by_ura_kind() {
+        let resource_only = ScopeRule::OnlyUraKinds(vec!["resource".to_string()]);
+        assert!(resource_only.admits("easynet:///r/acme/resource/device.dev/display/main"));
+        assert!(!resource_only.admits("easynet:///r/acme/user/alice"));
+        assert!(!resource_only.admits("not-a-ura"));
+
+        let permission_probe =
+            ScopeRule::OnlyUraKinds(vec!["agent".to_string(), "user".to_string()]);
+        assert!(permission_probe.admits("easynet:///r/acme/user/alice"));
+        assert!(permission_probe.admits("easynet:///r/acme/agent/device.dev.local-system"));
+        assert!(!permission_probe.admits("easynet:///r/acme/resource/device.dev/display/main"));
+    }
+
+    #[test]
+    fn scope_rule_rejects_ura_kind_scope_on_caller_axis() {
+        let broad_callers = ScopeRule::OnlyUraKinds(vec!["agent".to_string(), "user".to_string()]);
+        assert!(
+            !broad_callers.admits_agent("easynet:///r/acme/user/alice"),
+            "kind-wide User caller admission would recreate account-as-actor scope"
+        );
+        assert!(
+            !broad_callers.admits_agent("easynet:///r/acme/agent/alice.worker"),
+            "kind-wide Agent caller admission must use explicit caller URAs or authority bindings"
         );
     }
 

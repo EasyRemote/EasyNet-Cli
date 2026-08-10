@@ -34,7 +34,7 @@ use crate::core::domain::{
     SessionId, TenantId,
 };
 use crate::daemon::axon_bridge::local_runtime_request::{
-    LocalRuntimeRequestOptions, SystemInvocationIssuer,
+    AccountableUserInvocationIssuer, LocalRuntimeRequestOptions, SystemInvocationIssuer,
 };
 use crate::daemon::boot::kernel::api::KernelApi;
 use crate::daemon::execution::{
@@ -452,6 +452,56 @@ fn agent_portion(ability: &str) -> &str {
         .unwrap_or(ability)
 }
 
+/// Resolve the Device that executes a local invocation without changing the
+/// invocation's semantic callee.
+fn local_execution_host_ura(callee_ura: &str) -> anyhow::Result<String> {
+    let callee = crate::core::ura::parse_ura(callee_ura)
+        .map_err(|error| anyhow::anyhow!("resolve local execution host: {error}"))?;
+    match callee.kind {
+        crate::core::ura::URAKind::Device => Ok(callee_ura.to_string()),
+        crate::core::ura::URAKind::Agent => {
+            if let Some((device_id, _system_agent_id)) = callee.device_agent_ids() {
+                return Ok(crate::core::ura::device_ura(&callee.realm, device_id));
+            }
+            if callee.agent_ids().is_none() {
+                anyhow::bail!(
+                    "local invocation Agent callee {callee_ura:?} has no canonical owner identity"
+                );
+            }
+            let snapshot = crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()
+                .map_err(|error| anyhow::anyhow!("load local Agent placement: {error}"))?;
+            let placement = snapshot
+                .hosted_agent_identity_by_ura(callee_ura)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Agent callee {callee_ura:?} is not hosted by this runtime")
+                })?;
+            let host = placement
+                .signing_authority
+                .strip_prefix("hosted_by:")
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Agent callee {callee_ura:?} has malformed placement authority {:?}",
+                        placement.signing_authority
+                    )
+                })?;
+            let parsed_host = crate::core::ura::parse_ura(host).map_err(|error| {
+                anyhow::anyhow!("Agent callee {callee_ura:?} host is invalid: {error}")
+            })?;
+            if parsed_host.kind != crate::core::ura::URAKind::Device
+                || parsed_host.realm != callee.realm
+            {
+                anyhow::bail!(
+                    "Agent callee {callee_ura:?} placement host {host:?} is not a same-realm Device"
+                );
+            }
+            Ok(host.to_string())
+        }
+        kind => anyhow::bail!(
+            "local invocation callee {callee_ura:?} kind {kind} has no local Device execution host"
+        ),
+    }
+}
+
 impl KernelApi for Kernel {
     fn prepare_local_system_rpc(
         &self,
@@ -502,6 +552,64 @@ impl KernelApi for Kernel {
         )
     }
 
+    fn prepare_accountable_user_rpc(
+        &self,
+        accountable_user_ura: &str,
+        callee_ura: &str,
+        ability: &str,
+        subject_ura: &str,
+        payload: Vec<u8>,
+        causal_context: CausalContext,
+    ) -> anyhow::Result<DescriptorBoundInvocationRequest> {
+        let runtime = self.require_local_runtime("KernelApi::prepare_accountable_user_rpc")?;
+        let accountable_user_ura = accountable_user_ura.to_string();
+        let callee_ura = callee_ura.to_string();
+        let ability = ability.to_string();
+        let subject_ura = subject_ura.to_string();
+        crate::support::async_bridge::run_blocking(
+            async move {
+                let runtime_ability =
+                    crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+                        &callee_ura,
+                        &ability,
+                    )
+                    .map_err(|err| anyhow::anyhow!("{err}"))?;
+                let descriptor_binding =
+                    crate::daemon::axon_bridge::descriptor_ref::registered_descriptor_binding(
+                        &runtime,
+                        &runtime_ability,
+                        AxonInvocationCallMode::Rpc,
+                    )
+                    .await
+                    .map_err(|err| anyhow::anyhow!("{err}"))?;
+                let descriptor_ref =
+                    crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+                        &callee_ura,
+                        &ability,
+                        &descriptor_binding,
+                    )
+                    .map_err(|err| anyhow::anyhow!("{err}"))?;
+                let signer = crate::daemon::identity::self_identity::load_runtime_caller_signer(
+                    accountable_user_ura,
+                )
+                .map_err(|err| anyhow::anyhow!("load accountable User signer: {err}"))?;
+                AccountableUserInvocationIssuer::request_for_descriptor_ref(
+                    AxonInvocationCallMode::Rpc,
+                    signer,
+                    &callee_ura,
+                    descriptor_ref,
+                    &subject_ura,
+                    payload,
+                    causal_context,
+                    LocalRuntimeRequestOptions::default(),
+                )
+                .await
+                .map_err(|err| anyhow::anyhow!("{err}"))
+            },
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
+        )
+    }
+
     fn invoke(
         &self,
         request: DescriptorBoundInvocationRequest,
@@ -526,7 +634,9 @@ impl KernelApi for Kernel {
             .to_string();
         let args = serde_json::from_slice(request.payload())
             .map_err(|err| anyhow::anyhow!("KernelApi::invoke requires a JSON payload: {err}"))?;
-        let session_projection = LocalRuntimeSessionProjection::from_callee_ura(&callee)?;
+        let execution_host_ura = local_execution_host_ura(&callee)?;
+        let session_projection =
+            LocalRuntimeSessionProjection::from_execution_host_ura(&execution_host_ura)?;
 
         let permission_decision = if should_gate(&ability) {
             let permission_session_id = SessionId::new(format!(
@@ -866,7 +976,7 @@ mod tests {
     }
 
     #[test]
-    fn invoke_rejects_non_device_session_projection_without_admitting_row() {
+    fn invoke_rejects_callee_without_local_execution_host_before_admitting_row() {
         let k = Kernel::new();
         let hub_ura = crate::core::ura::hub_ura("tenant-a");
         let subject_ura = crate::core::ura::device_ura("tenant-a", "device-a");
@@ -879,10 +989,11 @@ mod tests {
 
         let err = k
             .invoke(request)
-            .expect_err("Kernel session read model must require Device callee");
+            .expect_err("Kernel must require a local Device execution host");
 
         assert!(
-            err.to_string().contains("requires Device callee URA"),
+            err.to_string()
+                .contains("has no local Device execution host"),
             "unexpected error: {err}"
         );
         assert!(

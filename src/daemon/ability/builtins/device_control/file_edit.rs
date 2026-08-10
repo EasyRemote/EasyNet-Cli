@@ -119,7 +119,7 @@ pub const PROFILE_VERSION: &str =
 pub const MAX_EDIT_FILE_SIZE: u64 = 1024 * 1024 * 1024;
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner("fs.edit", OwnerKind::Device, Arc::new(handler));
+    reg.register_rpc_with_owner("fs.edit", OwnerKind::locomotion_system(), Arc::new(handler));
 }
 
 fn handler(args: Value) -> Result<Value> {
@@ -467,6 +467,23 @@ mod tests {
         dir
     }
 
+    fn provision_local_device_credentials() -> crate::cli::commands::test_support::HomeGuard {
+        let home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "dev-a".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "axon://hub.example:50051".to_string(),
+                realm: "acme".to_string(),
+                username: Some("alice".to_string()),
+                user_id: Some("user-alice".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("write fs.edit ResourceRef test credentials");
+        home
+    }
+
     fn write_file(path: &Path, body: &str) {
         std::fs::write(path, body).unwrap();
     }
@@ -487,6 +504,7 @@ mod tests {
 
     #[test]
     fn replaces_unique_match() {
+        let _home = provision_local_device_credentials();
         let dir = temp_dir();
         let path = dir.join("a.txt");
         write_file(&path, "hello world");
@@ -505,6 +523,7 @@ mod tests {
 
     #[test]
     fn ambiguous_match_rejects_without_replace_all() {
+        let _home = provision_local_device_credentials();
         let dir = temp_dir();
         let path = dir.join("a.txt");
         write_file(&path, "foo foo foo");
@@ -524,6 +543,7 @@ mod tests {
 
     #[test]
     fn replace_all_flag_replaces_every_occurrence() {
+        let _home = provision_local_device_credentials();
         let dir = temp_dir();
         let path = dir.join("a.txt");
         write_file(&path, "foo foo foo");
@@ -542,6 +562,7 @@ mod tests {
 
     #[test]
     fn not_found_returns_search_preview() {
+        let _home = provision_local_device_credentials();
         let dir = temp_dir();
         let path = dir.join("a.txt");
         write_file(&path, "hello world");
@@ -561,6 +582,7 @@ mod tests {
 
     #[test]
     fn empty_old_string_creates_new_file() {
+        let _home = provision_local_device_credentials();
         let dir = temp_dir();
         let path = dir.join("new.txt");
         assert!(!path.exists());
@@ -578,6 +600,7 @@ mod tests {
 
     #[test]
     fn empty_old_string_creates_empty_file() {
+        let _home = provision_local_device_credentials();
         // Edge case: caller wants to create an empty placeholder.
         let dir = temp_dir();
         let path = dir.join("empty.txt");
@@ -595,6 +618,7 @@ mod tests {
 
     #[test]
     fn empty_old_string_on_existing_file_rejects() {
+        let _home = provision_local_device_credentials();
         let dir = temp_dir();
         let path = dir.join("exists.txt");
         write_file(&path, "do not touch");
@@ -613,6 +637,7 @@ mod tests {
 
     #[test]
     fn non_empty_old_string_on_missing_file_rejects() {
+        let _home = provision_local_device_credentials();
         let dir = temp_dir();
         let path = dir.join("nope.txt");
         let resp = handler(json!({
@@ -629,6 +654,7 @@ mod tests {
 
     #[test]
     fn binary_file_rejects_with_not_utf8() {
+        let _home = provision_local_device_credentials();
         let dir = temp_dir();
         let path = dir.join("bin.dat");
         std::fs::write(&path, [0xFF, 0xFE, 0xFD]).unwrap();
@@ -726,6 +752,7 @@ mod tests {
 
     #[test]
     fn stale_resource_ref_revision_rejects_before_filesystem_access() {
+        let _home = provision_local_device_credentials();
         let dir = temp_dir();
         let path = dir.join("a.txt");
         write_file(&path, "old");
@@ -744,6 +771,7 @@ mod tests {
 
     #[test]
     fn read_only_resource_ref_cannot_edit() {
+        let _home = provision_local_device_credentials();
         let dir = temp_dir();
         let path = dir.join("a.txt");
         write_file(&path, "old");
@@ -789,6 +817,7 @@ mod tests {
     fn edit_preserves_existing_file_mode() {
         // chmod 600 → fs.edit replaces a string → mode stays 600.
         use std::os::unix::fs::PermissionsExt;
+        let _home = provision_local_device_credentials();
         let dir = temp_dir();
         let path = dir.join("secret.conf");
         std::fs::write(&path, "key=old").unwrap();
@@ -808,6 +837,7 @@ mod tests {
 
     #[test]
     fn edit_through_symlink_keeps_link_intact() {
+        let _home = provision_local_device_credentials();
         let dir = temp_dir();
         let real = dir.join("real.txt");
         let link = dir.join("link.txt");
@@ -836,6 +866,7 @@ mod tests {
 
     #[test]
     fn edit_with_matching_expected_mtime_succeeds() {
+        let _home = provision_local_device_credentials();
         let dir = temp_dir();
         let path = dir.join("a.txt");
         std::fs::write(&path, "old").unwrap();
@@ -857,6 +888,7 @@ mod tests {
 
     #[test]
     fn edit_with_stale_expected_mtime_rejects() {
+        let _home = provision_local_device_credentials();
         let dir = temp_dir();
         let path = dir.join("a.txt");
         std::fs::write(&path, "old").unwrap();
@@ -876,6 +908,7 @@ mod tests {
 
     #[test]
     fn edit_with_expected_mtime_on_missing_file_rejects() {
+        let _home = provision_local_device_credentials();
         let dir = temp_dir();
         let path = dir.join("nope.txt");
         let resp = handler(json!({

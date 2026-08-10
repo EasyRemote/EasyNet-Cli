@@ -158,9 +158,9 @@ const URA_DISCOVERY_HINT: &str = "Where to find a canonical URA today (until PR-
 ///
 /// This value object is the root fix for the execution-target/callee-owner
 /// split. `execution_target_ura` is the node or hub the local daemon sends the
-/// frame to. `callee_ura` is the Agent/Device/Hub identity that advertises the
-/// AbilityDescriptor. They are equal for device-owned system abilities and
-/// intentionally different for hosted-agent abilities executed on a device.
+/// frame to. `callee_ura` is the Agent/SystemAgent/Authority identity that
+/// advertises the AbilityDescriptor. For device-native abilities the callee is
+/// a device-sponsored SystemAgent and the execution target remains the Device.
 ///
 /// What this is not: it is not a route answer. The remote daemon/authority remains
 /// responsible for proving that a hosted Agent is actually runnable at the
@@ -180,32 +180,43 @@ impl RemoteAbilityInvocationTarget {
     /// invocation target with descriptor binding deferred to that target.
     ///
     /// Use this for command adapters whose product contract is "call this
-    /// device/authority-owned system ability on `--node`". It is deliberately named
-    /// target-owned so it is not reused for arbitrary Ability URAs.
+    /// device-hosted SystemAgent or authority-owned system ability on `--node`".
+    /// It is deliberately named target-owned so it is not reused for arbitrary
+    /// Ability URAs.
     pub(crate) fn for_target_owned_selector(
         execution_target_ura: &str,
         selector: &str,
+    ) -> anyhow::Result<Self> {
+        Self::for_target_owned_selector_for_mode(execution_target_ura, selector, CallMode::Rpc)
+    }
+
+    pub(crate) fn for_target_owned_selector_for_mode(
+        execution_target_ura: &str,
+        selector: &str,
+        call_mode: CallMode,
     ) -> anyhow::Result<Self> {
         validate_remote_target_ura(execution_target_ura)?;
         let public_ability =
             crate::core::ura::owner_local_ability_name(execution_target_ura, selector);
         RemoteRootAbilityAdmission::evaluate(&public_ability).require(&public_ability)?;
-        let ability_ura =
-            crate::core::ura::owner_ability_ura(execution_target_ura, &public_ability).ok_or_else(
-                || anyhow!("derive ability URA for {execution_target_ura} {public_ability}"),
-            )?;
-        Self::from_ability_ura(execution_target_ura, &ability_ura)
+        let owner_ura = remote_target_owned_selector_owner_ura(execution_target_ura, selector)?;
+        let public_ability = crate::core::ura::descriptor_public_ability_name(&owner_ura, selector);
+        let ability_ura = crate::core::ura::owner_ability_ura(&owner_ura, &public_ability)
+            .ok_or_else(|| anyhow!("derive ability URA for {owner_ura} {public_ability}"))?;
+        Self::from_ability_ura_for_mode(execution_target_ura, &ability_ura, call_mode)
     }
 
     /// Project a remote runtime catalogue read target without routing it
     /// through the target-owned system action selector.
     pub(crate) fn for_catalogue_read(execution_target_ura: &str) -> anyhow::Result<Self> {
         validate_remote_target_ura(execution_target_ura)?;
+        let catalogue_owner_ura =
+            runtime_introspection_owner_for_execution_target(execution_target_ura)?;
         let ability_ura = crate::core::ura::owner_ability_ura(
-            execution_target_ura,
+            &catalogue_owner_ura,
             crate::daemon::ability::builtins::governance::meta::ABILITY_LIST_ABILITIES,
         )
-        .ok_or_else(|| anyhow!("derive catalogue Ability URA for {execution_target_ura}"))?;
+        .ok_or_else(|| anyhow!("derive catalogue Ability URA for {catalogue_owner_ura}"))?;
         Self::from_ability_ura(execution_target_ura, &ability_ura)
     }
 
@@ -230,7 +241,7 @@ impl RemoteAbilityInvocationTarget {
         let selector = crate::core::ura::AbilitySelector::parse(trimmed)?;
         validate_remote_execution_target(execution_target_ura, &selector)?;
         let descriptor_ref =
-            crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+            crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
                 selector.owner_ura(),
                 selector.public_name(),
                 call_mode,
@@ -573,6 +584,34 @@ impl<'a> RemoteInvocationTuplePlan<'a> {
     }
 }
 
+/// Issuer for product operations whose tuple remains accountable to a User
+/// while the CLI facade owns a named fresh-root policy (deploy, uninstall,
+/// and target Resource staging). The facade supplies every semantic identity;
+/// this issuer contributes only root freshness and causal placement.
+pub(crate) struct RemoteUserActionInvocationIssuer;
+
+impl RemoteUserActionInvocationIssuer {
+    pub(crate) fn caller_declared_root_plan<'a>(
+        target: &'a RemoteAbilityInvocationTarget,
+        caller_ura: impl Into<String>,
+        subject_ura: impl Into<String>,
+        args: Value,
+        timeout: Duration,
+    ) -> anyhow::Result<RemoteInvocationTuplePlan<'a>> {
+        RemotePublicAbilityAdmission::evaluate(target.public_ability())
+            .require(target.public_ability())?;
+        RemoteInvocationTuplePlan::with_explicit_nonce(
+            target,
+            caller_ura,
+            RemoteInvocationSubject::CallerDeclared(subject_ura.into()),
+            axon_sdk::invocation::fresh_nonce(),
+            CausalContext::None,
+            args,
+            timeout,
+        )
+    }
+}
+
 /// Issuer for daemon-owned remote root calls.
 ///
 /// System callers select caller, subject, target, and timeout; only this issuer
@@ -624,12 +663,36 @@ impl RemoteCatalogueReadIssuer {
         RemoteInvocationTuplePlan::system_root_with_explicit_nonce(
             target,
             caller_ura,
-            RemoteInvocationSubject::RuntimeReadProjection(target.callee_ura().to_string()),
+            RemoteInvocationSubject::RuntimeReadProjection(
+                target.execution_target_ura().to_string(),
+            ),
             axon_sdk::invocation::fresh_nonce(),
             args,
             timeout,
         )
     }
+}
+
+fn runtime_introspection_owner_for_execution_target(
+    execution_target_ura: &str,
+) -> anyhow::Result<String> {
+    crate::daemon::ability::catalog::ownership::execution_target_owner_ura_for_public_ability(
+        execution_target_ura,
+        crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+    )
+    .map_err(|error| anyhow!("remote catalogue owner projection failed: {error}"))
+}
+
+fn remote_target_owned_selector_owner_ura(
+    execution_target_ura: &str,
+    selector: &str,
+) -> anyhow::Result<String> {
+    let public_ability = crate::core::ura::owner_local_ability_name(execution_target_ura, selector);
+    crate::daemon::ability::catalog::ownership::execution_target_owner_ura_for_public_ability(
+        execution_target_ura,
+        &public_ability,
+    )
+    .map_err(|error| anyhow!("remote target-owned ability owner projection failed: {error}"))
 }
 
 /// Issuer for descriptor-bound remote session follow-up roots.
@@ -670,10 +733,12 @@ fn target_owned_remote_system_subject(
     let callee = crate::core::ura::parse_ura(target.callee_ura())
         .map_err(|error| anyhow!("remote system callee URA is invalid: {error}"))?;
     let subject_ura = match callee.kind {
-        crate::core::ura::URAKind::Device => target.callee_ura().to_string(),
+        crate::core::ura::URAKind::Agent if callee.device_agent_ids().is_some() => {
+            target.execution_target_ura().to_string()
+        }
         crate::core::ura::URAKind::Authority => target.as_str().to_string(),
         other => anyhow::bail!(
-            "target-owned remote system ability requires Device or Authority callee, got {other}"
+            "target-owned remote system ability requires SystemAgent or Authority callee, got {other}"
         ),
     };
     Ok(RemoteInvocationSubject::DaemonTargetOwned(subject_ura))
@@ -753,6 +818,18 @@ pub(crate) fn invoke_remote_target_with_signer(
     request: RemoteInvocationRequest<'_>,
     signer: RemoteInvocationCallerSigner,
 ) -> anyhow::Result<Value> {
+    let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
+    invoke_remote_target_with_signer_at_endpoint(request, signer, socket_path)
+}
+
+/// Submit a signed remote invocation through one explicitly attached daemon
+/// endpoint. Native SDK handles use this entry so caller identity and routing
+/// remain canonical without silently switching to the process-default daemon.
+pub(crate) fn invoke_remote_target_with_signer_at_endpoint(
+    request: RemoteInvocationRequest<'_>,
+    signer: RemoteInvocationCallerSigner,
+    socket_path: std::path::PathBuf,
+) -> anyhow::Result<Value> {
     if signer.owner_ura() != request.caller_ura {
         anyhow::bail!(
             "remote invocation signer owner `{}` does not match request caller `{}`",
@@ -760,7 +837,6 @@ pub(crate) fn invoke_remote_target_with_signer(
             request.caller_ura
         );
     }
-    let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
     ensure_remote_invocation_daemon_accepting(&socket_path)?;
     invoke_remote_target_on_ready_socket(request, signer, socket_path)
 }
@@ -1060,7 +1136,36 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
     input_frames: Vec<Value>,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
-    use axon_sdk::pb::axon::v1::{invoke_bidi_up::Payload as UpPayload, BinaryChunk, InvokeBidiUp};
+    invoke_remote_target_bidi_frames(
+        request,
+        input_frames
+            .into_iter()
+            .map(RemoteBidiInputFrame::Json)
+            .collect(),
+        max_frames,
+    )
+}
+
+/// Canonical caller-side input frame for a remote bidi invocation.
+///
+/// The frame keeps bytes, structured JSON, and transport EOF distinct until
+/// the daemon wire codec consumes them.  In particular, FileTransfer bytes
+/// must not be pre-wrapped as JSON before crossing the Hub, or the execution
+/// host would base64-encode an already encoded business frame a second time.
+pub(crate) enum RemoteBidiInputFrame {
+    Binary(Vec<u8>),
+    Json(Value),
+    Eof,
+}
+
+pub(crate) fn invoke_remote_target_bidi_frames(
+    request: RemoteInvocationRequest<'_>,
+    input_frames: Vec<RemoteBidiInputFrame>,
+    max_frames: Option<usize>,
+) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
+    use axon_sdk::pb::axon::v1::{
+        bidi_control, invoke_bidi_up::Payload as UpPayload, BidiControl, BinaryChunk, InvokeBidiUp,
+    };
 
     let RemoteInvocationRequest {
         target,
@@ -1131,16 +1236,30 @@ pub(crate) fn invoke_remote_target_bidi_json_frames(
 
         let mut next_sequence = 1_u64;
         for input in input_frames {
-            let data = serde_json::to_vec(&input)
-                .with_context(|| format!("encode {} bidi input JSON frame", target.as_str()))?;
-            up_frames.push(InvokeBidiUp {
-                sequence: next_sequence,
-                mac: Vec::new(),
-                payload: Some(UpPayload::BinaryChunk(BinaryChunk {
+            let payload = match input {
+                RemoteBidiInputFrame::Binary(data) => UpPayload::BinaryChunk(BinaryChunk {
                     stream_id: 1,
                     data,
                     ..BinaryChunk::default()
-                })),
+                }),
+                RemoteBidiInputFrame::Json(value) => {
+                    let data = serde_json::to_vec(&value).with_context(|| {
+                        format!("encode {} bidi input JSON frame", target.as_str())
+                    })?;
+                    UpPayload::BinaryChunk(BinaryChunk {
+                        stream_id: 1,
+                        data,
+                        ..BinaryChunk::default()
+                    })
+                }
+                RemoteBidiInputFrame::Eof => UpPayload::Control(BidiControl {
+                    control: Some(bidi_control::Control::Eof(true)),
+                }),
+            };
+            up_frames.push(InvokeBidiUp {
+                sequence: next_sequence,
+                mac: Vec::new(),
+                payload: Some(payload),
             });
             next_sequence = next_sequence.saturating_add(1);
         }
@@ -1344,18 +1463,44 @@ fn validate_remote_execution_target(
 
     match (target.kind(), selector.owner_kind()) {
         (URAKind::Device, "agent") => Ok(()),
-        (URAKind::Device, "device") => {
-            if selector.owner_ura() == target.as_str() {
+        (URAKind::Device, "system-agent") => {
+            let owner = crate::core::ura::parse_ura(selector.owner_ura()).map_err(|error| {
+                anyhow!(
+                    "system-agent ability owner URA `{}` is invalid: {error}",
+                    selector.owner_ura()
+                )
+            })?;
+            let target = crate::core::ura::parse_ura(execution_target_ura)
+                .map_err(|error| anyhow!("Device execution target URA is invalid: {error}"))?;
+            let Some((owner_device_id, _agent_id)) = owner.device_agent_ids() else {
+                bail!(
+                    "system-agent ability URA `{}` has non-system-agent owner `{}`",
+                    selector.ability_ura(),
+                    selector.owner_ura()
+                );
+            };
+            let Some(target_device_id) = target.device_id() else {
+                bail!(
+                    "system-agent ability URA `{}` requires a Device execution target with device id, got `{}`",
+                    selector.ability_ura(),
+                    execution_target_ura
+                );
+            };
+            if owner_device_id == target_device_id {
                 Ok(())
             } else {
                 bail!(
-                    "device-owned ability URA `{}` must execute on its owning device `{}`, not `{}`",
+                    "system-agent ability URA `{}` must execute on sponsoring Device `{}`, not `{}`",
                     selector.ability_ura(),
-                    selector.owner_ura(),
+                    crate::core::ura::device_ura(&owner.realm, owner_device_id),
                     execution_target_ura
                 );
             }
         }
+        (URAKind::Device, "device") => bail!(
+            "direct Device-owned ability URA `{}` is migration-only and cannot be used as a normal remote invocation callee; use the device-sponsored SystemAgent owner for this ability",
+            selector.ability_ura()
+        ),
         (URAKind::Authority, "authority") => {
             if selector.owner_ura() == target.as_str() {
                 Ok(())
@@ -1615,6 +1760,25 @@ pub fn invoke_federation_revoke(
     reason: &str,
     caller_ura: &str,
 ) -> anyhow::Result<()> {
+    let req_args = json!({
+        "agent_ura": agent_ura,
+        "reason": reason,
+    });
+    let arg_bytes = serde_json::to_vec(&req_args).context("encode revoke args")?;
+    invoke_federation_revoke_with_arguments(agent_ura, arg_bytes, caller_ura)
+}
+
+/// Submit an already-encoded `federation.revoke` payload through the local
+/// canonical Invocation service. Runtime lifecycle callers use this entry for
+/// the durable purge fields that are not part of the compact CLI command.
+/// Keeping both callers on this boundary guarantees that product revocation is
+/// carried as a signed `ReverseDispatchCall`, never as a JSON session-control
+/// request.
+pub(crate) fn invoke_federation_revoke_with_arguments(
+    agent_ura: &str,
+    arg_bytes: Vec<u8>,
+    caller_ura: &str,
+) -> anyhow::Result<()> {
     let socket_path = daemon_config::resolved_local_uds_path_with_env_override();
     if !crate::support::platform::local_daemon_grpc::probe_accepting(&socket_path) {
         bail!(
@@ -1623,12 +1787,6 @@ pub fn invoke_federation_revoke(
             socket_path.display()
         );
     }
-
-    let req_args = json!({
-        "agent_ura": agent_ura,
-        "reason": reason,
-    });
-    let arg_bytes = serde_json::to_vec(&req_args).context("encode revoke args")?;
 
     let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
     let caller_ura = canonical_federation_revoke_caller(caller_ura, &local_daemon_ura)?;
@@ -1721,6 +1879,53 @@ fn federation_revoke_authority_target(
 mod tests {
     use super::*;
 
+    fn device_system_agent_owner_ura(
+        realm: &str,
+        device_id: &str,
+        system_agent_id: &str,
+    ) -> String {
+        crate::core::ura::device_agent_ura(realm, device_id, system_agent_id)
+    }
+
+    fn descriptor_ref_for_device_system_agent(
+        realm: &str,
+        device_id: &str,
+        system_agent_id: &str,
+        public_ability: &str,
+    ) -> String {
+        let owner_ura = device_system_agent_owner_ura(realm, device_id, system_agent_id);
+        let ability_ura = crate::core::ura::owner_ability_ura(&owner_ura, public_ability)
+            .expect("SystemAgent ability URA");
+        format!(
+            "{ability_ura}@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+        )
+    }
+
+    fn health_descriptor_ref(realm: &str) -> String {
+        descriptor_ref_for_device_system_agent(
+            realm,
+            "node-a",
+            crate::daemon::ability::names::governance::RUNTIME_HEALTH_SYSTEM_AGENT_ID,
+            crate::daemon::ability::names::governance::OBSERVE_HEALTH,
+        )
+    }
+
+    fn receipt_history_descriptor_ref() -> String {
+        let owner_ura = device_system_agent_owner_ura(
+            "realm",
+            "node-a",
+            crate::daemon::ability::names::governance::RUNTIME_GOVERNANCE_SYSTEM_AGENT_ID,
+        );
+        let ability_ura = crate::core::ura::owner_ability_ura(
+            &owner_ura,
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+        )
+        .expect("runtime-governance receipt history Ability URA");
+        format!(
+            "{ability_ura}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+        )
+    }
+
     #[test]
     fn parse_node_ura_accepts_protocol_hub_identity() {
         assert!(parse_node_ura("easynet:///r/realm/device/node-a").is_ok());
@@ -1735,17 +1940,25 @@ mod tests {
 
     #[test]
     fn plain_remote_system_ability_is_bound_to_catalog_descriptor() {
+        let owner_ura = device_system_agent_owner_ura(
+            "realm",
+            "node-a",
+            crate::daemon::ability::names::device_control::LOCOMOTION_SYSTEM_AGENT_ID,
+        );
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&owner_ura, "fs.read").expect("ability URA");
         let target = RemoteAbilityInvocationTarget::from_ability_ura(
             "easynet:///r/realm/device/node-a",
-            "easynet:///r/realm/ability/device.node-a.fs.read",
+            &ability_ura,
         )
         .expect("target");
-        let expected = crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
-            "easynet:///r/realm/device/node-a",
-            "fs.read",
-            crate::daemon::ability::CallMode::Rpc,
-        )
-        .expect("descriptor");
+        let expected =
+            crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
+                &owner_ura,
+                "fs.read",
+                crate::daemon::ability::CallMode::Rpc,
+            )
+            .expect("descriptor");
         assert_eq!(target.descriptor_ref(), expected);
         assert_eq!(target.route_function_name(), "fs.read");
         assert_ne!(target.route_function_name(), target.as_str());
@@ -1758,7 +1971,7 @@ mod tests {
             let target = RemoteAbilityInvocationTarget::for_target_owned_selector(hub, ability)
                 .expect("target");
             let expected =
-                crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+                crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
                     hub,
                     ability,
                     crate::daemon::ability::CallMode::Rpc,
@@ -1803,14 +2016,14 @@ mod tests {
 
     #[test]
     fn explicit_descriptor_version_is_preserved() {
-        let descriptor = "easynet:///r/realm/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let descriptor = health_descriptor_ref("realm");
         let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/realm/device/node-a",
-            descriptor,
+            &descriptor,
         )
         .expect("target");
-        assert_eq!(target.descriptor_ref(), descriptor);
-        assert_eq!(target.route_function_name(), "echo");
+        assert_eq!(target.descriptor_ref(), descriptor.as_str());
+        assert_eq!(target.route_function_name(), "observe.health");
     }
 
     #[test]
@@ -1843,11 +2056,91 @@ mod tests {
     }
 
     #[test]
+    fn remote_execution_validation_rejects_direct_device_owned_ability_on_device_target() {
+        let selector = crate::core::ura::AbilitySelector::parse(
+            "easynet:///r/realm/ability/device.node-a.fs.read",
+        )
+        .expect("legacy device-owned selector");
+
+        let error = validate_remote_execution_target("easynet:///r/realm/device/node-a", &selector)
+            .expect_err("direct Device-owned ability must not be a remote callee");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("direct Device-owned ability URA")
+                && message.contains("migration-only")
+                && message.contains("device-sponsored SystemAgent"),
+            "wrong error: {message}"
+        );
+    }
+
+    #[test]
+    fn target_owned_selector_projects_device_target_to_system_agent_callee() {
+        let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
+            "easynet:///r/realm/device/node-a",
+            "node.describe",
+        )
+        .expect("target-owned SystemAgent target");
+
+        assert_eq!(
+            target.execution_target_ura(),
+            "easynet:///r/realm/device/node-a"
+        );
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/realm/agent/device.node-a.node-management"
+        );
+        assert_eq!(
+            target.as_str(),
+            "easynet:///r/realm/ability/system-agent.node-a.node-management.node.describe"
+        );
+
+        let subject =
+            target_owned_remote_system_subject(&target).expect("SystemAgent target-owned subject");
+        assert_eq!(subject.policy_name(), "DaemonTargetOwned");
+        assert_eq!(
+            subject.resolve().expect("subject URA"),
+            "easynet:///r/realm/device/node-a"
+        );
+    }
+
+    #[test]
+    fn target_owned_terminal_selector_preserves_owner_ability_boundary() {
+        let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
+            "easynet:///r/realm/device/node-a",
+            "terminal.create",
+        )
+        .expect("terminal SystemAgent target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/realm/agent/device.node-a.terminal"
+        );
+        assert_eq!(
+            target.as_str(),
+            "easynet:///r/realm/ability/system-agent.node-a.terminal.terminal.create"
+        );
+    }
+
+    #[test]
+    fn target_owned_file_transfer_binds_bidi_descriptor() {
+        let target = RemoteAbilityInvocationTarget::for_target_owned_selector_for_mode(
+            "easynet:///r/realm/device/node-a",
+            crate::daemon::ability::names::device_control::FS_TRANSFER,
+            CallMode::Bidi,
+        )
+        .expect("file-transfer SystemAgent bidi target");
+
+        assert_eq!(target.public_ability(), "fs.transfer");
+        assert!(target.descriptor_ref().ends_with("!stream"));
+    }
+
+    #[test]
     fn remote_request_preserves_explicit_tuple_facts() {
-        let descriptor = "easynet:///r/realm/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let descriptor = health_descriptor_ref("realm");
         let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/realm/device/node-a",
-            descriptor,
+            &descriptor,
         )
         .expect("target");
         let request = RemoteInvocationRequest::new(
@@ -1873,10 +2166,10 @@ mod tests {
 
     #[test]
     fn public_tuple_plan_preserves_explicit_tuple_facts() {
-        let descriptor = "easynet:///r/realm/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let descriptor = health_descriptor_ref("realm");
         let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/realm/device/node-a",
-            descriptor,
+            &descriptor,
         )
         .expect("target");
         let causal_context = CausalContext::None;
@@ -1910,10 +2203,10 @@ mod tests {
 
     #[test]
     fn public_tuple_plan_rejects_receipt_history_before_request_construction() {
-        let descriptor = "easynet:///r/realm/ability/device.node-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+        let descriptor = receipt_history_descriptor_ref();
         let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/realm/device/node-a",
-            descriptor,
+            &descriptor,
         )
         .expect("descriptor-bound history target");
 
@@ -1983,10 +2276,10 @@ mod tests {
 
     #[test]
     fn public_tuple_plan_preserves_explicit_causal_context() {
-        let descriptor = "easynet:///r/realm/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let descriptor = health_descriptor_ref("realm");
         let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/realm/device/node-a",
-            descriptor,
+            &descriptor,
         )
         .expect("target");
         let causal_context = CausalContext::Merkle {
@@ -2038,6 +2331,36 @@ mod tests {
     }
 
     #[test]
+    fn remote_user_action_issuer_preserves_user_caller_and_declared_subject() {
+        let target = RemoteAbilityInvocationTarget::for_target_owned_selector(
+            "easynet:///r/realm/device/node-a",
+            crate::daemon::ability::names::federation::ABILITY_DEPLOY,
+        )
+        .expect("ability-management target");
+        let caller = "easynet:///r/realm/user/alice";
+        let subject = "easynet:///r/realm/resource/user.alice/staged/ability-bundle";
+        let plan = RemoteUserActionInvocationIssuer::caller_declared_root_plan(
+            &target,
+            caller,
+            subject,
+            json!({}),
+            Duration::from_secs(30),
+        )
+        .expect("User-action tuple plan");
+
+        assert_eq!(plan.subject.policy_name(), "CallerDeclared");
+        assert_ne!(plan.nonce.derive(), [0; 16]);
+        let request = plan.into_request().expect("request");
+        assert_eq!(request.caller_ura, caller);
+        assert_eq!(request.subject_ura, subject);
+        assert_eq!(request.causal_context, CausalContext::None);
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/realm/agent/device.node-a.ability-management"
+        );
+    }
+
+    #[test]
     fn remote_catalogue_read_issuer_uses_read_projection_subject() {
         let target =
             RemoteAbilityInvocationTarget::for_catalogue_read("easynet:///r/realm/device/node-a")
@@ -2058,7 +2381,11 @@ mod tests {
         assert_ne!(plan.nonce.derive(), [0; 16]);
 
         let request = plan.into_request().expect("request");
-        assert_eq!(request.subject_ura, target.callee_ura());
+        assert_eq!(request.subject_ura, target.execution_target_ura());
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/realm/agent/device.node-a.runtime-introspection"
+        );
         assert_ne!(request.invocation_nonce, [0; 16]);
         assert_eq!(request.causal_context, CausalContext::None);
     }
@@ -2105,9 +2432,19 @@ mod tests {
 
     #[test]
     fn remote_system_issuer_rejects_receipt_history_as_target_owned() {
+        let owner_ura = device_system_agent_owner_ura(
+            "realm",
+            "node-a",
+            crate::daemon::ability::names::governance::RUNTIME_GOVERNANCE_SYSTEM_AGENT_ID,
+        );
+        let ability_ura = crate::core::ura::owner_ability_ura(
+            &owner_ura,
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+        )
+        .expect("runtime-governance receipt history Ability URA");
         let target = RemoteAbilityInvocationTarget::from_ability_ura(
             "easynet:///r/realm/device/node-a",
-            "easynet:///r/realm/ability/device.node-a.invocation.history.list",
+            &ability_ura,
         )
         .expect("explicit target");
 
@@ -2167,10 +2504,10 @@ mod tests {
 
     #[test]
     fn tuple_plan_rejects_hidden_invalid_defaults() {
-        let descriptor = "easynet:///r/realm/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let descriptor = health_descriptor_ref("realm");
         let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/realm/device/node-a",
-            descriptor,
+            &descriptor,
         )
         .expect("target");
 
@@ -2199,10 +2536,10 @@ mod tests {
 
     #[test]
     fn remote_tuple_rejects_all_zero_principals_before_signer_or_transport() {
-        let descriptor = "easynet:///r/realm/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let descriptor = health_descriptor_ref("realm");
         let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/realm/device/node-a",
-            descriptor,
+            &descriptor,
         )
         .expect("target");
         let placeholder = "00000000-0000-0000-0000-000000000000";
@@ -2302,10 +2639,10 @@ mod tests {
 
     #[test]
     fn remote_request_rejects_incomplete_tuple_facts() {
-        let descriptor = "easynet:///r/realm/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let descriptor = health_descriptor_ref("realm");
         let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/realm/device/node-a",
-            descriptor,
+            &descriptor,
         )
         .expect("target");
 
@@ -2371,10 +2708,10 @@ mod tests {
 
     #[test]
     fn remote_unary_loads_caller_signer_before_daemon_socket_probe() {
-        let descriptor = "easynet:///r/signer-first-test/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let descriptor = health_descriptor_ref("signer-first-test");
         let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/signer-first-test/device/node-a",
-            descriptor,
+            &descriptor,
         )
         .expect("target");
         let error = invoke_remote_target(signer_first_test_request(&target))
@@ -2385,10 +2722,10 @@ mod tests {
 
     #[test]
     fn remote_stream_loads_caller_signer_before_daemon_socket_probe() {
-        let descriptor = "easynet:///r/signer-first-test/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let descriptor = health_descriptor_ref("signer-first-test");
         let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/signer-first-test/device/node-a",
-            descriptor,
+            &descriptor,
         )
         .expect("target");
         let error = invoke_remote_target_stream(signer_first_test_request(&target), None)
@@ -2399,10 +2736,10 @@ mod tests {
 
     #[test]
     fn remote_bidi_loads_caller_signer_before_daemon_socket_probe() {
-        let descriptor = "easynet:///r/signer-first-test/ability/device.node-a.echo@2.4.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke";
+        let descriptor = health_descriptor_ref("signer-first-test");
         let target = RemoteAbilityInvocationTarget::from_descriptor_ref(
             "easynet:///r/signer-first-test/device/node-a",
-            descriptor,
+            &descriptor,
         )
         .expect("target");
         let error = invoke_remote_target_bidi_json_frames(

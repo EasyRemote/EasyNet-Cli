@@ -171,7 +171,12 @@ pub(crate) fn descriptor_binding_for_wire(
     ))
 }
 
-pub(crate) fn catalog_descriptor_binding_for_wire(
+/// Resolve a descriptor binding for a compile-time system protocol ability.
+///
+/// This is the bootstrap lane used before a live runtime catalog can be read.
+/// Hosted and federated application abilities must carry an explicit
+/// descriptor-bound Ability ref obtained from the live catalog.
+pub(crate) fn system_protocol_descriptor_binding_for_wire(
     callee_ura: &str,
     ability: &str,
     call_mode: crate::daemon::ability::CallMode,
@@ -211,13 +216,31 @@ pub(crate) fn catalog_descriptor_binding_for_wire(
     )
 }
 
-pub(crate) fn catalog_descriptor_ref_for_wire(
+pub(crate) fn system_protocol_descriptor_ref_for_wire(
     callee_ura: &str,
     ability: &str,
     call_mode: crate::daemon::ability::CallMode,
 ) -> Result<String, AxonError> {
-    let descriptor_binding = catalog_descriptor_binding_for_wire(callee_ura, ability, call_mode)?;
+    let descriptor_binding =
+        system_protocol_descriptor_binding_for_wire(callee_ura, ability, call_mode)?;
     ability_descriptor_ref_for_wire(callee_ura, ability, &descriptor_binding)
+}
+
+/// Bind a remote call without treating the compile-time system registry as a
+/// dynamic catalog. Application abilities must already be descriptor-bound;
+/// only named system protocol abilities may use the bootstrap registry.
+pub(crate) fn remote_descriptor_ref_for_wire(
+    callee_ura: &str,
+    ability: &str,
+    call_mode: crate::daemon::ability::CallMode,
+) -> Result<String, AxonError> {
+    if let Ok(descriptor_ref) = canonical_ability_descriptor_ref(ability) {
+        // `ability_ura_for_wire` proves that the explicit ref belongs to the
+        // requested callee before it can enter the signed envelope.
+        ability_ura_for_wire(callee_ura, &descriptor_ref)?;
+        return Ok(descriptor_ref);
+    }
+    system_protocol_descriptor_ref_for_wire(callee_ura, ability, call_mode)
 }
 
 pub(crate) fn ability_ura_for_wire(callee_ura: &str, ability: &str) -> Result<String, AxonError> {
@@ -330,17 +353,7 @@ pub(crate) fn ability_descriptor_ref_for_wire(
 }
 
 fn public_ability_name_for_wire(callee_ura: &str, ability: &str) -> String {
-    let ability = ability.trim();
-    let Ok(callee) = crate::core::ura::parse_ura(callee_ura) else {
-        return ability.to_string();
-    };
-    match callee.kind {
-        crate::core::ura::URAKind::Agent => {
-            crate::core::ura::owner_local_ability_name(callee_ura, ability)
-        }
-        crate::core::ura::URAKind::Device => ability.to_string(),
-        _ => ability.to_string(),
-    }
+    crate::core::ura::descriptor_public_ability_name(callee_ura, ability)
 }
 
 pub(crate) fn catalog_owner_kind_for_wire(
@@ -353,14 +366,25 @@ pub(crate) fn catalog_owner_kind_for_wire(
     })?;
     match parsed.kind {
         crate::core::ura::URAKind::Device => {
-            Ok(crate::daemon::ability::dispatch::OwnerKind::Device)
+            Ok(crate::daemon::ability::dispatch::OwnerKind::DeviceProfileProjection)
         }
         crate::core::ura::URAKind::Authority => {
             Ok(crate::daemon::ability::dispatch::OwnerKind::RealmAuthority)
         }
         crate::core::ura::URAKind::Agent => {
-            let Some((_, agent_id)) = parsed.agent_ids().or_else(|| parsed.device_agent_ids())
-            else {
+            if let Some((_, agent_id)) = parsed.device_agent_ids() {
+                if !crate::daemon::ability::catalog::profiles::is_declared_daemon_native_system_agent_id(
+                    agent_id,
+                ) {
+                    return Err(AxonError::invalid_argument(format!(
+                        "descriptor-bound ability owner `{owner_ura}` is a device-scoped Agent that is not a declared daemon-native SystemAgent"
+                    )));
+                }
+                return Ok(crate::daemon::ability::dispatch::OwnerKind::SystemAgent(
+                    agent_id.to_string(),
+                ));
+            }
+            let Some((_, agent_id)) = parsed.agent_ids() else {
                 return Err(AxonError::invalid_argument(format!(
                     "descriptor-bound ability owner `{owner_ura}` is an Agent URA without agent id"
                 )));
@@ -452,6 +476,16 @@ mod tests {
     }
 
     #[test]
+    fn system_agent_public_name_survives_owner_local_wire_projection() {
+        let callee = crate::core::ura::device_agent_ura("acme", "host-a", "terminal");
+
+        assert_eq!(
+            ability_ura_for_wire(&callee, "terminal.create").expect("terminal Ability URA"),
+            "easynet:///r/acme/ability/system-agent.host-a.terminal.terminal.create"
+        );
+    }
+
+    #[test]
     fn explicit_descriptor_ref_rejects_a_different_runtime_digest() {
         let callee = crate::core::ura::device_ura("acme", "host-a");
         let ability_ura = crate::core::ura::owner_ability_ura(&callee, "fs.read").unwrap();
@@ -473,23 +507,30 @@ mod tests {
 
     #[test]
     fn system_catalog_descriptor_lookup_is_owner_plane_aware() {
-        let device = crate::core::ura::device_ura("localhost", "host-a");
+        let runtime_introspection = crate::core::ura::device_agent_ura(
+            "localhost",
+            "host-a",
+            crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+        );
         let hub = crate::core::ura::hub_ura("localhost");
         let ability = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
 
-        let device_ref = catalog_descriptor_ref_for_wire(
-            &device,
+        let device_ref = system_protocol_descriptor_ref_for_wire(
+            &runtime_introspection,
             ability,
             crate::daemon::ability::CallMode::Rpc,
         )
-        .expect("Device meta.list_abilities descriptor");
-        let hub_ref =
-            catalog_descriptor_ref_for_wire(&hub, ability, crate::daemon::ability::CallMode::Rpc)
-                .expect("Hub meta.list_abilities descriptor");
+        .expect("runtime-introspection meta.list_abilities descriptor");
+        let hub_ref = system_protocol_descriptor_ref_for_wire(
+            &hub,
+            ability,
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .expect("Hub meta.list_abilities descriptor");
 
         assert!(
             device_ref.starts_with(&format!(
-                "{}/ability/device.host-a.{ability}@",
+                "{}/ability/system-agent.host-a.runtime-introspection.{ability}@",
                 "easynet:///r/localhost"
             )),
             "{device_ref}"
@@ -502,6 +543,32 @@ mod tests {
             "{hub_ref}"
         );
         assert_ne!(device_ref, hub_ref);
+    }
+
+    #[test]
+    fn remote_application_ability_requires_and_preserves_explicit_descriptor_ref() {
+        let callee = crate::core::ura::agent_ura("acme", "host-a", "worker");
+        let ability_ura = crate::core::ura::owner_ability_ura(&callee, "custom.execute").unwrap();
+        let explicit = format!("{ability_ura}@{TEST_BINDING}");
+
+        let resolved = remote_descriptor_ref_for_wire(
+            &callee,
+            &explicit,
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .expect("explicit live-catalog descriptor ref");
+
+        assert_eq!(resolved, explicit);
+        let error = remote_descriptor_ref_for_wire(
+            &callee,
+            "custom.execute",
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .expect_err("application ability name must not resolve from the system bootstrap catalog");
+        assert!(
+            error.to_string().contains("system catalog descriptor"),
+            "{error}"
+        );
     }
 
     /// Regression: the session prelude (`sign_descriptor_bound_prelude_request`)
@@ -543,14 +610,30 @@ mod tests {
     }
 
     #[test]
-    fn bare_device_domain_name_is_preserved_in_ability_ura() {
+    fn catalog_owner_rejects_undeclared_device_scoped_agent() {
+        let owner = crate::core::ura::device_agent_ura("acme", "dev-a", "random-agent");
+
+        let error = catalog_owner_kind_for_wire(&owner)
+            .expect_err("unknown device-scoped Agent must not become a SystemAgent owner");
+
+        assert!(
+            error
+                .reason
+                .contains("not a declared daemon-native SystemAgent"),
+            "{}",
+            error.reason
+        );
+    }
+
+    #[test]
+    fn bare_device_domain_name_is_not_duplicated_in_ability_ura() {
         let callee = crate::core::ura::device_ura("localhost", "dev-a");
         let ability_ura = ability_ura_for_wire(&callee, "device.inspect")
             .expect("device-domain ability should remain explicit");
 
         assert_eq!(
             ability_ura,
-            "easynet:///r/localhost/ability/device.dev-a.device.inspect"
+            "easynet:///r/localhost/ability/device.dev-a.inspect"
         );
     }
 

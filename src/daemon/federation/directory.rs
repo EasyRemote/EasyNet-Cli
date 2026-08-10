@@ -807,7 +807,7 @@ impl FederatedDirectorySubscriptionIssuer {
             &format!("directory/{peer_realm}"),
         );
         let descriptor_ref =
-            crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+            crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
                 &callee_ura,
                 ability,
                 crate::daemon::ability::CallMode::Stream,

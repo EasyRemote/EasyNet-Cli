@@ -53,6 +53,8 @@ pub struct ResolveKeyReceipt {
     pub public_keys_b64: Vec<String>,
     #[serde(default)]
     pub principal_owner_ura: Option<String>,
+    /// Public wire scalar user-id segment paired with `principal_owner_ura`.
+    /// This is not a runtime User URA.
     #[serde(default)]
     pub principal_owner_user_id: Option<String>,
 }

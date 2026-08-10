@@ -12,7 +12,7 @@ use crate::daemon::execution::mission::adapter::{
 use crate::daemon::execution::mission::process_runner::{self, ChildOptions};
 use crate::daemon::persistence::agent_registry::AgentEntry;
 
-/// Zero-sized singleton driver for `AgentType::External`.
+/// Zero-sized singleton driver for `RuntimeKind::External`.
 pub(crate) struct ExternalAdapter;
 
 impl AgentAdapter for ExternalAdapter {

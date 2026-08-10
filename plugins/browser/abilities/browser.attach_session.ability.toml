@@ -1,0 +1,20 @@
+schema_version = "2"
+name = "browser.attach_session"
+descriptor_version = "1.0.0"
+description = "Attach one bounded Axon InvokeBidi channel to the browser session. Agent CDP commands may be sent individually or in batches of up to 32 that amortize Axon framing; commands share a bounded concurrent lane and may respond out of order by correlation id, while high-level input remains arrival-ordered. Responses, target events, ping, and detach control all travel as JSON frames inside the canonical Axon session. The plugin injects the bound CDP session id and rejects caller-supplied session routing or browser-wide destructive methods."
+call_mode = "bidi"
+capability_state = "provider_backed"
+admission_action = "stream"
+visibility = "SCOPED"
+scope_subjects_kind = "only_ura_kinds"
+scope_subjects_uras = ["resource"]
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":true}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+additionalProperties = false

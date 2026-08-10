@@ -307,6 +307,25 @@ pub fn classify_invoke_failure(err: &anyhow::Error) -> LocalInvokeFailureClass {
 /// submission.
 pub struct LocalDaemonSystemAbilityIssuer;
 
+fn local_daemon_system_ability_target(
+    ability: &str,
+    execution_host_ura: &str,
+) -> anyhow::Result<LocalAbilityTarget> {
+    let execution_host = crate::core::ura::parse_ura(execution_host_ura)
+        .map_err(|error| anyhow::anyhow!("local daemon execution host URA is invalid: {error}"))?;
+    match execution_host.kind {
+        crate::core::ura::URAKind::Device => {
+            LocalAbilityTarget::for_device_sponsored_system_ability(ability, execution_host_ura)
+        }
+        crate::core::ura::URAKind::Authority => {
+            LocalAbilityTarget::new(ability, execution_host_ura)
+        }
+        other => anyhow::bail!(
+            "local daemon system ability execution host must be Device or Authority, got {other}"
+        ),
+    }
+}
+
 impl LocalDaemonSystemAbilityIssuer {
     #[cfg(feature = "axon-pb")]
     fn local_daemon_identity_subject_ura() -> anyhow::Result<String> {
@@ -359,12 +378,9 @@ impl LocalDaemonSystemAbilityIssuer {
         subject_ura: &str,
         timeout: std::time::Duration,
     ) -> anyhow::Result<Value> {
-        crate::support::platform::local_daemon_grpc::invoke_local_daemon_system_ability_root_for_subject_timeout(
-            ability,
-            args,
-            subject_ura,
-            timeout,
-        )
+        let execution_host_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
+        let target = local_daemon_system_ability_target(ability, &execution_host_ura)?;
+        Self::invoke_target_root_timeout(&target, args, subject_ura, timeout)
     }
 
     pub fn invoke_target_root_timeout(
@@ -1458,6 +1474,39 @@ mod tests {
             capability_flags: vec![],
             pages_port: None,
         }
+    }
+
+    #[test]
+    fn local_daemon_system_target_separates_device_host_from_system_agent_owner() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device-sponsored runtime-introspection target");
+
+        assert_eq!(
+            target.callee_ura(),
+            crate::core::ura::device_agent_ura(
+                "acme",
+                "dev-a",
+                crate::daemon::ability::names::governance::RUNTIME_GOVERNANCE_SYSTEM_AGENT_ID,
+            )
+        );
+        assert_eq!(
+            target.dispatch_name(),
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
+        );
+    }
+
+    #[test]
+    fn local_daemon_system_target_preserves_realm_authority_owner() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::ability::names::federation::DISCOVER,
+            "easynet:///r/acme/authority",
+        )
+        .expect("realm Authority target");
+
+        assert_eq!(target.callee_ura(), "easynet:///r/acme/authority");
     }
 
     #[test]

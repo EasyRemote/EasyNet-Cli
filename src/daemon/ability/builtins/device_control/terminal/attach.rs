@@ -142,7 +142,11 @@ pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>) {
         )?;
         attach_session(&pty_for_attach, attach_args)
     });
-    reg.register_bidi_with_envelope_and_owner("terminal.attach", OwnerKind::Device, handler);
+    reg.register_bidi_with_envelope_and_owner(
+        "terminal.attach",
+        OwnerKind::terminal_system(),
+        handler,
+    );
 }
 
 #[cfg(test)]

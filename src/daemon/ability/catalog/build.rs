@@ -21,7 +21,7 @@ use crate::daemon::ability::builtins::{
     device_control::{
         ability_management::{
             ops as device_ops_ability, publish as ability_publish_ability,
-            registrar as device_ability_registrar,
+            registrar as ability_deployment_registrar,
         },
         file_edit as fs_edit_ability, file_transfer as file_transfer_ability, files as fs_ability,
         http as http_request_ability, process as process_exec_ability, session as session_ability,
@@ -64,6 +64,8 @@ use crate::daemon::persistence::{
 };
 use anyhow::Context as _;
 use std::sync::Arc;
+
+const BUILTIN_PROFILE_AGENT_USER_ID: &str = "builtin-profile";
 
 /// Build a `AxonAbilityCatalog` populated with every v1 system
 /// ability handler plus deterministic builtin plugin abilities.
@@ -177,6 +179,7 @@ pub(crate) fn build_system_registry() -> Arc<AxonAbilityCatalog> {
     build_system_registry_uncached()
 }
 
+#[cfg(test)]
 pub(crate) fn build_system_registry_for_authority_owner(
     authority_ura: &str,
 ) -> std::result::Result<Arc<AxonAbilityCatalog>, String> {
@@ -283,12 +286,13 @@ pub struct BuiltAbilityRegistry {
     #[cfg(feature = "axon-pb")]
     pub invocation_cancellations:
         crate::daemon::invocation::dispatch::cancellation::InvocationCancellationRegistry,
-    /// Late-wired device-ability registrar cell. Populated during the
+    /// Late-wired ability deployment registrar cell. Populated during the
     /// build with a pending registrar; boot calls `set_runtime` on it
     /// (and may `replay_from_store`) once the `LocalRuntime` exists, so
     /// `ability.deploy` can run its install transaction. Mirrors
-    /// `hot_agent_registrar_cell` but for device-owned deploys.
-    pub device_registrar_cell: Arc<device_ops_ability::SharedDeviceRegistrarCell>,
+    /// `hot_agent_registrar_cell` but for device-hosted ability deployment.
+    pub ability_deployment_registrar_cell:
+        Arc<device_ops_ability::SharedAbilityDeploymentRegistrarCell>,
 }
 
 #[derive(Clone)]
@@ -627,13 +631,6 @@ fn build_registry_with_services_result_inner(
         }
         None => AxonAbilityCatalog::new_metadata_only_with_authority_context(authority_context),
     };
-    if hosts_device_authority {
-        daemon_invocation_contracts::register_for_owner(
-            &mut reg,
-            &crate::daemon::ability::dispatch::OwnerKind::Device,
-        )
-        .context("register Device daemon Invocation descriptor contracts")?;
-    }
     if hosts_realm_authority {
         daemon_invocation_contracts::register_for_owner(
             &mut reg,
@@ -746,19 +743,22 @@ fn build_registry_with_services_result_inner(
     agent_lifecycle_ability::register(&mut reg, Arc::clone(&hot_agent_registrar_cell));
     // Device-hosted node/ability operations (list_nodes, describe_node,
     // remove_node, deploy_ability, uninstall_ability). Hub-only assembly must
-    // not open or infer Device product state, so this registrar exists only
-    // when this daemon hosts a Device authority root.
-    let device_registrar_cell: Arc<device_ops_ability::SharedDeviceRegistrarCell> =
-        Arc::new(std::sync::OnceLock::new());
+    // not open or infer Device product state, so this registrar is initialized
+    // only when this daemon owns stateful Device product state.
+    let ability_deployment_registrar_cell: Arc<
+        device_ops_ability::SharedAbilityDeploymentRegistrarCell,
+    > = Arc::new(std::sync::OnceLock::new());
     if stateful_device_runtime {
-        device_registrar_cell
-            .set(device_ability_registrar::DeviceAbilityRegistrar::try_new_pending()?)
-            .map_err(|_| anyhow::anyhow!("device registrar cell was already initialized"))?;
+        ability_deployment_registrar_cell
+            .set(ability_deployment_registrar::AbilityDeploymentRegistrar::try_new_pending()?)
+            .map_err(|_| {
+                anyhow::anyhow!("ability deployment registrar cell was already initialized")
+            })?;
     }
     if hosts_device_authority {
         device_ops_ability::register(
             &mut reg,
-            Arc::clone(&device_registrar_cell),
+            Arc::clone(&ability_deployment_registrar_cell),
             Arc::clone(&local_registry_handle),
             Arc::clone(&discover_federation_resolver),
         );
@@ -908,8 +908,9 @@ fn build_registry_with_services_result_inner(
             // share the same paired identity on this daemon.
             api_key_ability::register(&mut reg, &owner_user_id, &pages_realm);
         }
-        // RFC-006-C v0.1 — device-local OpenAI shim. Device-owned,
-        // no `<user>` slot — registers regardless of pairing state.
+        // RFC-006-C v0.1 — device-hosted OpenAI shim. The callable owner is the
+        // device-sponsored openai-compat SystemAgent; the Device remains the
+        // execution host.
         openai_compat_ability::set_dispatch_handle(Arc::clone(&local_registry_handle));
         openai_compat_ability::set_identity(pages_identity.clone())?;
         openai_compat_ability::register(&mut reg);
@@ -963,10 +964,11 @@ fn build_registry_with_services_result_inner(
     // — otherwise the LLM's discovery flow would not see this
     // ability and would fall back to fabricating answers.
     mission_ability::register(&mut reg);
-    // The device-owned aggregate `agent.discover` owns the top-level view and
-    // reloads the Agent aggregate per call, so it never chooses a random first
-    // agent as a synthetic self or splits registry reads from hosted identity
-    // reads. Per-agent `<agent>.discover` rows are hosted-agent lifecycle rows;
+    // The agent-management SystemAgent aggregate `agent.discover` owns the
+    // top-level view and reloads the Agent aggregate per call, so it never
+    // chooses a random first agent as a synthetic self or splits registry reads
+    // from hosted identity reads. Per-agent `<agent>.discover` rows are
+    // hosted-agent lifecycle rows;
     // they are replayed
     // through HotAgentRegistrar after `Arc::new(reg)` below.
     discover_ability::register_device_aggregate_with_resolver(
@@ -979,16 +981,11 @@ fn build_registry_with_services_result_inner(
         Arc::clone(&discover_federation_resolver),
     );
 
-    // RFC-002 §3.3: register `device.keyring.*` for the daemon's
-    // own self-bundle, scoped under the literal owner `device`.
-    // The daemon publishes its 10 keyring abilities under this
-    // namespace so any local agent can call them through the
-    // standard dispatch path. The ability provider is the daemon-local key
-    // service; this process never opens key storage or derives a master key.
-    //
-    // Keyring belongs to the device runtime, so the catalogue lists
-    // these as `device.keyring.<verb>`, matching the URA
-    // `callee = device/<id>` that already covers them.
+    // RFC-002 §3.3: register the daemon's built-in managed-signing key
+    // inventory. The key service remains daemon-local custody, but the public
+    // AbilityDescriptor owner is the device-sponsored keyring-management
+    // SystemAgent; the historical `device.keyring.*` local-name prefix is not a
+    // Device callee/owner assertion.
     crate::daemon::keyring::abilities::register_device_keyring(&mut reg, key_service_for_daemon());
     // meta.{describe,list_abilities} — Agent self-introspection on
     // the same descriptor catalogue PLUS the live registry. describe
@@ -1258,7 +1255,7 @@ fn build_registry_with_services_result_inner(
         catalog: arc,
         plugin_runtime_manager,
         voice_capability_state,
-        device_registrar_cell,
+        ability_deployment_registrar_cell,
         #[cfg(feature = "axon-pb")]
         invocation_cancellations,
     })
@@ -1268,7 +1265,8 @@ fn build_registry_with_services_result_inner(
 /// user identity before the catalog is constructed. These roots are runtime
 /// architecture, not hosted-agent lifecycle rows: Pages and Files execute
 /// resource-management abilities through `<user>.pages` and `<user>.files`,
-/// while reflected MCP tools execute through `<user>.mcp`. Static eager
+/// reflected MCP tools execute through `<user>.mcp`, and default consent/MCP
+/// profile abilities use their named built-in Agent roots. Static eager
 /// registration and post-boot dynamic overlays therefore pass the same
 /// immutable authority gate.
 pub fn declare_daemon_native_agent_authorities(
@@ -1280,10 +1278,21 @@ pub fn declare_daemon_native_agent_authorities(
     }
     let user_root_identity = identity.user_root_identity()?;
     let Some(user_root_identity) = user_root_identity.as_ref() else {
-        return Ok(authority_context);
+        let Some(realm) = authority_context
+            .device_authority_realm()
+            .map(str::to_string)
+        else {
+            return Ok(authority_context);
+        };
+        return declare_builtin_profile_agent_authorities(
+            authority_context,
+            &realm,
+            BUILTIN_PROFILE_AGENT_USER_ID,
+        );
     };
     let realm = user_root_identity.realm.as_str();
     let user = user_root_identity.owner_user_id.as_str();
+    authority_context = declare_builtin_profile_agent_authorities(authority_context, realm, user)?;
     let declared_roots = [
         ("Pages", pages::management_agent_ura(realm, user)),
         ("Files", files::management_agent_ura(realm, user)),
@@ -1299,6 +1308,28 @@ pub fn declare_daemon_native_agent_authorities(
                 format!(
                     "{executor} execution host cannot be admitted by the daemon authority context"
                 )
+            })?;
+    }
+    Ok(authority_context)
+}
+
+fn declare_builtin_profile_agent_authorities(
+    mut authority_context: AbilityAuthorityContext,
+    realm: &str,
+    user: &str,
+) -> anyhow::Result<AbilityAuthorityContext> {
+    for (profile, authority_root) in [(
+        "default MCP profile",
+        axon_sdk::ura::agent_ura(
+            realm,
+            user,
+            crate::daemon::ability::catalog::profiles::DEFAULT_MCP_AGENT_ID,
+        ),
+    )] {
+        authority_context = authority_context
+            .with_declared_agent_authority_root(authority_root)
+            .with_context(|| {
+                format!("{profile} cannot be admitted by the daemon authority context")
             })?;
     }
     Ok(authority_context)

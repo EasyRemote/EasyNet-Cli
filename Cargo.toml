@@ -9,12 +9,13 @@ build = "build.rs"
 [workspace]
 members = [
     ".",
+    "plugins/browser",
     "plugins/remote-desktop",
     "tools/sdk-conformance-runner",
 ]
 
 [features]
-default = ["axon-pb", "remote-desktop", "native-media"]
+default = ["axon-pb", "browser-cdp", "remote-desktop", "native-media"]
 
 # Compile schemas/*.proto into Rust types via prost-build. Off by
 # default in v1 so developers without protoc installed can still
@@ -36,6 +37,11 @@ axon-pb = [
     "dep:tower",
     "dep:hyper-util",
 ]
+
+# Compile the provider-backed browser plugin and its version-tolerant CDP
+# transport. Browser commands/events remain application payloads carried by
+# Axon InvokeBidi; this feature does not add browser semantics to Axon.
+browser-cdp = ["dep:tokio-tungstenite", "dep:url"]
 
 # Compile the in-tree remote desktop plugin package and its media transport
 # stack. This is part of the current product surface: Frontend remote desktop,
@@ -239,6 +245,7 @@ toml_edit = "0.23"
 # features CLI needs directly for broadcast::channel and multi-thread
 # runtime (Commit 2 flips main.rs to #[tokio::main]).
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "fs", "io-util", "time", "net", "signal", "process"] }
+tokio-tungstenite = { version = "0.30", features = ["connect"], optional = true }
 # tokio-util LengthDelimitedCodec + Framed for IPC frame I/O
 # (4-byte LE length prefix + JSON payload). Plan v10.5 §架构决策
 # — 本机 IPC 接口.
@@ -248,6 +255,7 @@ futures = "0.3"
 # bytes::BytesMut backing the codec.
 bytes = "1"
 ureq = { version = "2", features = ["json"] }
+url = { version = "2.5.8", optional = true }
 # OpenAPI import accepts both JSON and YAML specifications.
 serde_yaml = "0.9"
 # Hidden password input for `easynet auth login` when --password

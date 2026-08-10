@@ -89,6 +89,30 @@ pub(crate) enum DaemonRouteIngress {
     },
 }
 
+fn exact_route_host_device_ura_for_delegation(
+    metadata: &std::collections::HashMap<String, String>,
+    callee_ura: &str,
+) -> Result<String, Status> {
+    if !metadata
+        .get(crate::daemon::ability::HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY)
+        .map(String::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return Ok(callee_ura.to_string());
+    }
+    let parsed = crate::core::ura::parse_ura(callee_ura).map_err(|error| {
+        Status::invalid_argument(format!(
+            "hosted-agent delegation exact route callee URA is invalid: {error}"
+        ))
+    })?;
+    if let Some((device_id, _agent_id)) = parsed.device_agent_ids() {
+        return Ok(crate::core::ura::device_ura(&parsed.realm, device_id));
+    }
+    Err(Status::invalid_argument(format!(
+        "hosted-agent delegation exact route requires a device-sponsored SystemAgent callee to derive host Device, got `{callee_ura}`"
+    )))
+}
+
 /// Self-contained first-key bootstrap claim derived from the presented key.
 ///
 /// This value proves that the canonical caller, subject, route, public key,
@@ -371,6 +395,8 @@ impl DaemonRouteRuntimeAdapter {
         let registered_ref = bound
             .descriptor_ref_for_mode("daemon exact unary route", callee_ura, CallMode::Rpc, None)?
             .into_descriptor_ref();
+        let host_device_ura =
+            exact_route_host_device_ura_for_delegation(&request.metadata, callee_ura)?;
 
         let wire = match ingress {
             DaemonRouteIngress::Bootstrap {
@@ -382,6 +408,7 @@ impl DaemonRouteRuntimeAdapter {
                     &request.metadata,
                     &envelope,
                     HostedAgentDelegationIngress::BootstrapCandidate,
+                    &host_device_ura,
                     route.name(),
                 )?;
                 let signed_ref = bound
@@ -406,6 +433,7 @@ impl DaemonRouteRuntimeAdapter {
                     &request.metadata,
                     &envelope,
                     HostedAgentDelegationIngress::TrustedLocalSystem,
+                    &host_device_ura,
                     route.name(),
                 )?;
                 crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
@@ -420,6 +448,7 @@ impl DaemonRouteRuntimeAdapter {
                     &request.metadata,
                     &envelope,
                     HostedAgentDelegationIngress::ExternalSigned,
+                    &host_device_ura,
                     route.name(),
                 )?;
                 let signed_ref = bound
@@ -490,12 +519,15 @@ impl DaemonRouteRuntimeAdapter {
                 None,
             )?
             .into_descriptor_ref();
+        let host_device_ura =
+            exact_route_host_device_ura_for_delegation(&request.metadata, callee_ura)?;
 
         let wire = if local_system_ingress {
             let metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
                 &request.metadata,
                 &envelope,
                 HostedAgentDelegationIngress::TrustedLocalSystem,
+                &host_device_ura,
                 route.name(),
             )?;
             crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
@@ -509,6 +541,7 @@ impl DaemonRouteRuntimeAdapter {
                 &request.metadata,
                 &envelope,
                 HostedAgentDelegationIngress::ExternalSigned,
+                &host_device_ura,
                 route.name(),
             )?;
             let signed_ref = bound
@@ -602,6 +635,8 @@ impl DaemonRouteRuntimeAdapter {
         let local_system_ingress = self
             .admission
             .accepts_local_system_envelope(envelope_open.envelope.as_ref());
+        let host_device_ura =
+            exact_route_host_device_ura_for_delegation(&envelope_open.metadata, callee_ura)?;
         let mut metadata = HostedAgentDelegationIssuer::materialize_request_metadata(
             &envelope_open.metadata,
             &envelope,
@@ -610,6 +645,7 @@ impl DaemonRouteRuntimeAdapter {
             } else {
                 HostedAgentDelegationIngress::ExternalSigned
             },
+            &host_device_ura,
             route.name(),
         )?;
         if let Some(extension) = envelope_open.session_ext.as_ref() {
@@ -957,6 +993,48 @@ fn constant_time_eq_32(left: &[u8; 32], right: &[u8; 32]) -> bool {
             difference | (left ^ right)
         })
         == 0
+}
+
+#[cfg(test)]
+mod hosted_agent_delegation_route_tests {
+    use super::*;
+
+    fn delegation_metadata() -> std::collections::HashMap<String, String> {
+        std::collections::HashMap::from([(
+            crate::daemon::ability::HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY.to_string(),
+            "1".to_string(),
+        )])
+    }
+
+    #[test]
+    fn delegation_exact_route_rejects_direct_device_callee() {
+        let metadata = delegation_metadata();
+        let error = exact_route_host_device_ura_for_delegation(
+            &metadata,
+            "easynet:///r/test-realm/device/edge-01",
+        )
+        .expect_err("delegation must not derive host from direct Device callee");
+
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(
+            error.message().contains("device-sponsored SystemAgent")
+                && !error.message().contains("Device or"),
+            "unexpected delegation callee error: {}",
+            error.message()
+        );
+    }
+
+    #[test]
+    fn delegation_exact_route_derives_host_from_system_agent_callee() {
+        let metadata = delegation_metadata();
+        let host = exact_route_host_device_ura_for_delegation(
+            &metadata,
+            "easynet:///r/test-realm/agent/device.edge-01.runtime-health",
+        )
+        .expect("device-sponsored SystemAgent callee must derive host Device");
+
+        assert_eq!(host, "easynet:///r/test-realm/device/edge-01");
+    }
 }
 
 #[cfg(test)]

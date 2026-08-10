@@ -109,7 +109,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
     let runtime = reg.runtime();
     reg.register_rpc_with_envelope_and_owner(
         "mission.think",
-        OwnerKind::Device,
+        OwnerKind::automation_system(),
         Arc::new(move |envelope, args| {
             let runtime = runtime.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("mission.think execution requires an executable canonical runtime")
@@ -1944,11 +1944,12 @@ This skill does X.\n";
     {
         let counter: Arc<StdMutex<usize>> = Arc::new(StdMutex::new(0));
         let replies: Arc<Vec<String>> = Arc::new(replies.into_iter().map(String::from).collect());
-        let authority_context =
-            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+        let hosted_agent_ura = crate::core::ura::agent_ura("test", "user-1", agent);
+        let authority_context = crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
                 crate::core::ura::device_ura("test", "local"),
+                vec![hosted_agent_ura],
             )
-            .expect("test device authority root is canonical");
+            .expect("test hosted Agent root is canonical");
         let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
@@ -1958,10 +1959,12 @@ This skill does X.\n";
         );
         let counter_c = Arc::clone(&counter);
         let replies_c = Arc::clone(&replies);
-        reg.register_rpc_with_owner_and_action(
+        let agent_owner = crate::daemon::ability::dispatch::OwnerKind::Agent(agent.to_string());
+        reg.register_rpc_with_spec_and_action(
             format!("{agent}.chat"),
-            crate::daemon::ability::dispatch::OwnerKind::Device,
+            agent_owner,
             crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+            crate::daemon::ability::manifest::default_chat_manifest(),
             Arc::new(move |args: Value| {
                 let mut idx = counter_c.lock().unwrap();
                 let i = *idx;

@@ -41,7 +41,7 @@ use crate::cli::daemon_client::remote_system_ability::RemoteDeviceSessionAbility
 #[cfg(feature = "axon-pb")]
 use crate::cli::daemon_client::remote_system_ability::{
     invoke_remote_device_session_ability, invoke_remote_device_system_ability_as_caller,
-    RemoteDeviceSystemAbility,
+    RemoteTargetSystemAbility,
 };
 #[cfg(feature = "axon-pb")]
 use crate::daemon::invocation::admission::authority_metadata::CanonicalSessionAuthorityIssuer;
@@ -96,9 +96,11 @@ impl TerminalInvocationRoute {
     fn resolve(raw_target: &str) -> anyhow::Result<Self> {
         let credentials = crate::daemon::persistence::config::load_credentials()
             .context("device terminal requires paired runtime credentials")?;
+        let identity = crate::support::platform::remote_device::PairedInvocationIdentity::load(
+            "device terminal",
+        )?;
         let target = raw_target.trim();
-        let local_device_ura =
-            crate::core::ura::device_ura(credentials.realm_str(), &credentials.node_id);
+        let local_device_ura = identity.local_device_ura();
         if target.is_empty()
             || target.eq_ignore_ascii_case("local")
             || target == credentials.node_id
@@ -117,7 +119,7 @@ impl TerminalInvocationRoute {
         {
             let target_ura =
                 crate::support::platform::remote_device::resolve_target_device_ura(target)?;
-            let caller_ura = local_device_ura;
+            let caller_ura = identity.caller_user_ura().to_string();
             let signer =
                 crate::daemon::invocation::routing::remote_invoke::load_remote_invocation_caller_signer(
                     &caller_ura,
@@ -132,7 +134,7 @@ impl TerminalInvocationRoute {
 
         #[cfg(not(feature = "axon-pb"))]
         {
-            let _ = local_device_ura;
+            let _ = identity;
             Err(
                 crate::support::platform::local_invoke::federation_capability_unsupported_error(
                     "opening a remote device terminal",
@@ -157,11 +159,23 @@ impl TerminalInvocationRoute {
         }
     }
 
+    fn session_callee_ura(&self) -> anyhow::Result<String> {
+        Ok(LocalAbilityTarget::for_device_sponsored_system_ability(
+            "terminal.create",
+            self.target_ura(),
+        )?
+        .callee_ura()
+        .to_string())
+    }
+
     fn create(&self, cols: u16, rows: u16) -> anyhow::Result<Value> {
         let args = json!({"cols": cols, "rows": rows});
         match self {
             Self::Local { target_ura } => {
-                let target = LocalAbilityTarget::new("terminal.create", target_ura)?;
+                let target = LocalAbilityTarget::for_device_sponsored_system_ability(
+                    "terminal.create",
+                    target_ura,
+                )?;
                 LocalDaemonSystemAbilityIssuer::invoke_target_root_timeout(
                     &target,
                     args,
@@ -176,7 +190,7 @@ impl TerminalInvocationRoute {
                 ..
             } => invoke_remote_device_system_ability_as_caller(
                 target_ura,
-                RemoteDeviceSystemAbility::TerminalCreate,
+                RemoteTargetSystemAbility::TerminalCreate,
                 args,
                 caller_ura,
             ),
@@ -216,7 +230,10 @@ impl TerminalInvocationRoute {
     ) -> anyhow::Result<Value> {
         match self {
             Self::Local { target_ura } => {
-                let target = LocalAbilityTarget::new(ability.as_str(), target_ura)?;
+                let target = LocalAbilityTarget::for_device_sponsored_system_ability(
+                    ability.as_str(),
+                    target_ura,
+                )?;
                 LocalDaemonSystemAbilityIssuer::invoke_target_root_with_authority_timeout(
                     &target,
                     args,
@@ -298,14 +315,15 @@ impl TerminalSession {
         let expires_at_ms = now_ms
             .checked_add(AUTHORITY_LEASE_MILLIS)
             .ok_or_else(|| anyhow::anyhow!("terminal authority expiry overflow"))?;
+        let session_callee_ura = route.session_callee_ura()?;
         let request = SessionAuthorityRequest {
             issuer_ura: route.issuer_ura().to_string(),
             session_id: session_id.to_string(),
             session_owner_user_id: session_owner_user_id.to_string(),
             creator_principal_id: route.issuer_ura().to_string(),
-            callee_ura: route.target_ura().to_string(),
+            callee_ura: session_callee_ura.clone(),
             subject_ura: subject_ura.to_string(),
-            audience: route.target_ura().to_string(),
+            audience: session_callee_ura,
             scopes: vec!["terminal.*".to_string()],
             // Descriptor admission remains authoritative: input/read/resize
             // are `stream`, while terminal close is `manage`.
@@ -552,6 +570,18 @@ mod tests {
         assert!(
             !TERMINAL_SESSION_ALLOWED_ACTIONS.contains(&"invoke"),
             "terminal authority must use descriptor actions, not a generic invocation verb"
+        );
+    }
+
+    #[test]
+    fn terminal_session_authority_targets_system_agent_not_device_host() {
+        let route = TerminalInvocationRoute::Local {
+            target_ura: crate::core::ura::device_ura("hub", "node-a"),
+        };
+
+        assert_eq!(
+            route.session_callee_ura().expect("terminal callee"),
+            crate::core::ura::device_agent_ura("hub", "node-a", "terminal")
         );
     }
 }

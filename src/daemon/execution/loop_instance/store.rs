@@ -5,14 +5,15 @@
 // Description: One JSON file per loop instance under
 //              `~/.easynet/tenants/<tenant>/loops/<id>.json`.
 //              Same atomic-overwrite semantics as the schedule
-//              store; same one-corrupt-file-must-not-poison-boot
-//              tolerance.
+//              store. Corrupt or obsolete records fail boot explicitly;
+//              durable automation is never silently discarded.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::path::PathBuf;
 
+use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
@@ -24,14 +25,9 @@ const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct OnDisk {
-    #[serde(default = "default_schema_version")]
     schema_version: u32,
     #[serde(flatten)]
     instance: LoopInstance,
-}
-
-fn default_schema_version() -> u32 {
-    SCHEMA_VERSION
 }
 
 pub struct LoopStore {
@@ -58,26 +54,23 @@ impl LoopStore {
             Err(e) => return Err(e.into()),
         };
         for ent in entries {
-            let ent = match ent {
-                Ok(e) => e,
-                Err(e) => {
-                    eprintln!("[loop] read_dir entry error: {e}");
-                    continue;
-                }
-            };
+            let ent = ent.context("read loop directory entry")?;
             let path = ent.path();
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
             }
-            match std::fs::read_to_string(&path) {
-                Ok(s) => match serde_json::from_str::<OnDisk>(&s) {
-                    Ok(d) => out.push(d.instance),
-                    Err(e) => {
-                        eprintln!("[loop] failed to parse {}: {e} (skipping)", path.display())
-                    }
-                },
-                Err(e) => eprintln!("[loop] failed to read {}: {e} (skipping)", path.display()),
+            let body = std::fs::read_to_string(&path)
+                .with_context(|| format!("read loop record {}", path.display()))?;
+            let record: OnDisk = serde_json::from_str(&body)
+                .with_context(|| format!("parse loop record {}", path.display()))?;
+            if record.schema_version != SCHEMA_VERSION {
+                anyhow::bail!(
+                    "loop record {} schema_version {} is not supported by this runtime",
+                    path.display(),
+                    record.schema_version
+                );
             }
+            out.push(record.instance);
         }
         Ok(out)
     }
@@ -108,18 +101,30 @@ impl LoopStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::domain::{AgentId, LoopState};
+    use crate::core::domain::{AgentId, DeferredInvocationAuthority, LoopState};
 
     fn instance(id: &str) -> LoopInstance {
         LoopInstance {
             id: LoopId::new(id),
             tenant: TenantId::default_v1(),
             worker_agent: AgentId::new("alice"),
+            authority: DeferredInvocationAuthority {
+                accountable_user_ura: crate::core::ura::user_ura("default", "user-1"),
+                creator_invocation_id: "test-loop-create".to_string(),
+                controller_callee_ura: crate::core::ura::device_agent_ura(
+                    "default",
+                    "self",
+                    crate::daemon::ability::names::automation::AUTOMATION_SYSTEM_AGENT_ID,
+                ),
+                target_callee_ura: crate::core::ura::agent_ura("default", "user-1", "alice"),
+                execution_host_ura: crate::core::ura::device_ura("default", "self"),
+            },
             verify_expr: "true".into(),
             body_prompt: "do work".into(),
             max_iters: 5,
             current_iter: 0,
             state: LoopState::Pending,
+            invocation_ledger: Vec::new(),
             last_body_output: None,
             last_verify_output: None,
         }
@@ -135,5 +140,37 @@ mod tests {
         assert_eq!(loaded[0].id, LoopId::new("rt-1"));
         assert_eq!(loaded[0].state, LoopState::Pending);
         store.delete(&loaded[0].id).unwrap();
+    }
+
+    #[test]
+    fn load_all_rejects_corrupt_or_obsolete_records() {
+        let home = tempfile::tempdir().expect("loop store test directory");
+        let dir = home.path().join("loops");
+        let store = LoopStore::open_at(dir.clone()).unwrap();
+        std::fs::write(dir.join("corrupt.json"), "{ not json").unwrap();
+        let error = store
+            .load_all()
+            .expect_err("corrupt durable loop state must fail closed");
+        assert!(error.to_string().contains("corrupt.json"), "{error:#}");
+
+        std::fs::remove_file(dir.join("corrupt.json")).unwrap();
+        let mut obsolete = serde_json::to_value(OnDisk {
+            schema_version: SCHEMA_VERSION,
+            instance: instance("obsolete"),
+        })
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone();
+        obsolete.remove("schema_version");
+        std::fs::write(
+            dir.join("obsolete.json"),
+            serde_json::to_string_pretty(&obsolete).unwrap(),
+        )
+        .unwrap();
+        let error = store
+            .load_all()
+            .expect_err("missing loop schema version must fail closed");
+        assert!(error.to_string().contains("obsolete.json"), "{error:#}");
     }
 }

@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use axon_sdk::invocation::{BidiInputFrame, BidiInputSender};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use serde_json::{json, Value};
+use serde_json::Value;
 #[cfg(test)]
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -173,16 +173,10 @@ fn local_bidi_wire_kind_for(
         .or_else(|| crate::daemon::ability::wire::core_bidi_wire_kind_for(ability))
 }
 
-fn local_is_bidi_wire_ability(
-    registry: &crate::daemon::ability::wire::AbilityWireRegistry,
-    ability: &str,
-) -> bool {
-    local_bidi_wire_kind_for(registry, ability).is_some()
-}
-
 #[derive(Clone)]
 struct ActiveRemoteBidi {
     ability: String,
+    wire_kind: LocalBidiWireKind,
     sender: BidiInputSender,
 }
 
@@ -1006,10 +1000,6 @@ impl LocalAxonSessionDispatcher {
         true
     }
 
-    fn is_json_frame_bidi(&self, ability: &str) -> bool {
-        Self::is_json_frame_bidi_with(&self.ability_wire, ability)
-    }
-
     fn is_json_frame_bidi_with(
         registry: &crate::daemon::ability::wire::AbilityWireRegistry,
         ability: &str,
@@ -1347,7 +1337,7 @@ impl LocalAxonSessionDispatcher {
             call_id = call_id,
             ability = ability,
         );
-        if !local_is_bidi_wire_ability(&self.ability_wire, &ability) {
+        let Some(wire_kind) = local_bidi_wire_kind_for(&self.ability_wire, &ability) else {
             return Self::send_bidi_control_failure(
                 outbound,
                 call_id,
@@ -1357,7 +1347,7 @@ impl LocalAxonSessionDispatcher {
                 ),
             )
             .await;
-        }
+        };
         let Some(envelope) = request.envelope else {
             return self
                 .fail_remote_bidi_opening(
@@ -1553,8 +1543,15 @@ impl LocalAxonSessionDispatcher {
             call_id = call_id,
             ability = ability,
         );
-        self.register_remote_bidi(call_id, &ability, handle, outbound, lifecycle_envelope)
-            .await
+        self.register_remote_bidi(
+            call_id,
+            &ability,
+            wire_kind,
+            handle,
+            outbound,
+            lifecycle_envelope,
+        )
+        .await
     }
 
     async fn send_canonical_carrier_dispatch_result(
@@ -1763,6 +1760,7 @@ impl LocalAxonSessionDispatcher {
         &self,
         call_id: u64,
         ability: &str,
+        wire_kind: LocalBidiWireKind,
         handle: axon_sdk::invocation::BidiInvocationHandle,
         outbound: &SessionUpSender,
         lifecycle_envelope: axon_sdk::invocation::DescriptorBoundEnvelope,
@@ -1837,6 +1835,7 @@ impl LocalAxonSessionDispatcher {
 
         let active = ActiveRemoteBidi {
             ability: ability.to_string(),
+            wire_kind,
             sender: handler_in_tx,
         };
         let key = CarrierCallKey {
@@ -2180,29 +2179,25 @@ impl LocalAxonSessionDispatcher {
         eof: bool,
         outbound: &SessionUpSender,
     ) -> Result<(), SessionDispatchError> {
-        let frame = if eof {
-            if self.is_json_frame_bidi(&active.ability) {
-                json!({"type": "close", "reason": "bidi_eof"})
-            } else {
-                json!({"type": "eof"})
-            }
-        } else if active.ability
-            == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_TERMINAL_ATTACH
-            || self.is_json_frame_bidi(&active.ability)
-        {
-            serde_json::from_slice::<Value>(&payload).map_err(|err| {
-                SessionDispatchError::Other(format!("decode remote bidi JSON input: {err}"))
-            })?
+        // The hub-side wire codec maps canonical InvokeBidi frames exactly
+        // once into the handler's JSON protocol.  The execution host owns
+        // delivery and lifecycle only; re-encoding here would corrupt binary
+        // FileTransfer payloads and conflate transport EOF with business data.
+        let send_result = if payload.is_empty() {
+            Ok(())
         } else {
-            json!({"type": "chunk", "data": B64.encode(payload)})
+            serde_json::from_slice::<Value>(&payload).map_err(|err| {
+                SessionDispatchError::Other(format!(
+                    "decode {:?} remote bidi handler input for {}: {err}",
+                    active.wire_kind, active.ability
+                ))
+            })?;
+            active
+                .sender
+                .send(BidiInputFrame::new(payload).with_content_type("application/json"))
+                .await
+                .map(|_| ())
         };
-        let payload = serde_json::to_vec(&frame).map_err(|err| {
-            SessionDispatchError::Other(format!("encode remote bidi input: {err}"))
-        })?;
-        let send_result = active
-            .sender
-            .send(BidiInputFrame::new(payload).with_content_type("application/json"))
-            .await;
         if eof {
             let _ = active.sender.close_input().await;
         }
@@ -2447,6 +2442,7 @@ mod tests {
     use std::time::Duration;
 
     const TEST_DEVICE_URA: &str = "easynet:///r/t/device/d1";
+    const TEST_LOCOMOTION_SYSTEM_AGENT_URA: &str = "easynet:///r/t/agent/device.d1.locomotion";
 
     fn start_test_carrier(
         dispatcher: &LocalAxonSessionDispatcher,
@@ -2769,7 +2765,7 @@ mod tests {
         {
             return descriptor_ref;
         }
-        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
             callee_ura,
             ability,
             catalog_call_mode(mode),
@@ -2899,10 +2895,6 @@ mod tests {
         }
     }
 
-    fn canonical_carrier_call(call_id: u64, ability: &str, args: Vec<u8>) -> InvokeBidiDown {
-        canonical_carrier_call_signed_as(call_id, ability, ability, args)
-    }
-
     fn canonical_carrier_explicit_test_call(
         call_id: u64,
         ability: &str,
@@ -2959,16 +2951,35 @@ mod tests {
         args: Vec<u8>,
         mode: axon_sdk::invocation::CallMode,
     ) -> InvokeBidiDown {
+        canonical_carrier_call_signed_as_with_mode_for_target(
+            call_id,
+            request_ability,
+            signed_ability,
+            args,
+            mode,
+            TEST_DEVICE_URA,
+            TEST_DEVICE_URA,
+        )
+    }
+
+    fn canonical_carrier_call_signed_as_with_mode_for_target(
+        call_id: u64,
+        request_ability: &str,
+        signed_ability: &str,
+        args: Vec<u8>,
+        mode: axon_sdk::invocation::CallMode,
+        callee_ura: &str,
+        subject_ura: &str,
+    ) -> InvokeBidiDown {
         use axon_sdk::pb::axon::v1::{DispatchCall, InvokeRequest};
         use ed25519_dalek::Signer as _;
 
         let signing_key = canonical_carrier_signing_key();
-        let signed_descriptor_ref =
-            descriptor_ref_for_call_mode(TEST_DEVICE_URA, signed_ability, mode);
+        let signed_descriptor_ref = descriptor_ref_for_call_mode(callee_ura, signed_ability, mode);
         let mut envelope = crate::daemon::invocation::ProtoEnvelope::from_target(
             TEST_CALLER_URA,
-            "easynet:///r/t/device/d1",
-            "easynet:///r/t/device/d1",
+            callee_ura,
+            subject_ura,
             crate::daemon::invocation::InvocationDerivationPolicy::FreshRoot,
         )
         .expect("valid canonical carrier envelope")
@@ -3015,13 +3026,20 @@ mod tests {
         }
     }
 
-    fn canonical_carrier_bidi_open(call_id: u64, ability: &str, args: Vec<u8>) -> InvokeBidiDown {
-        let mut frame = canonical_carrier_call_signed_as_with_mode(
+    fn canonical_carrier_bidi_open(
+        call_id: u64,
+        ability: &str,
+        args: Vec<u8>,
+        subject_ura: &str,
+    ) -> InvokeBidiDown {
+        let mut frame = canonical_carrier_call_signed_as_with_mode_for_target(
             call_id,
             ability,
             ability,
             args,
             axon_sdk::invocation::CallMode::Bidi,
+            TEST_LOCOMOTION_SYSTEM_AGENT_URA,
+            subject_ura,
         );
         if let Some(DownPayload::DispatchCall(call)) = frame.payload.as_mut() {
             call.call_mode =
@@ -3058,6 +3076,20 @@ mod tests {
     /// a proto DispatchResult.
     #[test]
     fn canonical_carrier_bidi_open_round_trips_and_replies_proto_on_canonical_session() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "d1".to_string(),
+                realm: "t".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "https://hub.example:50443".to_string(),
+                join_receipt_hash: Some("join-hash".to_string()),
+                username: Some("alice".to_string()),
+                user_id: Some("alice".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("test Device identity");
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_stack_size(32 * 1024 * 1024)
@@ -3080,14 +3112,19 @@ mod tests {
             crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
         );
 
+        let resource_ref = crate::daemon::resources::files::resource_ref_for_local_path_owned_by(
+            &target,
+            crate::daemon::resources::files::FilesystemResourceCapability::Write,
+            TEST_DEVICE_URA,
+        )
+        .expect("local fs ResourceRef");
+        let subject_ura = resource_ref["resource_ura"]
+            .as_str()
+            .expect("ResourceRef subject URA")
+            .to_string();
         let args = serde_json::to_vec(&json!({
             "mode": "upload",
-            "resource_ref": crate::daemon::resources::files::resource_ref_for_local_path_owned_by(
-                &target,
-                crate::daemon::resources::files::FilesystemResourceCapability::Write,
-                TEST_DEVICE_URA,
-            )
-            .expect("local fs ResourceRef"),
+            "resource_ref": resource_ref,
         }))
         .expect("encode args");
         disp.handle_down(
@@ -3095,6 +3132,7 @@ mod tests {
                 77,
                 crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER,
                 args,
+                &subject_ura,
             ),
             &session_tx,
         )
@@ -3104,7 +3142,11 @@ mod tests {
         disp.handle_down(
             session_frame(SessionDispatch::BidiInput {
                 call_id: 77,
-                payload: bytes.to_vec(),
+                payload: serde_json::to_vec(&json!({
+                    "type": "chunk",
+                    "data": B64.encode(bytes),
+                }))
+                .expect("mapped file-transfer chunk"),
                 eof: false,
             }),
             &session_tx,
@@ -3114,7 +3156,8 @@ mod tests {
         disp.handle_down(
             session_frame(SessionDispatch::BidiInput {
                 call_id: 77,
-                payload: Vec::new(),
+                payload: serde_json::to_vec(&json!({"type": "eof"}))
+                    .expect("mapped file-transfer EOF"),
                 eof: true,
             }),
             &session_tx,
@@ -3147,18 +3190,17 @@ mod tests {
 
         let progress = tokio::time::timeout(Duration::from_secs(3), rx.recv())
             .await
-            .expect("progress reply within 3s")
-            .expect("progress reply produced");
+            .expect("upload completion within 3s")
+            .expect("upload completion produced");
         let progress = match progress.payload {
-            Some(UpPayload::DispatchResult(result)) => result,
-            other => {
-                panic!("expected progress DispatchResult on a canonical session, got: {other:?}")
-            }
+            Some(UpPayload::DispatchResult(r)) => r,
+            other => panic!("expected completion DispatchResult, got: {other:?}"),
         };
         assert_eq!(progress.call_id, 77);
-        assert!(!progress.terminal);
-        assert!(progress.admission_receipt.is_none());
-        assert!(progress.terminal_receipt.is_none());
+        assert!(!progress.terminal, "completion payload precedes terminal receipt");
+        let completion: serde_json::Value =
+            serde_json::from_slice(&progress.payload).expect("upload completion payload");
+        assert_eq!(completion["type"], "complete", "{completion}");
 
         let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
             .await
@@ -3784,6 +3826,20 @@ mod tests {
 
     #[tokio::test]
     async fn device_mode_dispatcher_executes_fs_read_through_baseline_locomotion_registry() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "d1".to_string(),
+                realm: "t".to_string(),
+                credential_token: "token".to_string(),
+                hub_endpoint: "https://hub.example:50443".to_string(),
+                join_receipt_hash: Some("join-hash".to_string()),
+                username: Some("alice".to_string()),
+                user_id: Some("alice".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("test Device identity");
         let tmp = tempfile::tempdir().expect("tempdir");
         let target = tmp.path().join("hello.txt");
         std::fs::write(&target, "device-B-bytes-from-real-fs-read").expect("seed temp file");
@@ -3796,18 +3852,26 @@ mod tests {
         let session_tx = start_test_carrier(&disp, tx);
 
         let args = serde_json::json!({
-            "resource_ref": crate::daemon::resources::files::resource_ref_for_local_path_owned_by(
+            "resource_ref": crate::daemon::resources::files::resource_ref_for_local_path(
                 &target,
                 crate::daemon::resources::files::FilesystemResourceCapability::Read,
-                TEST_DEVICE_URA,
             )
             .expect("local fs ResourceRef"),
             "encoding": "utf8",
         });
-        let frame = canonical_carrier_call(
+        let locomotion_callee = crate::core::ura::device_agent_ura(
+            "t",
+            "d1",
+            crate::daemon::ability::names::device_control::LOCOMOTION_SYSTEM_AGENT_ID,
+        );
+        let frame = canonical_carrier_call_signed_as_with_mode_for_target(
             42,
             "fs.read",
+            "fs.read",
             serde_json::to_vec(&args).expect("encode args"),
+            axon_sdk::invocation::CallMode::Rpc,
+            &locomotion_callee,
+            TEST_DEVICE_URA,
         );
         session_tx.set_negotiated_contract(
             crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,

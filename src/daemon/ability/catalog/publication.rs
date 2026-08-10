@@ -140,6 +140,29 @@ impl LocalAbilityPublicationSnapshot {
             .collect()
     }
 
+    /// Return every committed local owner that is a Device-sponsored
+    /// SystemAgent.
+    ///
+    /// SystemAgent descriptors are independently routable owner projections;
+    /// their sponsoring Device supplies execution/custody only. Dynamic
+    /// plugin and deployed-ability publication must therefore enumerate these
+    /// owners directly instead of collapsing them into a Device projection.
+    #[must_use]
+    pub(crate) fn system_agent_owner_uras(&self) -> Vec<String> {
+        self.descriptors_by_owner
+            .keys()
+            .filter(|owner_ura| {
+                crate::core::ura::parse_ura(owner_ura)
+                    .ok()
+                    .is_some_and(|parsed| {
+                        parsed.kind == crate::core::ura::URAKind::Agent
+                            && parsed.device_agent_ids().is_some()
+                    })
+            })
+            .cloned()
+            .collect()
+    }
+
     #[must_use]
     pub(crate) fn all_descriptors(&self) -> Vec<AbilityDescriptor> {
         self.descriptors_by_owner
@@ -201,25 +224,28 @@ mod tests {
     use crate::daemon::ability::dispatch::{AbilityAuthorityContext, OwnerKind};
 
     #[test]
-    fn capture_tracks_hot_control_plane_commits_without_mutating_prior_snapshot() {
-        let owner_ura = "easynet:///r/acme/device/node-a";
+    fn capture_tracks_device_profile_projection_commits_without_mutating_prior_snapshot() {
+        let device_profile_owner_ura = "easynet:///r/acme/device/node-a";
         let catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
                 None,
             ),
-            AbilityAuthorityContext::for_device_authority_root(owner_ura)
+            AbilityAuthorityContext::for_device_authority_root(device_profile_owner_ura)
                 .expect("device authority context"),
         );
         let before = LocalAbilityPublicationSnapshot::capture(&catalog);
 
+        // This bounded Device owner path models the migration-only
+        // DeviceProfileProjection publication cursor. Plugin-provided dynamic
+        // abilities must publish through plugin-management, not this path.
         catalog
             .hot_register_rpc_with_spec(
-                "plugin.dynamic",
-                OwnerKind::Device,
+                "device_profile.cursor",
+                OwnerKind::DeviceProfileProjection,
                 crate::daemon::ability::manifest::AbilityManifest::new(
                     "dynamic",
-                    "test dynamic ability",
+                    "test DeviceProfileProjection cursor ability",
                     serde_json::json!({"type": "object"}),
                 )
                 .and_then(|manifest| manifest.with_admission_action("invoke"))
@@ -229,14 +255,14 @@ mod tests {
             .expect("hot-register dynamic ability");
         let after = LocalAbilityPublicationSnapshot::capture(&catalog);
 
-        assert!(!before.resolves(owner_ura, "plugin.dynamic"));
-        assert!(after.resolves(owner_ura, "plugin.dynamic"));
+        assert!(!before.resolves(device_profile_owner_ura, "device_profile.cursor"));
+        assert!(after.resolves(device_profile_owner_ura, "device_profile.cursor"));
         let published = after
-            .owner_projection_values(owner_ura)
+            .owner_projection_values(device_profile_owner_ura)
             .expect("local publication must project");
         assert!(published.iter().any(|summary| {
-            summary.get("namespace").and_then(Value::as_str) == Some("plugin")
-                && summary.get("local_name").and_then(Value::as_str) == Some("dynamic")
+            summary.get("namespace").and_then(Value::as_str) == Some("device_profile")
+                && summary.get("local_name").and_then(Value::as_str) == Some("cursor")
         }));
     }
 
@@ -244,7 +270,7 @@ mod tests {
     fn owner_projection_values_rejects_corrupt_committed_descriptor() {
         let owner_ura = "easynet:///r/acme/device/node-a";
         let mut descriptor = AbilityDescriptor::new(
-            "plugin.dynamic",
+            "device_profile.cursor",
             owner_ura,
             crate::daemon::ability::descriptors::Visibility::Scoped,
             crate::daemon::ability::descriptors::AdmissionAction::Invoke,
@@ -315,6 +341,38 @@ mod tests {
             .or_default();
 
         assert_eq!(snapshot.hosted_agent_owner_uras(), vec![alice, bob]);
+    }
+
+    #[test]
+    fn system_agent_owner_uras_are_kept_separate_from_hosted_user_agents() {
+        let plugin_management =
+            crate::core::ura::device_agent_ura("acme", "node-a", "plugin-management");
+        let ability_management =
+            crate::core::ura::device_agent_ura("acme", "node-a", "ability-management");
+        let hosted = crate::core::ura::agent_ura("acme", "alice", "worker");
+        let mut descriptors = Vec::new();
+        for (owner, name) in [
+            (&plugin_management, "plugin.echo"),
+            (&ability_management, "ability.deploy"),
+            (&hosted, "chat"),
+        ] {
+            descriptors.push(
+                AbilityDescriptor::new(
+                    name,
+                    owner,
+                    crate::daemon::ability::descriptors::Visibility::Scoped,
+                    crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+                )
+                .expect("descriptor"),
+            );
+        }
+        let snapshot = LocalAbilityPublicationSnapshot::from_descriptors(descriptors);
+
+        assert_eq!(
+            snapshot.system_agent_owner_uras(),
+            vec![ability_management, plugin_management]
+        );
+        assert_eq!(snapshot.hosted_agent_owner_uras(), vec![hosted]);
     }
 
     #[test]

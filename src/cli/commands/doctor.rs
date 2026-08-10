@@ -548,6 +548,7 @@ mod tests {
     fn daemon_row(name: &str, runtime: &str) -> DaemonAgentRow {
         DaemonAgentRow {
             name: name.to_string(),
+            ura: Some(crate::core::ura::agent_ura("test", "user", name)),
             runtime: runtime.to_string(),
             model: None,
             root_path: None,

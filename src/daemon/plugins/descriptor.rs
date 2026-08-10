@@ -6,7 +6,9 @@
 
 use serde_json::Value;
 
-use crate::daemon::ability::descriptors::AbilityHints;
+use crate::daemon::ability::catalog::SystemAbilityContract;
+use crate::daemon::ability::conformance::CapabilityState;
+use crate::daemon::ability::descriptors::{AbilityHints, ReceiptSemantics, ScopeRule, Visibility};
 use crate::daemon::plugins::errors::PluginHostError;
 use crate::daemon::plugins::errors::Result;
 use crate::daemon::plugins::index::PluginPackageIndex;
@@ -22,6 +24,35 @@ pub struct PluginAbilityMetadata {
     pub call_mode: crate::daemon::ability::CallMode,
     pub hints: AbilityHints,
     pub admission_action: crate::daemon::ability::descriptors::AdmissionAction,
+    pub subject_ura_kinds: Vec<String>,
+}
+
+/// Convert plugin discovery metadata into the canonical generated descriptor
+/// contract without losing builtin subject scope or behavioral hints.
+pub fn plugin_ability_contract(meta: &PluginAbilityMetadata) -> SystemAbilityContract {
+    SystemAbilityContract {
+        name: meta.name.clone(),
+        descriptor_version: crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION.to_string(),
+        description: meta.description.clone(),
+        input_schema: meta.input_schema.clone(),
+        output_receipt_schema: meta
+            .output_schema
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({})),
+        call_mode: meta.call_mode,
+        admission_action: meta.admission_action,
+        receipt_semantics: ReceiptSemantics::Operational,
+        visibility: Visibility::Scoped,
+        scope_subjects: if meta.subject_ura_kinds.is_empty() {
+            ScopeRule::Any
+        } else {
+            ScopeRule::OnlyUraKinds(meta.subject_ura_kinds.clone())
+        },
+        scope_agents: ScopeRule::Any,
+        denied_agents: Vec::new(),
+        hints: meta.hints.clone(),
+        capability_state: CapabilityState::ProviderBacked,
+    }
 }
 
 /// Descriptor projector over package index state.
@@ -48,8 +79,9 @@ impl PluginDescriptorProjector {
                     input_schema: descriptor.input_schema().clone(),
                     output_schema: descriptor.output_schema().cloned(),
                     call_mode: ability.call_mode(),
-                    hints: AbilityHints::default(),
+                    hints: descriptor.hints().clone(),
                     admission_action: descriptor.admission_action(),
+                    subject_ura_kinds: descriptor.subject_ura_kinds().to_vec(),
                 });
             }
         }
@@ -84,6 +116,7 @@ mod tests {
         assert_eq!(descriptor.input_schema["type"], "object");
         assert_eq!(descriptor.call_mode, crate::daemon::ability::CallMode::Rpc);
         assert_eq!(descriptor.hints, AbilityHints::default());
+        assert!(descriptor.subject_ura_kinds.is_empty());
         assert!(descriptor.output_schema.is_none());
     }
 
@@ -115,5 +148,33 @@ mod tests {
             crate::daemon::ability::CallMode::Stream
         );
         assert_eq!(attach.call_mode, crate::daemon::ability::CallMode::Bidi);
+    }
+
+    #[test]
+    #[cfg(feature = "browser-cdp")]
+    fn browser_descriptor_projection_preserves_scope_and_hints() {
+        let index = crate::daemon::plugins::PluginPackageIndex::builtin()
+            .expect("builtin plugin index loads");
+        let descriptors = PluginDescriptorProjector::project(&index).expect("descriptors");
+        let show = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "browser.show_session")
+            .expect("browser show descriptor");
+        assert_eq!(show.subject_ura_kinds, vec!["resource"]);
+        assert_eq!(
+            show.hints,
+            AbilityHints {
+                read_only: true,
+                destructive: false,
+                idempotent: true,
+            }
+        );
+
+        let close = descriptors
+            .iter()
+            .find(|descriptor| descriptor.name == "browser.close_session")
+            .expect("browser close descriptor");
+        assert!(close.hints.destructive);
+        assert!(close.hints.idempotent);
     }
 }

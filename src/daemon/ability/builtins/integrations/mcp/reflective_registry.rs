@@ -1412,23 +1412,18 @@ fn descriptor_owner_authority(owner_ura: &str) -> Result<DescriptorOwnerAuthorit
         }
         crate::core::ura::URAKind::Authority => (
             OwnerKind::RealmAuthority,
-            "hub".to_string(),
+            "authority".to_string(),
             owner_ura.to_string(),
         ),
-        crate::core::ura::URAKind::Device => (
-            OwnerKind::Device,
-            "device".to_string(),
-            owner_ura.to_string(),
-        ),
+        crate::core::ura::URAKind::Device => {
+            return Err(
+                "Device cannot own MCP reflective descriptors; use an explicit hosted Agent or Authority owner URA".to_string(),
+            );
+        }
         crate::core::ura::URAKind::User => {
-            let Some(user_id) = parsed.user_id() else {
-                return Err("owner user URA is missing user_id".to_string());
-            };
-            (
-                OwnerKind::User(user_id.to_string()),
-                format!("user:{user_id}"),
-                crate::core::ura::agent_ura(&parsed.realm, user_id, "account"),
-            )
+            return Err(
+                "User Principal cannot own MCP reflective descriptors; use an explicit Agent or Authority owner URA".to_string(),
+            );
         }
         other => {
             return Err(format!(
@@ -1646,6 +1641,10 @@ mod tests {
             owner_kind_for_descriptor_owner("easynet:///r/localhost/agent/dev.claude").unwrap(),
             OwnerKind::Agent("claude".to_string())
         );
+        assert_eq!(
+            owner_kind_for_descriptor_owner("easynet:///r/localhost/authority").unwrap(),
+            OwnerKind::RealmAuthority
+        );
         // Device-sponsored System Agent is refused: MCP reflective
         // descriptors are user-configured tooling and System Agents
         // carry no user identity (DEC-F048; F-047 verdict v2).
@@ -1654,6 +1653,12 @@ mod tests {
                 .expect_err("System Agent cannot own MCP descriptors");
         assert!(err.contains("RFC-005 §3.1.2"), "{err}");
         assert!(err.contains("device-sponsored System Agent"), "{err}");
+        let err = owner_kind_for_descriptor_owner("easynet:///r/localhost/device/dev-1")
+            .expect_err("Device cannot own MCP descriptors");
+        assert!(
+            err.contains("Device cannot own MCP reflective descriptors"),
+            "{err}"
+        );
     }
 
     /// Build an in-process MCP client wrapping a small Python echo

@@ -13,7 +13,7 @@ use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::sdp::validate_remote_offer_sdp;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
 use crate::daemon::plugins::remote_desktop::transport::{
-    RemoteOfferNegotiation, negotiate_remote_offer,
+    negotiate_remote_offer, RemoteOfferNegotiation,
 };
 use crate::daemon::plugins::remote_desktop::view::serialize_session;
 

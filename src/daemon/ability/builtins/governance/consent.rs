@@ -33,7 +33,6 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::core::domain::{PermissionDecision, PermissionId};
-use crate::daemon::ability::catalog::profiles::DEFAULT_CONSENT_AGENT_ID;
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, StreamSource};
 use crate::daemon::execution::permission::PermissionService;
@@ -48,18 +47,18 @@ pub fn register(reg: &mut AxonAbilityCatalog, perms: Arc<PermissionService>) {
     let p_for_sub = Arc::clone(&perms);
     reg.register_stream_with_owner(
         "consent.subscribe",
-        OwnerKind::Agent(DEFAULT_CONSENT_AGENT_ID.to_string()),
+        OwnerKind::consent_system(),
         Arc::new(move |args: Value| subscribe_handler(&p_for_sub, args)),
     );
     let p_for_list = Arc::clone(&perms);
     reg.register_rpc_with_owner(
         "consent.list_pending",
-        OwnerKind::Agent(DEFAULT_CONSENT_AGENT_ID.to_string()),
+        OwnerKind::consent_system(),
         Arc::new(move |_args: Value| list_pending_handler(&p_for_list)),
     );
     reg.register_rpc_with_owner(
         "consent.decide",
-        OwnerKind::Agent(DEFAULT_CONSENT_AGENT_ID.to_string()),
+        OwnerKind::consent_system(),
         Arc::new(move |args: Value| decide_handler(&perms, args)),
     );
 }

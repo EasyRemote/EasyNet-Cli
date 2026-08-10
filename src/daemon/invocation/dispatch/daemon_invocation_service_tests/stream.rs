@@ -203,8 +203,9 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
     const ABILITY: &str = "test.local_stream";
     let runtime_assembly = test_runtime_with_default_trust();
     let rt = runtime_assembly.runtime();
-    let runtime_ability =
-        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ABILITY).expect("stream ability URA");
+    let system_agent_ura = test_dispatch_system_agent_ura();
+    let runtime_ability = crate::core::ura::owner_ability_ura(&system_agent_ura, ABILITY)
+        .expect("stream ability URA");
     // Stream-mode descriptor proof so Axon's receipt-proof normalizer
     // admits the dispatch (production stamps the equivalent off the
     // control-plane record). register_streaming_ability leaves the proof
@@ -238,11 +239,12 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
     )
     .await
     .unwrap();
-    let svc = make_service_with_test_runtime(runtime_assembly);
-    publish_test_stream_route(&svc, TEST_DAEMON_URA, ABILITY);
+    let svc =
+        make_unregistered_service_for_route_owner_and_runtime(TEST_DAEMON_URA, runtime_assembly);
+    publish_test_stream_route(&svc, &system_agent_ura, ABILITY);
     sync_runtime_proof_from_catalog(
         &svc,
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         ABILITY,
         crate::daemon::ability::CallMode::Stream,
     )
@@ -256,7 +258,7 @@ async fn invoke_stream_dispatches_registered_local_stream_ability() {
             envelope: Some(
                 ProtoEnvelope::from_target(
                     crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-                    TEST_DAEMON_URA,
+                    &system_agent_ura,
                     subject_ura,
                     InvocationDerivationPolicy::FreshRoot,
                 )
@@ -347,8 +349,9 @@ async fn invoke_stream_cancels_local_runtime_when_client_drops_response() {
     const ABILITY: &str = "test.local_stream_cancel_on_drop";
     let runtime_assembly = test_runtime_with_default_trust();
     let rt = runtime_assembly.runtime();
-    let runtime_ability =
-        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ABILITY).expect("stream ability URA");
+    let system_agent_ura = test_dispatch_system_agent_ura();
+    let runtime_ability = crate::core::ura::owner_ability_ura(&system_agent_ura, ABILITY)
+        .expect("stream ability URA");
     let first_frame_sent = Arc::new(std::sync::Mutex::new(None));
     let cancel_observed = Arc::new(std::sync::Mutex::new(None));
     let (first_tx, first_rx) = tokio::sync::oneshot::channel();
@@ -395,11 +398,12 @@ async fn invoke_stream_cancels_local_runtime_when_client_drops_response() {
     )
     .await
     .unwrap();
-    let svc = make_service_with_test_runtime(runtime_assembly);
-    publish_test_stream_route(&svc, TEST_DAEMON_URA, ABILITY);
+    let svc =
+        make_unregistered_service_for_route_owner_and_runtime(TEST_DAEMON_URA, runtime_assembly);
+    publish_test_stream_route(&svc, &system_agent_ura, ABILITY);
     sync_runtime_proof_from_catalog(
         &svc,
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         ABILITY,
         crate::daemon::ability::CallMode::Stream,
     )
@@ -410,8 +414,8 @@ async fn invoke_stream_cancels_local_runtime_when_client_drops_response() {
             envelope: Some(
                 ProtoEnvelope::from_target(
                     crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-                    TEST_DAEMON_URA,
-                    TEST_DAEMON_URA,
+                    &system_agent_ura,
+                    &system_agent_ura,
                     InvocationDerivationPolicy::FreshRoot,
                 )
                 .expect("valid unsigned local-system stream envelope")
@@ -454,8 +458,9 @@ async fn invoke_stream_accepts_descriptor_ref_function_name() {
     let ability = "browser.descriptor_stream";
     let runtime_assembly = test_runtime_with_default_trust();
     let rt = runtime_assembly.runtime();
-    let runtime_ability =
-        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ability).expect("stream ability URA");
+    let system_agent_ura = test_dispatch_system_agent_ura();
+    let runtime_ability = crate::core::ura::owner_ability_ura(&system_agent_ura, ability)
+        .expect("stream ability URA");
     rt.register_ability_with_options(
         runtime_ability,
         make_ability(|ctx| async move { Ok(ctx.payload.clone()) }),
@@ -471,11 +476,12 @@ async fn invoke_stream_accepts_descriptor_ref_function_name() {
     .await
     .unwrap();
 
-    let svc = make_service_with_test_runtime(runtime_assembly);
-    publish_test_stream_route(&svc, TEST_DAEMON_URA, ability);
+    let svc =
+        make_unregistered_service_for_route_owner_and_runtime(TEST_DAEMON_URA, runtime_assembly);
+    publish_test_stream_route(&svc, &system_agent_ura, ability);
     sync_runtime_proof_from_catalog(
         &svc,
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         ability,
         crate::daemon::ability::CallMode::Stream,
     )
@@ -484,7 +490,7 @@ async fn invoke_stream_accepts_descriptor_ref_function_name() {
     let arguments = br#"{"descriptor":"stream-function-name"}"#.to_vec();
     let descriptor_ref = catalog_test_descriptor_ref(
         svc.directory.local_ability_catalog.as_ref().unwrap(),
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         ability,
         crate::daemon::ability::CallMode::Stream,
     );
@@ -493,8 +499,8 @@ async fn invoke_stream_accepts_descriptor_ref_function_name() {
             envelope: Some(
                 ProtoEnvelope::from_target(
                     crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-                    TEST_DAEMON_URA,
-                    TEST_DAEMON_URA,
+                    &system_agent_ura,
+                    &system_agent_ura,
                     InvocationDerivationPolicy::FreshRoot,
                 )
                 .expect("valid unsigned local-system stream envelope")
@@ -524,6 +530,7 @@ async fn invoke_stream_projects_empty_payload_terminal_frame_for_registry_snapsh
     use futures::StreamExt;
 
     let runtime_assembly = test_runtime_with_default_trust();
+    let system_agent_ura = test_dispatch_system_agent_ura();
     let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
         runtime_assembly.runtime(),
         AbilityAuthorityContext::for_device_authority_root(TEST_DAEMON_URA)
@@ -536,20 +543,21 @@ async fn invoke_stream_projects_empty_payload_terminal_frame_for_registry_snapsh
     });
     catalog.register_stream_with_spec(
         "browser.snapshot_once",
-        OwnerKind::Device,
+        OwnerKind::locomotion_system(),
         test_route_manifest("browser.snapshot_once"),
         handler,
     );
-    let svc = make_service_with_test_runtime(runtime_assembly);
-    publish_test_stream_route(&svc, TEST_DAEMON_URA, "browser.snapshot_once");
+    let svc =
+        make_unregistered_service_for_route_owner_and_runtime(TEST_DAEMON_URA, runtime_assembly);
+    publish_test_stream_route(&svc, &system_agent_ura, "browser.snapshot_once");
 
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(
                 ProtoEnvelope::from_target(
                     crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-                    TEST_DAEMON_URA,
-                    TEST_DAEMON_URA,
+                    &system_agent_ura,
+                    &system_agent_ura,
                     InvocationDerivationPolicy::FreshRoot,
                 )
                 .expect("valid unsigned local-system stream envelope")
@@ -621,8 +629,9 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
     const ABILITY: &str = "test.versioned_stream";
     let runtime_assembly = test_runtime_with_default_trust();
     let rt = runtime_assembly.runtime();
-    let runtime_ability =
-        crate::core::ura::owner_ability_ura(TEST_DAEMON_URA, ABILITY).expect("stream ability URA");
+    let system_agent_ura = test_dispatch_system_agent_ura();
+    let runtime_ability = crate::core::ura::owner_ability_ura(&system_agent_ura, ABILITY)
+        .expect("stream ability URA");
     rt.register_ability_with_options(
         runtime_ability,
         make_ability(|_ctx| async move {
@@ -639,11 +648,12 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
     )
     .await
     .unwrap();
-    let svc = make_service_with_test_runtime(runtime_assembly);
-    publish_test_stream_route(&svc, TEST_DAEMON_URA, ABILITY);
+    let svc =
+        make_unregistered_service_for_route_owner_and_runtime(TEST_DAEMON_URA, runtime_assembly);
+    publish_test_stream_route(&svc, &system_agent_ura, ABILITY);
     sync_runtime_proof_from_catalog(
         &svc,
-        TEST_DAEMON_URA,
+        &system_agent_ura,
         ABILITY,
         crate::daemon::ability::CallMode::Stream,
     )
@@ -656,8 +666,8 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
             envelope: Some(
                 ProtoEnvelope::from_target(
                     crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-                    TEST_DAEMON_URA,
-                    TEST_DAEMON_URA,
+                    &system_agent_ura,
+                    &system_agent_ura,
                     InvocationDerivationPolicy::FreshRoot,
                 )
                 .expect("valid local-system stream envelope")
@@ -688,31 +698,45 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
 
     const TARGET_DEVICE_URA: &str = "easynet:///r/test-realm/device/stream-target";
     const ABILITY: &str = "dev.semop.chat";
-    const OWNER_USER_ID: &str = "stream-owner";
+    const OWNER_USER_ID: &str = "test-user";
 
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let arguments = br#"{"message":"hello"}"#.to_vec();
-    let signing_key = test_device_signing_key();
+    let signing_key = test_discover_user_signing_key();
+    let target_system_agent_ura =
+        test_device_system_agent_ura(TARGET_DEVICE_URA, TEST_DISPATCH_SYSTEM_AGENT_ID);
     let subject_owner = format!("user.{OWNER_USER_ID}");
     let subject_ura =
         crate::core::ura::resource_dot_ura("test-realm", &subject_owner, "stream/dev-semop-chat");
     let receipt_anchor = Arc::new(
-        RealmTrustAnchor::from_entries(vec![TrustedAgent {
-            agent_ura: TEST_DAEMON_URA.to_string(),
-            public_key_b64: BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes()),
-            role: TrustedAgentRole::Device,
-            added_at_unix_ms: 1_700_000_000_000,
-            origin_realm: None,
-            hub_endpoint: None,
-            tls_ca_pem_path: None,
-        }])
+        RealmTrustAnchor::from_entries(vec![
+            TrustedAgent {
+                agent_ura: TEST_DISCOVER_USER_URA.to_string(),
+                public_key_b64: BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes()),
+                role: TrustAnchorRole::User,
+                added_at_unix_ms: 1_700_000_000_000,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            },
+            TrustedAgent {
+                agent_ura: TARGET_DEVICE_URA.to_string(),
+                public_key_b64: BASE64_STANDARD
+                    .encode(test_device_signing_key().verifying_key().to_bytes()),
+                role: TrustAnchorRole::Device,
+                added_at_unix_ms: 1_700_000_000_001,
+                origin_realm: None,
+                hub_endpoint: None,
+                tls_ca_pem_path: None,
+            },
+        ])
         .expect("remote caller trust anchor"),
     );
     let receipt_runtime_assembly =
         test_runtime_assembly(SharedTrustAnchor::new(Arc::clone(&receipt_anchor)));
     let receipt_runtime = receipt_runtime_assembly.runtime();
     let receipt_catalog = catalog_with_json_echo_on_runtime(
-        TARGET_DEVICE_URA,
+        &target_system_agent_ura,
         ABILITY,
         "fixture",
         "receipt",
@@ -720,13 +744,13 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
     );
     let descriptor_ref = catalog_test_descriptor_ref(
         receipt_catalog.as_ref(),
-        TARGET_DEVICE_URA,
+        &target_system_agent_ura,
         ABILITY,
         crate::daemon::ability::CallMode::Rpc,
     );
     let envelope = signed_test_envelope_with_descriptor_ref(
-        TEST_DAEMON_URA,
-        TARGET_DEVICE_URA,
+        TEST_DISCOVER_USER_URA,
+        &target_system_agent_ura,
         &subject_ura,
         descriptor_ref.clone(),
         &arguments,
@@ -735,16 +759,17 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
     let access_control_stores = Arc::new(
         crate::daemon::persistence::access_control::AccessControlStoreRegistry::ephemeral(),
     );
+    let owner_user_ura = crate::core::ura::user_ura("test-realm", OWNER_USER_ID);
     grant_child_access_for_test(
         access_control_stores.as_ref(),
         ChildAccessGrantInput {
-            owner_user_id: OWNER_USER_ID,
-            principal_kind: PrincipalKind::Device,
-            principal_ura: TEST_DAEMON_URA,
+            owner_user_ura: &owner_user_ura,
+            principal_kind: PrincipalKind::User,
+            principal_ura: TEST_DISCOVER_USER_URA,
             token_class: None,
-            callee_ura: TARGET_DEVICE_URA,
+            callee_ura: &target_system_agent_ura,
             subject_ura: &subject_ura,
-            ability_ura: &test_owner_ability_ura(TARGET_DEVICE_URA, ABILITY),
+            ability_ura: &test_owner_ability_ura(&target_system_agent_ura, ABILITY),
             action: AccessAction::Invoke,
         },
     );
@@ -763,7 +788,12 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
             .with_hub_signer(test_hub_signer("test-realm"))
             .with_local_ability_catalog(Arc::clone(&receipt_catalog))
             .with_daemon_runtime(receipt_runtime_assembly);
-    publish_test_route(&receipt_service, TARGET_DEVICE_URA, ABILITY);
+    publish_test_route_hosted_by(
+        &receipt_service,
+        &target_system_agent_ura,
+        ABILITY,
+        TARGET_DEVICE_URA,
+    );
     let receipt_response = receipt_service
         .invoke(Request::new(InvokeRequest {
             envelope: Some(envelope.clone()),
@@ -789,14 +819,14 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
     let target_receipt_key = receipt_runtime
         .resolve_receipt_signer_key(TARGET_DEVICE_URA)
         .expect("resolve target receipt signer")
-        .expect("target local-fast runtime minted a receipt signer");
+        .expect("target hosted SystemAgent runtime exposed sponsor Device receipt signer");
 
     let pending_stream = Arc::new(PendingStreamDispatchMap::new());
     let source_anchor = RealmTrustAnchor::from_entries(vec![
         TrustedAgent {
-            agent_ura: TEST_DAEMON_URA.to_string(),
+            agent_ura: TEST_DISCOVER_USER_URA.to_string(),
             public_key_b64: BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes()),
-            role: TrustedAgentRole::Device,
+            role: TrustAnchorRole::User,
             added_at_unix_ms: 1_700_000_000_000,
             origin_realm: None,
             hub_endpoint: None,
@@ -805,7 +835,7 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
         TrustedAgent {
             agent_ura: TARGET_DEVICE_URA.to_string(),
             public_key_b64: BASE64_STANDARD.encode(target_receipt_key.to_bytes()),
-            role: TrustedAgentRole::Device,
+            role: TrustAnchorRole::Device,
             added_at_unix_ms: 1_700_000_000_000,
             origin_realm: None,
             hub_endpoint: None,
@@ -836,7 +866,7 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
             },
         )
         .expect("canonical presence key");
-    publish_test_route(&svc, TARGET_DEVICE_URA, ABILITY);
+    publish_test_route_hosted_by(&svc, &target_system_agent_ura, ABILITY, TARGET_DEVICE_URA);
 
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
@@ -867,7 +897,7 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
                     .callee
                     .as_ref()
                     .map(|identity| identity.ura.as_str()),
-                Some(TARGET_DEVICE_URA)
+                Some(target_system_agent_ura.as_str())
             );
             assert_eq!(
                 envelope
@@ -879,11 +909,11 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
             assert_eq!(invocation_function_name(&request), ABILITY);
             assert_eq!(request.arguments, arguments);
             assert_eq!(
-                crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
-                    "test forwarded stream",
-                    TARGET_DEVICE_URA,
-                    request.target.as_ref(),
-                )
+                    crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
+                        "test forwarded stream",
+                    &target_system_agent_ura,
+                        request.target.as_ref(),
+                    )
                 .unwrap(),
                 descriptor_ref
             );
@@ -976,11 +1006,24 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
+    use crate::daemon::persistence::config::{save_credentials, Credentials};
     use base64::Engine as _;
 
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    save_credentials(&Credentials {
+        node_id: "test-daemon".to_string(),
+        credential_token: "token".to_string(),
+        hub_endpoint: "axon://hub.test:50051".to_string(),
+        realm: "test-realm".to_string(),
+        username: Some("test-user".to_string()),
+        user_id: Some("test-user".to_string()),
+        ..Default::default()
+    })
+    .expect("seed local Device credentials for filesystem ResourceRef");
     let trust = SharedTrustAnchor::new(Arc::new(test_trust_anchor()));
     let runtime_assembly = test_runtime_assembly(trust.clone());
     let rt = runtime_assembly.runtime();
+    let file_transfer_callee_ura = test_dispatch_system_agent_ura();
     let mut catalog =
         crate::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
             Arc::clone(&rt),
@@ -1014,15 +1057,34 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
     .unwrap();
     let file_transfer_descriptor_ref = catalog_test_descriptor_ref(
         &catalog,
-        TEST_DAEMON_URA,
+        &file_transfer_callee_ura,
         crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER,
         crate::daemon::ability::CallMode::Bidi,
     );
-    let open = make_descriptor_ref_envelope_open(&file_transfer_descriptor_ref, args);
+    let open = EnvelopeOpen {
+        envelope: Some(signed_test_envelope_with_descriptor_ref(
+            TEST_DISCOVER_USER_URA,
+            &file_transfer_callee_ura,
+            &file_transfer_callee_ura,
+            file_transfer_descriptor_ref.clone(),
+            &args,
+            &test_discover_user_signing_key(),
+        )),
+        target: Some(
+            wire_invocation_target(
+                &file_transfer_descriptor_ref,
+                crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER,
+            )
+            .expect("typed file-transfer descriptor target"),
+        ),
+        initial_args: args,
+        args_content_type: "application/json".to_string(),
+        ..EnvelopeOpen::default()
+    };
     let descriptor_ref =
         crate::daemon::invocation::dispatch::invocation_wire::descriptor_ref_from_invocation_target(
             "test external signed bidi",
-            TEST_DAEMON_URA,
+            &file_transfer_callee_ura,
             open.target.as_ref(),
         )
         .expect("typed descriptor target");
@@ -1034,8 +1096,14 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
             open.metadata.clone(),
         )
         .expect("wire dispatch");
+    let access_control_stores = Arc::new(
+        crate::daemon::persistence::access_control::AccessControlStoreRegistry::ephemeral(),
+    );
+    install_test_device_authority_grants(access_control_stores.as_ref());
+    install_test_user_authority_grants(access_control_stores.as_ref());
     let admission =
         AdmissionFacade::with_trust_anchor_cell(trust, Some(TEST_DAEMON_URA.to_string()))
+            .with_access_control_stores(access_control_stores)
             .with_ability_catalog(Arc::new(catalog));
     let runtime_admission = runtime_assembly
         .admission_graph()
@@ -1117,15 +1185,20 @@ async fn invoke_stream_rejects_governance_catalogue_route_before_presence_forwar
     let (target_tx, mut target_rx) = mpsc::channel(4);
     insert_test_dispatch_presence(&svc.directory.presence, TARGET_DEVICE_URA, target_tx)
         .expect("canonical presence key");
-    publish_test_stream_route(&svc, TARGET_DEVICE_URA, CATALOGUE_READ);
+    let target_callee_ura = publish_test_remote_system_agent_route_with_mode(
+        &svc,
+        TARGET_DEVICE_URA,
+        CATALOGUE_READ,
+        crate::daemon::ability::CallMode::Stream,
+    );
 
     let arguments = br#"{"scope":"local"}"#.to_vec();
-    let descriptor_ref = test_descriptor_ref(TARGET_DEVICE_URA, CATALOGUE_READ);
+    let descriptor_ref = test_descriptor_ref(&target_callee_ura, CATALOGUE_READ);
     let result = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(signed_test_envelope_with_descriptor_ref(
                 TEST_DAEMON_URA,
-                TARGET_DEVICE_URA,
+                &target_callee_ura,
                 TEST_DAEMON_URA,
                 descriptor_ref.clone(),
                 &arguments,
@@ -1194,7 +1267,7 @@ async fn invoke_rejects_caller_not_in_trust_anchor() {
     let caller_ura = "easynet:///r/realm/agent/test.external";
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x55; 32]);
     let arguments = br#"{"agent_ura":"easynet:///r/realm/agent/test.external"}"#.to_vec();
-    let descriptor_ref = test_descriptor_ref(TEST_DAEMON_URA, ABILITY_FEDERATION_HEARTBEAT);
+    let descriptor_ref = test_descriptor_ref(TEST_HUB_URA, ABILITY_FEDERATION_HEARTBEAT);
     let trust = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
     let runtime_assembly = test_runtime_assembly(trust.clone());
     let svc = register_test_daemon_routes(
@@ -1209,8 +1282,8 @@ async fn invoke_rejects_caller_not_in_trust_anchor() {
         svc.invoke(Request::new(InvokeRequest {
             envelope: Some(signed_test_envelope_with_descriptor_ref(
                 caller_ura,
-                TEST_DAEMON_URA,
-                TEST_DAEMON_URA,
+                TEST_HUB_URA,
+                TEST_HUB_URA,
                 descriptor_ref.clone(),
                 &arguments,
                 &signing_key,
@@ -1254,7 +1327,7 @@ async fn invoke_stream_rejects_caller_not_in_trust_anchor() {
             .local_ability_catalog
             .as_deref()
             .expect("test service ability catalog"),
-        TEST_DAEMON_URA,
+        TEST_HUB_URA,
         ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
         crate::daemon::ability::CallMode::Stream,
     );
@@ -1262,8 +1335,8 @@ async fn invoke_stream_rejects_caller_not_in_trust_anchor() {
         .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(signed_test_envelope_with_descriptor_ref(
                 caller_ura,
-                TEST_DAEMON_URA,
-                TEST_DAEMON_URA,
+                TEST_HUB_URA,
+                TEST_HUB_URA,
                 descriptor_ref.clone(),
                 &arguments,
                 &signing_key,

@@ -38,6 +38,8 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Newtype wrappers over the string ids the runtime already uses,
@@ -163,6 +165,9 @@ pub struct ScheduleEntry {
     pub tenant: TenantId,
     pub target_node: NodeId,
     pub target_agent: AgentId,
+    /// Durable authority and exact placement for deferred invocation. A User
+    /// Principal is accountability, not an Agent profile.
+    pub authority: DeferredInvocationAuthority,
     pub cron_expr: String,
     pub misfire_policy: MisfirePolicy,
     /// Optional catch-up window in seconds for
@@ -185,6 +190,28 @@ pub struct ScheduleEntry {
     /// left untouched (no template error) so a typo surfaces as
     /// odd-looking prompt text rather than a hard fail at fire time.
     pub prompt: String,
+    /// Durable per-fire causality ledger, keyed by the scheduled Unix
+    /// millisecond. Each selected fire is reserved before request preparation
+    /// and completed/failed by that exact key, so catch-up dispatches cannot
+    /// overwrite one another out of order.
+    pub fire_ledger: BTreeMap<i64, ScheduleFireRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScheduleFireRecord {
+    pub fire_at_unix_ms: i64,
+    pub state: ScheduleFireState,
+    pub invocation_id: Option<String>,
+    pub receipt_hash: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduleFireState {
+    Reserved,
+    Completed,
+    Failed,
 }
 
 /// Misfire policy frozen at plan v10.1 so a production misread
@@ -215,15 +242,60 @@ pub struct LoopInstance {
     pub id: LoopId,
     pub tenant: TenantId,
     pub worker_agent: AgentId,
+    pub authority: DeferredInvocationAuthority,
     pub verify_expr: String,
     pub body_prompt: String,
     pub max_iters: u32,
     pub current_iter: u32,
     pub state: LoopState,
+    /// Append-only body/verify causality ledger. Reservation precedes
+    /// dispatch; completion records the exact invocation and terminal receipt.
+    pub invocation_ledger: Vec<LoopInvocationRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_body_output: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_verify_output: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoopInvocationKind {
+    Body,
+    Verify,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoopInvocationState {
+    Reserved,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoopInvocationRecord {
+    pub iter: u32,
+    pub kind: LoopInvocationKind,
+    pub state: LoopInvocationState,
+    pub invocation_id: Option<String>,
+    pub receipt_ura: Option<String>,
+    pub receipt_hash: Option<String>,
+    pub causal_parent_receipt_ura: Option<String>,
+    pub output: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Persisted authority for work that executes after its creating invocation
+/// has completed. The exact User, Automation SystemAgent, target callee, and
+/// execution host are frozen together; no field may be reconstructed from a
+/// display name when the controller later resumes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeferredInvocationAuthority {
+    pub accountable_user_ura: String,
+    pub creator_invocation_id: String,
+    pub controller_callee_ura: String,
+    pub target_callee_ura: String,
+    pub execution_host_ura: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -237,6 +309,8 @@ pub enum LoopState {
     /// Verify expression returned a malformed value (not boolean-
     /// coercible, per EAL §verify).
     VerifyMalformed,
+    /// Dispatch or restart recovery could not prove a safe continuation.
+    Failed,
     Cancelled,
 }
 

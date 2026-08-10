@@ -323,7 +323,7 @@ impl MicBackend for SyntheticMicBackend {
 pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn MicBackend>) {
     reg.register_stream_with_envelope_and_spec(
         ABILITY_MIC_SUBSCRIBE,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_MIC_SUBSCRIBE),
         Arc::new(move |env: EnvelopeContext, args: Value| handler(&backend, env, args)),
     );

@@ -67,6 +67,19 @@ pub trait KernelApi: Send + Sync {
         payload: Vec<u8>,
     ) -> anyhow::Result<DescriptorBoundInvocationRequest>;
 
+    /// Construct deferred work as the accountable User Principal that created
+    /// the persisted automation resource. This path never falls back to the
+    /// daemon-local SystemAgent signer.
+    fn prepare_accountable_user_rpc(
+        &self,
+        accountable_user_ura: &str,
+        callee_ura: &str,
+        ability: &str,
+        subject_ura: &str,
+        payload: Vec<u8>,
+        causal_context: axon_sdk::invocation::CausalContext,
+    ) -> anyhow::Result<DescriptorBoundInvocationRequest>;
+
     /// The single synchronous kernel execution entry. The input and terminal
     /// result are Axon SDK canonical objects; the kernel owns only product
     /// permission policy and session observation around LocalRuntime.

@@ -205,9 +205,11 @@ fn register_management_abilities(
     );
 
     let user = config.user.clone();
+    let owner_user_id = config.owner_user_id.clone();
     let realm = config.realm.clone();
-    let health_handler: LocalRpcHandler =
-        Arc::new(move |args| list_get_unpublish::handle_health(&user, &realm, args));
+    let health_handler: LocalRpcHandler = Arc::new(move |args| {
+        list_get_unpublish::handle_health(&owner_user_id, &user, &realm, args)
+    });
     register_management_rpc(
         reg,
         "pages.health",
@@ -218,39 +220,19 @@ fn register_management_abilities(
     );
 }
 
-fn pages_authority_scope(realm: &str, user: &str) -> AuthorityScope {
-    AuthorityScope::new("agent:pages", management_agent_ura(realm, user))
+fn pages_authority_scope(realm: &str, owner_user_id: &str) -> AuthorityScope {
+    AuthorityScope::new("agent:pages", management_agent_ura(realm, owner_user_id))
         .expect("Pages authority scope is well-formed")
 }
 
-/// Execution host for the user-scoped Pages management family.
+/// Owner/callee for the user-scoped Pages management family.
 ///
-/// Runtime ownership is the daemon-native `pages` Agent. The `user` segment is
-/// the immutable user id that scopes the hosted Agent URA.
-pub(crate) fn management_agent_ura(realm: &str, user: &str) -> String {
-    crate::core::ura::agent_ura(realm, user, "pages")
-}
-
-/// Register only the static Pages management descriptor family.
-///
-/// Descriptor-resolution providers use this path to materialize the canonical
-/// control-plane rows for `agent/<user>.pages` without restoring project state or
-/// opening the runtime-facing publish/unpublish overlay.
-pub(crate) fn register_management_ability_descriptors(
-    reg: &mut AxonAbilityCatalog,
-    realm: &str,
-    user: &str,
-) {
-    register_management_abilities(
-        reg,
-        &PagesConfig {
-            user: user.to_string(),
-            owner_user_id: user.to_string(),
-            realm: realm.to_string(),
-            listener_port: 8787,
-        },
-        Arc::new(std::sync::OnceLock::new()),
-    );
+/// Runtime ownership is the daemon-native `pages` Agent. The `owner_user_id`
+/// segment is the immutable product user id that scopes the hosted Agent URA;
+/// it is not a User URA and is distinct from the display user slug used by URLs
+/// and local project storage.
+pub(crate) fn management_agent_ura(realm: &str, owner_user_id: &str) -> String {
+    crate::core::ura::agent_ura(realm, owner_user_id, "pages")
 }
 
 fn register_management_rpc(

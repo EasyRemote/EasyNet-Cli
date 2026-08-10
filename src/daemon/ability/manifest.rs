@@ -122,6 +122,38 @@ pub enum AbilityKind {
     System,
 }
 
+/// Descriptor-level subject policy contributed by a manifest.
+///
+/// This manifest-layer type deliberately stores ontology labels as strings
+/// instead of importing daemon descriptor types. The descriptor/control-plane
+/// layer is responsible for interpreting labels against canonical URA parsing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "values", rename_all = "snake_case")]
+pub enum ManifestSubjectScope {
+    /// Dynamic subject set bounded by canonical URA kind labels such as
+    /// `resource`, `user`, or `agent`.
+    OnlyUraKinds(Vec<String>),
+}
+
+impl ManifestSubjectScope {
+    pub fn only_ura_kinds(kinds: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self::OnlyUraKinds(kinds.into_iter().map(Into::into).collect())
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        match self {
+            Self::OnlyUraKinds(kinds) => {
+                if crate::core::ura::canonical_ura_kind_scope_labels(kinds).is_none() {
+                    anyhow::bail!(
+                        "ability.toml `subject_scope.only_ura_kinds` values must be sorted, deduplicated, non-empty, and drawn from authority/device/user/agent/ability/resource"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl AbilityKind {
     /// Infer kind from a fully-qualified ability name. Useful at
     /// dispatch-router boundaries that receive a string and need
@@ -234,6 +266,11 @@ pub struct AbilityManifest {
     /// running on the same physical device under one user".
     #[serde(skip_serializing_if = "Option::is_none", default)]
     access: Option<AccessPolicy>,
+    /// Optional descriptor-level subject axis. AccessPolicy scopes caller
+    /// discovery/invocation; this field scopes the Invocation `subject` by
+    /// canonical URA kind when the exact subject set is dynamic.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    subject_scope: Option<ManifestSubjectScope>,
     /// Optional cost declaration. Discovery / MCP surface annotates
     /// every advertised ability with a `cost_kind` + `cost_label`
     /// pair so an operator (or an LLM choosing between two tools)
@@ -797,6 +834,7 @@ impl AbilityManifest {
             output_schema: None,
             exec: None,
             access: None,
+            subject_scope: None,
             cost: None,
             boot: None,
             health: None,
@@ -864,6 +902,22 @@ impl AbilityManifest {
         self.access = Some(access);
         self.validate()?;
         Ok(self)
+    }
+
+    /// Attach descriptor-level subject scoping. This is separate from
+    /// [`AccessPolicy`]: the access policy limits callers, while this limits the
+    /// Invocation `subject` axis.
+    pub fn with_subject_scope(
+        mut self,
+        subject_scope: ManifestSubjectScope,
+    ) -> anyhow::Result<Self> {
+        self.subject_scope = Some(subject_scope);
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn subject_scope(&self) -> Option<&ManifestSubjectScope> {
+        self.subject_scope.as_ref()
     }
 
     /// Set the governed interface version for this ability. This value is
@@ -1111,6 +1165,9 @@ impl AbilityManifest {
         }
         if let Some(cost) = &self.cost {
             cost.validate()?;
+        }
+        if let Some(subject_scope) = &self.subject_scope {
+            subject_scope.validate()?;
         }
         if let Some(boot) = &self.boot {
             boot.validate()?;
@@ -1701,6 +1758,11 @@ pub fn default_chat_manifest() -> AbilityManifest {
         "default_chat_manifest is a constant, well-formed input; validation failing \
          here would be a compile-time contract violation in this file",
     )
+    .with_exposure(AbilityExposure::Task)
+    .expect(
+        "the embedded chat exposure is a constant canonical catalog lane; validation \
+         failure here would be a compile-time contract violation in this file",
+    )
     .with_admission_action("invoke")
     .expect(
         "the embedded chat admission action is a constant canonical enum value; validation \
@@ -1848,6 +1910,7 @@ tool_name = "legacy-provider-field"
         // before the two paths converge in a later PR. If this breaks, update
         // both sides in the same PR, not one at a time.
         let m = default_chat_manifest();
+        assert_eq!(m.exposure(), Some(AbilityExposure::Task));
         assert_eq!(m.name(), "chat");
         let props = m
             .input_schema()
@@ -2147,6 +2210,35 @@ tool_name = "legacy-provider-field"
     fn from_toml_str_rejects_malformed_toml() {
         let err = AbilityManifest::from_toml_str("not = a = valid = toml").unwrap_err();
         assert!(format!("{err}").contains("parse"));
+    }
+
+    #[test]
+    fn subject_scope_only_ura_kinds_round_trips_and_validates() {
+        let manifest = AbilityManifest::new("share_screen", "share screen", object_schema())
+            .unwrap()
+            .with_subject_scope(ManifestSubjectScope::only_ura_kinds(["resource"]))
+            .unwrap();
+        assert_eq!(
+            manifest.subject_scope(),
+            Some(&ManifestSubjectScope::OnlyUraKinds(vec![
+                "resource".to_string()
+            ]))
+        );
+        let toml = manifest.to_toml_string().unwrap();
+        assert!(toml.contains("[subject_scope]"), "{toml}");
+        assert!(toml.contains("kind = \"only_ura_kinds\""), "{toml}");
+        assert!(toml.contains("values = [\"resource\"]"), "{toml}");
+
+        let parsed = AbilityManifest::from_toml_str(&toml).unwrap();
+        assert_eq!(parsed.subject_scope(), manifest.subject_scope());
+
+        let error = AbilityManifest::new("bad", "bad", object_schema())
+            .unwrap()
+            .with_subject_scope(ManifestSubjectScope::only_ura_kinds([
+                "resource", "resource",
+            ]))
+            .unwrap_err();
+        assert!(format!("{error}").contains("only_ura_kinds"));
     }
 
     #[test]

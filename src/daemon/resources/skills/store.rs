@@ -510,6 +510,30 @@ pub(crate) fn global_skill_record_from_dir(
     pool_label: &str,
     path: &std::path::Path,
 ) -> anyhow::Result<Option<InstallRecord>> {
+    skill_record_from_unmanaged_dir(agent_name, "global", pool_label, path)
+}
+
+/// Project a valid runtime-native project skill that was not installed by the
+/// EasyNet marketplace. Agent bootstrap writes these packages directly into
+/// the runtime's canonical skill directory, so requiring marketplace-owned
+/// `.easynet/install.json` metadata would make an active skill invisible.
+///
+/// This remains a read projection only: it neither creates install metadata
+/// nor makes the package eligible for marketplace upgrade/remove operations.
+pub(crate) fn native_project_skill_record_from_dir(
+    agent_name: &str,
+    runtime_label: &str,
+    path: &std::path::Path,
+) -> anyhow::Result<Option<InstallRecord>> {
+    skill_record_from_unmanaged_dir(agent_name, "custom", runtime_label, path)
+}
+
+fn skill_record_from_unmanaged_dir(
+    agent_name: &str,
+    source_kind: &str,
+    source_identifier: &str,
+    path: &std::path::Path,
+) -> anyhow::Result<Option<InstallRecord>> {
     if !path.is_dir() || !looks_like_skill_dir(path) {
         return Ok(None);
     }
@@ -528,21 +552,13 @@ pub(crate) fn global_skill_record_from_dir(
         description: metadata.description,
         agent_id: agent_name.to_string(),
         source: SkillSource {
-            // `kind = "global"` distinguishes these from the
-            // `github`-kind records that `easynet skill install`
-            // writes. The to_url() rendering becomes
-            // "global:claude-global" — visible in the SOURCE
-            // column so an operator can tell which pool a row
-            // came from.
-            kind: "global".to_string(),
-            identifier: pool_label.to_string(),
+            kind: source_kind.to_string(),
+            identifier: source_identifier.to_string(),
             ref_: None,
             subpath: Some(dir_name.to_string()),
         },
-        // No tree hash for global skills — they're not pinned by
-        // EasyNet and the file set may change without us
-        // observing. Empty string is the documented "unknown"
-        // sentinel.
+        // Unmanaged skills are not pinned by EasyNet and can change without
+        // an install transaction. Empty is the public "unknown" sentinel.
         skill_tree_hash: String::new(),
         size_bytes,
         installed_at,
@@ -1020,7 +1036,8 @@ mod tests {
     fn resolve_skill_agent_workspace_projects_registered_workspace() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let root = config::home_dir().join("agents").join("alice");
-        let mut entry = agents::AgentEntry::new(agents::AgentType::ClaudeCode, None);
+        let mut entry =
+            agents::AgentEntry::new(crate::core::agent::spec::RuntimeKind::ClaudeCode, None);
         entry.root_path = Some(root.clone());
         let mut registry = agents::AgentRegistry::default();
         registry.agents.insert("default/alice".to_string(), entry);

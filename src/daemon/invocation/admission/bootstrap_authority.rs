@@ -16,13 +16,14 @@ use crate::daemon::federation::wire_contract::ResolveKeyRequest;
 use crate::daemon::invocation::admission::decision::AccessAction;
 use crate::daemon::invocation::admission::hosted_agent_publication::HostedAgentPublication;
 use crate::daemon::invocation::admission::owner_resolution::{local_device_owner_fact, OwnerFact};
+use crate::daemon::invocation::admission::policy_gate::TrustedCallerPath;
 use crate::daemon::invocation::admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
 use crate::daemon::invocation::dispatch::federation_wrappers::{
     AdvertiseAbilitiesRequest, AdvertiseAgentRequest, HeartbeatRequest, JoinRequest,
     ABILITY_FEDERATION_ADVERTISE_ABILITIES, ABILITY_FEDERATION_ADVERTISE_AGENT,
     ABILITY_FEDERATION_HEARTBEAT, ABILITY_FEDERATION_JOIN, ABILITY_FEDERATION_RESOLVE_KEY,
 };
-use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
+use crate::daemon::trust::anchor::RealmTrustAnchor;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BootstrapAuthorityDecision {
@@ -41,7 +42,7 @@ impl BootstrapAuthorityVerifier {
         action: AccessAction,
         args: &[u8],
         trust_anchor: &RealmTrustAnchor,
-        trusted_role: TrustedAgentRole,
+        trusted_path: TrustedCallerPath,
         daemon_ura: Option<&str>,
     ) -> BootstrapAuthorityDecision {
         let Some(caller_ura) = envelope
@@ -69,13 +70,13 @@ impl BootstrapAuthorityVerifier {
             return BootstrapAuthorityDecision::NotApplicable;
         };
 
-        if trusted_role == TrustedAgentRole::Hub {
+        if trusted_path == TrustedCallerPath::Hub {
             return verify_hub_link_authority(
                 caller_ura, callee_ura, ability, action, args, daemon_ura,
             );
         }
 
-        if trusted_role == TrustedAgentRole::User {
+        if trusted_path == TrustedCallerPath::User {
             return verify_user_resolve_key_bootstrap_authority(
                 caller_ura,
                 callee_ura,
@@ -87,7 +88,7 @@ impl BootstrapAuthorityVerifier {
             );
         }
 
-        if trusted_role != TrustedAgentRole::Device || !is_device_ura(caller_ura) {
+        if trusted_path != TrustedCallerPath::DeviceCustody || !is_device_ura(caller_ura) {
             return BootstrapAuthorityDecision::NotApplicable;
         }
 
@@ -109,8 +110,8 @@ impl BootstrapAuthorityVerifier {
         }
 
         let owner = match trust_anchor.lookup_principal_owner(caller_ura) {
-            Some(owner) => Some(OwnerFact::user(
-                owner.owner_user_id.clone(),
+            Some(owner) => Some(OwnerFact::user_ura(
+                owner.owner_ura.clone(),
                 owner.owner_ura.clone(),
             )),
             None => match local_device_owner_fact(caller_ura) {
@@ -125,8 +126,8 @@ impl BootstrapAuthorityVerifier {
         let Some(owner) = owner else {
             return BootstrapAuthorityDecision::NotApplicable;
         };
-        let Some(owner_user_id) = owner
-            .owner_user_id
+        let Some(owner_user_ura) = owner
+            .owner_user_ura
             .as_deref()
             .filter(|value| !value.trim().is_empty())
         else {
@@ -159,7 +160,7 @@ impl BootstrapAuthorityVerifier {
                     authority_id: bootstrap_authority_id(
                         publication.caller_device_ura(),
                         ability,
-                        publication.owner_user_id(),
+                        publication.owner_user_segment(),
                     ),
                 };
             }
@@ -191,7 +192,7 @@ impl BootstrapAuthorityVerifier {
         }
 
         BootstrapAuthorityDecision::Verified {
-            authority_id: bootstrap_authority_id(caller_ura, ability, owner_user_id),
+            authority_id: bootstrap_authority_id(caller_ura, ability, owner_user_ura),
         }
     }
 }
@@ -438,13 +439,13 @@ fn callee_is_selected_authority(
     callee.kind == URAKind::Authority && callee.realm == caller.realm
 }
 
-fn bootstrap_authority_id(caller_ura: &str, ability: &str, owner_user_id: &str) -> String {
+fn bootstrap_authority_id(caller_ura: &str, ability: &str, owner_user_segment: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(caller_ura.as_bytes());
     hasher.update([0]);
     hasher.update(ability.as_bytes());
     hasher.update([0]);
-    hasher.update(owner_user_id.as_bytes());
+    hasher.update(owner_user_segment.as_bytes());
     format!(
         "device_bootstrap_authority:sha256:{}",
         hex::encode(hasher.finalize())
@@ -500,7 +501,7 @@ mod tests {
     use crate::cli::commands::test_support::HomeGuard;
     use crate::daemon::invocation::admission::register_device_pubkey::RegisterPubkeyRequest;
     use crate::daemon::persistence::config::state_dir;
-    use crate::daemon::trust::anchor::TrustedPrincipalOwner;
+    use crate::daemon::trust::anchor::{TrustAnchorRole, TrustedPrincipalOwner};
     use axon_sdk::pb::axon::v1::{AgentIdentity, SubjectIdentity};
 
     fn envelope(caller: &str, callee: &str, subject: &str) -> Envelope {
@@ -558,7 +559,7 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
 
@@ -587,7 +588,7 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
 
@@ -606,11 +607,30 @@ mod tests {
             AccessAction::Stream,
             &[],
             &anchor(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
 
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
+    }
+
+    #[test]
+    fn hosted_agent_custody_path_does_not_inherit_device_bootstrap_authority() {
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope(
+                "easynet:///r/test/agent/hosted",
+                "easynet:///r/test/agent/hosted",
+                "easynet:///r/test/agent/hosted",
+            ),
+            device_control::SESSION_OPEN,
+            AccessAction::Stream,
+            &[],
+            &anchor(),
+            TrustedCallerPath::AgentDeviceCustody,
+            Some("easynet:///r/test/authority"),
+        );
+
+        assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
     }
 
     #[test]
@@ -625,7 +645,7 @@ mod tests {
             AccessAction::Stream,
             &[],
             &anchor(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
 
@@ -650,7 +670,7 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
 
@@ -675,7 +695,7 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
 
@@ -703,7 +723,7 @@ mod tests {
             AccessAction::Manage,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
 
@@ -734,7 +754,7 @@ mod tests {
             AccessAction::Manage,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
 
@@ -772,7 +792,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
 
@@ -802,7 +822,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
 
@@ -831,7 +851,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
 
@@ -860,7 +880,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
 
@@ -885,7 +905,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedAgentRole::User,
+            TrustedCallerPath::User,
             Some("easynet:///r/test/authority"),
         );
 
@@ -909,7 +929,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedAgentRole::User,
+            TrustedCallerPath::User,
             Some("easynet:///r/test/authority"),
         );
 
@@ -933,7 +953,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedAgentRole::User,
+            TrustedCallerPath::User,
             Some(hub),
         );
 
@@ -957,7 +977,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedAgentRole::User,
+            TrustedCallerPath::User,
             Some("easynet:///r/test/authority"),
         );
 
@@ -981,7 +1001,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedAgentRole::User,
+            TrustedCallerPath::User,
             Some("easynet:///r/test/authority"),
         );
 
@@ -994,7 +1014,7 @@ mod tests {
         let args = RegisterPubkeyRequest::new(
             "easynet:///r/test/user/alice",
             BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
-            TrustedAgentRole::User,
+            TrustAnchorRole::User,
         )
         .to_arguments_bytes()
         .expect("args");
@@ -1013,7 +1033,7 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
@@ -1021,7 +1041,7 @@ mod tests {
         let other_args = RegisterPubkeyRequest::new(
             "easynet:///r/test/user/bob",
             BASE64_STANDARD.encode(key.verifying_key().to_bytes()),
-            TrustedAgentRole::User,
+            TrustAnchorRole::User,
         )
         .to_arguments_bytes()
         .expect("args");
@@ -1035,7 +1055,7 @@ mod tests {
             AccessAction::Manage,
             &other_args,
             &anchor(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
         assert_eq!(rejected, BootstrapAuthorityDecision::NotApplicable);
@@ -1066,7 +1086,7 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
 
@@ -1095,7 +1115,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &anchor(),
-            TrustedAgentRole::Device,
+            TrustedCallerPath::DeviceCustody,
             Some("easynet:///r/test/authority"),
         );
 
@@ -1124,7 +1144,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &anchor(),
-            TrustedAgentRole::Hub,
+            TrustedCallerPath::Hub,
             Some("easynet:///r/test/authority"),
         );
 
@@ -1153,7 +1173,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &anchor(),
-            TrustedAgentRole::Hub,
+            TrustedCallerPath::Hub,
             Some("easynet:///r/test/authority"),
         );
 
@@ -1182,7 +1202,7 @@ mod tests {
             AccessAction::Read,
             &args,
             &anchor(),
-            TrustedAgentRole::Hub,
+            TrustedCallerPath::Hub,
             Some("easynet:///r/other/authority"),
         );
 

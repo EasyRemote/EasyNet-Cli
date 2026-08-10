@@ -977,7 +977,7 @@ mod tests {
             "allowed-tools:",
             "## When This Skill Activates",
             "<agent>.discover",
-            "canonical child Invocation",
+            "signed child Invocation",
         ] {
             assert!(
                 COLLABORATE_SKILL_MD.contains(required),

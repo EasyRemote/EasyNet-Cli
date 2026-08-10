@@ -200,6 +200,16 @@ impl SystemAbilityDescriptorGroup {
             | federation::STATUS => Ok(Self::Federation),
 
             governance::ADMIN_STATUS
+            | governance::KEYRING_CREATE
+            | governance::KEYRING_LIST
+            | governance::KEYRING_GET_PUBLIC
+            | governance::KEYRING_ROTATE
+            | governance::KEYRING_REVOKE
+            | governance::KEYRING_EXPIRE_SET
+            | governance::KEYRING_BIND_SUBJECT
+            | governance::KEYRING_PEER_ADD
+            | governance::KEYRING_PEER_LIST
+            | governance::KEYRING_FEDERATE_USER_IDENTITY_TOKEN
             | governance::OBSERVE_HEALTH
             | governance::OBSERVE_NETWORK_HEALTH
             | governance::RUNTIME_BOOTSTRAP_SELF_IDENTITY

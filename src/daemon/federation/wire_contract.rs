@@ -206,6 +206,8 @@ pub struct ResolveKeyResponse {
     pub public_keys_b64: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub principal_owner_ura: Option<String>,
+    /// Public wire scalar user-id segment paired with `principal_owner_ura`.
+    /// This is not a runtime User URA.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub principal_owner_user_id: Option<String>,
 }

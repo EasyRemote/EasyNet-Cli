@@ -70,7 +70,10 @@ pub fn register_with_ledger(
     _catalog: Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
     access_control_stores: Arc<AccessControlStoreRegistry>,
 ) {
-    let runtime_governance_owners = [OwnerKind::Device, OwnerKind::RealmAuthority];
+    let runtime_governance_owners = [
+        OwnerKind::runtime_governance_system(),
+        OwnerKind::RealmAuthority,
+    ];
     for ability in [
         AUTHORITY_BINDING_GRANT,
         AUTHORITY_BINDING_REVOKE,
@@ -145,31 +148,37 @@ fn grant_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Re
         request.principal_ura.as_deref(),
     )?;
     let actor_ura = require_actor_ura(request.actor_ura.as_str())?;
-    let owner_user_id = grant.owner_user_id.clone();
-    let result =
-        stores.with_store(&owner_user_id, |store| store.create_grant(grant, actor_ura))??;
+    let owner_user_ura = grant.owner_user_ura.clone();
+    let result = stores.with_store(&owner_user_ura, |store| {
+        store.create_grant(grant, actor_ura)
+    })??;
     Ok(serde_json::to_value(result)?)
 }
 
 fn revoke_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Result<Value> {
     let request: RevokeRequest = serde_json::from_value(args)?;
-    let owner_user_id = owner_user_id_from_mutation_boundary(request.owner_ura.as_str())?;
+    let owner_user_ura = owner_user_ura_from_mutation_boundary(request.owner_ura.as_str())?;
     let actor_ura = require_actor_ura(request.actor_ura.as_str())?;
-    let grant = stores.with_store(&owner_user_id, |store| {
-        store.revoke_grant(&request.grant_id, &owner_user_id, actor_ura, request.reason)
+    let grant = stores.with_store(&owner_user_ura, |store| {
+        store.revoke_grant(
+            &request.grant_id,
+            &owner_user_ura,
+            actor_ura,
+            request.reason,
+        )
     })??;
     Ok(json!({ "grant": grant }))
 }
 
 fn list_grants_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Result<Value> {
     let request: ListGrantsRequest = serde_json::from_value(args)?;
-    let owner_user_id = owner_user_id_from_boundary(request.owner_ura.as_str())?;
+    let owner_user_ura = owner_user_ura_from_boundary(request.owner_ura.as_str())?;
     let principal_id = principal_id_from_boundary(
         request.principal_kind,
         request.principal_ura.as_deref(),
         request.token_id.as_deref(),
     )?;
-    let mut grants = stores.with_store(&owner_user_id, |store| store.grants())?;
+    let mut grants = stores.with_store(&owner_user_ura, |store| store.grants())?;
     if let Some(principal_id) = principal_id {
         grants.retain(|grant| grant.principal_id == principal_id);
     }
@@ -203,23 +212,23 @@ fn list_grants_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyh
 
 fn check_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Result<Value> {
     let request: CheckRequest = serde_json::from_value(args)?;
-    let owner_user_id = owner_user_id_from_boundary(request.owner_ura.as_str())?;
+    let owner_user_ura = owner_user_ura_from_boundary(request.owner_ura.as_str())?;
     let principal_id = principal_id_from_boundary(
         Some(request.principal_kind),
         request.principal_ura.as_deref(),
         request.token_id.as_deref(),
     )?
     .ok_or_else(|| anyhow::anyhow!("principal_ura or token_id is required for policy checks"))?;
-    let grants = stores.with_store(&owner_user_id, |store| store.grants())?;
+    let grants = stores.with_store(&owner_user_ura, |store| store.grants())?;
     let owner = OwnerResolution {
-        owner_user_id: Some(owner_user_id),
+        owner_user_ura: Some(owner_user_ura),
         owner_ura: Some(request.owner_ura),
         owner_source: request.owner_source,
         audit_warnings: vec![],
     };
     let decision = PolicyEngine::check(PolicyInput {
         owner,
-        caller_user_id: None,
+        caller_user_ura: None,
         caller_ura: request.caller_ura,
         principal_kind: request.principal_kind,
         principal_id,
@@ -230,18 +239,13 @@ fn check_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Re
         ability_ura: request.ability_ura,
         action: request.action,
         safe_read: request.safe_read,
-        authority_self_read: false,
-        authority_self_manage: false,
-        authority_self_stream: false,
-        authority_peer_directory_stream: false,
-        realm_authority_public_read: false,
-        device_self_publication_manage: false,
-        device_self_session_stream: false,
+        system_rule_matches: Vec::new(),
         invocation_lifecycle_control: false,
         interactive_context_available: request.interactive_context_available,
         canonical_hash: request.canonical_hash,
         signature_key_id: request.signature_key_id,
         verified_authority_id: request.authority_proof_id,
+        verified_session_id: None,
         rejector_ura: request.rejector_ura,
         now: chrono::Utc::now(),
         grants,
@@ -260,8 +264,8 @@ fn request_create_handler(
         request.principal_ura.as_deref(),
     )?;
     let actor_ura = require_actor_ura(request.actor_ura.as_str())?;
-    let owner_user_id = permission_request.owner_user_id.clone();
-    let request = stores.with_store(&owner_user_id, |store| {
+    let owner_user_ura = permission_request.owner_user_ura.clone();
+    let request = stores.with_store(&owner_user_ura, |store| {
         store.upsert_permission_request(permission_request, actor_ura)
     })??;
     Ok(json!({ "request": request }))
@@ -278,8 +282,8 @@ fn request_resolve_handler(
         request.principal_ura.as_deref(),
     )?;
     let actor_ura = require_actor_ura(request.actor_ura.as_str())?;
-    let owner_user_id = permission_request.owner_user_id.clone();
-    stores.with_store(&owner_user_id, |store| {
+    let owner_user_ura = permission_request.owner_user_ura.clone();
+    stores.with_store(&owner_user_ura, |store| {
         if permission_request.status == PermissionRequestStatus::Approved {
             if let Some(grant) = request.created_grant {
                 let grant = grant_from_wire_mutation_boundary(
@@ -310,7 +314,7 @@ fn request_resolve_handler(
 
 fn request_list_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Result<Value> {
     let request: ListRequestsRequest = serde_json::from_value(args)?;
-    let owner_user_id = owner_user_id_from_boundary(request.owner_ura.as_str())?;
+    let owner_user_ura = owner_user_ura_from_boundary(request.owner_ura.as_str())?;
     let principal_id = principal_id_from_boundary(
         request.principal_kind,
         request.principal_ura.as_deref(),
@@ -330,7 +334,7 @@ fn request_list_handler(args: Value, stores: &AccessControlStoreRegistry) -> any
             anyhow::bail!("created_at_or_after must not be after created_at_or_before");
         }
     }
-    let mut requests = stores.with_store(&owner_user_id, |store| store.requests())?;
+    let mut requests = stores.with_store(&owner_user_ura, |store| store.requests())?;
     if let Some(principal_id) = principal_id {
         requests.retain(|item| item.principal_id == principal_id);
     }
@@ -403,14 +407,14 @@ fn grant_from_wire_mutation_boundary(
     owner_ura: &str,
     principal_ura: Option<&str>,
 ) -> anyhow::Result<crate::daemon::invocation::admission::grant_matcher::PermissionGrant> {
-    let owner_user_id = owner_user_id_from_mutation_boundary(owner_ura)?;
+    let owner_user_ura = owner_user_ura_from_mutation_boundary(owner_ura)?;
     let principal_id = principal_id_from_mutation_boundary(
         Some(grant.principal_kind),
         principal_ura,
         grant.token_id.as_deref(),
     )?
     .ok_or_else(|| anyhow::anyhow!("principal_ura or token_id is required for policy mutation"))?;
-    Ok(grant.into_permission_grant(owner_user_id, principal_id))
+    Ok(grant.into_permission_grant(owner_user_ura, principal_id))
 }
 
 fn permission_request_from_wire_mutation_boundary(
@@ -418,17 +422,17 @@ fn permission_request_from_wire_mutation_boundary(
     owner_ura: &str,
     principal_ura: Option<&str>,
 ) -> anyhow::Result<crate::daemon::invocation::admission::decision::PermissionRequest> {
-    let owner_user_id = owner_user_id_from_mutation_boundary(owner_ura)?;
+    let owner_user_ura = owner_user_ura_from_mutation_boundary(owner_ura)?;
     let principal_id = principal_id_from_mutation_boundary(
         Some(request.principal_kind),
         principal_ura,
         request.token_id.as_deref(),
     )?
     .ok_or_else(|| anyhow::anyhow!("principal_ura or token_id is required for policy mutation"))?;
-    Ok(request.into_permission_request(owner_user_id, principal_id))
+    Ok(request.into_permission_request(owner_user_ura, principal_id))
 }
 
-fn owner_user_id_from_boundary(owner_ura: &str) -> anyhow::Result<String> {
+fn owner_user_ura_from_boundary(owner_ura: &str) -> anyhow::Result<String> {
     let owner_ura = owner_ura.trim();
     if owner_ura.is_empty() {
         anyhow::bail!("owner_ura is required");
@@ -440,18 +444,18 @@ fn owner_user_id_from_boundary(owner_ura: &str) -> anyhow::Result<String> {
     }
     let parsed_ura = crate::core::ura::parse_ura(parsed.as_str())
         .map_err(|err| anyhow::anyhow!("owner_ura must be a canonical User URA: {err}"))?;
-    let derived = parsed_ura
-        .user_id()
-        .ok_or_else(|| anyhow::anyhow!("owner_ura must include a user id"))?;
-    Ok(derived.to_string())
+    if parsed_ura.user_id().is_none() {
+        anyhow::bail!("owner_ura must include a user id");
+    }
+    Ok(parsed.into_string())
 }
 
-fn owner_user_id_from_mutation_boundary(owner_ura: &str) -> anyhow::Result<String> {
+fn owner_user_ura_from_mutation_boundary(owner_ura: &str) -> anyhow::Result<String> {
     let owner_ura = owner_ura.trim();
     if owner_ura.is_empty() {
         anyhow::bail!("owner_ura is required for a policy mutation");
     }
-    owner_user_id_from_boundary(owner_ura)
+    owner_user_ura_from_boundary(owner_ura)
 }
 
 fn require_actor_ura(actor_ura: &str) -> anyhow::Result<&str> {
@@ -490,11 +494,18 @@ fn principal_id_from_boundary(
             if parsed.kind() != URAKind::User {
                 anyhow::bail!("principal_ura for user principal must be a User URA");
             }
-            crate::core::ura::parse_ura(parsed.as_str())
-                .map_err(|err| anyhow::anyhow!("principal_ura must be canonical: {err}"))?
-                .user_id()
-                .ok_or_else(|| anyhow::anyhow!("principal_ura must include a user id"))?
-                .to_string()
+            let parsed_ura = crate::core::ura::parse_ura(parsed.as_str())
+                .map_err(|err| anyhow::anyhow!("principal_ura must be canonical: {err}"))?;
+            if parsed_ura.user_id().is_none() {
+                anyhow::bail!("principal_ura must include a user id");
+            }
+            parsed.into_string()
+        }
+        Some(crate::daemon::invocation::admission::decision::PrincipalKind::Agent) => {
+            if parsed.kind() != URAKind::Agent {
+                anyhow::bail!("principal_ura for agent principal must be an Agent URA");
+            }
+            parsed.into_string()
         }
         Some(crate::daemon::invocation::admission::decision::PrincipalKind::Token) => {
             return token_id
@@ -736,6 +747,10 @@ struct WirePermissionGrant {
     #[serde(default)]
     token_class: Option<crate::daemon::invocation::admission::decision::TokenClass>,
     #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    session_expires_at: Option<String>,
+    #[serde(default)]
     callee_ura: Option<String>,
     #[serde(default)]
     subject_ura_pattern: Option<String>,
@@ -768,16 +783,18 @@ struct WirePermissionGrant {
 impl WirePermissionGrant {
     fn into_permission_grant(
         self,
-        owner_user_id: String,
+        owner_user_ura: String,
         principal_id: String,
     ) -> crate::daemon::invocation::admission::grant_matcher::PermissionGrant {
         crate::daemon::invocation::admission::grant_matcher::PermissionGrant {
             grant_id: self.grant_id,
-            owner_user_id,
+            owner_user_ura,
             principal_kind: self.principal_kind,
             principal_id,
             token_id: self.token_id,
             token_class: self.token_class,
+            session_id: self.session_id,
+            session_expires_at: self.session_expires_at,
             callee_ura: self.callee_ura,
             subject_ura_pattern: self.subject_ura_pattern,
             ability_ura_pattern: self.ability_ura_pattern,
@@ -927,12 +944,12 @@ struct WirePermissionRequest {
 impl WirePermissionRequest {
     fn into_permission_request(
         self,
-        owner_user_id: String,
+        owner_user_ura: String,
         principal_id: String,
     ) -> crate::daemon::invocation::admission::decision::PermissionRequest {
         crate::daemon::invocation::admission::decision::PermissionRequest {
             request_id: self.request_id,
-            owner_user_id,
+            owner_user_ura,
             caller_ura: self.caller_ura,
             principal_kind: self.principal_kind,
             principal_id,
@@ -1178,18 +1195,33 @@ mod tests {
     use crate::cli::commands::test_support::HomeGuard;
     use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 
+    fn terminal_system_agent_ura(realm: &str) -> String {
+        crate::core::ura::device_agent_ura(
+            realm,
+            "dev-a",
+            crate::daemon::ability::names::device_control::TERMINAL_SYSTEM_AGENT_ID,
+        )
+    }
+
+    fn terminal_system_ability_ura(realm: &str, public_name: &str) -> String {
+        crate::core::ura::owner_ability_ura(&terminal_system_agent_ura(realm), public_name)
+            .expect("terminal SystemAgent ability URA")
+    }
+
     fn signature_failure_record() -> axon_sdk::invocation::InvocationLedgerRecord {
+        let callee_ura = terminal_system_agent_ura("test");
+        let ability_ura = terminal_system_ability_ura("test", "terminal.attach");
         axon_sdk::invocation::InvocationLedgerRecordBuilder::new()
             .invocation_ura("easynet:///r/test/resource/alice.invocations/req-signature")
             .request_id("req-signature")
             .trace_id("trace-signature")
             .span_id("span-signature")
             .caller_ura("easynet:///r/test/user/alice")
-            .callee_ura("easynet:///r/test/device/dev-a")
+            .callee_ura(callee_ura)
             .subject_ura("easynet:///r/test/resource/user.alice/session/session-target")
-            .ability_ura("easynet:///r/test/ability/device.dev-a.terminal.attach")
+            .ability_ura(ability_ura.clone())
             .ability_name("terminal.attach")
-            .descriptor_ref("easynet:///r/test/ability/device.dev-a.terminal.attach@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!stream")
+            .descriptor_ref(format!("{ability_ura}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!stream"))
             .admission_action("stream")
             .authority_form("self")
             .safe_read(false)
@@ -1368,9 +1400,9 @@ mod tests {
                 "caller_ura": "easynet:///r/example/authority",
                 "principal_kind": "user",
                 "principal_ura": "easynet:///r/example/user/bob",
-                "callee_ura": "easynet:///r/example/device/dev-a",
+                "callee_ura": terminal_system_agent_ura("example"),
                 "subject_ura": "easynet:///r/example/resource/user.alice/session/session-target",
-                "ability_ura": "easynet:///r/example/ability/device.dev-a.terminal.attach",
+                "ability_ura": terminal_system_ability_ura("example", "terminal.attach"),
                 "action": "stream"
             }),
             &stores,
@@ -1466,6 +1498,72 @@ mod tests {
     }
 
     #[test]
+    fn agent_grant_boundary_requires_agent_principal_ura() {
+        let _home = HomeGuard::new();
+        let stores = AccessControlStoreRegistry::ephemeral();
+        let invalid = grant_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "principal_ura": "easynet:///r/example/device/dev-a",
+                "actor_ura": "easynet:///r/example/user/alice",
+                "grant": agent_grant_payload("grant-agent-invalid")
+            }),
+            &stores,
+        )
+        .expect_err("Agent grant must not accept a Device URA as principal");
+        assert!(
+            invalid
+                .to_string()
+                .contains("principal_ura for agent principal must be an Agent URA"),
+            "{invalid}"
+        );
+
+        let valid = grant_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "principal_ura": "easynet:///r/example/agent/alice.worker",
+                "actor_ura": "easynet:///r/example/user/alice",
+                "grant": agent_grant_payload("grant-agent-valid")
+            }),
+            &stores,
+        )
+        .expect("Agent grant with Agent URA");
+        assert_eq!(
+            valid["grant"]["principal_id"],
+            "easynet:///r/example/agent/alice.worker"
+        );
+
+        let listed = list_grants_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "principal_kind": "agent",
+                "principal_ura": "easynet:///r/example/agent/alice.worker"
+            }),
+            &stores,
+        )
+        .expect("list Agent grant by Agent URA");
+        let grants = listed["grants"].as_array().expect("grants array");
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0]["grant_id"], "grant-agent-valid");
+
+        let invalid_list = list_grants_handler(
+            json!({
+                "owner_ura": "easynet:///r/example/user/alice",
+                "principal_kind": "agent",
+                "principal_ura": "easynet:///r/example/device/dev-a"
+            }),
+            &stores,
+        )
+        .expect_err("Agent grant list filter must not accept a Device URA");
+        assert!(
+            invalid_list
+                .to_string()
+                .contains("principal_ura for agent principal must be an Agent URA"),
+            "{invalid_list}"
+        );
+    }
+
+    #[test]
     fn policy_read_boundaries_reject_scalar_only_owner_identity() {
         let _home = HomeGuard::new();
         let stores = AccessControlStoreRegistry::ephemeral();
@@ -1485,9 +1583,9 @@ mod tests {
                 "caller_ura": "easynet:///r/example/authority",
                 "principal_kind": "token",
                 "token_id": "token-1",
-                "callee_ura": "easynet:///r/example/device/dev-a",
+                "callee_ura": terminal_system_agent_ura("example"),
                 "subject_ura": "easynet:///r/example/resource/user.alice/session/session-target",
-                "ability_ura": "easynet:///r/example/ability/device.dev-a.terminal.attach",
+                "ability_ura": terminal_system_ability_ura("example", "terminal.attach"),
                 "action": "stream"
             }),
             &stores,
@@ -1519,11 +1617,11 @@ mod tests {
                     .trace_id("trace-1")
                     .span_id("span-1")
                     .caller_ura("easynet:///r/test/authority")
-                    .callee_ura("easynet:///r/test/device/dev-a")
+                    .callee_ura(terminal_system_agent_ura("test"))
                     .subject_ura("easynet:///r/test/user/alice")
-                    .ability_ura("easynet:///r/test/ability/device.dev-a.terminal.create")
+                    .ability_ura(terminal_system_ability_ura("test", "terminal.create"))
                     .ability_name("terminal.create")
-                    .descriptor_ref("easynet:///r/test/ability/device.dev-a.terminal.create@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read")
+                    .descriptor_ref(format!("{}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read", terminal_system_ability_ura("test", "terminal.create")))
                     .admission_action("read")
                     .authority_form("self")
                     .safe_read(true)
@@ -1541,14 +1639,14 @@ mod tests {
                                 "caller_ura": "easynet:///r/test/authority",
                                 "principal_kind": "token",
                                 "principal_id": "token-1",
-                                "callee_ura": "easynet:///r/test/device/dev-a",
+                                "callee_ura": terminal_system_agent_ura("test"),
                                 "subject_ura": "easynet:///r/test/user/alice",
-                                "ability_ura": "easynet:///r/test/ability/device.dev-a.terminal.create",
+                                "ability_ura": terminal_system_ability_ura("test", "terminal.create"),
                                 "action": "stream",
                                 "canonical_hash": "sha256:abc",
                                 "signature_key_id": "ed25519:key",
                                 "authority_proof_id": "proof-1",
-                                "rejector_ura": "easynet:///r/test/device/dev-a"
+                                "rejector_ura": terminal_system_agent_ura("test")
                             })
                         ),
                         retryable: false,
@@ -1577,7 +1675,7 @@ mod tests {
         );
         catalog.register_rpc_with_spec(
             "terminal.create",
-            OwnerKind::Device,
+            OwnerKind::DeviceProfileProjection,
             registry_manifest(
                 "terminal.create",
                 "Admission explain descriptor fixture.",
@@ -1609,9 +1707,12 @@ mod tests {
         assert_eq!(visible["root_trace"]["action"], "read");
         assert_eq!(
             visible["route_ref"],
-            "easynet:///r/test/ability/device.dev-a.terminal.create@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+            format!(
+                "{}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+                terminal_system_ability_ura("test", "terminal.create")
+            )
         );
-        assert_eq!(visible["rejector_ura"], "easynet:///r/test/device/dev-a");
+        assert_eq!(visible["rejector_ura"], terminal_system_agent_ura("test"));
 
         let hidden = reader
             .explain(json!({
@@ -1740,8 +1841,8 @@ mod tests {
         let output = list_grants_handler(json!({
             "owner_ura": "easynet:///r/example/user/alice",
             "token_id": "token-1",
-            "callee_ura": "easynet:///r/example/device/dev-a",
-            "ability_ura_pattern": "easynet:///r/example/ability/device.dev-a.terminal.attach",
+            "callee_ura": terminal_system_agent_ura("example"),
+            "ability_ura_pattern": terminal_system_ability_ura("example", "terminal.attach"),
             "subject_ura_pattern": "easynet:///r/example/resource/user.alice/session/session-target",
             "action": "stream",
             "effect": "allow",
@@ -1769,8 +1870,14 @@ mod tests {
         )
         .expect("user grant");
 
-        assert_eq!(output["grant"]["owner_user_id"], "alice");
-        assert_eq!(output["grant"]["principal_id"], "alice");
+        assert_eq!(
+            output["grant"]["owner_user_id"],
+            "easynet:///r/example/user/alice"
+        );
+        assert_eq!(
+            output["grant"]["principal_id"],
+            "easynet:///r/example/user/alice"
+        );
 
         let listed = list_grants_handler(
             json!({
@@ -1828,9 +1935,9 @@ mod tests {
                     "caller_ura": "easynet:///r/example/authority",
                     "principal_kind": "user",
                     "principal_id": "bob",
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.agent-management",
                     "subject_ura": "easynet:///r/example/user/alice",
-                    "ability_ura": "easynet:///r/example/ability/device.dev-a.agent.list",
+                    "ability_ura": "easynet:///r/example/ability/system-agent.dev-a.agent-management.agent.list",
                     "action": "invoke",
                     "requested_lifetimes": ["session"],
                     "status": "pending",
@@ -1851,7 +1958,7 @@ mod tests {
     #[test]
     fn policy_boundaries_reject_all_zero_user_uras() {
         let all_zero_user = "easynet:///r/example/user/00000000-0000-0000-0000-000000000000";
-        assert!(owner_user_id_from_boundary(all_zero_user).is_err());
+        assert!(owner_user_ura_from_boundary(all_zero_user).is_err());
         assert!(principal_id_from_boundary(
             Some(crate::daemon::invocation::admission::decision::PrincipalKind::User),
             Some(all_zero_user),
@@ -1899,8 +2006,8 @@ mod tests {
                 "owner_ura": "easynet:///r/example/user/alice",
                 "token_id": "token-1",
                 "status": "pending",
-                "callee_ura": "easynet:///r/example/device/dev-a",
-                "ability_ura": "easynet:///r/example/ability/device.dev-a.terminal.attach",
+                "callee_ura": terminal_system_agent_ura("example"),
+                "ability_ura": terminal_system_ability_ura("example", "terminal.attach"),
                 "subject_ura": "easynet:///r/example/resource/user.alice/session/session-target",
                 "created_at_or_after": "2026-07-09T00:00:00Z",
                 "created_at_or_before": "2026-07-09T00:05:00Z"
@@ -1934,9 +2041,8 @@ mod tests {
     }
 
     fn grant_payload(grant_id: &str, ability: &str, subject: &str) -> Value {
-        let ability_ura = crate::core::ura::device_ability_ura(
+        let ability_ura = terminal_system_ability_ura(
             "example",
-            "dev-a",
             ability.strip_prefix("device.").unwrap_or(ability),
         );
         let subject_ura = crate::core::ura::resource_dot_ura(
@@ -1949,12 +2055,12 @@ mod tests {
             "principal_kind": "token",
             "token_id": "token-1",
             "token_class": "hub_link",
-            "callee_ura": "easynet:///r/example/device/dev-a",
+            "callee_ura": terminal_system_agent_ura("example"),
             "subject_ura_pattern": subject_ura,
             "ability_ura_pattern": ability_ura,
             "actions": ["stream"],
             "effect": "allow",
-            "lifetime": "session",
+            "lifetime": "permanent",
             "state": "active",
             "created_by": "easynet:///r/example/user/alice",
             "created_at": "2026-07-09T00:00:00Z"
@@ -1965,12 +2071,28 @@ mod tests {
         json!({
             "grant_id": grant_id,
             "principal_kind": "user",
-            "callee_ura": "easynet:///r/example/device/dev-a",
+            "callee_ura": "easynet:///r/example/agent/device.dev-a.agent-management",
             "subject_ura_pattern": "easynet:///r/example/user/alice",
-            "ability_ura_pattern": "easynet:///r/example/ability/device.dev-a.agent.list",
+            "ability_ura_pattern": "easynet:///r/example/ability/system-agent.dev-a.agent-management.agent.list",
             "actions": ["invoke"],
             "effect": "allow",
-            "lifetime": "session",
+            "lifetime": "permanent",
+            "state": "active",
+            "created_by": "easynet:///r/example/user/alice",
+            "created_at": "2026-07-09T00:00:00Z"
+        })
+    }
+
+    fn agent_grant_payload(grant_id: &str) -> Value {
+        json!({
+            "grant_id": grant_id,
+            "principal_kind": "agent",
+            "callee_ura": "easynet:///r/example/agent/alice.worker",
+            "subject_ura_pattern": "easynet:///r/example/user/alice",
+            "ability_ura_pattern": "easynet:///r/example/ability/agent.alice.worker.remote_desktop.attach",
+            "actions": ["stream"],
+            "effect": "allow",
+            "lifetime": "permanent",
             "state": "active",
             "created_by": "easynet:///r/example/user/alice",
             "created_at": "2026-07-09T00:00:00Z"
@@ -1978,9 +2100,8 @@ mod tests {
     }
 
     fn request_payload(request_id: &str, ability: &str, subject: &str, created_at: &str) -> Value {
-        let ability_ura = crate::core::ura::device_ability_ura(
+        let ability_ura = terminal_system_ability_ura(
             "example",
-            "dev-a",
             ability.strip_prefix("device.").unwrap_or(ability),
         );
         let subject_ura = crate::core::ura::resource_dot_ura(
@@ -1994,7 +2115,7 @@ mod tests {
             "principal_kind": "token",
             "token_id": "token-1",
             "token_class": "hub_link",
-            "callee_ura": "easynet:///r/example/device/dev-a",
+            "callee_ura": terminal_system_agent_ura("example"),
             "subject_ura": subject_ura,
             "ability_ura": ability_ura,
             "action": "stream",

@@ -591,8 +591,10 @@ mod tests {
     use super::*;
 
     fn mic_plan(output_dir: PathBuf) -> RecordingPlan {
-        let selector =
-            AbilitySelector::parse("easynet:///r/acme/ability/device.dev.mic.subscribe").unwrap();
+        let selector = AbilitySelector::parse(
+            "easynet:///r/acme/ability/system-agent.dev.media.mic.subscribe",
+        )
+        .unwrap();
         let target = LocalAbilityTarget::from_selector(&selector);
         RecordingPlan {
             selector,
@@ -611,7 +613,8 @@ mod tests {
     #[test]
     fn record_rejects_zero_frame_budget_before_ipc() {
         let err = RecordingPlan::from_args(RecordArgs {
-            ability_ura: "easynet:///r/acme/ability/device.dev.mic.subscribe".to_string(),
+            ability_ura: "easynet:///r/acme/ability/system-agent.dev.media.mic.subscribe"
+                .to_string(),
             args: None,
             subject: Some("easynet:///r/acme/resource/device.dev/streams/mic.1".to_string()),
             max_frames: 0,
@@ -644,19 +647,20 @@ mod tests {
 
     #[test]
     fn camera_recording_uses_same_owner_transition_abilities() {
-        let selector =
-            AbilitySelector::parse("easynet:///r/acme/ability/device.dev.camera.subscribe")
-                .unwrap();
+        let selector = AbilitySelector::parse(
+            "easynet:///r/acme/ability/system-agent.dev.media.camera.subscribe",
+        )
+        .unwrap();
         let start = sibling_ability_selector(&selector, "camera.record_start").unwrap();
         let stop = sibling_ability_selector(&selector, "camera.record_stop").unwrap();
 
         assert_eq!(
             start.ability_ura(),
-            "easynet:///r/acme/ability/device.dev.camera.record_start"
+            "easynet:///r/acme/ability/system-agent.dev.media.camera.record_start"
         );
         assert_eq!(
             stop.ability_ura(),
-            "easynet:///r/acme/ability/device.dev.camera.record_stop"
+            "easynet:///r/acme/ability/system-agent.dev.media.camera.record_stop"
         );
         assert_eq!(start.owner_ura(), selector.owner_ura());
         assert_eq!(stop.owner_ura(), selector.owner_ura());
@@ -664,9 +668,10 @@ mod tests {
 
     #[test]
     fn camera_start_arguments_add_recording_defaults() {
-        let selector =
-            AbilitySelector::parse("easynet:///r/acme/ability/device.dev.camera.subscribe")
-                .unwrap();
+        let selector = AbilitySelector::parse(
+            "easynet:///r/acme/ability/system-agent.dev.media.camera.subscribe",
+        )
+        .unwrap();
         let target = LocalAbilityTarget::from_selector(&selector);
         let plan = RecordingPlan {
             selector,

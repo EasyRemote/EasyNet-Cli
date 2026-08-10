@@ -82,7 +82,7 @@ use crate::daemon::persistence::agent_lifecycle::{
 };
 use crate::daemon::persistence::agent_registry as agents;
 use crate::daemon::persistence::agent_registry::{
-    AgentEntry, AgentRegistry, AgentType, CURRENT_REGISTRY_SCHEMA,
+    AgentEntry, AgentRegistry, CURRENT_REGISTRY_SCHEMA,
 };
 use crate::daemon::persistence::{config, local_agents};
 
@@ -650,33 +650,34 @@ fn require_hot_registrar(
 
 pub fn register(reg: &mut AxonAbilityCatalog, hot_registrar: Arc<SharedHotRegistrarCell>) {
     super::authoring::register(reg, Arc::clone(&hot_registrar));
+    let owner = OwnerKind::agent_management_system();
     let registrar_for_start = Arc::clone(&hot_registrar);
     reg.register_rpc_with_owner(
         "agent.start",
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(move |args: Value| start_agent_handler(args, &registrar_for_start)),
     );
     let registrar_for_stop = Arc::clone(&hot_registrar);
     reg.register_rpc_with_owner(
         "agent.stop",
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(move |args: Value| stop_agent_handler(args, &registrar_for_stop)),
     );
     let registrar_for_purge = Arc::clone(&hot_registrar);
     reg.register_rpc_with_owner(
         ABILITY_PURGE_AGENT,
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(move |args: Value| purge_agent_handler(args, &registrar_for_purge)),
     );
     reg.register_rpc_with_envelope_and_owner(
         ABILITY_RECONCILE_AGENT_PURGE,
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(purge_reconciliation_handler),
     );
     let registrar_for_refresh = Arc::clone(&hot_registrar);
     reg.register_rpc_with_owner(
         "agent.refresh",
-        OwnerKind::Device,
+        owner,
         Arc::new(move |args: Value| refresh_agents_handler(args, &registrar_for_refresh)),
     );
 }
@@ -861,7 +862,13 @@ fn start_agent_locked(
     let top_level_agent_type = args
         .get("agent_type")
         .and_then(Value::as_str)
-        .map(AgentType::from_str)
+        .map(|value| {
+            RuntimeKind::from_str(value).map_err(|_| {
+                anyhow::anyhow!(
+                    "unknown agent type: {value} (expected: claude-code, codex, codex-app-server, external)"
+                )
+            })
+        })
         .transpose()?;
     let entry_agent_type = provided_entry.as_ref().map(|entry| entry.agent_type);
     let agent_type = match (top_level_agent_type, entry_agent_type) {
@@ -899,7 +906,7 @@ fn start_agent_locked(
     let mut registry = original_registry;
     let existing_entry = registry.agents.get(&registry_key).cloned();
     let replaced_prior = existing_entry.is_some();
-    if agent_type == AgentType::External {
+    if agent_type == RuntimeKind::External {
         let command = custom_command
             .as_deref()
             .or_else(|| provided_entry.as_ref().map(|entry| entry.command.as_str()))
@@ -952,7 +959,7 @@ fn start_agent_locked(
             }
             directory
         } else {
-            let mut spec = AgentSpec::new(&name, runtime_kind_from(agent_type));
+            let mut spec = AgentSpec::new(&name, agent_type);
             if model_present {
                 spec.model = model.clone();
             }
@@ -1020,7 +1027,7 @@ fn start_agent_locked(
         };
         entry.root_path = Some(canonical_root);
     }
-    if agent_type == AgentType::External {
+    if agent_type == RuntimeKind::External {
         if let Some(command) = custom_command
             .as_ref()
             .or_else(|| existing_entry.as_ref().map(|entry| &entry.command))
@@ -1241,10 +1248,6 @@ fn start_agent_locked(
         "model": entry.model.clone(),
         "entry": entry.clone(),
     }))
-}
-
-fn runtime_kind_from(t: AgentType) -> RuntimeKind {
-    t.runtime_kind()
 }
 
 #[cfg(not(test))]
@@ -3309,7 +3312,6 @@ fn hosted_agent_bootstrap_plan(registry: &AgentRegistry) -> anyhow::Result<Boots
         realm,
         user_id,
         host_device_ura,
-        consent: true,
         mcp: false,
         llm_sub_agents: bootstrap::llm_sub_agents_from_registry(registry)?,
     })
@@ -3579,7 +3581,6 @@ mod tests {
                 realm: "local".to_string(),
                 user_id: "user-dev".to_string(),
                 host_device_ura: crate::core::ura::device_ura("local", "dev-1"),
-                consent: false,
                 mcp: false,
                 llm_sub_agents: vec![LlmSubAgent {
                     name: "claude".to_string(),
@@ -3593,7 +3594,7 @@ mod tests {
             let identities = local_agents::load().expect("load persisted hosted identities");
 
             assert_eq!(outcomes.len(), 1);
-            assert_eq!(identities.host_device_agent_ura, plan.host_device_ura);
+            assert_eq!(identities.host_device_ura, plan.host_device_ura);
             assert_eq!(identities.hosted_agents.len(), 1);
             assert_eq!(identities.hosted_agents[0].profile, "llm");
             assert_eq!(identities.hosted_agents[0].name, "claude");
@@ -4256,7 +4257,7 @@ mod tests {
             let mut registry = AgentRegistry::default();
             registry.agents.insert(
                 "default/forged".to_string(),
-                AgentEntry::new(AgentType::ClaudeCode, None),
+                AgentEntry::new(RuntimeKind::ClaudeCode, None),
             );
             agents::save_agents(&registry).unwrap();
             let error = fixture
@@ -4427,7 +4428,7 @@ mod tests {
             let registry = agents::load_agents().unwrap();
             assert_eq!(
                 registry.agents.get("default/claude").unwrap().agent_type,
-                AgentType::ClaudeCode,
+                RuntimeKind::ClaudeCode,
                 "second start of same name MUST NOT overwrite the stored row's agent_type"
             );
         });
@@ -4458,7 +4459,7 @@ mod tests {
             assert_eq!(resp["agent_type"], "external");
             let registry = agents::load_agents().unwrap();
             let stored = registry.agents.get("default/semop").unwrap();
-            assert_eq!(stored.agent_type, AgentType::External);
+            assert_eq!(stored.agent_type, RuntimeKind::External);
             assert_eq!(stored.command, "/bin/cat");
             assert_eq!(stored.args, vec!["--number".to_string()]);
         });
@@ -4502,7 +4503,7 @@ mod tests {
 
             let registry = agents::load_agents().unwrap();
             let stored = registry.agents.get("default/codex-rich").unwrap();
-            assert_eq!(stored.agent_type, AgentType::Codex);
+            assert_eq!(stored.agent_type, RuntimeKind::Codex);
             assert_eq!(stored.model.as_deref(), Some("gpt-5"));
         });
     }

@@ -283,6 +283,10 @@ mod tests {
 
     const TEST_DEVICE_URA: &str = "easynet:///r/test/device/local";
 
+    fn test_mcp_agent_ura() -> String {
+        crate::core::ura::agent_ura("test", "test-user", DEFAULT_MCP_AGENT_ID)
+    }
+
     fn d(name: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(
             name.to_string(),
@@ -311,12 +315,18 @@ mod tests {
     }
 
     fn executable_test_catalog() -> AxonAbilityCatalog {
-        AxonAbilityCatalog::new_test_runtime_for_device_authority(
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+                TEST_DEVICE_URA,
+                vec![test_mcp_agent_ura()],
+            )
+            .expect("MCP bridge fixture authority context");
+        AxonAbilityCatalog::new_with_runtime_and_authority_context(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
                 None,
             ),
-            TEST_DEVICE_URA,
+            authority_context,
         )
     }
 
@@ -334,7 +344,7 @@ mod tests {
         let _ = handle.set(arc.clone());
         arc.hot_register_rpc_with_spec(
             "test.echo",
-            OwnerKind::Device,
+            OwnerKind::DeviceProfileProjection,
             manifest_for("test.echo"),
             Arc::new(|args: Value| Ok(json!({"echoed": args}))),
         )
@@ -537,7 +547,7 @@ mod tests {
         let _ = handle.set(arc.clone());
         arc.hot_register_rpc_with_spec(
             "always.fails",
-            OwnerKind::Device,
+            OwnerKind::DeviceProfileProjection,
             manifest_for("always.fails"),
             Arc::new(|_args: Value| anyhow::bail!("planned failure for the test")),
         )

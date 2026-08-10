@@ -44,21 +44,21 @@ pub fn register(
     let reload_runtime_manager = Arc::clone(&plugin_runtime_manager);
     reg.register_rpc_with_owner(
         RELOAD_ABILITY,
-        OwnerKind::Device,
+        OwnerKind::plugin_management_system(),
         Arc::new(move |args| reload_plugins(args, &reload_registry, &reload_runtime_manager)),
     );
     let status_registry = Arc::clone(&registry);
     let status_runtime_manager = Arc::clone(&plugin_runtime_manager);
     reg.register_rpc_with_owner(
         STATUS_ABILITY,
-        OwnerKind::Device,
+        OwnerKind::plugin_management_system(),
         Arc::new(move |args| plugin_status(args, &status_registry, &status_runtime_manager)),
     );
     let activate_registry = Arc::clone(&registry);
     let activate_runtime_manager = Arc::clone(&plugin_runtime_manager);
     reg.register_rpc_with_owner(
         ACTIVATE_REALTIME_ABILITY,
-        OwnerKind::Device,
+        OwnerKind::plugin_management_system(),
         Arc::new(move |args| {
             activate_realtime(args, &activate_registry, &activate_runtime_manager)
         }),
@@ -66,14 +66,14 @@ pub fn register(
     let companion_status_runtime_manager = Arc::clone(&plugin_runtime_manager);
     reg.register_rpc_with_owner_and_action(
         COMPANION_STATUS_ABILITY,
-        OwnerKind::Device,
+        OwnerKind::plugin_management_system(),
         crate::daemon::ability::descriptors::AdmissionAction::Read,
         Arc::new(move |args| companion_status(args, &companion_status_runtime_manager)),
     );
     let companion_reconcile_runtime_manager = Arc::clone(&plugin_runtime_manager);
     reg.register_rpc_with_owner_and_action(
         COMPANION_RECONCILE_ABILITY,
-        OwnerKind::Device,
+        OwnerKind::plugin_management_system(),
         crate::daemon::ability::descriptors::AdmissionAction::Manage,
         Arc::new(move |args| companion_reconcile(args, &companion_reconcile_runtime_manager)),
     );

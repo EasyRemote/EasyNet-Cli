@@ -29,14 +29,19 @@ pub(crate) fn require_canonical_dispatch_session(
     route_ura: &str,
     surface: &str,
 ) -> Result<PresenceDispatchSession, Status> {
-    let session = presence
-        .lookup_dispatch_session(execution_host_ura)
-        .ok_or_else(|| {
-            Status::failed_precondition(format!(
-                "RESOLVE_UNAVAILABLE: {surface} selected execution host `{execution_host_ura}` \
-                 for route `{route_ura}` but no live session exists"
-            ))
-        })?;
+    let Some(session) = presence.lookup_dispatch_session(execution_host_ura) else {
+        if presence.is_resolve_only(execution_host_ura) {
+            return Err(Status::failed_precondition(format!(
+                "{surface}: selected execution host `{execution_host_ura}` is this daemon itself; \
+                 self-targeted invocations dispatch through the local runtime, never the presence \
+                 reverse channel (device-mode self-presence is resolve-only)"
+            )));
+        }
+        return Err(Status::failed_precondition(format!(
+            "RESOLVE_UNAVAILABLE: {surface} selected execution host `{execution_host_ura}` \
+             for route `{route_ura}` but no live session exists"
+        )));
+    };
     if session.contract_version < CANONICAL_SESSION_CARRIER_VERSION {
         return Err(Status::failed_precondition(format!(
             "{CANONICAL_CARRIER_REQUIRED_CODE}: {surface} selected execution host \

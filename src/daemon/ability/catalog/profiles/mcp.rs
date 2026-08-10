@@ -255,6 +255,10 @@ fn parsed_owner_label(owner_ura: &str) -> Option<String> {
             crate::core::ura::AbilityOwner::Agent { user_id, agent_id } => {
                 Some(format!("user/{user_id} agent/{agent_id}"))
             }
+            crate::core::ura::AbilityOwner::SystemAgent {
+                device_id,
+                agent_id,
+            } => Some(format!("device/{device_id} system-agent/{agent_id}")),
             crate::core::ura::AbilityOwner::Device { device_id } => {
                 Some(format!("device/{device_id}"))
             }

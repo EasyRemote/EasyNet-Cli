@@ -401,8 +401,9 @@ enum BinderTarget<'a> {
 ///
 /// The binder is the boundary where plugin-provided implementation bindings
 /// are projected into daemon authority policy and Axon runtime registration.
-/// Today the policy is the existing device authority projection; keeping it
-/// here prevents plugin packages from becoming authority roots.
+/// Plugin packages do not become authority roots. Their AbilityImpls are
+/// exposed through the device-sponsored plugin-management SystemAgent, while
+/// the Device remains only the execution host for the plugin runtime.
 pub struct DaemonPluginBinder<'a> {
     target: BinderTarget<'a>,
     owner_policy: OwnerKind,
@@ -412,14 +413,14 @@ impl<'a> DaemonPluginBinder<'a> {
     pub fn static_catalog(catalog: &'a mut AxonAbilityCatalog) -> Self {
         Self {
             target: BinderTarget::Static(catalog),
-            owner_policy: OwnerKind::Device,
+            owner_policy: OwnerKind::plugin_management_system(),
         }
     }
 
     pub fn dynamic_catalog(catalog: &'a AxonAbilityCatalog) -> Self {
         Self {
             target: BinderTarget::Dynamic(catalog),
-            owner_policy: OwnerKind::Device,
+            owner_policy: OwnerKind::plugin_management_system(),
         }
     }
 
@@ -520,5 +521,68 @@ impl<'a> DaemonPluginBinder<'a> {
                     reason: error.to_string(),
                 }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn test_catalog() -> AxonAbilityCatalog {
+        let device_ura = crate::core::ura::device_ura("plugin-owner-test", "dev-1");
+        AxonAbilityCatalog::new_metadata_only_with_authority_context(
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                &device_ura,
+            )
+            .expect("device authority context"),
+        )
+    }
+
+    fn plugin_contribution(ability: &str) -> PluginPackageContribution {
+        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+            ability,
+            "test plugin ability",
+            serde_json::json!({"type": "object"}),
+        )
+        .and_then(|manifest| manifest.with_admission_action("invoke"))
+        .expect("valid plugin manifest");
+        let handler: LocalRpcHandlerWithEnvelope =
+            Arc::new(|_env, _args| Ok(serde_json::json!({"ok": true})));
+        let mut builder = PluginContributionBuilder::new(
+            "owner-test",
+            "1.0.0",
+            PluginKind::Sidecar,
+            PluginRuntimeLimits::new(1, 1),
+            PluginRequirementSet::default(),
+            Vec::new(),
+        );
+        builder
+            .rpc(
+                ability,
+                manifest,
+                AbilityImplSource::SidecarPlugin,
+                RuntimeEnv::plugin("owner-test", "1.0.0"),
+                handler,
+            )
+            .expect("plugin rpc contribution");
+        builder.finish().expect("plugin package contribution")
+    }
+
+    #[test]
+    fn daemon_plugin_binder_uses_plugin_management_system_agent_owner() {
+        let mut catalog = test_catalog();
+        let package = plugin_contribution("plugin_owner_test");
+
+        DaemonPluginBinder::static_catalog(&mut catalog)
+            .bind_package(&package)
+            .expect("bind plugin contribution");
+
+        let row = catalog
+            .authority_ability_catalog_snapshot()
+            .into_iter()
+            .find(|row| row.name == "plugin_owner_test")
+            .expect("plugin owner_test row");
+        assert_eq!(row.owner, OwnerKind::plugin_management_system());
     }
 }

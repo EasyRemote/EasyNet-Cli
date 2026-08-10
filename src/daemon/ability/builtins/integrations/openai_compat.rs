@@ -785,41 +785,42 @@ fn invoke_user_owned_rpc(
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
     use crate::daemon::ability::dispatch::OwnerKind;
-    // RFC-006-C v0.1 — DEVICE-local OpenAI protocol shim. The
+    // RFC-006-C v0.1 — device-hosted OpenAI protocol shim. The
     // device daemon serves OpenAI's `/v1/chat/completions` and
     // `/v1/models` HTTP surface against locally-hosted chat-base
-    // abilities (`<agent>.chat`). Owner is `Device` because the
-    // handler runs on the host and only sees host-local chat-base
-    // abilities — there is no hub round-trip in the call path.
+    // abilities (`<agent>.chat`). The callable owner is the
+    // device-sponsored openai-compat SystemAgent; the Device remains the
+    // execution host/custody substrate.
     //
     // What `hub.openai.*` means is up to whichever hub chose to
     // advertise it (federation.resolve include_abilities=true
     // surfaces it to clients on demand). Device-side never
     // pre-registers a `hub.*` name on behalf of the hub: that
     // would let the device daemon lie about what the hub offers.
+    let owner = OwnerKind::openai_compat_system();
     reg.register_rpc_with_owner(
         OPENAI_CHAT_COMPLETIONS,
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(handle_chat_completions) as LocalRpcHandler,
     );
     reg.register_rpc_with_owner(
         OPENAI_LIST_MODELS,
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(handle_list_models) as LocalRpcHandler,
     );
     reg.register_rpc_with_owner(
         OPENAI_FILES_UPLOAD,
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(handle_file_upload) as LocalRpcHandler,
     );
     reg.register_rpc_with_owner(
         OPENAI_FILES_RETRIEVE,
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(handle_file_retrieve) as LocalRpcHandler,
     );
     reg.register_rpc_with_owner(
         OPENAI_FILES_DELETE,
-        OwnerKind::Device,
+        owner,
         Arc::new(handle_file_delete) as LocalRpcHandler,
     );
 }
@@ -1025,7 +1026,7 @@ mod tests {
 
     fn files_test_scope(realm: &str, user: &str) -> AuthorityScope {
         AuthorityScope::new(
-            format!("user:{user}"),
+            "agent:files",
             crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
                 realm, user,
             ),
@@ -1043,7 +1044,7 @@ mod tests {
     ) {
         reg.register_rpc_with_spec_impl_and_authority_scope(
             ability,
-            OwnerKind::User(user.to_string()),
+            OwnerKind::Agent("files".to_string()),
             files_test_scope(realm, user),
             test_manifest(ability, admission_action),
             handler,
@@ -1056,6 +1057,24 @@ mod tests {
 
     fn metadata_test_catalog() -> AxonAbilityCatalog {
         AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
+    fn metadata_test_catalog_with_hosted_agent(
+        realm: &str,
+        user: &str,
+        agent: &str,
+    ) -> AxonAbilityCatalog {
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                crate::core::ura::device_ura(realm, "openai-test-device"),
+            )
+            .and_then(|context| {
+                context.with_declared_agent_authority_root(crate::core::ura::agent_ura(
+                    realm, user, agent,
+                ))
+            })
+            .expect("OpenAI test hosted Agent authority context");
+        AxonAbilityCatalog::new_metadata_only_with_authority_context(authority_context)
     }
 
     fn executable_test_catalog(realm: &str) -> AxonAbilityCatalog {
@@ -1112,7 +1131,7 @@ mod tests {
     fn resolve_model_to_ability_rejects_non_agent_ability_ura() {
         let err =
             resolve_model_to_ability("easynet:///r/easynet.run/ability/device.01HUB.e2e.run.shell")
-                .expect_err("device-owned abilities cannot be OpenAI models");
+                .expect_err("non-agent abilities cannot be OpenAI models");
         assert!(
             err.to_string()
                 .contains("model must point to an agent-owned chat Ability URA"),
@@ -1167,7 +1186,7 @@ mod tests {
         // authority/runtime state, so a concurrent HOME-mutating test must
         // not race it (passes isolated, flakes only under parallelism).
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = metadata_test_catalog();
+        let mut reg = metadata_test_catalog_with_hosted_agent("easynet.run", "alice", "codex");
         register_test_rpc(
             &mut reg,
             "codex.chat",
@@ -1188,7 +1207,7 @@ mod tests {
 
     #[test]
     fn project_model_id_drops_chat_key_when_identity_is_missing() {
-        let mut reg = metadata_test_catalog();
+        let mut reg = metadata_test_catalog_with_hosted_agent("easynet.run", "alice", "codex");
         register_test_rpc(
             &mut reg,
             "codex.chat",
@@ -1205,7 +1224,7 @@ mod tests {
 
     #[test]
     fn project_model_id_drops_chat_key_when_user_is_missing() {
-        let mut reg = metadata_test_catalog();
+        let mut reg = metadata_test_catalog_with_hosted_agent("easynet.run", "alice", "codex");
         register_test_rpc(
             &mut reg,
             "codex.chat",
@@ -1260,7 +1279,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "files.put",
-            OwnerKind::Device,
+            OwnerKind::DeviceProfileProjection,
             "invoke",
             Arc::new(|_args: Value| Ok(json!({"owner": "device"}))) as LocalRpcHandler,
         );
@@ -1291,7 +1310,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "device.llm.chat",
-            OwnerKind::Device,
+            OwnerKind::DeviceProfileProjection,
             "invoke",
             ok_handler(),
         );

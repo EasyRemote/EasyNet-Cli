@@ -13,17 +13,19 @@
 //! registers those. Phase 2 only ensures the runtime exists and is
 //! reachable from the dispatch service.
 
-use std::sync::Arc;
 #[cfg(test)]
 use std::{collections::HashMap, sync::Mutex};
+use std::{path::PathBuf, sync::Arc};
 
+#[cfg(feature = "axon-pb")]
+use axon_sdk::invocation::persistence::PersistentLog;
 #[cfg(any(test, feature = "axon-pb"))]
 use axon_sdk::invocation::AxonError;
 #[cfg(test)]
 use axon_sdk::invocation::{
-    authority_proof_expected_hash, sha256, AgentIdentity, AuthorityBinding, CalleeSignature,
-    DescriptorBoundEnvelope, InvocationAuthorityProof, ReceiptSigningAuthority,
-    VerifiedAdmissionPolicy,
+    authority_proof_expected_hash, canonical_host_attestation_bytes, sha256, AgentIdentity,
+    AuthorityBinding, CalleeSignature, DescriptorBoundEnvelope, InvocationAuthorityProof,
+    ReceiptSigningAuthority, UraProfile, VerifiedAdmissionPolicy,
 };
 use axon_sdk::invocation::{
     AxiomBinding, CanonicalReceiptProvider, InvocationLedger, KeyResolver, LedgerSink, LocalRuntime,
@@ -38,6 +40,56 @@ use crate::daemon::identity::local_invocation::CanonicalAdmissionKeyResolver;
 use crate::daemon::identity::receipt_signing::load_runtime_signing_authority_providers;
 #[cfg(feature = "axon-pb")]
 pub use crate::daemon::identity::receipt_signing::ProductionReceiptAuthorityConfig;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(feature = "axon-pb")]
+pub struct RuntimePersistenceConfig {
+    log_dir: PathBuf,
+}
+
+#[cfg(feature = "axon-pb")]
+impl RuntimePersistenceConfig {
+    #[must_use]
+    pub fn persistent(log_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            log_dir: log_dir.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn log_dir(&self) -> &std::path::Path {
+        &self.log_dir
+    }
+
+    fn into_persistent_log(self) -> PersistentLog {
+        PersistentLog::new(Some(self.log_dir))
+    }
+}
+
+#[cfg(all(test, feature = "axon-pb"))]
+pub(crate) fn isolated_test_runtime_persistence(label: &str) -> RuntimePersistenceConfig {
+    static RUNTIME_PERSISTENCE_SEQ: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+    let sanitized_label: String = label
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let seq = RUNTIME_PERSISTENCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "easynet-daemon-runtime-{}-{}-{}",
+        std::process::id(),
+        sanitized_label,
+        seq
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    RuntimePersistenceConfig::persistent(dir)
+}
 
 /// Immutable runtime admission composition shared by transport dispatch and
 /// Axon's signature verifier.
@@ -190,6 +242,7 @@ impl DaemonRuntimeAssembly {
 pub fn build_production_local_runtime(
     config: ProductionReceiptAuthorityConfig,
     trusted_identities: Arc<dyn KeyResolver>,
+    runtime_persistence: RuntimePersistenceConfig,
 ) -> Result<DaemonRuntimeAssembly, AxonError> {
     let providers = load_runtime_signing_authority_providers(config)?;
     Ok(assemble_daemon_runtime(
@@ -197,6 +250,7 @@ pub fn build_production_local_runtime(
         providers.receipt,
         Some(providers.invocation),
         Some(providers.invocation_verification),
+        runtime_persistence,
         None,
     ))
 }
@@ -213,6 +267,7 @@ pub fn build_production_local_runtime(
 pub fn build_daemon_runtime_with_receipt_provider(
     trusted_identities: Arc<dyn KeyResolver>,
     canonical_receipt_provider: Arc<dyn CanonicalReceiptProvider>,
+    runtime_persistence: RuntimePersistenceConfig,
     ledger: Option<Arc<InvocationLedger>>,
 ) -> DaemonRuntimeAssembly {
     assemble_daemon_runtime(
@@ -220,6 +275,7 @@ pub fn build_daemon_runtime_with_receipt_provider(
         canonical_receipt_provider,
         None,
         None,
+        runtime_persistence,
         ledger,
     )
 }
@@ -234,6 +290,7 @@ fn assemble_daemon_runtime(
     invocation_verification_keys: Option<
         Arc<dyn crate::daemon::identity::receipt_signing::InvocationVerificationKeyProvider>,
     >,
+    runtime_persistence: RuntimePersistenceConfig,
     ledger: Option<Arc<InvocationLedger>>,
 ) -> DaemonRuntimeAssembly {
     let runtime_admission = Arc::new(
@@ -266,10 +323,12 @@ fn assemble_daemon_runtime(
         runtime_admission,
     ));
     let runtime_resolver: Arc<dyn KeyResolver> = admission_graph.clone();
-    let runtime = LocalRuntime::new_with_authority_providers(
+    let runtime_persistence = Arc::new(runtime_persistence.into_persistent_log());
+    let runtime = LocalRuntime::new_with_authority_providers_and_persistence(
         runtime_resolver,
         invocation_authority_provider,
         receipt_provider,
+        runtime_persistence,
     );
     install_ledger_sink(&runtime, ledger);
     DaemonRuntimeAssembly {
@@ -335,11 +394,13 @@ pub fn build_local_runtime(
 /// tests that stage runtime admission before entering the canonical runtime.
 pub(crate) fn build_test_daemon_runtime_assembly(
     key_resolver: Arc<dyn KeyResolver>,
+    runtime_persistence: RuntimePersistenceConfig,
     ledger: Option<Arc<InvocationLedger>>,
 ) -> DaemonRuntimeAssembly {
     build_daemon_runtime_with_receipt_provider(
         key_resolver,
         ephemeral_test_canonical_receipt_provider(),
+        runtime_persistence,
         ledger,
     )
 }
@@ -384,6 +445,14 @@ impl KeyResolver for EphemeralTestReceiptKeyResolver {
 }
 
 #[cfg(test)]
+fn sponsor_device_identity_for_system_agent(agent_ura: &str) -> Option<AgentIdentity> {
+    let parsed = crate::core::ura::parse_ura(agent_ura).ok()?;
+    let (device_id, _agent_id) = parsed.device_agent_ids()?;
+    let device_ura = crate::core::ura::device_ura(&parsed.realm, device_id);
+    Some(AgentIdentity::new(device_ura, UraProfile::StrictV2))
+}
+
+#[cfg(test)]
 #[derive(Default)]
 struct EphemeralTestCanonicalReceiptProvider {
     authorities: Mutex<HashMap<AgentIdentity, Arc<dyn ReceiptSigningAuthority>>>,
@@ -424,7 +493,7 @@ impl CanonicalReceiptProvider for EphemeralTestCanonicalReceiptProvider {
             return Ok(Arc::clone(authority));
         }
         let authority: Arc<dyn ReceiptSigningAuthority> = Arc::new(
-            EphemeralTestReceiptSigningAuthority::self_signed(callee.clone()),
+            EphemeralTestReceiptSigningAuthority::for_callee(callee.clone()),
         );
         authorities.insert(callee.clone(), Arc::clone(&authority));
         Ok(authority)
@@ -448,15 +517,41 @@ impl CanonicalReceiptProvider for EphemeralTestCanonicalReceiptProvider {
 #[cfg(test)]
 struct EphemeralTestReceiptSigningAuthority {
     callee_identity: AgentIdentity,
+    signer_identity: AgentIdentity,
     signing_key: SigningKey,
+    host_attestation: Vec<u8>,
 }
 
 #[cfg(test)]
 impl EphemeralTestReceiptSigningAuthority {
+    fn for_callee(callee_identity: AgentIdentity) -> Self {
+        if let Some(signer_identity) =
+            sponsor_device_identity_for_system_agent(&callee_identity.ura)
+        {
+            return Self::hosted(callee_identity, signer_identity);
+        }
+        Self::self_signed(callee_identity)
+    }
+
     fn self_signed(callee_identity: AgentIdentity) -> Self {
         Self {
             signing_key: SigningKey::from_bytes(&sha256(callee_identity.ura.as_bytes())),
+            signer_identity: callee_identity.clone(),
             callee_identity,
+            host_attestation: Vec::new(),
+        }
+    }
+
+    fn hosted(callee_identity: AgentIdentity, signer_identity: AgentIdentity) -> Self {
+        let signing_key = SigningKey::from_bytes(&sha256(signer_identity.ura.as_bytes()));
+        let attestation_bytes =
+            canonical_host_attestation_bytes(&callee_identity.ura, &signer_identity.ura);
+        let signature: Signature = signing_key.sign(&attestation_bytes);
+        Self {
+            callee_identity,
+            signer_identity,
+            signing_key,
+            host_attestation: signature.to_bytes().to_vec(),
         }
     }
 
@@ -473,11 +568,11 @@ impl ReceiptSigningAuthority for EphemeralTestReceiptSigningAuthority {
     }
 
     fn signer_identity(&self) -> &AgentIdentity {
-        &self.callee_identity
+        &self.signer_identity
     }
 
     fn host_attestation(&self) -> &[u8] {
-        &[]
+        &self.host_attestation
     }
 
     fn verifying_key(&self) -> VerifyingKey {
@@ -557,6 +652,37 @@ mod tests {
         let rt = build_local_runtime(rejecting_test_key_resolver(), None);
         // Arc strong count > 0 — proves the runtime was built.
         assert!(Arc::strong_count(&rt) >= 1);
+    }
+
+    #[tokio::test]
+    async fn ephemeral_receipt_provider_uses_sponsor_device_for_system_agent() {
+        let provider = ephemeral_test_canonical_receipt_provider();
+        let callee = AgentIdentity::new(
+            "easynet:///r/acme/agent/device.edge-01.runtime-governance",
+            UraProfile::StrictV2,
+        );
+
+        let authority = provider
+            .resolve_signing_authority(&callee)
+            .await
+            .expect("SystemAgent test receipt authority resolves");
+
+        assert_eq!(authority.callee_identity().ura, callee.ura);
+        assert_eq!(
+            authority.signer_identity().ura,
+            "easynet:///r/acme/device/edge-01"
+        );
+        let signer_key = provider
+            .resolve_signer_key("easynet:///r/acme/device/edge-01")
+            .expect("test receipt signer key resolves")
+            .expect("sponsor Device signer key is visible");
+        axon_sdk::invocation::verify_host_attestation(
+            &callee.ura,
+            "easynet:///r/acme/device/edge-01",
+            authority.host_attestation(),
+            &signer_key,
+        )
+        .expect("host attestation verifies against sponsor Device key");
     }
 
     #[test]

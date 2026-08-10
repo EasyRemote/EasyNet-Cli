@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch};
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
@@ -23,7 +23,7 @@ use crate::daemon::plugins::remote_desktop::input::{
     apply_input_frame_with_policy, input_policy_allows, input_policy_for_entry, parse_input_frame,
 };
 use crate::daemon::plugins::remote_desktop::media::encode::{
-    BuiltinH264StreamTerminal, BuiltinH264TerminalCallback, spawn_builtin_h264_stream,
+    spawn_builtin_h264_stream, BuiltinH264StreamTerminal, BuiltinH264TerminalCallback,
 };
 use crate::daemon::plugins::remote_desktop::request::AttachEncoding;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
@@ -355,30 +355,13 @@ fn install_h264_preview_session_for_test(
 ) {
     let (stop_tx, _stop_rx) = watch::channel(false);
     session_store.with_sessions(|sessions| {
-        let mut session = crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession::new(
-            crate::daemon::plugins::remote_desktop::session::RemoteDesktopSessionInit {
-                session_id: session_id.to_string(),
-                session_token: "token".to_string(),
-                creator_caller_ura: Some("easynet:///r/acme/user/test-caller".to_string()),
-                consent: crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant::from_envelope_for_test(
-                    &crate::daemon::ability::dispatch::EnvelopeContext::for_test(
-                        "easynet:///r/acme/user/test-caller",
-                        "easynet:///r/acme/resource/display.01",
-                    ),
-                ),
-                subject_ura: "easynet:///r/acme/resource/display.01".to_string(),
-                subject_type: crate::daemon::persistence::resources::ResourceType::Display,
-                subject_display_name: "Test Display".to_string(),
-                mode: "view_only".to_string(),
-                lease_ttl_ms: 5_000,
-                transport_preferences: vec![TRANSPORT_INVOKE_BIDI.to_string()],
-                video:
-                    crate::daemon::plugins::remote_desktop::request::RemoteDesktopVideoConstraints::default(
-                    ),
-                input_policy:
-                    crate::daemon::plugins::remote_desktop::request::RemoteDesktopInputPolicy::default(),
-            },
+        let init = crate::daemon::plugins::remote_desktop::test_support::test_session_init(
+            session_id,
+            "easynet:///r/acme/resource/display.01",
+            vec![TRANSPORT_INVOKE_BIDI.to_string()],
         );
+        let mut session =
+            crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession::new(init);
         session.attach_preview_transport(stop_tx);
         sessions.insert(session_id.to_string(), session);
     });

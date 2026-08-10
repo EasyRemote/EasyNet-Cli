@@ -7,12 +7,12 @@ use serde_json::Value;
 use tokio::sync::{mpsc, watch};
 
 use crate::daemon::ability::dispatch::{
-    BIDI_CHANNEL_BOUND, BidiOutputFrame, BidiSource, EnvelopeContext,
+    BidiOutputFrame, BidiSource, EnvelopeContext, BIDI_CHANNEL_BOUND,
 };
 use crate::daemon::plugins::remote_desktop::constants::ABILITY_ATTACH_SESSION;
 use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::invoke_bidi::{
-    BidiCaptureWorkerConfig, spawn_bidi_capture_worker,
+    spawn_bidi_capture_worker, BidiCaptureWorkerConfig,
 };
 use crate::daemon::plugins::remote_desktop::request::require_str;
 use crate::daemon::plugins::remote_desktop::request::{

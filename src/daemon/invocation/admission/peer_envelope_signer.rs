@@ -322,7 +322,7 @@ fn peer_descriptor_ref_for_envelope(envelope: &Envelope, ability: &str) -> Resul
         .ok_or_else(|| {
             Status::internal("cross-hub canonical_invoke signing: callee URA missing after rewrite")
         })?;
-    crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+    crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
         callee_ura,
         ability,
         crate::daemon::ability::CallMode::Rpc,
@@ -391,7 +391,7 @@ mod tests {
     }
 
     fn peer_discover_descriptor_ref() -> String {
-        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
             "easynet:///r/peer/authority",
             "federation.discover",
             crate::daemon::ability::CallMode::Rpc,

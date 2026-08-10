@@ -25,9 +25,9 @@
 //   * `context.captures.get`     — one device-scoped metadata record
 //   * `context.captures.read`    — bounded finite capture byte stream
 //
-// Owner is Device: the clipboard and the folder mappings are
-// per-device state, captured/served by whichever daemon hosts them —
-// the same ownership reasoning as `chat.history.*`.
+// Owner is the device-sponsored context SystemAgent: the clipboard and folder
+// mappings are per-device state, but the public descriptor owner/callee is a
+// restricted Agent. The Device remains the storage/execution substrate.
 //
 // Folder mappings are ADDED/REMOVED via the `easynet context` CLI by
 // design (the mapping grants filesystem read access, so it stays a
@@ -79,69 +79,70 @@ const CAPTURE_STREAM_MAX_BYTES: u64 = 256 * 1024 * 1024;
 /// Register every context ability. Called from
 /// `daemon::ability::catalog::build_registry`.
 pub fn register(reg: &mut AxonAbilityCatalog) {
+    let owner = OwnerKind::context_system();
     reg.register_rpc_with_owner(
         ABILITY_CLIPBOARD_LIST,
-        OwnerKind::Device,
+        owner.clone(),
         std::sync::Arc::new(clipboard_list_handler),
     );
     reg.register_rpc_with_owner(
         ABILITY_CLIPBOARD_GET,
-        OwnerKind::Device,
+        owner.clone(),
         std::sync::Arc::new(clipboard_get_handler),
     );
     reg.register_rpc_with_owner(
         ABILITY_CLIPBOARD_TRACK,
-        OwnerKind::Device,
+        owner.clone(),
         std::sync::Arc::new(clipboard_track_handler),
     );
     reg.register_rpc_with_owner(
         ABILITY_CLIPBOARD_REMOVE,
-        OwnerKind::Device,
+        owner.clone(),
         std::sync::Arc::new(clipboard_remove_handler),
     );
     reg.register_rpc_with_envelope_and_owner(
         ABILITY_CATALOG,
-        OwnerKind::Device,
+        owner.clone(),
         std::sync::Arc::new(catalog_handler),
     );
     reg.register_rpc_with_owner(
         ABILITY_FOLDERS_LIST,
-        OwnerKind::Device,
+        owner.clone(),
         std::sync::Arc::new(folders_list_handler),
     );
     reg.register_rpc_with_owner(
         ABILITY_FS_LIST,
-        OwnerKind::Device,
+        owner.clone(),
         std::sync::Arc::new(fs_list_handler),
     );
     reg.register_rpc_with_owner(
         ABILITY_FAVORITES_LIST,
-        OwnerKind::Device,
+        owner.clone(),
         std::sync::Arc::new(favorites_list_handler),
     );
     reg.register_rpc_with_owner(
         ABILITY_FAVORITES_ADD,
-        OwnerKind::Device,
+        owner.clone(),
         std::sync::Arc::new(favorites_add_handler),
     );
     reg.register_rpc_with_owner(
         ABILITY_FAVORITES_REMOVE,
-        OwnerKind::Device,
+        owner.clone(),
         std::sync::Arc::new(favorites_remove_handler),
     );
     reg.register_rpc_with_envelope_and_owner(
         ABILITY_CAPTURES_LIST,
-        OwnerKind::Device,
+        owner.clone(),
         std::sync::Arc::new(captures_list_handler),
     );
     reg.register_rpc_with_envelope_and_owner(
         ABILITY_CAPTURES_GET,
-        OwnerKind::Device,
+        owner.clone(),
         std::sync::Arc::new(captures_get_handler),
     );
     reg.register_stream_with_envelope_and_spec(
         ABILITY_CAPTURES_READ,
-        OwnerKind::Device,
+        owner,
         crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_CAPTURES_READ,
             description_for(ABILITY_CAPTURES_READ).expect("capture read description"),
@@ -513,12 +514,8 @@ pub fn description_for(name: &str) -> Option<&'static str> {
             "List media artifacts persisted by abilities (screenshots, photos, recordings), \
              newest first, with the distinct ability folder names."
         }
-        ABILITY_CAPTURES_GET => {
-            "Read bounded metadata for one persisted media artifact."
-        }
-        ABILITY_CAPTURES_READ => {
-            "Stream one persisted media artifact as ordered, bounded chunks."
-        }
+        ABILITY_CAPTURES_GET => "Read bounded metadata for one persisted media artifact.",
+        ABILITY_CAPTURES_READ => "Stream one persisted media artifact as ordered, bounded chunks.",
         _ => return None,
     })
 }

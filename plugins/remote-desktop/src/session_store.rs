@@ -134,6 +134,7 @@ impl RemoteDesktopSessionStore {
     }
 
     /// Store latest media stats for one non-terminal session.
+    #[cfg(target_os = "macos")]
     pub(in crate::daemon::plugins::remote_desktop) fn record_media_pipeline_stats(
         &self,
         session_id: &str,

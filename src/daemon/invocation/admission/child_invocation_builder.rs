@@ -422,9 +422,14 @@ mod tests {
     use crate::daemon::invocation::admission::decision::{AccessAction, PrincipalKind};
 
     fn route() -> SelectedChildRoute {
-        let callee = "easynet:///r/test/device/dev-a".to_string();
+        let execution_host = "easynet:///r/test/device/dev-a".to_string();
+        let callee = crate::core::ura::device_agent_ura(
+            "test",
+            "dev-a",
+            crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+        );
         let descriptor_ref =
-            crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+            crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
                 &callee,
                 "meta.list_resources",
                 crate::daemon::ability::CallMode::Rpc,
@@ -438,7 +443,7 @@ mod tests {
         SelectedChildRoute {
             route_ref: "route-ref::test".to_string(),
             selected_callee_ura: callee,
-            execution_host_ura: "easynet:///r/test/device/dev-a".to_string(),
+            execution_host_ura: execution_host,
             public_ability: "meta.list_resources".to_string(),
             dispatch_key: "meta.list_resources".to_string(),
             descriptor_version,
@@ -595,11 +600,12 @@ mod tests {
                 proof_id: "proof-1".to_string(),
                 grant_id: Some("grant-1".to_string()),
                 permission_request_id: None,
-                owner_user_id: "alice".to_string(),
+                owner_user_ura: "easynet:///r/test/user/alice".to_string(),
                 principal_kind: PrincipalKind::Token,
                 principal_id: "token-principal".to_string(),
                 token_id: Some("token-1".to_string()),
-                callee_ura: "easynet:///r/test/device/dev-a".to_string(),
+                token_class: None,
+                callee_ura: route().selected_callee_ura,
                 subject_ura: "easynet:///r/test/device/dev-a".to_string(),
                 ability_ura:
                     crate::daemon::axon_bridge::descriptor_ref::ability_ura_from_descriptor_ref(
@@ -610,7 +616,7 @@ mod tests {
                 nonce: None,
                 canonical_hash: Some("sha256:abc".to_string()),
                 session_id: None,
-                session_owner_user_id: None,
+                session_owner_user_ura: None,
                 allowed_followup_abilities: vec![],
                 session_expires_at: None,
                 issued_at: "2026-07-09T00:00:00Z".to_string(),

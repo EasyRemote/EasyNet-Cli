@@ -151,7 +151,7 @@ impl Default for SharedTrustAnchor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{TrustAnchorRole, TrustedAgent};
 
     fn hub(realm: &str) -> String {
         crate::core::ura::hub_ura(realm)
@@ -161,7 +161,7 @@ mod tests {
         TrustedAgent {
             agent_ura: ura.to_string(),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-            role: TrustedAgentRole::Backend,
+            role: TrustAnchorRole::Backend,
             added_at_unix_ms: 1_714_492_800_000,
             origin_realm: None,
             hub_endpoint: None,

@@ -195,9 +195,12 @@ impl AbilityCatalogueScope {
         let parsed = parse_ura(&scope_ura)?;
         match parsed.kind {
             URAKind::Ability => Ok(Self::Ability(scope_ura)),
-            URAKind::Agent | URAKind::Device | URAKind::Authority | URAKind::User => {
-                Ok(Self::Owner(scope_ura))
-            }
+            URAKind::Agent | URAKind::Device | URAKind::Authority => Ok(Self::Owner(scope_ura)),
+            URAKind::User => bail!(
+                "--subject-ura cannot scope ability ownership to a User Principal; \
+                 use an explicit Agent, SystemAgent, Authority, DeviceProfileProjection \
+                 migration row, or Ability URA"
+            ),
             other => bail!("--subject-ura must be an owner URA or Ability URA, got {other:?}"),
         }
     }
@@ -238,7 +241,7 @@ fn local_agent_ura(agent: &str) -> anyhow::Result<String> {
         })
 }
 
-/// Build owned (Device, Agent, User, Kind) cells for one ability
+/// Build owned (Device, Agent, Principal, Kind) cells for one ability
 /// entry. The three identity columns are projections of the
 /// owner URA — only the slots that the owner kind actually
 /// names get populated; the rest stay `-`.
@@ -272,14 +275,14 @@ fn extract_columns(entry: &Value) -> (String, String, String, String) {
     // KIND is read straight from the owner URA kind — that's the
     // authoritative classifier. Handler implementation hints such as
     // `fulfilled_by` describe how an ability runs, not who owns the catalogue
-    // row, so they cannot override owner classification. The pre-migration
-    // default was `agent_chat`, which mis-labelled every device-owned and
-    // user-owned verb.
+    // row, so they cannot override owner classification. User rows are rendered
+    // only as legacy principal projections; target architecture uses Agent,
+    // SystemAgent, Authority, or DeviceProfileProjection owners.
     let kind = match parsed.as_ref().map(|p| p.kind) {
         Some(URAKind::Device) => "system".to_string(),
         Some(URAKind::Authority) => "hub".to_string(),
         Some(URAKind::Agent) => "agent".to_string(),
-        Some(URAKind::User) => "user".to_string(),
+        Some(URAKind::User) => "legacy_principal".to_string(),
         _ => "-".to_string(),
     };
 
@@ -331,7 +334,7 @@ enum GroupKey {
         agent: String,
         ura: String,
     },
-    User {
+    LegacyPrincipal {
         user: String,
         ura: String,
     },
@@ -346,7 +349,9 @@ impl GroupKey {
             GroupKey::Agent { user, agent, ura } => {
                 format!("AGENT {user}.{agent} ({ura})")
             }
-            GroupKey::User { user, ura } => format!("USER {user} ({ura})"),
+            GroupKey::LegacyPrincipal { user, ura } => {
+                format!("LEGACY PRINCIPAL {user} ({ura})")
+            }
             GroupKey::Device(ura) => format!("DEVICE / SYSTEM ({ura})"),
             GroupKey::Other => "OTHER".to_string(),
         }
@@ -357,7 +362,7 @@ impl GroupKey {
         match self {
             GroupKey::Hub(_) => 0,
             GroupKey::Agent { .. } => 1,
-            GroupKey::User { .. } => 2,
+            GroupKey::LegacyPrincipal { .. } => 2,
             GroupKey::Device(_) => 3,
             GroupKey::Other => 4,
         }
@@ -379,7 +384,7 @@ fn group_for(entry: &Value) -> GroupKey {
                     ura: owner_ura.to_string(),
                 }
             }
-            URAKind::User => GroupKey::User {
+            URAKind::User => GroupKey::LegacyPrincipal {
                 user: p.user_id().unwrap_or("-").to_string(),
                 ura: owner_ura.to_string(),
             },
@@ -418,7 +423,7 @@ fn render_grouped(filtered: &[Value]) {
         let header_style = match key {
             GroupKey::Hub(_) => style(&title).magenta().bold(),
             GroupKey::Agent { .. } => style(&title).green().bold(),
-            GroupKey::User { .. } => style(&title).yellow().bold(),
+            GroupKey::LegacyPrincipal { .. } => style(&title).yellow().bold(),
             GroupKey::Device(_) => style(&title).blue().bold(),
             GroupKey::Other => style(&title).red().bold(),
         };
@@ -760,6 +765,19 @@ mod tests {
     }
 
     #[test]
+    fn catalogue_scope_rejects_user_principal_as_owner_filter() {
+        let err =
+            AbilityCatalogueScope::from_cli_scope(Some("easynet:///r/test/user/alice".into()))
+                .unwrap_err()
+                .to_string();
+
+        assert!(
+            err.contains("User Principal"),
+            "user principals are accountability roots, not ability owners: {err}"
+        );
+    }
+
+    #[test]
     fn catalogue_query_rejects_conflicting_cli_owner_scope() {
         let err = AbilityCatalogueQuery::from_args(&AbilitiesArgs {
             agent: None,
@@ -793,7 +811,7 @@ mod tests {
     fn catalogue_query_rejects_conflicting_local_agent_selector() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut local = crate::daemon::persistence::local_agents::LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/test/device/dev-1".to_string(),
+            host_device_ura: "easynet:///r/test/device/dev-1".to_string(),
             hosted_agents: Vec::new(),
         };
         crate::daemon::persistence::local_agents::upsert_hosted_agent(
@@ -896,8 +914,8 @@ mod tests {
     #[test]
     fn group_for_buckets_each_owner_kind_into_its_section() {
         // Pin the partition: hub URA → Hub, agent URA → Agent,
-        // user URA → User, device URA → Device. A future render
-        // change that loses or merges a bucket trips this test.
+        // historical user-owner URA → LegacyPrincipal, device URA → Device. A
+        // future render change that loses or merges a bucket trips this test.
         let hub = json!({
             "name": "hub.openai.chat_completions",
             "owner_ura": crate::core::ura::hub_ura("easynet.run"),
@@ -917,7 +935,7 @@ mod tests {
         });
         assert!(matches!(group_for(&hub), GroupKey::Hub(_)));
         assert!(matches!(group_for(&agent), GroupKey::Agent { .. }));
-        assert!(matches!(group_for(&user), GroupKey::User { .. }));
+        assert!(matches!(group_for(&user), GroupKey::LegacyPrincipal { .. }));
         assert!(matches!(group_for(&device), GroupKey::Device(_)));
     }
 
@@ -948,7 +966,7 @@ mod tests {
         assert_eq!(extract_columns(&device).3, "system");
         assert_eq!(extract_columns(&hub).3, "hub");
         assert_eq!(extract_columns(&agent).3, "agent");
-        assert_eq!(extract_columns(&user).3, "user");
+        assert_eq!(extract_columns(&user).3, "legacy_principal");
     }
 
     #[test]
@@ -962,7 +980,7 @@ mod tests {
 
     #[test]
     fn group_section_order_matches_render_priority() {
-        // Hub → Agent → User → Device → Other. Lower number prints
+        // Hub → Agent → legacy principal → Device → Other. Lower number prints
         // first.
         assert!(
             GroupKey::Hub("x".into()).section_order()
@@ -980,14 +998,14 @@ mod tests {
                 ura: "x".into()
             }
             .section_order()
-                < GroupKey::User {
+                < GroupKey::LegacyPrincipal {
                     user: "u".into(),
                     ura: "x".into()
                 }
                 .section_order()
         );
         assert!(
-            GroupKey::User {
+            GroupKey::LegacyPrincipal {
                 user: "u".into(),
                 ura: "x".into()
             }

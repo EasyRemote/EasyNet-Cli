@@ -619,7 +619,7 @@ pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn Snap
     let record_start_backend = Arc::clone(&backend);
     reg.register_rpc_with_envelope_and_spec_and_semantics(
         ABILITY_CAMERA_SNAPSHOT,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_CAMERA_SNAPSHOT),
         media::receipt_semantics(ABILITY_CAMERA_SNAPSHOT)
             .expect("camera.snapshot receipt semantics"),
@@ -627,7 +627,7 @@ pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn Snap
     );
     reg.register_stream_with_envelope_and_spec_and_semantics(
         ABILITY_CAMERA_SUBSCRIBE,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_CAMERA_SUBSCRIBE),
         media::receipt_semantics(ABILITY_CAMERA_SUBSCRIBE)
             .expect("camera.subscribe receipt semantics"),
@@ -637,7 +637,7 @@ pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn Snap
     );
     reg.register_rpc_with_envelope_and_spec_and_semantics(
         ABILITY_CAMERA_RECORD_START,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_CAMERA_RECORD_START),
         media::receipt_semantics(ABILITY_CAMERA_RECORD_START)
             .expect("camera.record_start receipt semantics"),
@@ -647,7 +647,7 @@ pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn Snap
     );
     reg.register_rpc_with_envelope_and_spec_and_semantics(
         ABILITY_CAMERA_RECORD_STOP,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_CAMERA_RECORD_STOP),
         media::receipt_semantics(ABILITY_CAMERA_RECORD_STOP)
             .expect("camera.record_stop receipt semantics"),

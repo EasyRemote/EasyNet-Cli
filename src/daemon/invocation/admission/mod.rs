@@ -9,6 +9,8 @@ pub(crate) mod bootstrap_authority;
 pub mod child_invocation_builder;
 pub mod decision;
 #[cfg(feature = "axon-pb")]
+pub(crate) mod device_caller;
+#[cfg(feature = "axon-pb")]
 pub mod device_trust_sync;
 #[cfg(feature = "axon-pb")]
 pub mod federated_key_resolver;

@@ -856,7 +856,7 @@ mod tests {
     //!   gate + cache + plumbing surface.
 
     use super::*;
-    use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{TrustAnchorRole, TrustedAgent};
     use axon_sdk::pb::axon::v1::ResponseHeader;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -961,7 +961,7 @@ mod tests {
         TrustedAgent {
             agent_ura: crate::core::ura::hub_ura("peer-realm"),
             public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-            role: TrustedAgentRole::Hub,
+            role: TrustAnchorRole::Hub,
             added_at_unix_ms: 1_714_492_800_000,
             origin_realm: Some("peer-realm".to_string()),
             hub_endpoint: Some(target_hub_endpoint.to_string()),
@@ -1003,7 +1003,7 @@ mod tests {
         // it dialable.
         let target = "https://peer-hub.example:50443".to_string();
         let mut entry = fed_peer_entry(&target, PathBuf::from("/dev/null"));
-        entry.role = TrustedAgentRole::Backend;
+        entry.role = TrustAnchorRole::Backend;
         let anchor = anchor_with(entry);
 
         let dialer = dialer_with_anchor(anchor);

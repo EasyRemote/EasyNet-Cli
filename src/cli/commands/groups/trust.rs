@@ -19,7 +19,7 @@ use serde_json::json;
 
 use crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default;
 use crate::daemon::trust::anchor::{
-    RealmTrustAnchor, RealmTrustAnchorLoadState, TrustedAgent, TrustedAgentRole,
+    RealmTrustAnchor, RealmTrustAnchorLoadState, TrustAnchorRole, TrustedAgent,
 };
 use crate::support::platform::output::OutputFormat;
 
@@ -184,12 +184,12 @@ fn entry_json(e: &TrustedAgent) -> serde_json::Value {
     })
 }
 
-fn role_label(role: &TrustedAgentRole) -> &'static str {
+fn role_label(role: &TrustAnchorRole) -> &'static str {
     match role {
-        TrustedAgentRole::Backend => "backend",
-        TrustedAgentRole::Device => "device",
-        TrustedAgentRole::Hub => "hub",
-        TrustedAgentRole::User => "user",
+        TrustAnchorRole::Backend => "backend",
+        TrustAnchorRole::Device => "device",
+        TrustAnchorRole::Hub => "hub",
+        TrustAnchorRole::User => "user",
     }
 }
 

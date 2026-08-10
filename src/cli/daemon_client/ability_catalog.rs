@@ -11,43 +11,31 @@
 use serde_json::Value;
 
 use crate::cli::daemon_client::remote_system_ability::invoke_remote_device_catalogue_read;
-use crate::core::ura::{parse_ura, AbilitySelector, URAKind};
+use crate::daemon::ability::{AbilityCatalogQuery, AbilityCatalogRow};
 use crate::support::platform::local_invoke::LocalRuntimeCatalogueReadIssuer;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AbilityCatalogueQuery {
-    owner_ura: Option<String>,
-    ability_ura: Option<String>,
+    inner: AbilityCatalogQuery,
 }
 
 impl AbilityCatalogueQuery {
     pub(crate) fn new(owner_ura: Option<String>, ability_ura: Option<String>) -> Self {
         Self {
-            owner_ura,
-            ability_ura,
+            inner: AbilityCatalogQuery::new(owner_ura, ability_ura),
         }
     }
 
     pub(crate) fn owner_ura(&self) -> Option<&str> {
-        self.owner_ura.as_deref()
+        self.inner.owner_ura()
     }
 
     pub(crate) fn ability_ura(&self) -> Option<&str> {
-        self.ability_ura.as_deref()
+        self.inner.ability_ura()
     }
 
     pub(crate) fn to_request(&self) -> Value {
-        let mut body = serde_json::Map::new();
-        if let Some(owner_ura) = self.owner_ura.as_ref() {
-            body.insert("owner_ura".to_string(), Value::String(owner_ura.clone()));
-        }
-        if let Some(ability_ura) = self.ability_ura.as_ref() {
-            body.insert(
-                "ability_ura".to_string(),
-                Value::String(ability_ura.clone()),
-            );
-        }
-        Value::Object(body)
+        self.inner.to_request_json()
     }
 }
 
@@ -97,89 +85,13 @@ impl AbilityCatalogueClient {
         entries
             .iter()
             .enumerate()
-            .map(|(index, entry)| schema_bound_catalogue_entry(entry, index))
+            .map(|(index, entry)| {
+                AbilityCatalogRow::parse(entry, index, "CLI meta.list_abilities")
+                    .map(AbilityCatalogRow::into_value)
+                    .map_err(anyhow::Error::msg)
+            })
             .collect()
     }
-}
-
-fn schema_bound_catalogue_entry(entry: &Value, index: usize) -> anyhow::Result<Value> {
-    let object = entry
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("meta.list_abilities row #{index} is not an object"))?;
-    let ability_ura = required_catalogue_string(object, index, "ability_ura")?;
-    let selector = AbilitySelector::parse(ability_ura).map_err(|error| {
-        anyhow::anyhow!("meta.list_abilities row #{index} has invalid ability_ura: {error}")
-    })?;
-    let owner_ura = required_catalogue_string(object, index, "owner_ura")?;
-    let owner = parse_ura(owner_ura).map_err(|error| {
-        anyhow::anyhow!("meta.list_abilities row #{index} has invalid owner_ura: {error}")
-    })?;
-    if !matches!(
-        owner.kind,
-        URAKind::Agent | URAKind::Authority | URAKind::Device
-    ) {
-        anyhow::bail!(
-            "meta.list_abilities row #{index} owner_ura must be an Agent, Device, or Authority URA"
-        );
-    }
-    if !crate::core::ura::ability_ura_matches_owner_ura(owner_ura, ability_ura) {
-        anyhow::bail!(
-            "meta.list_abilities row #{index} owner_ura {owner_ura:?} does not match \
-             ability_ura owner {:?}",
-            selector.owner_ura()
-        );
-    }
-    let name = required_catalogue_string(object, index, "name")?;
-    if name != selector.public_name() {
-        anyhow::bail!(
-            "meta.list_abilities row #{index} name {name:?} does not match ability_ura public \
-             name {:?}",
-            selector.public_name()
-        );
-    }
-    let version = required_catalogue_string(object, index, "version")?;
-    let descriptor_ref = object
-        .get("descriptor_ref")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!("meta.list_abilities row #{index} missing canonical descriptor_ref")
-        })?;
-    axon_sdk::invocation::canonical_ability_descriptor_ref(descriptor_ref).map_err(|error| {
-        anyhow::anyhow!("meta.list_abilities row #{index} has invalid descriptor_ref: {error}")
-    })?;
-    let descriptor_ability_ura =
-        axon_sdk::invocation::ability_ura_from_descriptor_ref(descriptor_ref).map_err(|error| {
-            anyhow::anyhow!(
-                "meta.list_abilities row #{index} descriptor_ref has invalid ability_ura: {error}"
-            )
-        })?;
-    if descriptor_ability_ura != ability_ura {
-        anyhow::bail!(
-            "meta.list_abilities row #{index} descriptor_ref ability {descriptor_ability_ura:?} \
-             does not match ability_ura {ability_ura:?}"
-        );
-    }
-    if !descriptor_ref.starts_with(&format!("{ability_ura}@{version}#")) {
-        anyhow::bail!(
-            "meta.list_abilities row #{index} descriptor_ref does not bind version {version:?}"
-        );
-    }
-    Ok(entry.clone())
-}
-
-fn required_catalogue_string<'a>(
-    object: &'a serde_json::Map<String, Value>,
-    index: usize,
-    field: &str,
-) -> anyhow::Result<&'a str> {
-    object
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("meta.list_abilities row #{index} missing {field}"))
 }
 
 fn invoke_remote_catalogue(
@@ -194,41 +106,43 @@ fn invoke_remote_catalogue(
 mod tests {
     use super::*;
 
+    fn catalog_row(name: &str, owner_ura: &str) -> Value {
+        AbilityCatalogRow::from_descriptor(
+            crate::daemon::ability::AbilityDescriptor::new(
+                name,
+                owner_ura,
+                crate::daemon::ability::descriptors::Visibility::Public,
+                crate::daemon::ability::descriptors::AdmissionAction::Stream,
+            )
+            .expect("test descriptor"),
+        )
+        .expect("test catalog row")
+        .into_value()
+    }
+
     #[test]
     fn abilities_from_value_requires_descriptor_bound_ref() {
-        let value = serde_json::json!({
-            "abilities": [{
-                "ability_ura": "easynet:///r/acme/ability/device.dev.er.add",
-                "owner_ura": "easynet:///r/acme/device/dev",
-                "name": "er.add",
-                "version": "1.0.0",
-                "descriptor_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "admission_action": "stream"
-            }]
-        });
+        let mut row = catalog_row("er.add", "easynet:///r/acme/device/dev");
+        row.as_object_mut()
+            .expect("catalog row object")
+            .remove("descriptor_ref");
+        let value = serde_json::json!({ "abilities": [row] });
 
         let err = AbilityCatalogueClient::abilities_from_value(&value)
             .expect_err("CLI catalogue must not synthesize descriptor_ref")
             .to_string();
 
         assert!(
-            err.contains("missing canonical descriptor_ref"),
+            err.contains("missing required field \"descriptor_ref\""),
             "got {err}"
         );
     }
 
     #[test]
     fn abilities_from_value_preserves_daemon_descriptor_ref() {
-        let descriptor_ref = "easynet:///r/acme/ability/device.dev.er.add@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!stream";
-        let value = serde_json::json!({
-            "abilities": [{
-                "ability_ura": "easynet:///r/acme/ability/device.dev.er.add",
-                "owner_ura": "easynet:///r/acme/device/dev",
-                "name": "er.add",
-                "version": "1.0.0",
-                "descriptor_ref": descriptor_ref
-            }]
-        });
+        let row = catalog_row("er.add", "easynet:///r/acme/device/dev");
+        let descriptor_ref = row["descriptor_ref"].as_str().unwrap().to_string();
+        let value = serde_json::json!({ "abilities": [row] });
 
         let abilities = AbilityCatalogueClient::abilities_from_value(&value)
             .expect("descriptor-bound catalogue row");
@@ -238,39 +152,25 @@ mod tests {
 
     #[test]
     fn abilities_from_value_rejects_name_derived_owner_repair() {
-        let descriptor_ref = "easynet:///r/acme/ability/device.dev.er.add@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!stream";
-        let value = serde_json::json!({
-            "abilities": [{
-                "ability_ura": "easynet:///r/acme/ability/device.dev.er.add",
-                "owner_ura": "easynet:///r/acme/device/other",
-                "name": "er.add",
-                "version": "1.0.0",
-                "descriptor_ref": descriptor_ref
-            }]
-        });
+        let mut row = catalog_row("er.add", "easynet:///r/acme/device/dev");
+        row["owner_ura"] = Value::String("easynet:///r/acme/device/other".to_string());
+        let value = serde_json::json!({ "abilities": [row] });
 
         let err = AbilityCatalogueClient::abilities_from_value(&value)
             .expect_err("owner must be catalogue-bound, not derived by renderer")
             .to_string();
 
         assert!(
-            err.contains("owner_ura") && err.contains("does not match"),
+            err.contains("wire ability_ura")
+                && err.contains("does not match canonical ability_ura"),
             "got {err}"
         );
     }
 
     #[test]
     fn abilities_from_value_accepts_device_sponsored_agent_owner() {
-        let descriptor_ref = "easynet:///r/acme/ability/device.dev-1.mcp-default.search@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!stream";
-        let value = serde_json::json!({
-            "abilities": [{
-                "ability_ura": "easynet:///r/acme/ability/device.dev-1.mcp-default.search",
-                "owner_ura": "easynet:///r/acme/agent/device.dev-1.mcp-default",
-                "name": "mcp-default.search",
-                "version": "1.0.0",
-                "descriptor_ref": descriptor_ref
-            }]
-        });
+        let row = catalog_row("search", "easynet:///r/acme/agent/device.dev-1.mcp-default");
+        let value = serde_json::json!({ "abilities": [row] });
 
         let abilities = AbilityCatalogueClient::abilities_from_value(&value)
             .expect("device-sponsored Agent catalogue row must stay canonical");

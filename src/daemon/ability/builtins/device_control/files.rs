@@ -144,15 +144,16 @@ const DEFAULT_LIST_MAX_ENTRIES: usize = 4096;
 
 // ── Registration ───────────────────────────────────────────────────
 
-/// Wire all three filesystem abilities into the registry. Called
+/// Wire the filesystem abilities into the registry. Called
 /// from `daemon::ability::catalog::build_registry_with_services` once at
 /// daemon startup. The abilities are stateless so registration is
 /// just three handler closures with no per-call setup.
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner("fs.read", OwnerKind::Device, Arc::new(handler_read));
-    reg.register_rpc_with_owner("fs.write", OwnerKind::Device, Arc::new(handler_write));
-    reg.register_rpc_with_owner("fs.stat", OwnerKind::Device, Arc::new(handler_stat));
-    reg.register_rpc_with_owner("fs.list", OwnerKind::Device, Arc::new(handler_list));
+    let owner = OwnerKind::locomotion_system();
+    reg.register_rpc_with_owner("fs.read", owner.clone(), Arc::new(handler_read));
+    reg.register_rpc_with_owner("fs.write", owner.clone(), Arc::new(handler_write));
+    reg.register_rpc_with_owner("fs.stat", owner.clone(), Arc::new(handler_stat));
+    reg.register_rpc_with_owner("fs.list", owner, Arc::new(handler_list));
 }
 
 // ── fs.read ──────────────────────────────────────────────────────

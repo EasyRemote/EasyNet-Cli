@@ -1,8 +1,9 @@
 // EasyNet CLI — Keyring ability handlers (RFC-002 §3.3)
 // =======================================================
 //
-// 10 abilities exposed by the daemon under the device-owned
-// `device.keyring.*` namespace:
+// 10 abilities exposed by the daemon under the keyring-management SystemAgent.
+// The public names retain the historical `device.keyring.*` local namespace;
+// that prefix is not the descriptor owner, callee, or authority root:
 //
 //   keyring.create        — generate a fresh ed25519 entry
 //   keyring.list          — enumerate entries (filter by purpose/status)
@@ -41,10 +42,106 @@ use crate::daemon::keyring::managed_signing_projection::{
 };
 use crate::daemon::keyring::managed_signing_provider::ManagedSigningProvider;
 
-const DEVICE_KEYRING_OWNER: &str = "device";
+const KEYRING_LEGACY_LOCAL_NAMESPACE: &str = "device";
 
 fn device_keyring_ability_name(verb: &str) -> String {
-    format!("{DEVICE_KEYRING_OWNER}.keyring.{verb}")
+    format!("{KEYRING_LEGACY_LOCAL_NAMESPACE}.keyring.{verb}")
+}
+
+/// Authored public input contracts for the keyring-management SystemAgent.
+///
+/// Keeping these beside the handlers prevents the published descriptor from
+/// drifting away from the fields each state transition actually consumes.
+pub fn input_schema_for(name: &str) -> Option<Value> {
+    use crate::daemon::ability::names::governance as names;
+
+    let key_id = || {
+        serde_json::json!({
+            "type": "object",
+            "required": ["key_id"],
+            "properties": {"key_id": {"type": "string", "minLength": 1}},
+            "additionalProperties": false
+        })
+    };
+    Some(match name {
+        names::KEYRING_CREATE => serde_json::json!({
+            "type": "object",
+            "required": ["purpose"],
+            "properties": {
+                "purpose": {"type": "string", "minLength": 1},
+                "bound_subject": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+        }),
+        names::KEYRING_LIST => serde_json::json!({
+            "type": "object",
+            "properties": {
+                "filter": {
+                    "type": "object",
+                    "properties": {
+                        "purpose": {"type": "string", "minLength": 1},
+                        "status": {"type": "string", "enum": ["active", "retired", "revoked"]}
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        }),
+        names::KEYRING_GET_PUBLIC | names::KEYRING_ROTATE => key_id(),
+        names::KEYRING_REVOKE => serde_json::json!({
+            "type": "object",
+            "required": ["key_id"],
+            "properties": {
+                "key_id": {"type": "string", "minLength": 1},
+                "reason": {"type": "string"}
+            },
+            "additionalProperties": false
+        }),
+        names::KEYRING_EXPIRE_SET => serde_json::json!({
+            "type": "object",
+            "required": ["key_id", "expires_unix_ms"],
+            "properties": {
+                "key_id": {"type": "string", "minLength": 1},
+                "expires_unix_ms": {"type": "integer"}
+            },
+            "additionalProperties": false
+        }),
+        names::KEYRING_BIND_SUBJECT => serde_json::json!({
+            "type": "object",
+            "required": ["key_id", "subject_id"],
+            "properties": {
+                "key_id": {"type": "string", "minLength": 1},
+                "subject_id": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+        }),
+        names::KEYRING_PEER_ADD => serde_json::json!({
+            "type": "object",
+            "required": ["peer_ura", "public_key", "via_authority"],
+            "properties": {
+                "peer_ura": {"type": "string", "minLength": 1},
+                "public_key": {"type": "string", "minLength": 1},
+                "via_authority": {"type": "string", "minLength": 1}
+            },
+            "additionalProperties": false
+        }),
+        names::KEYRING_PEER_LIST => serde_json::json!({
+            "type": "object",
+            "additionalProperties": false
+        }),
+        names::KEYRING_FEDERATE_USER_IDENTITY_TOKEN => serde_json::json!({
+            "type": "object",
+            "required": ["source_user_ura", "managed_key_id", "target_realm", "issued_at_unix_ms"],
+            "properties": {
+                "source_user_ura": {"type": "string", "minLength": 1},
+                "managed_key_id": {"type": "string", "minLength": 1},
+                "target_realm": {"type": "string", "minLength": 1},
+                "issued_at_unix_ms": {"type": "integer", "minimum": 0}
+            },
+            "additionalProperties": false
+        }),
+        _ => return None,
+    })
 }
 
 fn b64_encode(bytes: &[u8]) -> String {
@@ -305,80 +402,86 @@ pub fn handle_peer_list(provider: &dyn ManagedSigningProvider, _args: Value) -> 
     )?)
 }
 
-/// Register device key administration projections under `device.keyring.<verb>`.
+/// Register key administration projections under the keyring-management
+/// SystemAgent.
+///
+/// The ability names remain `device.keyring.<verb>` until the wire-name
+/// migration is done, but Device is only the vault/custody host. It is not the
+/// descriptor owner or public Invocation callee.
 /// Raw signing is deliberately not an Invocation ability: signing consumers
 /// receive a subject/key-bound SDK capability through the local key service.
 pub fn register_device_keyring(
     reg: &mut AxonAbilityCatalog,
     provider: Arc<dyn ManagedSigningProvider>,
 ) {
+    let owner = OwnerKind::keyring_management_system();
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
         device_keyring_ability_name("create"),
-        OwnerKind::Device,
+        owner.clone(),
         AdmissionAction::Manage,
         Arc::new(move |args| handle_create(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
         device_keyring_ability_name("list"),
-        OwnerKind::Device,
+        owner.clone(),
         AdmissionAction::Read,
         Arc::new(move |args| handle_list(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
         device_keyring_ability_name("get_public"),
-        OwnerKind::Device,
+        owner.clone(),
         AdmissionAction::Read,
         Arc::new(move |args| handle_get_public(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
         device_keyring_ability_name("rotate"),
-        OwnerKind::Device,
+        owner.clone(),
         AdmissionAction::Manage,
         Arc::new(move |args| handle_rotate(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
         device_keyring_ability_name("revoke"),
-        OwnerKind::Device,
+        owner.clone(),
         AdmissionAction::Manage,
         Arc::new(move |args| handle_revoke(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
         device_keyring_ability_name("expire_set"),
-        OwnerKind::Device,
+        owner.clone(),
         AdmissionAction::Manage,
         Arc::new(move |args| handle_expire_set(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
         device_keyring_ability_name("bind_subject"),
-        OwnerKind::Device,
+        owner.clone(),
         AdmissionAction::Manage,
         Arc::new(move |args| handle_bind_subject(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
         device_keyring_ability_name("peer_add"),
-        OwnerKind::Device,
+        owner.clone(),
         AdmissionAction::Manage,
         Arc::new(move |args| handle_peer_add(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
         device_keyring_ability_name("peer_list"),
-        OwnerKind::Device,
+        owner.clone(),
         AdmissionAction::Read,
         Arc::new(move |args| handle_peer_list(&h, args)),
     );
     let h = provider.clone();
     reg.register_rpc_with_owner_and_action(
         device_keyring_ability_name("federate_user_identity_token"),
-        OwnerKind::Device,
+        owner,
         AdmissionAction::Manage,
         Arc::new(move |args| handle_federate_user_identity_token(&h, args)),
     );

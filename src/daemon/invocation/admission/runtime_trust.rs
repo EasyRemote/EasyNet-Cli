@@ -48,7 +48,7 @@ use axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA;
 
 use crate::daemon::persistence::file_lock::ExclusiveFileLock;
 use crate::daemon::trust::anchor::{
-    RealmTrustAnchor, RealmTrustError, TrustedAgent, TrustedAgentRole, TrustedPrincipalOwner,
+    RealmTrustAnchor, RealmTrustError, TrustAnchorRole, TrustedAgent, TrustedPrincipalOwner,
 };
 use crate::daemon::trust::cell::SharedTrustAnchor;
 
@@ -72,7 +72,7 @@ impl RuntimeTrustContext {
         public_key_b64: String,
     ) -> Result<(), Status> {
         self.writer()
-            .register_pubkey(user_ura, public_key_b64, TrustedAgentRole::User)
+            .register_pubkey(user_ura, public_key_b64, TrustAnchorRole::User)
     }
 
     pub(crate) fn bind_principal_owner(&self, owner: TrustedPrincipalOwner) -> Result<(), Status> {
@@ -153,7 +153,7 @@ impl<'a> RuntimeTrust<'a> {
         &self,
         principal_ura: String,
         public_key_b64: String,
-        role: TrustedAgentRole,
+        role: TrustAnchorRole,
     ) -> Result<(), Status> {
         self.register_pubkey_with_owner(principal_ura, public_key_b64, role, None)
     }
@@ -162,7 +162,7 @@ impl<'a> RuntimeTrust<'a> {
         &self,
         principal_ura: String,
         public_key_b64: String,
-        role: TrustedAgentRole,
+        role: TrustAnchorRole,
         owner: Option<TrustedPrincipalOwner>,
     ) -> Result<(), Status> {
         validate_public_key_b64("identity.register_pubkey", &public_key_b64)?;
@@ -190,17 +190,17 @@ impl<'a> RuntimeTrust<'a> {
         };
 
         self.mutate_anchor_when_changed("identity.register_pubkey", |next_anchor| {
-            let user_key_already_present = matches!(role, TrustedAgentRole::User)
+            let user_key_already_present = matches!(role, TrustAnchorRole::User)
                 && next_anchor
                     .lookup_user_by_pubkey(&principal_ura, &public_key_b64)
                     .is_some();
             let mut changed = false;
             match role {
-                TrustedAgentRole::Backend | TrustedAgentRole::Hub | TrustedAgentRole::Device => {
+                TrustAnchorRole::Backend | TrustAnchorRole::Hub | TrustAnchorRole::Device => {
                     next_anchor.upsert_singleton_agent(entry)?;
                     changed = true;
                 }
-                TrustedAgentRole::User if !user_key_already_present => {
+                TrustAnchorRole::User if !user_key_already_present => {
                     Self::enforce_user_key_cap_before_append(
                         next_anchor,
                         &principal_ura,
@@ -209,7 +209,7 @@ impl<'a> RuntimeTrust<'a> {
                     next_anchor.append_agent(entry)?;
                     changed = true;
                 }
-                TrustedAgentRole::User => {}
+                TrustAnchorRole::User => {}
             }
             if let Some(owner) = owner {
                 next_anchor.upsert_principal_owner(owner)?;
@@ -342,7 +342,7 @@ impl<'a> RuntimeTrust<'a> {
     fn validate_register_realm(
         &self,
         principal_ura: &str,
-        role: TrustedAgentRole,
+        role: TrustAnchorRole,
     ) -> Result<(), Status> {
         let parsed_realm = crate::core::ura::realm_from_ura(principal_ura).ok_or_else(|| {
             Status::invalid_argument(format!(
@@ -350,7 +350,7 @@ impl<'a> RuntimeTrust<'a> {
                  canonical URA grammar",
             ))
         })?;
-        if parsed_realm != self.daemon_realm && !matches!(role, TrustedAgentRole::Device) {
+        if parsed_realm != self.daemon_realm && !matches!(role, TrustAnchorRole::Device) {
             return Err(Status::permission_denied(format!(
                 "identity.register_pubkey: role `{}` requires principal_ura realm `{parsed_realm}` \
                  to match daemon realm `{}` — cross-realm user pubkey resolution \
@@ -412,12 +412,12 @@ pub(crate) fn now_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn role_wire_label(role: TrustedAgentRole) -> &'static str {
+fn role_wire_label(role: TrustAnchorRole) -> &'static str {
     match role {
-        TrustedAgentRole::Backend => "backend",
-        TrustedAgentRole::Device => "device",
-        TrustedAgentRole::Hub => "hub",
-        TrustedAgentRole::User => "user",
+        TrustAnchorRole::Backend => "backend",
+        TrustAnchorRole::Device => "device",
+        TrustAnchorRole::Hub => "hub",
+        TrustAnchorRole::User => "user",
     }
 }
 
@@ -502,7 +502,7 @@ mod tests {
             .register_pubkey(
                 "easynet:///r/realm/user/alice".to_string(),
                 b64_pubkey(1),
-                TrustedAgentRole::User,
+                TrustAnchorRole::User,
             )
             .expect("register");
 
@@ -525,12 +525,12 @@ mod tests {
         let user_ura = "easynet:///r/realm/user/alice".to_string();
         let public_key = b64_pubkey(1);
         ctx.writer()
-            .register_pubkey(user_ura.clone(), public_key.clone(), TrustedAgentRole::User)
+            .register_pubkey(user_ura.clone(), public_key.clone(), TrustAnchorRole::User)
             .expect("initial register");
         let generation = ctx.cell.cert_anchor_generation();
 
         ctx.writer()
-            .register_pubkey(user_ura.clone(), public_key, TrustedAgentRole::User)
+            .register_pubkey(user_ura.clone(), public_key, TrustAnchorRole::User)
             .expect("same-key retry is idempotent");
 
         assert_eq!(ctx.cell.cert_anchor_generation(), generation);
@@ -549,7 +549,7 @@ mod tests {
 
         for seed in 1..=9u8 {
             ctx.writer()
-                .register_pubkey(user_ura.clone(), b64_pubkey(seed), TrustedAgentRole::User)
+                .register_pubkey(user_ura.clone(), b64_pubkey(seed), TrustAnchorRole::User)
                 .expect("register user key");
         }
 
@@ -581,14 +581,14 @@ mod tests {
             .register_pubkey(
                 device_ura.clone(),
                 public_key.clone(),
-                TrustedAgentRole::Device,
+                TrustAnchorRole::Device,
             )
             .expect("initial register");
         ctx.writer()
             .register_pubkey_with_owner(
                 device_ura.clone(),
                 public_key,
-                TrustedAgentRole::Device,
+                TrustAnchorRole::Device,
                 Some(TrustedPrincipalOwner {
                     principal_ura: device_ura.clone(),
                     owner_user_id: "alice".to_string(),
@@ -614,7 +614,7 @@ mod tests {
             .register_pubkey(
                 "easynet:///r/other/user/alice".to_string(),
                 b64_pubkey(1),
-                TrustedAgentRole::User,
+                TrustAnchorRole::User,
             )
             .expect_err("reject cross-realm user");
         assert_eq!(err.code(), tonic::Code::PermissionDenied);
@@ -627,14 +627,14 @@ mod tests {
         let hub_ura = crate::core::ura::hub_ura("realm");
 
         ctx.writer()
-            .register_pubkey(hub_ura.clone(), b64_pubkey(1), TrustedAgentRole::Hub)
+            .register_pubkey(hub_ura.clone(), b64_pubkey(1), TrustAnchorRole::Hub)
             .expect("canonical Authority identity admits Hub role");
         let err = ctx
             .writer()
             .register_pubkey(
                 "easynet:///r/realm/authority/extra".to_string(),
                 b64_pubkey(2),
-                TrustedAgentRole::Hub,
+                TrustAnchorRole::Hub,
             )
             .expect_err("Authority URA with tail must not be admitted as Hub");
 
@@ -650,14 +650,14 @@ mod tests {
             .register_pubkey(
                 "easynet:///r/realm/user/alice".to_string(),
                 b64_pubkey(1),
-                TrustedAgentRole::User,
+                TrustAnchorRole::User,
             )
             .expect("first");
         ctx.writer()
             .register_pubkey(
                 "easynet:///r/realm/user/alice".to_string(),
                 b64_pubkey(2),
-                TrustedAgentRole::User,
+                TrustAnchorRole::User,
             )
             .expect("second");
         let before = ctx.cell.cert_anchor_generation();
@@ -683,7 +683,7 @@ mod tests {
                     .register_pubkey(
                         crate::core::ura::user_ura("realm", &format!("user-{index}")),
                         b64_pubkey(index),
-                        TrustedAgentRole::User,
+                        TrustAnchorRole::User,
                     )
                     .expect("register user key")
             }));
@@ -708,7 +708,7 @@ mod tests {
             .register_pubkey(
                 "easynet:///r/realm/user/alice".to_string(),
                 key.clone(),
-                TrustedAgentRole::User,
+                TrustAnchorRole::User,
             )
             .expect("register");
         let removed = ctx
@@ -750,7 +750,7 @@ mod tests {
         let key = b64_pubkey(1);
         let user_ura = "easynet:///r/realm/user/alice";
         ctx.writer()
-            .register_pubkey(user_ura.to_string(), key.clone(), TrustedAgentRole::User)
+            .register_pubkey(user_ura.to_string(), key.clone(), TrustAnchorRole::User)
             .expect("register");
         assert!(ctx
             .writer()
@@ -759,7 +759,7 @@ mod tests {
 
         let err = ctx
             .writer()
-            .register_pubkey(user_ura.to_string(), key, TrustedAgentRole::User)
+            .register_pubkey(user_ura.to_string(), key, TrustAnchorRole::User)
             .expect_err("tombstoned key rejected");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
     }
@@ -772,7 +772,7 @@ mod tests {
             .register_pubkey(
                 "easynet:///r/realm/user/alice".to_string(),
                 json!("not-base64").as_str().unwrap().to_string(),
-                TrustedAgentRole::User,
+                TrustAnchorRole::User,
             )
             .expect_err("bad key");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);

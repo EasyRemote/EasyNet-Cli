@@ -1435,7 +1435,7 @@ mod tests {
                 ability: "testbot.echo".into(),
                 state: "COMPLETED".into(),
                 caller: "easynet:///r/cli/agent/user.owner".into(),
-                callee: "easynet:///r/cli/device/local".into(),
+                callee: "easynet:///r/cli/agent/user.testbot".into(),
                 subject: "easynet:///r/cli/agent/user.target".into(),
                 elapsed_ms: Some(12),
                 usage: InvocationUsage {

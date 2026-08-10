@@ -17,7 +17,9 @@ pub enum AbilityControlPlaneError {
     DescriptorConstruction { reason: String },
     /// A control-plane registration reached descriptor materialization without
     /// the manifest that owns the public contract.
-    #[error("ability {ability:?} control-plane registration requires a manifest before descriptor materialization")]
+    #[error(
+        "ability {ability:?} control-plane registration requires a manifest before descriptor materialization"
+    )]
     MissingManifest { ability: String },
     /// Descriptor version was supplied as an empty or whitespace-only string.
     #[error("ability descriptor version must be non-empty")]
@@ -27,7 +29,9 @@ pub enum AbilityControlPlaneError {
     InvalidDescriptorVersion { version: String },
     /// A manifest-declared interface version disagreed with an explicit
     /// control-plane registration version.
-    #[error("ability manifest descriptor_version {manifest_version:?} does not match registration descriptor_version {registration_version:?}")]
+    #[error(
+        "ability manifest descriptor_version {manifest_version:?} does not match registration descriptor_version {registration_version:?}"
+    )]
     DescriptorVersionMismatch {
         manifest_version: String,
         registration_version: String,
@@ -40,7 +44,9 @@ pub enum AbilityControlPlaneError {
     #[error("ability descriptor name has invalid format: {name:?}")]
     InvalidDescriptorName { name: String },
     /// Descriptor Ability URA could not be derived from the authority root.
-    #[error("ability descriptor URA cannot be derived from authority root {authority_root:?} and ability {ability:?}")]
+    #[error(
+        "ability descriptor URA cannot be derived from authority root {authority_root:?} and ability {ability:?}"
+    )]
     DescriptorAbilityUraDerivationFailed {
         authority_root: String,
         ability: String,
@@ -57,7 +63,8 @@ pub enum AbilityControlPlaneError {
     #[error("authority owner projection must be non-empty")]
     EmptyAuthorityOwnerProjection,
     /// Authority owner projection was not one of the canonical owner-plane
-    /// markers (`device`, `authority`, `agent:<id>`, `user:<id>`, `plugin:<id>`).
+    /// markers (`device`, `authority`, `system-agent:<id>`, `agent:<id>`,
+    /// `plugin:<id>`).
     #[error("authority owner projection has invalid format: {projection:?}")]
     InvalidAuthorityOwnerProjection { projection: String },
     /// Authority root lacked the URA or local marker backing the binding.
@@ -84,9 +91,11 @@ pub enum AbilityControlPlaneError {
         reason: String,
     },
     /// A registration requested an owner plane that the process-local
-    /// authority set does not host. Device contexts admit Device, Agent, and
-    /// User owners; realm-authority contexts admit realm-owned authority
-    /// owners; combined contexts admit both planes.
+    /// authority set does not host. Device contexts admit Device and
+    /// device-sponsored SystemAgent owners. User-owned Agent owners require an
+    /// explicit hosted-Agent root; realm-authority contexts admit realm-owned
+    /// Authority owners; combined contexts admit the union of their hosted
+    /// planes.
     #[error(
         "authority set {authority_set:?} does not support owner projection {owner_projection:?}"
     )]

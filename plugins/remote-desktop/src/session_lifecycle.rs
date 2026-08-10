@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
-use crate::daemon::plugins::remote_desktop::session::{RemoteDesktopSession, now_ms};
+use crate::daemon::plugins::remote_desktop::session::{now_ms, RemoteDesktopSession};
 use crate::daemon::plugins::remote_desktop::session_access::{
     ensure_session_control_identity, ensure_session_resource_identity,
 };
@@ -325,7 +325,7 @@ mod tests {
                     let mut session = RemoteDesktopSession::new(RemoteDesktopSessionInit {
                         session_id: session_id.clone(),
                         session_token: format!("token-{index}"),
-                        creator_caller_ura: Some("easynet:///r/acme/user/test".to_string()),
+                        creator_caller_ura: "easynet:///r/acme/user/test".to_string(),
                         consent: RemoteDesktopConsentGrant::from_envelope_for_test(&env_for(&ura)),
                         subject_ura: ura.clone(),
                         subject_type: ResourceType::Display,

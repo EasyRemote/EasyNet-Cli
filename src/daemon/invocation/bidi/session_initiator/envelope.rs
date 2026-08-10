@@ -31,7 +31,7 @@ pub async fn build_session_envelope_open(
     // `descriptor_bound_from_wire_parts`; signing the old axiom bytes would
     // satisfy metadata presence but fail signature verification.
     let descriptor_ref =
-        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
             &hub_ura,
             ABILITY_SESSION_OPEN,
             crate::daemon::ability::CallMode::Bidi,

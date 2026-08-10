@@ -229,8 +229,9 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
     //   Current user:   user URA          — owner of this device
     //   Current device: device URA        — this machine
     //
-    // All three are first-class agents in the ontology, so all
-    // three carry equal visual weight. The user URA is derived
+    // All three are first-class URA identities, but they have distinct roles:
+    // Authority is the realm root, User is the accountable Principal, and
+    // Device is the execution/custody substrate. The user URA is derived
     // from credentials.json's immutable user binding; when federation-native
     // credentials are intentionally device-only we render that state explicitly
     // instead of suppressing the row as a compatibility fallback.

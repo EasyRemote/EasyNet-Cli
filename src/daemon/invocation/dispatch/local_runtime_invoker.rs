@@ -422,26 +422,31 @@ mod tests {
 
     #[tokio::test]
     async fn explicit_device_subject_is_not_reclassified_as_callee() {
-        let (_home, local_device_ura) = provision_test_local_device_ura();
+        let (_home, _local_device_ura) = provision_test_local_device_ura();
+        let callee = crate::core::ura::device_agent_ura(
+            "acme",
+            "dev-a",
+            crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+        );
         let subject = crate::core::ura::device_ura("acme", "dev-b");
-        let runtime =
-            runtime_with_descriptor_bound_ability(&local_device_ura, "device.inspect").await;
+        let ability = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&callee, ability).expect("SystemAgent ability URA");
+        let runtime = runtime_with_descriptor_bound_ability(&callee, ability).await;
         let request = local_system_request(
             &runtime,
             AxonInvocationCallMode::Rpc,
-            &target("device.inspect".to_string(), Some(subject.clone())),
+            &target(ability_ura.clone(), Some(subject.clone())),
             b"{}".to_vec(),
         )
         .await
         .expect("descriptor-bound request");
 
-        assert_eq!(request.envelope().envelope().callee.ura, local_device_ura);
+        assert_eq!(request.envelope().envelope().callee.ura, callee);
         assert_eq!(request.envelope().envelope().subject.ura, subject);
         assert_eq!(
             request.envelope().envelope().ability,
-            expected_descriptor_ref(
-                &crate::core::ura::owner_ability_ura(&local_device_ura, "device.inspect").unwrap()
-            )
+            expected_descriptor_ref(&ability_ura)
         );
     }
 

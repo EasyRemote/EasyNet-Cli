@@ -43,7 +43,7 @@ use crate::cli::commands::ability_catalog_row::AbilityCatalogueRow;
 use crate::cli::commands::{abilities, config_cmd, devices, exec, join, reset};
 use crate::cli::daemon_client::remote_system_ability::{
     invoke_remote_device_system_ability, invoke_remote_device_system_ability_as_caller,
-    RemoteDeviceSystemAbility,
+    RemoteTargetSystemAbility,
 };
 use crate::support::platform::local_invoke::LocalRuntimeDeviceDirectoryReadIssuer;
 use crate::support::platform::output::{self, OutputFormat};
@@ -450,7 +450,7 @@ fn describe_target(node_id: &str, authority: bool) -> anyhow::Result<Value> {
 fn invoke_remote_describe(node: &str) -> anyhow::Result<Value> {
     invoke_remote_device_system_ability(
         node,
-        RemoteDeviceSystemAbility::NodeDescribe,
+        RemoteTargetSystemAbility::NodeDescribe,
         serde_json::json!({"node_id": "local"}),
         &format!("describing remote device {node:?}"),
     )
@@ -459,7 +459,7 @@ fn invoke_remote_describe(node: &str) -> anyhow::Result<Value> {
 fn invoke_remote_describe_as_caller(target_ura: &str, caller_ura: &str) -> anyhow::Result<Value> {
     invoke_remote_device_system_ability_as_caller(
         target_ura,
-        RemoteDeviceSystemAbility::NodeDescribe,
+        RemoteTargetSystemAbility::NodeDescribe,
         serde_json::json!({"node_id": "local"}),
         caller_ura,
     )

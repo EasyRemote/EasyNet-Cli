@@ -136,7 +136,6 @@ pub(crate) async fn connect_channel(
 #[cfg(feature = "axon-pb")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum LocalDaemonSystemCalleePolicy {
-    LocalDaemon,
     Explicit(String),
 }
 
@@ -184,10 +183,6 @@ pub(crate) struct LocalDaemonTargetedBidiRequest<'a> {
 
 #[cfg(feature = "axon-pb")]
 impl LocalDaemonSystemCalleePolicy {
-    fn local_daemon() -> Self {
-        Self::LocalDaemon
-    }
-
     fn explicit(callee_ura: &str) -> anyhow::Result<Self> {
         Ok(Self::Explicit(normalized_local_daemon_ura(
             callee_ura,
@@ -197,7 +192,6 @@ impl LocalDaemonSystemCalleePolicy {
 
     fn resolve(&self) -> anyhow::Result<String> {
         match self {
-            Self::LocalDaemon => local_daemon_identity_ura(),
             Self::Explicit(callee_ura) => normalized_local_daemon_ura(callee_ura, "callee_ura"),
         }
     }
@@ -216,10 +210,6 @@ impl LocalDaemonSystemSubjectPolicy {
         match self {
             Self::Explicit(subject) => normalized_local_daemon_ura(subject, "subject_ura"),
         }
-    }
-
-    fn explicit(subject: &str) -> anyhow::Result<Self> {
-        normalized_local_daemon_ura(subject, "subject_ura").map(Self::Explicit)
     }
 }
 
@@ -264,22 +254,6 @@ impl LocalDaemonSystemDerivationPolicy {
 
 #[cfg(feature = "axon-pb")]
 impl LocalDaemonSystemTuplePlan {
-    fn local_root_for_subject(
-        function_name: &str,
-        payload_json: serde_json::Value,
-        subject_ura: &str,
-        timeout: Duration,
-    ) -> anyhow::Result<Self> {
-        Self::new(
-            function_name,
-            payload_json,
-            LocalDaemonSystemCalleePolicy::local_daemon(),
-            LocalDaemonSystemSubjectPolicy::explicit(subject_ura)?,
-            LocalDaemonSystemDerivationPolicy::fresh_root(),
-            timeout,
-        )
-    }
-
     fn targeted_root_for_subject(
         function_name: &str,
         payload_json: serde_json::Value,
@@ -425,22 +399,6 @@ fn ensure_local_daemon_accepting() -> anyhow::Result<std::path::PathBuf> {
 }
 
 #[cfg(feature = "axon-pb")]
-pub(crate) fn invoke_local_daemon_system_ability_root_for_subject_timeout(
-    function_name: &str,
-    payload_json: serde_json::Value,
-    subject_ura: &str,
-    timeout: Duration,
-) -> anyhow::Result<serde_json::Value> {
-    let tuple_plan = LocalDaemonSystemTuplePlan::local_root_for_subject(
-        function_name,
-        payload_json,
-        subject_ura,
-        timeout,
-    )?;
-    invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
-}
-
-#[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
     function_name: &str,
     payload_json: serde_json::Value,
@@ -456,6 +414,33 @@ pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
         timeout,
     )?;
     invoke_local_daemon_ability_with_tuple_plan(tuple_plan)
+}
+
+/// Invoke one daemon-system ability through an explicitly attached daemon
+/// Invocation endpoint and verify its terminal receipt before returning the
+/// business payload.
+///
+/// This is the session-bound counterpart of the process-default local issuer.
+/// C ABI handles use it when their `control.json` names a daemon other than the
+/// process default; silently consulting the default socket would cross runtime
+/// and tenant attachment boundaries.
+#[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_attached_daemon_system_ability_targeted_root_timeout(
+    endpoint: PathBuf,
+    function_name: &str,
+    payload_json: serde_json::Value,
+    callee_ura: &str,
+    subject_ura: &str,
+    timeout: Duration,
+) -> anyhow::Result<serde_json::Value> {
+    let tuple_plan = LocalDaemonSystemTuplePlan::targeted_root_for_subject(
+        function_name,
+        payload_json,
+        callee_ura,
+        subject_ura,
+        timeout,
+    )?;
+    invoke_local_daemon_ability_with_tuple_plan_at_verified(endpoint, tuple_plan)
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2083,21 +2068,6 @@ pub(crate) fn invoke_local_daemon_ability_targeted_with_hosted_agent_delegation(
 }
 
 #[cfg(not(feature = "axon-pb"))]
-pub(crate) fn invoke_local_daemon_system_ability_root_for_subject_timeout(
-    function_name: &str,
-    _payload_json: serde_json::Value,
-    _subject_ura: &str,
-    _timeout: Duration,
-) -> anyhow::Result<serde_json::Value> {
-    Err(anyhow::Error::new(
-        crate::support::platform::local_invoke::LocalInvokeFailure::DaemonOffline(format!(
-            "invoking daemon-system `{function_name}` through the local daemon Invocation endpoint requires the \
-             `axon-pb` feature; rebuild with `cargo build --features axon-pb`"
-        )),
-    ))
-}
-
-#[cfg(not(feature = "axon-pb"))]
 pub(crate) fn invoke_local_daemon_system_ability_targeted_root_timeout(
     function_name: &str,
     _payload_json: serde_json::Value,
@@ -2285,20 +2255,6 @@ mod tests {
             "job.run",
             serde_json::json!({"job": 1}),
             "easynet:///r/acme/device/edge-1",
-            "",
-            Duration::from_secs(5),
-        )
-        .is_err());
-        assert!(LocalDaemonSystemTuplePlan::local_root_for_subject(
-            "job.run",
-            serde_json::json!({"job": 1}),
-            "easynet:///r/acme/resource/user.jobs/job-1",
-            Duration::ZERO,
-        )
-        .is_err());
-        assert!(LocalDaemonSystemTuplePlan::local_root_for_subject(
-            "job.run",
-            serde_json::json!({"job": 1}),
             "",
             Duration::from_secs(5),
         )

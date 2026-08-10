@@ -56,12 +56,6 @@ impl Drop for SessionUpHeartbeatTask {
 /// a healthy device's directory entry green between session re-dials.
 const FEDERATION_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Hub-side cap on the owner-projection lease batch
-/// (`hub_profile/heartbeat.rs::MAX_HEARTBEAT_LEASE_REFRESH_OWNERS`).
-/// A batch over the cap is rejected outright — which would silently
-/// kill device liveness — so the sender truncates instead.
-const MAX_HEARTBEAT_LEASE_REFRESH_OWNERS: usize = 64;
-
 pub(super) fn spawn_federation_heartbeat(
     channel: Channel,
     signer: Arc<dyn CanonicalSigner>,
@@ -108,27 +102,19 @@ pub(super) fn spawn_federation_heartbeat(
 
 /// One `federation.heartbeat` unary over the session channel.
 ///
-/// Refreshes this device's `last_heartbeat_unix_ms` in the hub
-/// directory plus the owner-projection leases this daemon has
-/// published (RFC-005), and applies the Authority broadcast abilities diff
+/// Refreshes this device's liveness in the hub directory and applies the
+/// Authority broadcast abilities diff
 /// from the receipt (AXON-RFC-001 v4.1.7) so the local
-/// `AuthorityPublishedAbilityStore` stays current between re-dials. Wire
-/// shape mirrors the hub's `hub_profile/heartbeat.rs::HeartbeatArgs`;
-/// the hub keys the record refresh on the envelope caller URA and
-/// auto-includes it in the lease batch, so an empty batch is valid only when
-/// no local owner projection cursor exists. Cursor load failures are
-/// unavailable local read-model state and fail closed before sending.
+/// `AuthorityPublishedAbilityStore` stays current between re-dials. Owner
+/// projections are event-driven and non-expiring; the retained wire field is
+/// sent empty so heartbeat is not a second existence/ownership protocol.
 async fn send_federation_heartbeat(
     client: &mut axon_sdk::pb::axon::v1::invocation_client::InvocationClient<Channel>,
     signer: &dyn CanonicalSigner,
     authority_published_abilities: &AuthorityPublishedAbilityStore,
 ) -> Result<(), tonic::Status> {
     let caller_ura = signer.owner_ura();
-    let refresh_owner_uras = heartbeat_refresh_owner_uras_for_caller(caller_ura)?;
-    let args = HeartbeatArgs {
-        since_abilities_revision: authority_published_abilities.revision(),
-        refresh_owner_uras,
-    };
+    let args = heartbeat_args(authority_published_abilities.revision());
     let arguments = serde_json::to_vec(&args)
         .map_err(|e| tonic::Status::internal(format!("federation.heartbeat serialize: {e}")))?;
     let request =
@@ -138,16 +124,11 @@ async fn send_federation_heartbeat(
     Ok(())
 }
 
-fn heartbeat_refresh_owner_uras_for_caller(caller_ura: &str) -> Result<Vec<String>, tonic::Status> {
-    let mut refresh_owner_uras = crate::daemon::federation::read_model::owner_projection::
-        heartbeat_refresh_owner_uras_for_host(caller_ura)
-        .map_err(|error| {
-            tonic::Status::failed_precondition(format!(
-                "federation.heartbeat owner projection cursor unavailable: {error}"
-            ))
-        })?;
-    refresh_owner_uras.truncate(MAX_HEARTBEAT_LEASE_REFRESH_OWNERS);
-    Ok(refresh_owner_uras)
+fn heartbeat_args(since_abilities_revision: u64) -> HeartbeatArgs {
+    HeartbeatArgs {
+        since_abilities_revision,
+        refresh_owner_uras: Vec::new(),
+    }
 }
 
 fn apply_federation_heartbeat_receipt(
@@ -176,13 +157,10 @@ fn apply_federation_heartbeat_receipt(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_federation_heartbeat_receipt, heartbeat_refresh_owner_uras_for_caller};
+    use super::{apply_federation_heartbeat_receipt, heartbeat_args};
     use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
     use crate::daemon::federation::client::ability_contract::AuthorityAbilityEntry;
     use crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
-    use crate::daemon::persistence::owner_projections::{
-        self, OwnerProjectionCursor, OwnerProjectionCursorFile, OwnerProjectionCursorLifecycle,
-    };
 
     fn canonical_authority_entry(name: &str) -> AuthorityAbilityEntry {
         AuthorityAbilityEntry {
@@ -258,90 +236,9 @@ mod tests {
     }
 
     #[test]
-    fn heartbeat_refresh_owner_uras_missing_store_is_empty() {
-        let _home = crate::cli::commands::test_support::HomeGuard::new();
-
-        let refresh = heartbeat_refresh_owner_uras_for_caller("easynet:///r/realm/device/n1")
-            .expect("missing cursor store is a first-boot empty state");
-
-        assert!(refresh.is_empty());
-    }
-
-    #[test]
-    fn heartbeat_refresh_owner_uras_rejects_corrupt_cursor_store() {
-        let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let path = owner_projections::path();
-        std::fs::create_dir_all(path.parent().expect("state dir")).expect("create state dir");
-        std::fs::write(&path, br#"{"projections":[]}"#).expect("write schema-less cursor store");
-
-        let error = heartbeat_refresh_owner_uras_for_caller("easynet:///r/realm/device/n1")
-            .expect_err("corrupt cursor store must not be treated as an empty refresh set");
-
-        assert_eq!(error.code(), tonic::Code::FailedPrecondition);
-        assert!(
-            error
-                .message()
-                .contains("owner projection cursor unavailable"),
-            "unexpected heartbeat cursor error: {error}"
-        );
-    }
-
-    #[test]
-    fn heartbeat_refresh_owner_uras_filters_to_caller_hosted_owners() {
-        let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let caller_ura = "easynet:///r/realm/device/n1";
-        let hosted_agent_ura = "easynet:///r/realm/agent/alice.worker";
-        owner_projections::replace(&OwnerProjectionCursorFile {
-            schema_version: 2,
-            projections: vec![
-                cursor(
-                    caller_ura,
-                    "easynet:///r/realm/device/n1",
-                    OwnerProjectionCursorLifecycle::Active,
-                ),
-                cursor(
-                    hosted_agent_ura,
-                    "easynet:///r/realm/device/n1",
-                    OwnerProjectionCursorLifecycle::Active,
-                ),
-                cursor(
-                    "easynet:///r/realm/device/other",
-                    "easynet:///r/realm/device/other",
-                    OwnerProjectionCursorLifecycle::Active,
-                ),
-                cursor(
-                    "easynet:///r/realm/agent/alice.retired",
-                    "easynet:///r/realm/device/n1",
-                    OwnerProjectionCursorLifecycle::Retired,
-                ),
-            ],
-        })
-        .expect("seed owner projection cursors");
-
-        let refresh = heartbeat_refresh_owner_uras_for_caller(caller_ura)
-            .expect("valid cursor store filters by caller");
-
-        assert_eq!(
-            refresh,
-            vec![hosted_agent_ura.to_string(), caller_ura.to_string()]
-        );
-    }
-
-    fn cursor(
-        owner_ura: &str,
-        host_device_ura: &str,
-        lifecycle: OwnerProjectionCursorLifecycle,
-    ) -> OwnerProjectionCursor {
-        OwnerProjectionCursor {
-            owner_ura: owner_ura.to_string(),
-            host_device_ura: host_device_ura.to_string(),
-            generation: 1,
-            lifecycle,
-            projection_revision: 1,
-            projection_digest: format!("sha256:{owner_ura}"),
-            content_fingerprint: format!("fingerprint:{owner_ura}"),
-            lease_expires_unix_ms: 1,
-            updated_at: "2026-07-22T00:00:00.000Z".to_string(),
-        }
+    fn heartbeat_does_not_reintroduce_projection_lease_ownership() {
+        let args = heartbeat_args(42);
+        assert_eq!(args.since_abilities_revision, 42);
+        assert!(args.refresh_owner_uras.is_empty());
     }
 }

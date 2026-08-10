@@ -110,7 +110,7 @@ pub(crate) use connection_state::{
 pub use envelope::build_session_envelope_open;
 use frame_loop::{run_live_session, LiveSessionRun};
 #[cfg(test)]
-use prelude::committed_owner_ability_descriptors;
+use prelude::{committed_device_native_owner_descriptors, committed_owner_ability_descriptors};
 use prelude::{run_session_preludes, SessionPreludeChannels, SessionPreludeRun};
 pub use prelude::{
     PairedUserTrustSigner, SessionPreludeInputs, UserTrustBootstrapError, UserTrustSync,
@@ -1091,6 +1091,45 @@ mod tests {
     }
 
     #[test]
+    fn device_native_projection_is_partitioned_by_system_agent_owner() {
+        let device = "easynet:///r/acme/device/dev-1";
+        let introspection = "easynet:///r/acme/agent/device.dev-1.runtime-introspection";
+        let locomotion = "easynet:///r/acme/agent/device.dev-1.locomotion";
+        let user_agent = "easynet:///r/acme/agent/alice.worker";
+        let descriptors = vec![
+            AbilityDescriptor::new(
+                crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+                introspection,
+                crate::daemon::ability::descriptors::Visibility::Scoped,
+                crate::daemon::ability::descriptors::AdmissionAction::Read,
+            )
+            .expect("introspection descriptor"),
+            AbilityDescriptor::new(
+                crate::daemon::ability::names::device_control::FS_READ,
+                locomotion,
+                crate::daemon::ability::descriptors::Visibility::Scoped,
+                crate::daemon::ability::descriptors::AdmissionAction::Read,
+            )
+            .expect("locomotion descriptor"),
+            AbilityDescriptor::new(
+                "agent.chat",
+                user_agent,
+                crate::daemon::ability::descriptors::Visibility::Scoped,
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+            )
+            .expect("user Agent descriptor"),
+        ];
+
+        let by_owner = committed_device_native_owner_descriptors(&descriptors, device);
+
+        assert_eq!(by_owner.len(), 2);
+        assert_eq!(by_owner[introspection].len(), 1);
+        assert_eq!(by_owner[locomotion].len(), 1);
+        assert!(!by_owner.contains_key(user_agent));
+        assert!(!by_owner.contains_key(device));
+    }
+
+    #[test]
     fn live_catalog_inventory_refreshes_after_dynamic_control_plane_commit() {
         let owner_ura = "easynet:///r/acme/device/node-a";
         let catalog = Arc::new(
@@ -1120,7 +1159,7 @@ mod tests {
         catalog
             .hot_register_rpc_with_spec(
                 "session.inventory.dynamic",
-                crate::daemon::ability::dispatch::OwnerKind::Device,
+                crate::daemon::ability::dispatch::OwnerKind::DeviceProfileProjection,
                 crate::daemon::ability::manifest::AbilityManifest::new(
                     "dynamic",
                     "Dynamic inventory regression descriptor.",
@@ -2349,7 +2388,7 @@ mod tests {
             crate::daemon::trust::anchor::TrustedAgent {
                 agent_ura: user_ura.to_string(),
                 public_key_b64: user_pubkey_b64.to_string(),
-                role: crate::daemon::trust::anchor::TrustedAgentRole::User,
+                role: crate::daemon::trust::anchor::TrustAnchorRole::User,
                 added_at_unix_ms: 1_700_000_000_000,
                 origin_realm: None,
                 hub_endpoint: None,
@@ -2457,7 +2496,7 @@ mod tests {
         .expect("save test credentials");
         crate::daemon::persistence::local_agents::save(
             &crate::daemon::persistence::local_agents::LocalAgentsFile {
-                host_device_agent_ura: device_ura.to_string(),
+                host_device_ura: device_ura.to_string(),
                 hosted_agents: vec![crate::daemon::persistence::local_agents::HostedAgentEntry {
                     profile: "llm".to_string(),
                     name: "anthropic".to_string(),

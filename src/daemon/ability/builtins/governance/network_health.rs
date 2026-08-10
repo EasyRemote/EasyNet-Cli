@@ -61,7 +61,7 @@ pub const ABILITY_NETWORK_HEALTH: &str =
 pub fn register(reg: &mut AxonAbilityCatalog, resolver: SharedDiscoverFederationResolver) {
     reg.register_rpc_with_owner(
         ABILITY_NETWORK_HEALTH,
-        OwnerKind::Device,
+        OwnerKind::runtime_health_system(),
         Arc::new(move |_args: Value| handler(resolver.as_ref())),
     );
 }
@@ -74,7 +74,7 @@ fn handler(resolver: &dyn DiscoverFederationResolver) -> anyhow::Result<Value> {
     let view = federation_probe::collect_device_view(resolver);
     let self_node = view.nodes.iter().find(|n| n.is_self);
     let joined = self_node.map(|n| n.paired).unwrap_or(false) || hosted_identity.is_joined();
-    let host_ura: Value = if let Some(ura) = hosted_identity.host_device_agent_ura() {
+    let host_ura: Value = if let Some(ura) = hosted_identity.host_device_ura() {
         Value::String(ura.to_string())
     } else if let Some(ura) = self_node.and_then(|n| n.agent_ura.clone()) {
         Value::String(ura)

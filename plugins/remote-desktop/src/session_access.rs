@@ -77,9 +77,7 @@ fn ensure_session_caller_consistent(
     env: &EnvelopeContext,
     session: &RemoteDesktopSession,
 ) -> RemoteDesktopResult<()> {
-    let Some(expected) = session.creator_caller_ura() else {
-        return Ok(());
-    };
+    let expected = session.creator_caller_ura();
     let actual = env.caller();
     if expected != actual {
         return Err(RemoteDesktopError::SessionCallerMismatch {
@@ -96,9 +94,7 @@ fn ensure_session_consent_receipt_consistent(
     env: &EnvelopeContext,
     session: &RemoteDesktopSession,
 ) -> RemoteDesktopResult<()> {
-    let Some(expected) = session.consent().approval_receipt() else {
-        return Ok(());
-    };
+    let expected = session.consent().approval_receipt();
     if !causal_context_contains_receipt(ability, Some(env.causal_context()), expected)? {
         return Err(RemoteDesktopError::ConsentReceiptMismatch {
             ability,

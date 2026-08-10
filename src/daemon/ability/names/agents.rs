@@ -13,3 +13,8 @@ pub const AGENT_ABILITY_PUT: &str = "agent.ability.put";
 
 pub const CHAT_HISTORY_LIST: &str = "chat.history.list";
 pub const CHAT_HISTORY_GET: &str = "chat.history.get";
+
+/// Device-sponsored SystemAgent id for daemon-native Agent management
+/// abilities. The canonical callee shape is
+/// `easynet:///r/<realm>/agent/device.<device-id>.agent-management`.
+pub const AGENT_MANAGEMENT_SYSTEM_AGENT_ID: &str = "agent-management";

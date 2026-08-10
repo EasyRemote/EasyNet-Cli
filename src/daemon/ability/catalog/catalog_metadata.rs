@@ -326,8 +326,8 @@ fn upsert_operational_contract(
 /// Projection membership comes from `AxonAbilityCatalog::lookup_owner`, not
 /// from ability name prefixes. That keeps the profile catalogue aligned with
 /// the handler registration truth table and prevents broad namespaces such as
-/// `device.*` from accidentally stealing abilities advertised by the
-/// device-profile Agent or any hosted sub-profile Agent.
+/// `device.*` from accidentally stealing abilities advertised by the remaining
+/// direct Device-owner projection or any hosted sub-profile Agent.
 pub fn published_system_abilities_for_owner(
     owner: crate::daemon::ability::dispatch::OwnerKind,
 ) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
@@ -349,6 +349,43 @@ pub fn system_ability_owner(
     // record, not the legacy `owner` side table (equivalence pinned by
     // `control_plane_owner_matches_legacy_lookup_for_static_ability`).
     registry.control_plane_owner(ability_name)
+}
+
+/// Unique device-sponsored SystemAgent owner for one public system ability.
+///
+/// Public names can legitimately exist on more than one owner plane (for
+/// example, runtime introspection is published by both a realm Authority and a
+/// device-sponsored SystemAgent). Routing to a Device therefore cannot use the
+/// name-only `control_plane_owner` lookup, which is intentionally ambiguous in
+/// that case. This projection reads every committed control-plane row, filters
+/// to SystemAgent owners, de-duplicates call modes, and fails closed unless one
+/// SystemAgent owner remains.
+pub(crate) fn unique_system_agent_owner_for_public_ability(
+    public_ability: &str,
+) -> Option<crate::daemon::ability::dispatch::OwnerKind> {
+    let public_ability = public_ability.trim();
+    if public_ability.is_empty() {
+        return None;
+    }
+    let registry = build_system_registry();
+    let mut owners = Vec::new();
+    for row in registry.authority_ability_catalog_snapshot() {
+        if row.descriptor.name != public_ability
+            || !matches!(
+                &row.owner,
+                crate::daemon::ability::dispatch::OwnerKind::SystemAgent(_)
+            )
+        {
+            continue;
+        }
+        if !owners.contains(&row.owner) {
+            owners.push(row.owner);
+        }
+    }
+    match owners.as_slice() {
+        [owner] => Some(owner.clone()),
+        _ => None,
+    }
 }
 
 fn published_abilities_from_registry(
@@ -377,12 +414,6 @@ fn published_abilities_from_registry_for_owner(
         .filter(|row| !contract_only_names.contains(row.name.as_str()))
         .filter(|row| owner.map(|expected| &row.owner == expected).unwrap_or(true))
         .filter(|row| !row.name.ends_with(".chat"))
-        // RFC-002 §3.3 keyring abilities are owner-namespaced under
-        // `device` and self-described by `keyring::abilities` — they
-        // don't go through the system descriptor table. Filter them
-        // for the same reason `<agent>.chat` is filtered: their
-        // schema lives inside the registering module, not here.
-        .filter(|row| !row.name.starts_with("device.keyring."))
         .map(|row| row.descriptor)
         .collect()
 }
@@ -483,6 +514,9 @@ pub fn description_for(name: &str) -> &'static str {
         return description;
     }
     if let Some(description) = daemon_invocation_contracts::description_for(name) {
+        return description;
+    }
+    if let Some(description) = keyring_management_description_for(name) {
         return description;
     }
 
@@ -682,6 +716,42 @@ pub fn description_for(name: &str) -> &'static str {
     }
 }
 
+fn keyring_management_description_for(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "device.keyring.create" => {
+            "Create a managed Ed25519 signing key in the local keyring-management SystemAgent vault and return its public projection."
+        }
+        "device.keyring.list" => {
+            "List managed signing keys from the local keyring-management SystemAgent vault, optionally filtered by purpose or status."
+        }
+        "device.keyring.get_public" => {
+            "Return the public key and fingerprint for one managed signing key without exposing private key material."
+        }
+        "device.keyring.rotate" => {
+            "Retire an active managed signing key and mint its next epoch successor in the keyring vault."
+        }
+        "device.keyring.revoke" => {
+            "Revoke a managed signing key so it cannot be used for subsequent signing operations."
+        }
+        "device.keyring.expire_set" => {
+            "Set or update the expiry timestamp for a managed signing key."
+        }
+        "device.keyring.bind_subject" => {
+            "Bind a managed signing key to the canonical subject URA it is allowed to sign for."
+        }
+        "device.keyring.peer_add" => {
+            "Record a peer public key by trust-on-first-use metadata for later key resolution."
+        }
+        "device.keyring.peer_list" => {
+            "List peer public-key records known to the local keyring-management SystemAgent."
+        }
+        "device.keyring.federate_user_identity_token" => {
+            "Issue a bounded cross-realm user identity token signed by a managed key bound to the source user URA."
+        }
+        _ => return None,
+    })
+}
+
 pub fn try_description_for_owned(name: &str) -> anyhow::Result<String> {
     if let Some(description) = crate::daemon::plugins::try_builtin_description_for_owned(name)? {
         return Ok(description);
@@ -764,6 +834,9 @@ fn authored_static_input_schema(name: &str) -> Option<serde_json::Value> {
         automation_names::LOOP_STATUS => loop_ability::status_input_schema(),
         automation_names::LOOP_SUBSCRIBE => loop_ability::subscribe_input_schema(),
         automation_names::LOOP_CANCEL => loop_ability::cancel_input_schema(),
+        name if governance_names::KEYRING_ABILITIES.contains(&name) => {
+            return crate::daemon::keyring::abilities::input_schema_for(name)
+        }
         resource_names::SKILL_INSTALL => skill_install_ability::install_input_schema(),
         resource_names::SKILL_REMOVE => skill_install_ability::remove_input_schema(),
         resource_names::SKILL_UPGRADE => skill_install_ability::upgrade_input_schema(),
@@ -1119,6 +1192,9 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | governance_names::ADMISSION_EXPLAIN
         | device_names::TERMINAL_LIST
         | device_names::SESSION_LIST
+        | "device.keyring.list"
+        | "device.keyring.get_public"
+        | "device.keyring.peer_list"
         | governance_names::CONSENT_LIST_PENDING
         // RFC-005 v3.2 A9 — meta.list_resources is a pure read of
         // the local resources table (same shape as
@@ -1162,6 +1238,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | governance_names::AUTHORITY_BINDING_REVOKE
         | governance_names::POLICY_REQUEST_CREATE
         | governance_names::POLICY_REQUEST_RESOLVE
+        | "device.keyring.peer_add"
         // context mutations — flip clipboard tracking, delete a
         // clip, add / remove favorites: device-context
         // configuration writes, same decision class as
@@ -1250,6 +1327,12 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | automation_names::LOOP_CREATE
         | automation_names::LOOP_SUBSCRIBE
         | automation_names::LOOP_CANCEL
+        | "device.keyring.create"
+        | "device.keyring.rotate"
+        | "device.keyring.revoke"
+        | "device.keyring.expire_set"
+        | "device.keyring.bind_subject"
+        | "device.keyring.federate_user_identity_token"
         // EAL orchestration. mission.run compiles and executes a
         // program (potentially multi-step, potentially cross-agent);
         // mission.cancel mutates the run state of an in-flight

@@ -1082,7 +1082,7 @@ impl SignedInvocation {
             )
             .map_err(|error| DaemonError::InvalidInvocation(error.to_string()))?;
         let descriptor_ref =
-            crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+            crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
                 &target.callee_ura,
                 crate::daemon::invocation::dispatch::cancellation::ABILITY_INVOCATION_CANCEL,
                 crate::daemon::ability::CallMode::Rpc,

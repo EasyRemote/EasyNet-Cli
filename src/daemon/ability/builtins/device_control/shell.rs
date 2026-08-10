@@ -102,7 +102,11 @@ pub const PROFILE_VERSION: &str =
 const BASH_PATHS: &[&str] = &["/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash"];
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner("shell.run", OwnerKind::Device, Arc::new(handler));
+    reg.register_rpc_with_owner(
+        "shell.run",
+        OwnerKind::locomotion_system(),
+        Arc::new(handler),
+    );
 }
 
 fn handler(args: Value) -> Result<Value> {

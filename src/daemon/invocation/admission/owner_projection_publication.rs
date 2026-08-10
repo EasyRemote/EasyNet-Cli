@@ -12,6 +12,7 @@ use axon_sdk::pb::axon::v1::Envelope;
 use crate::core::ura::{parse_ura, URAKind};
 use crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore;
 use crate::daemon::federation::read_model::owner_projection::OwnerProjectionPublication;
+use crate::daemon::invocation::admission::device_caller::admits_owner_projection_publication_host;
 use crate::daemon::trust::anchor::RealmTrustAnchor;
 
 pub(crate) struct OwnerProjectionPublicationAuthority;
@@ -114,17 +115,30 @@ impl OwnerProjectionPublicationAuthority {
 
         let owner = parse_ura(&publication.owner_ura).map_err(|_| {
             OwnerProjectionPublicationError::InvalidIdentity(
-                "owner_ura must be a canonical Agent, Device, or Authority URA",
+                "owner_ura must be a canonical Agent, Authority, or same-device DeviceProfileProjection URA",
             )
         })?;
         if owner.realm != caller.realm {
             return Err(OwnerProjectionPublicationError::OwnerMismatch);
         }
 
-        match caller.kind {
-            URAKind::Device => match owner.kind {
+        let device_publication_custody = admits_owner_projection_publication_host(
+            caller_ura,
+            callee_ura,
+            &publication.owner_ura,
+            daemon_ura,
+        );
+
+        match (device_publication_custody, caller.kind) {
+            (true, URAKind::Device) => match owner.kind {
+                // Same-device DeviceProfileProjection is a migration/high-water
+                // publication cursor, not a target public AbilityDescriptor
+                // owner/callee.
                 URAKind::Device if publication.owner_ura == caller_ura => Ok(()),
                 URAKind::Agent => {
+                    if device_sponsored_system_agent_owned_by_caller(&owner, &caller) {
+                        return Ok(());
+                    }
                     let caller_owner = trust_anchor
                         .lookup_principal_owner(caller_ura)
                         .ok_or(OwnerProjectionPublicationError::OwnerBindingMissing)?;
@@ -148,7 +162,7 @@ impl OwnerProjectionPublicationAuthority {
                 }
                 _ => Err(OwnerProjectionPublicationError::OwnerMismatch),
             },
-            URAKind::Authority
+            (_, URAKind::Authority)
                 if caller_ura == callee_ura
                     && publication.owner_ura == caller_ura
                     && owner.kind == URAKind::Authority =>
@@ -160,6 +174,23 @@ impl OwnerProjectionPublicationAuthority {
             )),
         }
     }
+}
+
+fn device_sponsored_system_agent_owned_by_caller(
+    owner: &crate::core::ura::ParsedURA,
+    caller: &crate::core::ura::ParsedURA,
+) -> bool {
+    let Some(caller_device_id) = caller.device_id() else {
+        return false;
+    };
+    owner
+        .device_agent_ids()
+        .is_some_and(|(sponsor_device_id, system_agent_id)| {
+            sponsor_device_id == caller_device_id
+                && crate::daemon::ability::catalog::profiles::is_declared_daemon_native_system_agent_id(
+                    system_agent_id,
+                )
+        })
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -260,5 +291,35 @@ mod tests {
         )
         .expect_err("host identity remains bound");
         assert_eq!(error, OwnerProjectionPublicationError::HostMismatch);
+    }
+
+    #[test]
+    fn device_sponsorship_authorizes_declared_system_agent_projection() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let system_agent_ura = "easynet:///r/test/agent/device.dev-1.runtime-introspection";
+        let descriptor = AbilityDescriptor::new(
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+            system_agent_ura,
+            Visibility::Scoped,
+            crate::daemon::ability::descriptors::AdmissionAction::Read,
+        )
+        .expect("system Agent descriptor");
+        let publication = prepare_and_persist(system_agent_ura, DEVICE_URA, &[descriptor])
+            .expect("canonical system Agent projection");
+        let trust_anchor = RealmTrustAnchor::from_parts_with_principal_owners(
+            Vec::new(),
+            vec![owner_binding(DEVICE_URA)],
+            Vec::new(),
+        )
+        .expect("device owner binding");
+
+        OwnerProjectionPublicationAuthority::verify_admitted_session(
+            DEVICE_URA,
+            HUB_URA,
+            &publication,
+            &AdvertisedAgentStore::new(),
+            &trust_anchor,
+        )
+        .expect("Device sponsor owns the declared SystemAgent publication boundary");
     }
 }

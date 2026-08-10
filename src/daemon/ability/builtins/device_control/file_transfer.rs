@@ -112,7 +112,7 @@ const UPLOAD_RECV_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_bidi_with_owner(
         "fs.transfer",
-        OwnerKind::Device,
+        OwnerKind::locomotion_system(),
         Arc::new(move |args: Value| open_handler(args)),
     );
 }
@@ -697,32 +697,8 @@ mod tests {
     }
 
     fn transfer_ref(path: &Path, capability: FilesystemResourceCapability) -> Value {
-        let tmp_root = std::env::temp_dir();
-        let relative_path = path
-            .strip_prefix(&tmp_root)
-            .expect("file transfer test path must live under temp root")
-            .to_str()
-            .expect("file transfer test path must be UTF-8")
-            .trim_start_matches('/')
-            .to_string();
-        assert!(
-            !relative_path.is_empty(),
-            "file transfer test ResourceRef must target a file"
-        );
-        let owner_ura = crate::core::ura::device_ura("localhost", "file-transfer-test-device");
-        json!({
-            "resource_ura": crate::core::ura::resource_dot_ura(
-                "localhost",
-                "device.file-transfer-test-device",
-                &format!("fs/tmp/{relative_path}")
-            ),
-            "owner_ura": owner_ura,
-            "namespace": "fs",
-            "display_path": format!("tmp/{relative_path}"),
-            "capability": capability.as_str(),
-            "expires_unix_ms": i64::MAX,
-            "revision": "fs-local-mapping-v1",
-        })
+        filesystem::resource_ref_for_local_path(path, capability)
+            .expect("file transfer fixture must be owned by this test daemon's local Device")
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

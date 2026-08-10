@@ -46,8 +46,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::daemon::ability::catalog as ability_catalog;
-use crate::daemon::ability::descriptors::{AbilityDescriptor, AbilityIdentity};
+use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
+use crate::daemon::ability::{insert_catalog_descriptor, AbilityCatalogRow, CatalogDescriptorKey};
 use crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
 use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 use serde_json::{json, Value};
@@ -58,9 +59,8 @@ pub const ABILITY_LIST_ABILITIES: &str =
 
 /// Register both meta abilities on the registry.
 ///
-/// `descriptors_provider` is the explicit embedded-consumer seam used only
-/// when no live registry has been published. Daemon production reads the
-/// committed control-plane descriptors and never overlays this provider.
+/// `descriptors_provider` is a test fixture seam. Daemon production requires
+/// the committed control-plane handle and fails closed while it is unpublished.
 ///
 /// `registry_handle` is a `OnceLock` populated by the build site
 /// AFTER `Arc::new(reg)`. The list_abilities handler reads through
@@ -88,6 +88,7 @@ pub fn register<F>(
                 &handle_for_describe,
                 &authority_published_abilities_for_describe,
                 envelope.callee(),
+                envelope.subject(),
             )
         });
     let p_for_list = Arc::clone(&provider);
@@ -103,7 +104,7 @@ pub fn register<F>(
                 envelope.callee(),
             )
         });
-    for owner in local_runtime_owners {
+    for owner in introspection_registration_owners(local_runtime_owners) {
         reg.register_rpc_with_envelope_and_owner(
             ABILITY_DESCRIBE,
             owner.clone(),
@@ -117,24 +118,34 @@ pub fn register<F>(
     }
 }
 
+fn introspection_registration_owners(local_runtime_owners: Vec<OwnerKind>) -> Vec<OwnerKind> {
+    local_runtime_owners
+        .into_iter()
+        .map(|owner| match owner {
+            OwnerKind::DeviceProfileProjection => OwnerKind::runtime_introspection_system(),
+            other => other,
+        })
+        .collect()
+}
+
 fn describe_handler(
     descriptors_provider: &Arc<dyn Fn() -> Vec<AbilityDescriptor> + Send + Sync>,
     registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     authority_published_abilities: &AuthorityPublishedAbilityStore,
-    invocation_callee_ura: &str,
+    catalog_callee_ura: &str,
+    invocation_subject_ura: &str,
 ) -> anyhow::Result<Value> {
-    // The envelope callee is the runtime authority being described. Identity
-    // must never be reconstructed from Device-only persistence: Hub mode has
-    // no local-agent identity, and Both mode has two distinct authority views.
-    let invocation_callee =
-        crate::core::ura::parse_ura(invocation_callee_ura).map_err(|error| {
-            anyhow::anyhow!(
-            "meta.describe: invocation callee `{invocation_callee_ura}` is not a canonical URA: \
+    // The callee is the behavioral actor being described. The subject remains
+    // the resource read for admission/audit and must never be reinterpreted as
+    // actor identity or execution placement.
+    let catalog_callee = crate::core::ura::parse_ura(catalog_callee_ura).map_err(|error| {
+        anyhow::anyhow!(
+            "meta.describe: invocation callee `{catalog_callee_ura}` is not a canonical URA: \
              {error}"
         )
-        })?;
+    })?;
 
-    // `describe` is the lightweight summary of the same callee-scoped
+    // `describe` is the lightweight summary of the same subject-scoped
     // catalogue returned by `list_abilities`. Reusing the canonical
     // projection prevents Hub/Both mode from reporting the Device profile's
     // full static template set under a Hub identity.
@@ -143,7 +154,7 @@ fn describe_handler(
         registry_handle,
         json!({}),
         authority_published_abilities,
-        invocation_callee_ura,
+        catalog_callee_ura,
     )?;
     let abilities = catalog
         .get("abilities")
@@ -178,10 +189,11 @@ fn describe_handler(
         *by_namespace.entry(ns).or_insert(0) += 1;
     }
 
-    let hosted_agent_count = describe_hosted_agent_count(&invocation_callee)?;
+    let hosted_agent_count = describe_hosted_agent_count(&catalog_callee)?;
 
     Ok(json!({
-        "ura": invocation_callee_ura,
+        "ura": catalog_callee_ura,
+        "subject_ura": invocation_subject_ura,
         "identity_summary": {
             "signing_authority": "self_signed",
         },
@@ -196,9 +208,16 @@ fn describe_handler(
 }
 
 fn describe_hosted_agent_count(
-    invocation_callee: &crate::core::ura::ParsedURA,
+    catalog_callee: &crate::core::ura::ParsedURA,
 ) -> anyhow::Result<usize> {
-    if invocation_callee.kind != crate::core::ura::URAKind::Device {
+    let is_device_runtime = catalog_callee.kind == crate::core::ura::URAKind::Device
+        || catalog_callee
+            .device_agent_ids()
+            .is_some_and(|(_, system_agent_id)| {
+                system_agent_id
+                    == crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID
+            });
+    if !is_device_runtime {
         return Ok(0);
     }
     AgentAggregateRepository::load_hosted_identity_status()
@@ -209,26 +228,23 @@ fn describe_hosted_agent_count(
 }
 
 fn list_abilities_handler(
-    descriptors_provider: &Arc<dyn Fn() -> Vec<AbilityDescriptor> + Send + Sync>,
+    _descriptors_provider: &Arc<dyn Fn() -> Vec<AbilityDescriptor> + Send + Sync>,
     registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
     authority_published_abilities: &AuthorityPublishedAbilityStore,
-    invocation_callee_ura: &str,
+    catalog_callee_ura: &str,
 ) -> anyhow::Result<Value> {
     let scope = AbilityListScope::from_args(&args)?;
+    let catalog_execution_host_ura = catalog_execution_host_ura(catalog_callee_ura)?;
     let live_registry = registry_handle.get();
     // The committed control plane is the sole production catalogue. Import
     // manifests and profile templates have already been normalized into its
     // governed descriptor, so discovery only filters and serializes those
-    // aggregates. The provider remains an explicit embedded-consumer seam for
-    // callers that deliberately publish no live registry.
-    let mut catalog: BTreeMap<
-        (AbilityIdentity, String, crate::daemon::ability::CallMode),
-        AbilityDescriptor,
-    > = BTreeMap::new();
+    // aggregates.
+    let mut catalog: BTreeMap<CatalogDescriptorKey, AbilityDescriptor> = BTreeMap::new();
     if let Some(registry) = live_registry {
         for row in registry.authority_ability_catalog_snapshot() {
-            if !authority_row_visible_from_callee(&row, invocation_callee_ura) {
+            if row.execution_host_ura != catalog_execution_host_ura {
                 continue;
             }
             if !ability_catalog::is_publishable_catalog_name(&row.name) {
@@ -238,170 +254,125 @@ fn list_abilities_handler(
             if !scope.matches_descriptor(&descriptor) {
                 continue;
             }
-            insert_canonical_descriptor(&mut catalog, descriptor)?;
+            insert_catalog_descriptor(&mut catalog, descriptor, "local committed catalog")
+                .map_err(anyhow::Error::msg)?;
         }
     } else {
-        // Explicit static-provider seam (embedded consumers and unit tests).
-        // Only already-canonical descriptors may leave it. A `self` template
-        // has schema value but no routable identity, so it is not a wire row.
-        for descriptor in descriptors_provider() {
-            if !descriptor_owner_is_canonical(&descriptor)
-                || !ability_catalog::is_publishable_catalog_name(&descriptor.name)
-                || !scope.matches_descriptor(&descriptor)
-            {
-                continue;
+        #[cfg(not(test))]
+        anyhow::bail!("meta.list_abilities: committed descriptor control plane is not published");
+        #[cfg(test)]
+        {
+            // Unit fixtures may publish canonical descriptors directly. This
+            // branch is absent from production binaries.
+            for descriptor in _descriptors_provider() {
+                if !descriptor_owner_is_canonical(&descriptor)
+                    || !ability_catalog::is_publishable_catalog_name(&descriptor.name)
+                    || !scope.matches_descriptor(&descriptor)
+                {
+                    continue;
+                }
+                insert_catalog_descriptor(&mut catalog, descriptor, "test catalog fixture")
+                    .map_err(anyhow::Error::msg)?;
             }
-            insert_canonical_descriptor(&mut catalog, descriptor)?;
         }
     }
 
-    // Final pass — service-health metadata. Applied uniformly over
-    // the assembled catalog so no insertion path has to remember it. The
-    // store is keyed by canonical ability URA, the same
-    // `owner_ability_ura` construction `canonical_ability_ura()`
-    // uses, so the lookup cannot drift from the monitor's writes.
-    // Advisory metadata only: absence means "not monitored", never
-    // "down" — the invoke path does not consult this.
+    // Realm rows enter the same canonical key/conflict gate as local rows.
+    // Appending serialized JSON here would bypass duplicate/hash detection and
+    // could expose two incompatible descriptor refs for one identity.
+    let authority_catalog_revision = if scope.include_realm {
+        let published = authority_published_abilities.snapshot_with_revision();
+        let revision = published.revision;
+        for descriptor in published.descriptors {
+            if scope.matches_descriptor(&descriptor) {
+                insert_catalog_descriptor(&mut catalog, descriptor, "Authority-published catalog")
+                    .map_err(anyhow::Error::msg)?;
+            }
+        }
+        Some(revision)
+    } else {
+        None
+    };
+
+    let catalog_revision = catalog_snapshot_revision(&catalog)?;
+
+    // Advisory health is a row annotation, not governed descriptor metadata.
+    // Mutating AbilityDescriptor.metadata here would change the descriptor hash
+    // and fabricate a new descriptor_ref on every health transition.
     let mut merged: Vec<Value> = catalog
         .into_values()
-        .map(|d| {
-            let descriptor = match d
+        .map(|descriptor| {
+            let health = descriptor
                 .canonical_ability_ura()
-                .and_then(|ura| crate::daemon::ability::health::snapshot(&ura))
-            {
-                Some(health) => {
-                    let mut d = d
-                        .with_metadata_entry("health_status", health.status.as_wire_str())
-                        .with_metadata_entry(
-                            "health_checked_unix_ms",
-                            health.checked_unix_ms.to_string(),
-                        );
-                    if !health.detail.is_empty() {
-                        d = d.with_metadata_entry("health_detail", health.detail);
-                    }
-                    d
+                .and_then(|ura| crate::daemon::ability::health::snapshot(&ura));
+            let mut row = public_catalog_descriptor_row(&descriptor)?;
+            if let (Some(health), Value::Object(object)) = (health, &mut row) {
+                let mut annotation = serde_json::Map::new();
+                annotation.insert(
+                    "status".to_string(),
+                    Value::String(health.status.as_wire_str().to_string()),
+                );
+                annotation.insert(
+                    "checked_unix_ms".to_string(),
+                    Value::Number(health.checked_unix_ms.into()),
+                );
+                if !health.detail.is_empty() {
+                    annotation.insert("detail".to_string(), Value::String(health.detail));
                 }
-                None => d,
-            };
-            public_catalog_descriptor_row(&descriptor).unwrap_or(Value::Null)
-        })
-        .collect();
-
-    // Phase 3: realm Authority-published abilities. Only when the caller asked for realm
-    // scope — the default-local path stays owner-local. The federation read
-    // model has already validated every cached Authority entry as a canonical
-    // `AbilityDescriptor`, so the merged catalog always exposes the same
-    // `ability_ura` / `descriptor_ref` facts as local registry rows.
-    if scope.include_realm {
-        for descriptor in authority_published_abilities.snapshot() {
-            let mut row = serde_json::to_value(descriptor)?;
-            normalize_public_catalog_descriptor_row(&mut row);
-            if let Value::Object(ref mut map) = row {
-                let source_is_empty = map
-                    .get("source")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .unwrap_or_default()
-                    .is_empty();
-                if source_is_empty {
-                    map.insert(
-                        "source".to_string(),
-                        Value::String("authority:broadcast".to_string()),
-                    );
-                }
+                object.insert("health".to_string(), Value::Object(annotation));
             }
-            merged.push(row);
-        }
-    }
+            Ok::<_, anyhow::Error>(row)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     scope.apply(&mut merged);
-    Ok(json!({ "abilities": merged }))
+    Ok(json!({
+        "abilities": merged,
+        "catalog_revision": catalog_revision,
+        "authority_catalog_revision": authority_catalog_revision,
+    }))
 }
 
 fn public_catalog_descriptor_row(descriptor: &AbilityDescriptor) -> anyhow::Result<Value> {
-    let mut row = serde_json::to_value(descriptor)?;
-    normalize_public_catalog_descriptor_row(&mut row);
-    Ok(row)
+    AbilityCatalogRow::from_descriptor(descriptor.clone())
+        .map(AbilityCatalogRow::into_value)
+        .map_err(anyhow::Error::msg)
 }
 
-fn normalize_public_catalog_descriptor_row(row: &mut Value) {
-    if let Value::Object(map) = row {
-        if let Some(version) = map.get("version").cloned() {
-            map.insert("descriptor_version".to_string(), version);
-        }
-    }
+fn catalog_snapshot_revision(
+    catalog: &BTreeMap<CatalogDescriptorKey, AbilityDescriptor>,
+) -> anyhow::Result<String> {
+    use sha2::{Digest, Sha256};
+
+    let rows = catalog
+        .values()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()?;
+    let canonical = crate::daemon::ability::descriptors::canonical_json_bytes(&Value::Array(rows));
+    Ok(format!("sha256:{}", hex::encode(Sha256::digest(canonical))))
 }
 
-fn insert_canonical_descriptor(
-    catalog: &mut BTreeMap<
-        (AbilityIdentity, String, crate::daemon::ability::CallMode),
-        AbilityDescriptor,
-    >,
-    descriptor: AbilityDescriptor,
-) -> anyhow::Result<()> {
-    let identity = descriptor.identity().ok_or_else(|| {
+fn catalog_execution_host_ura(catalog_callee_ura: &str) -> anyhow::Result<String> {
+    let callee = crate::core::ura::parse_ura(catalog_callee_ura).map_err(|error| {
         anyhow::anyhow!(
-            "meta.list_abilities: canonical descriptor `{}` has no identity",
-            descriptor.name
+            "meta.list_abilities: catalogue callee `{catalog_callee_ura}` is invalid: {error}"
         )
     })?;
-    let key = (
-        identity.clone(),
-        descriptor.version.clone(),
-        descriptor.call_mode(),
-    );
-    match catalog.entry(key) {
-        std::collections::btree_map::Entry::Vacant(entry) => {
-            entry.insert(descriptor);
-        }
-        std::collections::btree_map::Entry::Occupied(entry) if entry.get() == &descriptor => {}
-        std::collections::btree_map::Entry::Occupied(entry) => {
-            anyhow::bail!(
-                "meta.list_abilities: conflicting canonical descriptors for identity `{}` \
-                 version `{}` mode `{}` (hashes `{}` and `{}`)",
-                identity.as_str(),
-                descriptor.version,
-                descriptor.call_mode().as_str(),
-                entry.get().descriptor_hash_prefixed(),
-                descriptor.descriptor_hash_prefixed(),
-            );
+    if let Some((device_id, system_agent_id)) = callee.device_agent_ids() {
+        if system_agent_id
+            == crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID
+        {
+            return Ok(crate::core::ura::device_ura(&callee.realm, device_id));
         }
     }
-    Ok(())
-}
-
-fn authority_row_visible_from_callee(
-    row: &crate::daemon::ability::dispatch::AuthorityAbilityCatalogSnapshotRow,
-    invocation_callee_ura: &str,
-) -> bool {
-    match &row.owner {
-        OwnerKind::Device | OwnerKind::RealmAuthority => {
-            row.descriptor.owner_ura == invocation_callee_ura
-        }
-        OwnerKind::Agent(_) | OwnerKind::User(_) => {
-            row.descriptor.owner_ura == invocation_callee_ura
-                || invocation_callee_hosts_subordinate_owners(invocation_callee_ura)
-        }
-    }
-}
-
-fn invocation_callee_hosts_subordinate_owners(invocation_callee_ura: &str) -> bool {
-    crate::core::ura::parse_ura(invocation_callee_ura)
-        .map(|callee| callee.kind == crate::core::ura::URAKind::Device)
-        .unwrap_or(false)
-}
-
-fn descriptor_owner_is_canonical(descriptor: &AbilityDescriptor) -> bool {
-    crate::core::ura::parse_ura(&descriptor.owner_ura).is_ok()
-        && descriptor
-            .canonical_ability_ura()
-            .is_some_and(|ability_ura| crate::core::ura::parse_ura(&ability_ura).is_ok())
+    Ok(catalog_callee_ura.to_string())
 }
 
 struct AbilityListScope {
     include_realm: bool,
     owner_ura: Option<String>,
     ability_ura: Option<String>,
+    descriptor_version: Option<String>,
 }
 
 impl AbilityListScope {
@@ -411,7 +382,7 @@ impl AbilityListScope {
             .ok_or_else(|| anyhow::anyhow!("meta.list_abilities: args must be a JSON object"))?;
         for key in object.keys() {
             match key.as_str() {
-                "scope" | "owner_ura" | "ability_ura" => {}
+                "scope" | "owner_ura" | "ability_ura" | "descriptor_version" => {}
                 other => {
                     anyhow::bail!("meta.list_abilities: unsupported field `{other}`")
                 }
@@ -433,12 +404,22 @@ impl AbilityListScope {
         let ability_ura = string_arg(object, "ability_ura")
             .map(|ura| parse_ability_scope(&ura))
             .transpose()?;
+        let descriptor_version = string_arg(object, "descriptor_version")
+            .map(|version| {
+                crate::daemon::ability::AbilityDescriptorVersion::new(version.clone())
+                    .map(|_| version)
+                    .map_err(|error| {
+                        anyhow::anyhow!("meta.list_abilities: invalid descriptor_version: {error}")
+                    })
+            })
+            .transpose()?;
         validate_ability_scope_owner(owner_ura.as_deref(), ability_ura.as_deref())?;
 
         Ok(Self {
             include_realm,
             owner_ura,
             ability_ura,
+            descriptor_version,
         })
     }
 
@@ -461,6 +442,15 @@ impl AbilityListScope {
                     .unwrap_or(false)
             });
         }
+        if let Some(version) = self.descriptor_version.as_deref() {
+            abilities.retain(|entry| {
+                entry
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .map(|candidate| candidate == version)
+                    .unwrap_or(false)
+            });
+        }
     }
 
     fn matches_descriptor(&self, descriptor: &AbilityDescriptor) -> bool {
@@ -470,11 +460,21 @@ impl AbilityListScope {
             }
         }
         if let Some(ability_ura) = self.ability_ura.as_deref() {
-            return descriptor
+            if !descriptor
                 .canonical_ability_ura()
                 .as_deref()
                 .map(|candidate| candidate == ability_ura)
-                .unwrap_or(false);
+                .unwrap_or(false)
+            {
+                return false;
+            }
+        }
+        if self
+            .descriptor_version
+            .as_deref()
+            .is_some_and(|version| descriptor.version != version)
+        {
+            return false;
         }
         true
     }
@@ -567,6 +567,10 @@ pub fn list_abilities_input_schema() -> Value {
             "ability_ura": {
                 "type": "string",
                 "description": "Canonical Ability URA. Filters the catalogue to one exact ability descriptor set."
+            },
+            "descriptor_version": {
+                "type": "string",
+                "description": "Exact governed descriptor version. Use with ability_ura when selecting one version."
             }
         },
         "additionalProperties": false,
@@ -577,6 +581,14 @@ pub fn list_abilities_description() -> &'static str {
     "Return the full local AbilityDescriptor catalogue. Canonical \
      Invoke surface for ability discovery; the MCP-shaped projection \
      lives at mcp.bridge.list_tools for external MCP clients."
+}
+
+#[cfg(test)]
+fn descriptor_owner_is_canonical(descriptor: &AbilityDescriptor) -> bool {
+    crate::core::ura::parse_ura(&descriptor.owner_ura).is_ok()
+        && descriptor
+            .canonical_ability_ura()
+            .is_some_and(|ability_ura| crate::core::ura::parse_ura(&ability_ura).is_ok())
 }
 
 #[cfg(test)]
@@ -604,15 +616,17 @@ mod tests {
     #[test]
     fn canonical_catalog_preserves_distinct_versions_and_call_modes() {
         let mut catalog = BTreeMap::new();
-        insert_canonical_descriptor(&mut catalog, d("fs.read")).expect("RPC v1 inserts");
-        insert_canonical_descriptor(
+        insert_catalog_descriptor(&mut catalog, d("fs.read"), "test").expect("RPC v1 inserts");
+        insert_catalog_descriptor(
             &mut catalog,
             d("fs.read").with_call_mode(crate::daemon::ability::CallMode::Stream),
+            "test",
         )
         .expect("Stream v1 inserts");
-        insert_canonical_descriptor(
+        insert_catalog_descriptor(
             &mut catalog,
             d("fs.read").with_version("2.0.0").expect("valid version"),
+            "test",
         )
         .expect("RPC v2 inserts");
 
@@ -622,20 +636,22 @@ mod tests {
     #[test]
     fn canonical_catalog_rejects_conflicting_same_identity_version_and_mode() {
         let mut catalog = BTreeMap::new();
-        insert_canonical_descriptor(
+        insert_catalog_descriptor(
             &mut catalog,
             d("fs.read").with_input_schema(json!({"type": "object"})),
+            "test",
         )
         .expect("first descriptor inserts");
 
-        let error = insert_canonical_descriptor(
+        let error = insert_catalog_descriptor(
             &mut catalog,
             d("fs.read").with_input_schema(json!({"type": "string"})),
+            "test",
         )
         .expect_err("same identity/version/mode with different schema must fail closed");
         assert!(error
             .to_string()
-            .contains("conflicting canonical descriptors"));
+            .contains("contains conflicting descriptors"));
     }
 
     fn seed_test_credentials(realm: &str, node_id: &str, username: &str) {
@@ -671,7 +687,7 @@ mod tests {
     {
         super::register(
             reg,
-            vec![OwnerKind::Device],
+            vec![OwnerKind::DeviceProfileProjection],
             descriptors_provider,
             registry_handle,
             AuthorityPublishedAbilityStore::new(),
@@ -743,25 +759,37 @@ mod tests {
 
     fn explicit_meta_target(
         ability: &str,
-        callee_ura: &str,
+        subject_owner_ura: &str,
         args: Value,
     ) -> anyhow::Result<crate::daemon::invocation::routing::target::InvocationTarget> {
-        let ability_ura = crate::core::ura::owner_ability_ura(callee_ura, ability)
+        let ability_owner_ura = meta_read_ability_owner_for_subject(subject_owner_ura);
+        let ability_ura = crate::core::ura::owner_ability_ura(&ability_owner_ura, ability)
             .expect("canonical meta ability URA for explicit target");
-        let callee = crate::core::ura::parse_ura(callee_ura)
-            .expect("explicit meta target callee must be canonical");
-        let subject_ura = if callee.kind == crate::core::ura::URAKind::Authority {
-            ability_ura.clone()
-        } else {
-            callee_ura.to_string()
-        };
         crate::daemon::invocation::routing::target::PublicInvocationTargetIssuer::local_explicit_tuple(
             ability_ura,
             args,
             crate::daemon::invocation::routing::target::CallMode::Rpc,
-            subject_ura,
+            subject_owner_ura.to_string(),
             axon_sdk::invocation::CausalContext::None,
         )
+    }
+
+    fn meta_read_ability_owner_for_subject(subject_owner_ura: &str) -> String {
+        let parsed = crate::core::ura::parse_ura(subject_owner_ura)
+            .expect("explicit meta target subject must be canonical");
+        match parsed.kind {
+            crate::core::ura::URAKind::Device => {
+                let device_id = parsed
+                    .device_id()
+                    .expect("Device subject must carry device id");
+                crate::core::ura::device_agent_ura(
+                    &parsed.realm,
+                    device_id,
+                    crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+                )
+            }
+            _ => subject_owner_ura.to_string(),
+        }
     }
 
     fn canonical_meta_fixtures() -> Vec<AbilityDescriptor> {
@@ -950,7 +978,7 @@ mod tests {
                 &device_ura,
             )
             .expect("device authority context"),
-            vec![OwnerKind::Device],
+            vec![OwnerKind::DeviceProfileProjection],
         );
 
         let error = invoke_describe_targeted(&registry, &device_ura)
@@ -973,7 +1001,10 @@ mod tests {
         let registry = authority_bound_meta_registry(
             AbilityAuthorityContext::for_combined_authority_roots(&device_ura)
                 .expect("combined authority context"),
-            vec![OwnerKind::Device, OwnerKind::RealmAuthority],
+            vec![
+                OwnerKind::DeviceProfileProjection,
+                OwnerKind::RealmAuthority,
+            ],
         );
 
         let device_response = invoke_list_targeted(&registry, &device_ura, json!({})).unwrap();
@@ -982,9 +1013,17 @@ mod tests {
         let hub_rows = hub_response["abilities"].as_array().unwrap();
         assert_eq!(device_rows.len(), 2);
         assert_eq!(hub_rows.len(), 2);
-        assert!(device_rows
-            .iter()
-            .all(|row| row["owner_ura"] == device_ura && row["owner_ura"] != "self"));
+        let runtime_introspection_ura = crate::core::ura::device_agent_ura(
+            "both-view",
+            "dev-1",
+            crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+        );
+        assert!(
+            device_rows
+                .iter()
+                .all(|row| row["owner_ura"] == runtime_introspection_ura
+                    && row["owner_ura"] != "self")
+        );
         assert!(hub_rows
             .iter()
             .all(|row| row["owner_ura"] == hub_ura && row["owner_ura"] != "self"));
@@ -999,7 +1038,8 @@ mod tests {
             .expect("Hub list descriptor");
         assert_eq!(
             device_list["ability_ura"],
-            crate::core::ura::device_ability_ura("both-view", "dev-1", ABILITY_LIST_ABILITIES)
+            crate::core::ura::owner_ability_ura(&runtime_introspection_ura, ABILITY_LIST_ABILITIES)
+                .expect("runtime-introspection list ability URA")
         );
         assert_eq!(
             hub_list["ability_ura"],
@@ -1009,7 +1049,8 @@ mod tests {
 
         let device_describe = invoke_describe_targeted(&registry, &device_ura).unwrap();
         let hub_describe = invoke_describe_targeted(&registry, &hub_ura).unwrap();
-        assert_eq!(device_describe["ura"], device_ura);
+        assert_eq!(device_describe["ura"], runtime_introspection_ura);
+        assert_eq!(device_describe["subject_ura"], device_ura);
         assert_eq!(hub_describe["ura"], hub_ura);
         assert_eq!(
             device_describe["abilities_summary"]["total"], 2,
@@ -1057,7 +1098,7 @@ mod tests {
     }
 
     #[test]
-    fn list_abilities_stamps_health_metadata_from_monitor_store() {
+    fn list_abilities_projects_health_as_non_governed_row_annotation() {
         use crate::daemon::ability::health::{
             self as ability_health, AbilityHealthRecord, HealthStatus,
         };
@@ -1071,6 +1112,9 @@ mod tests {
         let ability_ura = monitored
             .canonical_ability_ura()
             .expect("canonical ability ura");
+        let descriptor_ref = monitored
+            .descriptor_ref()
+            .expect("canonical descriptor ref before health projection");
         ability_health::seed_for_tests(
             &ability_ura,
             AbilityHealthRecord {
@@ -1097,17 +1141,16 @@ mod tests {
             .iter()
             .find(|a| a["ability_ura"].as_str() == Some(ability_ura.as_str()))
             .expect("seeded ability row present");
+        assert_eq!(seeded["health"]["status"].as_str(), Some("unhealthy"));
+        assert_eq!(seeded["health"]["checked_unix_ms"].as_u64(), Some(1_234));
         assert_eq!(
-            seeded["metadata"]["health_status"].as_str(),
-            Some("unhealthy")
-        );
-        assert_eq!(
-            seeded["metadata"]["health_checked_unix_ms"].as_str(),
-            Some("1234")
-        );
-        assert_eq!(
-            seeded["metadata"]["health_detail"].as_str(),
+            seeded["health"]["detail"].as_str(),
             Some("exit 7: connection refused")
+        );
+        assert_eq!(
+            seeded["descriptor_ref"].as_str(),
+            Some(descriptor_ref.as_str()),
+            "ephemeral health must not mutate governed descriptor identity"
         );
 
         // A descriptor with no record must NOT grow health keys —
@@ -1116,9 +1159,7 @@ mod tests {
             .iter()
             .find(|a| a["name"].as_str() == Some("svc_plain"))
             .expect("plain ability row present");
-        assert!(plain["metadata"]
-            .as_object()
-            .is_none_or(|m| !m.contains_key("health_status")));
+        assert!(plain.get("health").is_none());
     }
 
     #[test]
@@ -1133,7 +1174,7 @@ mod tests {
         let mut reg = metadata_test_catalog();
         super::register(
             &mut reg,
-            vec![OwnerKind::Device],
+            vec![OwnerKind::DeviceProfileProjection],
             || vec![d("observe.health")],
             empty_registry_handle(),
             Arc::clone(&authority_published_abilities),
@@ -1175,7 +1216,7 @@ mod tests {
             "default scope must not leak realm Authority broadcast entries"
         );
 
-        // Realm scope: realm Authority entry must appear, with `source` stamped.
+        // Realm scope: the exact Authority-published descriptor must appear.
         let realm_resp = invoke_list(
             &reg,
             "easynet:///r/test/device/01DEV",
@@ -1187,7 +1228,11 @@ mod tests {
             .iter()
             .find(|a| a["name"] == "test.scope")
             .expect("test.scope must be in realm-scope output");
-        assert_eq!(authority_entry["source"], "authority:broadcast");
+        assert_eq!(authority_entry["source"], "");
+        assert_eq!(realm_resp["authority_catalog_revision"], 99);
+        assert!(realm_resp["catalog_revision"]
+            .as_str()
+            .is_some_and(|revision| revision.starts_with("sha256:")));
         assert!(
             authority_entry["descriptor_ref"]
                 .as_str()
@@ -1298,8 +1343,8 @@ mod tests {
 
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let device_ura = "easynet:///r/alice-realm/device/test-node";
-        let alice_ura = crate::core::ura::device_agent_ura("alice-realm", "test-node", "alice");
-        let bob_ura = crate::core::ura::device_agent_ura("alice-realm", "test-node", "bob");
+        let alice_ura = crate::core::ura::agent_ura("alice-realm", "user-alice", "alice");
+        let bob_ura = crate::core::ura::agent_ura("alice-realm", "user-bob", "bob");
 
         let mut reg = metadata_test_catalog();
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
@@ -1307,8 +1352,11 @@ mod tests {
         // Registration imports the manifest into the governed descriptor;
         // meta.list_abilities reads that committed descriptor directly.
         let mut live_reg = runtime_metadata_test_catalog(
-            AbilityAuthorityContext::for_device_authority_root(device_ura)
-                .expect("fixed Device authority context"),
+            AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+                device_ura,
+                vec![alice_ura.clone(), bob_ura.clone()],
+            )
+            .expect("fixed Device context with hosted Agents"),
         );
         live_reg.register_stream_with_spec(
             "alice.chat",
@@ -1385,17 +1433,13 @@ mod tests {
 
         let chat = abilities
             .iter()
-            .find(|a| a["name"] == "alice.chat" && a["owner_ura"] == alice_ura)
+            .find(|a| a["name"] == "chat" && a["owner_ura"] == alice_ura)
             .unwrap_or_else(|| {
                 panic!("device-sponsored Agent chat must retain its Agent namespace: {abilities:?}")
             });
         let chat_owners: std::collections::BTreeSet<&str> = abilities
             .iter()
-            .filter(|a| {
-                a["name"]
-                    .as_str()
-                    .is_some_and(|name| name.ends_with(".chat"))
-            })
+            .filter(|a| a["name"].as_str().is_some_and(|name| name == "chat"))
             .filter_map(|a| a["owner_ura"].as_str())
             .collect();
         assert!(
@@ -1428,7 +1472,7 @@ mod tests {
 
         let subscribe = abilities
             .iter()
-            .find(|a| a["name"] == "alice.subscribe")
+            .find(|a| a["name"] == "subscribe" && a["owner_ura"] == alice_ura)
             .expect("agent-owned subscribe must surface as the owner-local ability name");
         assert_eq!(
             subscribe["hints"]["streaming_only"],
@@ -1440,7 +1484,7 @@ mod tests {
 
         let mcp_search = abilities
             .iter()
-            .find(|a| a["name"] == "alice.mcp_search")
+            .find(|a| a["name"] == "mcp_search" && a["owner_ura"] == alice_ura)
             .expect("dynamic MCP ability must surface as the owner-local ability name");
         assert_eq!(
             mcp_search["schema_summary"]["input"]["properties"]["query"]["type"],
@@ -1456,9 +1500,9 @@ mod tests {
         let mut live_reg = runtime_metadata_test_catalog(
             AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
                 "easynet:///r/alice-realm/device/test-node",
-                vec![crate::core::ura::device_agent_ura(
+                vec![crate::core::ura::agent_ura(
                     "alice-realm",
-                    "test-node",
+                    "user-alice",
                     "alice",
                 )],
             )
@@ -1496,7 +1540,7 @@ mod tests {
         );
         live_reg.register_rpc_with_owner_and_action(
             "device.unowned.test",
-            OwnerKind::Device,
+            OwnerKind::DeviceProfileProjection,
             crate::daemon::ability::descriptors::AdmissionAction::Invoke,
             Arc::new(|_args| Ok(json!({}))),
         );
@@ -1532,7 +1576,7 @@ mod tests {
 
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         save(&LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
+            host_device_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
             hosted_agents: Vec::new(),
         })
         .expect("seed local-agents.json");
@@ -1556,7 +1600,7 @@ mod tests {
         live_reg
             .hot_register_rpc_with_spec(
                 "device.hot.echo",
-                OwnerKind::Device,
+                OwnerKind::DeviceProfileProjection,
                 manifest,
                 Arc::new(|_args| Ok(json!({}))),
             )
@@ -1600,7 +1644,7 @@ mod tests {
 
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         save(&LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
+            host_device_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
             hosted_agents: Vec::new(),
         })
         .expect("seed local-agents.json");
@@ -1662,7 +1706,7 @@ mod tests {
         seed_test_credentials("test-realm", "dev-1", "alice");
 
         let mut local = LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
+            host_device_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
             hosted_agents: Vec::new(),
         };
         upsert_hosted_agent(
@@ -1751,7 +1795,7 @@ mod tests {
         seed_test_credentials("test-realm", "dev-1", "alice");
 
         let mut local = LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
+            host_device_ura: "easynet:///r/test-realm/device/dev-1".to_string(),
             hosted_agents: Vec::new(),
         };
         upsert_hosted_agent(

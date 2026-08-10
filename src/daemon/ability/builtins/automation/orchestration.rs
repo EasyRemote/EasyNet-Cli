@@ -197,7 +197,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, discuss: Arc<DiscussService>) {
     let runtime = reg.runtime();
     reg.register_rpc_with_envelope_and_owner(
         "mission.discuss_round",
-        OwnerKind::Device,
+        OwnerKind::automation_system(),
         Arc::new(move |envelope, args| {
             let request = DiscussRoundRequest::parse(&args)?;
             let runtime = runtime.as_ref().ok_or_else(|| {

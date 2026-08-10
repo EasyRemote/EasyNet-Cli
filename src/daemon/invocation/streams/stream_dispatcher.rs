@@ -271,6 +271,7 @@ impl StreamDispatcher {
                     &request.metadata,
                     &envelope,
                     HostedAgentDelegationIngress::TrustedLocalSystem,
+                    &selected_route.execution_host_ura,
                     ability,
                 )?;
                 crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
@@ -285,6 +286,7 @@ impl StreamDispatcher {
                     &request.metadata,
                     &envelope,
                     HostedAgentDelegationIngress::ExternalSigned,
+                    &selected_route.execution_host_ura,
                     ability,
                 )?;
                 let signed_descriptor_ref = bound_ability

@@ -592,27 +592,31 @@ fn normalize_daemon_route_owners(
     let mut normalized = std::collections::BTreeSet::new();
     for owner_ura in owner_uras {
         let owner_ura = owner_ura.trim();
-        if owner_ura.is_empty() {
-            return Err(axon_sdk::invocation::AxonError::invalid_argument(
-                "daemon unary route owner URA must not be empty",
-            ));
-        }
-        let parsed = crate::core::ura::parse_ura(owner_ura).map_err(|error| {
-            axon_sdk::invocation::AxonError::invalid_argument(format!(
-                "daemon unary route owner URA is invalid: {error}"
-            ))
-        })?;
-        if !matches!(
-            parsed.kind,
-            crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Authority
-        ) {
-            return Err(axon_sdk::invocation::AxonError::invalid_argument(
-                "daemon unary route owner must be a canonical Device or Authority URA",
-            ));
-        }
-        normalized.insert(owner_ura.to_string());
+        normalized.insert(validate_daemon_route_authority_owner(owner_ura, "unary")?);
     }
     Ok(normalized.into_iter().collect())
+}
+
+fn validate_daemon_route_authority_owner(
+    owner_ura: &str,
+    route_family: &str,
+) -> Result<String, axon_sdk::invocation::AxonError> {
+    if owner_ura.is_empty() {
+        return Err(axon_sdk::invocation::AxonError::invalid_argument(format!(
+            "daemon {route_family} route owner URA must not be empty"
+        )));
+    }
+    let parsed = crate::core::ura::parse_ura(owner_ura).map_err(|error| {
+        axon_sdk::invocation::AxonError::invalid_argument(format!(
+            "daemon {route_family} route owner URA is invalid: {error}"
+        ))
+    })?;
+    if parsed.kind != crate::core::ura::URAKind::Authority {
+        return Err(axon_sdk::invocation::AxonError::invalid_argument(format!(
+            "daemon exact {route_family} routes require the canonical realm Authority owner; Device is only an execution host/custody root"
+        )));
+    }
+    Ok(owner_ura.to_string())
 }
 
 impl DaemonInvocationService {
@@ -822,12 +826,7 @@ impl DaemonInvocationService {
         &self,
         owner_ura: &str,
     ) -> Result<(), axon_sdk::invocation::AxonError> {
-        let owner_ura = owner_ura.trim();
-        if owner_ura.is_empty() {
-            return Err(axon_sdk::invocation::AxonError::invalid_argument(
-                "daemon stream route owner URA must not be empty",
-            ));
-        }
+        let owner_ura = validate_daemon_route_authority_owner(owner_ura.trim(), "stream")?;
         let registration = self
             .daemon_stream_route_registration
             .get_or_init(|| async {
@@ -848,19 +847,23 @@ impl DaemonInvocationService {
                     self.admission_plane.verifier(),
                     runtime_admission,
                 )
-                .register_streams(owner_ura, catalog.as_ref(), streams.daemon_route_provider())
+                .register_streams(
+                    owner_ura.as_str(),
+                    catalog.as_ref(),
+                    streams.daemon_route_provider(),
+                )
                 .await
                 .map_err(|error| error.to_string())?;
-                Ok(owner_ura.to_string())
+                Ok(owner_ura.clone())
             })
             .await;
         match registration {
-            Ok(registered_owner) if registered_owner == owner_ura => Ok(()),
-            Ok(registered_owner) => Err(axon_sdk::invocation::AxonError::invalid_argument(
-                format!(
+            Ok(registered_owner) if registered_owner == &owner_ura => Ok(()),
+            Ok(registered_owner) => {
+                Err(axon_sdk::invocation::AxonError::invalid_argument(format!(
                     "daemon stream routes are registered for `{registered_owner}`, not `{owner_ura}`"
-                ),
-            )),
+                )))
+            }
             Err(error) => Err(axon_sdk::invocation::AxonError::internal(format!(
                 "daemon stream route registration failed: {error}"
             ))),
@@ -873,17 +876,7 @@ impl DaemonInvocationService {
         &self,
         owner_ura: &str,
     ) -> Result<(), axon_sdk::invocation::AxonError> {
-        let owner_ura = owner_ura.trim();
-        let parsed = crate::core::ura::parse_ura(owner_ura).map_err(|error| {
-            axon_sdk::invocation::AxonError::invalid_argument(format!(
-                "daemon bidi route owner URA is invalid: {error}"
-            ))
-        })?;
-        if parsed.kind != crate::core::ura::URAKind::Authority {
-            return Err(axon_sdk::invocation::AxonError::invalid_argument(
-                "daemon exact bidi routes require the canonical realm Authority owner",
-            ));
-        }
+        let owner_ura = validate_daemon_route_authority_owner(owner_ura.trim(), "bidi")?;
         let registration = self
             .daemon_bidi_route_registration
             .get_or_init(|| async {
@@ -904,14 +897,18 @@ impl DaemonInvocationService {
                     self.admission_plane.verifier(),
                     runtime_admission,
                 )
-                .register_bidis(owner_ura, catalog.as_ref(), bidi.daemon_route_provider())
+                .register_bidis(
+                    owner_ura.as_str(),
+                    catalog.as_ref(),
+                    bidi.daemon_route_provider(),
+                )
                 .await
                 .map_err(|error| error.to_string())?;
-                Ok(owner_ura.to_string())
+                Ok(owner_ura.clone())
             })
             .await;
         match registration {
-            Ok(registered_owner) if registered_owner == owner_ura => Ok(()),
+            Ok(registered_owner) if registered_owner == &owner_ura => Ok(()),
             Ok(registered_owner) => {
                 Err(axon_sdk::invocation::AxonError::invalid_argument(format!(
                     "daemon bidi routes are registered for `{registered_owner}`, not `{owner_ura}`"
@@ -943,7 +940,12 @@ impl DaemonInvocationService {
             return Ok(None);
         };
         let Some(registered_owners) = self.daemon_unary_route_registration.get() else {
-            return Ok(Some(route));
+            // Exact daemon routes are an explicitly assembled Authority
+            // surface. A Device runtime deliberately has no such
+            // registration; recognizing the function name alone must not
+            // make it intercept an Authority-owned request that the generic
+            // resolver/session path can route remotely.
+            return Ok(None);
         };
         let registered_owners = registered_owners.as_ref().map_err(|error| {
             Status::failed_precondition(format!("daemon unary route registration failed: {error}"))
@@ -1561,8 +1563,7 @@ impl Invocation for DaemonInvocationService {
             // before Axon LocalRuntime dispatch. The runtime executes the
             // selected route; it is not a resolver fallback.
             None => {
-                let (r, _runtime_started) =
-                    unary.dispatch_local_rpc_selected_route(&inner).await;
+                let (r, _runtime_started) = unary.dispatch_local_rpc_selected_route(&inner).await;
                 r
             }
         };

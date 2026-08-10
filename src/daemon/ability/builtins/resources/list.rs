@@ -56,7 +56,7 @@ pub const ABILITY_META_LIST_RESOURCES: &str =
 pub fn register(reg: &mut AxonAbilityCatalog) {
     reg.register_rpc_with_owner(
         ABILITY_META_LIST_RESOURCES,
-        OwnerKind::Device,
+        OwnerKind::runtime_introspection_system(),
         Arc::new(handler),
     );
 }
@@ -163,6 +163,10 @@ mod tests {
         );
         register(&mut reg);
         assert!(reg.get_rpc(ABILITY_META_LIST_RESOURCES).is_some());
+        assert_eq!(
+            reg.control_plane_owner(ABILITY_META_LIST_RESOURCES),
+            Some(OwnerKind::runtime_introspection_system())
+        );
     }
 
     // ── parse_kinds (pure; no filesystem dependency) ──────────

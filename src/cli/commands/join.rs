@@ -920,7 +920,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
     let join_arguments =
         crate::daemon::federation::client::ability_contract::args_to_bytes(&join_args);
     let join_descriptor_ref =
-        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
             &target.hub_ura,
             crate::daemon::ability::conformance::ABILITY_FEDERATION_JOIN,
             crate::daemon::ability::CallMode::Rpc,
@@ -977,7 +977,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
     )
     .ok_or_else(|| anyhow::anyhow!("derive federation.resolve_key subject URA"))?;
     let descriptor_ref =
-        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
             &target.hub_ura,
             crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
             crate::daemon::ability::CallMode::Rpc,

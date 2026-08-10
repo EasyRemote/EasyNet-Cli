@@ -18,7 +18,7 @@ use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedPrincipalOwner};
 pub(crate) struct HostedAgentPublication {
     caller_device_ura: String,
     agent_ura: String,
-    owner_user_id: String,
+    owner_user_segment: String,
     owner_ura: String,
 }
 
@@ -98,7 +98,7 @@ impl HostedAgentPublication {
                 "agent_ura must identify a user-owned Agent in the caller realm",
             ));
         }
-        let (agent_owner_user_id, _) =
+        let (agent_owner_user_segment, _) =
             agent
                 .agent_ids()
                 .ok_or(HostedAgentPublicationError::InvalidIdentity(
@@ -119,7 +119,7 @@ impl HostedAgentPublication {
         let owner = trust_anchor
             .lookup_principal_owner(caller_device_ura)
             .ok_or(HostedAgentPublicationError::OwnerBindingMissing)?;
-        if owner.owner_user_id != agent_owner_user_id {
+        if owner.owner_user_id != agent_owner_user_segment {
             return Err(HostedAgentPublicationError::OwnerUserMismatch);
         }
         let owner_ura = parse_ura(&owner.owner_ura).map_err(|_| {
@@ -139,7 +139,7 @@ impl HostedAgentPublication {
         Ok(Self {
             caller_device_ura: caller_device_ura.to_string(),
             agent_ura: agent_ura.to_string(),
-            owner_user_id: owner.owner_user_id.clone(),
+            owner_user_segment: owner.owner_user_id.clone(),
             owner_ura: owner.owner_ura.clone(),
         })
     }
@@ -164,8 +164,8 @@ impl HostedAgentPublication {
         )
     }
 
-    pub(crate) fn owner_user_id(&self) -> &str {
-        &self.owner_user_id
+    pub(crate) fn owner_user_segment(&self) -> &str {
+        &self.owner_user_segment
     }
 
     pub(crate) fn caller_device_ura(&self) -> &str {
@@ -182,7 +182,7 @@ impl HostedAgentPublication {
     pub(crate) fn into_owner_binding(self, added_at_unix_ms: u64) -> TrustedPrincipalOwner {
         TrustedPrincipalOwner {
             principal_ura: self.agent_ura,
-            owner_user_id: self.owner_user_id,
+            owner_user_id: self.owner_user_segment,
             owner_ura: self.owner_ura,
             added_at_unix_ms,
         }

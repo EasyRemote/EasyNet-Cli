@@ -924,7 +924,7 @@ mod tests {
             start,
         );
         handle_stream_line(
-            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"{\"ok\":true,\"x-easynet-invocation\":{\"ability\":\"docetl.code_filter\",\"ability_ura\":\"easynet:///r/localhost/ability/device.dev-1.docetl.code_filter\",\"mcp_tool\":\"docetl_code_filter\",\"invocation_ura\":\"easynet:///r/localhost/resource/device.dev-1/invocation/req-1/history\",\"callee_ura\":\"easynet:///r/localhost/device/dev-1\"}}"}]}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"{\"ok\":true,\"x-easynet-invocation\":{\"ability\":\"docetl.code_filter\",\"ability_ura\":\"easynet:///r/localhost/ability/alice.docetl.docetl.code_filter\",\"mcp_tool\":\"docetl_code_filter\",\"invocation_ura\":\"easynet:///r/localhost/resource/device.dev-1/invocation/req-1/history\",\"callee_ura\":\"easynet:///r/localhost/agent/alice.docetl\"}}"}]}]}}"#,
             &final_text,
             &stats,
             start,
@@ -939,7 +939,7 @@ mod tests {
         assert_eq!(call.mcp_tool_name.as_deref(), Some("docetl_code_filter"));
         assert_eq!(
             call.ability_ura.as_deref(),
-            Some("easynet:///r/localhost/ability/device.dev-1.docetl.code_filter")
+            Some("easynet:///r/localhost/ability/alice.docetl.docetl.code_filter")
         );
         assert_eq!(
             call.invocation_ura.as_deref(),
@@ -947,7 +947,7 @@ mod tests {
         );
         assert_eq!(
             call.callee_ura.as_deref(),
-            Some("easynet:///r/localhost/device/dev-1")
+            Some("easynet:///r/localhost/agent/alice.docetl")
         );
     }
 

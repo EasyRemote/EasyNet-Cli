@@ -86,7 +86,7 @@ pub fn register(
     // re-rooted the receipt DAG.
     reg.register_rpc_with_envelope_and_owner(
         ABILITY_SEND_TASK,
-        OwnerKind::Device,
+        OwnerKind::a2a_integration_system(),
         Arc::new(
             move |env: crate::daemon::ability::dispatch::EnvelopeContext, args: Value| {
                 send_task_handler(args, &env, federation_resolver.as_ref())
@@ -244,7 +244,7 @@ fn send_task_handler(
             Err(error) => {
                 return Ok(error_response(&format!(
                     "invalid admitted causal context: {error}"
-                )))
+                )));
             }
         };
         let request = match crate::daemon::invocation::routing::remote_invoke::RemoteChildInvocationIssuer::child_plan(

@@ -245,8 +245,18 @@ mod tests {
 
     const TEST_DEVICE_URA: &str = "easynet:///r/test/device/mcp-client";
 
+    fn test_mcp_agent_ura() -> String {
+        crate::core::ura::agent_ura("test", "test-user", DEFAULT_MCP_AGENT_ID)
+    }
+
     fn metadata_test_catalog() -> AxonAbilityCatalog {
-        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+                TEST_DEVICE_URA,
+                vec![test_mcp_agent_ura()],
+            )
+            .expect("MCP client fixture authority context");
+        AxonAbilityCatalog::new_metadata_only_with_authority_context(authority_context)
     }
 
     fn empty_svc() -> Arc<McpClientService> {

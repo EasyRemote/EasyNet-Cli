@@ -19,7 +19,7 @@ use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsen
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSessionInit {
     pub(in crate::daemon::plugins::remote_desktop) session_id: String,
     pub(in crate::daemon::plugins::remote_desktop) session_token: String,
-    pub(in crate::daemon::plugins::remote_desktop) creator_caller_ura: Option<String>,
+    pub(in crate::daemon::plugins::remote_desktop) creator_caller_ura: String,
     pub(in crate::daemon::plugins::remote_desktop) consent: RemoteDesktopConsentGrant,
     pub(in crate::daemon::plugins::remote_desktop) subject_ura: String,
     pub(in crate::daemon::plugins::remote_desktop) subject_type: ResourceType,
@@ -37,16 +37,16 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSessionInit {
 /// not be mutated by signaling, media, input, or lease operations.
 /// Invariant 2: the bearer token is never exposed through a general accessor;
 /// callers can only compare it or fetch it for the create-session response.
-/// Invariant 3: when a caller URA is present, subsequent control and
-/// data-plane calls must present the same caller; the token alone is not a
-/// reusable authorization object.
+/// Invariant 3: every session has an authenticated creator caller; subsequent
+/// control and data-plane calls must present the same caller. The token alone
+/// is not a reusable authorization object.
 /// Invariant 4: the local-user consent grant is captured once at creation and
 /// cannot be rewritten by signaling or media paths.
 #[derive(Debug, Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSessionProfile {
     session_id: String,
     session_token: String,
-    creator_caller_ura: Option<String>,
+    creator_caller_ura: String,
     consent: RemoteDesktopConsentGrant,
     subject_ura: String,
     subject_type: ResourceType,
@@ -98,10 +98,9 @@ impl RemoteDesktopSessionProfile {
         &self.session_token
     }
 
-    /// Authenticated creator caller captured from the Axon envelope, when
-    /// the invocation path supplied one.
-    pub(in crate::daemon::plugins::remote_desktop) fn creator_caller_ura(&self) -> Option<&str> {
-        self.creator_caller_ura.as_deref()
+    /// Authenticated creator caller captured from the Axon envelope.
+    pub(in crate::daemon::plugins::remote_desktop) fn creator_caller_ura(&self) -> &str {
+        &self.creator_caller_ura
     }
 
     /// Immutable local-user consent grant captured at session creation.

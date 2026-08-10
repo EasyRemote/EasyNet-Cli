@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,7 +18,7 @@ use crate::daemon::invocation::admission::register_device_pubkey::RegisterPubkey
 use crate::daemon::persistence::agent_aggregate::{
     AgentAggregateRepository, AgentHostedAdvertiseEntry,
 };
-use crate::daemon::trust::anchor::TrustedAgentRole;
+use crate::daemon::trust::anchor::TrustAnchorRole;
 
 pub struct SessionPreludeInputs<'a> {
     pub(super) ability_descriptors: &'a [AbilityDescriptor],
@@ -80,14 +81,8 @@ pub(super) async fn run_session_preludes(
     } = request;
     let caller_ura = signer.owner_ura().to_string();
     let ability_descriptors = inputs.ability_descriptors;
-    let owner_descriptors = committed_owner_ability_descriptors(
-        ability_descriptors,
-        &caller_ura,
-        crate::core::ura::parse_ura(&caller_ura)
-            .ok()
-            .and_then(|parsed| parsed.device_id().map(str::to_string))
-            .as_deref(),
-    );
+    let owner_projections =
+        committed_device_native_owner_descriptors(ability_descriptors, &caller_ura);
     let authority_published_abilities = inputs.authority_published_abilities;
 
     run_join_prelude(
@@ -105,7 +100,7 @@ pub(super) async fn run_session_preludes(
         hub_endpoint,
         &caller_ura,
         signer.as_ref(),
-        &owner_descriptors,
+        &owner_projections,
     )
     .await?;
 
@@ -189,50 +184,51 @@ async fn run_owner_projection_prelude(
     hub_endpoint: &str,
     caller_ura: &str,
     signer: &dyn CanonicalSigner,
-    ability_descriptors: &[AbilityDescriptor],
+    owner_projections: &BTreeMap<String, Vec<AbilityDescriptor>>,
 ) -> Result<(), SessionError> {
     phase.transition(
         DeviceSessionPhase::Preluding(PreludeStep::OwnerProjection),
         "join_prelude_done",
     );
-    if ability_descriptors.is_empty() {
+    if owner_projections.is_empty() {
         return Ok(());
     }
 
-    let ability_count = ability_descriptors.len();
+    let ability_count = owner_projections.values().map(Vec::len).sum::<usize>();
+    let owner_count = owner_projections.len();
     crate::op_event!(
         component = session,
         kind = advertise_abilities_prelude_sending,
         ability_count = ability_count,
+        owner_count = owner_count,
     );
-    if let Err(status) = send_advertise_abilities_prelude(
-        client,
-        caller_ura,
-        caller_ura,
-        signer,
-        ability_descriptors,
-    )
-    .await
-    {
-        let code = status.code();
-        let msg = status.message();
-        crate::op_event!(
-            component = session,
-            kind = advertise_abilities_prelude_failed,
-            code = code,
-            error = msg,
-            message = "owner projection publish failed; reconnecting instead of exposing an online owner with empty abilities",
-        );
-        return Err(SessionError::OwnerProjectionFailed {
-            endpoint: hub_endpoint.to_string(),
-            status,
-        });
+    for (owner_ura, descriptors) in owner_projections {
+        if let Err(status) =
+            send_advertise_abilities_prelude(client, owner_ura, caller_ura, signer, descriptors)
+                .await
+        {
+            let code = status.code();
+            let msg = status.message();
+            crate::op_event!(
+                component = session,
+                kind = advertise_abilities_prelude_failed,
+                owner_ura = owner_ura,
+                code = code,
+                error = msg,
+                message = "device-native owner projection publish failed; reconnecting instead of exposing an online host with an incomplete namespace",
+            );
+            return Err(SessionError::OwnerProjectionFailed {
+                endpoint: hub_endpoint.to_string(),
+                status,
+            });
+        }
     }
 
     crate::op_event!(
         component = session,
         kind = advertise_abilities_prelude_ok,
         ability_count = ability_count,
+        owner_count = owner_count,
     );
     Ok(())
 }
@@ -727,7 +723,7 @@ pub(super) async fn signed_prelude_request(
     let descriptor_subject_ura =
         descriptor_prelude_subject_ura(&hub_ura, subject_ura, function_name)?;
     let descriptor_ref =
-        crate::daemon::axon_bridge::descriptor_ref::catalog_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
             &hub_ura,
             function_name,
             crate::daemon::ability::CallMode::Rpc,
@@ -994,7 +990,7 @@ async fn sync_realm_hub_trust_prelude(
 
     for pubkey_b64 in pubkeys {
         let register_args =
-            match RegisterPubkeyRequest::new(hub_ura.as_str(), pubkey_b64, TrustedAgentRole::Hub)
+            match RegisterPubkeyRequest::new(hub_ura.as_str(), pubkey_b64, TrustAnchorRole::Hub)
                 .to_arguments_bytes()
             {
                 Ok(v) => v,
@@ -1150,7 +1146,7 @@ async fn sync_paired_user_trust_prelude(
     let mut last_import_error = None;
     for pubkey_b64 in pubkeys {
         let register_args =
-            match RegisterPubkeyRequest::new(user_ura.as_str(), pubkey_b64, TrustedAgentRole::User)
+            match RegisterPubkeyRequest::new(user_ura.as_str(), pubkey_b64, TrustAnchorRole::User)
                 .to_arguments_bytes()
             {
                 Ok(v) => v,
@@ -1297,7 +1293,7 @@ async fn publish_paired_user_keys_prelude(
     public_keys_b64: &[String],
 ) -> Result<(), UserTrustBootstrapError> {
     for public_key_b64 in public_keys_b64 {
-        let args = RegisterPubkeyRequest::new(user_ura, public_key_b64, TrustedAgentRole::User)
+        let args = RegisterPubkeyRequest::new(user_ura, public_key_b64, TrustAnchorRole::User)
             .to_arguments_bytes()
             .map_err(|err| UserTrustBootstrapError::PublishFailed {
                 user_ura: user_ura.to_string(),
@@ -1380,6 +1376,54 @@ pub(super) fn committed_owner_ability_descriptors(
         .collect()
 }
 
+/// Partition the committed device-native namespace by its real public owner.
+///
+/// DeviceProfileProjection rows remain a same-device migration cursor. Every
+/// executable daemon-native family is published under the device-sponsored
+/// SystemAgent that owns/can receive it; the Device is carried separately as
+/// `host_device_ura`. User-owned hosted Agents are intentionally excluded and
+/// use the identity + ability publication transaction below.
+pub(super) fn committed_device_native_owner_descriptors(
+    descriptors: &[AbilityDescriptor],
+    host_device_ura: &str,
+) -> BTreeMap<String, Vec<AbilityDescriptor>> {
+    let Ok(host) = crate::core::ura::parse_ura(host_device_ura) else {
+        return BTreeMap::new();
+    };
+    if host.kind != crate::core::ura::URAKind::Device {
+        return BTreeMap::new();
+    }
+    let Some(host_device_id) = host.device_id() else {
+        return BTreeMap::new();
+    };
+
+    let mut by_owner = BTreeMap::<String, Vec<AbilityDescriptor>>::new();
+    for descriptor in descriptors {
+        let owner_ura = descriptor.owner_ura.as_str();
+        let is_same_device_profile = owner_ura == host_device_ura;
+        let is_sponsored_system_agent = crate::core::ura::parse_ura(owner_ura)
+            .ok()
+            .filter(|owner| owner.realm == host.realm)
+            .is_some_and(|owner| {
+                owner
+                    .device_agent_ids()
+                    .is_some_and(|(device_id, system_agent_id)| {
+                        device_id == host_device_id
+                            && crate::daemon::ability::catalog::profiles::is_declared_daemon_native_system_agent_id(
+                                system_agent_id,
+                            )
+                    })
+            });
+        if is_same_device_profile || is_sponsored_system_agent {
+            by_owner
+                .entry(owner_ura.to_string())
+                .or_default()
+                .push(descriptor.clone());
+        }
+    }
+    by_owner
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1396,7 +1440,7 @@ mod tests {
     use crate::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
     use crate::daemon::identity::self_identity::TestCanonicalSigner;
     use crate::daemon::persistence::config::{save_credentials, state_dir, Credentials};
-    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole, TrustedAgent};
     use crate::daemon::trust::cell::SharedTrustAnchor;
     use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
     use base64::Engine as _;
@@ -1525,7 +1569,7 @@ mod tests {
                 RealmTrustAnchor::from_entries(vec![TrustedAgent {
                     agent_ura: user_ura.to_string(),
                     public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-                    role: TrustedAgentRole::User,
+                    role: TrustAnchorRole::User,
                     added_at_unix_ms: 1_700_000_000_000,
                     origin_realm: None,
                     hub_endpoint: None,
@@ -1698,7 +1742,7 @@ mod tests {
                 .verifying_key()
                 .to_bytes(),
         );
-        let args = RegisterPubkeyRequest::new(user_ura, public_key_b64, TrustedAgentRole::User)
+        let args = RegisterPubkeyRequest::new(user_ura, public_key_b64, TrustAnchorRole::User)
             .to_arguments_bytes()
             .expect("identity.register_pubkey user args");
 

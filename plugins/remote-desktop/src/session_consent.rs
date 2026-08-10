@@ -49,15 +49,15 @@ impl RemoteDesktopConsentReceipt {
 /// Consent grant bound to one remote desktop session.
 ///
 /// What this is NOT: a replacement for the consent broker. It is the session
-/// row's immutable projection of the approval actor and optional Axon receipt
+/// row's immutable projection of the approval actor and required Axon receipt
 /// that created the session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopConsentGrant {
     policy: &'static str,
-    approval_actor_ura: Option<String>,
-    consent_id: Option<String>,
-    subject_ura: Option<String>,
-    approval_receipt: Option<RemoteDesktopConsentReceipt>,
+    approval_actor_ura: String,
+    consent_id: String,
+    subject_ura: String,
+    approval_receipt: RemoteDesktopConsentReceipt,
 }
 
 impl RemoteDesktopConsentGrant {
@@ -81,10 +81,10 @@ impl RemoteDesktopConsentGrant {
         {
             return Ok(Self {
                 policy: POLICY_LOCAL_USER_CONSENT,
-                approval_actor_ura: Some(authorization.caller_ura),
-                consent_id: Some(authorization.consent_id),
-                subject_ura: Some(authorization.subject_ura),
-                approval_receipt: Some(approval_receipt),
+                approval_actor_ura: authorization.caller_ura,
+                consent_id: authorization.consent_id,
+                subject_ura: authorization.subject_ura,
+                approval_receipt,
             });
         }
         Err(RemoteDesktopError::ConsentReceiptRequired {
@@ -99,21 +99,22 @@ impl RemoteDesktopConsentGrant {
     ) -> Self {
         Self {
             policy: POLICY_LOCAL_USER_CONSENT,
-            approval_actor_ura: Some(env.caller().to_string()),
-            consent_id: Some("test-consent".to_string()),
-            subject_ura: Some(env.subject().to_string()),
+            approval_actor_ura: env.caller().to_string(),
+            consent_id: "test-consent".to_string(),
+            subject_ura: env.subject().to_string(),
             approval_receipt: first_receipt_from_causal_context(
                 "test.ability",
                 env.causal_context(),
             )
-            .expect("test causal context must be valid"),
+            .expect("test causal context must be valid")
+            .expect("test session consent requires a receipt"),
         }
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn approval_receipt(
         &self,
-    ) -> Option<&RemoteDesktopConsentReceipt> {
-        self.approval_receipt.as_ref()
+    ) -> &RemoteDesktopConsentReceipt {
+        &self.approval_receipt
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
@@ -122,7 +123,7 @@ impl RemoteDesktopConsentGrant {
             "approval_actor_ura": self.approval_actor_ura,
             "consent_id": self.consent_id,
             "subject_ura": self.subject_ura,
-            "approval_receipt": self.approval_receipt.as_ref().map(RemoteDesktopConsentReceipt::to_value),
+            "approval_receipt": self.approval_receipt.to_value(),
         })
     }
 }
@@ -437,6 +438,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(grant.policy, POLICY_LOCAL_USER_CONSENT);
-        assert!(grant.approval_receipt().is_some());
+        assert_eq!(
+            grant.approval_receipt().receipt_ura(),
+            "easynet:///r/acme/resource/user-alice.invocations/1"
+        );
     }
 }

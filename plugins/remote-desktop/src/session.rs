@@ -88,7 +88,7 @@ impl RemoteDesktopSession {
     }
 
     /// Authenticated creator caller captured when the session was created.
-    pub(in crate::daemon::plugins::remote_desktop) fn creator_caller_ura(&self) -> Option<&str> {
+    pub(in crate::daemon::plugins::remote_desktop) fn creator_caller_ura(&self) -> &str {
         self.profile.creator_caller_ura()
     }
 
@@ -466,6 +466,7 @@ impl RemoteDesktopSession {
     }
 
     /// Store latest media stats and emit a bounded event-log row.
+    #[cfg(target_os = "macos")]
     pub(in crate::daemon::plugins::remote_desktop) fn record_media_stats(
         &mut self,
         epoch: TransportEpoch,

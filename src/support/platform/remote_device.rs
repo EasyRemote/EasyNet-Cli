@@ -20,19 +20,47 @@ use anyhow::{anyhow, Context};
 use crate::core::identity::RuntimeIdentityUra;
 use crate::core::ura::URAKind;
 
-/// Resolve the explicit signing identity for a CLI-originated remote request.
+/// Paired identities available to a CLI-originated accountable mutation.
 ///
-/// Remote dispatch has no synthetic caller. An unpaired or incomplete CLI
-/// identity is rejected before request construction because no canonical signer
-/// can own that invocation tuple.
-pub(crate) fn require_caller_device_ura_from_credentials() -> anyhow::Result<String> {
-    let credentials = crate::daemon::persistence::config::load_credentials().map_err(|error| {
-        anyhow!("remote invocation requires paired device credentials: {error}")
-    })?;
-    caller_device_ura(&credentials)
+/// The User is the signed caller/accountability root. The Device is only the
+/// local execution host used for locality decisions. Keeping both identities
+/// in one typed value prevents command-specific paths from silently replacing
+/// the User caller with Device custody.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PairedInvocationIdentity {
+    caller_user_ura: String,
+    local_device_ura: String,
 }
 
-pub(crate) fn caller_device_ura(
+impl PairedInvocationIdentity {
+    pub(crate) fn load(surface: &str) -> anyhow::Result<Self> {
+        let credentials = crate::daemon::persistence::config::load_credentials()
+            .with_context(|| format!("load paired credentials for {surface}"))?;
+        let caller_user_ura = match credentials.runtime_user_binding()? {
+            crate::daemon::persistence::config::RuntimeUserBinding::Bound { user_ura } => user_ura,
+            crate::daemon::persistence::config::RuntimeUserBinding::Unbound { reason } => {
+                anyhow::bail!(
+                    "{surface} requires an accountable User Principal caller; runtime user binding is {reason}"
+                )
+            }
+        };
+        let local_device_ura = caller_device_ura(&credentials)?;
+        Ok(Self {
+            caller_user_ura,
+            local_device_ura,
+        })
+    }
+
+    pub(crate) fn caller_user_ura(&self) -> &str {
+        &self.caller_user_ura
+    }
+
+    pub(crate) fn local_device_ura(&self) -> &str {
+        &self.local_device_ura
+    }
+}
+
+fn caller_device_ura(
     credentials: &crate::daemon::persistence::config::Credentials,
 ) -> anyhow::Result<String> {
     let realm = credentials.realm.trim();
@@ -90,7 +118,9 @@ pub(crate) fn resolve_cli_device_target_ura(
             .with_context(|| format!("resolve local {surface} target Device URA"));
     }
     resolve_target_device_ura(target).map_err(|error| {
-        anyhow!("{surface} target must be a canonical Device URA; failed to resolve {target:?}: {error}")
+        anyhow!(
+            "{surface} target must be a canonical Device URA; failed to resolve {target:?}: {error}"
+        )
     })
 }
 

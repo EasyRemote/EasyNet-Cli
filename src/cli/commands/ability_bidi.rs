@@ -113,10 +113,9 @@ pub fn run(args: BidiArgs) -> anyhow::Result<()> {
     let frames = match node_ura.as_deref() {
         #[cfg(feature = "axon-pb")]
         Some(remote_node) => {
-            let credentials = crate::daemon::persistence::config::load_credentials()
-                .context("remote ability bidi requires paired device credentials")?;
-            let caller_ura =
-                crate::support::platform::remote_device::caller_device_ura(&credentials)?;
+            let identity = crate::support::platform::remote_device::PairedInvocationIdentity::load(
+                "remote ability bidi",
+            )?;
             let remote_target = ability_ref
                 .remote_target_for_mode(remote_node, crate::daemon::ability::CallMode::Bidi)?;
             let surface = "remote ability bidi with --node";
@@ -130,7 +129,7 @@ pub fn run(args: BidiArgs) -> anyhow::Result<()> {
             let request =
                 crate::daemon::invocation::routing::remote_invoke::RemoteInvocationTuplePlan::public_explicit(
                     &remote_target,
-                    caller_ura,
+                    identity.caller_user_ura().to_string(),
                     subject,
                     invocation_nonce,
                     causal_context,
@@ -253,7 +252,9 @@ mod tests {
     #[test]
     fn zero_max_frames_is_rejected_before_ipc() {
         let err = run(BidiArgs {
-            ability_ura: "easynet:///r/acme/ability/device.dev.remote_desktop.attach".to_string(),
+            ability_ura:
+                "easynet:///r/acme/ability/system-agent.dev.plugin-management.remote_desktop.attach"
+                    .to_string(),
             node: None,
             args: None,
             input_frames: Vec::new(),

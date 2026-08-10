@@ -110,10 +110,9 @@ pub fn run(args: StreamArgs) -> anyhow::Result<()> {
     let frames = match node_ura.as_deref() {
         #[cfg(feature = "axon-pb")]
         Some(remote_node) => {
-            let credentials = crate::daemon::persistence::config::load_credentials()
-                .context("remote ability stream requires paired device credentials")?;
-            let caller_ura =
-                crate::support::platform::remote_device::caller_device_ura(&credentials)?;
+            let identity = crate::support::platform::remote_device::PairedInvocationIdentity::load(
+                "remote ability stream",
+            )?;
             let remote_target = ability_ref
                 .remote_target_for_mode(remote_node, crate::daemon::ability::CallMode::Stream)?;
             let surface = "remote ability stream with --node";
@@ -127,7 +126,7 @@ pub fn run(args: StreamArgs) -> anyhow::Result<()> {
             let request =
                 crate::daemon::invocation::routing::remote_invoke::RemoteInvocationTuplePlan::public_explicit(
                     &remote_target,
-                    caller_ura,
+                    identity.caller_user_ura().to_string(),
                     subject,
                     invocation_nonce,
                     causal_context,
@@ -252,7 +251,8 @@ mod tests {
     #[test]
     fn zero_max_frames_is_rejected_before_ipc() {
         let err = run(StreamArgs {
-            ability_ura: "easynet:///r/acme/ability/device.local.test.stream".to_string(),
+            ability_ura: "easynet:///r/acme/ability/system-agent.local.locomotion.test.stream"
+                .to_string(),
             node: None,
             args: None,
             timeout: 60,

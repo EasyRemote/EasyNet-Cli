@@ -18,6 +18,7 @@ pub(crate) mod access_control_routes_gen;
 pub mod authority;
 pub mod builtins;
 pub mod catalog;
+pub(crate) mod catalog_row;
 pub mod conformance;
 mod control_plane;
 mod control_plane_error;
@@ -29,9 +30,11 @@ pub mod impl_bindings;
 /// persistence DTO, not the governed interface exposed to callers.
 pub mod manifest;
 pub mod names;
+pub(crate) mod owner_projection;
 pub(crate) mod principal_routes_gen;
 pub(crate) mod receipt_routes_gen;
 pub(crate) mod runtime_admin_routes_gen;
+pub(crate) mod runtime_governance_routes_gen;
 pub mod wire;
 
 pub(crate) use authority::public_route_ability_from_descriptor_ref;
@@ -41,6 +44,9 @@ pub use authority::{
     HostedAgentDelegationContext, HostedAgentDelegationEnvelopeBinding,
     HostedAgentDelegationRequest, HOSTED_AGENT_DELEGATION_METADATA_KEY,
     HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
+};
+pub(crate) use catalog_row::{
+    insert_catalog_descriptor, AbilityCatalogQuery, AbilityCatalogRow, CatalogDescriptorKey,
 };
 pub use control_plane::{
     AbilityControlPlaneAuthorityModeLookupError, AbilityControlPlaneLookupError,

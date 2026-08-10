@@ -101,7 +101,7 @@ use crate::daemon::invocation::dispatch::remote_failure::{
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, DelegatedInvokeRoute, SelectedInvokeRoute,
 };
-use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole, TrustedPrincipalOwner};
+use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole, TrustedPrincipalOwner};
 
 /// Fail-closed ownership predicate for user-scoped directory projections.
 ///
@@ -110,7 +110,7 @@ use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole, TrustedPr
 /// principal-to-user fact, so user-scoped discovery must satisfy both immutable
 /// owner fields before merging an online principal into the response.
 struct PrincipalOwnerFilter {
-    owner_user_id: String,
+    owner_user_segment: String,
     owner_ura: String,
     trust_anchor: Arc<RealmTrustAnchor>,
 }
@@ -139,7 +139,7 @@ impl FederationDiscoverReadScope {
                 )
             })?;
 
-        let Some(owner_user_id) = request.local_user_id.as_deref() else {
+        let Some(owner_user_segment) = request.local_user_id.as_deref() else {
             if Some(caller_ura) != local_daemon_ura {
                 return Err(Status::permission_denied(
                     "federation.discover unfiltered operator/audit scope requires the local daemon principal",
@@ -163,16 +163,16 @@ impl FederationDiscoverReadScope {
         })?;
         if caller.kind != crate::core::ura::URAKind::User
             || caller.realm != realm
-            || caller.user_id() != Some(owner_user_id)
+            || caller.user_id() != Some(owner_user_segment)
         {
             return Err(Status::permission_denied(format!(
-                "federation.discover user scope does not admit caller `{caller_ura}` for local_user_id `{owner_user_id}`"
+                "federation.discover user scope does not admit caller `{caller_ura}` for local_user_id `{owner_user_segment}`"
             )));
         }
 
         Ok(Self::User(PrincipalOwnerFilter::new(
             realm,
-            owner_user_id,
+            owner_user_segment,
             trust_anchor,
         )))
     }
@@ -186,10 +186,10 @@ impl FederationDiscoverReadScope {
 }
 
 impl PrincipalOwnerFilter {
-    fn new(realm: &str, owner_user_id: &str, trust_anchor: Arc<RealmTrustAnchor>) -> Self {
+    fn new(realm: &str, owner_user_segment: &str, trust_anchor: Arc<RealmTrustAnchor>) -> Self {
         Self {
-            owner_user_id: owner_user_id.to_string(),
-            owner_ura: crate::core::ura::user_ura(realm, owner_user_id),
+            owner_user_segment: owner_user_segment.to_string(),
+            owner_ura: crate::core::ura::user_ura(realm, owner_user_segment),
             trust_anchor,
         }
     }
@@ -198,7 +198,7 @@ impl PrincipalOwnerFilter {
         self.trust_anchor
             .lookup_principal_owner(principal_ura)
             .is_some_and(|owner| {
-                owner.owner_user_id == self.owner_user_id && owner.owner_ura == self.owner_ura
+                owner.owner_user_id == self.owner_user_segment && owner.owner_ura == self.owner_ura
             })
     }
 }
@@ -381,7 +381,7 @@ fn admitted_join_principal_owner(
                 "federation.join: principal_enrollment.principal_ura is not canonical: {err}"
             ))
         })?;
-    let Some(owner_user_id) = parsed_principal.user_id().map(str::to_string) else {
+    let Some(owner_user_segment) = parsed_principal.user_id().map(str::to_string) else {
         return Err(Status::invalid_argument(
             "federation.join: principal_enrollment.principal_ura missing user id",
         ));
@@ -398,7 +398,7 @@ fn admitted_join_principal_owner(
     )?;
     Ok(Some(TrustedPrincipalOwner {
         principal_ura: request.membership_ura.trim().to_string(),
-        owner_user_id,
+        owner_user_id: owner_user_segment,
         owner_ura: principal_identity.into_string(),
         added_at_unix_ms: crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
     }))
@@ -629,7 +629,7 @@ impl UnaryDispatcher {
             .register_pubkey_with_owner(
                 request.membership_ura.clone(),
                 public_key_b64,
-                TrustedAgentRole::Device,
+                TrustAnchorRole::Device,
                 owner,
             )?;
         let response = federation_wrappers::handle_join(&request);
@@ -967,6 +967,7 @@ impl UnaryDispatcher {
                     &request.metadata,
                     &envelope,
                     HostedAgentDelegationIngress::TrustedLocalSystem,
+                    &selected_route.execution_host_ura,
                     ability,
                 ) {
                     Ok(metadata) => metadata,
@@ -995,6 +996,7 @@ impl UnaryDispatcher {
                     &request.metadata,
                     &envelope,
                     HostedAgentDelegationIngress::BootstrapCandidate,
+                    &selected_route.execution_host_ura,
                     ability,
                 ) {
                     Ok(metadata) => metadata,
@@ -1034,6 +1036,7 @@ impl UnaryDispatcher {
                     &request.metadata,
                     &envelope,
                     HostedAgentDelegationIngress::ExternalSigned,
+                    &selected_route.execution_host_ura,
                     ability,
                 ) {
                     Ok(metadata) => metadata,
@@ -1445,7 +1448,7 @@ impl UnaryDispatcher {
         let is_hub_role = trust_anchor.lookup(caller_ura).is_some_and(|entry| {
             matches!(
                 entry.role,
-                crate::daemon::trust::anchor::TrustedAgentRole::Hub
+                crate::daemon::trust::anchor::TrustAnchorRole::Hub
             )
         });
         let is_local_self = self
@@ -1485,7 +1488,7 @@ impl UnaryDispatcher {
         let is_backend_role = trusted_entry.is_some_and(|entry| {
             matches!(
                 entry.role,
-                crate::daemon::trust::anchor::TrustedAgentRole::Backend
+                crate::daemon::trust::anchor::TrustAnchorRole::Backend
             )
         });
         let is_local_hub_identity = self
@@ -1497,8 +1500,8 @@ impl UnaryDispatcher {
             && trusted_entry.is_some_and(|entry| {
                 matches!(
                     entry.role,
-                    crate::daemon::trust::anchor::TrustedAgentRole::Backend
-                        | crate::daemon::trust::anchor::TrustedAgentRole::Hub
+                    crate::daemon::trust::anchor::TrustAnchorRole::Backend
+                        | crate::daemon::trust::anchor::TrustAnchorRole::Hub
                 )
             });
         let is_local_self = self
@@ -1832,7 +1835,8 @@ impl UnaryDispatcher {
         // Self-targeted invocations belong to the local-runtime arms; refuse
         // loudly here rather than treating local runtime presence as a remote
         // dispatch channel.
-        self.reject_self_presence_host(selected_route, label)?;
+        self.reject_self_presence_host(selected_route, label)
+            .await?;
         let pending = self.sessions.pending.as_ref().ok_or_else(|| {
             Status::failed_precondition(format!(
                 "{label}: daemon was constructed without a PendingDispatchMap; call \
@@ -1917,15 +1921,19 @@ impl UnaryDispatcher {
         Ok((call_id, result, carrier_version))
     }
 
-    fn reject_self_presence_host(
+    async fn reject_self_presence_host(
         &self,
         selected_route: &SelectedInvokeRoute,
         label: &str,
     ) -> Result<(), Status> {
         if self
-            .admission
-            .daemon_ura()
-            .is_some_and(|self_ura| self_ura == selected_route.execution_host_ura)
+            .gate
+            .matches_self_target_ura(&selected_route.execution_host_ura)
+            .await
+            || self
+                .directory
+                .presence
+                .is_resolve_only(&selected_route.execution_host_ura)
         {
             crate::op_event!(
                 component = daemon_invocation,
@@ -2080,6 +2088,8 @@ impl UnaryDispatcher {
         )?;
         let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
         let receipt_resolver = self.admission.receipt_key_resolver();
+        self.reject_self_presence_host(selected_route, "Invoke")
+            .await?;
         ensure_forwarded_receipt_signer_key(
             receipt_resolver.as_ref(),
             self.sessions.device_trust_sync.as_ref(),
@@ -2087,7 +2097,6 @@ impl UnaryDispatcher {
             "Invoke",
         )
         .await?;
-        self.reject_self_presence_host(selected_route, "Invoke")?;
         let (_call_id, dispatch_result, carrier_version) = self
             .dispatch_frame_to_presence(selected_route, "Invoke", |call_id| {
                 Ok(build_canonical_dispatch_frame(

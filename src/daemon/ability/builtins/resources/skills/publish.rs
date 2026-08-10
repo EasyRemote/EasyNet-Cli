@@ -118,28 +118,21 @@ impl SkillPublishProvenance {
 }
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner(
-        "skill.publish",
-        OwnerKind::Device,
-        Arc::new(publish_handler),
-    );
+    let owner = OwnerKind::skill_management_system();
+    reg.register_rpc_with_owner("skill.publish", owner.clone(), Arc::new(publish_handler));
     reg.register_rpc_with_owner(
         "skill.unpublish",
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(unpublish_handler),
     );
-    reg.register_rpc_with_owner("skill.list", OwnerKind::Device, Arc::new(list::handle));
-    reg.register_rpc_with_owner("skill.tree", OwnerKind::Device, Arc::new(tree_handler));
+    reg.register_rpc_with_owner("skill.list", owner.clone(), Arc::new(list::handle));
+    reg.register_rpc_with_owner("skill.tree", owner.clone(), Arc::new(tree_handler));
     reg.register_rpc_with_owner(
         "skill.read_file",
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(read_file_handler),
     );
-    reg.register_rpc_with_owner(
-        "skill.write_file",
-        OwnerKind::Device,
-        Arc::new(write_file_handler),
-    );
+    reg.register_rpc_with_owner("skill.write_file", owner, Arc::new(write_file_handler));
 }
 
 /// `skill.publish` — materialise a curator-authored skill.
@@ -1009,16 +1002,16 @@ mod tests {
     use crate::core::agent::spec::{AgentSpec, RuntimeKind};
     use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
     use crate::daemon::persistence::agent_registry as agents;
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
+    use crate::daemon::persistence::agent_registry::AgentEntry;
 
     fn materialise_agent(tag: &str, _guard: &HomeGuard) -> String {
-        materialise_agent_with_runtime(tag, RuntimeKind::ClaudeCode, AgentType::ClaudeCode)
+        materialise_agent_with_runtime(tag, RuntimeKind::ClaudeCode, RuntimeKind::ClaudeCode)
     }
 
     fn materialise_agent_with_runtime(
         tag: &str,
         runtime: RuntimeKind,
-        agent_type: AgentType,
+        agent_type: RuntimeKind,
     ) -> String {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
@@ -1049,7 +1042,7 @@ mod tests {
         let mut local = crate::daemon::persistence::local_agents::load().unwrap_or_else(|_| {
             crate::daemon::persistence::local_agents::LocalAgentsFile::default()
         });
-        local.host_device_agent_ura = "easynet:///r/localhost/device/dev-1".to_string();
+        local.host_device_ura = "easynet:///r/localhost/device/dev-1".to_string();
         crate::daemon::persistence::local_agents::upsert_hosted_agent(
             &mut local, "llm", name, &agent_ura,
         );
@@ -1118,7 +1111,7 @@ mod tests {
     fn publish_writes_codex_skill_to_runtime_project_dir() {
         let _g = HomeGuard::new();
         let name =
-            materialise_agent_with_runtime("codex-writes", RuntimeKind::Codex, AgentType::Codex);
+            materialise_agent_with_runtime("codex-writes", RuntimeKind::Codex, RuntimeKind::Codex);
         let res = publish_handler(json!({
             "owner_agent_id": name,
             "skill_name": "codex-visible",

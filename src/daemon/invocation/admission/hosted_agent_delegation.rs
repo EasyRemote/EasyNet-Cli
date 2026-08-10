@@ -71,6 +71,7 @@ impl HostedAgentDelegationIssuer {
         metadata: &HashMap<String, String>,
         envelope: &Envelope,
         ingress: HostedAgentDelegationIngress,
+        host_device_ura: &str,
         route_ability: &str,
     ) -> Result<HashMap<String, String>, Status> {
         let Some(raw_request) = metadata
@@ -138,6 +139,7 @@ impl HostedAgentDelegationIssuer {
         let binding = HostedAgentDelegationEnvelopeBinding::new(
             caller_ura,
             callee_ura,
+            host_device_ura,
             subject_ura,
             hex::encode(envelope.invocation_nonce.as_slice()),
             route_ability,
@@ -174,10 +176,10 @@ mod tests {
     use crate::daemon::ability::HostedAgentDelegationContext;
     use crate::daemon::invocation::{InvocationDerivationPolicy, ProtoEnvelope};
 
-    fn local_system_envelope() -> Envelope {
+    fn local_system_envelope_for_target(callee_ura: &str) -> Envelope {
         ProtoEnvelope::from_target(
             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
-            "easynet:///r/default/device/local",
+            callee_ura,
             "easynet:///r/default/device/local",
             InvocationDerivationPolicy::Explicit {
                 invocation_nonce: [0x44; 16],
@@ -187,6 +189,14 @@ mod tests {
         .unwrap()
         .into_inner("meta.acquire", b"")
         .unwrap()
+    }
+
+    fn local_system_envelope() -> Envelope {
+        local_system_envelope_for_target(&crate::core::ura::device_agent_ura(
+            "default",
+            "local",
+            "ability-management",
+        ))
     }
 
     #[test]
@@ -206,6 +216,7 @@ mod tests {
             &metadata,
             &envelope,
             HostedAgentDelegationIngress::TrustedLocalSystem,
+            "easynet:///r/default/device/local",
             "meta.acquire",
         )
         .unwrap();
@@ -216,6 +227,7 @@ mod tests {
             .expect("signed delegation metadata");
         let binding = HostedAgentDelegationEnvelopeBinding::new(
             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+            crate::core::ura::device_agent_ura("default", "local", "ability-management"),
             "easynet:///r/default/device/local",
             "easynet:///r/default/device/local",
             hex::encode([0x44; 16]),
@@ -230,6 +242,62 @@ mod tests {
             ),
         )
         .expect("daemon-issued token verifies with daemon local-system key");
+    }
+
+    #[test]
+    fn materialize_request_metadata_binds_system_agent_callee_to_host_device() {
+        let request = HostedAgentDelegationRequest::new(crate::core::ura::agent_ura(
+            "default", "u", "learner",
+        ))
+        .unwrap();
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY.to_string(),
+            request.metadata_value().unwrap(),
+        );
+        let wire_callee =
+            crate::core::ura::device_agent_ura("default", "local", "ability-management");
+        let host_device_ura = crate::core::ura::device_ura("default", "local");
+        let envelope = local_system_envelope_for_target(&wire_callee);
+
+        let materialized = HostedAgentDelegationIssuer::materialize_request_metadata(
+            &metadata,
+            &envelope,
+            HostedAgentDelegationIngress::TrustedLocalSystem,
+            host_device_ura.as_str(),
+            "meta.acquire",
+        )
+        .unwrap();
+
+        let raw = materialized
+            .get(HOSTED_AGENT_DELEGATION_METADATA_KEY)
+            .expect("signed delegation metadata");
+        let binding = HostedAgentDelegationEnvelopeBinding::new(
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+            wire_callee.as_str(),
+            host_device_ura.as_str(),
+            "easynet:///r/default/device/local",
+            hex::encode([0x44; 16]),
+            "meta.acquire",
+        )
+        .unwrap();
+        let context = HostedAgentDelegationContext::from_signed_metadata(
+            raw,
+            &binding,
+            crate::daemon::identity::local_invocation::system_verifying_key().expect(
+                "test daemon-local system identity must resolve through configured key service",
+            ),
+        )
+        .expect("daemon-issued token verifies with separate wire callee and host device");
+
+        let authority = context
+            .authorize(
+                request.agent_ura(),
+                "hosted_by:easynet:///r/default/device/local",
+                "meta.acquire",
+            )
+            .unwrap();
+        assert_eq!(authority.host_device_ura(), host_device_ura);
     }
 
     #[test]
@@ -248,6 +316,7 @@ mod tests {
             &metadata,
             &envelope,
             HostedAgentDelegationIngress::ExternalSigned,
+            "easynet:///r/default/device/local",
             "meta.acquire",
         )
         .unwrap_err();
@@ -271,6 +340,7 @@ mod tests {
             &metadata,
             &envelope,
             HostedAgentDelegationIngress::BootstrapCandidate,
+            "easynet:///r/default/device/local",
             "meta.acquire",
         )
         .unwrap_err();

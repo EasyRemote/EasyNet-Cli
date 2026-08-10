@@ -378,10 +378,9 @@ fn execute_with_dispatcher_for_trace_with_timeout(
         traces_truncated,
     };
 
-    // Convert captured results to readable strings for the report.
-    let outputs: HashMap<String, String> = captured
+    let outputs: HashMap<String, Value> = captured
         .into_iter()
-        .map(|(k, v)| (k, String::from_utf8_lossy(&v.value).to_string()))
+        .map(|(key, result)| (key, decode_emitted_value(&result.value)))
         .collect();
 
     Ok(ExecutionReport {

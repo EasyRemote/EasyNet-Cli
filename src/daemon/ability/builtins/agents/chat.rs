@@ -2254,16 +2254,37 @@ mod tests {
     //! agent directories and would otherwise spawn subprocesses.
 
     use super::*;
-    use crate::daemon::persistence::agent_registry::{AgentRegistry, AgentType};
+    use crate::core::agent::spec::RuntimeKind;
+    use crate::daemon::persistence::agent_registry::AgentRegistry;
 
     fn entry() -> AgentEntry {
-        AgentEntry::new(AgentType::ClaudeCode, None)
+        AgentEntry::new(RuntimeKind::ClaudeCode, None)
+    }
+
+    fn materialized_entry(name: &str) -> AgentEntry {
+        let root = crate::daemon::persistence::config::agents_root().join(name);
+        std::fs::create_dir_all(root.join("abilities")).expect("agent fixture root");
+        let spec = crate::core::agent::spec::AgentSpec::new(name, RuntimeKind::ClaudeCode);
+        std::fs::write(
+            root.join("agent.toml"),
+            spec.to_toml_string().expect("canonical agent fixture spec"),
+        )
+        .expect("write canonical agent fixture spec");
+        let mut entry = entry();
+        entry.root_path = Some(root);
+        entry
     }
 
     fn agent_chat_test_catalog() -> AxonAbilityCatalog {
-        AxonAbilityCatalog::new_test_metadata_for_device_authority(
+        let authority = crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
             "easynet:///r/test/device/agent-chat",
+            [
+                crate::core::ura::agent_ura("test", "local", "alice"),
+                crate::core::ura::agent_ura("test", "local", "bob"),
+            ],
         )
+        .expect("chat fixture hosted Agent authority");
+        AxonAbilityCatalog::new_metadata_only_with_authority_context(authority)
     }
 
     #[test]
@@ -2273,8 +2294,12 @@ mod tests {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut reg = agent_chat_test_catalog();
         let mut agents = AgentRegistry::default();
-        agents.agents.insert("alice".into(), entry());
-        agents.agents.insert("bob".into(), entry());
+        agents
+            .agents
+            .insert("alice".into(), materialized_entry("alice"));
+        agents
+            .agents
+            .insert("bob".into(), materialized_entry("bob"));
         register(
             &mut reg,
             &agents,
@@ -2283,6 +2308,11 @@ mod tests {
         );
         assert!(reg.get_rpc("alice.chat").is_some());
         assert!(reg.get_rpc("bob.chat").is_some());
+        let alice_chat = reg
+            .control_plane_record_for_mode("alice.chat", crate::daemon::ability::CallMode::Rpc)
+            .expect("chat descriptor lookup is unambiguous")
+            .expect("chat registration publishes a descriptor");
+        assert_eq!(alice_chat.descriptor().metadata["exposure"], "task");
         // Stream handler registered too — same name, different mode.
         assert!(reg.get_stream("alice.chat").is_some());
         assert!(reg.get_stream("bob.chat").is_some());
@@ -2303,7 +2333,7 @@ mod tests {
         std::fs::create_dir_all(&abilities_dir).expect("abilities dir");
         std::fs::write(
             root.join("agent.toml"),
-            "name = \"alice\"\nruntime = \"claude-code\"\n",
+            "schema_version = \"1\"\nname = \"alice\"\nruntime = \"claude-code\"\n",
         )
         .expect("agent.toml");
         let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
@@ -3669,10 +3699,7 @@ mod tests {
         // Build the handler the same way the registration paths do:
         // boot-time pre-registration and HotAgentRegistrar both call
         // build_agent_ability_handler.
-        let mut entry = AgentEntry::new(
-            crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
-            None,
-        );
+        let mut entry = AgentEntry::new(crate::core::agent::spec::RuntimeKind::ClaudeCode, None);
         // `root_path` is the field that `manifests_for` (and
         // `abilities_for`) read to find the on-disk abilities/
         // directory. Without it the helpers fall back to the

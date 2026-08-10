@@ -1684,16 +1684,16 @@ mod tests {
     fn ability_list_response_accepts_backend_public_contract() {
         let response = serde_json::from_value::<AbilityListResp>(serde_json::json!({
             "items": [{
-                "ura": "easynet:///r/acme/ability/device.dev-1.browser.open_session",
+                "ura": "easynet:///r/acme/ability/system-agent.dev-1.plugin-management.browser.open_session",
                 "name": "browser.open_session",
                 "tool_name": "browser.open_session",
-                "ability_ura": "easynet:///r/acme/ability/device.dev-1.browser.open_session",
+                "ability_ura": "easynet:///r/acme/ability/system-agent.dev-1.plugin-management.browser.open_session",
                 "version": "1.0.0",
                 "category": "browser",
                 "description": "Open a browser session",
                 "state": "available",
                 "install_id": "install-1",
-                "owner_ura": "easynet:///r/acme/device/dev-1"
+                "owner_ura": "easynet:///r/acme/agent/device.dev-1.plugin-management"
             }],
             "resolve_unavailable": []
         }))
@@ -1701,7 +1701,7 @@ mod tests {
 
         assert_eq!(
             response.items[0].owner_ura.as_deref(),
-            Some("easynet:///r/acme/device/dev-1")
+            Some("easynet:///r/acme/agent/device.dev-1.plugin-management")
         );
     }
 
@@ -1710,7 +1710,7 @@ mod tests {
         let response = serde_json::from_value::<AbilityListResp>(serde_json::json!({
             "items": [{
                 "name": "browser.open_session",
-                "ability_ura": "easynet:///r/acme/ability/device.dev-1.browser.open_session",
+                "ability_ura": "easynet:///r/acme/ability/system-agent.dev-1.plugin-management.browser.open_session",
                 "version": "1.0.0",
                 "state": "available",
                 "descriptor_ref": "legacy"

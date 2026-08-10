@@ -313,8 +313,9 @@ fn render_paired_credentials(creds: &config::Credentials) {
     let realm = creds.realm_str();
     let hub_ura = ura::hub_ura(realm);
     let device_ura = ura::device_ura(realm, &creds.node_id);
-    // Per RFC-001 §3.2, hub / user / device are all first-class agents; the user
-    // row must use the immutable product user id, not the display username slug.
+    // Per RFC-001 §3.2, Hub, User, and Device are routable URA identities, not
+    // one Agent class. The User row is a Principal/accountability root and must
+    // use the immutable product user id, not the display username slug.
     let mut rows: Vec<(&str, &str)> = vec![("Hub", hub_ura.as_str())];
     let user_binding = runtime_user_binding_display(creds);
     rows.push(("Current user", user_binding.value()));

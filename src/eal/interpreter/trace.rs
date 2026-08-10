@@ -260,8 +260,12 @@ pub struct ExecutionReport {
     pub steps_failed: usize,
     pub trace: ExecutionTrace,
     /// Captured outputs from steps with `output_binding`.
-    /// Key = binding name, Value = JSON string of the step's result.
-    pub outputs: HashMap<String, String>,
+    ///
+    /// Values cross the interpreter boundary as structured JSON. A child
+    /// result that is not JSON is represented once, at the byte boundary,
+    /// as `Value::String`; downstream Mission consumers must not re-parse
+    /// serialized JSON strings.
+    pub outputs: HashMap<String, Value>,
 }
 
 // ── Internal captured result ──

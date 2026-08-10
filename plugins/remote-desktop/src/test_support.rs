@@ -131,7 +131,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn test_session_init(
     RemoteDesktopSessionInit {
         session_id: session_id.to_string(),
         session_token: "token".to_string(),
-        creator_caller_ura: Some(env.caller().to_string()),
+        creator_caller_ura: env.caller().to_string(),
         consent: RemoteDesktopConsentGrant::from_envelope_for_test(&env),
         subject_ura: subject.to_string(),
         subject_type: ResourceType::Display,

@@ -132,14 +132,15 @@ pub fn register(
     io: Option<crate::daemon::ability::builtins::device_control::terminal::io::PtyIoService>,
 ) {
     use crate::daemon::ability::dispatch::LocalRpcHandler;
+    let owner = OwnerKind::terminal_system();
     let svc_for_create = Arc::clone(&pty);
     let create_h: LocalRpcHandler =
         Arc::new(move |args: Value| create_handler(&svc_for_create, args));
-    reg.register_rpc_with_owner("terminal.create", OwnerKind::Device, create_h);
+    reg.register_rpc_with_owner("terminal.create", owner.clone(), create_h);
 
     let svc_for_list = Arc::clone(&pty);
     let list_h: LocalRpcHandler = Arc::new(move |args: Value| list_handler(&svc_for_list, args));
-    reg.register_rpc_with_owner("terminal.list", OwnerKind::Device, list_h);
+    reg.register_rpc_with_owner("terminal.list", owner.clone(), list_h);
 
     let pty_for_close = pty;
     let close_h = Arc::new(move |env, args: Value| {
@@ -151,7 +152,7 @@ pub fn register(
         )?;
         close_session(&pty_for_close, io.as_ref(), close_args)
     });
-    reg.register_rpc_with_envelope_and_owner("terminal.close", OwnerKind::Device, close_h);
+    reg.register_rpc_with_envelope_and_owner("terminal.close", owner, close_h);
 }
 
 /// `terminal.create` handler.

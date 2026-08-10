@@ -117,8 +117,8 @@ pub fn render_ability_contract_toml(contract: &SystemAbilityContract) -> String 
             &serde_json::to_value(contract.visibility).expect("visibility serializes")
         )
     ));
-    let (subject_kind, subject_uras) = scope_parts(&contract.scope_subjects);
-    let (agent_kind, agent_uras) = scope_parts(&contract.scope_agents);
+    let (subject_kind, subject_uras) = subject_scope_parts(&contract.scope_subjects);
+    let (agent_kind, agent_uras) = agent_scope_parts(&contract.scope_agents);
     out.push_str(&format!("scope_subjects_kind = \"{subject_kind}\"\n"));
     out.push_str(&format!(
         "scope_subjects_uras = {}\n",
@@ -173,7 +173,7 @@ pub fn render_ability_contract_toml(contract: &SystemAbilityContract) -> String 
     out
 }
 
-fn scope_parts(
+fn subject_scope_parts(
     rule: &crate::daemon::ability::descriptors::ScopeRule,
 ) -> (&'static str, Vec<String>) {
     use crate::daemon::ability::descriptors::ScopeRule;
@@ -181,6 +181,21 @@ fn scope_parts(
         ScopeRule::Any => ("any", Vec::new()),
         ScopeRule::None => ("none", Vec::new()),
         ScopeRule::OnlyMatching(uras) => ("only_matching", uras.clone()),
+        ScopeRule::OnlyUraKinds(kinds) => ("only_ura_kinds", kinds.clone()),
+    }
+}
+
+fn agent_scope_parts(
+    rule: &crate::daemon::ability::descriptors::ScopeRule,
+) -> (&'static str, Vec<String>) {
+    use crate::daemon::ability::descriptors::ScopeRule;
+    match rule {
+        ScopeRule::Any => ("any", Vec::new()),
+        ScopeRule::None => ("none", Vec::new()),
+        ScopeRule::OnlyMatching(uras) => ("only_matching", uras.clone()),
+        ScopeRule::OnlyUraKinds(_) => {
+            panic!("scope_agents cannot use only_ura_kinds; caller policy must stay explicit")
+        }
     }
 }
 
@@ -261,8 +276,8 @@ pub fn parse_ability_contract_toml(body: &str) -> anyhow::Result<SystemAbilityCo
         admission_action,
         receipt_semantics,
         visibility,
-        scope_subjects: parse_scope(raw.scope_subjects_kind, raw.scope_subjects_uras)?,
-        scope_agents: parse_scope(raw.scope_agents_kind, raw.scope_agents_uras)?,
+        scope_subjects: parse_subject_scope(raw.scope_subjects_kind, raw.scope_subjects_uras)?,
+        scope_agents: parse_agent_scope(raw.scope_agents_kind, raw.scope_agents_uras)?,
         denied_agents,
         hints: crate::daemon::ability::descriptors::ability_hints_from_wire_json(
             &raw.hints_json,
@@ -278,7 +293,7 @@ fn parse_enum<T: serde::de::DeserializeOwned>(raw: &str, field: &str) -> anyhow:
         .map_err(|error| anyhow::anyhow!("invalid {field} {raw:?}: {error}"))
 }
 
-fn parse_scope(
+fn parse_subject_scope(
     kind: String,
     uras: Vec<String>,
 ) -> anyhow::Result<crate::daemon::ability::descriptors::ScopeRule> {
@@ -288,7 +303,29 @@ fn parse_scope(
         ("any", true) => Ok(ScopeRule::Any),
         ("none", true) => Ok(ScopeRule::None),
         ("only_matching", false) => Ok(ScopeRule::OnlyMatching(uras)),
-        _ => anyhow::bail!("invalid scope kind/uras combination {kind:?}"),
+        ("only_ura_kinds", false)
+            if crate::core::ura::canonical_ura_kind_scope_labels(&uras).is_some() =>
+        {
+            Ok(ScopeRule::OnlyUraKinds(uras))
+        }
+        _ => anyhow::bail!("invalid subject scope kind/uras combination {kind:?}"),
+    }
+}
+
+fn parse_agent_scope(
+    kind: String,
+    uras: Vec<String>,
+) -> anyhow::Result<crate::daemon::ability::descriptors::ScopeRule> {
+    use crate::daemon::ability::descriptors::ScopeRule;
+    let uras = canonical_policy_values(uras, "scope agents")?;
+    match (kind.as_str(), uras.is_empty()) {
+        ("any", true) => Ok(ScopeRule::Any),
+        ("none", true) => Ok(ScopeRule::None),
+        ("only_matching", false) => Ok(ScopeRule::OnlyMatching(uras)),
+        ("only_ura_kinds", _) => anyhow::bail!(
+            "scope_agents_kind cannot be `only_ura_kinds`; caller policy must use explicit URAs or authority bindings"
+        ),
+        _ => anyhow::bail!("invalid agent scope kind/uras combination {kind:?}"),
     }
 }
 
@@ -641,6 +678,26 @@ additionalProperties = false
         assert!(
             error.to_string().contains("legacy_transport_hint"),
             "unknown field error should name the rejected field: {error}"
+        );
+    }
+
+    #[test]
+    fn governed_contract_rejects_kind_gated_agent_scope() {
+        let contract = super::super::system_ability_contract_inventory()
+            .into_iter()
+            .find(|contract| contract.name == "voice.report_metrics")
+            .expect("voice report metrics contract");
+        let body = render_ability_contract_toml(&contract)
+            .replace(
+                "scope_agents_kind = \"any\"",
+                "scope_agents_kind = \"only_ura_kinds\"",
+            )
+            .replace("scope_agents_uras = []", "scope_agents_uras = [\"agent\"]");
+        let error =
+            parse_ability_contract_toml(&body).expect_err("caller kind scope must fail closed");
+        assert!(
+            error.to_string().contains("scope_agents_kind"),
+            "error should name rejected caller scope axis: {error}"
         );
     }
 }

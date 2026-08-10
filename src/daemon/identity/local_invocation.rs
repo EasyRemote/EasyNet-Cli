@@ -176,7 +176,7 @@ fn persisted_local_device_ura() -> Option<String> {
     let hosted_identity =
         crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_hosted_identity_status()
             .ok()?;
-    let ura = hosted_identity.host_device_agent_ura()?;
+    let ura = hosted_identity.host_device_ura()?;
     let parsed = crate::core::ura::parse_ura(ura).ok()?;
     if parsed.kind == crate::core::ura::URAKind::Device {
         Some(ura.to_string())

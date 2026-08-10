@@ -83,7 +83,7 @@ fn seed_hosted_agents_for_chat(agent_names: &[&str]) {
     })
     .expect("seed paired Device credentials");
     let mut local = LocalAgentsFile {
-        host_device_agent_ura: crate::core::ura::device_ura("localhost", "dev"),
+        host_device_ura: crate::core::ura::device_ura("localhost", "dev"),
         ..LocalAgentsFile::default()
     };
     let mut durable = AgentRegistry::default();
@@ -107,7 +107,7 @@ fn canonical_test_agent_registry_key(name: &str) -> String {
 
 fn test_agent_entry(name: &str) -> crate::daemon::persistence::agent_registry::AgentEntry {
     let mut entry = crate::daemon::persistence::agent_registry::AgentEntry::new(
-        crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
+        crate::core::agent::spec::RuntimeKind::ClaudeCode,
         None,
     );
     entry.root_path = Some(crate::daemon::persistence::config::agents_root().join(name));
@@ -168,9 +168,9 @@ fn daemon_registry_boot_hook_recovers_acquiring_descriptor_imports() {
 #[test]
 fn published_ability_names_contains_agent_list_and_terminal_list() {
     // Diagnostic for the production NODATA: agent.list resolves but
-    // terminal.list does not. Both are OwnerKind::Device RPC abilities
-    // and both must be in the published set that (a) drives the device
-    // profile and (b) is registered directly into the daemon's live,
+    // terminal.list does not. `agent.list` and `terminal.list` are now
+    // device-sponsored SystemAgent abilities, but both must remain in the
+    // published set that is registered directly into the daemon's live,
     // embedded LocalRuntime during catalog assembly.
     let names = published_ability_names();
     assert!(
@@ -215,18 +215,101 @@ fn build_registry_publishes_canonical_descriptors_for_device_media_and_remote_de
             serde_json::json!("object"),
             "{ability} must expose an object input schema"
         );
+        if ability.starts_with("remote_desktop.") {
+            assert_eq!(
+                row.owner,
+                crate::daemon::ability::dispatch::OwnerKind::plugin_management_system(),
+                "{ability} must be catalogued under plugin-management SystemAgent owner"
+            );
+            let parsed_owner = crate::core::ura::parse_ura(&row.descriptor.owner_ura)
+                .unwrap_or_else(|error| panic!("{ability} owner_ura must be canonical: {error}"));
+            let (_, system_agent_id) = parsed_owner.device_agent_ids().unwrap_or_else(|| {
+                panic!("{ability} owner must be a device-sponsored SystemAgent")
+            });
+            assert_eq!(
+                system_agent_id,
+                crate::daemon::ability::names::integrations::PLUGIN_MANAGEMENT_SYSTEM_AGENT_ID,
+                "{ability} must be published through plugin-management, not direct Device ownership"
+            );
+        }
     }
 }
 
 #[test]
-fn terminal_list_is_owner_kind_device() {
+fn ability_deployment_lifecycle_has_system_agent_owner_and_typed_subjects() {
+    let rows = build_registry().authority_ability_catalog_snapshot();
+    for (ability, subject_kind) in [
+        ("ability.deploy", "resource"),
+        ("ability.uninstall", "ability"),
+    ] {
+        let row = rows
+            .iter()
+            .find(|row| row.name == ability)
+            .unwrap_or_else(|| panic!("{ability} must be registered at daemon boot"));
+        assert_eq!(
+            row.owner,
+            crate::daemon::ability::dispatch::OwnerKind::ability_management_system(),
+            "{ability} must be owned by the ability-management SystemAgent"
+        );
+        assert_eq!(
+            row.descriptor.scope_subjects,
+            crate::daemon::ability::descriptors::ScopeRule::OnlyUraKinds(vec![
+                subject_kind.to_string()
+            ]),
+            "{ability} must enforce its lifecycle subject kind at descriptor admission"
+        );
+        let parsed_owner = crate::core::ura::parse_ura(&row.descriptor.owner_ura)
+            .unwrap_or_else(|error| panic!("{ability} owner_ura must be canonical: {error}"));
+        assert_eq!(
+            parsed_owner
+                .device_agent_ids()
+                .map(|(_, agent_id)| agent_id),
+            Some(crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID),
+            "{ability} owner must be the Device-sponsored ability-management SystemAgent"
+        );
+    }
+}
+
+#[test]
+fn migrated_device_native_abilities_are_owner_kind_system_agent() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     use crate::daemon::ability::dispatch::OwnerKind;
     assert_eq!(
         system_ability_owner("terminal.list"),
-        Some(OwnerKind::Device)
+        Some(OwnerKind::terminal_system())
     );
-    assert_eq!(system_ability_owner("agent.list"), Some(OwnerKind::Device));
+    assert_eq!(
+        system_ability_owner("agent.list"),
+        Some(OwnerKind::agent_management_system())
+    );
+    assert_eq!(
+        system_ability_owner("mission.run"),
+        Some(OwnerKind::automation_system())
+    );
+    assert_eq!(
+        system_ability_owner("schedule.add"),
+        Some(OwnerKind::automation_system())
+    );
+    assert_eq!(
+        system_ability_owner(crate::daemon::ability::names::device_control::SESSION_LIST),
+        Some(OwnerKind::session_system())
+    );
+    assert_eq!(
+        system_ability_owner(crate::daemon::ability::names::device_control::SESSION_ATTACH),
+        Some(OwnerKind::session_system())
+    );
+    assert_eq!(
+        system_ability_owner(crate::daemon::ability::names::governance::OBSERVE_HEALTH),
+        Some(OwnerKind::runtime_health_system())
+    );
+    assert_eq!(
+        system_ability_owner(crate::daemon::ability::names::governance::OBSERVE_NETWORK_HEALTH),
+        Some(OwnerKind::runtime_health_system())
+    );
+    assert_eq!(
+        system_ability_owner(crate::daemon::ability::names::governance::ADMIN_STATUS),
+        Some(OwnerKind::runtime_health_system())
+    );
 }
 
 #[test]
@@ -316,10 +399,6 @@ fn ability_layer_classification_is_complete() {
         .collect();
     let unclassified: Vec<String> = names
         .iter()
-        // device.keyring.* abilities have their own ontology
-        // (RFC-002 §3.3) and are not classified by the system
-        // ability layer table.
-        .filter(|n| !n.starts_with("device.keyring."))
         .filter(|n| classify_ability(n).is_none())
         .cloned()
         .collect();
@@ -865,7 +944,7 @@ fn combined_registry_binds_local_introspection_to_distinct_device_and_realm_auth
     let config = registry_config_for_agents_with_authority(&agents, authority_context);
     let built = build_registry_with_services_result(config).expect("assemble registry");
     assert!(
-        built.device_registrar_cell.get().is_none(),
+        built.ability_deployment_registrar_cell.get().is_none(),
         "RealmAuthority registry assembly must not initialize the Device ability store registrar"
     );
     let registry = built.catalog;
@@ -875,7 +954,12 @@ fn combined_registry_binds_local_introspection_to_distinct_device_and_realm_auth
         "combined authority set must admit every built-in owner plane"
     );
 
-    for owner_ura in [&device_ura, &hub_ura] {
+    let runtime_introspection_ura = crate::core::ura::device_agent_ura(
+        "realm-b",
+        "dev-b",
+        crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+    );
+    for owner_ura in [&runtime_introspection_ura, &hub_ura] {
         let record = registry
             .control_plane_record_for_authority_mode(
                 owner_ura,
@@ -910,6 +994,11 @@ fn combined_registry_exposes_invocation_history_through_one_ledger_governance_ow
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let agents = AgentRegistry::default();
     let device_ura = crate::core::ura::device_ura("history-fixture", "dev-b");
+    let governance_ura = crate::core::ura::device_agent_ura(
+        "history-fixture",
+        "dev-b",
+        crate::daemon::ability::names::governance::RUNTIME_GOVERNANCE_SYSTEM_AGENT_ID,
+    );
     let hub_ura = crate::core::ura::hub_ura("history-fixture");
     let authority_context =
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
@@ -921,13 +1010,13 @@ fn combined_registry_exposes_invocation_history_through_one_ledger_governance_ow
         .expect("assemble registry")
         .catalog;
 
-    let device_record = registry
+    let governance_record = registry
         .control_plane_record_for_authority_mode(
-            &device_ura,
+            &governance_ura,
             crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
             crate::daemon::ability::CallMode::Rpc,
         )
-        .expect("Device history authority lookup");
+        .expect("runtime-governance history authority lookup");
     let hub_record = registry
         .control_plane_record_for_authority_mode(
             &hub_ura,
@@ -936,9 +1025,10 @@ fn combined_registry_exposes_invocation_history_through_one_ledger_governance_ow
         )
         .expect("Hub history authority lookup");
 
-    let record = device_record.expect("history list must remain visible on the host device");
-    assert_eq!(record.descriptor().owner_ura, device_ura);
-    assert_eq!(record.authority().scope().authority_root(), device_ura);
+    let record = governance_record
+        .expect("history list must publish through the runtime-governance SystemAgent");
+    assert_eq!(record.descriptor().owner_ura, governance_ura);
+    assert_eq!(record.authority().scope().authority_root(), governance_ura);
     assert!(
         hub_record.is_none(),
         "one daemon ledger must not publish a duplicate hub-governance history route"
@@ -1100,6 +1190,78 @@ fn pages_management_is_owned_by_the_declared_pages_agent() {
 }
 
 #[test]
+fn paired_device_registry_retains_device_local_api_key_lifecycle() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let agents = AgentRegistry::default();
+    let device_ura = crate::core::ura::device_ura("device-local-api-key", "dev-1");
+    let owner_user_id = "user-alice";
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+            device_ura.clone(),
+        )
+        .expect("api-key test Device authority context");
+    let mut config = registry_config_for_agents_with_authority(&agents, authority_context);
+    config.pages_identity = crate::daemon::ability::builtins::resources::pages::PagesIdentity {
+        user: Some("alice".to_string()),
+        owner_user_id: Some(owner_user_id.to_string()),
+        realm: Some("device-local-api-key".to_string()),
+        listener_port: Some(8787),
+    };
+
+    let registry = build_registry_with_services_result(config)
+        .expect("assemble paired Device registry")
+        .catalog;
+
+    let api_key_owner_ura = crate::core::ura::device_agent_ura(
+        "device-local-api-key",
+        "dev-1",
+        crate::daemon::ability::names::governance::API_KEY_MANAGEMENT_SYSTEM_AGENT_ID,
+    );
+    for ability in [
+        "user-alice.api_key.create",
+        "user-alice.api_key.list",
+        "user-alice.api_key.revoke",
+    ] {
+        let record = registry
+            .control_plane_record_for_authority_mode(
+                &api_key_owner_ura,
+                ability,
+                crate::daemon::ability::CallMode::Rpc,
+            )
+            .expect("api-key control-plane lookup")
+            .unwrap_or_else(|| {
+                panic!("{ability} must remain registered in paired Device-mode registry")
+            });
+        assert_eq!(
+            record.authority().scope().owner_projection(),
+            "system-agent:api-key-management",
+            "{ability} must be owned by the api-key-management SystemAgent while the Device remains execution host"
+        );
+        assert_eq!(
+            record.authority().scope().authority_root(),
+            api_key_owner_ura
+        );
+    }
+
+    let openai_owner_ura = crate::core::ura::device_agent_ura(
+        "device-local-api-key",
+        "dev-1",
+        crate::daemon::ability::names::integrations::OPENAI_COMPAT_SYSTEM_AGENT_ID,
+    );
+    assert!(
+        registry
+            .control_plane_record_for_authority_mode(
+                &openai_owner_ura,
+                crate::daemon::ability::names::integrations::OPENAI_CHAT_COMPLETIONS,
+                crate::daemon::ability::CallMode::Rpc,
+            )
+            .expect("OpenAI shim control-plane lookup")
+            .is_some(),
+        "Device-hosted API-key lifecycle and consuming OpenAI shim must assemble as SystemAgent-owned surfaces"
+    );
+}
+
+#[test]
 fn user_rooted_registry_rejects_paired_identity_without_realm() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let agents = AgentRegistry::default();
@@ -1172,8 +1334,14 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
     );
     let exclusions = registry.static_authority_exclusion_snapshot();
     assert!(
-        exclusions.get("device").copied().unwrap_or_default() > 0,
-        "shared assembly must report its centrally-filtered Device registrations: {exclusions:?}"
+        exclusions.get("device").copied().unwrap_or_default() == 0,
+        "RealmAuthority assembly must not treat Device as a public ability owner plane: {exclusions:?}"
+    );
+    assert!(
+        exclusions
+            .keys()
+            .any(|owner| owner.starts_with("system-agent:")),
+        "shared assembly must report centrally-filtered SystemAgent registrations: {exclusions:?}"
     );
     let conformance = crate::daemon::ability::conformance::RegistryConformance::new(&registry)
         .check(
@@ -1237,7 +1405,7 @@ fn realm_authority_daemon_builder_does_not_read_device_agent_transaction_state()
     std::fs::create_dir_all(&state_dir).expect("create isolated state directory");
     std::fs::write(state_dir.join("agents.json"), b"not-json")
         .expect("write invalid Device agent registry sentinel");
-    std::fs::write(state_dir.join("device-abilities.json"), b"not-json")
+    std::fs::write(state_dir.join("ability-deployments.json"), b"not-json")
         .expect("write invalid Device ability store sentinel");
     std::fs::write(
         crate::daemon::persistence::teach_grants::path(),
@@ -1264,7 +1432,7 @@ fn realm_authority_daemon_builder_does_not_read_device_agent_transaction_state()
         "RealmAuthority daemon builder must not parse Device agent/ability transaction state",
     );
     assert!(
-        built.device_registrar_cell.get().is_none(),
+        built.ability_deployment_registrar_cell.get().is_none(),
         "RealmAuthority daemon builder must not initialize the Device ability registrar"
     );
     let rows = built.catalog.authority_ability_catalog_snapshot();
@@ -1604,7 +1772,8 @@ fn registry_includes_chat_handler_per_registered_agent() {
     // the unified AxonAbilityCatalog. This is the load-bearing
     // property that lets the proxy dispatch chat through the
     // same registry as ping/session/permission.
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
+    use crate::core::agent::spec::RuntimeKind;
+    use crate::daemon::persistence::agent_registry::AgentEntry;
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     seed_hosted_agents_for_chat(&["alice", "bob"]);
     let mut agents = AgentRegistry::default();
@@ -1612,7 +1781,7 @@ fn registry_includes_chat_handler_per_registered_agent() {
         canonical_test_agent_registry_key("alice"),
         test_agent_entry("alice"),
     );
-    let mut bob = AgentEntry::new(AgentType::Codex, None);
+    let mut bob = AgentEntry::new(RuntimeKind::Codex, None);
     bob.root_path = Some(crate::daemon::persistence::config::agents_root().join("bob"));
     agents
         .agents
@@ -1639,8 +1808,9 @@ fn build_registry_always_registers_key_service_abilities() {
         .catalog;
     let names = reg.list_abilities();
 
-    // Administrative projections are present under device.keyring.*. Raw
-    // signing is SDK-only and must never be exposed as an Invocation ability.
+    // Administrative projections retain the legacy `device.keyring.*` local
+    // names but are owned by the keyring-management SystemAgent. Raw signing is
+    // SDK-only and must never be exposed as an Invocation ability.
     for verb in [
         "create",
         "list",
@@ -1658,6 +1828,16 @@ fn build_registry_always_registers_key_service_abilities() {
             "{want} must be registered; got {names:?}"
         );
     }
+    for row in reg.authority_ability_catalog_snapshot() {
+        if row.name.starts_with("device.keyring.") {
+            assert_eq!(
+                row.owner,
+                crate::daemon::ability::dispatch::OwnerKind::keyring_management_system(),
+                "{} must be owned by the keyring-management SystemAgent",
+                row.name
+            );
+        }
+    }
     assert!(
         !names.iter().any(|name| name == "device.keyring.sign"),
         "raw signing must remain inside the local key-service capability boundary"
@@ -1667,21 +1847,29 @@ fn build_registry_always_registers_key_service_abilities() {
 /// RFC-005 lint: public catalogue names are owner-local names.
 /// Device ownership is carried by `owner_ura` / `ability_ura`, so
 /// catalogue rows must not expose implementation-local owner prefixes such
-/// as `fs.read`.
+/// as `fs.read`. The remaining `device.keyring.*` names are historical wire
+/// names whose owner is asserted above as the keyring-management SystemAgent;
+/// they are not Device-owned descriptors.
 #[test]
 fn published_catalogue_does_not_duplicate_device_owner_prefix() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
-    let names: Vec<String> = published_system_abilities()
+    let violations: Vec<String> = published_system_abilities()
         .into_iter()
-        .map(|meta| meta.name)
-        .collect();
-    let violations: Vec<String> = names
-        .into_iter()
-        .filter(|name| name.starts_with("device."))
+        .filter(|descriptor| {
+            if !descriptor.name.starts_with("device.") {
+                return false;
+            }
+            // `device.keyring.*` is the only legacy owner-prefixed public
+            // namespace kept for wire compatibility. The semantic owner/callee
+            // must still be the keyring-management SystemAgent.
+            !(descriptor.name.starts_with("device.keyring.")
+                && descriptor.owner_ura.ends_with(".keyring-management"))
+        })
+        .map(|descriptor| descriptor.name)
         .collect();
     assert!(
         violations.is_empty(),
-        "RFC-005 catalogue must not duplicate device ownership in public names: {violations:?}"
+        "RFC-005 catalogue must not duplicate Device ownership in public names except keyring-management legacy wire names: {violations:?}"
     );
 }
 

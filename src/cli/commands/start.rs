@@ -1508,8 +1508,7 @@ mod tests {
     fn build_bootstrap_plan_threads_credentials_into_plan() {
         let _g = HomeGuard::new();
         // Empty registry: load_agents returns Default. The plan
-        // should still build with consent=true (default-on per
-        // plan §1) and an empty llm list.
+        // should still build with an empty hosted-Agent list.
         let creds = test_creds();
         let plan = build_bootstrap_plan(&creds).expect("plan must build");
         assert_eq!(plan.realm, "tenant-test");
@@ -1517,7 +1516,6 @@ mod tests {
             plan.host_device_ura,
             "easynet:///r/tenant-test/device/node-test"
         );
-        assert!(plan.consent, "consent default-on per plan §1");
         assert!(!plan.mcp);
         assert!(plan.llm_sub_agents.is_empty());
     }

@@ -25,60 +25,6 @@ use serde::{Deserialize, Serialize};
 use crate::core::agent::spec::RuntimeKind;
 use crate::daemon::persistence::config;
 
-// ─── Agent Type ──────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AgentType {
-    ClaudeCode,
-    Codex,
-    CodexAppServer,
-    /// A user-defined external agent runtime. Unlike the LLM-CLI
-    /// variants, this one is not tied to a specific binary: the agent's
-    /// own `command`/`args` point at any executable whose chat brain reads
-    /// the NL prompt on stdin and writes the answer on stdout. This is
-    /// the dynamic-extension seam: registering a new harness agent is
-    /// configuration, not a new enum variant.
-    External,
-}
-
-impl std::fmt::Display for AgentType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ClaudeCode => write!(f, "claude-code"),
-            Self::Codex => write!(f, "codex"),
-            Self::CodexAppServer => write!(f, "codex-app-server"),
-            Self::External => write!(f, "external"),
-        }
-    }
-}
-
-impl std::str::FromStr for AgentType {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "claude-code" | "claude" => Ok(Self::ClaudeCode),
-            "codex" => Ok(Self::Codex),
-            "codex-app-server" | "codex-appserver" => Ok(Self::CodexAppServer),
-            "external" | "custom" => Ok(Self::External),
-            _ => anyhow::bail!(
-                "unknown agent type: {s} (expected: claude-code, codex, codex-app-server, external)"
-            ),
-        }
-    }
-}
-
-impl AgentType {
-    pub(crate) fn runtime_kind(self) -> RuntimeKind {
-        match self {
-            Self::ClaudeCode => RuntimeKind::ClaudeCode,
-            Self::Codex => RuntimeKind::Codex,
-            Self::CodexAppServer => RuntimeKind::CodexAppServer,
-            Self::External => RuntimeKind::External,
-        }
-    }
-}
-
 // ─── Agent Entry ─────────────────────────────────────────────────────────────
 
 /// One row of the on-disk agent registry (`~/.easynet/agents.json`).
@@ -122,7 +68,7 @@ pub struct AgentEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) root_path: Option<PathBuf>,
 
-    pub(crate) agent_type: AgentType,
+    pub(crate) agent_type: RuntimeKind,
 
     // ── Runtime projection fields ────────────────────────────
     //
@@ -260,10 +206,10 @@ impl AgentEntry {
         })
     }
 
-    /// Create a new agent entry with sensible defaults for the given type.
-    pub fn new(agent_type: AgentType, model: Option<String>) -> Self {
+    /// Create a new agent entry with sensible defaults for the given runtime.
+    pub fn new(agent_type: RuntimeKind, model: Option<String>) -> Self {
         let (command, args) = match agent_type {
-            AgentType::ClaudeCode => (
+            RuntimeKind::ClaudeCode => (
                 "claude".to_string(),
                 vec![
                     "-p".to_string(),
@@ -271,13 +217,13 @@ impl AgentEntry {
                     "text".to_string(),
                 ],
             ),
-            AgentType::Codex => ("codex".to_string(), vec!["exec".to_string()]),
-            AgentType::CodexAppServer => ("codex".to_string(), vec!["app-server".to_string()]),
+            RuntimeKind::Codex => ("codex".to_string(), vec!["exec".to_string()]),
+            RuntimeKind::CodexAppServer => ("codex".to_string(), vec!["app-server".to_string()]),
             // External agents have no default binary: the operator
             // supplies `command`/`args` at `agent add` time. Leaving
             // them empty here keeps `new` total without inventing a
             // default that would later look like an executable.
-            AgentType::External => (String::new(), Vec::new()),
+            RuntimeKind::External => (String::new(), Vec::new()),
         };
         Self {
             schema_version: CURRENT_REGISTRY_SCHEMA,
@@ -514,14 +460,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn external_agent_type_round_trips_and_has_no_default_command() {
+    fn external_runtime_kind_round_trips_and_has_no_default_command() {
         // Dynamic-extension contract: `external` parses, displays, and
         // serializes as "external", and carries no built-in binary.
-        let t: AgentType = "external".parse().unwrap();
-        assert_eq!(t, AgentType::External);
-        assert_eq!(AgentType::External.to_string(), "external");
-        assert_eq!("custom".parse::<AgentType>().unwrap(), AgentType::External);
-        let entry = AgentEntry::new(AgentType::External, None);
+        let t: RuntimeKind = "external".parse().unwrap();
+        assert_eq!(t, RuntimeKind::External);
+        assert_eq!(RuntimeKind::External.to_string(), "external");
+        assert_eq!(
+            "custom".parse::<RuntimeKind>().unwrap(),
+            RuntimeKind::External
+        );
+        let entry = AgentEntry::new(RuntimeKind::External, None);
         assert!(entry.command.is_empty());
         assert!(entry.args.is_empty());
     }

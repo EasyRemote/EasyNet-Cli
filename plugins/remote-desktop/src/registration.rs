@@ -34,7 +34,7 @@ use crate::daemon::ability::dispatch::{
     AbilityHandlerFailure, BidiSource, EnvelopeContext, StreamSource,
 };
 use crate::daemon::ability::{AbilityImplSource, CallMode};
-use crate::daemon::plugins::package::BuiltinPluginAbilitySpec;
+use crate::daemon::plugins::package::{BuiltinPluginAbilityHints, BuiltinPluginAbilitySpec};
 use crate::daemon::plugins::remote_desktop::consent_registry::ConsentTicketError;
 use crate::daemon::plugins::remote_desktop::constants::{
     ABILITY_ADD_ICE_CANDIDATE, ABILITY_ATTACH_SESSION, ABILITY_CREATE_SESSION, ABILITY_END_SESSION,
@@ -58,6 +58,9 @@ type PluginStreamHandler =
     fn(Arc<RemoteDesktopPlugin>, EnvelopeContext, Value) -> anyhow::Result<StreamSource>;
 type PluginBidiHandler =
     fn(Arc<RemoteDesktopPlugin>, EnvelopeContext, Value) -> anyhow::Result<BidiSource>;
+
+const RESOURCE_SUBJECT_KINDS: &[&str] = &["resource"];
+const PERMISSION_PROBE_SUBJECT_KINDS: &[&str] = &["agent", "user"];
 
 #[derive(Clone, Copy)]
 enum RemoteDesktopAbilityBinding {
@@ -202,6 +205,8 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
                 description: schema::grant_consent_description,
                 input_schema: schema::grant_consent_input_schema,
             },
@@ -216,6 +221,8 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
                 description: schema::create_session_description,
                 input_schema: schema::create_session_input_schema,
             },
@@ -230,6 +237,8 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Read,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
                 description: schema::show_session_description,
                 input_schema: schema::show_session_input_schema,
             },
@@ -244,6 +253,8 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
                 description: schema::set_description_description,
                 input_schema: schema::set_description_input_schema,
             },
@@ -258,6 +269,8 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
                 description: schema::add_ice_candidate_description,
                 input_schema: schema::add_ice_candidate_input_schema,
             },
@@ -272,6 +285,8 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
                 description: schema::report_client_state_description,
                 input_schema: schema::report_client_state_input_schema,
             },
@@ -286,6 +301,8 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Stream,
                 admission_action: AdmissionAction::Stream,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
                 description: schema::watch_events_description,
                 input_schema: schema::watch_events_input_schema,
             },
@@ -300,6 +317,8 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
                 description: schema::refresh_lease_description,
                 input_schema: schema::refresh_lease_input_schema,
             },
@@ -314,6 +333,8 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
                 description: schema::end_session_description,
                 input_schema: schema::end_session_input_schema,
             },
@@ -328,6 +349,8 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Bidi,
                 admission_action: AdmissionAction::Stream,
                 bidi_wire_kind: Some(PluginBidiWireKind::JsonFrames),
+                subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
                 description: schema::attach_description,
                 input_schema: schema::attach_input_schema,
             },
@@ -342,6 +365,8 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Read,
                 bidi_wire_kind: None,
+                subject_ura_kinds: PERMISSION_PROBE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
                 description: schema::permission_status_description,
                 input_schema: schema::permission_status_input_schema,
             },
@@ -356,6 +381,8 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Manage,
                 bidi_wire_kind: None,
+                subject_ura_kinds: PERMISSION_PROBE_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::NONE,
                 description: schema::request_permission_description,
                 input_schema: schema::request_permission_input_schema,
             },
@@ -418,9 +445,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn contribute_with_screen_backend
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::ability::CallMode as DescriptorCallMode;
     use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
+    use crate::daemon::ability::descriptors::ScopeRule;
     use crate::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
+    use crate::daemon::ability::CallMode as DescriptorCallMode;
     use crate::daemon::plugins::{
         DaemonPluginBinder, PluginContributionSet, PluginKind, PluginRequirementSet,
     };
@@ -519,8 +547,22 @@ mod tests {
 
         assert_eq!(descriptor.description, schema::create_session_description());
         assert_eq!(
+            descriptor.scope_subjects,
+            ScopeRule::OnlyUraKinds(vec!["resource".to_string()]),
+            "remote_desktop.create_session descriptor must reject non-resource subjects before handler dispatch"
+        );
+        assert_eq!(
             descriptor.input_schema(),
             &schema::create_session_input_schema()
+        );
+        let permission_status = rows
+            .iter()
+            .find(|row| row.name == ABILITY_PERMISSION_STATUS)
+            .expect("remote_desktop.permission_status must be catalogued");
+        assert_eq!(
+            permission_status.descriptor.scope_subjects,
+            ScopeRule::OnlyUraKinds(vec!["agent".to_string(), "user".to_string()]),
+            "host-local permission probes must admit only User-self or local-system Agent subjects"
         );
         let record = reg
             .control_plane_record_for_mode(ABILITY_CREATE_SESSION, DescriptorCallMode::Rpc)

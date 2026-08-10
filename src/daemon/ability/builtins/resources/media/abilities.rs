@@ -7,16 +7,16 @@
 // Per the binding invariants
 // in plan v3.2:
 //
-//   A1 mic.subscribe        Stream  operational       device
-//   A2 camera.subscribe     Stream  operational       device
-//   A3 camera.snapshot      Rpc     operational       device
-//   A4 screen.subscribe     Stream  operational       device
-//   A5 speaker.publish      Bidi    operational       device
+//   A1 mic.subscribe        Stream  operational       media SystemAgent
+//   A2 camera.subscribe     Stream  operational       media SystemAgent
+//   A3 camera.snapshot      Rpc     operational       media SystemAgent
+//   A4 screen.subscribe     Stream  operational       media SystemAgent
+//   A5 speaker.publish      Bidi    operational       media SystemAgent
 //   A6 voice.subscribe      Stream  provider seam     realm Authority
 //   A7 voice.transcribe     Bidi    provider seam     realm Authority
-//   A8 screen.snapshot      Rpc     operational       device
-//   A9 camera.record_start  Rpc     state-transition  device
-//   A10 camera.record_stop  Rpc     state-transition  device
+//   A8 screen.snapshot      Rpc     operational       media SystemAgent
+//   A9 camera.record_start  Rpc     state-transition  media SystemAgent
+//   A10 camera.record_stop  Rpc     state-transition  media SystemAgent
 //
 // Single source of truth: a const `ABILITIES` table holds every
 // ability's name + description + input_schema + transport mode +
@@ -499,7 +499,7 @@ mod tests {
         let mut reg = metadata_test_catalog();
         reg.register_bidi_with_spec_and_semantics(
             ABILITY_SPEAKER_PUBLISH,
-            crate::daemon::ability::dispatch::OwnerKind::Device,
+            crate::daemon::ability::dispatch::OwnerKind::media_system(),
             registry_manifest(ABILITY_SPEAKER_PUBLISH),
             receipt_semantics(ABILITY_SPEAKER_PUBLISH).expect("speaker semantics"),
             std::sync::Arc::new(|_| anyhow::bail!("test handler")),

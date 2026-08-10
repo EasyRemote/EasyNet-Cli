@@ -56,7 +56,7 @@ where
         Arc::new(snapshot_provider);
     reg.register_rpc_with_owner(
         ABILITY_LIST_AGENTS,
-        OwnerKind::Device,
+        OwnerKind::agent_management_system(),
         Arc::new(move |_args: Value| list_agents_handler(&provider)),
     );
 }
@@ -112,11 +112,12 @@ pub fn list_agents_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+    use crate::core::agent::spec::RuntimeKind;
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
     use crate::daemon::persistence::local_agents::LocalAgentsFile;
     use std::path::PathBuf;
 
-    fn registered_entry(agent_type: AgentType, model: Option<String>, name: &str) -> AgentEntry {
+    fn registered_entry(agent_type: RuntimeKind, model: Option<String>, name: &str) -> AgentEntry {
         let mut entry = AgentEntry::new(agent_type, model);
         entry.root_path = Some(PathBuf::from(format!("/tmp/easynet-test-{name}")));
         entry
@@ -162,8 +163,11 @@ mod tests {
     #[test]
     fn list_agents_projects_name_runtime_model_label() {
         let mut registry = AgentRegistry::default();
-        let mut entry =
-            registered_entry(AgentType::ClaudeCode, Some("sonnet".to_string()), "claude");
+        let mut entry = registered_entry(
+            RuntimeKind::ClaudeCode,
+            Some("sonnet".to_string()),
+            "claude",
+        );
         entry.with_label(Some("primary".to_string()));
         registry.agents.insert("default/claude".to_string(), entry);
 
@@ -186,7 +190,11 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "default/claude".to_string(),
-            registered_entry(AgentType::ClaudeCode, Some("sonnet".to_string()), "claude"),
+            registered_entry(
+                RuntimeKind::ClaudeCode,
+                Some("sonnet".to_string()),
+                "claude",
+            ),
         );
         let mut local_agents = crate::daemon::persistence::local_agents::LocalAgentsFile::default();
         crate::daemon::persistence::local_agents::upsert_hosted_agent(
@@ -207,7 +215,7 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "default/minimal".to_string(),
-            registered_entry(AgentType::Codex, None, "minimal"),
+            registered_entry(RuntimeKind::Codex, None, "minimal"),
         );
 
         let mut reg = agent_list_test_catalog();
@@ -226,7 +234,7 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "minimal".to_string(),
-            registered_entry(AgentType::Codex, None, "minimal"),
+            registered_entry(RuntimeKind::Codex, None, "minimal"),
         );
 
         let rows = agent_rows(&snapshot(registry)).unwrap();
@@ -241,7 +249,7 @@ mod tests {
         let mut registry = AgentRegistry::default();
         registry.agents.insert(
             "minimal".to_string(),
-            AgentEntry::new(AgentType::Codex, None),
+            AgentEntry::new(RuntimeKind::Codex, None),
         );
 
         let error = agent_rows(&snapshot(registry))

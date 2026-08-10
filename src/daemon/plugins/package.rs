@@ -11,7 +11,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::daemon::ability::descriptors::AdmissionAction;
+use crate::daemon::ability::descriptors::{AbilityHints, AdmissionAction};
 use crate::daemon::ability::CallMode;
 use sha2::{Digest, Sha256};
 
@@ -71,6 +71,44 @@ impl PackageHash {
 /// name, product layer, bidi wire profile, description, and input schema. The
 /// package manifest is validated against this table at index time; generated
 /// descriptor TOMLs are projections of this table, not independent facts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BuiltinPluginAbilityHints {
+    pub read_only: bool,
+    pub destructive: bool,
+    pub idempotent: bool,
+}
+
+impl BuiltinPluginAbilityHints {
+    pub const NONE: Self = Self {
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+    };
+    pub const READ_ONLY: Self = Self {
+        read_only: true,
+        destructive: false,
+        idempotent: false,
+    };
+    pub const READ_ONLY_IDEMPOTENT: Self = Self {
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+    };
+    pub const DESTRUCTIVE_IDEMPOTENT: Self = Self {
+        read_only: false,
+        destructive: true,
+        idempotent: true,
+    };
+
+    fn descriptor_hints(self) -> AbilityHints {
+        AbilityHints {
+            read_only: self.read_only,
+            destructive: self.destructive,
+            idempotent: self.idempotent,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct BuiltinPluginAbilitySpec {
     pub name: &'static str,
@@ -78,6 +116,8 @@ pub struct BuiltinPluginAbilitySpec {
     pub call_mode: CallMode,
     pub admission_action: AdmissionAction,
     pub bidi_wire_kind: Option<PluginBidiWireKind>,
+    pub subject_ura_kinds: &'static [&'static str],
+    pub hints: BuiltinPluginAbilityHints,
     pub description: fn() -> &'static str,
     pub input_schema: fn() -> Value,
 }
@@ -99,7 +139,7 @@ impl BuiltinPluginAbilitySpec {
                 reason: "ability name has no verb segment".to_string(),
             }
         })?;
-        crate::daemon::ability::manifest::AbilityManifest::new(
+        let mut manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             verb,
             (self.description)(),
             (self.input_schema)(),
@@ -108,7 +148,20 @@ impl BuiltinPluginAbilitySpec {
         .map_err(|source| PluginHostError::DescriptorProjectionFailed {
             ability: self.name.to_string(),
             reason: source.to_string(),
-        })
+        })?;
+        if !self.subject_ura_kinds.is_empty() {
+            manifest = manifest
+                .with_subject_scope(
+                    crate::daemon::ability::manifest::ManifestSubjectScope::only_ura_kinds(
+                        self.subject_ura_kinds.iter().copied(),
+                    ),
+                )
+                .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+                    ability: self.name.to_string(),
+                    reason: source.to_string(),
+                })?;
+        }
+        Ok(manifest)
     }
 }
 
@@ -125,6 +178,8 @@ pub struct PluginAbilityDescriptor {
     input_schema: Value,
     output_schema: Option<Value>,
     admission_action: AdmissionAction,
+    subject_ura_kinds: Vec<String>,
+    hints: AbilityHints,
 }
 
 impl PluginAbilityDescriptor {
@@ -155,6 +210,14 @@ impl PluginAbilityDescriptor {
 
     pub fn admission_action(&self) -> AdmissionAction {
         self.admission_action
+    }
+
+    pub fn subject_ura_kinds(&self) -> &[String] {
+        &self.subject_ura_kinds
+    }
+
+    pub fn hints(&self) -> &AbilityHints {
+        &self.hints
     }
 
     /// Project this plugin descriptor into the daemon registry manifest shape.
@@ -470,6 +533,12 @@ fn builtin_descriptors(
                 input_schema: (spec.input_schema)(),
                 output_schema: None,
                 admission_action: spec.admission_action,
+                subject_ura_kinds: spec
+                    .subject_ura_kinds
+                    .iter()
+                    .map(|kind| (*kind).to_string())
+                    .collect(),
+                hints: spec.hints.descriptor_hints(),
             }),
         );
     }
@@ -562,6 +631,8 @@ fn validate_descriptor(
         input_schema: raw.input_schema,
         output_schema: raw.output_schema,
         admission_action: raw.admission_action,
+        subject_ura_kinds: Vec::new(),
+        hints: AbilityHints::default(),
     })
 }
 
@@ -823,6 +894,8 @@ pub(crate) mod tests {
                 call_mode: CallMode::Rpc,
                 admission_action: AdmissionAction::Read,
                 bidi_wire_kind: None,
+                subject_ura_kinds: &[],
+                hints: BuiltinPluginAbilityHints::NONE,
                 description,
                 input_schema,
             }]

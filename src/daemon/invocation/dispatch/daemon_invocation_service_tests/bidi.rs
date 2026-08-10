@@ -525,11 +525,11 @@ fn validate_session_realm_accepts_cross_realm_when_trust_anchor_has_caller() {
     // but the local trust anchor on realm-a's hub has an
     // explicit entry for it. Mirrors the admission gate's
     // existing FederatedKeyResolver hit; closes LB-49.
-    use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{TrustAnchorRole, TrustedAgent};
     let entry = TrustedAgent {
         agent_ura: "easynet:///r/realm-b/device/device-1".to_string(),
         public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-        role: TrustedAgentRole::Device,
+        role: TrustAnchorRole::Device,
         added_at_unix_ms: 1_777_640_000_000,
         origin_realm: Some("federated-tenant".to_string()),
         hub_endpoint: None,
@@ -561,28 +561,33 @@ async fn remote_bidi_open_frame_is_canonical_and_fail_closed() {
     use axon_sdk::pb::axon::v1::EnvelopeOpen;
 
     let svc = make_service().with_session_realm("test-realm");
-    let target_ura = "easynet:///r/test-realm/device/bidi-target";
-    publish_test_route(&svc, target_ura, "remote_desktop.attach");
+    let target_device_ura = "easynet:///r/test-realm/device/bidi-target";
+    let target_callee_ura = publish_test_remote_system_agent_route_with_mode(
+        &svc,
+        target_device_ura,
+        "remote_desktop.attach",
+        crate::daemon::ability::CallMode::Bidi,
+    );
     let route = svc
         .target_gate()
         .route_resolver()
         .await
-        .resolve_route(target_ura, "remote_desktop.attach")
+        .resolve_route(&target_callee_ura, "remote_desktop.attach")
         .expect("published route resolves");
 
     let initial_args = br#"{"session_id":"rd-9"}"#.to_vec();
     let envelope_open = EnvelopeOpen {
         envelope: Some(signed_test_envelope(
             "easynet:///r/test-realm/user/alice",
-            target_ura,
-            target_ura,
+            &target_callee_ura,
+            &target_callee_ura,
             "remote_desktop.attach",
             &initial_args,
             &test_device_signing_key(),
         )),
         target: Some(
             wire_invocation_target(
-                test_descriptor_ref(target_ura, "remote_desktop.attach"),
+                test_descriptor_ref(&target_callee_ura, "remote_desktop.attach"),
                 "remote_desktop.attach",
             )
             .expect("typed descriptor target"),
@@ -643,7 +648,7 @@ async fn remote_bidi_rejects_governance_catalogue_route_before_carrier_frame() {
     const CATALOGUE_READ: &str = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
 
     let svc = make_service().with_session_realm("test-realm");
-    publish_test_route_with_mode(
+    let target_callee_ura = publish_test_remote_system_agent_route_with_mode(
         &svc,
         TARGET_DEVICE_URA,
         CATALOGUE_READ,
@@ -653,16 +658,16 @@ async fn remote_bidi_rejects_governance_catalogue_route_before_carrier_frame() {
         .target_gate()
         .route_resolver()
         .await
-        .resolve_route(TARGET_DEVICE_URA, CATALOGUE_READ)
+        .resolve_route(&target_callee_ura, CATALOGUE_READ)
         .expect("published bidi catalogue route resolves before governance gate");
 
     let initial_args = br#"{"scope":"local"}"#.to_vec();
-    let descriptor_ref = test_descriptor_ref(TARGET_DEVICE_URA, CATALOGUE_READ);
+    let descriptor_ref = test_descriptor_ref(&target_callee_ura, CATALOGUE_READ);
     let envelope_open = EnvelopeOpen {
         envelope: Some(signed_test_envelope_with_descriptor_ref(
             "easynet:///r/test-realm/user/alice",
-            TARGET_DEVICE_URA,
-            TARGET_DEVICE_URA,
+            &target_callee_ura,
+            &target_callee_ura,
             descriptor_ref.clone(),
             &initial_args,
             &test_device_signing_key(),

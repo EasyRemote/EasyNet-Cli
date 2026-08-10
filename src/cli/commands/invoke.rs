@@ -158,10 +158,9 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
     let (result, fulfilled_label) = match node_ura.as_deref() {
         #[cfg(feature = "axon-pb")]
         Some(target) => {
-            let credentials = crate::daemon::persistence::config::load_credentials()
-                .context("remote ability invoke requires paired device credentials")?;
-            let caller_ura =
-                crate::support::platform::remote_device::caller_device_ura(&credentials)?;
+            let identity = crate::support::platform::remote_device::PairedInvocationIdentity::load(
+                "remote ability invoke",
+            )?;
             let target_call = ability_ref
                 .remote_target_for_mode(target, crate::daemon::ability::CallMode::Rpc)?;
             let surface = "remote ability invoke with --node";
@@ -174,7 +173,7 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             )?;
             let request = crate::daemon::invocation::routing::remote_invoke::RemoteInvocationTuplePlan::public_explicit(
                 &target_call,
-                caller_ura,
+                identity.caller_user_ura().to_string(),
                 subject,
                 invocation_nonce,
                 causal_context,
@@ -282,26 +281,26 @@ mod tests {
 
     #[test]
     fn invoke_ability_ref_parses_plain_ability_ura() {
-        let parsed =
-            AbilityInvocationRef::parse("easynet:///r/acme/ability/device.node.observe.health")
-                .expect("plain ability URA");
+        let parsed = AbilityInvocationRef::parse(
+            "easynet:///r/acme/ability/system-agent.node.runtime-health.observe.health",
+        )
+        .expect("plain ability URA");
 
         assert_eq!(
             parsed.selector().ability_ura(),
-            "easynet:///r/acme/ability/device.node.observe.health"
+            "easynet:///r/acme/ability/system-agent.node.runtime-health.observe.health"
         );
         assert!(!parsed.is_descriptor_ref());
     }
 
     #[test]
     fn invoke_ability_ref_preserves_explicit_descriptor_ref() {
-        let descriptor_ref =
-            "easynet:///r/acme/ability/device.node.observe.health@2.1.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+        let descriptor_ref = "easynet:///r/acme/ability/system-agent.node.runtime-health.observe.health@2.1.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
         let parsed = AbilityInvocationRef::parse(descriptor_ref).expect("descriptor ref");
 
         assert_eq!(
             parsed.selector().ability_ura(),
-            "easynet:///r/acme/ability/device.node.observe.health"
+            "easynet:///r/acme/ability/system-agent.node.runtime-health.observe.health"
         );
         assert_eq!(parsed.descriptor_ref(), Some(descriptor_ref));
     }
@@ -314,7 +313,8 @@ mod tests {
         // rejected with a typed error before any IPC, so a typo
         // never accidentally hits the wire.
         let res = run(InvokeArgs {
-            ability_ura: "easynet:///r/acme/ability/device.local.observe.health".into(),
+            ability_ura:
+                "easynet:///r/acme/ability/system-agent.local.runtime-health.observe.health".into(),
             node: Some("some-node-id".into()),
             args: None,
             timeout: 60,
@@ -346,7 +346,8 @@ mod tests {
         // `--node ""` is almost always an unset shell variable that
         // expanded to empty, not a deliberate intent. Reject loudly.
         let res = run(InvokeArgs {
-            ability_ura: "easynet:///r/acme/ability/device.local.observe.health".into(),
+            ability_ura:
+                "easynet:///r/acme/ability/system-agent.local.runtime-health.observe.health".into(),
             node: Some("   ".into()),
             args: None,
             timeout: 60,
@@ -365,7 +366,8 @@ mod tests {
         // Operator-visible: a typo in --args should say "parse
         // --args JSON", not crash mid-IPC.
         let res = run(InvokeArgs {
-            ability_ura: "easynet:///r/acme/ability/device.local.observe.health".into(),
+            ability_ura:
+                "easynet:///r/acme/ability/system-agent.local.runtime-health.observe.health".into(),
             node: None,
             args: Some("{not valid".into()),
             timeout: 60,

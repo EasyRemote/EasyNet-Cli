@@ -621,6 +621,29 @@ fn hub_session_bidi_status(error: SessionRequestError) -> Status {
     }
 }
 
+async fn forward_terminal_bidi_payload(
+    down_tx: &tokio::sync::mpsc::Sender<Result<InvokeBidiDown, Status>>,
+    finalization: &mut ForwardedFinalizationVerifier,
+    stdout_stream_id: u32,
+    payload: Vec<u8>,
+) -> Result<(), Status> {
+    if payload.is_empty() {
+        return Ok(());
+    }
+    finalization.observe_data()?;
+    down_tx
+        .send(Ok(InvokeBidiDown {
+            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                stream_id: stdout_stream_id,
+                data: payload,
+                ..BinaryChunk::default()
+            })),
+            ..InvokeBidiDown::default()
+        }))
+        .await
+        .map_err(|_| Status::cancelled("remote bidi response receiver closed"))
+}
+
 impl BidiDispatcher {
     async fn dispatch_hub_session_bidi(
         &self,
@@ -726,12 +749,24 @@ impl BidiDispatcher {
                             has_failure = result.failure.is_some(),
                         );
                         let DispatchResult {
+                            payload,
                             error,
                             failure,
                             admission_receipt,
                             terminal_receipt,
                             ..
                         } = *result;
+                        if let Err(status) = forward_terminal_bidi_payload(
+                            &down_tx_for_results,
+                            &mut finalization,
+                            stdout_stream_id,
+                            payload,
+                        )
+                        .await
+                        {
+                            let _ = down_tx_for_results.send(Err(status)).await;
+                            break;
+                        }
                         let frame = match terminal_receipt {
                             Some(terminal_receipt) => finalization
                                 .finalize(admission_receipt, terminal_receipt)
@@ -968,7 +1003,7 @@ impl BidiDispatcher {
                             has_failure = result.failure.is_some(),
                         );
                         let DispatchResult {
-                            payload: _,
+                            payload,
                             error,
                             failure,
                             request_id: _,
@@ -976,6 +1011,17 @@ impl BidiDispatcher {
                             terminal_receipt,
                             ..
                         } = *result;
+                        if let Err(status) = forward_terminal_bidi_payload(
+                            &down_tx_for_results,
+                            &mut finalization,
+                            stdout_stream_id,
+                            payload,
+                        )
+                        .await
+                        {
+                            let _ = down_tx_for_results.send(Err(status)).await;
+                            break;
+                        }
                         let frame = match terminal_receipt {
                             Some(terminal_receipt) => finalization
                                 .finalize(admission_receipt, terminal_receipt)
@@ -1244,6 +1290,7 @@ impl BidiDispatcher {
                 &envelope_open.metadata,
                 &wire_envelope,
                 HostedAgentDelegationIngress::TrustedLocalSystem,
+                &selected_route.execution_host_ura,
                 &dispatch_ability,
             )?;
             crate::daemon::axon_bridge::descriptor_bound_dispatch::local_system_from_wire_parts(
@@ -1257,6 +1304,7 @@ impl BidiDispatcher {
                 &envelope_open.metadata,
                 &wire_envelope,
                 HostedAgentDelegationIngress::ExternalSigned,
+                &selected_route.execution_host_ura,
                 &dispatch_ability,
             )?;
             let signed_descriptor_ref = bound_ability
@@ -4139,7 +4187,7 @@ fn build_remote_bidi_input_frame_from_mapped(
     mapped: LocalBidiUpFrame,
 ) -> Option<Result<DispatchFrame, Status>> {
     match mapped {
-        LocalBidiUpFrame::Forward(value) | LocalBidiUpFrame::ForwardAndClose(value) => {
+        LocalBidiUpFrame::Forward(value) => {
             let bytes = match serde_json::to_vec(&value) {
                 Ok(bytes) => bytes,
                 Err(err) => {
@@ -4150,6 +4198,19 @@ fn build_remote_bidi_input_frame_from_mapped(
             };
             Some(Ok(build_remote_bidi_input_dispatch_frame(
                 call_id, &bytes, false,
+            )))
+        }
+        LocalBidiUpFrame::ForwardAndClose(value) => {
+            let bytes = match serde_json::to_vec(&value) {
+                Ok(bytes) => bytes,
+                Err(err) => {
+                    return Some(Err(Status::internal(format!(
+                        "InvokeBidi remote bidi: encode final mapped input frame: {err}"
+                    ))));
+                }
+            };
+            Some(Ok(build_remote_bidi_input_dispatch_frame(
+                call_id, &bytes, true,
             )))
         }
         LocalBidiUpFrame::Close => Some(Ok(build_remote_bidi_input_dispatch_frame(
@@ -4440,6 +4501,29 @@ mod tests {
                 assert!(payload.is_empty());
             }
             other => panic!("expected remote BidiInput EOF, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remote_file_transfer_final_frame_preserves_payload_and_eof() {
+        let mapped = map_local_bidi_up_payload(
+            LocalBidiWireKind::FileTransfer,
+            UpPayload::Control(BidiControl {
+                control: Some(axon_sdk::pb::axon::v1::bidi_control::Control::Eof(true)),
+            }),
+        );
+        let frame = build_remote_bidi_input_frame_from_mapped(45, mapped)
+            .expect("mapped file-transfer EOF is forwarded")
+            .expect("mapped file-transfer EOF builds");
+
+        match decode_remote_bidi_input(frame) {
+            SessionDispatch::BidiInput { payload, eof, .. } => {
+                assert!(eof, "ForwardAndClose must retain carrier EOF");
+                let value: serde_json::Value =
+                    serde_json::from_slice(&payload).expect("file-transfer EOF JSON");
+                assert_eq!(value["type"], "eof");
+            }
+            other => panic!("expected final remote BidiInput, got {other:?}"),
         }
     }
 

@@ -809,16 +809,16 @@ pub fn start_daemon_invocation_transport(
     )
     .context("resume pending Agent purge after Hub publication wiring")?;
 
-    let daemon_route_owner = daemon_ura.as_deref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "Invocation transport cannot register daemon routes without its canonical owner URA"
-        )
-    })?;
-    futures::executor::block_on(service.register_daemon_unary_routes(daemon_route_owner))
-        .context("register daemon exact unary routes in shared Axon LocalRuntime")?;
-    futures::executor::block_on(service.register_daemon_stream_routes(daemon_route_owner))
-        .context("register daemon exact stream routes in shared Axon LocalRuntime")?;
     if capabilities.hub_runtime {
+        let daemon_route_owner = daemon_ura.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Invocation transport cannot register Hub daemon routes without its canonical Authority URA"
+            )
+        })?;
+        futures::executor::block_on(service.register_daemon_unary_routes(daemon_route_owner))
+            .context("register daemon exact unary routes in shared Axon LocalRuntime")?;
+        futures::executor::block_on(service.register_daemon_stream_routes(daemon_route_owner))
+            .context("register daemon exact stream routes in shared Axon LocalRuntime")?;
         futures::executor::block_on(service.register_daemon_bidi_routes(daemon_route_owner))
             .context("register daemon exact bidi routes in shared Axon LocalRuntime")?;
     }
@@ -1090,6 +1090,17 @@ async fn publish_local_runtime_federation(
         Arc::clone(&connection_state_sink),
     )
     .await;
+
+    for system_agent_ura in snapshot.system_agent_owner_uras() {
+        publish_owner_projection_from_snapshot(
+            &snapshot,
+            Arc::clone(&escalation),
+            &system_agent_ura,
+            &host_device_ura,
+            Arc::clone(&connection_state_sink),
+        )
+        .await;
+    }
 
     for agent_ura in snapshot.hosted_agent_owner_uras() {
         publish_hosted_agent_from_snapshot(
@@ -1584,14 +1595,14 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
     }
 
     fn revoke_hosted_agent(&self, request: HotAgentRevokeRequest) -> HotAgentAdvertiseOutcome {
-        // ISS-002 (agent.stop, symmetric to advertise): remove the agent
-        // identity from the hub directory via `federation.revoke` on the
-        // same `session.open` escalation. `escalate_with_timeout`
-        // builds the hub ability URA from the ability name + session
-        // realm, so only the JSON args are passed here.
+        // `federation.revoke` is a product invocation, not session control.
+        // Enter through the local canonical Invocation service so the signed
+        // request is routed over the existing session as ReverseDispatchCall
+        // and its terminal receipt is verified by the normal dispatch path.
+        let agent_ura = request.agent_ura;
         let body = serde_json::json!({
-            "agent_ura": request.agent_ura,
-            "target_ura": request.agent_ura,
+            "agent_ura": agent_ura,
+            "target_ura": agent_ura,
             "generation": request.generation,
             "reason": request.reason,
             "purge_transaction_id": request.purge_transaction_id,
@@ -1607,28 +1618,13 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
                 ));
             }
         };
-        let escalation = Arc::clone(&self.escalation);
-        let outcome = match crate::support::async_bridge::try_run_blocking(
-            async move {
-                escalation
-                    .escalate_with_timeout(
-                        "federation.revoke".to_string(),
-                        args,
-                        BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT,
-                    )
-                    .await
-            },
-            crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
-            "hot federation.revoke",
+        match crate::daemon::invocation::routing::remote_invoke::invoke_federation_revoke_with_arguments(
+            &agent_ura,
+            args,
+            &self.caller_ura,
         ) {
-            Ok(outcome) => outcome,
-            Err(error) => return HotAgentAdvertiseOutcome::failed(error),
-        };
-        match outcome {
-            RequestOutcome::Ok { .. } => HotAgentAdvertiseOutcome::succeeded(),
-            RequestOutcome::Err { error } => {
-                HotAgentAdvertiseOutcome::failed(render_session_request_error(&error))
-            }
+            Ok(()) => HotAgentAdvertiseOutcome::succeeded(),
+            Err(error) => HotAgentAdvertiseOutcome::failed(error.to_string()),
         }
     }
 }
@@ -2072,7 +2068,7 @@ mod tests {
     use crate::daemon::invocation::bidi::session_initiator::{
         SessionConnectionStateChange, SessionConnectionStateSink,
     };
-    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole, TrustedAgent};
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
 
@@ -2177,6 +2173,9 @@ mod tests {
         let runtime =
             crate::daemon::axon_bridge::runtime_factory::build_test_daemon_runtime_assembly(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                crate::daemon::axon_bridge::runtime_factory::isolated_test_runtime_persistence(
+                    "boot-invocation",
+                ),
                 None,
             );
         InvocationTransportDependencies {
@@ -2425,7 +2424,7 @@ mod tests {
         let stale = RealmTrustAnchor::from_entries(vec![TrustedAgent {
             agent_ura: hub_ura.clone(),
             public_key_b64: old_pub,
-            role: TrustedAgentRole::Hub,
+            role: TrustAnchorRole::Hub,
             added_at_unix_ms: 1,
             origin_realm: None,
             hub_endpoint: None,
@@ -2466,7 +2465,7 @@ mod tests {
         let stale = RealmTrustAnchor::from_entries(vec![TrustedAgent {
             agent_ura: hub_ura.clone(),
             public_key_b64: old_pub.clone(),
-            role: TrustedAgentRole::Hub,
+            role: TrustAnchorRole::Hub,
             added_at_unix_ms: 1,
             origin_realm: None,
             hub_endpoint: None,

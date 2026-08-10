@@ -69,7 +69,7 @@ impl DesktopCompanionSupervisor for LinuxDesktopCompanionSupervisor {
             return CompanionSupervisorState::UnsupportedSession;
         }
         match &plan.spec {
-            PlatformCompanionSpec::Linux { .. } => CompanionSupervisorState::NotInstalled,
+            PlatformCompanionSpec::Linux { .. } => CompanionSupervisorState::UnsupportedPlatform,
             _ => CompanionSupervisorState::UnsupportedPlatform,
         }
     }

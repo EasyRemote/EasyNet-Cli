@@ -16,7 +16,7 @@ use crate::daemon::plugins::remote_desktop::request::{
 use crate::daemon::plugins::remote_desktop::resource::resolve_screen_resource_from_envelope;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::{
-    RemoteDesktopSession, RemoteDesktopSessionInit, now_ms,
+    now_ms, RemoteDesktopSession, RemoteDesktopSessionInit,
 };
 use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::prune_inactive_sessions;
@@ -52,7 +52,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
     let session = RemoteDesktopSession::new(RemoteDesktopSessionInit {
         session_id: session_id.clone(),
         session_token,
-        creator_caller_ura: Some(env.caller().to_string()),
+        creator_caller_ura: env.caller().to_string(),
         consent,
         subject_ura: entry.resource_ura.clone(),
         subject_type: entry.kind,

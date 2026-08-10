@@ -288,7 +288,8 @@ fn invoke_descriptor_mutation(
     hosted_agent_ura: &str,
 ) -> anyhow::Result<(Value, Value)> {
     let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
-    let target = LocalAbilityTarget::new(ability, &local_daemon_ura)?;
+    let target =
+        LocalAbilityTarget::for_device_sponsored_system_ability(ability, &local_daemon_ura)?;
     let context = LocalSystemInvocationIssuer::root_context(
         subject_ura,
         &[],

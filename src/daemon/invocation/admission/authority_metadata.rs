@@ -78,6 +78,9 @@ pub(crate) struct DelegationPayload {
 pub(crate) struct SessionAuthorityPayload {
     pub(crate) issuer_ura: String,
     pub(crate) session_id: String,
+    /// Public session-authority wire scalar: the User id segment bound into
+    /// `subject_ura`. It is not a User URA; admission converts it to a canonical
+    /// User URA only at issuer-policy comparison boundaries.
     pub(crate) session_owner_user_id: String,
     pub(crate) creator_principal_id: String,
     pub(crate) callee_ura: String,
@@ -99,6 +102,8 @@ pub(crate) struct SessionAuthorityPayload {
 pub(crate) struct SessionAuthorityRequest {
     pub(crate) issuer_ura: String,
     pub(crate) session_id: String,
+    /// Public session-authority request scalar. Keep the wire key
+    /// `session_owner_user_id`; do not use this field as a runtime User URA.
     pub(crate) session_owner_user_id: String,
     pub(crate) creator_principal_id: String,
     pub(crate) callee_ura: String,
@@ -609,41 +614,7 @@ pub(crate) fn session_authority_admits_subject(
     if !crate::core::identity::is_canonical_session_authority_id(&payload.session_id) {
         return false;
     }
-    if payload.subject_ura == subject {
-        return true;
-    }
-    let Ok(parsed) = crate::core::ura::parse_ura(subject) else {
-        return false;
-    };
-    if parsed.kind != crate::core::ura::URAKind::Resource {
-        return false;
-    }
-    if let Some(session_id) = parsed
-        .resource_path()
-        .and_then(|path| path.trim().strip_prefix("session/"))
-    {
-        if !crate::core::identity::is_canonical_session_authority_id(session_id) {
-            return false;
-        }
-    }
-    let Some(owner_id) = parsed.resource_owner_id() else {
-        return false;
-    };
-    resource_owner_matches_session_owner(owner_id, &payload.session_owner_user_id)
-}
-
-fn resource_owner_matches_session_owner(owner_id: &str, session_owner_user_id: &str) -> bool {
-    let session_owner_user_id = session_owner_user_id.trim();
-    if session_owner_user_id.is_empty() {
-        return false;
-    }
-    if let Some(user_id) = owner_id.strip_prefix("user.") {
-        return user_id == session_owner_user_id;
-    }
-    owner_id
-        .strip_prefix("agent.")
-        .and_then(|rest| rest.split_once('.').map(|(user_id, _)| user_id))
-        .is_some_and(|user_id| user_id == session_owner_user_id)
+    payload.subject_ura == subject
 }
 
 pub(crate) fn authority_audience_admits(audience: &str, callee: &str) -> bool {
@@ -990,6 +961,27 @@ mod tests {
         matching_user_subject.subject_ura = "easynet:///r/example/user/alice".into();
         validate_session_authority_payload_shape(&matching_user_subject, None)
             .expect("the declared session owner remains a canonical user subject");
+    }
+
+    #[test]
+    fn session_authority_admits_only_exact_payload_subject() {
+        let payload = session_payload();
+        assert!(
+            session_authority_admits_subject(&payload, &payload.subject_ura),
+            "session authority must admit its exact canonical subject"
+        );
+
+        for subject_ura in [
+            "easynet:///r/example/resource/user.alice/session/session-1/terminal/default",
+            "easynet:///r/example/resource/user.alice/runtime-state/read",
+            "easynet:///r/example/resource/agent.alice.backend/runtime-state/read",
+            "easynet:///r/example/user/alice",
+        ] {
+            assert!(
+                !session_authority_admits_subject(&payload, subject_ura),
+                "session authority must not infer same-owner authority for {subject_ura}"
+            );
+        }
     }
 
     #[test]

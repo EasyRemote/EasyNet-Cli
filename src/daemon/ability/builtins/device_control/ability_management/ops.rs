@@ -2,30 +2,35 @@
 // ==========================================
 //
 // File: src/daemon/ability/builtins/device_control/ability_management/ops.rs
-// Description: Device-hosted abilities the CLI's device/ability
-//              subcommands invoke. Local device mutations are backed
-//              by the canonical device ability registrar. Remote
-//              device mutations are an explicit Unsupported capability
-//              state until a provider-backed federation mutation route
-//              exists in the runtime capability matrix.
+// Description: Device and ability-management SystemAgent abilities the CLI's
+//              device/ability subcommands invoke. Local mutations are backed
+//              by the canonical ability deployment registrar. Direct
+//              mutation of a non-local Device target through this local
+//              handler remains fail-closed; remote deploy callers must first
+//              stage a target-local ResourceRef and invoke this ability on the
+//              target Device's ability-management SystemAgent.
 //
 // Abilities registered here
 // -------------------------
 //   node.describe     Describe one node by id.
 //   node.remove       Remove a node from the realm device registry.
-//   ability.deploy    Publish an ability bundle to a target Device URA.
+//   ability.deploy    Deploy an ability bundle to a target host Device;
+//                     the public descriptor is owned by ability-management.
 //   ability.uninstall Uninstall a previously deployed ability.
 //
 // Routing model
 // -------------
 // Every mutation handler classifies a canonical target identity through
 // `DeviceOperationTarget`. Local mutations require this device's Device URA.
-// Other Device URAs are explicit remote targets and fail closed as Unsupported
-// until the capability matrix marks remote mutation provider-backed.
+// Other Device URAs are explicit remote targets and fail closed at this local
+// handler; the supported remote deploy path invokes the target handler after
+// target-local bundle materialization.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::io::Read;
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use serde_json::{json, Value};
@@ -33,26 +38,19 @@ use serde_json::{json, Value};
 use crate::daemon::ability::builtins::agents::discover::{
     DiscoverFederationResolver, SharedDiscoverFederationResolver,
 };
+pub use crate::daemon::ability::builtins::device_control::ability_management::registrar::SharedAbilityDeploymentRegistrarCell;
 use crate::daemon::ability::builtins::device_control::ability_management::registrar::{
-    DeviceAbilityInstall, DeviceAbilityRegistrar, DeviceAbilityUninstall,
+    AbilityDeploymentInstall, AbilityDeploymentRegistrar, AbilityDeploymentUninstall,
 };
 #[cfg(test)]
-use crate::daemon::ability::builtins::device_control::ability_management::store::DeviceAbilityStore;
+use crate::daemon::ability::builtins::device_control::ability_management::store::AbilityDeploymentStore;
 use crate::daemon::ability::builtins::device_control::ability_management::store::{
-    manifest_digest, DeviceAbilityRecord,
+    manifest_digest, AbilityDeploymentRecord,
 };
 use crate::daemon::ability::builtins::integrations::federation_probe;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, OwnerKind};
-use crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
 use crate::daemon::resources::files::{self as filesystem, FilesystemResourceCapability};
 use crate::support::async_bridge::{run_blocking, SyncBridgeRuntimePolicy};
-
-/// Shared, late-wired cell holding the device-ability registrar.
-/// Constructed pending at registry-build time; boot attaches the live
-/// `LocalRuntime` via `set_runtime`. `ability.deploy`'s handler reads
-/// it to run the install transaction. Mirrors
-/// `agent_lifecycle_ability::SharedHotRegistrarCell`.
-pub type SharedDeviceRegistrarCell = OnceLock<Arc<DeviceAbilityRegistrar>>;
 
 pub const ABILITY_DESCRIBE_NODE: &str =
     crate::daemon::ability::names::device_control::NODE_DESCRIBE;
@@ -137,15 +135,17 @@ impl DeviceOperationTarget {
 /// at daemon boot from `daemon::ability::catalog::build_registry_with_services`.
 pub fn register(
     reg: &mut AxonAbilityCatalog,
-    device_registrar: Arc<SharedDeviceRegistrarCell>,
+    ability_deployment_registrar: Arc<SharedAbilityDeploymentRegistrarCell>,
     local_catalog: Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
     resolver: SharedDiscoverFederationResolver,
 ) {
+    let node_management_owner = OwnerKind::node_management_system();
+    let ability_management_owner = OwnerKind::ability_management_system();
     let describe_resolver = Arc::clone(&resolver);
     let describe_catalog = Arc::clone(&local_catalog);
     reg.register_rpc_with_spec(
         ABILITY_DESCRIBE_NODE,
-        OwnerKind::Device,
+        node_management_owner.clone(),
         crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_DESCRIBE_NODE,
             describe_node_description(),
@@ -157,7 +157,7 @@ pub fn register(
     );
     reg.register_rpc_with_spec(
         ABILITY_REMOVE_NODE,
-        OwnerKind::Device,
+        node_management_owner,
         crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_REMOVE_NODE,
             remove_node_description(),
@@ -167,14 +167,18 @@ pub fn register(
     );
     reg.register_rpc_with_envelope_and_spec(
         ABILITY_DEPLOY_ABILITY,
-        OwnerKind::Device,
+        ability_management_owner.clone(),
         crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_DEPLOY_ABILITY,
             deploy_ability_description(),
             deploy_ability_input_schema(),
-        ),
+        )
+        .with_subject_scope(
+            crate::daemon::ability::manifest::ManifestSubjectScope::only_ura_kinds(["resource"]),
+        )
+        .expect("ability.deploy Resource subject scope must be valid"),
         {
-            let cell = Arc::clone(&device_registrar);
+            let cell = Arc::clone(&ability_deployment_registrar);
             Arc::new(move |env: EnvelopeContext, args: Value| {
                 deploy_ability_handler(env, args, &cell)
             })
@@ -182,14 +186,18 @@ pub fn register(
     );
     reg.register_rpc_with_envelope_and_spec(
         ABILITY_UNINSTALL_ABILITY,
-        OwnerKind::Device,
+        ability_management_owner,
         crate::daemon::ability::catalog::system_manifest::registry_manifest(
             ABILITY_UNINSTALL_ABILITY,
             uninstall_ability_description(),
             uninstall_ability_input_schema(),
-        ),
+        )
+        .with_subject_scope(
+            crate::daemon::ability::manifest::ManifestSubjectScope::only_ura_kinds(["ability"]),
+        )
+        .expect("ability.uninstall Ability subject scope must be valid"),
         {
-            let cell = Arc::clone(&device_registrar);
+            let cell = Arc::clone(&ability_deployment_registrar);
             Arc::new(move |env: EnvelopeContext, args: Value| {
                 uninstall_ability_handler(env, args, &cell)
             })
@@ -221,28 +229,59 @@ fn local_identity() -> anyhow::Result<LocalDeviceIdentity> {
     }
 }
 
-fn require_local_device_authority(
-    env: &EnvelopeContext,
-    expected_device_ura: &str,
-    surface: &str,
-) -> anyhow::Result<String> {
-    let caller = env.caller();
-    if caller != expected_device_ura && caller != LOCAL_SYSTEM_AGENT_URA {
-        anyhow::bail!(
-            "{surface}: caller {caller:?} is not authorized to mutate local device abilities; \
-             expected local device authority {expected_device_ura:?}"
-        );
-    }
-    Ok(caller.to_string())
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AbilityManagementMutationActor {
+    User(String),
+    Agent(String),
+    Authority(String),
 }
 
-fn require_device_registrar(
-    device_registrar: &SharedDeviceRegistrarCell,
+impl AbilityManagementMutationActor {
+    /// Preserve the actor already admitted by the invocation boundary.
+    ///
+    /// This handler does not re-run policy evaluation. It only prevents a
+    /// direct handler call from turning Device custody (or an ambient local
+    /// system identity) into mutation authority. Public mutations must retain
+    /// an admitted accountable User, Agent, or Authority actor.
+    fn from_envelope(env: &EnvelopeContext, surface: &str) -> anyhow::Result<Self> {
+        let caller = env.caller();
+        let parsed = crate::core::ura::parse_ura(caller)
+            .map_err(|error| anyhow::anyhow!("{surface}: caller URA is invalid: {error}"))?;
+        match parsed.kind {
+            crate::core::ura::URAKind::User
+            | crate::core::ura::URAKind::Agent
+            | crate::core::ura::URAKind::Authority => {
+                super::store::validate_ability_deployment_actor(caller)
+                    .map_err(|error| anyhow::anyhow!("{surface}: {error}"))?;
+                match parsed.kind {
+                    crate::core::ura::URAKind::User => Ok(Self::User(caller.to_string())),
+                    crate::core::ura::URAKind::Agent => Ok(Self::Agent(caller.to_string())),
+                    crate::core::ura::URAKind::Authority => {
+                        Ok(Self::Authority(caller.to_string()))
+                    }
+                    _ => unreachable!("actor kind was matched above"),
+                }
+            }
+            kind => anyhow::bail!(
+                "{surface}: caller {caller:?} has non-actor kind {kind}; ability-management mutations require an admitted User, Agent, or Authority"
+            ),
+        }
+    }
+
+    fn ura(&self) -> &str {
+        match self {
+            Self::User(ura) | Self::Agent(ura) | Self::Authority(ura) => ura,
+        }
+    }
+}
+
+fn require_ability_deployment_registrar(
+    ability_deployment_registrar: &SharedAbilityDeploymentRegistrarCell,
     surface: &str,
-) -> anyhow::Result<Arc<DeviceAbilityRegistrar>> {
-    device_registrar.get().cloned().ok_or_else(|| {
+) -> anyhow::Result<Arc<AbilityDeploymentRegistrar>> {
+    ability_deployment_registrar.get().cloned().ok_or_else(|| {
         anyhow::anyhow!(
-            "{surface}: canonical device ability registrar is unavailable; \
+            "{surface}: canonical ability deployment registrar is unavailable; \
              daemon runtime assembly has not completed"
         )
     })
@@ -388,6 +427,7 @@ impl AbilityNamespace {
     }
 }
 
+#[derive(Debug)]
 struct AbilityBundle {
     display_path: String,
     /// Absolute path to the bundle's `ability.json` (durable store key).
@@ -410,26 +450,36 @@ impl AbilityBundle {
     fn from_resource_ref(args: &Value) -> anyhow::Result<Self> {
         let resolved =
             filesystem::resolve_filesystem_path(args, FilesystemResourceCapability::Read)?;
-        let dir = resolved.local_path;
+        let path = resolved.local_path;
         let display_path = resolved.display_path;
-        if !dir.is_dir() {
-            anyhow::bail!("ability.deploy: resource_ref {display_path:?} is not a directory");
-        }
-
-        let manifest_file = dir.join("ability.json");
-        if !manifest_file.is_file() {
+        let (manifest_path, raw_manifest_bytes) = if path.is_dir() {
+            let manifest_file = path.join("ability.json");
+            if !manifest_file.is_file() {
+                anyhow::bail!(
+                    "ability.deploy: resource_ref {display_path:?} does not contain an ability.json"
+                );
+            }
+            (
+                manifest_file.to_string_lossy().into_owned(),
+                std::fs::read(&manifest_file)?,
+            )
+        } else if path.is_file() {
+            (
+                format!("{display_path}!/ability.json"),
+                read_root_ability_json_from_archive(&path, &display_path)?,
+            )
+        } else {
             anyhow::bail!(
-                "ability.deploy: resource_ref {display_path:?} does not contain an ability.json"
+                "ability.deploy: resource_ref {display_path:?} must be a directory or tar.gz bundle"
             );
-        }
+        };
 
-        let raw_manifest_bytes = std::fs::read(&manifest_file)?;
         let (manifest, namespace, manifest_bytes) =
-            parse_device_ability_bundle_manifest(&raw_manifest_bytes, &display_path)?;
+            parse_ability_deployment_bundle_manifest(&raw_manifest_bytes, &display_path)?;
 
         Ok(Self {
             display_path,
-            manifest_path: manifest_file.to_string_lossy().into_owned(),
+            manifest_path,
             manifest_bytes,
             public_name: manifest.name().to_string(),
             namespace,
@@ -445,7 +495,51 @@ impl AbilityBundle {
     }
 }
 
-fn parse_device_ability_bundle_manifest(
+fn read_root_ability_json_from_archive(path: &Path, display_path: &str) -> anyhow::Result<Vec<u8>> {
+    let file = std::fs::File::open(path).map_err(|e| {
+        anyhow::anyhow!("ability.deploy: open bundle archive {display_path:?}: {e}")
+    })?;
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz);
+    let mut entries = archive
+        .entries()
+        .map_err(|e| anyhow::anyhow!("ability.deploy: read tar.gz bundle {display_path:?}: {e}"))?;
+    while let Some(entry) = entries.next() {
+        let mut entry = entry.map_err(|e| {
+            anyhow::anyhow!("ability.deploy: read tar.gz entry from {display_path:?}: {e}")
+        })?;
+        let entry_path = entry.path().map_err(|e| {
+            anyhow::anyhow!("ability.deploy: read tar.gz entry path from {display_path:?}: {e}")
+        })?;
+        if archive_entry_is_root_ability_json(&entry_path) {
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).map_err(|e| {
+                anyhow::anyhow!(
+                    "ability.deploy: read ability.json from tar.gz bundle {display_path:?}: {e}"
+                )
+            })?;
+            return Ok(bytes);
+        }
+    }
+
+    anyhow::bail!(
+        "ability.deploy: tar.gz bundle {display_path:?} does not contain root ability.json"
+    )
+}
+
+fn archive_entry_is_root_ability_json(path: &Path) -> bool {
+    let mut components = path.components().filter_map(|component| match component {
+        std::path::Component::CurDir => None,
+        std::path::Component::Normal(part) => Some(part),
+        _ => Some(std::ffi::OsStr::new("__invalid__")),
+    });
+    matches!(
+        (components.next(), components.next()),
+        (Some(first), None) if first == std::ffi::OsStr::new("ability.json")
+    )
+}
+
+fn parse_ability_deployment_bundle_manifest(
     bytes: &[u8],
     display_path: &str,
 ) -> anyhow::Result<(
@@ -468,7 +562,9 @@ fn parse_device_ability_bundle_manifest(
 
     let canonical_value = Value::Object(object);
     let canonical_manifest_bytes = serde_json::to_vec(&canonical_value).map_err(|e| {
-        anyhow::anyhow!("invalid ability.json at {display_path}/ability.json: serialize canonical manifest: {e}")
+        anyhow::anyhow!(
+            "invalid ability.json at {display_path}/ability.json: serialize canonical manifest: {e}"
+        )
     })?;
     let manifest = crate::daemon::ability::manifest::AbilityManifest::from_json_slice(
         &canonical_manifest_bytes,
@@ -481,15 +577,20 @@ fn parse_device_ability_bundle_manifest(
 fn deploy_ability_handler(
     env: EnvelopeContext,
     args: Value,
-    device_registrar: &SharedDeviceRegistrarCell,
+    ability_deployment_registrar: &SharedAbilityDeploymentRegistrarCell,
 ) -> anyhow::Result<Value> {
-    deploy_ability_handler_with_clock(env, args, device_registrar, &SystemDeviceOpsClock)
+    deploy_ability_handler_with_clock(
+        env,
+        args,
+        ability_deployment_registrar,
+        &SystemDeviceOpsClock,
+    )
 }
 
 fn deploy_ability_handler_with_clock(
     env: EnvelopeContext,
     args: Value,
-    device_registrar: &SharedDeviceRegistrarCell,
+    ability_deployment_registrar: &SharedAbilityDeploymentRegistrarCell,
     clock: &dyn DeviceOpsClock,
 ) -> anyhow::Result<Value> {
     let target_ura = args
@@ -499,24 +600,33 @@ fn deploy_ability_handler_with_clock(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("ability.deploy: `target_ura` is required"))?;
     let local = local_identity()?;
-    let owner_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
-    let mutated_by = require_local_device_authority(&env, &owner_ura, "ability.deploy")?;
-    DeviceOperationTarget::classify_target_ura(target_ura, &owner_ura)?
+    let host_device_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
+    let deployed_owner_ura = crate::core::ura::device_agent_ura(
+        &local.tenant_id,
+        &local.node_id,
+        crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
+    );
+    let mutated_by = AbilityManagementMutationActor::from_envelope(&env, "ability.deploy")?
+        .ura()
+        .to_string();
+    let creator_invocation_id = env.invocation_id().to_string();
+    DeviceOperationTarget::classify_target_ura(target_ura, &host_device_ura)?
         .require_local_mutation("ability.deploy")?;
 
     // ── manifest materialization ────────────────────────────────────
     let bundle = AbilityBundle::from_resource_ref(&args)?;
     let key = bundle.wire_key();
-    let ability_ura = crate::core::ura::owner_ability_ura(&owner_ura, &key)
+    let ability_ura = crate::core::ura::owner_ability_ura(&deployed_owner_ura, &key)
         .ok_or_else(|| anyhow::anyhow!("ability.deploy: cannot derive ability_ura"))?;
-    let install_id = DeviceAbilityRecord::derive_install_id(
+    let install_id = AbilityDeploymentRecord::derive_install_id(
         &ability_ura,
         &manifest_digest(&bundle.manifest_bytes),
     );
 
     // The registrar (runtime binding + durable commit) is a canonical daemon
     // runtime assembly precondition.
-    let registrar = require_device_registrar(device_registrar, "ability.deploy")?;
+    let registrar =
+        require_ability_deployment_registrar(ability_deployment_registrar, "ability.deploy")?;
 
     // Operator-facing store timestamp. The cryptographic execution
     // timeline remains the Axon receipt chain; this field is for deploy
@@ -527,7 +637,7 @@ fn deploy_ability_handler_with_clock(
         })?),
         None => None,
     };
-    let install = DeviceAbilityInstall::new(
+    let install = AbilityDeploymentInstall::new(
         key.clone(),
         bundle.namespace.as_str(),
         ability_ura.clone(),
@@ -535,6 +645,8 @@ fn deploy_ability_handler_with_clock(
         bundle.manifest_bytes.clone(),
         bundle.manifest.clone(),
         clock.now_unix_ms(),
+        mutated_by.clone(),
+        creator_invocation_id.clone(),
     )?
     .with_binding_lease_ms(binding_lease_ms)?;
 
@@ -546,8 +658,10 @@ fn deploy_ability_handler_with_clock(
         "namespace": bundle.namespace.as_str(),
         "ability_ura": ability_ura,
         "node_id": local.node_id,
-        "target_ura": owner_ura,
+        "target_ura": host_device_ura,
+        "owner_ura": deployed_owner_ura,
         "mutated_by": mutated_by,
+        "creator_invocation_id": creator_invocation_id,
         "install_id": install_id,
         "binding_lease_ms": binding_lease_ms,
         "bundle": bundle.display_path,
@@ -563,8 +677,8 @@ fn deploy_ability_handler_with_clock(
 /// stream-source IO registers on the live driver — same rationale as
 /// `mcp_executor::block_on_async`.
 fn block_on_install(
-    registrar: Arc<DeviceAbilityRegistrar>,
-    install: DeviceAbilityInstall,
+    registrar: Arc<AbilityDeploymentRegistrar>,
+    install: AbilityDeploymentInstall,
 ) -> anyhow::Result<
     crate::daemon::ability::builtins::device_control::ability_management::registrar::InstallState,
 > {
@@ -579,7 +693,7 @@ fn block_on_install(
 fn uninstall_ability_handler(
     env: EnvelopeContext,
     args: Value,
-    device_registrar: &SharedDeviceRegistrarCell,
+    ability_deployment_registrar: &SharedAbilityDeploymentRegistrarCell,
 ) -> anyhow::Result<Value> {
     let ability_ura = args
         .get("ability_ura")
@@ -595,12 +709,15 @@ fn uninstall_ability_handler(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("ability.uninstall: `target_ura` is required"))?;
     let local = local_identity()?;
-    let owner_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
-    let mutated_by = require_local_device_authority(&env, &owner_ura, "ability.uninstall")?;
-    DeviceOperationTarget::classify_target_ura(target_ura, &owner_ura)?
+    let host_device_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
+    let mutated_by = AbilityManagementMutationActor::from_envelope(&env, "ability.uninstall")?
+        .ura()
+        .to_string();
+    DeviceOperationTarget::classify_target_ura(target_ura, &host_device_ura)?
         .require_local_mutation("ability.uninstall")?;
 
-    let registrar = require_device_registrar(device_registrar, "ability.uninstall")?;
+    let registrar =
+        require_ability_deployment_registrar(ability_deployment_registrar, "ability.uninstall")?;
     let install_id = args
         .get("install_id")
         .and_then(Value::as_str)
@@ -609,7 +726,7 @@ fn uninstall_ability_handler(
         .map(str::to_string);
     let outcome = block_on_uninstall(
         registrar,
-        DeviceAbilityUninstall {
+        AbilityDeploymentUninstall {
             ability_ura: ability_ura.to_string(),
             install_id,
         },
@@ -619,7 +736,7 @@ fn uninstall_ability_handler(
         "public_name": public_name,
         "ability_ura": ability_ura,
         "node_id": local.node_id,
-        "target_ura": owner_ura,
+        "target_ura": host_device_ura,
         "mutated_by": mutated_by,
         "install_ids": outcome.install_ids,
         "runtime_removed": outcome.runtime_removed,
@@ -629,9 +746,9 @@ fn uninstall_ability_handler(
 }
 
 fn block_on_uninstall(
-    registrar: Arc<DeviceAbilityRegistrar>,
-    uninstall: DeviceAbilityUninstall,
-) -> anyhow::Result<crate::daemon::ability::builtins::device_control::ability_management::registrar::DeviceAbilityUninstallOutcome>
+    registrar: Arc<AbilityDeploymentRegistrar>,
+    uninstall: AbilityDeploymentUninstall,
+) -> anyhow::Result<crate::daemon::ability::builtins::device_control::ability_management::registrar::AbilityDeploymentUninstallOutcome>
 {
     block_on_device_transaction("ability.uninstall", async move {
         registrar.uninstall(uninstall).await
@@ -688,10 +805,14 @@ pub fn remove_node_input_schema() -> Value {
 }
 
 pub fn deploy_ability_description() -> &'static str {
-    "Publish a host_stream device ability bundle ResourceRef to a canonical Device URA. Local \
-     target validates the manifest, durably installs it, binds the runtime, \
-     and registers the control-plane record. Remote targets are currently \
-     unsupported by the canonical runtime capability matrix. Shell and arbitrary \
+    "Deploy a host_stream ability bundle ResourceRef through the device-sponsored \
+     ability-management SystemAgent, which owns the deployed public descriptor. \
+     The target Device is execution host/custody only, not descriptor owner or \
+     public callee. A local target validates the manifest, durably installs it, \
+     binds the runtime, and registers the control-plane record. Remote CLI deploy \
+     stages a tar.gz bundle into the target Device resource plane before invoking \
+     this ability on its ability-management SystemAgent; this handler still \
+     rejects attempts to mutate a non-local target directly. Shell and arbitrary \
      host-command exec kinds are rejected until a permission broker exists."
 }
 
@@ -709,10 +830,11 @@ pub fn deploy_ability_input_schema() -> Value {
 }
 
 pub fn uninstall_ability_description() -> &'static str {
-    "Uninstall an ability from a canonical Device URA. Mirrors `ability.deploy`: \
-     local target removes the durable row, runtime binding, and \
-     control-plane record; remote targets are currently unsupported by the \
-     canonical runtime capability matrix."
+    "Uninstall an ability from a canonical host Device URA. The accountable \
+     User invokes the target Device's ability-management SystemAgent with the \
+     removed Ability URA as subject; the Device remains execution host/custody \
+     only. The target removes the durable row, runtime binding, and \
+     control-plane record as one lifecycle transition."
 }
 
 pub fn uninstall_ability_input_schema() -> Value {
@@ -833,7 +955,7 @@ mod tests {
     /// validation path (resource_ref / manifest parse) without needing
     /// a live runtime. The install transaction itself is covered by the
     /// negative-test matrix with a wired runtime.
-    fn empty_device_cell() -> SharedDeviceRegistrarCell {
+    fn empty_device_cell() -> SharedAbilityDeploymentRegistrarCell {
         std::sync::OnceLock::new()
     }
 
@@ -867,15 +989,52 @@ mod tests {
         guard
     }
 
-    fn local_device_env() -> EnvelopeContext {
-        EnvelopeContext::for_test(LOCAL_SYSTEM_AGENT_URA, "easynet:///r/test/device/local")
+    fn admitted_user_env() -> EnvelopeContext {
+        EnvelopeContext::for_test(
+            "easynet:///r/test/user/user-alice",
+            "easynet:///r/test/device/local",
+        )
+    }
+
+    #[test]
+    fn ability_management_actor_preserves_admitted_logical_caller_kinds() {
+        for caller in [
+            "easynet:///r/test/user/user-alice",
+            "easynet:///r/test/agent/user-alice.operator",
+            "easynet:///r/test/authority",
+        ] {
+            let env = EnvelopeContext::for_test(caller, "easynet:///r/test/device/local");
+            let actor = AbilityManagementMutationActor::from_envelope(&env, "ability.deploy")
+                .expect("logical actor kind must remain available after admission");
+            assert_eq!(actor.ura(), caller);
+        }
+        let local_system = EnvelopeContext::for_test(
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+            "easynet:///r/test/device/local",
+        );
+        AbilityManagementMutationActor::from_envelope(&local_system, "ability.deploy")
+            .expect_err("ambient local system issuer must not mutate public ability state");
+    }
+
+    #[test]
+    fn ability_management_actor_rejects_device_custody_as_mutation_authority() {
+        let env = EnvelopeContext::for_test(
+            "easynet:///r/test/device/local",
+            "easynet:///r/test/agent/device.local.ability-management",
+        );
+        let error = AbilityManagementMutationActor::from_envelope(&env, "ability.deploy")
+            .expect_err("Device custody must not become an ability-management actor");
+        assert!(
+            error.to_string().contains("non-actor kind device"),
+            "{error}"
+        );
     }
 
     #[test]
     fn deploy_ability_rejects_missing_resource_ref() {
         let _home = provision_local_device_credentials();
         let err = deploy_ability_handler(
-            local_device_env(),
+            admitted_user_env(),
             json!({ "target_ura": TEST_DEVICE_URA }),
             &empty_device_cell(),
         )
@@ -892,8 +1051,8 @@ mod tests {
             json!({ "resource_ref": {}, "target_ura": "remote-a" }),
             json!({ "resource_ref": {}, "target_ura": crate::core::ura::hub_ura("test") }),
         ] {
-            let err = deploy_ability_handler(local_device_env(), args, &empty_device_cell())
-                .expect_err("deploy target must be an explicit canonical Device URA");
+            let err = deploy_ability_handler(admitted_user_env(), args, &empty_device_cell())
+                .expect_err("deploy target must be an explicit canonical host Device URA");
             let message = format!("{err}");
             assert!(
                 message.contains("target_ura"),
@@ -910,7 +1069,7 @@ mod tests {
             filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
                 .unwrap();
         let err = deploy_ability_handler(
-            local_device_env(),
+            admitted_user_env(),
             json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
             &empty_device_cell(),
         )
@@ -937,13 +1096,13 @@ mod tests {
             filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
                 .unwrap();
         let err = deploy_ability_handler(
-            local_device_env(),
+            admitted_user_env(),
             json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
             &empty_device_cell(),
         )
         .unwrap_err();
         assert!(
-            format!("{err}").contains("canonical device ability registrar is unavailable"),
+            format!("{err}").contains("canonical ability deployment registrar is unavailable"),
             "expected canonical registrar precondition failure, got: {err}"
         );
     }
@@ -952,7 +1111,7 @@ mod tests {
     fn deploy_ability_remote_target_is_unsupported_before_bundle_materialization() {
         let _home = provision_local_device_credentials();
         let err = deploy_ability_handler(
-            local_device_env(),
+            admitted_user_env(),
             json!({ "target_ura": "easynet:///r/test/device/remote-a" }),
             &empty_device_cell(),
         )
@@ -979,7 +1138,7 @@ mod tests {
             filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
                 .unwrap();
         let err = deploy_ability_handler(
-            local_device_env(),
+            admitted_user_env(),
             json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
             &empty_device_cell(),
         )
@@ -1005,7 +1164,7 @@ mod tests {
             filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
                 .unwrap();
         let err = deploy_ability_handler(
-            local_device_env(),
+            admitted_user_env(),
             json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
             &empty_device_cell(),
         )
@@ -1020,7 +1179,7 @@ mod tests {
             "exec":{"kind":"shell","argv":["echo","hi"]}}"#;
 
         let (manifest, namespace, canonical_bytes) =
-            parse_device_ability_bundle_manifest(raw, "/tmp/bundle").unwrap();
+            parse_ability_deployment_bundle_manifest(raw, "/tmp/bundle").unwrap();
         assert_eq!(manifest.name(), "weather");
         assert_eq!(namespace.as_str(), "er");
         let canonical: Value = serde_json::from_slice(&canonical_bytes).unwrap();
@@ -1030,6 +1189,77 @@ mod tests {
         );
         crate::daemon::ability::manifest::AbilityManifest::from_json_slice(&canonical_bytes)
             .expect("canonical bytes must parse as strict AbilityManifest");
+    }
+
+    #[test]
+    fn deploy_ability_bundle_archive_reads_root_ability_json() {
+        let _home = provision_local_device_credentials();
+        let dir = tempfile::tempdir().unwrap();
+        let archive_path = dir.path().join("bundle.tar.gz");
+        let raw = br#"{"schema_version":"1","name":"weather","namespace":"er","description":"w",
+            "input_schema":{"type":"object"},
+            "exec":{"kind":"host_stream","host_socket":"/tmp/er-host.sock","function":"er.weather"}}"#;
+        {
+            let file = std::fs::File::create(&archive_path).unwrap();
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(raw.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, "ability.json", &raw[..])
+                .unwrap();
+            archive.finish().unwrap();
+        }
+        let resource_ref = filesystem::resource_ref_for_local_path(
+            &archive_path,
+            FilesystemResourceCapability::Read,
+        )
+        .unwrap();
+
+        let bundle = AbilityBundle::from_resource_ref(&json!({ "resource_ref": resource_ref }))
+            .expect("tar.gz ability bundle should parse root ability.json");
+
+        assert_eq!(bundle.public_name, "weather");
+        assert_eq!(bundle.namespace.as_str(), "er");
+        assert!(bundle.manifest_path.ends_with("!/ability.json"));
+    }
+
+    #[test]
+    fn deploy_ability_bundle_archive_requires_root_ability_json() {
+        let _home = provision_local_device_credentials();
+        let dir = tempfile::tempdir().unwrap();
+        let archive_path = dir.path().join("bundle.tar.gz");
+        {
+            let file = std::fs::File::create(&archive_path).unwrap();
+            let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+            let mut archive = tar::Builder::new(encoder);
+            let raw = br#"{"schema_version":"1","name":"weather","namespace":"er","description":"w",
+                "input_schema":{"type":"object"},
+                "exec":{"kind":"host_stream","host_socket":"/tmp/er-host.sock","function":"er.weather"}}"#;
+            let mut header = tar::Header::new_gnu();
+            header.set_size(raw.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive
+                .append_data(&mut header, "nested/ability.json", &raw[..])
+                .unwrap();
+            archive.finish().unwrap();
+        }
+        let resource_ref = filesystem::resource_ref_for_local_path(
+            &archive_path,
+            FilesystemResourceCapability::Read,
+        )
+        .unwrap();
+
+        let err = AbilityBundle::from_resource_ref(&json!({ "resource_ref": resource_ref }))
+            .expect_err("nested ability.json must not be accepted as root bundle manifest");
+
+        assert!(
+            err.to_string().contains("root ability.json"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1048,7 +1278,7 @@ mod tests {
             filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
                 .unwrap();
         let err = deploy_ability_handler(
-            local_device_env(),
+            admitted_user_env(),
             json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
             &empty_device_cell(),
         )
@@ -1063,7 +1293,7 @@ mod tests {
     fn uninstall_ability_requires_canonical_registrar() {
         let _home = provision_local_device_credentials();
         let err = uninstall_ability_handler(
-            local_device_env(),
+            admitted_user_env(),
             json!({
                 "ability_ura": "easynet:///r/localhost/ability/alice.claude.weather",
                 "target_ura": TEST_DEVICE_URA,
@@ -1071,14 +1301,14 @@ mod tests {
             &empty_device_cell(),
         )
         .unwrap_err();
-        assert!(format!("{err}").contains("canonical device ability registrar is unavailable"));
+        assert!(format!("{err}").contains("canonical ability deployment registrar is unavailable"));
     }
 
     #[test]
     fn uninstall_ability_remote_target_is_unsupported_capability_state() {
         let _home = provision_local_device_credentials();
         let err = uninstall_ability_handler(
-            local_device_env(),
+            admitted_user_env(),
             json!({
                 "ability_ura": "easynet:///r/localhost/ability/alice.claude.weather",
                 "target_ura": "easynet:///r/test/device/remote-a",
@@ -1107,7 +1337,7 @@ mod tests {
         let resource_ref =
             filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
                 .unwrap();
-        let store_path = dir.path().join("device-abilities.json");
+        let store_path = dir.path().join("ability-deployments.json");
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let dir_path = dir.path().to_path_buf();
 
@@ -1117,8 +1347,8 @@ mod tests {
                 .build()
                 .unwrap();
             let result = runtime.block_on(async move {
-                let registrar = DeviceAbilityRegistrar::new_pending_with_store(
-                    DeviceAbilityStore::open_at(store_path),
+                let registrar = AbilityDeploymentRegistrar::new_pending_with_store(
+                    AbilityDeploymentStore::open_at(store_path),
                 );
                 let local_runtime =
                     crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
@@ -1130,10 +1360,10 @@ mod tests {
                 registrar
                     .set_control_plane_catalog(Arc::downgrade(&catalog))
                     .unwrap();
-                let cell = SharedDeviceRegistrarCell::new();
+                let cell = SharedAbilityDeploymentRegistrarCell::new();
                 assert!(cell.set(registrar).is_ok());
                 deploy_ability_handler(
-                    local_device_env(),
+                    admitted_user_env(),
                     json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
                     &cell,
                 )
@@ -1147,5 +1377,20 @@ mod tests {
             .expect("deploy transaction must not park the current-thread runtime")
             .unwrap();
         assert_eq!(resp.get("state").and_then(Value::as_str), Some("ACTIVE"));
+        assert_eq!(
+            resp.get("target_ura").and_then(Value::as_str),
+            Some(TEST_DEVICE_URA),
+            "target_ura remains the Device execution host"
+        );
+        assert_eq!(
+            resp.get("owner_ura").and_then(Value::as_str),
+            Some("easynet:///r/test/agent/device.local.ability-management"),
+            "dynamic deploy descriptor owner must be the ability-management SystemAgent"
+        );
+        assert_eq!(
+            resp.get("ability_ura").and_then(Value::as_str),
+            Some("easynet:///r/test/ability/system-agent.local.ability-management.er.weather"),
+            "dynamic deploy must not recreate a direct Device-owned Ability URA"
+        );
     }
 }
