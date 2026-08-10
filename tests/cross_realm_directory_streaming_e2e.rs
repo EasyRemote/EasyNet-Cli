@@ -76,7 +76,7 @@ use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::Daemon
 use easynet_cli::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
 use easynet_cli::daemon::persistence::access_control::AccessControlStoreRegistry;
 use easynet_cli::daemon::trust::anchor::{
-    RealmTrustAnchor, TrustedAgent, TrustedAgentRole, TrustedPrincipalOwner,
+    RealmTrustAnchor, TrustAnchorRole, TrustedAgent, TrustedPrincipalOwner,
 };
 use easynet_cli::daemon::trust::cell::SharedTrustAnchor;
 use easynet_cli::daemon::trust::key_resolver::RealmTrustAnchorKeyResolver;
@@ -190,7 +190,7 @@ async fn upstream_daemon(
                     .verifying_key()
                     .to_bytes(),
             ),
-            role: TrustedAgentRole::Hub,
+            role: TrustAnchorRole::Hub,
             added_at_unix_ms: 1_700_000_000_000,
             origin_realm: Some(trusted_peer_realm.to_string()),
             hub_endpoint: Some(format!("https://{trusted_peer_realm}.example:50443")),
@@ -211,18 +211,20 @@ async fn upstream_daemon(
             store.create_grant(
                 PermissionGrant {
                     grant_id: "cross-realm-directory-stream".to_string(),
-                    owner_user_id: UPSTREAM_OWNER_USER_ID.to_string(),
+                    owner_user_ura: owner_user_ura.clone(),
                     principal_kind: PrincipalKind::Token,
                     principal_id: trusted_peer_ura.clone(),
                     token_id: Some(trusted_peer_ura),
                     token_class: Some(TokenClass::HubLink),
+                    session_id: None,
+                    session_expires_at: None,
                     callee_ura: Some(owner_ura.clone()),
                     subject_ura_pattern: Some(subject_ura),
                     ability_ura_pattern: Some(ability_ura),
                     actions: vec![AccessAction::Stream],
                     constraints: None,
                     effect: PermissionEffect::Allow,
-                    lifetime: PermissionGrantLifetime::Session,
+                    lifetime: PermissionGrantLifetime::Permanent,
                     state: PermissionGrantState::Active,
                     expires_at: None,
                     review_required_after: None,

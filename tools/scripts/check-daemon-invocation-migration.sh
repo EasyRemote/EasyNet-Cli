@@ -356,6 +356,7 @@ for path in sorted((root / "src").rglob("*.rs")):
             ("src/daemon/invocation/routing/remote_invoke.rs", "target_owned_root_plan"),
             ("src/daemon/invocation/routing/remote_invoke.rs", "catalogue_read_plan"),
             ("src/daemon/invocation/routing/remote_invoke.rs", "followup_root_plan"),
+            ("src/daemon/invocation/routing/remote_invoke.rs", "caller_declared_root_plan"),
             ("src/daemon/invocation/routing/remote_invoke.rs", "child_plan"),
         }:
             violations.append(
@@ -414,6 +415,8 @@ for token, detail in (
     ("pub(crate) fn public_explicit", "public explicit tuple constructor"),
     ("pub(crate) struct RemoteSystemInvocationIssuer", "daemon-system remote issuer"),
     ("pub(crate) fn target_owned_root_plan", "daemon-system target-owned remote root issuer constructor"),
+    ("pub(crate) struct RemoteUserActionInvocationIssuer", "User-accountable product root issuer"),
+    ("pub(crate) fn caller_declared_root_plan", "User-accountable product root issuer constructor"),
     ("pub(crate) struct RemoteChildInvocationIssuer", "runtime child remote issuer"),
     ("pub(crate) fn child_plan", "runtime child remote issuer constructor"),
     ("InvocationCausalContext::daemon_system_root()", "shared daemon-system causal policy"),

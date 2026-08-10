@@ -1,13 +1,13 @@
 schema_version = "2"
 name = "ability.deploy"
 descriptor_version = "1.0.0"
-description = "Publish a host_stream device ability bundle ResourceRef to a canonical Device URA. Local target validates the manifest, durably installs it, binds the runtime, and registers the control-plane record. Remote targets are currently unsupported by the canonical runtime capability matrix. Shell and arbitrary host-command exec kinds are rejected until a permission broker exists."
+description = "Deploy a host_stream ability bundle ResourceRef through the device-sponsored ability-management SystemAgent, which owns the deployed public descriptor. The target Device is execution host/custody only, not descriptor owner or public callee. A local target validates the manifest, durably installs it, binds the runtime, and registers the control-plane record. Remote CLI deploy stages a tar.gz bundle into the target Device resource plane before invoking this ability on its ability-management SystemAgent; this handler still rejects attempts to mutate a non-local target directly. Shell and arbitrary host-command exec kinds are rejected until a permission broker exists."
 call_mode = "rpc"
 capability_state = "cutover_ready"
 admission_action = "manage"
 visibility = "SCOPED"
-scope_subjects_kind = "any"
-scope_subjects_uras = []
+scope_subjects_kind = "only_ura_kinds"
+scope_subjects_uras = ["resource"]
 scope_agents_kind = "any"
 scope_agents_uras = []
 denied_agents = []
@@ -19,6 +19,11 @@ receipt_semantics = "operational"
 type = "object"
 required = ["resource_ref", "target_ura"]
 additionalProperties = false
+
+[input_schema.properties.binding_lease_ms]
+type = "integer"
+minimum = 1000
+maximum = 300000
 
 [input_schema.properties.resource_ref]
 type = "object"

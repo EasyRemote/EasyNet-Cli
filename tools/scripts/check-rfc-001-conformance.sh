@@ -143,16 +143,10 @@ count_pattern "agent.kind / agent.role branches" \
   '\bagent\.(kind|role)\b' \
   "$SRC"
 
-# AgentType (claude-code | codex | codex-app-server) is the legacy
-# Rust sub-agent type discriminator. Per the P4.4 decision it stays
-# as an internal Rust type — the wire-level Agent envelope still has
-# no `kind` field (Rule 2 above enforces that). The display string
-# is surfaced through AbilityDescriptor.metadata["agent_type"] when
-# the LLM-profile descriptor builder has it; see
-# daemon/ability/catalog/profiles/llm.rs::descriptors_for_with_metadata.
-# Counted (not [info]) so a future drop-the-internal-enum cleanup
-# can use the count as its progress signal.
-count_pattern "AgentType internal enum (kept by P4.4 decision; no wire impact)" \
+# The retired `AgentType` Rust enum must not return. Runtime adapter selection
+# uses `core::agent::spec::RuntimeKind`; the public `agent_type` JSON field is
+# a compatibility field name, not an Agent-class discriminator.
+count_pattern "retired AgentType enum/name" \
   '\bAgentType\b' \
   "$SRC"
 

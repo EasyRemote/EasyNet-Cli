@@ -16,11 +16,11 @@
 //! 2. The hub read model is seeded with the same admitted
 //!    owner-projection shape that `federation.advertise_abilities`
 //!    persists after publication authority admission.
-//! 3. A unary `Invoke` of the device-local ability drives
+//! 3. A unary `Invoke` of the Device-hosted SystemAgent ability drives
 //!    `resolve_local_rpc_route` → `DaemonRouteResolver` →
 //!    remote device FINAL_ROUTE → pending-dispatch precondition.
 //!    The route is proven by descriptor-bound admission plus the
-//!    projection read model, not by a DeviceAgent shortcut.
+//!    projection read model, not by a direct Device-owner shortcut.
 //! 4. A unary `Invoke` of a known online device ability without a
 //!    pending dispatcher reaches the same dispatch precondition.
 //! 5. A unary `Invoke` against a non-local owner that is *not online*
@@ -74,11 +74,12 @@ use tonic::Request;
 const REALM: &str = "test-realm";
 const DEVICE_URA: &str = "easynet:///r/test-realm/device/device-a";
 const REMOTE_DEVICE_URA: &str = "easynet:///r/test-realm/device/device-b";
+const REMOTE_RUNTIME_HEALTH_SYSTEM_AGENT_URA: &str =
+    "easynet:///r/test-realm/agent/device.device-b.runtime-health";
 const HUB_URA: &str = "easynet:///r/test-realm/authority";
 const ABILITY_PUBLIC_NAME: &str = "observe.health";
 const UNBOUND_ABILITY_PUBLIC_NAME: &str = "observe.network_health";
-const ABILITY_URA: &str = "easynet:///r/test-realm/ability/device.device-a.observe.health";
-const DEVICE_SIGNING_SEED: [u8; 32] = [0xA1; 32];
+const TEST_SIGNING_SEED: [u8; 32] = [0xA1; 32];
 
 /// Any single in-process step that takes longer than this is a
 /// pipeline regression, not legitimate work.
@@ -100,12 +101,12 @@ impl SelfIdentity for TestSigner {
     }
 }
 
-fn device_signer() -> TestSigner {
-    TestSigner(SigningKey::from_bytes(&DEVICE_SIGNING_SEED))
+fn test_signer() -> TestSigner {
+    TestSigner(SigningKey::from_bytes(&TEST_SIGNING_SEED))
 }
 
-fn device_public_key_b64() -> String {
-    BASE64_STANDARD.encode(device_signer().0.verifying_key().to_bytes())
+fn test_public_key_b64() -> String {
+    BASE64_STANDARD.encode(test_signer().0.verifying_key().to_bytes())
 }
 
 /// An in-process daemon hosting a real `DaemonInvocationService`
@@ -141,13 +142,19 @@ async fn start_daemon() -> TestDaemon {
     let socket_path = tempdir.path().join("daemon.sock");
 
     let trust_path = tempdir.path().join("realm-trust.toml");
-    let device_public_key_b64 = device_public_key_b64();
+    let test_public_key_b64 = test_public_key_b64();
     let trust_toml = format!(
         r#"
 [[trusted_agent]]
 agent_ura = "{DEVICE_URA}"
-public_key_b64 = "{device_public_key_b64}"
+public_key_b64 = "{test_public_key_b64}"
 role = "device"
+added_at_unix_ms = 0
+
+[[trusted_agent]]
+agent_ura = "{HUB_URA}"
+public_key_b64 = "{test_public_key_b64}"
+role = "hub"
 added_at_unix_ms = 0
 
 [[trusted_agent]]
@@ -261,29 +268,18 @@ async fn connect(socket_path: &std::path::Path) -> Channel {
         .expect("connect to daemon")
 }
 
-/// Mark `DEVICE_URA` online in the presence registry. The dispatch
+/// Mark the host Device online in the presence registry. The dispatch
 /// sender is never read on these paths (resolve only consults the
 /// registry for liveness), so a throwaway channel is sufficient.
-fn mark_owner_online(presence: &PresenceRegistry) {
+fn mark_host_device_online(presence: &PresenceRegistry, host_device_ura: &str) {
     let (tx, _rx) = mpsc::channel(1);
     presence
         .insert_negotiated(
-            DEVICE_URA.to_string(),
+            host_device_ura.to_string(),
             tx,
             SessionContract::new(CANONICAL_SESSION_CARRIER_VERSION, vec![0xA1; 16]),
         )
         .expect("canonical presence key");
-}
-
-/// Build a unary `Invoke` of `function_name` against `callee_ura`,
-/// with `args` as the JSON argument payload.
-fn invoke(
-    catalog: &AxonAbilityCatalog,
-    callee_ura: &str,
-    function_name: &str,
-    args: serde_json::Value,
-) -> Request<InvokeRequest> {
-    invoke_with_explicit_subject(catalog, callee_ura, DEVICE_URA, function_name, args)
 }
 
 fn invoke_with_explicit_subject(
@@ -294,11 +290,11 @@ fn invoke_with_explicit_subject(
     args: serde_json::Value,
 ) -> Request<InvokeRequest> {
     let arguments = args.to_string().into_bytes();
-    let signer = device_signer();
+    let signer = test_signer();
     let descriptor_ref = fixture_descriptor_ref(catalog, callee_ura, function_name);
     Request::new(
         ProtoEnvelope::from_target(
-            DEVICE_URA,
+            HUB_URA,
             callee_ura,
             subject_ura,
             InvocationDerivationPolicy::FreshRoot,
@@ -359,18 +355,40 @@ fn catalog_owner_kind_for(callee_ura: &str) -> OwnerKind {
     let parsed = easynet_cli::core::ura::parse_ura(callee_ura)
         .unwrap_or_else(|err| panic!("fixture callee URA must parse: {callee_ura}: {err}"));
     match parsed.kind {
-        easynet_cli::core::ura::URAKind::Device => OwnerKind::Device,
+        easynet_cli::core::ura::URAKind::Agent => {
+            let (_, system_agent_id) = parsed.device_agent_ids().unwrap_or_else(|| {
+                panic!("fixture Agent callee must be a device-sponsored SystemAgent: {callee_ura}")
+            });
+            match system_agent_id {
+                easynet_cli::daemon::ability::names::governance::RUNTIME_HEALTH_SYSTEM_AGENT_ID => OwnerKind::SystemAgent(
+                    easynet_cli::daemon::ability::names::governance::RUNTIME_HEALTH_SYSTEM_AGENT_ID
+                        .to_string(),
+                ),
+                other => panic!("fixture SystemAgent callee is not supported: {other}"),
+            }
+        }
         easynet_cli::core::ura::URAKind::Authority => OwnerKind::RealmAuthority,
         other => {
-            panic!("fixture callee owner kind must be Device or RealmAuthority, got {other:?}")
+            panic!(
+                "fixture callee owner kind must be device-sponsored SystemAgent or RealmAuthority, got {other:?}"
+            )
         }
     }
 }
 
 /// Seed the hub read model with the same admitted projection shape that
 /// `federation.advertise_abilities` persists after authority admission.
-fn seed_health_projection(daemon: &TestDaemon) {
-    let descriptor = fixture_descriptor(&daemon.catalog, DEVICE_URA, ABILITY_PUBLIC_NAME);
+fn remote_health_projection_summary(daemon: &TestDaemon, public_name: &str) -> serde_json::Value {
+    let descriptor = fixture_descriptor(
+        &daemon.catalog,
+        REMOTE_RUNTIME_HEALTH_SYSTEM_AGENT_URA,
+        public_name,
+    );
+    let ability_ura = easynet_cli::core::ura::owner_ability_ura(
+        REMOTE_RUNTIME_HEALTH_SYSTEM_AGENT_URA,
+        public_name,
+    )
+    .expect("runtime-health SystemAgent ability URA");
     let descriptor_version = descriptor.version.clone();
     let descriptor_revision = descriptor.descriptor_hash_prefixed();
     let schema_hash = descriptor.schema_hash_prefixed();
@@ -402,7 +420,7 @@ fn seed_health_projection(daemon: &TestDaemon) {
         "tags": ["class:unary", "mode:rpc"]
     }]);
     let callable_summary = json!({
-        "public_name": ABILITY_PUBLIC_NAME,
+        "public_name": public_name,
         "description": description,
         "call_mode": "rpc",
         "receipt_semantics": receipt_semantics,
@@ -410,23 +428,30 @@ fn seed_health_projection(daemon: &TestDaemon) {
         "flags": flags,
         "mode_geometry": mode_geometry
     });
-    let ability_summaries = json!([{
-        "ability_ura": ABILITY_URA,
-        "owner_ura": DEVICE_URA,
-        "namespace": "observe",
-        "local_name": "health",
+    json!({
+        "ability_ura": ability_ura,
+        "owner_ura": REMOTE_RUNTIME_HEALTH_SYSTEM_AGENT_URA,
+        "namespace": public_name.split_once('.').map(|(namespace, _)| namespace).unwrap_or(""),
+        "local_name": public_name.split_once('.').map(|(_, local_name)| local_name).unwrap_or(public_name),
         "descriptor_revision": descriptor_revision,
         "schema_hash": schema_hash,
         "policy_ref": policy_hash,
-        "route_summary_ref": format!("route-ref::{ABILITY_URA}"),
+        "route_summary_ref": format!("route-ref::{ability_ura}"),
         "tags": ["class:unary", "mode:rpc"],
         "callable_summary": callable_summary
-    }]);
+    })
+}
+
+fn seed_remote_health_projection(daemon: &TestDaemon) {
+    let ability_summaries = json!([
+        remote_health_projection_summary(daemon, ABILITY_PUBLIC_NAME),
+        remote_health_projection_summary(daemon, UNBOUND_ABILITY_PUBLIC_NAME)
+    ]);
     let stored = daemon
         .ability_catalog_store
         .upsert_admitted_projection_json(json!({
-            "owner_ura": DEVICE_URA,
-            "host_device_ura": DEVICE_URA,
+            "owner_ura": REMOTE_RUNTIME_HEALTH_SYSTEM_AGENT_URA,
+            "host_device_ura": REMOTE_DEVICE_URA,
             "generation": 1,
             "projection_revision": 1,
             "projection_digest": "",
@@ -438,19 +463,20 @@ fn seed_health_projection(daemon: &TestDaemon) {
 }
 
 #[tokio::test]
-async fn invoke_resolves_published_device_ability_to_session_dispatch() {
+async fn invoke_resolves_published_system_agent_ability_to_session_dispatch() {
     let daemon = start_daemon().await;
-    mark_owner_online(&daemon.presence);
+    mark_host_device_online(&daemon.presence, REMOTE_DEVICE_URA);
     let mut client = InvocationClient::new(connect(&daemon.socket_path).await);
 
-    seed_health_projection(&daemon);
+    seed_remote_health_projection(&daemon);
 
     let payload = json!({ "marker": "resolve-before-invoke" });
     let status = tokio::time::timeout(
         STEP_TIMEOUT,
-        client.invoke(invoke(
+        client.invoke(invoke_with_explicit_subject(
             &daemon.catalog,
-            DEVICE_URA,
+            REMOTE_RUNTIME_HEALTH_SYSTEM_AGENT_URA,
+            REMOTE_DEVICE_URA,
             ABILITY_PUBLIC_NAME,
             payload.clone(),
         )),
@@ -472,16 +498,20 @@ async fn invoke_resolves_published_device_ability_to_session_dispatch() {
 #[tokio::test]
 async fn invoke_reaches_dispatch_precondition_when_owner_online_for_known_ability() {
     let daemon = start_daemon().await;
-    mark_owner_online(&daemon.presence);
+    mark_host_device_online(&daemon.presence, REMOTE_DEVICE_URA);
     let mut client = InvocationClient::new(connect(&daemon.socket_path).await);
 
-    // Owner is online and the descriptor is known; without a pending remote
-    // dispatcher, resolve must get far enough to fail at dispatch precondition.
+    seed_remote_health_projection(&daemon);
+
+    // Host Device is online and the SystemAgent has published the descriptor;
+    // without a pending remote dispatcher, resolve must get far enough to fail
+    // at dispatch precondition.
     let status = tokio::time::timeout(
         STEP_TIMEOUT,
-        client.invoke(invoke(
+        client.invoke(invoke_with_explicit_subject(
             &daemon.catalog,
-            DEVICE_URA,
+            REMOTE_RUNTIME_HEALTH_SYSTEM_AGENT_URA,
+            REMOTE_DEVICE_URA,
             UNBOUND_ABILITY_PUBLIC_NAME,
             json!({}),
         )),
@@ -509,8 +539,9 @@ async fn invoke_surfaces_typed_nxdomain_when_owner_offline() {
 
     let status = tokio::time::timeout(
         STEP_TIMEOUT,
-        client.invoke(invoke(
+        client.invoke(invoke_with_explicit_subject(
             &daemon.catalog,
+            REMOTE_RUNTIME_HEALTH_SYSTEM_AGENT_URA,
             REMOTE_DEVICE_URA,
             ABILITY_PUBLIC_NAME,
             json!({}),

@@ -166,6 +166,8 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "plugin remove" "$0"
   grep -q "user_plugin_one_invocation_record" "$0"
   grep -q "provider_catalog" "$0"
+  grep -q "caller-remote-native-deploy.json" "$0"
+  grep -q "caller_cli_remote_deployed_native_easynet_ability" "$0"
   grep -q "provider-invocation-list-native-after-easyremote" "$0"
   grep -q "native_easynet_receipt_chains_projected" "$0"
   grep -q "caller_observed_native_easynet_ability_removed" "$0"
@@ -183,6 +185,9 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "ability list --node" "$0"
   grep -q "ability stream" "$0"
   grep -q "invocation list --ability-ura" "$0"
+  grep -q "collect_complete_invocation_records" "$0"
+  grep -q "capture_latest_agent_send_run" "$0"
+  grep -q "caller_agent_send_mission_completed" "$0"
   grep -q "resolve_docker" "$0"
   grep -q "extend_tool_path" "$0"
   grep -q "docker compose" "$0"
@@ -265,6 +270,44 @@ caller_cli() {
 
 caller_cli_probe() {
   service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so timeout '${CLI_PROBE_SECS}s' easynet $*"
+}
+
+capture_latest_agent_send_run() {
+  [[ $# -eq 3 ]] || die "capture_latest_agent_send_run requires <service> <home> <artifact-stem>"
+  local service="$1"
+  local home="$2"
+  local stem="$3"
+  local file
+  for file in source.eal ir.json trace.json meta.json; do
+    service_exec "$service" "run=\$(find '$home/.easynet/missions/runs' -mindepth 1 -maxdepth 1 -type d -name '*_agent-send' | sort | tail -n 1); test -n \"\$run\"; cat \"\$run/$file\"" \
+      >"$OUT_DIR/${stem}-${file}"
+  done
+}
+
+collect_complete_invocation_records() {
+  [[ $# -eq 4 ]] || die "collect_complete_invocation_records requires <service> <summary-json> <records-json> <stderr>"
+  local service="$1"
+  local summary_json="$2"
+  local records_json="$3"
+  local stderr_file="$4"
+  local records_jsonl="${records_json}.jsonl"
+  local cli="${service}_cli"
+  declare -F "$cli" >/dev/null || die "unknown invocation ledger service: $service"
+  : >"$records_jsonl"
+  : >"$stderr_file"
+  local request_id
+  while IFS= read -r request_id; do
+    [[ -n "$request_id" ]] || continue
+    "$cli" "invocation show '$request_id' --format json" \
+      </dev/null >>"$records_jsonl" 2>>"$stderr_file"
+  done < <(jq -r '
+    if type == "array" then .
+    elif type == "object" then (.records // .items // [])
+    else []
+    end
+    | .[] | .request_id // empty
+  ' "$summary_json")
+  jq -s '.' "$records_jsonl" >"$records_json"
 }
 
 dump_logs() {
@@ -672,12 +715,20 @@ wait_caller_device "$PROVIDER_NODE"
 hub_cli "invocation list --ability-ura '$DIRECTORY_DISCOVER_URA' --limit 500 --format json" \
   >"$OUT_DIR/hub-invocation-list-directory-before-device-list.json" \
   2>"$OUT_DIR/hub-invocation-list-directory-before-device-list.err"
+collect_complete_invocation_records hub \
+  "$OUT_DIR/hub-invocation-list-directory-before-device-list.json" \
+  "$OUT_DIR/hub-invocation-records-directory-before-device-list.json" \
+  "$OUT_DIR/hub-invocation-records-directory-before-device-list.err"
 caller_cli "device list --state all --format json" \
   >"$OUT_DIR/caller-device-list-single-submit.json" \
   2>"$OUT_DIR/caller-device-list-single-submit.err"
 hub_cli "invocation list --ability-ura '$DIRECTORY_DISCOVER_URA' --limit 500 --format json" \
   >"$OUT_DIR/hub-invocation-list-directory-after-device-list.json" \
   2>"$OUT_DIR/hub-invocation-list-directory-after-device-list.err"
+collect_complete_invocation_records hub \
+  "$OUT_DIR/hub-invocation-list-directory-after-device-list.json" \
+  "$OUT_DIR/hub-invocation-records-directory-after-device-list.json" \
+  "$OUT_DIR/hub-invocation-records-directory-after-device-list.err"
 
 echo "==> exercising caller device list/abilities/exec/terminal public contract"
 wait_caller_remote_ability_list "$PROVIDER_URA"
@@ -689,6 +740,10 @@ caller_cli "device exec '$PROVIDER_URA' -- /usr/bin/printf DEVICE_EXEC_CANONICAL
   >"$OUT_DIR/caller-device-exec-provider.txt" 2>"$OUT_DIR/caller-device-exec-provider.err"
 provider_cli "invocation list --ability-ura '$PROCESS_EXEC_URA' --format json" \
   >"$OUT_DIR/provider-invocation-list-device-exec.json" 2>"$OUT_DIR/provider-invocation-list-device-exec.err"
+collect_complete_invocation_records provider \
+  "$OUT_DIR/provider-invocation-list-device-exec.json" \
+  "$OUT_DIR/provider-invocation-records-device-exec.json" \
+  "$OUT_DIR/provider-invocation-records-device-exec.err"
 
 cat >"$SHARED_DIR/device_terminal_probe.py" <<'PY'
 import os
@@ -743,6 +798,10 @@ service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet
   >"$OUT_DIR/caller-device-terminal-provider.txt" 2>"$OUT_DIR/caller-device-terminal-provider.err"
 provider_cli "invocation list --ability-ura '$TERMINAL_CREATE_URA' --format json" \
   >"$OUT_DIR/provider-invocation-list-terminal-create.json" 2>"$OUT_DIR/provider-invocation-list-terminal-create.err"
+collect_complete_invocation_records provider \
+  "$OUT_DIR/provider-invocation-list-terminal-create.json" \
+  "$OUT_DIR/provider-invocation-records-terminal-create.json" \
+  "$OUT_DIR/provider-invocation-records-terminal-create.err"
 
 echo "==> exercising custom caller-side CLI agent CRUD"
 cat >"$SHARED_DIR/fake-agent.sh" <<'EOF'
@@ -759,6 +818,7 @@ caller_cli "agent add '$AGENT_NAME' --type external --command /shared/fake-agent
 caller_cli "agent set '$AGENT_NAME' --model e2e-updated-model" >"$OUT_DIR/agent-set.txt" 2>"$OUT_DIR/agent-set.err"
 caller_cli "agent list" >"$OUT_DIR/agent-list.txt" 2>"$OUT_DIR/agent-list.err"
 caller_cli "agent send '$AGENT_NAME' 'hello from docker easyremote caller e2e'" >"$OUT_DIR/agent-send.txt" 2>"$OUT_DIR/agent-send.err"
+capture_latest_agent_send_run caller /home/caller caller-agent-send-mission
 caller_cli "agent add '$TMP_AGENT' --type external --command /shared/fake-agent.sh --arg '$TMP_AGENT' --label '$TMP_AGENT'" \
   >"$OUT_DIR/agent-temp-add.txt" 2>"$OUT_DIR/agent-temp-add.err"
 caller_cli "agent remove '$TMP_AGENT' --purge" >"$OUT_DIR/agent-temp-remove.txt" 2>"$OUT_DIR/agent-temp-remove.err"
@@ -773,6 +833,7 @@ provider_cli "agent add '$PROVIDER_AGENT_NAME' --type external --command /shared
 provider_cli "agent list" >"$OUT_DIR/provider-agent-list-after-add.txt" 2>"$OUT_DIR/provider-agent-list-after-add.err"
 provider_cli "agent send '$PROVIDER_AGENT_NAME' '$PROVIDER_AGENT_PROMPT'" \
   >"$OUT_DIR/provider-agent-send.txt" 2>"$OUT_DIR/provider-agent-send.err"
+capture_latest_agent_send_run provider /home/provider provider-agent-send-mission
 PROVIDER_AGENT_CHAT_URA="$(wait_caller_ability_name "$PROVIDER_URA" "$PROVIDER_AGENT_CHAT_ABILITY" "caller-ability-list-provider-agent")"
 [[ "$PROVIDER_AGENT_CHAT_URA" == easynet://* ]] || die "provider user Agent chat ability was not discovered as a canonical URA: $PROVIDER_AGENT_CHAT_URA"
 caller_cli "ability show '$PROVIDER_AGENT_CHAT_URA' --node '$PROVIDER_URA' --format json" \
@@ -792,6 +853,10 @@ caller_cli "ability invoke '$PROVIDER_AGENT_CHAT_DESCRIPTOR_REF' --node '$PROVID
   >"$OUT_DIR/caller-cli-provider-agent-chat-invoke.json" 2>"$OUT_DIR/caller-cli-provider-agent-chat-invoke.err"
 provider_cli "invocation list --ability-ura '$PROVIDER_AGENT_CHAT_URA' --format json" \
   >"$OUT_DIR/provider-invocation-list-provider-agent-after-cli.json" 2>"$OUT_DIR/provider-invocation-list-provider-agent-after-cli.err"
+collect_complete_invocation_records provider \
+  "$OUT_DIR/provider-invocation-list-provider-agent-after-cli.json" \
+  "$OUT_DIR/provider-invocation-records-provider-agent-after-cli.json" \
+  "$OUT_DIR/provider-invocation-records-provider-agent-after-cli.err"
 provider_cli "agent remove '$PROVIDER_AGENT_NAME' --purge" >"$OUT_DIR/provider-agent-remove.txt" 2>"$OUT_DIR/provider-agent-remove.err"
 provider_cli "agent list" >"$OUT_DIR/provider-agent-list-after-remove.txt" 2>"$OUT_DIR/provider-agent-list-after-remove.err"
 wait_caller_ability_absent "$PROVIDER_URA" "$PROVIDER_AGENT_CHAT_ABILITY" "caller-ability-list-provider-after-agent-remove"
@@ -897,10 +962,10 @@ JSON
 service_exec provider "HOME=/home/provider EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python nohup python3 /shared/native_easynet_host.py > /shared/native-easynet-host.log 2>&1 & echo \$! > /shared/native-easynet-host.pid"
 wait_file "$SHARED_DIR/native-easynet-ready.json" || die "native EasyNet host_stream server did not publish readiness"
 cp "$SHARED_DIR/native-easynet-ready.json" "$OUT_DIR/native-easynet-ready.json"
-provider_cli "ability deploy '$NATIVE_BUNDLE' --node local --format json" \
-  >"$OUT_DIR/provider-native-deploy.json" 2>"$OUT_DIR/provider-native-deploy.err"
-NATIVE_ABILITY_URA="$(jq -r '.ability_ura' "$OUT_DIR/provider-native-deploy.json")"
-[[ "$NATIVE_ABILITY_URA" == easynet://* ]] || die "native EasyNet deploy returned invalid ability URA: $NATIVE_ABILITY_URA"
+caller_cli "ability deploy '$NATIVE_BUNDLE' --node '$PROVIDER_URA' --format json" \
+  >"$OUT_DIR/caller-remote-native-deploy.json" 2>"$OUT_DIR/caller-remote-native-deploy.err"
+NATIVE_ABILITY_URA="$(jq -r '.ability_ura' "$OUT_DIR/caller-remote-native-deploy.json")"
+[[ "$NATIVE_ABILITY_URA" == easynet://* ]] || die "remote native EasyNet deploy returned invalid ability URA: $NATIVE_ABILITY_URA"
 
 echo "==> installing and invoking user-defined declarative exec plugin"
 USER_PLUGIN_ID="user.plugin.echo"
@@ -928,6 +993,10 @@ caller_cli "ability invoke '$USER_PLUGIN_DESCRIPTOR_REF' --node '$PROVIDER_URA' 
   >"$OUT_DIR/caller-cli-user-plugin-invoke.json" 2>"$OUT_DIR/caller-cli-user-plugin-invoke.err"
 provider_cli "invocation list --ability-ura '$USER_PLUGIN_ABILITY_URA' --format json" \
   >"$OUT_DIR/provider-invocation-list-user-plugin-after-cli.json" 2>"$OUT_DIR/provider-invocation-list-user-plugin-after-cli.err"
+collect_complete_invocation_records provider \
+  "$OUT_DIR/provider-invocation-list-user-plugin-after-cli.json" \
+  "$OUT_DIR/provider-invocation-records-user-plugin-after-cli.json" \
+  "$OUT_DIR/provider-invocation-records-user-plugin-after-cli.err"
 provider_cli "plugin remove '$USER_PLUGIN_ID' '$USER_PLUGIN_VERSION'" >"$OUT_DIR/provider-plugin-remove-user-plugin.txt" 2>"$OUT_DIR/provider-plugin-remove-user-plugin.err"
 provider_cli "plugin list --format json" >"$OUT_DIR/provider-plugin-list-after-user-plugin-remove.json" 2>"$OUT_DIR/provider-plugin-list-after-user-plugin-remove.err"
 wait_caller_ability_absent "$PROVIDER_URA" "$USER_PLUGIN_ABILITY" "caller-ability-list-provider-after-plugin-remove"
@@ -1062,10 +1131,14 @@ ADD_DESCRIPTOR_REF="$(jq -r '
 [[ "$ADD_DESCRIPTOR_REF" == easynet://*@*#*!* ]] || die "caller ability show did not expose descriptor-bound add ref"
 
 echo "==> calling provider ability from caller device through CLI"
-caller_cli "ability stream '$ADD_DESCRIPTOR_REF' --node '$PROVIDER_URA' --subject 'easynet:///r/${REALM}/resource/e2e/docker-easyremote-cli/add' --nonce-hex 00000000000000000000000000000002 --causal-root --args '$(json_arg add 19 23)' --format json --raw" \
-  >"$OUT_DIR/caller-cli-add-stream.json" 2>"$OUT_DIR/caller-cli-add-stream.err"
+caller_cli "ability invoke '$ADD_DESCRIPTOR_REF' --node '$PROVIDER_URA' --subject 'easynet:///r/${REALM}/resource/e2e/docker-easyremote-cli/add' --nonce-hex 00000000000000000000000000000002 --causal-root --args '$(json_arg add 19 23)' --raw" \
+  >"$OUT_DIR/caller-cli-add-invoke.json" 2>"$OUT_DIR/caller-cli-add-invoke.err"
 provider_cli "invocation list --ability-ura '$ADD_URA' --format json" \
   >"$OUT_DIR/provider-invocation-list-add-after-cli.json" 2>"$OUT_DIR/provider-invocation-list-add-after-cli.err"
+collect_complete_invocation_records provider \
+  "$OUT_DIR/provider-invocation-list-add-after-cli.json" \
+  "$OUT_DIR/provider-invocation-records-add-after-cli.json" \
+  "$OUT_DIR/provider-invocation-records-add-after-cli.err"
 
 echo "==> calling EasyRemote provider from caller device with @remote syntax matrix"
 cat >"$SHARED_DIR/easyremote_caller.py" <<'PY'
@@ -1155,7 +1228,7 @@ def ability_record_to_dict(record) -> dict[str, object]:
         "metadata": dict(record.metadata or {}),
     }
 
-@remote(client=client, owner_ura=provider_ura, name="add")
+@remote(client=client, owner_ura=provider.ability_owner_ura, name="add")
 def remote_add(a: int, b: int) -> dict[str, object]: ...
 
 @provider.remote(name="defaulted")
@@ -1219,11 +1292,18 @@ results = {
 }
 print(json.dumps(results, indent=2, sort_keys=True))
 PY
-service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so EASYNET_CREDENTIALS=/home/caller/.runtime-host/credentials.json EASYNET_CONTROL_JSON=/home/caller/.easynet/control.json PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python PROVIDER_NODE='$PROVIDER_NODE' PROVIDER_URA='$PROVIDER_URA' NATIVE_ABILITY_URA='$NATIVE_ABILITY_URA' python3 /shared/easyremote_caller.py" \
-  >"$OUT_DIR/easyremote-remote-results.json" 2>"$SHARED_DIR/easyremote-caller.log"
+if ! service_exec caller "HOME=/home/caller EASYNET_CLI_LIB=/usr/local/lib/libeasynet_cli.so EASYNET_CREDENTIALS=/home/caller/.runtime-host/credentials.json EASYNET_CONTROL_JSON=/home/caller/.easynet/control.json PYTHONPATH=/work/EasyRemote:/work/EasyNet-Cli/sdk/python:/work/EasyNet-Axon/sdk/python PROVIDER_NODE='$PROVIDER_NODE' PROVIDER_URA='$PROVIDER_URA' NATIVE_ABILITY_URA='$NATIVE_ABILITY_URA' python3 /shared/easyremote_caller.py" \
+  >"$OUT_DIR/easyremote-remote-results.json" 2>"$SHARED_DIR/easyremote-caller.log"; then
+  cp "$SHARED_DIR/easyremote-caller.log" "$OUT_DIR/easyremote-caller.log"
+  die "EasyRemote caller matrix failed; see $OUT_DIR/easyremote-caller.log"
+fi
 cp "$SHARED_DIR/easyremote-caller.log" "$OUT_DIR/easyremote-caller.log"
 provider_cli "invocation list --ability-ura '$NATIVE_ABILITY_URA' --format json" \
   >"$OUT_DIR/provider-invocation-list-native-after-easyremote.json" 2>"$OUT_DIR/provider-invocation-list-native-after-easyremote.err"
+collect_complete_invocation_records provider \
+  "$OUT_DIR/provider-invocation-list-native-after-easyremote.json" \
+  "$OUT_DIR/provider-invocation-records-native-after-easyremote.json" \
+  "$OUT_DIR/provider-invocation-records-native-after-easyremote.err"
 
 echo "==> uninstalling one provider EasyRemote ability and verifying caller sees removal"
 provider_cli "ability uninstall '$ADD_URA' --yes" >"$OUT_DIR/provider-ability-uninstall-add.json" 2>"$OUT_DIR/provider-ability-uninstall-add.err"
@@ -1260,6 +1340,9 @@ ability_uras = {
 directory_discover_ura = sys.argv[27]
 user_directory_subject_ura = sys.argv[28]
 user_ura = sys.argv[29]
+provider_realm = provider_ura.split("/r/", 1)[1].split("/device/", 1)[0]
+ability_management_owner_ura = f"easynet:///r/{provider_realm}/agent/device.{provider_node}.ability-management"
+plugin_management_owner_ura = f"easynet:///r/{provider_realm}/agent/device.{provider_node}.plugin-management"
 
 def text(name: str) -> str:
     path = out / name
@@ -1274,6 +1357,21 @@ def contains(name: str, needle: str) -> bool:
 
 def cli_contains(stem: str, needle: str) -> bool:
     return contains(f"{stem}.txt", needle) or contains(f"{stem}.err", needle)
+
+def successful_agent_send_trace(stem: str) -> bool:
+    trace = load(f"{stem}-trace.json")
+    meta = load(f"{stem}-meta.json")
+    return (
+        isinstance(trace, dict)
+        and trace.get("steps_completed") == 1
+        and trace.get("steps_failed") == 0
+        and trace.get("outcome") == "completed"
+        and isinstance(trace.get("step_traces"), list)
+        and len(trace["step_traces"]) == 1
+        and trace["step_traces"][0].get("outcome") == "completed"
+        and isinstance(meta, dict)
+        and meta.get("status") == "ok"
+    )
 
 def ability_rows(name: str):
     payload = load(name)
@@ -1324,7 +1422,7 @@ def runtime_stream_payloads(value):
 
 ready = load("easyremote-ready.json") or {}
 native_ready = load("native-easynet-ready.json") or {}
-native_deploy = load("provider-native-deploy.json") or {}
+native_deploy = load("caller-remote-native-deploy.json") or {}
 provider_agent_invoke = load("caller-cli-provider-agent-chat-invoke.json") or {}
 provider_agent_show = load("caller-ability-show-provider-agent-chat.json") or {}
 user_plugin_list_after_install = load("provider-plugin-list-after-user-plugin-install.json") or {}
@@ -1332,30 +1430,30 @@ user_plugin_status = load("provider-plugin-status-user-plugin.json") or {}
 user_plugin_invoke = load("caller-cli-user-plugin-invoke.json") or {}
 user_plugin_show = load("caller-ability-show-user-plugin.json") or {}
 remote_results = load("easyremote-remote-results.json") or {}
-cli_stream = load("caller-cli-add-stream.json") or []
+cli_invoke = load("caller-cli-add-invoke.json") or {}
 provider_agent_records = ability_invocation_records(
-    "provider-invocation-list-provider-agent-after-cli.json"
+    "provider-invocation-records-provider-agent-after-cli.json"
 )
 user_plugin_records = ability_invocation_records(
-    "provider-invocation-list-user-plugin-after-cli.json"
+    "provider-invocation-records-user-plugin-after-cli.json"
 )
 cli_add_records = ability_invocation_records(
-    "provider-invocation-list-add-after-cli.json"
+    "provider-invocation-records-add-after-cli.json"
 )
 native_records = ability_invocation_records(
-    "provider-invocation-list-native-after-easyremote.json"
+    "provider-invocation-records-native-after-easyremote.json"
 )
 device_exec_records = ability_invocation_records(
-    "provider-invocation-list-device-exec.json"
+    "provider-invocation-records-device-exec.json"
 )
 terminal_create_records = ability_invocation_records(
-    "provider-invocation-list-terminal-create.json"
+    "provider-invocation-records-terminal-create.json"
 )
 directory_before_records = ability_invocation_records(
-    "hub-invocation-list-directory-before-device-list.json"
+    "hub-invocation-records-directory-before-device-list.json"
 )
 directory_after_records = ability_invocation_records(
-    "hub-invocation-list-directory-after-device-list.json"
+    "hub-invocation-records-directory-after-device-list.json"
 )
 directory_before_request_ids = {
     str(record.get("request_id") or "")
@@ -1481,7 +1579,7 @@ provider_agent_canonical_records = [
     record
     for record in provider_agent_records
     if isinstance(record, dict)
-    and record.get("caller_ura") == caller_ura
+    and record.get("caller_ura") == user_ura
     and record.get("ability_ura") == provider_agent_chat_ura
     and (not provider_agent_owner_ura or record.get("subject_ura") == provider_agent_owner_ura)
 ]
@@ -1585,6 +1683,8 @@ report = {
         "chat_ability_ura": provider_agent_chat_ura,
         "invoke_result": provider_agent_invoke,
         "canonical_invocation_records": provider_agent_canonical_records,
+        "caller_agent_send_trace": load("caller-agent-send-mission-trace.json"),
+        "provider_agent_send_trace": load("provider-agent-send-mission-trace.json"),
     },
     "user_plugin": {
         "package_id": user_plugin_id,
@@ -1630,7 +1730,7 @@ report = {
         ),
         "caller_device_exec_one_verified_receipt_chain": (
             device_exec_receipt_chain_verified
-            and device_exec_records[0].get("caller_ura") == caller_ura
+            and device_exec_records[0].get("caller_ura") == user_ura
             and device_exec_records[0].get("subject_ura") == provider_ura
         ),
         "caller_device_terminal_session_completed": contains(
@@ -1638,12 +1738,13 @@ report = {
         ),
         "caller_device_terminal_create_one_verified_receipt_chain": (
             terminal_create_receipt_chain_verified
-            and terminal_create_records[0].get("caller_ura") == caller_ura
+            and terminal_create_records[0].get("caller_ura") == user_ura
             and terminal_create_records[0].get("subject_ura") == provider_ura
         ),
         "agent_created_and_listed_on_caller": cli_contains("agent-list", agent_name),
         "agent_updated_on_caller": cli_contains("agent-set", "updated") or cli_contains("agent-set", agent_name),
         "agent_invoked_on_caller": contains("agent-send.txt", f"docker-easyremote-agent[{agent_name}]"),
+        "caller_agent_send_mission_completed": successful_agent_send_trace("caller-agent-send-mission"),
         "temp_agent_removed_on_caller": (
             cli_contains("agent-temp-add", tmp_agent)
             and cli_contains("agent-temp-remove", tmp_agent)
@@ -1654,6 +1755,7 @@ report = {
             contains("provider-agent-send.txt", f"docker-easyremote-agent[{provider_agent_name}]")
             and contains("provider-agent-send.txt", provider_agent_prompt)
         ),
+        "provider_agent_send_mission_completed": successful_agent_send_trace("provider-agent-send-mission"),
         "caller_cli_discovered_user_agent_chat": (
             provider_agent_visible
             and isinstance(provider_agent_show, dict)
@@ -1677,7 +1779,7 @@ report = {
             user_plugin_visible
             and isinstance(user_plugin_show, dict)
             and user_plugin_show.get("ability_ura") == user_plugin_ability_ura
-            and user_plugin_show.get("owner_ura") == provider_ura
+            and user_plugin_show.get("owner_ura") == plugin_management_owner_ura
         ),
         "caller_cli_invoked_user_plugin": (
             payload_contains(user_plugin_invoke, "hello-plugin")
@@ -1708,13 +1810,15 @@ report = {
         "caller_cli_queried_native_easynet_ability": native_visible,
         "caller_cli_showed_provider_add_ability": ability_uras["add"] in text("caller-ability-show-add.json"),
         "caller_cli_showed_native_easynet_ability": native_ability_ura in text("caller-ability-show-native.json"),
-        "provider_cli_deployed_native_easynet_ability": (
+        "caller_cli_remote_deployed_native_easynet_ability": (
             native_deploy.get("ability_ura") == native_ability_ura
             and native_deploy.get("namespace") == "nativeer"
             and native_deploy.get("public_name") == "native_echo"
             and native_deploy.get("state") == "ACTIVE"
+            and native_deploy.get("target_ura") == provider_ura
+            and native_deploy.get("owner_ura") == ability_management_owner_ura
         ),
-        "caller_cli_stream_called_provider_add": payload_contains(cli_stream, '"value":42'),
+        "caller_cli_invoke_called_provider_add": payload_contains(cli_invoke, '"value":42'),
         "caller_remote_used_module_remote_decorator": remote_add.get("value") == 5,
         "caller_remote_used_owner_remote_decorator": "RemoteOwner.remote" in remote_results.get("decorators", []),
         "caller_remote_variadic_args": remote_total_varargs == 10,
@@ -1734,7 +1838,7 @@ report = {
         "caller_remote_context_function": (
             isinstance(remote_whoami, dict)
             and remote_whoami.get("note") == "from-caller-device"
-            and remote_whoami.get("caller") == caller_ura
+            and remote_whoami.get("caller") == user_ura
             and bool(remote_whoami.get("invocation_id"))
         ),
         "easyremote_sdk_consumer_boundary": (
@@ -1746,12 +1850,12 @@ report = {
             and len(provider_catalog) > 0
             and len(native_discovery) == 1
             and native_discovery[0].get("ability_ura") == native_ability_ura
-            and native_discovery[0].get("owner_ura") == provider_ura
+            and native_discovery[0].get("owner_ura") == ability_management_owner_ura
         ),
         "caller_remote_called_easynet_native_handle": (
             native_handle.get("source") == "easynet-cli-deploy"
             and native_handle.get("joined") == "from-handlefrom-handle"
-            and native_handle.get("caller") == caller_ura
+            and native_handle.get("caller") == user_ura
             and bool(native_handle.get("invocation_id"))
         ),
         "caller_remote_streamed_easynet_native_handle": (
@@ -1761,7 +1865,7 @@ report = {
                     "text": "from-stream",
                     "times": 2,
                     "joined": "from-streamfrom-stream",
-                    "caller": caller_ura,
+                    "caller": user_ura,
                     "invocation_id": native_handle_stream[0].get("invocation_id")
                     if native_handle_stream and isinstance(native_handle_stream[0], dict)
                     else "",
@@ -1772,7 +1876,7 @@ report = {
         "caller_remote_called_easynet_native_canonical_ura": (
             native_ura_call.get("source") == "easynet-cli-deploy"
             and native_ura_call.get("joined") == "from-ura"
-            and native_ura_call.get("caller") == caller_ura
+            and native_ura_call.get("caller") == user_ura
             and bool(native_ura_call.get("invocation_id"))
         ),
         "caller_remote_streamed_easynet_native_canonical_ura": (
@@ -1782,7 +1886,7 @@ report = {
                     "text": "from-ura-stream",
                     "times": 1,
                     "joined": "from-ura-stream",
-                    "caller": caller_ura,
+                    "caller": user_ura,
                     "invocation_id": native_ura_stream[0].get("invocation_id")
                     if native_ura_stream and isinstance(native_ura_stream[0], dict)
                     else "",
@@ -1793,7 +1897,7 @@ report = {
         "caller_remote_called_easynet_native_typed_stub": (
             native_stub.get("source") == "easynet-cli-deploy"
             and native_stub.get("joined") == "from-stubfrom-stubfrom-stub"
-            and native_stub.get("caller") == caller_ura
+            and native_stub.get("caller") == user_ura
             and bool(native_stub.get("invocation_id"))
         ),
         "caller_remote_streamed_easynet_native_typed_stub": (
@@ -1803,7 +1907,7 @@ report = {
                     "text": "from-stub-stream",
                     "times": 1,
                     "joined": "from-stub-stream",
-                    "caller": caller_ura,
+                    "caller": user_ura,
                     "invocation_id": native_stub_stream[0].get("invocation_id")
                     if native_stub_stream and isinstance(native_stub_stream[0], dict)
                     else "",
@@ -1830,7 +1934,7 @@ report = {
     },
     "provider_user_agent_invocation_records": provider_agent_records,
     "provider_user_plugin_invocation_records": user_plugin_records,
-    "caller_cli_add_stream_frames": cli_stream,
+    "caller_cli_add_invoke": cli_invoke,
     "provider_cli_add_invocation_records": cli_add_records,
     "provider_native_runtime_invocation_records": native_records,
     "provider_device_exec_invocation_records": device_exec_records,
@@ -1853,9 +1957,11 @@ jq -e '
   and .assertions.agent_created_and_listed_on_caller
   and .assertions.agent_updated_on_caller
   and .assertions.agent_invoked_on_caller
+  and .assertions.caller_agent_send_mission_completed
   and .assertions.temp_agent_removed_on_caller
   and .assertions.provider_user_agent_created_and_listed
   and .assertions.provider_user_agent_invoked_via_agent_send
+  and .assertions.provider_agent_send_mission_completed
   and .assertions.caller_cli_discovered_user_agent_chat
   and .assertions.caller_invoked_user_agent_chat_through_canonical_invoke
   and .assertions.caller_observed_user_agent_chat_removed
@@ -1871,8 +1977,8 @@ jq -e '
   and .assertions.caller_cli_queried_native_easynet_ability
   and .assertions.caller_cli_showed_provider_add_ability
   and .assertions.caller_cli_showed_native_easynet_ability
-  and .assertions.provider_cli_deployed_native_easynet_ability
-  and .assertions.caller_cli_stream_called_provider_add
+  and .assertions.caller_cli_remote_deployed_native_easynet_ability
+  and .assertions.caller_cli_invoke_called_provider_add
   and .assertions.caller_remote_used_module_remote_decorator
   and .assertions.caller_remote_used_owner_remote_decorator
   and .assertions.caller_remote_variadic_args

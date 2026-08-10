@@ -64,26 +64,37 @@ make_good_fixture() {
     "$CLI/src/daemon/execution/mission" \
     "$CLI/src/daemon/execution/mcp" \
     "$CLI/src/daemon/ability/builtins/governance" \
+    "$CLI/src/daemon/ability/names" \
     "$CLI/src/daemon/ability/builtins/resources" \
     "$CLI/src/daemon/ability/builtins/resources/files_store" \
     "$CLI/src/daemon/ability/builtins/resources/skills" \
+    "$CLI/src/daemon/ability/authority" \
     "$CLI/src/daemon/ability/catalog/profiles" \
+    "$CLI/src/daemon/ability/names" \
     "$CLI/src/daemon/axon_bridge" \
     "$CLI/src/daemon/boot/invocation" \
     "$CLI/src/daemon/boot/lifecycle" \
     "$CLI/src/daemon/identity" \
+    "$CLI/src/daemon/trust" \
+    "$CLI/src/daemon/federation/read_model" \
     "$CLI/src/daemon/invocation/admission" \
     "$CLI/src/daemon/invocation/bidi/session_initiator" \
     "$CLI/src/daemon/invocation/dispatch" \
+    "$CLI/src/daemon/invocation/dispatch/daemon_invocation_service_tests" \
     "$CLI/src/daemon/invocation/routing" \
     "$CLI/src/daemon/invocation/streams" \
+    "$CLI/src/daemon/keyring" \
+    "$CLI/src/ffi/invocation" \
     "$CLI/src/daemon/persistence" \
+    "$CLI/src/daemon/plugins" \
     "$CLI/src/daemon/resources/context" \
     "$CLI/src/daemon/resources/pages" \
     "$CLI/src/daemon/resources/skills" \
     "$CLI/src/support/platform" \
     "$CLI/ability-descriptors/system/agents" \
     "$CLI/docs/spec" \
+    "$CLI/docs/spec/owner-truth-table" \
+    "$CLI/tests/seven_axes_fixture" \
     "$CLI/sdk/go" \
     "$CLI/sdk/python/easynet_sdk" \
     "$CLI/sdk/python/tests" \
@@ -148,7 +159,7 @@ fn handle() {
 EOF
   cat >"$CLI/src/daemon/ability/builtins/automation/mission.rs" <<'EOF'
 fn register(reg: &mut Catalog) {
-    reg.register_rpc_with_owner("mission.run", handler);
+    reg.register_rpc_with_owner("mission.run", OwnerKind::automation_system(), handler);
 }
 
 fn handler(client: &InvocationClient, child: ChildInvocation) {
@@ -208,6 +219,103 @@ fn render_lifecycle_details(report: &RuntimeStatusReport) {
     }
     if let Some(_discovery) = report.daemon().control_discovery() {}
 }
+EOF
+  cat >"$CLI/docs/login-profile-join.md" <<'EOF'
+# Login profile join
+
+A Profile is a local Realm + Account selection state.
+
+An Account is not an Agent. It authenticates and carries accountability for the
+selected Realm/Profile; callable product surfaces must use an explicit hosted
+Agent, SystemAgent, or Authority instead of an account-as-agent fallback.
+EOF
+  cat >"$CLI/docs/easynet_ontology.tex" <<'EOF'
+\section{Ontology}
+
+\textbf{User Principal} is the accountability and authentication subject.
+A User account is not an Agent; it may own or authorize hosted Agents, but it
+does not advertise abilities as a synthetic account Agent.
+
+\begin{itemize}
+  \item \textbf{Agent} --- routable behavior subject that may advertise governed
+  \texttt{AbilityDescriptor}s.
+  \item \textbf{Authority} --- routable realm governance actor.
+\end{itemize}
+
+Ordinary public Invocation callees are \textbf{Agent, System Agent, or
+Authority} identities advertising governed AbilityDescriptors.
+Bounded Device caller exceptions are enumerated by the shared
+\texttt{DeviceCallerPurpose} classifier.
+
+\begin{quote}
+\textbf{Canonical actor contract.}
+User/Account = Principal/accountability;
+Agent = routable AbilityDescriptor owner/callee;
+System Agent = Device-sponsored restricted Agent;
+Authority = realm governance actor;
+Device = execution host/custody/sponsor, not an ordinary public actor;
+AbilityImpl/Plugin/Skill = implementation/resource plane, not public ownership identity.
+\end{quote}
+
+The CLI surface \texttt{easynet ability deploy <path> --to <node>} still uses a
+Device selector to choose the execution host. The current daemon implementation
+derives deployed AbilityDescriptor ownership from the device-sponsored
+ability-management
+System Agent while keeping the target Device as execution host.
+EOF
+  cat >"$CLI/docs/spec/owner-truth-table/ability-owner-truth-table.tex" <<'EOF'
+\section{Truth table}
+
+\codew{device.*} is a legacy/local public-name namespace, not a
+descriptor-ownership rule. Current daemon-native public descriptors are owned
+by a device-sponsored SystemAgent selected by ability family.
+
+\begin{longtable}{llll}
+\codew{device.ability.*} & \code{agent/device.<id>.ability-management} & \code{=callee} & runtime deploy \\
+\codew{device.keyring.*} & \code{agent/device.<id>.keyring-management} & \code{=callee} & keyring \\
+\end{longtable}
+
+\subsection{SystemAgent-owned, Device-hosted --- ability publishing primitives}
+
+A User account is a principal and accountability subject, not an Agent and not
+an ability-advertising callee.
+EOF
+  cat >"$CLI/src/daemon/ability/catalog/profiles/device.rs" <<'EOF'
+//! Migration projection for remaining direct Device-owned daemon-local
+//! descriptors. This is not a target architecture Agent identity.
+//! Runtime owner rows use OwnerKind::DeviceProfileProjection so direct Device
+//! compatibility cannot be mistaken for an ordinary actor/callee.
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn direct_device_owner_inventory_is_explicit() {
+        let expected: Vec<String> = Vec::new();
+        assert_eq!(
+            Vec::<String>::new(),
+            expected,
+            "direct Device-owner ability inventory changed; migrate the family to a SystemAgent or document a bootstrap/self-maintenance exception"
+        );
+    }
+}
+EOF
+  cat >"$CLI/src/daemon/ability/catalog/profiles/llm.rs" <<'EOF'
+const SYSTEM_SKILL_ABILITIES: &[&str] = &["skill.list"];
+
+#[cfg(test)]
+mod tests {
+    fn descriptor(_name: &str, _description: &str) {}
+
+    #[test]
+    fn catalog_snapshot_projects_to_multiple_llm_owners_without_mutating_source() {
+        descriptor("meta.list_abilities", "Runtime-introspection metadata");
+    }
+}
+EOF
+  cat >"$CLI/tests/seven_axes_fixture/mod.rs" <<'EOF'
+/// Invoke one Device-hosted system ability through the same descriptor-ref
+/// gRPC surface as production callers.
+pub fn invoke_device_hosted_system_ability() {}
 EOF
   cat >"$CLI/src/cli/presentation/banner.rs" <<'EOF'
 use crate::daemon::lifecycle::{RuntimeLifecycleError, RuntimeLifecycleService, RuntimeLifecycleStatus, RuntimeStatusReport};
@@ -363,13 +471,21 @@ impl RuntimeLifecycleService {
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/agents/discover.rs" <<'EOF'
-use crate::daemon::persistence::agent_aggregate::AgentAggregateSnapshot;
+struct Descriptor {
+    owner_ura: String,
+}
 
-type AgentDirectoryProvider =
-    std::sync::Arc<dyn Fn() -> anyhow::Result<AgentAggregateSnapshot> + Send + Sync>;
+struct Row {
+    descriptor: Descriptor,
+}
 
-fn owner_ura_for(directory: &AgentAggregateSnapshot, peer_name: &str) -> Option<String> {
-    directory.hosted_llm_agent_ura(peer_name).map(str::to_string)
+fn owner_ura_for(row: &Row) -> String {
+    let owner = row.descriptor.owner_ura.clone();
+    owner
+}
+
+fn device_aggregate_target() {
+    LocalAbilityTarget::for_device_sponsored_system_ability("agent.discover", &device_ura);
 }
 EOF
   cat >"$CLI/src/daemon/ability/catalog/profiles/mod.rs" <<'EOF'
@@ -378,11 +494,96 @@ use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 fn load_host_descriptors() -> Vec<AbilityDescriptor> {
     let snapshot = AgentAggregateRepository::load_hosted_identity_snapshot().unwrap();
     let projection = snapshot.host_descriptor_identity_projection();
-    let device = projection.host_device_agent_ura();
+    let device = projection.host_device_ura();
     let consent = projection.consent_agent_ura();
     let mcp = projection.mcp_agent_ura();
     let llm = projection.llm_agent_uras();
     all_descriptors_for_host(device.unwrap(), consent, mcp, llm)
+}
+
+fn all_descriptors_for_host(device_ura: &str) -> Vec<AbilityDescriptor> {
+	    let mut out = system_agent_descriptor_projections_for_device(device_ura);
+		    out
+		}
+
+struct SystemAgentDescriptorProjection {
+    system_agent_id: &'static str,
+    owner: fn() -> OwnerKind,
+}
+
+const SYSTEM_AGENT_DESCRIPTOR_PROJECTIONS: &[SystemAgentDescriptorProjection] = &[
+    SystemAgentDescriptorProjection { system_agent_id: AGENT_MANAGEMENT_SYSTEM_AGENT_ID, owner: OwnerKind::agent_management_system },
+    SystemAgentDescriptorProjection { system_agent_id: LOCOMOTION_SYSTEM_AGENT_ID, owner: OwnerKind::locomotion_system },
+    SystemAgentDescriptorProjection { system_agent_id: TERMINAL_SYSTEM_AGENT_ID, owner: OwnerKind::terminal_system },
+    SystemAgentDescriptorProjection { system_agent_id: SESSION_SYSTEM_AGENT_ID, owner: OwnerKind::session_system },
+    SystemAgentDescriptorProjection { system_agent_id: NODE_MANAGEMENT_SYSTEM_AGENT_ID, owner: OwnerKind::node_management_system },
+    SystemAgentDescriptorProjection { system_agent_id: SKILL_MANAGEMENT_SYSTEM_AGENT_ID, owner: OwnerKind::skill_management_system },
+    SystemAgentDescriptorProjection { system_agent_id: CONTEXT_SYSTEM_AGENT_ID, owner: OwnerKind::context_system },
+    SystemAgentDescriptorProjection { system_agent_id: MEDIA_SYSTEM_AGENT_ID, owner: OwnerKind::media_system },
+    SystemAgentDescriptorProjection { system_agent_id: PLUGIN_MANAGEMENT_SYSTEM_AGENT_ID, owner: OwnerKind::plugin_management_system },
+    SystemAgentDescriptorProjection { system_agent_id: AUTOMATION_SYSTEM_AGENT_ID, owner: OwnerKind::automation_system },
+    SystemAgentDescriptorProjection { system_agent_id: RUNTIME_GOVERNANCE_SYSTEM_AGENT_ID, owner: OwnerKind::runtime_governance_system },
+    SystemAgentDescriptorProjection { system_agent_id: RUNTIME_HEALTH_SYSTEM_AGENT_ID, owner: OwnerKind::runtime_health_system },
+    SystemAgentDescriptorProjection { system_agent_id: RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID, owner: OwnerKind::runtime_introspection_system },
+    SystemAgentDescriptorProjection { system_agent_id: DESCRIPTOR_TRANSFER_SYSTEM_AGENT_ID, owner: OwnerKind::descriptor_transfer_system },
+    SystemAgentDescriptorProjection { system_agent_id: API_KEY_MANAGEMENT_SYSTEM_AGENT_ID, owner: OwnerKind::api_key_management_system },
+    SystemAgentDescriptorProjection { system_agent_id: ABILITY_MANAGEMENT_SYSTEM_AGENT_ID, owner: OwnerKind::ability_management_system },
+    SystemAgentDescriptorProjection { system_agent_id: OPENAI_COMPAT_SYSTEM_AGENT_ID, owner: OwnerKind::openai_compat_system },
+    SystemAgentDescriptorProjection { system_agent_id: A2A_INTEGRATION_SYSTEM_AGENT_ID, owner: OwnerKind::a2a_integration_system },
+    SystemAgentDescriptorProjection { system_agent_id: KEYRING_MANAGEMENT_SYSTEM_AGENT_ID, owner: OwnerKind::keyring_management_system },
+];
+
+fn system_agent_descriptor_projections_for_device(device_ura: &str) -> Vec<AbilityDescriptor> {
+    SYSTEM_AGENT_DESCRIPTOR_PROJECTIONS
+        .iter()
+        .flat_map(|projection| {
+            system_agent_descriptors_for_device(
+                device_ura,
+                projection.system_agent_id,
+                (projection.owner)(),
+            )
+        })
+        .collect()
+}
+			EOF
+  cat >"$CLI/src/daemon/ability/names/integrations.rs" <<'EOF'
+	pub const PLUGIN_MANAGEMENT_SYSTEM_AGENT_ID: &str = "plugin-management";
+	pub const OPENAI_COMPAT_SYSTEM_AGENT_ID: &str = "openai-compat";
+	pub const A2A_INTEGRATION_SYSTEM_AGENT_ID: &str = "a2a-integration";
+	EOF
+  cat >"$CLI/src/daemon/ability/names/automation.rs" <<'EOF'
+pub const AUTOMATION_SYSTEM_AGENT_ID: &str = "automation";
+EOF
+	  cat >"$CLI/src/daemon/ability/names/governance.rs" <<'EOF'
+		pub const RUNTIME_GOVERNANCE_SYSTEM_AGENT_ID: &str = "runtime-governance";
+		pub const RUNTIME_HEALTH_SYSTEM_AGENT_ID: &str = "runtime-health";
+		pub const API_KEY_MANAGEMENT_SYSTEM_AGENT_ID: &str = "api-key-management";
+		pub const RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID: &str = "runtime-introspection";
+		pub const DESCRIPTOR_TRANSFER_SYSTEM_AGENT_ID: &str = "descriptor-transfer";
+		pub const KEYRING_MANAGEMENT_SYSTEM_AGENT_ID: &str = "keyring-management";
+		EOF
+  cat >"$CLI/src/daemon/ability/names/federation.rs" <<'EOF'
+pub const ABILITY_MANAGEMENT_SYSTEM_AGENT_ID: &str = "ability-management";
+EOF
+  cat >"$CLI/src/daemon/ability/names/device_control.rs" <<'EOF'
+pub const LOCOMOTION_SYSTEM_AGENT_ID: &str = "locomotion";
+pub const TERMINAL_SYSTEM_AGENT_ID: &str = "terminal";
+pub const SESSION_SYSTEM_AGENT_ID: &str = "session";
+pub const NODE_MANAGEMENT_SYSTEM_AGENT_ID: &str = "node-management";
+EOF
+  cat >"$CLI/src/daemon/ability/catalog_row.rs" <<'EOF'
+fn parse_catalog_row(value: serde_json::Value) -> anyhow::Result<()> {
+    let _row: AbilityCatalogRow = serde_json::from_value(value.clone())?;
+    let required = [
+        "ability_ura",
+        "owner_ura",
+        "descriptor_hash",
+        "descriptor_ref",
+    ];
+    for field in required {
+        insert_catalog_descriptor(field);
+    }
+    Ok(())
 }
 EOF
   cat >"$CLI/src/daemon/identity/local_invocation.rs" <<'EOF'
@@ -390,7 +591,7 @@ use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 
 fn persisted_local_device_ura() -> Option<String> {
     let hosted_identity = AgentAggregateRepository::load_hosted_identity_status().ok()?;
-    hosted_identity.host_device_agent_ura().map(str::to_string)
+    hosted_identity.host_device_ura().map(str::to_string)
 }
 EOF
   cat >"$CLI/src/daemon/invocation/bidi/session_wire.rs" <<'EOF'
@@ -445,6 +646,10 @@ fn callee_ura_from_envelope(envelope: &Envelope) -> anyhow::Result<String> {
 }
 EOF
   cat >"$CLI/src/daemon/axon_bridge/runtime_factory.rs" <<'EOF'
+pub struct RuntimePersistenceConfig {
+    pub log_dir: std::path::PathBuf,
+}
+
 fn ledger_invocation_ura() {
     panic!("LedgerSink cannot derive invocation record URA from binding subject=`x` callee=`y` caller=`z` invocation_id=`i`")
 }
@@ -459,7 +664,7 @@ use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 pub fn spawn() {
     let device_ura = AgentAggregateRepository::load_hosted_identity_status()
         .ok()
-        .and_then(|status| status.host_device_agent_ura().map(str::to_string))
+        .and_then(|status| status.host_device_ura().map(str::to_string))
         .unwrap_or_default();
     run_loop(&device_ura);
 }
@@ -492,9 +697,10 @@ struct AgentLifecycleProjectionStore;
 pub const ABILITY_PURGE_AGENT: &str = crate::daemon::ability::names::agents::AGENT_PURGE;
 
 fn register(reg: &mut AxonAbilityCatalog) {
+    let owner = OwnerKind::agent_management_system();
     reg.register_rpc_with_owner(
         ABILITY_PURGE_AGENT,
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(move |args: Value| purge_agent_handler(args, &registrar_for_purge)),
     );
 }
@@ -687,7 +893,7 @@ impl AgentRegisteredRuntimeProjection {
 }
 
 	struct AgentHostedIdentityStatus {
-	    host_device_agent_ura: Option<String>,
+	    host_device_ura: Option<String>,
 	    hosted_agent_count: usize,
 	}
 
@@ -704,15 +910,15 @@ impl AgentRegisteredRuntimeProjection {
 	}
 
 struct AgentHostDescriptorIdentityProjection {
-    host_device_agent_ura: Option<String>,
+    host_device_ura: Option<String>,
     consent_agent_ura: Option<String>,
     mcp_agent_ura: Option<String>,
     llm_agent_uras: Vec<(String, String)>,
 }
 
 impl AgentHostDescriptorIdentityProjection {
-    fn host_device_agent_ura(&self) -> Option<&str> {
-        self.host_device_agent_ura.as_deref()
+    fn host_device_ura(&self) -> Option<&str> {
+        self.host_device_ura.as_deref()
     }
 
     fn consent_agent_ura(&self) -> Option<&str> {
@@ -734,7 +940,7 @@ struct AgentHostedAdvertiseEntry;
 impl AgentHostedIdentitySnapshot {
     fn host_descriptor_identity_projection(&self) -> AgentHostDescriptorIdentityProjection {
         AgentHostDescriptorIdentityProjection {
-            host_device_agent_ura: Some("easynet:///r/acme/device/dev-1".to_string()),
+            host_device_ura: Some("easynet:///r/acme/device/dev-1".to_string()),
             consent_agent_ura: Some("easynet:///r/acme/agent/user.consent".to_string()),
             mcp_agent_ura: Some("easynet:///r/acme/agent/user.mcp".to_string()),
             llm_agent_uras: vec![
@@ -795,13 +1001,13 @@ impl AgentAggregateSnapshot {
         self.registry.agents.iter().map(|(name, entry)| (name.as_str(), entry))
     }
 
-    fn host_device_agent_ura(&self) -> &str {
-        &self.local_agents.host_device_agent_ura
+    fn host_device_ura(&self) -> &str {
+        &self.local_agents.host_device_ura
     }
 
 	    fn hosted_identity_status(&self) -> AgentHostedIdentityStatus {
 	        AgentHostedIdentityStatus {
-	            host_device_agent_ura: Some(self.local_agents.host_device_agent_ura.clone()),
+	            host_device_ura: Some(self.local_agents.host_device_ura.clone()),
 	            hosted_agent_count: self.local_agents.hosted_agents.len(),
 	        }
 	    }
@@ -876,7 +1082,7 @@ impl AgentAggregateRepository {
 
     pub(crate) fn load_hosted_identity_status() -> anyhow::Result<AgentHostedIdentityStatus> {
         Ok(AgentHostedIdentityStatus {
-            host_device_agent_ura: Some(Self::load_hosted_identity_projection()?.host_device_agent_ura),
+            host_device_ura: Some(Self::load_hosted_identity_projection()?.host_device_ura),
             hosted_agent_count: 0,
         })
     }
@@ -919,6 +1125,10 @@ fn authorize_teach(owner: &str, learner_ura: &str) -> anyhow::Result<()> {
     let learner_identity = snapshot.hosted_agent_identity_by_ura(learner_ura);
     Ok(())
 }
+
+fn descriptor_transfer_target() {
+    LocalAbilityTarget::for_device_sponsored_system_ability("meta.teach", &device_ura);
+}
 EOF
   cat >"$CLI/src/daemon/ability/builtins/governance/admin_status.rs" <<'EOF'
 use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
@@ -935,7 +1145,7 @@ use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 
 fn handler() -> anyhow::Result<()> {
     let hosted_identity = AgentAggregateRepository::load_hosted_identity_status()?;
-    let _host = hosted_identity.host_device_agent_ura();
+    let _host = hosted_identity.host_device_ura();
     let _count = hosted_identity.hosted_agent_count();
     Ok(())
 }
@@ -958,22 +1168,32 @@ use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 
 fn ledger_resource_ura() -> anyhow::Result<Option<String>> {
     let hosted_identity = AgentAggregateRepository::load_hosted_identity_status()?;
-    ledger_resource_ura_from_host_device_agent_ura(hosted_identity.host_device_agent_ura())
+    ledger_resource_ura_from_host_device_ura(hosted_identity.host_device_ura())
 }
 
 fn ledger_governance_owner() -> &'static str {
     "easynet:///r/default/device/dev-1"
 }
 
-fn ledger_resource_ura_from_host_device_agent_ura(host_device_agent_ura: Option<&str>) -> anyhow::Result<Option<String>> {
-    let Some(host_device_agent_ura) = host_device_agent_ura else {
+fn ledger_resource_ura_from_host_device_ura(host_device_ura: Option<&str>) -> anyhow::Result<Option<String>> {
+    let Some(host_device_ura) = host_device_ura else {
         return Ok(None);
     };
-    let parsed = crate::core::ura::parse_ura(host_device_agent_ura)?;
+    let parsed = crate::core::ura::parse_ura(host_device_ura)?;
     Ok(Some(crate::core::ura::resource_dot_ura(&parsed.realm, "device.dev-1", "billing/invocations")))
 }
 EOF
-	  cat >"$CLI/src/daemon/ability/builtins/agents/list.rs" <<'EOF'
+  cat >"$CLI/src/daemon/ability/builtins/governance/invocation_cancel.rs" <<'EOF'
+fn register(registry: &mut AxonAbilityCatalog) {
+    for owner in [
+        OwnerKind::runtime_governance_system(),
+        OwnerKind::RealmAuthority,
+    ] {
+        registry.register_rpc_with_owner("invocation.cancel", owner, handler_read);
+    }
+}
+EOF
+		  cat >"$CLI/src/daemon/ability/builtins/agents/list.rs" <<'EOF'
 use crate::daemon::persistence::agent_aggregate::AgentAggregateSnapshot;
 
 pub fn register<F>(reg: &mut AxonAbilityCatalog, snapshot_provider: F)
@@ -1204,6 +1424,12 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
     Ok(json!({ "provenance": provenance.as_kind() }))
 }
 
+fn register(reg: &mut AxonAbilityCatalog) {
+    let owner = OwnerKind::skill_management_system();
+    reg.register_rpc_with_owner("skill.publish", owner.clone(), publish_handler);
+    reg.register_rpc_with_owner("skill.list", owner, list_handler);
+}
+
 #[test]
 fn publish_without_run_id_records_direct_publish_provenance() {}
 EOF
@@ -1211,9 +1437,13 @@ EOF
 fn registration_hints(owner_ura: &str, registry_name: &str, call_mode: DescriptorCallMode) -> AbilityHints {
     let public_name = crate::core::ura::descriptor_public_ability_name(owner_ura, registry_name);
     AbilityHints {
-        destructive: public_name == agent_names::AGENT_PURGE,
+        destructive: is_destructive_public_ability(&public_name),
         ..Default::default()
     }
+}
+
+pub(crate) fn is_destructive_public_ability(public_name: &str) -> bool {
+    matches!(public_name, agent_names::AGENT_PURGE)
 }
 
 fn description_for(name: &str) -> &'static str {
@@ -1226,6 +1456,10 @@ fn description_for(name: &str) -> &'static str {
 
 fn input_schema_for(name: &str) -> Value {
     match name {
+        "device.keyring.list"
+        | "device.keyring.peer_add"
+        | "device.keyring.create"
+        | "device.keyring.federate_user_identity_token" => json!({"type": "object"}),
         agent_names::AGENT_PURGE => agent_lifecycle_ability::purge_agent_input_schema(),
         agent_names::AGENT_PURGE_RECONCILE => agent_lifecycle_ability::purge_reconcile_input_schema(),
         _ => json!({}),
@@ -1435,6 +1669,10 @@ impl CostMetadataProjection {
     }
 }
 
+fn mcp_owner_kind() -> OwnerKind {
+    OwnerKind::Agent(super::DEFAULT_MCP_AGENT_ID.to_string())
+}
+
 #[test]
 fn mcp_cost_projection_marks_agent_owned_undeclared_rows_unknown() {}
 
@@ -1544,7 +1782,7 @@ fn route_selector_from_query(
     Ok(None)
 }
 
-fn route_selector_from_descriptor_ref(
+	fn route_selector_from_descriptor_ref(
     owner_ura: &str,
     descriptor_ref: &str,
 ) -> Result<RouteSelector, ResolveRouteFailure> {
@@ -1566,10 +1804,65 @@ fn ability_selector_from_descriptor_ref(
             &descriptor_ref,
         )
         .map_err(|_| ResolveRouteFailure)?;
-    crate::core::ura::AbilitySelector::parse(&ability_ura).map_err(|_| ResolveRouteFailure)
+	    crate::core::ura::AbilitySelector::parse(&ability_ura).map_err(|_| ResolveRouteFailure)
+	}
+
+fn route_owner_kind_from_selector(selector: &Selector) -> Result<RouteOwnerKind, ResolveRouteFailure> {
+    match selector.owner_kind() {
+        "system-agent" => Ok(Self::SystemAgent),
+        _ => Err(ResolveRouteFailure),
+    }
 }
 
-fn resolve_delegation(peer_source: PeerSource, parsed_owner: ParsedOwner, selector: Selector) {
+fn local_runtime_route_kind(owner_kind: RouteOwnerKind) {
+    match owner_kind {
+        RouteOwnerKind::Agent | RouteOwnerKind::SystemAgent => {}
+        _ => {}
+    }
+}
+
+fn public_ability_name(owner_ura: &str, ability_name: &str) -> String {
+    crate::core::ura::descriptor_public_ability_name(owner_ura, ability_name)
+}
+
+fn next_hop_json() {
+    json!({
+        "device_hosted_ability": {
+            "host_device_ura": "easynet:///r/localhost/device/dev",
+            "callee_ura": "easynet:///r/localhost/agent/device.dev.runtime-introspection",
+            "ability_ura": "easynet:///r/localhost/ability/agent.device.dev.runtime-introspection.meta.list",
+        }
+    });
+}
+
+fn selected_execution_for_owner(owner_kind: crate::core::ura::URAKind) -> Result<(), ResolveRouteFailure> {
+    match owner_kind {
+        crate::core::ura::URAKind::Device => Err(ResolveRouteFailure::new(
+            "query",
+            NegativeReason::Refused,
+            "direct Device-owned catalog projections are not dispatchable public routes; migrate the descriptor owner to a device-sponsored SystemAgent",
+        )),
+        _ => Ok(()),
+    }
+}
+
+		#[cfg(test)]
+		mod tests {
+			    fn automation_system_agent_ability_resolves_from_local_device_authority() {}
+			    fn session_system_agent_ability_resolves_from_local_device_authority() {}
+			    fn node_management_system_agent_ability_resolves_from_local_device_authority() {}
+				    fn runtime_governance_system_agent_ability_resolves_from_local_device_authority() {}
+			    fn runtime_health_system_agent_ability_resolves_from_local_device_authority() {}
+			    fn invocation_governance_system_agent_ability_resolves_from_local_device_authority() {}
+			    fn ability_management_system_agent_ability_resolves_from_local_device_authority() {}
+			    fn openai_compat_system_agent_ability_resolves_from_local_device_authority() {}
+			    fn api_key_management_system_agent_ability_resolves_from_local_device_authority() {}
+		    fn a2a_integration_system_agent_ability_resolves_from_local_device_authority() {}
+		    fn runtime_introspection_system_agent_ability_resolves_from_local_device_authority() {}
+		    fn descriptor_transfer_system_agent_ability_resolves_from_local_device_authority() {}
+		}
+
+	fn resolve_delegation(peer_source: PeerSource, parsed_owner: ParsedOwner, selector: Selector) {
     let resolution = HubResolver::new(peer_source.federated_peers).resolve(&parsed_owner.realm);
     let endpoint = match resolution {
         HubResolution::Static { hub_endpoint } => {
@@ -1787,9 +2080,16 @@ impl RegistrySharedStores {
 }
 
 fn build_registry(shared_stores: RegistrySharedStores, hosts_hub_authority: bool) {
+    // keyring-management owns device.keyring.* legacy local names; the prefix is
+    // not a Device callee/owner assertion.
     let voice_provider_assembly = shared_stores.voice_calls.clone();
     let hosts_realm_authority = hosts_hub_authority;
     if hosts_realm_authority {
+        daemon_invocation_contracts::register_for_owner(
+            &mut reg,
+            &crate::daemon::ability::dispatch::OwnerKind::RealmAuthority,
+        )
+        .context("register Authority-owned daemon Invocation descriptor contracts")?;
         if let Some(provider) = voice_provider_assembly.as_ref() {
             voice_call_ability::register(&mut reg, provider.clone());
         }
@@ -1844,10 +2144,11 @@ def reject_retired_top_level_receipt_alias(raw: object, stage: str) -> None:
 EOF
   cat >"$CLI/src/daemon/ability/builtins/device_control/files.rs" <<'EOF'
 fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner("fs.read", OwnerKind::Device, handler_read);
-    reg.register_rpc_with_owner("fs.write", OwnerKind::Device, handler_write);
-    reg.register_rpc_with_owner("fs.stat", OwnerKind::Device, handler_stat);
-    reg.register_rpc_with_owner("fs.list", OwnerKind::Device, handler_list);
+    let owner = OwnerKind::locomotion_system();
+    reg.register_rpc_with_owner("fs.read", owner.clone(), handler_read);
+    reg.register_rpc_with_owner("fs.write", owner.clone(), handler_write);
+    reg.register_rpc_with_owner("fs.stat", owner.clone(), handler_stat);
+    reg.register_rpc_with_owner("fs.list", owner, handler_list);
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/resources/files_store/mod.rs" <<'EOF'
@@ -1996,10 +2297,14 @@ fn start_daemon_invocation_transport(config: DaemonConfig) -> anyhow::Result<()>
     if capabilities.owns_upstream_session() {
         register_purge_recovery_on_outbox_ready(outbox, registrar);
     }
-    let daemon_route_owner = daemon_ura.as_deref().unwrap();
-    service.register_daemon_unary_routes(daemon_route_owner)?;
-    service.register_daemon_stream_routes(daemon_route_owner)?;
     if capabilities.hub_runtime {
+        let daemon_route_owner = daemon_ura.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Invocation transport cannot register Hub daemon routes without its canonical Authority URA"
+            )
+        })?;
+        service.register_daemon_unary_routes(daemon_route_owner)?;
+        service.register_daemon_stream_routes(daemon_route_owner)?;
         service.register_daemon_bidi_routes(daemon_route_owner)?;
     }
     spawn_tcp_tls_listener(
@@ -2051,6 +2356,15 @@ impl DaemonRouteRuntimeAdapter {
         project_registered_finalized_bidi_receipt(lifecycle).await;
     }
 }
+
+fn exact_route_host_device_ura_for_delegation(callee_ura: &str) -> Result<String, Status> {
+    let _ = "requires a device-sponsored SystemAgent callee";
+    let _ = callee_ura;
+    Ok("easynet:///r/test/device/edge-01".to_string())
+}
+
+fn delegation_exact_route_rejects_direct_device_callee() {}
+fn delegation_exact_route_derives_host_from_system_agent_callee() {}
 EOF
   cat >"$CLI/src/daemon/invocation/streams/stream_dispatcher.rs" <<'EOF'
 impl StreamDispatcher {
@@ -2129,6 +2443,23 @@ struct DaemonInvocationService {
     admission_plane: RuntimeAdmissionPlane,
 }
 
+fn validate_daemon_route_authority_owner(owner_ura: &str, route_family: &str) -> Result<String, AxonError> {
+    let parsed = crate::core::ura::parse_ura(owner_ura).unwrap();
+    if parsed.kind != crate::core::ura::URAKind::Authority {
+        return Err(AxonError::invalid_argument(format!(
+            "daemon exact {route_family} routes require the canonical realm Authority owner; Device is only an execution host/custody root"
+        )));
+    }
+    Ok(owner_ura.to_string())
+}
+
+fn normalize_daemon_route_owners(owner_uras: &[String]) -> Result<Vec<String>, AxonError> {
+    owner_uras
+        .iter()
+        .map(|owner_ura| validate_daemon_route_authority_owner(owner_ura, "unary"))
+        .collect()
+}
+
 impl DaemonInvocationService {
     pub fn with_transport_boundary(mut self, boundary: AdmissionTransportBoundary) -> Self {
         self.admission_plane = self.admission_plane.with_transport_boundary(boundary);
@@ -2136,20 +2467,23 @@ impl DaemonInvocationService {
     }
 
     pub(crate) async fn register_daemon_unary_routes(&self, owner_ura: &str) {
+        let owner_ura = validate_daemon_route_authority_owner(owner_ura.trim(), "unary").unwrap();
         DaemonRouteRuntimeAdapter::new(runtime, cancellations)
-            .register(owner_ura, catalog.as_ref(), provider)
+            .register(owner_ura.as_str(), catalog.as_ref(), provider)
             .await;
     }
 
     pub(crate) async fn register_daemon_stream_routes(&self, owner_ura: &str) {
+        let owner_ura = validate_daemon_route_authority_owner(owner_ura.trim(), "stream").unwrap();
         DaemonRouteRuntimeAdapter::new(runtime, cancellations)
-            .register_streams(owner_ura, catalog.as_ref(), provider)
+            .register_streams(owner_ura.as_str(), catalog.as_ref(), provider)
             .await;
     }
 
     pub(crate) async fn register_daemon_bidi_routes(&self, owner_ura: &str) {
+        let owner_ura = validate_daemon_route_authority_owner(owner_ura.trim(), "bidi").unwrap();
         DaemonRouteRuntimeAdapter::new(runtime, cancellations)
-            .register_bidis(owner_ura, catalog.as_ref(), provider)
+            .register_bidis(owner_ura.as_str(), catalog.as_ref(), provider)
             .await;
     }
 
@@ -2178,6 +2512,10 @@ impl DaemonInvocationService {
     }
 }
 
+fn daemon_exact_route_owner_rejects_device_ura() {
+    normalize_daemon_route_owners(&["easynet:///r/test/device/dev".to_string()]).unwrap_err();
+}
+
 pub(crate) enum DaemonBidiRoute {
     SessionOpen,
 }
@@ -2189,6 +2527,25 @@ impl DaemonBidiRoute {
 }
 
 pub(crate) const DAEMON_INVOCATION_BIDI_ROUTES: &[DaemonBidiRoute] = &[DaemonBidiRoute::SessionOpen];
+EOF
+  mkdir -p "$CLI/src/daemon/invocation/dispatch/daemon_invocation_service_tests"
+  cat >"$CLI/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs" <<'EOF'
+fn daemon_exact_unary_route_registration_rejects_device_owner() {}
+fn daemon_exact_stream_route_registration_rejects_device_owner() {}
+
+async fn invoke_dispatches_federation_discover_with_no_filter_returns_empty_when_no_peers() {
+    svc.invoke(authority_invoke_request(ABILITY_FEDERATION_DISCOVER, "{}")).await;
+}
+
+async fn invoke_dispatches_federation_discover_includes_local_presence_devices() {
+    let svc = make_unregistered_service_for_route_owner(TEST_HUB_URA).with_session_realm("local-realm");
+    let svc = register_test_daemon_routes(svc, TEST_HUB_URA);
+}
+
+fn user_scoped_discover_request() {}
+EOF
+  cat >"$CLI/src/daemon/invocation/dispatch/daemon_invocation_service_tests/bidi.rs" <<'EOF'
+fn exact_bidi_route_registration_rejects_device_owner() {}
 EOF
   cat >"$CLI/src/daemon/invocation/dispatch/attempt_audit.rs" <<'EOF'
 struct InvocationAttemptLedger;
@@ -2479,6 +2836,53 @@ fn hot_agent_authority_snapshot_error(
     HotAgentAuthorityInventoryError::CounterOverflow
 }
 
+enum OwnerKind {
+    DeviceProfileProjection,
+    SystemAgent(String),
+    Agent(String),
+    RealmAuthority,
+}
+
+fn is_declared_daemon_native_system_agent_id(agent_id: &str) -> bool {
+    matches!(agent_id, "runtime-health" | "runtime-governance")
+}
+
+enum AbilityControlPlaneError {
+    UnsupportedOwnerForAuthoritySet {
+        owner_projection: String,
+        authority_set: &'static str,
+    },
+}
+
+struct AbilityAuthorityContext;
+
+impl AbilityAuthorityContext {
+    fn hosted_agent_authority_root(&self, agent_id: &str) -> Option<String> {
+        Some(format!("easynet:///r/default/agent/user.{agent_id}"))
+    }
+
+    fn supports_owner(&self, owner: &OwnerKind) -> bool {
+        match owner {
+            OwnerKind::RealmAuthority => true,
+            OwnerKind::DeviceProfileProjection => true,
+            OwnerKind::SystemAgent(agent_id) => {
+                is_declared_daemon_native_system_agent_id(
+                        agent_id,
+                    )
+            }
+            OwnerKind::Agent(agent_id) => self.hosted_agent_authority_root(agent_id).is_some(),
+        }
+    }
+
+    fn agent_authority_root(&self, agent_id: &str) -> Result<String, AbilityControlPlaneError> {
+        self.hosted_agent_authority_root(agent_id)
+            .ok_or_else(|| AbilityControlPlaneError::UnsupportedOwnerForAuthoritySet {
+                owner_projection: format!("agent:{agent_id}"),
+                authority_set: "device",
+            })
+    }
+}
+
 fn routeable_mode_registered(ability: &AbilityName, call_mode: DescriptorCallMode) -> bool {
     control_plane_record_for_mode(ability, call_mode).is_some() && self.has_mode(ability, call_mode)
 }
@@ -2534,6 +2938,33 @@ fn dynamic_runtime_key_validates_exact_authority_mode_record() {}
 fn ability_name_handler_projection_rejects_multi_authority_same_slot() {}
 fn ability_name_handler_projection_does_not_synthesize_cross_authority_runtime_set() {}
 
+impl OwnerKind {
+	    pub(crate) fn terminal_system() -> Self { OwnerKind::SystemAgent("terminal".to_string()) }
+	    pub(crate) fn session_system() -> Self { OwnerKind::SystemAgent("session".to_string()) }
+	    pub(crate) fn node_management_system() -> Self { OwnerKind::SystemAgent("node-management".to_string()) }
+	    pub(crate) fn locomotion_system() -> Self { OwnerKind::SystemAgent("locomotion".to_string()) }
+    pub(crate) fn skill_management_system() -> Self { OwnerKind::SystemAgent("skill-management".to_string()) }
+	    pub(crate) fn context_system() -> Self { OwnerKind::SystemAgent("context-management".to_string()) }
+		    pub(crate) fn media_system() -> Self { OwnerKind::SystemAgent("media".to_string()) }
+		    pub(crate) fn plugin_management_system() -> Self { OwnerKind::SystemAgent("plugin-management".to_string()) }
+			    pub(crate) fn automation_system() -> Self { OwnerKind::SystemAgent("automation".to_string()) }
+				    pub(crate) fn runtime_governance_system() -> Self { OwnerKind::SystemAgent("runtime-governance".to_string()) }
+				    pub(crate) fn runtime_health_system() -> Self { OwnerKind::SystemAgent("runtime-health".to_string()) }
+				    pub(crate) fn ability_management_system() -> Self { OwnerKind::SystemAgent("ability-management".to_string()) }
+			    pub(crate) fn openai_compat_system() -> Self { OwnerKind::SystemAgent("openai-compat".to_string()) }
+			    pub(crate) fn api_key_management_system() -> Self { OwnerKind::SystemAgent("api-key-management".to_string()) }
+	    pub(crate) fn a2a_integration_system() -> Self { OwnerKind::SystemAgent("a2a-integration".to_string()) }
+	    pub(crate) fn runtime_introspection_system() -> Self { OwnerKind::SystemAgent("runtime-introspection".to_string()) }
+	    pub(crate) fn descriptor_transfer_system() -> Self { OwnerKind::SystemAgent("descriptor-transfer".to_string()) }
+	    pub(crate) fn keyring_management_system() -> Self { OwnerKind::SystemAgent("keyring-management".to_string()) }
+				}
+
+impl AbilityAuthorityContext {
+    pub(crate) fn ledger_governance_owner(&self) -> OwnerKind {
+        OwnerKind::runtime_governance_system()
+    }
+}
+
 // dynamic execution row remains present after adding a second mode
 
 struct PersistedHotAgentAuthority;
@@ -2553,7 +2984,7 @@ impl PersistedHotAgentAuthority {
             HostedLlmAgentIdentity::Missing => return Err(HotAgentAuthorityInventoryError::CounterOverflow),
             HostedLlmAgentIdentity::Ambiguous => return Err(HotAgentAuthorityInventoryError::CounterOverflow),
         };
-        let _host = snapshot.host_device_agent_ura();
+        let _host = snapshot.host_device_ura();
         Ok(())
     }
 }
@@ -2739,6 +3170,132 @@ fn off_box_facade_does_not_accept_daemon_ura_spoof_as_local_self() {}
 #[test]
 fn off_box_facade_does_not_accept_local_system_self_admission() {}
 
+fn local_hosted_agent_custody_path(caller_ura: &str) -> Result<TrustedCallerPath, Status> {
+    let caller = parse_ura(caller_ura)?;
+    if caller.kind != URAKind::Agent {
+        return Err(Status::invalid_argument("LOCAL_HOSTED_AGENT_CALLER_KIND_MISMATCH"));
+    }
+    Ok(TrustedCallerPath::AgentDeviceCustody)
+}
+
+fn trusted_path_for_caller(caller_ura: &str, provider: &Provider) -> Result<TrustedCallerPath, Status> {
+    if provider.resolve_invocation_verifying_key(caller_ura)?.is_some() {
+        return local_hosted_agent_custody_path(caller_ura);
+    }
+    Err(Status::permission_denied("unknown"))
+}
+
+fn verify_policy(trusted_path: TrustedCallerPath) {
+    AdmissionPolicyGate::verify(AdmissionPolicyContext {
+        trusted_path,
+    });
+}
+
+#[test]
+fn local_hosted_agent_key_fallback_projects_direct_agent_custody_path() {}
+
+#[test]
+fn local_hosted_agent_key_fallback_rejects_device_caller_ura() {}
+
+EOF
+  cat >"$CLI/src/daemon/invocation/admission/bootstrap_authority.rs" <<'EOF'
+use crate::daemon::invocation::admission::policy_gate::TrustedCallerPath;
+
+struct BootstrapAuthorityVerifier;
+
+impl BootstrapAuthorityVerifier {
+    fn verify(trusted_path: TrustedCallerPath) {
+        let caller_ura = "easynet:///r/test/device/dev-1";
+        if trusted_path == TrustedCallerPath::Hub {
+            return;
+        }
+        if trusted_path == TrustedCallerPath::User {
+            return;
+        }
+        if trusted_path != TrustedCallerPath::DeviceCustody {
+            return;
+        }
+        local_device_owner_fact(caller_ura);
+    }
+}
+
+#[test]
+fn hosted_agent_custody_path_does_not_inherit_device_bootstrap_authority() {}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/device_control/ability_management/ops.rs" <<'EOF'
+fn deploy_ability_handler() {
+    let host_device_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
+    let deployed_owner_ura = crate::core::ura::device_agent_ura(
+        &local.tenant_id,
+        &local.node_id,
+        crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
+    );
+    let ability_ura = crate::core::ura::owner_ability_ura(&deployed_owner_ura, &key);
+    json!({
+        "target_ura": host_device_ura,
+        "owner_ura": deployed_owner_ura,
+        "ability_ura": ability_ura,
+    });
+}
+
+#[test]
+fn deploy_ability_wired_transaction_completes_inside_current_thread_runtime() {}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/device_control/ability_management/registrar.rs" <<'EOF'
+pub struct AbilityDeploymentRegistrar;
+pub type SharedAbilityDeploymentRegistrarCell = OnceLock<Arc<AbilityDeploymentRegistrar>>;
+
+struct DeployedAbilityControlPlaneKey {
+    authority_root: String,
+    owner_projection: String,
+}
+
+impl AbilityDeploymentInstall {
+    fn validate(selector: Selector) {
+        if selector.owner_kind() != "system-agent"
+            || selector.dispatch_target()
+                != crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID
+        {
+            fail_closed();
+        }
+    }
+}
+
+impl DeployedAbilityControlPlaneKey {
+    fn from_ability_ura(selector: Selector) -> Self {
+        Self {
+            authority_root: selector.owner_ura().to_string(),
+            owner_projection: format!("system-agent:{}", selector.dispatch_target()),
+        }
+    }
+}
+
+#[test]
+fn install_rejects_direct_device_owned_dynamic_ability_ura() {}
+EOF
+  cat >"$CLI/src/daemon/ability/builtins/device_control/ability_management/store.rs" <<'EOF'
+fn ability_management_system_agent_owner_is_hosted_by_device(
+    owner_ura: &str,
+    hosted_device_ura: &str,
+) -> bool {
+    let hosted_device_id = parse_ura(hosted_device_ura).device_id().unwrap();
+    parse_ura(owner_ura).device_agent_ids().is_some_and(
+        |(device_id, system_agent_id)| {
+            device_id == hosted_device_id
+                && system_agent_id
+                    == crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID
+        },
+    )
+}
+
+#[test]
+fn quarantine_unhosted_device_authority_hides_old_system_agent_rows_from_replay() {}
+
+#[test]
+fn quarantine_unhosted_device_authority_hides_direct_device_rows_from_replay() {}
+
+#[test]
+fn quarantine_unhosted_device_authority_hides_same_device_non_ability_management_rows() {}
 EOF
   mkdir -p "$CLI/src/daemon/invocation/dispatch/daemon_invocation_service_tests"
   cat >"$CLI/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs" <<'EOF'
@@ -2747,6 +3304,17 @@ async fn signed_invocation_cancel_command_replay_is_rejected() {
     let replay = invoke_cancel_twice_through_local_runtime().await;
     assert_eq!(replay.reason, "NONCE_REPLAY");
 }
+
+async fn invoke_dispatches_federation_discover_with_no_filter_returns_empty_when_no_peers() {
+    svc.invoke(authority_invoke_request(ABILITY_FEDERATION_DISCOVER, "{}")).await;
+}
+
+async fn invoke_dispatches_federation_discover_includes_local_presence_devices() {
+    let svc = make_unregistered_service_for_route_owner(TEST_HUB_URA).with_session_realm("local-realm");
+    let svc = register_test_daemon_routes(svc, TEST_HUB_URA);
+}
+
+fn user_scoped_discover_request() {}
 EOF
   cat >"$CLI/src/daemon/invocation/admission/identity_write_gate.rs" <<'EOF'
 use crate::daemon::invocation::admission::admission_facade::AdmissionTransportBoundary;
@@ -3094,6 +3662,35 @@ fn daemon_system_subject_ura_for_descriptor(target: &LocalAbilityTarget) -> anyh
     target.owner_subject()
 }
 
+fn runtime_introspection_subject_ura(callee_ura: &str) -> String {
+    callee_ura.to_string()
+}
+
+fn runtime_introspection_subject_projects_system_agent_callee_to_host_device() {}
+
+struct DeployedAbilitySubject(String);
+
+fn is_ability_management_system_agent_callee(callee_ura: &str) -> bool {
+    callee_ura.contains("/agent/device.") && callee_ura.ends_with(".ability-management")
+}
+
+fn deployed_ability_subject_for(callee_ura: &str, ability: &str) -> Option<DeployedAbilitySubject> {
+    if !is_ability_management_system_agent_callee(callee_ura) {
+        return None;
+    }
+    if let Ok(selector) = crate::core::ura::AbilitySelector::parse(ability) {
+        if selector.owner_ura() == callee_ura {
+            return Some(DeployedAbilitySubject(selector.ability_ura().to_string()));
+        }
+        return None;
+    }
+    Some(DeployedAbilitySubject(owner_ability_ura(callee_ura, ability)))
+}
+
+fn deployed_dynamic_ability_subject_resolves_to_ability_ura_for_public_name() {}
+fn deployed_dynamic_ability_subject_accepts_canonical_ability_ura() {}
+fn deployed_dynamic_ability_subject_rejects_cross_owner_ability_ura() {}
+
 impl LocalAbilityTarget {
     pub(crate) fn daemon_system_subject_ura(&self) -> anyhow::Result<String> {
         daemon_system_subject_ura_for_descriptor(self)
@@ -3172,17 +3769,52 @@ EOF
   # copying these high-churn boundary owners avoids duplicating their entire
   # positive contract in this shell fixture.
   local canonical_file
-  for canonical_file in \
-    src/daemon/ability/catalog/build.rs \
-    src/daemon/ability/dispatch.rs \
+	  for canonical_file in \
+	    src/daemon/ability/catalog/build.rs \
+	    src/daemon/ability/catalog/assembly_tests.rs \
+	    src/daemon/ability/catalog/catalog_metadata.rs \
+	    src/daemon/ability/catalog_row.rs \
+	    src/daemon/ability/conformance.rs \
+		    src/daemon/ability/catalog/profiles/mod.rs \
+		    src/daemon/ability/authority/mod.rs \
+		    src/daemon/ability/dispatch.rs \
+	    src/daemon/ability/owner_projection.rs \
+	    src/daemon/ability/names/governance.rs \
     src/daemon/ability/builtins/governance/access_control.rs \
-    src/daemon/ability/builtins/governance/invocation_history.rs \
-    src/daemon/persistence/agent_aggregate.rs \
-    src/daemon/invocation/routing/route_resolver.rs \
-    src/daemon/invocation/bidi/bidi_dispatcher.rs \
-    src/daemon/invocation/dispatch/local_session_dispatcher.rs \
-    src/daemon/invocation/dispatch/attempt_audit.rs \
-    src/daemon/invocation/bidi/session_initiator/prelude.rs
+	    src/daemon/ability/builtins/governance/invocation_history.rs \
+	    src/daemon/ability/builtins/device_control/ability_management/ops.rs \
+	    src/daemon/ability/builtins/device_control/ability_management/registrar.rs \
+	    src/daemon/ability/builtins/device_control/ability_management/store.rs \
+	    src/daemon/keyring/abilities.rs \
+	    src/daemon/plugins/contribution.rs \
+	    src/daemon/persistence/agent_aggregate.rs \
+	    src/daemon/axon_bridge/runtime_factory.rs \
+	    src/daemon/axon_bridge/hot_agent_registrar.rs \
+	    src/daemon/identity/receipt_signing.rs \
+	    src/daemon/trust/key_resolver.rs \
+	    src/daemon/federation/read_model/ability_catalog.rs \
+		    src/daemon/invocation/routing/route_resolver.rs \
+			    src/daemon/invocation/admission/admission_facade.rs \
+			    src/daemon/invocation/admission/authority_proof.rs \
+			    src/daemon/invocation/admission/policy_gate.rs \
+			    src/daemon/invocation/admission/policy_gate_tests.rs \
+			    src/daemon/invocation/admission/device_caller.rs \
+		    src/daemon/invocation/admission/hosted_agent_delegation.rs \
+		    src/daemon/invocation/admission/decision.rs \
+		    src/daemon/invocation/admission/grant_matcher.rs \
+		    src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs \
+		    src/daemon/invocation/dispatch/federation_wrappers.rs \
+	    src/daemon/invocation/dispatch/daemon_invocation_service_tests/local_rpc.rs \
+	    src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs \
+	    src/daemon/invocation/dispatch/daemon_invocation_service_tests/stream.rs \
+	    src/daemon/invocation/dispatch/unary_dispatcher.rs \
+	    src/daemon/invocation/streams/stream_dispatcher.rs \
+	    src/daemon/invocation/bidi/bidi_dispatcher.rs \
+	    src/daemon/invocation/dispatch/local_session_dispatcher.rs \
+	    src/daemon/invocation/dispatch/attempt_audit.rs \
+	    src/daemon/persistence/access_control.rs \
+	    src/daemon/invocation/bidi/session_initiator/prelude.rs \
+	    tests/resolve_before_invoke_e2e.rs
   do
     cp "$ROOT/$canonical_file" "$CLI/$canonical_file"
   done
@@ -3191,6 +3823,1673 @@ EOF
 bash -n "$CHECK"
 make_good_fixture
 expect_pass "canonical fixture"
+
+make_good_fixture
+cat >"$CLI/docs/spec/owner-truth-table/ability-owner-truth-table.tex" <<'EOF'
+\section{Truth table}
+
+\begin{longtable}{llll}
+\codew{device.ability.*} & \code{device/<id>} & \code{=callee} & deploy \\
+\code{user/<user>} & \code{=callee} & \code{-} & callable account \\
+\end{longtable}
+
+\subsection{Device-owned --- ability publishing primitives}
+
+Daemon-bundle abilities are mounted once per daemon with \code{owner\_ura = device URA}.
+EOF
+expect_fail \
+  "owner truth table stale actor model" \
+  "R146_OWNER_TRUTH_TABLE_CURRENT_ACTOR_MODEL"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/admission"
+cat >"$CLI/src/daemon/invocation/admission/policy_gate.rs" <<'EOF'
+enum TrustAnchorRole {
+    Device,
+}
+
+enum PrincipalKind {
+    Device,
+}
+
+struct PrincipalProjection {
+    kind: PrincipalKind,
+}
+
+fn principal_for(trusted_role: TrustAnchorRole, caller_ura: &str) -> PrincipalProjection {
+    match trusted_role {
+        TrustAnchorRole::Device => PrincipalProjection {
+            kind: PrincipalKind::Device,
+        },
+    }
+}
+
+fn device_publication_custody_manage_scope(trusted_role: TrustAnchorRole) -> bool {
+    matches!(trusted_role, TrustAnchorRole::Device)
+}
+EOF
+expect_fail \
+  "trust path principal split regression" \
+  "R114_TRUST_PATH_PRINCIPAL_SPLIT"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/admission/admission_facade.rs" <<'EOF'
+fn trusted_path_for_caller(caller_ura: &str, entry: Entry) -> Result<TrustedCallerPath, Status> {
+    TrustedCallerPath::from_role_and_caller(entry.role, caller_ura)
+}
+EOF
+expect_fail \
+  "admission facade bypasses verified caller classifier" \
+  "R114_TRUST_PATH_PRINCIPAL_SPLIT"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/trust"
+cat >"$CLI/src/daemon/trust/anchor.rs" <<'EOF'
+pub enum TrustedAgentRole {
+    Device,
+}
+EOF
+expect_fail \
+  "trust anchor role named as Agent role" \
+  "R129_TRUST_ANCHOR_ROLE_ONTOLOGY"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/trust"
+cat >"$CLI/src/daemon/trust/anchor.rs" <<'EOF'
+pub enum TrustAnchorRole {
+    Device,
+}
+
+pub struct RealmTrustAnchor {
+    by_ura: Map,
+}
+
+impl RealmTrustAnchor {
+    pub fn lookup(&self, agent_ura: &str) -> Option<()> {
+        self.by_ura.get(agent_ura)
+    }
+}
+EOF
+expect_fail \
+  "trust anchor lookup preserves agent_ura runtime naming" \
+  "R129_TRUST_ANCHOR_ROLE_ONTOLOGY"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/trust"
+cat >"$CLI/src/daemon/trust/anchor.rs" <<'EOF'
+pub enum TrustAnchorRole {
+    User,
+}
+
+fn canonical_ura_for_role(
+    principal_ura: &str,
+    role: TrustAnchorRole,
+) -> Result<String, RealmTrustError> {
+    todo!()
+}
+EOF
+expect_fail \
+  "trust anchor role canonicalizer preserves broad principal_ura naming" \
+  "R129_TRUST_ANCHOR_ROLE_ONTOLOGY"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/trust"
+cat >"$CLI/src/daemon/trust/anchor.rs" <<'EOF'
+/// The serialized trust file still uses `[[trusted_agent]]` and `agent_ura`
+/// for compatibility, but this enum is not an Agent ontology. Admission lowers
+/// this storage role into `TrustedCallerPath`; TrustedAgent.agent_ura is a
+/// storage/wire compatibility name for a caller/principal URA.
+pub enum TrustAnchorRole {
+    Device,
+}
+
+pub struct RealmTrustAnchor {
+    by_ura: Map,
+}
+
+impl RealmTrustAnchor {
+    pub fn lookup(&self, principal_ura: &str) -> Option<()> {
+        self.by_ura.get(principal_ura)
+    }
+}
+EOF
+cat >"$CLI/src/daemon/trust/key_resolver.rs" <<'EOF'
+fn decode_pubkey(public_key_b64: &str, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+    todo!()
+}
+
+impl KeyResolver for RealmTrustAnchorKeyResolver {
+    fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+        decode_pubkey("pk", agent_ura)
+    }
+
+    fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
+        let mut keys = Vec::new();
+        for row in user_rows.iter() {
+            keys.push(decode_pubkey(&row.public_key_b64, agent_ura)?);
+        }
+        Ok(keys)
+    }
+}
+EOF
+expect_fail \
+  "trust anchor key resolver preserves agent_ura runtime naming" \
+  "R129_TRUST_ANCHOR_ROLE_ONTOLOGY"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/admission"
+cat >"$CLI/src/daemon/invocation/admission/federated_key_resolver.rs" <<'EOF'
+/// Resolves an `agent_ura` to its Ed25519 verifying key.
+impl FederatedKeyResolver {
+    fn resolve_federated(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+        Err(caller_key_not_found(agent_ura, "missing"))
+    }
+}
+
+impl KeyResolver for FederatedKeyResolver {
+    fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+        Err(caller_key_not_found(agent_ura, "agent_ura:{agent_ura}:missing"))
+    }
+
+    fn resolve_all(&self, agent_ura: &str) -> Result<Vec<VerifyingKey>, AxonError> {
+        todo!()
+    }
+}
+EOF
+expect_fail \
+  "federated key resolver preserves agent_ura runtime naming" \
+  "R129_TRUST_ANCHOR_ROLE_ONTOLOGY"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/admission"
+cat >"$CLI/src/daemon/invocation/admission/admission_facade.rs" <<'EOF'
+fn trusted_path_for_caller(caller_ura: &str, provider: &Provider) -> Result<TrustedCallerPath, Status> {
+    if provider.resolve_invocation_verifying_key(caller_ura)?.is_some() {
+        return TrustedCallerPath::from_role_and_caller(
+            TrustAnchorRole::Device,
+            caller_ura,
+        );
+    }
+    Err(Status::permission_denied("unknown"))
+}
+EOF
+expect_fail \
+  "hosted Agent custody TrustAnchorRole round-trip" \
+  "R130_HOSTED_AGENT_CUSTODY_DIRECT_PATH"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/admission"
+cat >>"$CLI/src/daemon/invocation/admission/admission_facade.rs" <<'EOF'
+fn federated_caller_path(caller_ura: &str) -> Option<TrustedCallerPath> {
+    let parsed = parse_ura(caller_ura).ok()?;
+    match parsed.kind {
+        URAKind::Agent => Some(TrustedCallerPath::AgentDeviceCustody),
+        URAKind::Device => Some(TrustedCallerPath::DeviceCustody),
+        URAKind::User => Some(TrustedCallerPath::User),
+        URAKind::Authority => Some(TrustedCallerPath::Hub),
+        _ => None,
+    }
+}
+EOF
+expect_fail \
+  "facade-local federated caller classifier" \
+  "R130_HOSTED_AGENT_CUSTODY_DIRECT_PATH"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/admission"
+cat >"$CLI/src/daemon/invocation/admission/bootstrap_authority.rs" <<'EOF'
+enum TrustAnchorRole {
+    Device,
+    User,
+    Hub,
+}
+
+struct BootstrapAuthorityVerifier;
+
+impl BootstrapAuthorityVerifier {
+    fn verify(trusted_role: TrustAnchorRole) {
+        let caller_ura = "easynet:///r/test/device/dev-1";
+        if trusted_role == TrustAnchorRole::Hub {
+            return;
+        }
+        if trusted_role == TrustAnchorRole::User {
+            return;
+        }
+        if trusted_role != TrustAnchorRole::Device {
+            return;
+        }
+        local_device_owner_fact(caller_ura);
+    }
+}
+EOF
+expect_fail \
+  "bootstrap authority TrustAnchorRole runtime input" \
+  "R131_BOOTSTRAP_AUTHORITY_TRUSTED_PATH"
+
+make_good_fixture
+mkdir -p "$CLI/src/ffi/invocation"
+cat >"$CLI/src/ffi/invocation/mod.rs" <<'EOF'
+fn validate_public_invocation_tuple(
+    caller_ura: &str,
+    callee_ura: &str,
+    descriptor_ref: &str,
+    subject_ura: &str,
+    metadata: &Metadata,
+) -> Result<(), InvocationJsonError> {
+    submit_tuple(
+        caller_ura,
+        callee_ura,
+        &descriptor_ref,
+        subject_ura,
+        metadata,
+    );
+    validate_public_invocation_caller_ura(caller_ura, descriptor_ref)?;
+    validate_public_invocation_descriptor_ref(descriptor_ref)?;
+    project_invocation_authority_metadata_shape(metadata);
+    session_authority_admits_subject(&payload, subject_ura);
+    let _ = ReceiptHistoryReadDescriptor;
+    let _ = AuthoritySubjectMismatch;
+    let _ = AllZeroPrincipal;
+    Ok(())
+}
+
+fn validate_public_invocation_descriptor_ref(descriptor_ref: &str) -> Result<(), InvocationJsonError> {
+    Ok(())
+}
+
+fn validate_public_invocation_caller_ura(
+    caller_ura: &str,
+    descriptor_ref: &str,
+) -> Result<(), InvocationJsonError> {
+    match parsed.kind {
+        URAKind::Device => Ok(()),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    fn parse_invocation_json_rejects_all_zero_subject_before_daemon_io() {}
+    fn parse_invocation_json_rejects_receipt_history_descriptor_before_daemon_io() {}
+    fn parse_invocation_json_rejects_session_authority_subject_mismatch_before_daemon_io() {}
+    fn parse_invocation_json_rejects_device_caller_for_ordinary_ability_before_daemon_io() {}
+    fn builder_rejects_receipt_history_descriptor_before_daemon_io() {}
+}
+EOF
+expect_fail \
+  "FFI Device caller unconditional allow" \
+  "R7C_FFI_DEVICE_CALLER_BOUNDARY"
+
+make_good_fixture
+mkdir -p "$CLI/src/ffi/invocation"
+cat >"$CLI/src/ffi/invocation/mod.rs" <<'EOF'
+fn validate_public_invocation_tuple(
+    caller_ura: &str,
+    callee_ura: &str,
+    descriptor_ref: &str,
+    subject_ura: &str,
+    metadata: &Metadata,
+) -> Result<(), InvocationJsonError> {
+    validate_public_invocation_caller_ura(caller_ura, descriptor_ref)?;
+    validate_public_invocation_descriptor_ref(descriptor_ref)?;
+    project_invocation_authority_metadata_shape(metadata);
+    session_authority_admits_subject(&payload, subject_ura);
+    let _ = ReceiptHistoryReadDescriptor;
+    let _ = AuthoritySubjectMismatch;
+    let _ = AllZeroPrincipal;
+    Ok(())
+}
+
+fn validate_public_invocation_descriptor_ref(descriptor_ref: &str) -> Result<(), InvocationJsonError> {
+    Ok(())
+}
+
+fn validate_public_invocation_caller_ura(
+    caller_ura: &str,
+    descriptor_ref: &str,
+) -> Result<(), InvocationJsonError> {
+    match parsed.kind {
+        URAKind::Device if public_device_caller_ability_allowed(public_ability) => Ok(()),
+        URAKind::Device => Err(InvocationJsonError::InvalidInvocationRole {
+            field: "caller_ura",
+            reason: "ordinary Device caller rejected".to_string(),
+        }),
+        _ => Ok(()),
+    }
+}
+
+fn public_device_caller_ability_allowed(public_ability: &str) -> bool {
+    matches!(
+        public_ability,
+        ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY
+            | ABILITY_SESSION_OPEN
+            | "ability.deploy"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    fn parse_invocation_json_rejects_all_zero_subject_before_daemon_io() {}
+    fn parse_invocation_json_rejects_receipt_history_descriptor_before_daemon_io() {}
+    fn parse_invocation_json_rejects_session_authority_subject_mismatch_before_daemon_io() {}
+    fn parse_invocation_json_rejects_device_caller_for_ordinary_ability_before_daemon_io() {}
+    fn parse_invocation_json_allows_device_caller_for_explicit_session_control() {}
+    fn builder_rejects_receipt_history_descriptor_before_daemon_io() {}
+}
+EOF
+expect_fail \
+  "FFI local Device caller allow-list regression" \
+  "R134_DEVICE_CALLER_CLASSIFIER"
+
+make_good_fixture
+cat >>"$CLI/src/daemon/invocation/admission/device_caller.rs" <<'EOF'
+const BAD_DEVICE_CALLER_ABILITY_EXCEPTION: &str = "ability.deploy";
+EOF
+expect_fail \
+  "Device caller classifier admits ability-management SystemAgent ability" \
+  "R134_DEVICE_CALLER_CLASSIFIER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/admission"
+cat >"$CLI/src/daemon/invocation/admission/device_caller.rs" <<'EOF'
+pub(crate) enum DeviceCallerPurpose {
+    Bootstrap,
+    Pairing,
+    PublicationCustody,
+    SessionControl,
+}
+
+fn classify_public_invocation_caller_kind() {}
+fn public_device_caller_purpose() {}
+fn admits_device_policy_scope() {}
+
+fn admits_owner_projection_publication_host(owner: ParsedUra) -> bool {
+    matches!(
+        owner.kind,
+        URAKind::Device | URAKind::Agent | URAKind::Authority
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    fn classifies_public_device_caller_purposes() {}
+    fn rejects_public_device_caller_for_ordinary_ability() {}
+    fn admits_policy_scope_only_for_exact_publication_geometry() {}
+}
+EOF
+expect_fail \
+  "Device publication custody broad owner allow-list regression" \
+  "R134_DEVICE_CALLER_CLASSIFIER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/device_control/terminal"
+cat >"$CLI/src/daemon/ability/builtins/device_control/terminal/lifecycle.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("terminal.create", OwnerKind::Device, create_handler);
+    reg.register_rpc_with_owner("terminal.list", OwnerKind::Device, list_handler);
+}
+EOF
+expect_fail \
+  "Terminal direct Device owner" \
+  "R106_TERMINAL_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/device_control"
+cat >"$CLI/src/daemon/ability/builtins/device_control/files.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("fs.read", OwnerKind::Device, handler_read);
+}
+EOF
+expect_fail \
+  "Locomotion direct Device owner" \
+  "R107_LOCOMOTION_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/resources/skills"
+cat >"$CLI/src/daemon/ability/builtins/resources/skills/publish.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("skill.list", OwnerKind::Device, handler_read);
+}
+EOF
+expect_fail \
+  "Skill management direct Device owner" \
+  "R108_SKILL_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/resources/context"
+cat >"$CLI/src/daemon/ability/builtins/resources/context/ability.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("context.fs.list", OwnerKind::Device, handler_read);
+}
+EOF
+expect_fail \
+  "Context direct Device owner" \
+  "R109_CONTEXT_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/resources/media"
+cat >"$CLI/src/daemon/ability/builtins/resources/media/camera_snapshot.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("camera.snapshot", OwnerKind::Device, handler_read);
+}
+EOF
+expect_fail \
+  "Media direct Device owner" \
+  "R110_MEDIA_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/integrations"
+cat >"$CLI/src/daemon/ability/builtins/integrations/plugins.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("plugin.status", OwnerKind::Device, handler_read);
+}
+EOF
+expect_fail \
+  "Plugin lifecycle direct Device owner" \
+  "R111_PLUGIN_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/keyring"
+cat >"$CLI/src/daemon/keyring/abilities.rs" <<'EOF'
+fn register_device_keyring(reg: &mut AxonAbilityCatalog) {
+    let owner = OwnerKind::Device;
+    reg.register_rpc_with_owner("device.keyring.list", owner, list_keys);
+}
+EOF
+expect_fail \
+  "Keyring public Device owner" \
+  "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/plugins"
+cat >"$CLI/src/daemon/plugins/contribution.rs" <<'EOF'
+pub struct DaemonPluginBinder {
+    owner_policy: OwnerKind,
+}
+
+impl DaemonPluginBinder {
+    pub fn static_catalog() -> Self {
+        Self {
+            owner_policy: OwnerKind::Device,
+        }
+    }
+}
+EOF
+expect_fail \
+  "Plugin contribution Device owner" \
+  "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/catalog"
+cat >"$CLI/src/daemon/ability/catalog/publication.rs" <<'EOF'
+fn capture_tracks_hot_control_plane_commits_without_mutating_prior_snapshot(
+    catalog: &AxonAbilityCatalog,
+) {
+    catalog.hot_register_rpc_with_spec(
+        "plugin.dynamic",
+        OwnerKind::Device,
+        manifest,
+        handler,
+    );
+}
+EOF
+expect_fail \
+  "Plugin dynamic publication modeled as Device owner" \
+  "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY"
+
+make_good_fixture
+cat >>"$CLI/src/daemon/ability/catalog/catalog_metadata.rs" <<'EOF'
+fn published_metadata(rows: Vec<Row>) -> Vec<Row> {
+    rows.into_iter()
+        .filter(|row| !row.name.starts_with("device.keyring."))
+        .collect()
+}
+EOF
+expect_fail \
+  "Keyring hidden from public metadata" \
+  "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/automation"
+cat >"$CLI/src/daemon/ability/builtins/automation/mission.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("mission.run", OwnerKind::Device, handler_read);
+}
+EOF
+expect_fail \
+  "Automation direct Device owner" \
+  "R115_AUTOMATION_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/device_control"
+cat >"$CLI/src/daemon/ability/builtins/device_control/session.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("session.list", OwnerKind::Device, handler_read);
+    reg.register_stream_with_owner("session.attach", OwnerKind::Device, handler_read);
+}
+EOF
+expect_fail \
+  "Session direct Device owner" \
+  "R116_SESSION_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/catalog/profiles/mod.rs" <<'EOF'
+fn all_descriptors_for_host(device_ura: &str) -> Vec<AbilityDescriptor> {
+    terminal_system_descriptors_for_device(device_ura)
+}
+
+fn terminal_system_descriptors_for_device(device_ura: &str) -> Vec<AbilityDescriptor> {
+    system_agent_descriptors_for_device(
+        device_ura,
+        TERMINAL_SYSTEM_AGENT_ID,
+        OwnerKind::terminal_system(),
+    )
+}
+
+fn system_agent_descriptors_for_device(
+    device_ura: &str,
+    system_agent_id: &str,
+    owner: OwnerKind,
+) -> Vec<AbilityDescriptor> {
+    vec![]
+}
+EOF
+expect_fail \
+  "SystemAgent descriptor projection per-family wrapper regression" \
+  "R136_SYSTEM_AGENT_DESCRIPTOR_PROJECTION_REGISTRY"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/device_control/ability_management"
+cat >"$CLI/src/daemon/ability/builtins/device_control/ability_management/ops.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_spec("node.describe", OwnerKind::Device, manifest, handler_read);
+    reg.register_rpc_with_spec("node.remove", OwnerKind::Device, manifest, handler_read);
+}
+EOF
+expect_fail \
+  "Node lifecycle direct Device owner" \
+  "R124_NODE_MANAGEMENT_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/governance" "$CLI/src/daemon/ability/builtins/resources"
+cat >"$CLI/src/daemon/ability/builtins/governance/meta.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_envelope_and_owner("meta.describe", OwnerKind::Device, handler_read);
+    reg.register_rpc_with_envelope_and_owner("meta.list_abilities", OwnerKind::Device, handler_read);
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/resources/list.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("meta.list_resources", OwnerKind::Device, handler_read);
+}
+EOF
+expect_fail \
+  "Runtime introspection direct Device owner" \
+  "R125_RUNTIME_INTROSPECTION_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/governance"
+cat >"$CLI/src/daemon/ability/builtins/governance/teach.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_envelope_and_spec("meta.teach", OwnerKind::Device, manifest, handler_read);
+    reg.register_rpc_with_envelope_and_spec("meta.acquire", OwnerKind::Device, manifest, handler_read);
+    reg.register_rpc_with_envelope_and_spec("meta.forget", OwnerKind::Device, manifest, handler_read);
+}
+EOF
+expect_fail \
+  "Descriptor transfer direct Device owner" \
+  "R126_DESCRIPTOR_TRANSFER_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/governance"
+cat >"$CLI/src/daemon/ability/builtins/governance/access_control.rs" <<'EOF'
+fn register_with_ledger(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("authority.binding.grant", OwnerKind::Device, handler_read);
+    reg.register_rpc_with_owner("policy.request.create", OwnerKind::Device, handler_read);
+    reg.register_rpc_with_owner("admission.explain", OwnerKind::Device, handler_read);
+}
+EOF
+expect_fail \
+  "Runtime governance direct Device owner" \
+  "R117_RUNTIME_GOVERNANCE_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/device_control/ability_management"
+cat >"$CLI/src/daemon/ability/builtins/device_control/ability_management/publish.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("ability.publish", OwnerKind::Device, handler_read);
+    reg.register_rpc_with_owner("ability.unpublish", OwnerKind::Device, handler_read);
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/device_control/ability_management/ops.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_envelope_and_spec("ability.deploy", OwnerKind::Device, manifest, handler_read);
+    reg.register_rpc_with_envelope_and_spec("ability.uninstall", OwnerKind::Device, manifest, handler_read);
+}
+EOF
+expect_fail \
+  "Ability management direct Device owner" \
+  "R118_ABILITY_MANAGEMENT_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/device_control/ability_management"
+cat >"$CLI/src/daemon/ability/builtins/device_control/ability_management/ops.rs" <<'EOF'
+fn deploy_ability_handler() {
+    let host_device_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
+    let ability_ura = crate::core::ura::owner_ability_ura(&host_device_ura, &key);
+    json!({
+        "target_ura": host_device_ura,
+        "ability_ura": ability_ura,
+    });
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/device_control/ability_management/registrar.rs" <<'EOF'
+struct DeviceAbilityControlPlaneKey;
+
+impl DeviceAbilityInstall {
+    fn validate(selector: Selector) {
+        if selector.owner_kind() != "device" {
+            fail_closed();
+        }
+    }
+}
+
+impl DeviceAbilityControlPlaneKey {
+    fn authority_scope(&self) {
+        AuthorityScope::new("device", self.authority_root.clone());
+    }
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/device_control/ability_management/store.rs" <<'EOF'
+fn quarantine_unhosted_device_authority(hosted_device_authority_root: &str) {
+    if selector.owner_kind() != "device" {
+        return;
+    }
+}
+EOF
+expect_fail \
+  "Dynamic ability deploy direct Device owner" \
+  "R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/plugins"
+cat >"$CLI/src/daemon/plugins/runtime_manager.rs" <<'EOF'
+fn bind_dynamic_plugin(catalog: &AxonAbilityCatalog, manifest: AbilityManifest, handler: LocalRpcHandlerWithEnvelope) {
+    catalog
+        .hot_register_rpc_with_envelope_and_spec(
+            "easyremote.dynamic",
+            OwnerKind::Device,
+            manifest,
+            handler,
+        )
+        .expect("dynamic plugin ability registered");
+}
+EOF
+expect_fail \
+  "Production dynamic hot-register direct Device owner" \
+  "R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p \
+  "$CLI/ability-descriptors/system/device_control" \
+  "$CLI/src/cli/commands"
+cat >"$CLI/ability-descriptors/system/device_control/ability.deploy.ability.toml" <<'EOF'
+schema_version = "2"
+name = "ability.deploy"
+description = "Publish a host_stream device ability bundle ResourceRef to a canonical Device URA."
+EOF
+cat >"$CLI/src/cli/commands/deploy.rs" <<'EOF'
+// EasyNet CLI — `easynet ability deploy`
+// =======================================
+//
+// File: src/cli/deploy.rs
+// Description: Publish an ability bundle to a canonical Device URA.
+EOF
+expect_fail \
+  "Dynamic ability deploy public docs preserve Device owner wording" \
+  "R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/cli/daemon_client"
+cat >"$CLI/src/cli/daemon_client/remote_system_ability.rs" <<'EOF'
+pub(crate) fn invoke_remote_device_system_ability(node: &str, ability: RemoteTargetSystemAbility, args: Value, action_label: &str) -> anyhow::Result<Value> {
+    invoke_target_owned_system_ability(node, ability, args, action_label)
+}
+EOF
+expect_fail \
+  "Remote system facade omits ability deploy staging path" \
+  "R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+cat >"$CLI/src/cli/commands/invoke.rs" <<'EOF'
+fn remote_public_invoke(credentials: &Credentials) {
+    let caller_ura = crate::support::platform::remote_device::caller_device_ura(credentials);
+    RemoteInvocationTuplePlan::public_explicit(target, caller_ura, subject, nonce, causal, args, timeout);
+}
+EOF
+expect_fail \
+  "Remote public ability ingress uses Device custody as caller" \
+  "R161_PUBLIC_CLI_USER_CALLER_DEVICE_HOST_SPLIT"
+
+make_good_fixture
+cat >"$CLI/src/cli/commands/device_terminal.rs" <<'EOF'
+fn resolve_remote(local_device_ura: String) {
+    let caller_ura = local_device_ura;
+    load_remote_invocation_caller_signer(&caller_ura);
+}
+EOF
+expect_fail \
+  "Remote terminal uses Device as caller and authority issuer" \
+  "R161_PUBLIC_CLI_USER_CALLER_DEVICE_HOST_SPLIT"
+
+make_good_fixture
+cat >"$CLI/src/support/platform/remote_device.rs" <<'EOF'
+pub(crate) fn caller_device_ura(credentials: &Credentials) -> String {
+    device_ura(&credentials.realm, &credentials.node_id)
+}
+EOF
+expect_fail \
+  "CLI exposes Device caller derivation outside paired identity" \
+  "R161_PUBLIC_CLI_USER_CALLER_DEVICE_HOST_SPLIT"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/resources/files"
+cat >"$CLI/src/daemon/resources/files/mod.rs" <<'EOF'
+fn resolve_resource_ref(reference: FilesystemResourceRef) -> anyhow::Result<ResolvedFilesystemPath> {
+    let parts = parse_filesystem_resource_ura(&reference.resource_ura)?;
+    if parts.owner_ura != reference.owner_ura {
+        fail_closed();
+    }
+    let root = virtual_root_path(&parts.virtual_root).unwrap();
+    Ok(ResolvedFilesystemPath { local_path: root.join(parts.relative_path), display_path: reference.display_path, virtual_root_path: Some(root) })
+}
+EOF
+expect_fail \
+  "Filesystem ResourceRef accepts foreign Device owner" \
+  "R159_FILESYSTEM_RESOURCE_REF_LOCAL_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/routing"
+cat >"$CLI/src/daemon/invocation/routing/target.rs" <<'EOF'
+enum DaemonSystemSubjectPolicy {
+    RealmAuthorityAbilitySubject(String),
+    CalleeOwnerSubject(String),
+}
+
+impl DaemonSystemSubjectPolicy {
+    fn for_descriptor(ability: &str, callee_ura: &str) -> Self {
+        match crate::core::ura::AbilitySelector::parse(ability) {
+            Ok(selector) if selector.owner_kind() == "authority" => {
+                Self::RealmAuthorityAbilitySubject(selector.ability_ura().to_string())
+            }
+            _ => Self::CalleeOwnerSubject(callee_ura.to_string()),
+        }
+    }
+}
+EOF
+expect_fail \
+  "Dynamic ability target subject falls back to callee owner" \
+  "R132_ABILITY_DEPLOY_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability"
+cat >"$CLI/src/daemon/ability/authority/mod.rs" <<'EOF'
+pub struct HostedAgentDelegationEnvelopeBinding {
+    wire_caller_ura: String,
+    wire_callee_ura: String,
+    wire_subject_ura: String,
+    wire_invocation_nonce_hex: String,
+    route_ability: String,
+}
+
+impl HostedAgentDelegationEnvelopeBinding {
+    pub fn new(
+        wire_caller_ura: impl Into<String>,
+        wire_callee_ura: impl Into<String>,
+        wire_subject_ura: impl Into<String>,
+        wire_invocation_nonce_hex: impl Into<String>,
+        route_ability: impl Into<String>,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            wire_caller_ura: wire_caller_ura.into(),
+            wire_callee_ura: wire_callee_ura.into(),
+            wire_subject_ura: wire_subject_ura.into(),
+            wire_invocation_nonce_hex: wire_invocation_nonce_hex.into(),
+            route_ability: route_ability.into(),
+        })
+    }
+}
+
+pub struct HostedAgentDelegationContext {
+    agent_ura: String,
+    wire_callee_ura: String,
+    route_ability: String,
+}
+
+impl HostedAgentDelegationContext {
+    pub fn authorize(
+        &self,
+        expected_agent_ura: &str,
+        persisted_signing_authority: &str,
+        expected_ability: &str,
+    ) -> anyhow::Result<()> {
+        crate::core::ura::parse_ura(&self.wire_callee_ura)?;
+        let expected_host_authority = format!("hosted_by:{}", self.wire_callee_ura);
+        if persisted_signing_authority != expected_host_authority {
+            anyhow::bail!("host mismatch");
+        }
+        Ok(())
+    }
+}
+EOF
+expect_fail \
+  "Hosted delegation callee host split regression" \
+  "R133_HOSTED_DELEGATION_CALLEE_HOST_SPLIT"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/persistence"
+cat >"$CLI/src/daemon/persistence/teach_grants.rs" <<'EOF'
+fn validate_for_grant(snapshot: Snapshot, host_device_ura: String) {
+    if snapshot.callee_ura != *host_device_ura {
+        fail_closed();
+    }
+}
+EOF
+expect_fail \
+  "Teach grant hosted delegation stores Device as callee" \
+  "R133_HOSTED_DELEGATION_CALLEE_HOST_SPLIT"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/integrations"
+cat >"$CLI/src/daemon/ability/builtins/integrations/openai_compat.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("openai.chat_completions", OwnerKind::Device, handler_read);
+    reg.register_rpc_with_owner("openai.list_models", OwnerKind::Device, handler_read);
+    reg.register_rpc_with_owner("openai.files.upload", OwnerKind::Device, handler_read);
+    reg.register_rpc_with_owner("openai.files.retrieve", OwnerKind::Device, handler_read);
+    reg.register_rpc_with_owner("openai.files.delete", OwnerKind::Device, handler_read);
+}
+EOF
+expect_fail \
+  "OpenAI compatibility direct Device owner" \
+  "R119_OPENAI_COMPAT_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/governance"
+cat >"$CLI/src/daemon/ability/builtins/governance/api_key.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog, user: &str, realm: &str) {
+    let owner = OwnerKind::Device;
+    reg.register_rpc_with_owner_and_action(format!("{user}.api_key.create"), owner.clone(), AdmissionAction::Manage, create_handler);
+    reg.register_rpc_with_owner_and_action(format!("{user}.api_key.list"), owner.clone(), AdmissionAction::Read, list_handler);
+    reg.register_rpc_with_owner_and_action(format!("{user}.api_key.revoke"), owner, AdmissionAction::Manage, revoke_handler);
+}
+EOF
+expect_fail \
+  "API-key lifecycle direct Device owner" \
+  "R120_API_KEY_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/integrations/a2a"
+cat >"$CLI/src/daemon/ability/builtins/integrations/a2a/bridge.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("a2a.bridge.list_skills", OwnerKind::Device, handler_read);
+    reg.register_rpc_with_owner("a2a.bridge.send_task", OwnerKind::Device, handler_read);
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/integrations/a2a/client.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_envelope_and_owner("a2a.client.send_task", OwnerKind::Device, handler_read);
+}
+EOF
+expect_fail \
+  "A2A integration direct Device owner" \
+  "R121_A2A_INTEGRATION_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/integrations/mcp" "$CLI/src/daemon/ability/catalog/profiles" "$CLI/src/daemon/ability"
+cat >"$CLI/src/daemon/ability/builtins/integrations/mcp/reflective_registry.rs" <<'EOF'
+fn descriptor_owner_authority(owner_ura: &str) {
+    match parsed.kind {
+        crate::core::ura::URAKind::Device => (
+            OwnerKind::Device,
+            "device".to_string(),
+            owner_ura.to_string(),
+        ),
+        crate::core::ura::URAKind::User => {
+            return Err("User Principal cannot own MCP reflective descriptors".to_string());
+        }
+        crate::core::ura::URAKind::Agent => {
+            return Err("System Agents cannot own MCP reflective descriptors".to_string());
+        }
+    }
+}
+EOF
+cat >"$CLI/src/daemon/ability/conformance.rs" <<'EOF'
+enum BaselineDomain {
+    DeviceBridge,
+}
+const DEVICE_BASELINE: &[BaselineAbility] = &[
+    local_rpc!("mcp.bridge.list_tools", DeviceBridge),
+    local_rpc!("mcp.client.call", DeviceBridge),
+];
+EOF
+expect_fail \
+  "MCP DeviceBridge ontology" \
+  "R127_MCP_HOSTED_AGENT_ONTOLOGY"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/integrations/mcp"
+cat >"$CLI/src/daemon/ability/builtins/integrations/mcp/reflective_registry.rs" <<'EOF'
+fn descriptor_owner_authority(owner_ura: &str) {
+    match parsed.kind {
+        crate::core::ura::URAKind::Agent => (
+            OwnerKind::Agent("mcp".to_string()),
+            "agent:mcp".to_string(),
+            owner_ura.to_string(),
+        ),
+        crate::core::ura::URAKind::Authority => (
+            OwnerKind::RealmAuthority,
+            "hub".to_string(),
+            owner_ura.to_string(),
+        ),
+        crate::core::ura::URAKind::Device => {
+            return Err("Device cannot own MCP reflective descriptors".to_string());
+        }
+        crate::core::ura::URAKind::User => {
+            return Err("User Principal cannot own MCP reflective descriptors".to_string());
+        }
+    }
+}
+
+fn rejects_system_agent() {
+    return Err("System Agents cannot own MCP reflective descriptors".to_string());
+}
+EOF
+expect_fail \
+  "MCP Authority owner obsolete hub marker" \
+  "R127_MCP_HOSTED_AGENT_ONTOLOGY"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/agents/account.rs" <<'EOF'
+fn account_owner_ura(realm: &str, user: &str) -> String {
+    crate::core::ura::agent_ura(realm, user, "account")
+}
+EOF
+expect_fail \
+  "account synthesized as Agent" \
+  "R128_ACCOUNT_NOT_AGENT_ONTOLOGY"
+
+make_good_fixture
+cat >"$CLI/docs/login-profile-join.md" <<'EOF'
+# Login profile join
+
+A Profile is a local Realm + Account selection state.
+EOF
+expect_fail \
+  "account profile documentation omits not-Agent boundary" \
+  "R128_ACCOUNT_NOT_AGENT_ONTOLOGY"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/admission/authority_proof.rs" <<'EOF'
+pub struct AuthorityProof {
+    pub owner_user_id: String,
+    pub session_owner_user_id: Option<String>,
+}
+
+pub struct AuthorityProofVerificationContext<'a> {
+    pub owner_user_id: &'a str,
+    pub session_owner_user_id: Option<&'a str>,
+}
+
+pub trait AuthorityProofIssuerResolver {
+    fn issuer_authorized_for_owner(&self, issuer_ura: &str, owner_user_id: &str) -> bool;
+}
+
+fn validate_verification_context_identity(context: &AuthorityProofVerificationContext<'_>) {
+    validate_user_principal_ura(context.owner_user_id, "owner_user_id").unwrap();
+    validate_nonzero_user_id(context.session_owner_user_id.unwrap_or("alice"), "session_owner_user_id").unwrap();
+}
+
+fn verify_invocation_binding(proof: AuthorityProof, context: AuthorityProofVerificationContext<'_>) {
+    if proof.owner_user_id != context.owner_user_id {}
+    if proof.session_owner_user_id.as_deref() != context.session_owner_user_id {}
+}
+EOF
+expect_fail \
+  "AuthorityProof runtime owner uses owner_user_id naming" \
+  "R137_AUTHORITY_PROOF_OWNER_PRINCIPAL_URA"
+
+make_good_fixture
+cat >"$CLI/src/daemon/persistence/owner_projections.rs" <<'EOF'
+pub(crate) fn validate_owner_projection_host_binding(
+    owner_ura: &str,
+    host_device_ura: &str,
+) -> Result<(), String> {
+    if owner_ura == "not-a-ura" {
+        return Err("owner_ura must be a canonical owner URA".to_string());
+    }
+    if host_device_ura == "not-a-ura" {
+        return Err("host_device_ura must be a canonical host URA".to_string());
+    }
+    if owner_ura.starts_with("easynet:///r/acme/agent/") {
+        return Err("Agent owner projections must be hosted by a Device URA".to_string());
+    }
+    if owner_ura.starts_with("easynet:///r/acme/device/") {
+        return Err("Device owner projections must be hosted by the same Device URA".to_string());
+    }
+    if owner_ura.starts_with("easynet:///r/acme/authority") {
+        return Err("Authority owner projections must be hosted by the same Authority URA".to_string());
+    }
+    Ok(())
+}
+
+fn validate_file(cursor: Cursor) {
+    validate_owner_projection_host_binding(&cursor.owner_ura, &cursor.host_device_ura).unwrap();
+}
+EOF
+expect_fail \
+  "owner projection store describes Device as ordinary owner" \
+  "R82_OWNER_PROJECTION_CURSOR_BINDING_FAIL_CLOSED"
+
+make_good_fixture
+cat >"$CLI/docs/easynet_ontology.tex" <<'EOF'
+\section{Ontology}
+
+A User account is not an Agent.
+
+\begin{tabular}{ll}
+Agent (the only addressable actor) & Device \\
+\end{tabular}
+
+\begin{warningbox}
+This is \textbf{not fixed in the current PR.}
+\end{warningbox}
+EOF
+expect_fail \
+  "ontology preserves pre-SystemAgent actor model" \
+  "R138_ONTOLOGY_ACTOR_MODEL_CLOSED"
+
+make_good_fixture
+cat >"$CLI/docs/easynet_ontology.tex" <<'EOF'
+\section{Ontology}
+
+\begin{quote}
+\textbf{Canonical actor contract.}
+User/Account = Agent owner;
+Agent = account profile runtime;
+System Agent = Device wrapper;
+Authority = realm governance actor;
+Device = ordinary public actor;
+AbilityImpl/Plugin/Skill = public ownership identity.
+\end{quote}
+
+A User account is not an Agent.
+\item \textbf{Agent} --- routable behavior subject
+\item \textbf{Authority} --- routable realm governance actor
+Ordinary public Invocation callees are \textbf{Agent, System Agent,
+Device selector to choose the execution host
+ability-management
+System Agent
+EOF
+expect_fail \
+  "ontology canonical actor contract drifts to account/device actor model" \
+  "R148_CANONICAL_ACTOR_CONTRACT"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/admission/authority_metadata.rs" <<'EOF'
+pub(crate) struct SessionAuthorityPayload {
+    pub(crate) session_owner_user_id: String,
+    pub(crate) subject_ura: String,
+}
+
+pub(crate) struct SessionAuthorityRequest {
+    pub(crate) session_owner_user_id: String,
+}
+
+fn validate_session_authority_payload_shape(payload: &SessionAuthorityPayload) {
+    let _ = parsed.user_id() != Some(payload.session_owner_user_id.as_str());
+}
+EOF
+cat >"$CLI/src/daemon/invocation/admission/admission_facade.rs" <<'EOF'
+fn verify_session_issuer_authorized(payload: &SessionAuthorityPayload) -> Result<(), Status> {
+    let owner_user_ura = session_owner_user_id(payload)?;
+    Ok(())
+}
+
+fn session_owner_user_id(payload: &SessionAuthorityPayload) -> Result<String, Status> {
+    let subject = parse_authority_runtime_ura("subject_ura", &payload.subject_ura)?;
+    Ok(crate::core::ura::user_ura(&subject.realm, payload.session_owner_user_id.as_str()))
+}
+EOF
+expect_fail \
+  "session authority scalar helper returns User URA under owner_user_id name" \
+  "R149_SESSION_AUTHORITY_OWNER_SCALAR_BOUNDARY"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/resources/pages"
+cat >"$CLI/src/daemon/ability/builtins/resources/pages/mod.rs" <<'EOF'
+fn register_management_abilities(config: PagesConfig) {
+    let user = config.user.clone();
+    let realm = config.realm.clone();
+    let health_handler = Arc::new(move |args| list_get_unpublish::handle_health(&user, &realm, args));
+}
+
+fn pages_authority_scope(realm: &str, user: &str) -> AuthorityScope {
+    AuthorityScope::new("agent:pages", management_agent_ura(realm, user)).unwrap()
+}
+
+/// Execution host for the user-scoped Pages management family.
+pub(crate) fn management_agent_ura(realm: &str, user: &str) -> String {
+    crate::core::ura::agent_ura(realm, user, "pages")
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/resources/pages/list_get_unpublish.rs" <<'EOF'
+pub fn handle_health(user: &str, realm: &str, args: Value) -> anyhow::Result<Value> {
+    let owner_ura = crate::core::ura::agent_ura(realm, user, "pages");
+    Ok(json!({ "owner_ura": owner_ura }))
+}
+EOF
+expect_fail \
+  "Pages health owner URA uses display user instead of owner_user_id" \
+  "R150_PAGES_OWNER_SEGMENT_BOUNDARY"
+
+make_good_fixture
+mkdir -p \
+  "$CLI/src/daemon/invocation/admission" \
+  "$CLI/src/daemon/invocation/dispatch" \
+  "$CLI/src/daemon/federation/client" \
+  "$CLI/src/daemon/federation"
+cat >"$CLI/src/daemon/invocation/admission/hosted_agent_publication.rs" <<'EOF'
+pub(crate) struct HostedAgentPublication {
+    caller_device_ura: String,
+    agent_ura: String,
+    owner_user_id: String,
+    owner_ura: String,
+}
+
+impl HostedAgentPublication {
+    pub(crate) fn owner_user_id(&self) -> &str {
+        &self.owner_user_id
+    }
+}
+EOF
+cat >"$CLI/src/daemon/invocation/dispatch/unary_dispatcher.rs" <<'EOF'
+struct PrincipalOwnerFilter {
+    owner_user_id: String,
+    owner_ura: String,
+}
+
+fn resolve(request: Request) {
+    let Some(owner_user_id) = request.local_user_id.as_deref() else {
+        return;
+    };
+}
+EOF
+cat >"$CLI/src/daemon/federation/client/ability_contract.rs" <<'EOF'
+pub struct ResolveKeyReceipt {
+    pub principal_owner_ura: Option<String>,
+    pub principal_owner_user_id: Option<String>,
+}
+EOF
+cat >"$CLI/src/daemon/federation/wire_contract.rs" <<'EOF'
+pub struct ResolveKeyResponse {
+    pub principal_owner_ura: Option<String>,
+    pub principal_owner_user_id: Option<String>,
+}
+EOF
+expect_fail \
+  "product owner_user_id scalar leaks into private runtime naming" \
+  "R152_PRODUCT_OWNER_USER_ID_ADAPTER_BOUNDARY"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/dispatch"
+cat >"$CLI/src/daemon/invocation/dispatch/unary_dispatcher.rs" <<'EOF'
+enum FederationDiscoverReadScope {
+    OperatorAudit,
+}
+
+impl FederationDiscoverReadScope {
+    fn resolve(request: &DiscoverRequest, envelope: &Envelope) -> Result<Self, Status> {
+        if request.local_user_id.is_none() {
+            return Ok(Self::OperatorAudit);
+        }
+        Ok(Self::OperatorAudit)
+    }
+}
+EOF
+cat >"$CLI/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs" <<'EOF'
+fn invoke_request(function_name: &str, args_json: &str) -> Request<InvokeRequest> {
+    invoke_request_for_callee(TEST_DAEMON_URA, function_name, args_json)
+}
+EOF
+cat >"$CLI/src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs" <<'EOF'
+#[tokio::test]
+async fn invoke_dispatches_federation_discover_with_no_filter_returns_empty_when_no_peers() {
+    let svc = make_service();
+    let resp = svc
+        .invoke(invoke_request(ABILITY_FEDERATION_DISCOVER, "{}"))
+        .await
+        .expect("dispatch returns Ok");
+}
+
+#[tokio::test]
+async fn invoke_dispatches_federation_discover_includes_local_presence_devices() {
+    let mut svc =
+        make_unregistered_service_for_route_owner(TEST_DAEMON_URA).with_session_realm("local-realm");
+    let svc = register_test_daemon_routes(svc, TEST_DAEMON_URA);
+}
+EOF
+expect_fail \
+  "federation.discover operator scope accepts Device caller" \
+  "R153_FEDERATION_DISCOVER_AUTHORITY_SCOPE"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/admission/admission_facade.rs" <<'EOF'
+fn admit(input: Input, trust_anchor: TrustAnchor) -> Result<(), Status> {
+    let caller_ura = "easynet:///r/example/device/dev-1";
+    let trusted_path = trusted_path_for_caller(caller_ura, trust_anchor.as_ref())?;
+    AdmissionPolicyGate::verify(AdmissionPolicyContext {
+        trusted_path,
+    });
+    Ok(())
+}
+
+fn trusted_path_for_caller(
+    caller_ura: &str,
+    trust_anchor: &RealmTrustAnchor,
+) -> Result<TrustedCallerPath, Status> {
+    if let Some(entry) = trust_anchor.lookup(caller_ura) {
+        return TrustedCallerPath::from_verified_caller(
+            caller_ura,
+            VerifiedCallerEvidence::TrustAnchorRole(entry.role),
+        );
+    }
+    if self.is_federated_caller(caller_ura) {
+        return TrustedCallerPath::from_verified_caller(
+            caller_ura,
+            VerifiedCallerEvidence::Federated,
+        );
+    }
+    Err(Status::permission_denied("unknown"))
+}
+EOF
+cat >"$CLI/src/daemon/invocation/admission/policy_gate.rs" <<'EOF'
+pub(crate) enum TrustedCallerPath {
+    User,
+    Hub,
+    DeviceCustody,
+    AgentDeviceCustody,
+}
+
+impl TrustedCallerPath {
+    pub(crate) fn from_federated_caller(caller_ura: &str) -> Result<Self, Status> {
+        let caller = parse_ura(caller_ura)?;
+        match caller.kind {
+            URAKind::Agent => Ok(Self::AgentDeviceCustody),
+            URAKind::Device => Ok(Self::DeviceCustody),
+            URAKind::User => Ok(Self::User),
+            URAKind::Authority => Ok(Self::Hub),
+            _ => Err(Status::invalid_argument("FEDERATED_CALLER_KIND_MISMATCH")),
+        }
+    }
+}
+EOF
+cat >"$CLI/src/daemon/invocation/admission/policy_gate_tests.rs" <<'EOF'
+fn trusted_caller_path_classifies_federated_actor_kinds() {}
+EOF
+expect_fail \
+  "Device custody classified without public ability purpose" \
+  "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH"
+
+make_good_fixture
+cat >>"$CLI/src/daemon/invocation/admission/policy_gate.rs" <<'EOF'
+fn device_owned_ability_matches(ability_ura: &str, realm: &str, device_id: &str) -> bool {
+    subject_ura == callee_ura || ability_ura.ends_with(device_id)
+}
+EOF
+expect_fail \
+  "Realm authority public read admits direct Device-owned ability subject" \
+  "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH"
+
+make_good_fixture
+perl -0pi -e 's/Some\(AbilityOwner::Device \{ \.\. \}\) => None,/Some(AbilityOwner::Device { device_id }) => {\n                let device_ura = crate::core::ura::device_ura(\&parsed.realm, \&device_id);\n                owner_fact_from_trust_anchor(\&device_ura, trust_anchor)\n            },/' "$CLI/src/daemon/invocation/admission/policy_gate.rs"
+grep -Fq "owner_fact_from_trust_anchor(&device_ura, trust_anchor)" \
+  "$CLI/src/daemon/invocation/admission/policy_gate.rs" || \
+  fail "expected safe direct Device-owned Ability owner arm"
+expect_fail \
+  "Device-owned ability subject projects through Device owner" \
+  "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH"
+
+make_good_fixture
+cat >>"$CLI/src/daemon/ability/authority/mod.rs" <<'EOF'
+enum OwnerProjection {
+    Device,
+    RealmAuthority,
+}
+EOF
+expect_fail \
+  "authority module duplicate OwnerProjection grammar" \
+  "R156_OWNER_PROJECTION_VALUE_OBJECT"
+
+make_good_fixture
+cat >>"$CLI/src/daemon/ability/dispatch.rs" <<'EOF'
+fn manual_owner_projection_parser(owner_projection: &str) -> Option<String> {
+    owner_projection
+        .strip_prefix("system-agent:")
+        .map(|agent_id| format!("system-agent:{agent_id}"))
+}
+EOF
+expect_fail \
+  "dispatch manual owner projection parser" \
+  "R156_OWNER_PROJECTION_VALUE_OBJECT"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/admission/decision.rs" <<'EOF'
+pub struct OwnerResolution {
+    pub owner_user_id: Option<String>,
+}
+
+pub struct PolicyDecision {
+    pub owner_user_id: Option<String>,
+}
+
+pub struct PermissionRequest {
+    pub owner_user_id: String,
+}
+EOF
+cat >"$CLI/src/daemon/invocation/admission/grant_matcher.rs" <<'EOF'
+pub struct PermissionGrant {
+    pub owner_user_id: String,
+}
+
+pub struct GrantMatchInput<'a> {
+    pub owner_user_id: &'a str,
+}
+EOF
+expect_fail \
+  "runtime policy owner uses owner_user_id naming" \
+  "R139_RUNTIME_OWNER_USER_URA_NAMING"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/governance/access_control.rs" <<'EOF'
+fn grant_handler(grant: Grant, stores: Stores) {
+    let owner_user_id = grant.owner_user_ura.clone();
+    stores.with_store(&owner_user_id, |store| {});
+}
+
+fn owner_user_id_from_boundary(owner_ura: &str) -> anyhow::Result<String> {
+    Ok(owner_ura.to_string())
+}
+
+fn owner_user_id_from_mutation_boundary(owner_ura: &str) -> anyhow::Result<String> {
+    owner_user_id_from_boundary(owner_ura)
+}
+EOF
+expect_fail \
+  "access-control runtime owner uses owner_user_id helper naming" \
+  "R139_RUNTIME_OWNER_USER_URA_NAMING"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/admission/decision.rs" <<'EOF'
+pub enum PrincipalKind {
+    User,
+    Device,
+}
+EOF
+expect_fail \
+  "Device custody projection named as generic principal" \
+  "R141_DEVICE_CUSTODY_NOT_PRINCIPAL"
+
+make_good_fixture
+mkdir -p "$CLI/src/ffi/invocation"
+cat >"$CLI/src/ffi/invocation/mod.rs" <<'EOF'
+fn validate_public_tuple_ura(
+    field: &'static str,
+    value: &str,
+) -> Result<crate::core::ura::ParsedURA, InvocationJsonError> {
+    crate::core::ura::parse_ura(value.trim()).map_err(|error| InvocationJsonError::InvalidUra {
+        field,
+        reason: error.to_string(),
+    })
+}
+EOF
+expect_fail \
+  "FFI public tuple URA trim compatibility" \
+  "R140_PUBLIC_INVOCATION_TUPLE_URA_EXACT"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/descriptors"
+cat >"$CLI/src/daemon/ability/descriptors/surface.rs" <<'EOF'
+/// Public route descriptor where callee ∈ {authority, device, agent}.
+/// Device built-ins are published under ability/device/dev.terminal.list.
+pub struct AbilityDescriptor;
+EOF
+expect_fail \
+  "AbilityDescriptor treats Device as public callee" \
+  "R142_DEVICE_NOT_PUBLIC_CALLEE"
+
+make_good_fixture
+mkdir -p "$CLI/docs/状态机器"
+cat >"$CLI/docs/状态机器/easynet-state-machines.md" <<'EOF'
+{
+  "callee_ura": "easynet:///r/localhost/device/dev-a",
+  "ability_ura": "easynet:///r/localhost/ability/device.dev-a.terminal.list"
+}
+EOF
+expect_fail \
+  "state-machine route example uses Device public callee" \
+  "R142_DEVICE_NOT_PUBLIC_CALLEE"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/builtins/device_control/ability_management/registrar.rs" <<'EOF'
+pub struct DeviceAbilityRegistrar;
+pub struct SharedDeviceRegistrarCell;
+EOF
+expect_fail \
+  "ability deployment registrar keeps DeviceAbility registrar naming" \
+  "R143_ABILITY_DEPLOYMENT_REGISTRAR_NAMING"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'EOF'
+fn validate_daemon_route_authority_owner(owner_ura: &str, route_family: &str) -> Result<String, AxonError> {
+    let parsed = crate::core::ura::parse_ura(owner_ura).unwrap();
+    if !matches!(
+        parsed.kind,
+        crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Authority
+    ) {
+        anyhow::bail!("daemon exact {route_family} routes require owner");
+    }
+    Ok(owner_ura.to_string())
+}
+
+fn normalize_daemon_route_owners(owner_uras: &[String]) -> Result<Vec<String>, AxonError> {
+    owner_uras
+        .iter()
+        .map(|owner_ura| validate_daemon_route_authority_owner(owner_ura, "unary"))
+        .collect()
+}
+
+fn daemon_exact_route_owner_rejects_device_ura() {}
+EOF
+expect_fail \
+  "daemon exact route owner accepts Device" \
+  "R144_DAEMON_INVOCATION_AUTHORITY_OWNER"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/catalog/build.rs" <<'EOF'
+fn build_registry(hosts_realm_authority: bool) {
+    if hosts_realm_authority {
+        daemon_invocation_contracts::register_for_owner(
+            &mut reg,
+            &crate::daemon::ability::dispatch::OwnerKind::Device,
+        )
+        .context("register Authority-owned daemon Invocation descriptor contracts")?;
+    }
+}
+EOF
+expect_fail \
+  "daemon Invocation contracts registered for Device" \
+  "R144_DAEMON_INVOCATION_AUTHORITY_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/governance"
+cat >"$CLI/src/daemon/ability/builtins/governance/invocation_history.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("invocation.history.list", OwnerKind::Device, handler_read);
+    reg.register_rpc_with_owner("invocation.record.get", OwnerKind::Device, handler_read);
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/governance/invocation_cancel.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("invocation.cancel", OwnerKind::Device, handler_read);
+}
+EOF
+expect_fail \
+  "Invocation governance direct Device owner" \
+  "R122_INVOCATION_GOVERNANCE_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/builtins/governance"
+cat >"$CLI/src/daemon/ability/builtins/governance/health.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("observe.health", OwnerKind::Device, handler_read);
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/governance/network_health.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("observe.network_health", OwnerKind::Device, handler_read);
+}
+EOF
+cat >"$CLI/src/daemon/ability/builtins/governance/admin_status.rs" <<'EOF'
+fn register(reg: &mut AxonAbilityCatalog) {
+    reg.register_rpc_with_owner("admin.status", OwnerKind::Device, handler_read);
+}
+EOF
+expect_fail \
+  "Runtime health direct Device owner" \
+  "R123_RUNTIME_HEALTH_SYSTEM_AGENT_OWNER"
+
+make_good_fixture
+perl -0pi -e 's/fn agent_authority_root\(&self, agent_id: &str\) -> Result<String, AbilityControlPlaneError> \{.*?\n    \}/fn agent_authority_root\(\&self, agent_id: \&str\) -> String {\n        crate::core::ura::device_agent_ura("realm", "device", agent_id)\n    }/s' "$CLI/src/daemon/ability/dispatch.rs"
+expect_fail \
+  "Agent owner device-sponsored fallback" \
+  "R112_AGENT_OWNER_EXPLICIT_HOSTED_ROOT"
+
+make_good_fixture
+mkdir -p "$CLI/docs/design"
+cat >"$CLI/docs/design/ability-control-plane-model.md" <<'EOF'
+# Ability Control-Plane Model
+
+DeviceAgent advertises AbilityDescriptor.
+EOF
+expect_fail \
+  "DeviceAgent target terminology" \
+  "R113_DEVICE_OWNER_INVENTORY_BOUNDARY"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/catalog/profiles/device.rs" <<'EOF'
+//! The daemon-hosted Agent anchored at the local device URA.
+EOF
+expect_fail \
+  "missing direct Device owner inventory" \
+  "R113_DEVICE_OWNER_INVENTORY_BOUNDARY"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/catalog/profiles/device.rs" <<'EOF'
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn direct_device_owner_inventory_is_explicit() {
+        let expected = vec!["admin.status".to_string()];
+        assert_eq!(Vec::<String>::new(), expected);
+    }
+}
+EOF
+expect_fail \
+  "non-empty direct Device owner inventory" \
+  "R113_DEVICE_OWNER_INVENTORY_BOUNDARY"
+
+make_good_fixture
+cat >"$CLI/tests/seven_axes_fixture/mod.rs" <<'EOF'
+/// Invoke one Device-owned system ability through the same descriptor-ref
+/// gRPC surface as production callers.
+pub fn invoke_device_system_ability() {}
+EOF
+cat >"$CLI/src/daemon/ability/catalog/profiles/llm.rs" <<'EOF'
+const DEVICE_SKILL_ABILITIES: &[&str] = &["skill.list"];
+
+#[cfg(test)]
+mod tests {
+    fn descriptor(_name: &str, _description: &str) {}
+
+    #[test]
+    fn catalog_snapshot_projects_to_multiple_llm_owners_without_mutating_source() {
+        descriptor("meta.list_abilities", "Device-owned metadata");
+    }
+}
+EOF
+expect_fail \
+  "active fixture obsolete Device-owned wording" \
+  "R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL"
+
+make_good_fixture
+cat >"$CLI/src/daemon/ability/conformance.rs" <<'EOF'
+enum BaselineDomain {
+    DeviceRemoteDesktop,
+}
+
+const DEVICE_REMOTE_DESKTOP_BASELINE: &[BaselineAbility] = &[
+    local_rpc!("remote_desktop.create_session", DeviceRemoteDesktop),
+];
+EOF
+expect_fail \
+  "remote desktop conformance DeviceRemoteDesktop naming" \
+  "R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL"
+
+make_good_fixture
+cat >"$CLI/tests/resolve_before_invoke_e2e.rs" <<'EOF'
+fn catalog_owner_kind_for(callee_ura: &str) -> OwnerKind {
+    let parsed = easynet_cli::core::ura::parse_ura(callee_ura).unwrap();
+    match parsed.kind {
+        easynet_cli::core::ura::URAKind::Device => OwnerKind::Device,
+        easynet_cli::core::ura::URAKind::Authority => OwnerKind::RealmAuthority,
+        other => panic!("fixture callee owner kind must be Device or RealmAuthority, got {other:?}"),
+    }
+}
+
+async fn invoke_resolves_published_device_ability_to_session_dispatch() {}
+EOF
+expect_fail \
+  "resolve-before-invoke direct Device owner positive fixture" \
+  "R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL"
+
+make_good_fixture
+cat >"$CLI/src/daemon/federation/read_model/ability_catalog.rs" <<'EOF'
+pub(crate) struct AbilityCatalogStore;
+
+impl AbilityCatalogStore {
+    pub(crate) fn get_at(&self, _owner_ura: &str, _now_unix_ms: i64) -> Option<Vec<serde_json::Value>> {
+        None
+    }
+}
+EOF
+cat >"$CLI/src/daemon/invocation/dispatch/federation_wrappers.rs" <<'EOF'
+pub(crate) fn handle_resolve_at() -> ResolveResponse {
+    // Bad: only direct presence rows and advertised agents are visible.
+    ResolveResponse { agents: Vec::new() }
+}
+EOF
+cat >"$CLI/src/daemon/invocation/routing/route_resolver.rs" <<'EOF'
+fn selected_execution_for_owner() {
+    // Bad: every device-scoped Agent is accepted as if it were a SystemAgent.
+    if owner.device_agent_ids().is_some() {
+        return Ok(());
+    }
+}
+EOF
+expect_fail \
+  "device-hosted SystemAgent liveness seam" \
+  "R147_ACTIVE_FIXTURE_CURRENT_ACTOR_MODEL"
 
 make_good_fixture
 mkdir -p "$CLI/src/daemon/execution/mission/executors"
@@ -3767,6 +6066,56 @@ expect_fail \
   "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
 
 make_good_fixture
+python3 - "$CLI/src/daemon/invocation/dispatch/daemon_invocation_service.rs" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+text = text.replace(
+    "if parsed.kind != crate::core::ura::URAKind::Authority {",
+    "if !matches!(parsed.kind, crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Authority) {",
+)
+path.write_text(text)
+PY
+expect_fail \
+  "daemon exact route rejects Device owner regression" \
+  "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
+python3 - "$CLI/src/daemon/boot/invocation/mod.rs" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+start = text.find(
+    "    if capabilities.hub_runtime {\n"
+    "        let daemon_route_owner = daemon_ura.as_deref().ok_or_else"
+)
+end_anchor = "\n\n    if let (Some(client), Some(signer))"
+end = text.find(end_anchor, start)
+if end == -1:
+    end_anchor = "\n    spawn_tcp_tls_listener("
+    end = text.find(end_anchor, start)
+if start == -1 or end == -1:
+    raise SystemExit("failed to locate hub-gated daemon route block fixture")
+replacement = """    let daemon_route_owner = daemon_ura.as_deref().unwrap();
+    futures::executor::block_on(service.register_daemon_unary_routes(daemon_route_owner))
+        .context("register daemon exact unary routes in shared Axon LocalRuntime")?;
+    futures::executor::block_on(service.register_daemon_stream_routes(daemon_route_owner))
+        .context("register daemon exact stream routes in shared Axon LocalRuntime")?;
+    if capabilities.hub_runtime {
+        futures::executor::block_on(service.register_daemon_bidi_routes(daemon_route_owner))
+            .context("register daemon exact bidi routes in shared Axon LocalRuntime")?;
+    }
+"""
+text = text[:start] + replacement + text[end:]
+path.write_text(text)
+PY
+expect_fail \
+  "daemon exact unary stream registration must stay Hub-gated" \
+  "R16_DAEMON_ROUTE_RUNTIME_OWNER_FORK"
+
+make_good_fixture
 python3 - "$CLI/src/daemon/boot/invocation/mod.rs" <<'PY'
 from pathlib import Path
 import sys
@@ -4335,7 +6684,7 @@ impl LocalHostedAgentPlacements {
     }
 
     fn from_file(file: &crate::daemon::persistence::local_agents::LocalAgentsFile) -> Self {
-        let host_device_ura = file.host_device_agent_ura.trim();
+        let host_device_ura = file.host_device_ura.trim();
         let by_agent_ura = file
             .hosted_agents
             .iter()
@@ -4397,7 +6746,7 @@ impl LocalHostedAgentPlacements {
     }
 
     fn from_file(file: &crate::daemon::persistence::local_agents::LocalAgentsFile) -> Self {
-        let host_device_ura = file.host_device_agent_ura.trim();
+        let host_device_ura = file.host_device_ura.trim();
         let by_agent_ura = file
             .hosted_agents
             .iter()
@@ -4576,7 +6925,7 @@ make_good_fixture
 cat >"$CLI/src/daemon/ability/builtins/governance/admin_status.rs" <<'EOF'
 fn handler() -> anyhow::Result<()> {
     let local = crate::daemon::persistence::local_agents::load()?;
-    let _joined = !local.host_device_agent_ura.is_empty();
+    let _joined = !local.host_device_ura.is_empty();
     let _count = local.hosted_agents.len();
     Ok(())
 }
@@ -4591,7 +6940,7 @@ use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 
 fn ledger_resource_ura() -> Option<String> {
     let hosted_identity = AgentAggregateRepository::load_hosted_identity_status().ok()?;
-    let parsed = crate::core::ura::parse_ura(hosted_identity.host_device_agent_ura()?).ok()?;
+    let parsed = crate::core::ura::parse_ura(hosted_identity.host_device_ura()?).ok()?;
     Some(crate::core::ura::resource_dot_ura(&parsed.realm, "device.dev-1", "billing/invocations"))
 }
 EOF
@@ -4662,7 +7011,7 @@ make_good_fixture
 cat >"$CLI/src/daemon/ability/catalog/profiles/mod.rs" <<'EOF'
 fn load_host_descriptors() -> Vec<AbilityDescriptor> {
     let local = crate::daemon::persistence::local_agents::load().unwrap();
-    let host_ura = local.host_device_agent_ura.clone();
+    let host_ura = local.host_device_ura.clone();
     let consent_ura =
         crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "consent", "default");
     let mcp_ura =
@@ -4684,13 +7033,13 @@ make_good_fixture
 cat >"$CLI/src/daemon/identity/local_invocation.rs" <<'EOF'
 fn persisted_local_device_ura() -> Option<String> {
     let local = crate::daemon::persistence::local_agents::load().ok()?;
-    Some(local.host_device_agent_ura.trim().to_string())
+    Some(local.host_device_ura.trim().to_string())
 }
 EOF
 cat >"$CLI/src/daemon/resources/context/clipboard_tracker.rs" <<'EOF'
 pub fn spawn() {
     let device_ura = crate::daemon::persistence::local_agents::load()
-        .map(|file| file.host_device_agent_ura)
+        .map(|file| file.host_device_ura)
         .unwrap_or_default();
     run_loop(&device_ura);
 }
@@ -5348,7 +7697,7 @@ expect_fail \
 
 make_good_fixture
 cat >"$CLI/src/daemon/ability/builtins/resources/skills/publish.rs" <<'EOF'
-fn resolve_owner_root_and_type(owner_id: &str) -> anyhow::Result<(PathBuf, agents::AgentType)> {
+fn resolve_owner_root(owner_id: &str) -> anyhow::Result<PathBuf> {
     let registry = agents::load_agents()?;
     let entry = registry.agents.get(owner_id).ok_or_else(|| {
         anyhow::anyhow!(
@@ -5356,7 +7705,7 @@ fn resolve_owner_root_and_type(owner_id: &str) -> anyhow::Result<(PathBuf, agent
             registry.agents.keys().collect::<Vec<_>>()
         )
     })?;
-    Ok((entry.required_root_path(owner_id, "skill.publish")?, entry.agent_type))
+    Ok(entry.required_root_path(owner_id, "skill.publish")?)
 }
 EOF
 expect_fail \
@@ -7067,6 +9416,42 @@ pub fn project_invoke_bidi_down_frame(
 }
 EOF
 cat >"$CLI/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
+fn runtime_introspection_owner_for_execution_target(execution_target_ura: &str) -> anyhow::Result<String> {
+    Ok(execution_target_ura.to_string())
+}
+
+fn remote_catalogue_read_issuer_uses_read_projection_subject() {}
+fn remote_target_owned_selector_owner_ura(execution_target_ura: &str, selector: &str) {}
+fn device_sponsored_system_agent_owner_for_public_ability(public_ability: &str) {}
+fn execution_target_owner_ura_for_public_ability(execution_target_ura: &str, public_ability: &str) {}
+fn target_owned_selector_projects_device_target_to_system_agent_callee() {}
+fn remote_execution_validation_rejects_direct_device_owned_ability_on_device_target() {}
+
+impl RemoteAbilityInvocationTarget {
+    fn for_target_owned_selector(execution_target_ura: &str, selector: &str) {
+        let public_ability = owner_local_ability_name(execution_target_ura, selector);
+        RemoteRootAbilityAdmission::evaluate(&public_ability).require(&public_ability)?;
+        let owner_ura = remote_target_owned_selector_owner_ura(execution_target_ura, selector);
+        let public_ability = owner_local_ability_name(&owner_ura, selector);
+        let _ability_ura = owner_ability_ura(&owner_ura, &public_ability);
+        let _mapped = device_sponsored_system_agent_owner_for_public_ability(&public_ability);
+        let _owner = execution_target_owner_ura_for_public_ability(execution_target_ura, &public_ability);
+    }
+}
+
+fn validate_remote_execution_target() {
+    match (target.kind(), selector.owner_kind()) {
+        (URAKind::Device, "device") => bail!("direct Device-owned ability URA migration-only"),
+        _ => {}
+    }
+}
+
+fn target_owned_remote_system_subject(target: &RemoteAbilityInvocationTarget, callee: Ura) {
+    if callee.device_agent_ids().is_some() {
+        let _subject = target.execution_target_ura().to_string();
+    }
+}
+
 fn drain(frame: axon_sdk::pb::axon::v1::InvokeBidiDown) {
     let _ = frame;
 }
@@ -7074,6 +9459,46 @@ EOF
 expect_fail \
   "bidi receipt payload data_b64 fallback" \
   "R77_BIDI_RECEIPT_PAYLOAD_PROJECTION"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/routing"
+cat >"$CLI/src/daemon/invocation/routing/remote_invoke.rs" <<'EOF'
+fn runtime_introspection_owner_for_execution_target() {}
+fn remote_catalogue_read_issuer_uses_read_projection_subject() {}
+fn remote_target_owned_selector_owner_ura(execution_target_ura: &str, selector: &str) {}
+fn device_sponsored_system_agent_owner_for_public_ability(public_ability: &str) {}
+fn execution_target_owner_ura_for_public_ability(execution_target_ura: &str, public_ability: &str) {}
+fn target_owned_selector_projects_device_target_to_system_agent_callee() {}
+fn remote_execution_validation_rejects_direct_device_owned_ability_on_device_target() {}
+
+impl RemoteAbilityInvocationTarget {
+    fn for_target_owned_selector(execution_target_ura: &str, selector: &str) {
+        let public_ability = owner_local_ability_name(execution_target_ura, selector);
+        RemoteRootAbilityAdmission::evaluate(&public_ability).require(&public_ability)?;
+        let owner_ura = remote_target_owned_selector_owner_ura(execution_target_ura, selector);
+        let public_ability = owner_local_ability_name(&owner_ura, selector);
+        let _ability_ura = owner_ability_ura(execution_target_ura, &public_ability);
+        let _mapped = device_sponsored_system_agent_owner_for_public_ability(&public_ability);
+        let _owner = execution_target_owner_ura_for_public_ability(execution_target_ura, &public_ability);
+    }
+}
+
+fn validate_remote_execution_target() {
+    match (target.kind(), selector.owner_kind()) {
+        (URAKind::Device, "device") => bail!("migration-only"),
+        _ => {}
+    }
+}
+
+fn target_owned_remote_system_subject(target: &RemoteAbilityInvocationTarget, callee: Ura) {
+    if callee.device_agent_ids().is_some() {
+        let _subject = target.execution_target_ura().to_string();
+    }
+}
+EOF
+expect_fail \
+  "remote target-owned selector derives ability from Device execution target" \
+  "R135_REMOTE_DESCRIPTOR_OWNER_CALLEE_SPLIT"
 
 make_good_fixture
 cat >"$CLI/src/cli/commands/groups/device.rs" <<'EOF'
@@ -7206,6 +9631,315 @@ EOF
 expect_fail \
   "banner runtime projection fallback" \
   "R99_BANNER_RUNTIME_PROJECTION_FAIL_CLOSED"
+
+make_good_fixture
+mkdir -p "$CLI/plugins/remote-desktop/abilities"
+cat >"$CLI/plugins/remote-desktop/abilities/remote_desktop.create_session.ability.toml" <<'EOF'
+name = "remote_desktop.create_session"
+scope_subjects_kind = "any"
+EOF
+expect_fail \
+  "remote-desktop TOML broad subject scope" \
+  "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY"
+
+make_good_fixture
+mkdir -p "$CLI/ability-descriptors/system/example"
+cat >"$CLI/ability-descriptors/system/example/example.bad.ability.toml" <<'EOF'
+name = "example.bad"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "only_ura_kinds"
+scope_agents_uras = ["agent"]
+EOF
+expect_fail \
+  "ability TOML caller kind scope" \
+  "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY"
+
+make_good_fixture
+mkdir -p "$CLI/plugins/remote-desktop/src"
+cat >"$CLI/plugins/remote-desktop/src/registration.rs" <<'EOF'
+fn specs() {
+    BuiltinPluginAbilitySpec {
+        name: "remote_desktop.create_session",
+        description: "create remote desktop session",
+        admission_action: "remote-desktop.session.create",
+    };
+}
+EOF
+expect_fail \
+  "remote-desktop registration missing subject kind policy" \
+  "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/descriptors"
+cat >>"$CLI/src/daemon/ability/descriptors/surface.rs" <<'EOF'
+fn ura_kind_scope_label(kind: crate::core::ura::URAKind) -> &'static str {
+    match kind {
+        crate::core::ura::URAKind::Resource => "resource",
+        _ => "unknown",
+    }
+}
+EOF
+expect_fail \
+  "descriptor surface duplicate URA-kind scope label mapper" \
+  "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/ability/descriptors"
+cat >"$CLI/src/daemon/ability/descriptors/surface.rs" <<'EOF'
+enum ScopeRule {
+    Any,
+    OnlyUraKinds(Vec<String>),
+}
+
+impl ScopeRule {
+    fn admits_agent(&self, candidate: &str) -> bool {
+        match self {
+            ScopeRule::Any => true,
+            ScopeRule::OnlyUraKinds(allowed) => crate::core::ura::parse_ura(candidate)
+                .ok()
+                .is_some_and(|parsed| {
+                    let kind = crate::core::ura::ura_kind_scope_label(parsed.kind);
+                    allowed.iter().any(|allow| allow == kind)
+                }),
+        }
+    }
+}
+
+#[test]
+fn scope_rule_can_admit_dynamic_subjects_by_ura_kind() {}
+#[test]
+fn scope_rule_rejects_ura_kind_scope_on_caller_axis() {}
+EOF
+expect_fail \
+  "descriptor caller scope admits OnlyUraKinds" \
+  "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/routing/route_resolver.rs" <<'EOF'
+fn route_owner_kind_from_selector(selector: &Selector) -> Result<RouteOwnerKind, ResolveRouteFailure> {
+    match selector.owner_kind() {
+        "system-agent" => Ok(Self::SystemAgent),
+        _ => Err(ResolveRouteFailure),
+    }
+}
+
+fn local_runtime_route_kind(owner_kind: RouteOwnerKind) {
+    match owner_kind {
+        RouteOwnerKind::Agent | RouteOwnerKind::SystemAgent => {}
+        _ => {}
+    }
+}
+
+fn public_ability_name(owner_ura: &str, ability_name: &str) -> String {
+    crate::core::ura::descriptor_public_ability_name(owner_ura, ability_name)
+}
+
+fn next_hop_json() {
+    json!({
+        "local_device_ability": {
+            "device_ura": "easynet:///r/localhost/device/dev",
+            "ability_ura": "easynet:///r/localhost/ability/device.dev.meta.list",
+        }
+    });
+}
+EOF
+expect_fail \
+  "final route obsolete local_device_ability arm" \
+  "R154_FINAL_ROUTE_DEVICE_HOSTED_ARM"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/routing/route_resolver.rs" <<'EOF'
+enum SelectedRouteKind {
+    LocalDevice,
+    SameRealmDevice,
+    RoutableAgentOwned,
+}
+
+fn route_owner_kind_from_selector(selector: &Selector) -> Result<RouteOwnerKind, ResolveRouteFailure> {
+    match selector.owner_kind() {
+        "system-agent" => Ok(Self::SystemAgent),
+        _ => Err(ResolveRouteFailure),
+    }
+}
+
+fn local_runtime_route_kind(owner_kind: RouteOwnerKind) {
+    match owner_kind {
+        RouteOwnerKind::Agent | RouteOwnerKind::SystemAgent => {}
+        _ => {}
+    }
+}
+
+fn public_ability_name(owner_ura: &str, ability_name: &str) -> String {
+    crate::core::ura::descriptor_public_ability_name(owner_ura, ability_name)
+}
+
+fn next_hop_json() {
+    json!({
+        "device_hosted_ability": {
+            "host_device_ura": "easynet:///r/localhost/device/dev",
+            "callee_ura": "easynet:///r/localhost/device/dev",
+            "ability_ura": "easynet:///r/localhost/ability/device.dev.meta.list",
+        }
+    });
+}
+
+fn selected_execution_for_owner(owner_kind: crate::core::ura::URAKind) -> Result<SelectedRouteKind, ResolveRouteFailure> {
+    match owner_kind {
+        crate::core::ura::URAKind::Device => Ok(SelectedRouteKind::SameRealmDevice),
+        _ => Ok(SelectedRouteKind::RoutableAgentOwned),
+    }
+}
+EOF
+expect_fail \
+  "route resolver SameRealmDevice direct Device route kind" \
+  "R155_NO_SAME_REALM_DEVICE_ROUTE_KIND"
+
+make_good_fixture
+cat >"$CLI/src/daemon/invocation/routing/route_resolver.rs" <<'EOF'
+enum SelectedRouteKind {
+    LocalDevice,
+    RealmAuthorityOwned,
+    HostedAgent,
+}
+
+impl SelectedRouteKind {
+    fn route_reason(self) -> RouteReason {
+        match self {
+            Self::LocalDevice => RouteReason::LocalDevice,
+            Self::RealmAuthorityOwned => RouteReason::LocalHub,
+            Self::HostedAgent => RouteReason::HostedAgent,
+        }
+    }
+}
+
+fn route_owner_kind_from_selector(selector: &Selector) -> Result<RouteOwnerKind, ResolveRouteFailure> {
+    match selector.owner_kind() {
+        "system-agent" => Ok(Self::SystemAgent),
+        _ => Err(ResolveRouteFailure),
+    }
+}
+
+fn local_runtime_route_kind(owner_kind: RouteOwnerKind) {
+    match owner_kind {
+        RouteOwnerKind::Agent | RouteOwnerKind::SystemAgent => {}
+        _ => {}
+    }
+}
+
+fn public_ability_name(owner_ura: &str, ability_name: &str) -> String {
+    crate::core::ura::descriptor_public_ability_name(owner_ura, ability_name)
+}
+
+fn projection_rejection() -> &'static str {
+    "direct Device-owned catalog projections are not dispatchable public routes; migrate the descriptor owner to a device-sponsored SystemAgent"
+}
+
+fn next_hop_json() {
+    json!({
+        "device_hosted_ability": {
+            "host_device_ura": "easynet:///r/localhost/device/dev",
+            "callee_ura": "easynet:///r/localhost/system-agent/dev.ability-management",
+            "ability_ura": "easynet:///r/localhost/ability/system-agent.dev.ability-management.remote_desktop.create_session",
+        },
+        "hosted_agent_via_device": {
+            "agent_ura": "easynet:///r/localhost/system-agent/dev.ability-management",
+            "host_device_ura": "easynet:///r/localhost/device/dev",
+            "ability_ura": "easynet:///r/localhost/ability/system-agent.dev.ability-management.remote_desktop.create_session",
+        }
+    });
+}
+EOF
+expect_fail \
+  "route resolver HostedAgent internal route kind" \
+  "R157_ROUTABLE_AGENT_ROUTE_KIND"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/dispatch"
+cat >"$CLI/src/daemon/invocation/dispatch/daemon_route_runtime.rs" <<'EOF'
+fn exact_route_host_device_ura_for_delegation(callee_ura: &str) -> Result<String, Status> {
+    if parsed.kind == crate::core::ura::URAKind::Device {
+        return Ok(callee_ura.to_string());
+    }
+    let _ = "Device or device-sponsored SystemAgent";
+    let _ = "delegation_exact_route_rejects_direct_device_callee";
+    let _ = "delegation_exact_route_derives_host_from_system_agent_callee";
+    let _ = "requires a device-sponsored SystemAgent callee";
+    Ok(callee_ura.to_string())
+}
+EOF
+expect_fail \
+  "daemon exact-route delegation helper accepts direct Device callee" \
+  "R148_DISPATCH_FIXTURE_SYSTEM_AGENT_CALLEE"
+
+make_good_fixture
+mkdir -p "$CLI/src/daemon/invocation/dispatch/daemon_invocation_service_tests"
+cat >"$CLI/src/daemon/invocation/dispatch/daemon_invocation_service_tests/stream.rs" <<'EOF'
+fn obsolete_stream_fixture() {
+    publish_test_stream_route(&svc, TARGET_DEVICE_URA, CATALOGUE_READ);
+    let descriptor_ref = test_descriptor_ref(TARGET_DEVICE_URA, CATALOGUE_READ);
+}
+EOF
+expect_fail \
+  "stream governance fixture uses direct Device descriptor owner" \
+  "R148_DISPATCH_FIXTURE_SYSTEM_AGENT_CALLEE"
+
+make_good_fixture
+cat >"$CLI/src/daemon/identity/receipt_signing.rs" <<'EOF'
+struct KeyServiceReceiptAuthorityProvider {
+    self_signed: HashMap<String, Arc<dyn ReceiptSigningAuthority>>,
+    signer_capabilities: HashMap<String, Arc<dyn CanonicalSigner>>,
+}
+
+impl KeyServiceReceiptAuthorityProvider {
+    async fn resolve_signing_authority(&self, callee: &AgentIdentity) -> Result<Arc<dyn ReceiptSigningAuthority>, AxonError> {
+        self.self_signed
+            .get(&callee.ura)
+            .cloned()
+            .ok_or_else(|| AxonError::permission_denied("daemon_receipt_callee_not_owned"))
+    }
+}
+EOF
+expect_fail \
+  "production receipt signing lacks SystemAgent sponsor Device custody" \
+  "R158_SYSTEM_AGENT_RECEIPT_KEY_CUSTODY"
+
+make_good_fixture
+cat >"$CLI/src/daemon/axon_bridge/runtime_factory.rs" <<'EOF'
+struct EphemeralTestReceiptSigningAuthority;
+
+impl EphemeralTestReceiptSigningAuthority {
+    fn self_signed(callee_identity: AgentIdentity) -> Self {
+        Self
+    }
+}
+EOF
+expect_fail \
+  "test receipt provider lacks SystemAgent sponsor Device proof" \
+  "R158_SYSTEM_AGENT_RECEIPT_KEY_CUSTODY"
+
+make_good_fixture
+cat >"$CLI/src/cli/commands/discover.rs" <<'EOF'
+fn device_aggregate_target() {
+    LocalAbilityTarget::new("agent.discover", &device_ura);
+}
+EOF
+expect_fail \
+  "local discover targets Device instead of catalog-owned SystemAgent" \
+  "R159_LOCAL_SYSTEM_ABILITY_OWNER_HOST_SPLIT"
+
+make_good_fixture
+cat >"$CLI/src/daemon/axon_bridge/hot_agent_registrar.rs" <<'EOF'
+fn sync_manifest(manifest: Manifest) {
+    let Some(exec) = manifest.exec() else {
+        return;
+    };
+    register_runtime(exec);
+}
+EOF
+expect_fail \
+  "declaration-only manifests omitted from canonical catalog" \
+  "R160_DESCRIPTOR_CATALOG_EXECUTION_SPLIT"
 
 make_good_fixture
 expect_pass "fixture restored after all negative cases"

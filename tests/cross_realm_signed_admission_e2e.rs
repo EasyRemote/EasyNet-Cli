@@ -90,7 +90,7 @@ use easynet_cli::daemon::invocation::admission::federated_key_resolver::Federate
 use easynet_cli::daemon::invocation::bidi::state::presence::PresenceRegistry;
 use easynet_cli::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
 use easynet_cli::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_STATUS;
-use easynet_cli::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+use easynet_cli::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole, TrustedAgent};
 use easynet_cli::daemon::trust::cell::SharedTrustAnchor;
 
 const REALM_B_HUB_SIGNING_SEED: [u8; 32] = [0xB0; 32];
@@ -349,7 +349,7 @@ async fn cross_realm_signed_caller_resolves_key_before_policy_or_dispatch() {
         .append_agent(TrustedAgent {
             agent_ura: DEVICE_A_URA.to_string(),
             public_key_b64: device_a_pubkey_b64.clone(),
-            role: TrustedAgentRole::Device,
+            role: TrustAnchorRole::Device,
             added_at_unix_ms: 1_714_492_800_000,
             origin_realm: None,
             hub_endpoint: None,
@@ -364,7 +364,7 @@ async fn cross_realm_signed_caller_resolves_key_before_policy_or_dispatch() {
                     .verifying_key()
                     .to_bytes(),
             ),
-            role: TrustedAgentRole::Hub,
+            role: TrustAnchorRole::Hub,
             added_at_unix_ms: 1_714_492_800_000,
             origin_realm: Some(REALM_B.to_string()),
             hub_endpoint: Some("in-process-B".to_string()),
@@ -531,7 +531,7 @@ async fn cross_realm_forged_signature_rejected_after_key_resolves() {
         .append_agent(TrustedAgent {
             agent_ura: DEVICE_A_URA.to_string(),
             public_key_b64: device_a_pubkey_b64.clone(),
-            role: TrustedAgentRole::Device,
+            role: TrustAnchorRole::Device,
             added_at_unix_ms: 1_714_492_800_000,
             origin_realm: None,
             hub_endpoint: None,
@@ -546,7 +546,7 @@ async fn cross_realm_forged_signature_rejected_after_key_resolves() {
                     .verifying_key()
                     .to_bytes(),
             ),
-            role: TrustedAgentRole::Hub,
+            role: TrustAnchorRole::Hub,
             added_at_unix_ms: 1_714_492_800_000,
             origin_realm: Some(REALM_B.to_string()),
             hub_endpoint: Some("in-process-B".to_string()),

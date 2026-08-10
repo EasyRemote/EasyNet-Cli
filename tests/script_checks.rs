@@ -206,6 +206,14 @@ fn remote_desktop_contract_boundary_script_holds() {
 }
 
 #[test]
+fn browser_cdp_axon_boundary_script_holds() {
+    // Pins the browser executor to a package-owned provider, current headed
+    // Chrome with isolated debugging profiles, and CDP application frames
+    // carried only by the governed Axon bidi session.
+    run_bash_script("tests/scripts/test_check_browser_cdp_axon_boundary.sh");
+}
+
+#[test]
 fn auth_exec_canonical_tool_script_contract_holds() {
     // Pins the CLI exec path to canonical advertised tool names. The
     // retired shell.run/process.exec bare aliases must stay rejected.
@@ -564,7 +572,7 @@ fn mcp_cost_metadata_projection_boundary_script_holds() {
 
 #[test]
 fn device_ability_call_mode_resolution_boundary_script_holds() {
-    // Pins dynamic device ability call-mode ownership to one registrar value
+    // Pins dynamic ability deployment call-mode ownership to one registrar value
     // object. Install, uninstall, replay, and runtime proof binding must not
     // reintroduce procedural inference helpers.
     run_bash_script("tests/scripts/test_check_device_ability_call_mode_resolution_boundary.sh");

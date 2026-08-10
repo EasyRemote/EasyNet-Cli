@@ -1,0 +1,37 @@
+schema_version = "2"
+name = "device.keyring.federate_user_identity_token"
+descriptor_version = "1.0.0"
+description = "Issue a bounded cross-realm user identity token signed by a managed key bound to the source user URA."
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["source_user_ura", "managed_key_id", "target_realm", "issued_at_unix_ms"]
+additionalProperties = false
+
+[input_schema.properties.issued_at_unix_ms]
+type = "integer"
+minimum = 0
+
+[input_schema.properties.managed_key_id]
+type = "string"
+minLength = 1
+
+[input_schema.properties.source_user_ura]
+type = "string"
+minLength = 1
+
+[input_schema.properties.target_realm]
+type = "string"
+minLength = 1

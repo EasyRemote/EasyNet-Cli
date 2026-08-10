@@ -18,13 +18,13 @@ mkdir -p "$SB/tools/scripts" "$SB/src/daemon/ability/builtins/device_control/abi
 cp "$SCRIPT" "$SB/tools/scripts/check-device-ability-call-mode-resolution-boundary.sh"
 
 cat >"$SB/src/daemon/ability/builtins/device_control/ability_management/registrar.rs" <<'RS'
-enum DeviceAbilityCallModeResolution {
+enum AbilityDeploymentCallModeResolution {
     Rpc,
     Stream,
     Bidi,
 }
 
-impl DeviceAbilityCallModeResolution {
+impl AbilityDeploymentCallModeResolution {
     fn from_manifest(manifest: &AbilityManifest) -> anyhow::Result<Self> {
         Ok(Self::Stream)
     }
@@ -47,9 +47,9 @@ impl DeviceAbilityCallModeResolution {
 }
 
 fn install(manifest: &AbilityManifest, modes: AbilityCallModes, mode: DescriptorCallMode) {
-    let _ = DeviceAbilityCallModeResolution::from_manifest(manifest);
-    let _ = DeviceAbilityCallModeResolution::from_runtime_modes(modes);
-    let _ = DeviceAbilityCallModeResolution::from_descriptor_mode(mode);
+    let _ = AbilityDeploymentCallModeResolution::from_manifest(manifest);
+    let _ = AbilityDeploymentCallModeResolution::from_runtime_modes(modes);
+    let _ = AbilityDeploymentCallModeResolution::from_descriptor_mode(mode);
 }
 RS
 

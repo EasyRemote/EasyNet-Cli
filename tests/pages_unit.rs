@@ -622,7 +622,7 @@ fn u14_pages_management_abilities_are_in_local_runtime() {
     // Backend routes `project_list` through the synthetic hosted agent
     // `agent/<user>.pages`. The local dispatch key stays owner-qualified, but
     // the control-plane authority root must be the pages agent, not the
-    // user's account-agent fallback.
+    // user's product account or any synthesized account-as-agent fallback.
     let ability = ura::local_dispatch_ability_key(&pages_agent, "project_list");
     assert_eq!(ability, "pages.project_list");
     assert!(reg.has_rpc(&ability));

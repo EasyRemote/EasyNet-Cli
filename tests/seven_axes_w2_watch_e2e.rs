@@ -108,7 +108,7 @@ mission "watch-stream" {
   let third = testbot.echo(message: second.output)
 }
 "#;
-    let run = home.invoke_device_system_ability(
+    let run = home.invoke_device_hosted_system_ability(
         "mission.run",
         serde_json::json!({
             "source": mission,

@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use easynet_cli::daemon::persistence::config::Credentials;
-use easynet_cli::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgentRole};
+use easynet_cli::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole};
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa,
     KeyPair, KeyUsagePurpose,
@@ -144,7 +144,7 @@ fn principal_bound_device_join_hub_ura_uses_real_tcp_tls_daemon_without_backend(
     let hub_row = trust
         .lookup(HUB_URA)
         .expect("device trust anchor must include Hub URA row");
-    assert_eq!(hub_row.role, TrustedAgentRole::Hub);
+    assert_eq!(hub_row.role, TrustAnchorRole::Hub);
     assert_eq!(hub_row.origin_realm.as_deref(), Some(REALM));
     assert!(
         hub_row.tls_ca_pem_path.as_deref().is_some(),
@@ -155,7 +155,7 @@ fn principal_bound_device_join_hub_ura_uses_real_tcp_tls_daemon_without_backend(
     let device_row = trust
         .lookup(&device_ura)
         .expect("device trust anchor must include joined Device URA row");
-    assert_eq!(device_row.role, TrustedAgentRole::Device);
+    assert_eq!(device_row.role, TrustAnchorRole::Device);
 
     let hub_trust_path = hub_home.path().join(".easynet/realm-trust.toml");
     let hub_trust =

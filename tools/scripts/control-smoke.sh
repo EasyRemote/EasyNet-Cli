@@ -44,7 +44,7 @@ if [ ! -S "$DAEMON_SOCK" ]; then
   exit 1
 fi
 
-ABILITY_URA="easynet:///r/cli/ability/device.local.observe.health"
+ABILITY_URA="easynet:///r/cli/ability/system-agent.local.runtime-health.observe.health"
 echo "[smoke] invoking $ABILITY_URA through daemon-hosted Axon..."
 RESP="$("$CLI_BIN" ability invoke "$ABILITY_URA" --args '{"smoke":"ok"}' --raw)"
 echo "[smoke] response: $RESP"

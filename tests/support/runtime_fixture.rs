@@ -49,8 +49,23 @@ pub fn daemon_runtime_with_key_resolver_and_ledger(
     easynet_cli::daemon::axon_bridge::runtime_factory::build_daemon_runtime_with_receipt_provider(
         resolver,
         Arc::new(DeterministicReceiptProvider::default()),
+        isolated_runtime_persistence(),
         ledger,
     )
+}
+
+fn isolated_runtime_persistence(
+) -> easynet_cli::daemon::axon_bridge::runtime_factory::RuntimePersistenceConfig {
+    static RUNTIME_PERSISTENCE_SEQ: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+    let seq = RUNTIME_PERSISTENCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "easynet-integration-daemon-runtime-{}-{}",
+        std::process::id(),
+        seq
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    easynet_cli::daemon::axon_bridge::runtime_factory::RuntimePersistenceConfig::persistent(dir)
 }
 
 #[derive(Default)]
