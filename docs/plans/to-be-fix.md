@@ -7,6 +7,243 @@
 ---
 
 ## EasyNet-Cli
+
+### F-050 Ability owner/callee 本体收敛清单 【已核验,2026-08-08】
+- 结论:当前未发现“User/Account 被生产实现成 Agent”的活跃 bug。正确模型是:
+  User/Account = Principal/accountability; Agent/SystemAgent/Authority = routable
+  owner/callee; Device = host/custody/sponsor,不是 ordinary public ability actor。
+- 2026-08-08 多 agent red-team 复核结论:第一轮攻击指出的 dynamic deploy、meta.teach/acquire/forget、
+  hosted delegation callee/host、MCP Device owner、R114 过期门禁在当前工作树已收敛或已由 gate 钉住;
+  不能继续按旧报告当 P0 处理。剩余风险是命名/投影防回流,不是新增一套 actor ontology。
+- 本次已收口:
+  · `device.keyring.*` 保留历史 public wire name,但 public descriptor owner/callee 改为
+    `keyring-management` SystemAgent; Device 只保留 key custody/service host 语义。
+  · plugin package contribution 默认 owner 改为 `plugin-management` SystemAgent; plugin package
+    是 `AbilityImpl` 来源,不是 authority root/public owner。
+  · dynamic `ability.deploy`/easyremote 路径不再制造 Device-owned descriptor:
+    `target_ura` 是 execution host selector,descriptor owner/callee 归
+    `ability-management` SystemAgent;动态部署注册/持久模型已收敛为
+    `AbilityDeployment*`,仅 `device-abilities.json` 保留 storage/wire 兼容名。
+  · `ability.deploy` public descriptor 和 CLI 顶部说明已同步 runtime owner split:
+    部署目标 Device 是 execution host/custody,不是 descriptor owner/public callee;
+    deployed AbilityDescriptor owner/callee 是该 Device sponsor 的
+    `ability-management` SystemAgent;R132 已补 descriptor/CLI wording gate。
+  · hosted delegation 已拆开 wire callee 与 host Device:callee 只能是
+    Agent/SystemAgent/Authority,Device 只在显式 host 字段里出现。
+  · MCP reflective registry 的 Authority owner projection 已从旧 `hub` marker
+    改为 canonical `authority`,继续拒绝 User Principal / Device fallback。
+  · active owner truth table 已改为当前 actor model:`device.*` 是 legacy/local
+    public name namespace,descriptor owner/callee 是对应 device-sponsored
+    SystemAgent;User/Account 只作 principal/accountability,不是 Agent。
+  · R145/R146 架构 gate 钉住 keyring/plugin owner 边界与 active truth table,
+    防止回流到 `OwnerKind::Device` 或 account-as-Agent;`published_system_abilities`
+    不再靠隐藏 keyring 逃避 layer metadata。
+  · R113 已强化为 direct Device-owner inventory 必须显式为空;R147 钉住正向
+    fixture/model wording,禁止 `invoke_device_system_ability`、"Device-owned system
+    ability"、"Device-owned metadata" 回流到 active positive sources。
+  · governance access-control runtime helper/local 已从 `owner_user_id` 收敛为
+    `owner_user_ura`;R139 已扩展到 access-control runtime helper/local,只允许
+    `owner_user_id` 留在 serde/schema/output 兼容边界。
+  · active ontology 已增加 canonical actor contract,把 User/Account、Agent、
+    SystemAgent、Authority、Device、AbilityImpl/Plugin/Skill 的边界压成唯一短定义;
+    R148 已钉住该定义,并要求 Device 例外指向共享 `DeviceCallerPurpose`
+    classifier,不再另写一套 prose allow-list。
+  · session-authority 的 `session_owner_user_id` 已明确限定为 public wire scalar
+    User-id segment; admission 中返回 canonical User URA 的 helper 已改名为
+    `session_owner_user_ura`;R149 钉住该 scalar/URA 转换边界。
+  · `pages.health` owner projection 已改为用 immutable `owner_user_id` 生成 Pages
+    Agent URA;display `user` 只继续用于 URL/storage/resource presentation;R150
+    钉住 owner segment 与 display slug 的边界。
+  · runtime admission trust path 已改为 invocation-aware classification:
+    Device caller 必须带 selected public ability 并经 `DeviceCallerPurpose` 承认后,
+    才能进入 `DeviceCustody`;R151 禁止 `TrustAnchorRole::Device`/federated Device
+    kind 在缺少 ability context 时直接进 runtime policy。
+  · Realm Authority 对本地 Device 的 descriptor-safe public read 已收窄为只读
+    本地 `DeviceProfileProjection` subject; admission 不再因为 `ability_ura`
+    是 direct Device-owned 就放行。direct Device-owned Ability URA 只保留为
+    migration fact,不能成为 public-read policy subject/callee; owner resolution
+    也不能把它投影成 Device trust-anchor owner。
+  · dynamic ability/easyremote replay 已补强同设备错误 SystemAgent 场景:
+    只有当前 Device 的 `ability-management` SystemAgent row 可 replay;direct Device
+    row、旧 Device row、同设备非 ability-management SystemAgent row 都 quarantine。
+  · public ability -> device-sponsored SystemAgent owner 已收敛到
+    `daemon::ability::catalog::ownership` 单一事实源;remote invoke、descriptor-ref、
+    local CLI target 都消费该事实源,不再按 ability 前缀或 Device target 重建 owner。
+  · local RPC/stream/bidi、route resolver、FFI/CLI 示例与 seven-axes fixture 的正向
+    owner/callee 已迁到 Agent/SystemAgent/Authority;Device 仅保留 execution host、
+    sponsor、custody 或显式 resource subject。direct Device owner 只留在命名明确的
+    migration/quarantine 读取与拒绝测试。
+  · descriptor catalog 与 execution index 已拆开:无 `[exec]` 的 authored/imported
+    manifest 以 `DescriptorOnly` 显式状态进入 canonical control plane 和动态生命周期索引,
+    可被 `agent.discover` 查询但绝不安装 runtime handler;forget/reconcile 同时覆盖可执行与
+    declaration-only rows。seven-axes W3 已证明 original/imported descriptor 可独立发现并
+    在 forget 后精确移除副本。
+  · product/public `owner_user_id` 边界已二次审计:Pages 继续用 immutable product
+    user-id segment 生成 Pages Agent URA;hosted-agent publication/federation
+    discover 内部改为 `owner_user_segment`;resolve-key 的
+    `principal_owner_user_id` 仅作为 wire scalar 并显式注明不是 runtime User URA。
+  · `federation.discover` operator/audit path 已收口为 local Authority self-call:
+    unfiltered discover 测试使用 `TEST_HUB_URA` caller/callee/subject 与 Authority
+    route owner;user-scoped discover 继续是 canonical User caller + `local_user_id`
+    owner filter;没有扩宽 `DeviceCallerPurpose`。
+  · `OwnerProjectionCursor`/`DeviceProfileProjection` 已限定为 same-device
+    migration cursor/read-model;R82/R113 钉住 owner/host binding 与空 direct Device
+    inventory,不得当作新 descriptor-owner 路径;活跃 owner-projection 测试名也从
+    `device_owned` 改成 `DeviceProfileProjection`,避免 migration fixture 继续暗示
+    target Device owner/callee。
+  · MCP conformance/domain 已收敛为 `McpHostedAgent`;当前无 `DeviceBridge`
+    active domain,reflective registry 继续拒绝 Device/User owner。
+  · `profiles/mod.rs` 已用 `SYSTEM_AGENT_DESCRIPTOR_PROJECTIONS` 作为唯一
+    SystemAgent projection 压缩点,避免每个 SystemAgent 再生一组 wrapper。
+  · hub final-route 的 Device-hosted execution arm 已迁移为
+    `device_hosted_ability`:payload 显式携带 `host_device_ura` 与 `callee_ura`,
+    next-hop `ability_ura` 必须匹配 selector 且由 `callee_ura` 所有;Device 只作为
+    `execution_host_ura`,不再通过 `local_device_ability` 名称暗示 direct Device
+    callee/owner。
+  · `SameRealmDevice` dispatch kind 已删除:远端/Hub 侧 direct Device-owned catalog
+    projection 只作为 directory/migration fact,不再生成 public final route;可执行
+    device-hosted descriptor 必须落到 SystemAgent/hosted Agent/Authority。route
+    record 也已拆开 owner/callee 与 `execute_on.target_ura`,避免 SystemAgent route
+    把 callee 当 execution host。
+  · remote_desktop/easyremote public descriptors 已从 broad `scope_subjects=any`
+    收紧为 kind-gated subject scope:会话/信令/控制类只接受 `resource` subject,
+    host-local permission probe 只接受 `agent`/`user`;该策略贯穿
+    `*.ability.toml` -> `AbilityManifest.subject_scope` -> `ScopeRule::OnlyUraKinds`
+    -> descriptor/admission gate。
+  · `OnlyUraKinds` 的 canonical URA-kind label vocabulary 已收敛到
+    `core::ura`:descriptor admission、AbilityManifest validation、ability TOML
+    parser 共用 `ura_kind_scope_label` / `canonical_ura_kind_scope_labels`,
+    不再各自维护 `authority/device/user/agent/ability/resource` 列表。
+    同时 `ScopeRule::admits_agent` 对 `OnlyUraKinds` fail-closed,所以即便
+    descriptor 被程序化构造也不能用 kind-wide caller scope 绕过显式 caller
+    URA/AuthorityBinding。
+	  · Axon runtime descriptor resolver 的 remote_desktop fixture 已去掉旧
+	    Device callee/Device-owned ability URA,改为 `plugin-management` SystemAgent
+	    callee/owner;Device 只作为 runtime catalog host/source,不再回流成 public callee。
+	  · SystemAgent receipt/key custody 已补 production 投影:SystemAgent 仍是
+	    receipt callee/child-invocation caller,但 signing authority 和 verification
+	    key 通过 sponsor Device signer 解析,并带 canonical host attestation;production
+	    path 只接受已声明 daemon-native SystemAgent id 且 sponsor Device 必须是当前
+	    hosted Device;R158 同时钉住 trust-key resolver、production receipt_signing、
+	    test receipt provider 和 selected-route fixture,避免只在 test helper 中成立。
+	  · SystemAgent owner authority boundary 已从“任意 device-scoped Agent id”
+	    收窄到声明表:`AbilityAuthorityContext` 只支持
+	    `SYSTEM_AGENT_DESCRIPTOR_PROJECTIONS` 中声明的 daemon-native SystemAgent id;
+	    `owner_projection -> OwnerKind` 反向解析也拒绝未声明 `system-agent:*`,
+	    避免 `system-agent:worker` 这类普通 Agent 名借 Device custody 成为 public
+	    descriptor owner/callee。
+	  · direct Device migration owner 的内部 Rust 名称已改为
+	    `OwnerKind::DeviceProfileProjection`;durable/wire `owner_projection="device"`
+	    只作为 migration marker 保留,不再在生产源码中暴露 `OwnerKind::Device`
+	    这种 ordinary actor 读法。R113 继续要求 live inventory 为空并禁止旧 spelling
+	    回流到 active device profile。
+- 当前评审范围内无已知未收口 P0/P1;持续约束:
+  1. admission runtime policy 入口已收口;剩余只允许在 storage/identity adapter
+     层保留 `TrustAnchorRole::Device`/raw `URAKind::Device` 作为解析事实,不得重新
+     作为 ordinary actor 或绕过 `TrustedCallerPath` + selected public ability +
+     `DeviceCallerPurpose` 的统一 policy boundary。
+  2. 后续新增能力族优先复用现有 SystemAgent 家族;只有出现新的稳定 actor/use-case
+     边界时才新增 SystemAgent,不要为每个 verb 或 implementation detail 新建 actor。
+  3. 2026-08-09 精简架构评审的 seam reduction 已完成:
+     `DeviceCallerPurpose` 与 Device policy scope 已收敛到
+     `DEVICE_CALLER_RULES`,且 `ability.publish`/`ability.deploy`/
+     `ability.uninstall` 不再是 Device caller 例外;owner-projection string
+     grammar 已收敛到 `ability::owner_projection::OwnerProjection`,dispatch
+     和 AuthorityScope 不再各自维护 marker parser/renderer;trust-path gate 已改为保护
+     invariant,不再把 `VerifiedCallerProjection`/`VerifiedCallerEvidence`/
+     `from_verified_invocation_caller` 等中间 DTO/helper 名称当作正向架构事实。
+  4. 2026-08-09 selected-route/SystemAgent receipt custody 已补齐:
+     broad `selected_route` dispatch positive fixtures 已迁到 device-sponsored
+     SystemAgent owner/callee,Device 只作为 host/custody;production receipt signing、
+     child Invocation signing、verification-key projection 均支持 SystemAgent ->
+     sponsor Device key custody,并 fail-closed 到声明 SystemAgent id + 本 Device sponsor,
+     由 R158 钉住。
+  5. 2026-08-09 兼容字段生命周期 seam 已收敛:
+     RFC-014/admission/policy-store 的 `owner_user_id`/
+     `session_owner_user_id` 只作为 serde/wire/durable key 保留,运行时字段均为
+     canonical `owner_user_ura`/`session_owner_user_ura`;`AbilityCatalogRow`
+     保留 `descriptor_version` 仅作为 `version` 的 wire-adapter alias,输入若与
+     `version` 不一致即拒绝,不会形成第二 catalog identity。R94/R137/R139 已钉住。
+  6. 2026-08-09 positive fixture/vocabulary P2 已收敛:
+     remote_desktop conformance 使用 `PluginManagedRemoteDesktop`;
+     resolve-before-invoke 正向路径使用 remote `runtime-health` SystemAgent
+     owner/callee,Device 只作为 `host_device_ura`/execution host。Hub resolve
+     通过 live host Device join SystemAgent projection,不要求 SystemAgent 独立
+     presence,也不回退 direct Device owner/callee。
+  7. 2026-08-09 dynamic ability 防回流已补强:
+     R132 现在扫描 production `hot_register*` 动态注册路径,禁止传
+     `OwnerKind::Device`;easyremote/plugin 动态能力必须经 `ability-management`
+     或 `plugin-management` SystemAgent/显式 hosted Agent owner,不能绕过
+     deploy/store/replay 的 SystemAgent owner 收敛。
+  8. R159/R160 已加入正向与合成负例门禁:R159 要求 local system ability 通过
+     catalog-owned SystemAgent target constructor 构造 callee/host split;R160 要求
+     declaration-only manifest 进入 canonical catalog,并禁止 hosted-Agent reconcile
+     只枚举 runtime handlers。
+- 精简化建议:
+  · SystemAgent 数量不再继续膨胀;优先复用 `ability-management`、`runtime-governance`、
+    `runtime-introspection`、`plugin-management`、`keyring-management`。
+  · `profiles/mod.rs` 的 SystemAgent descriptor projection 应保持/收敛为表驱动 registry,
+    避免每个 agent 一组重复 wrapper。
+  · `DeviceProfileProjection` 只作为 migration read model/cursor,不作为长期 actor model。
+- 补强测试/gate:
+  · keyring route-resolver 测试:legacy `device.keyring.list` 必须解析到
+    `agent/device.<id>.keyring-management`,不能回到 Device callee。
+  · remote_desktop/easyremote rows 断言 owner=`plugin-management`。
+  · R145 枚举全部 public `device.keyring.*` verbs,避免新增 verb 被 metadata carve-out 漏掉。
+  · R146 继续扫描 active owner truth table,禁止 `Device-owned` 标题、rows 1/2/3/5
+    回写 `device/<id>` owner、以及 User/Account 作为 callable ability owner。
+  · R147 继续扫描 active positive fixture/model wording,禁止把 SystemAgent-owned /
+    Device-hosted 调用重新命名成 Device-owned。
+  · R139 继续扫描 access-control runtime helper/local,禁止
+    `owner_user_id_from_*` 或 `let owner_user_id` 重新承载 canonical User URA。
+  · R148 继续扫描 active ontology canonical actor contract,禁止 Account-as-Agent、
+    Device-as-ordinary-actor、AbilityImpl/Plugin/Skill-as-owner 语义回流。
+  · R149 继续扫描 session-authority scalar/URA conversion boundary,禁止返回 User
+    URA 的 helper 重命名回 `session_owner_user_id`。
+  · R150 继续扫描 Pages owner segment boundary,禁止 `pages.health` owner URA
+    从 display user slug 构造,或把 immutable `owner_user_id` 重新解释成 User URA。
+  · R151 继续扫描 Device caller trust-path boundary,禁止 runtime admission 在缺少
+    selected public ability 的情况下把 trusted/federated Device 分类成 `DeviceCustody`;
+    同时禁止 Realm Authority public-read 重新引入 direct Device-owned Ability URA
+    subject allow,并禁止 direct Device-owned Ability subject 通过 Device owner
+    trust-anchor 投影进入 ordinary owner policy。
+  · R132 继续扫描 dynamic ability/easyremote replay,要求 direct Device row、old
+    Device row、same-device non-ability-management SystemAgent row 均不能 replay;
+    同时扫描 `ability.deploy` descriptor/CLI 文案,禁止把 deploy 写回 direct
+    Device-owned dynamic ability。
+  · R152 继续扫描 product/public owner-user-id adapter boundary,要求 hosted-agent
+    publication/federation discover 使用 `owner_user_segment`,resolve-key wire DTO
+    注明 `principal_owner_user_id` 不是 runtime User URA。
+  · R153 继续扫描 `federation.discover` read-scope boundary,禁止 unfiltered
+    operator/audit discover 退回 generic Device-style invoke 或 Device route owner。
+  · R82/R113 继续扫描 owner projection cursor 与 direct Device inventory,要求
+    DeviceProfileProjection 只能是 same-device migration read-model 且 live inventory
+    保持空。
+  · R146 继续扫描 remote_desktop subject scope boundary,要求 registration table、
+    TOML、manifest、descriptor projection 全部支持 `only_ura_kinds`,并禁止
+    remote_desktop public ability TOML 回退到 `scope_subjects_kind = "any"`;
+    同时要求 `OnlyUraKinds` 的 label validator/mapper 由 `core::ura` 唯一提供,
+    并要求 caller/agent axis 对 `OnlyUraKinds` fail-closed。
+  · R154 继续扫描 final-route Device-hosted execution arm,要求使用
+    `device_hosted_ability` + `host_device_ura` + `callee_ura`,禁止 active
+    resolver 回退到旧 `local_device_ability` arm。
+  · R155 继续扫描 route resolver,禁止 `SelectedRouteKind::SameRealmDevice`
+    和 direct Device-owned projection dispatch;错误信息必须指向
+    device-sponsored SystemAgent ownership。
+  · R157 继续扫描 route resolver,要求 daemon-internal selected route kind 使用
+    `RoutableAgentOwned` 表达 Agent/SystemAgent owner/callee,并禁止把内部枚举
+    重新命名为 `SelectedRouteKind::HostedAgent`;`HostedAgent` 只能保留在
+    Axon/product wire projection。
+  · R158 继续扫描 SystemAgent receipt/key custody 与 selected-route fixtures:
+    production receipt/invocation signing 必须把 device-sponsored SystemAgent
+    投影到 sponsor Device signer,且只允许声明 SystemAgent id 和当前 hosted Device
+    sponsor;普通 hosted Agent 仍走显式 hosted lease;
+    selected-route positive fixtures 必须 owner-scoped 到 SystemAgent/Agent/Authority,
+    不得再发布 direct Device-owned demo route。
+  · resolver regression 继续覆盖 remote_desktop 的 SystemAgent owner/callee:
+    descriptor_ref 必须从 `plugin-management` SystemAgent ability URA 派生,不能再
+    从 `device/<id>.remote_desktop.*` 派生。
+
 ### F-039 retired 顶层 CLI 别名 join/start/stop 【已修复 2026-06-12,CTO 指令"不兼容旧方案/干净最新实现"授权】
 - 落点:src/facade/cli/mod.rs Join/Start/Stop variants + run arms;
   scripts/check-cli-flat-command-boundary.sh(规则:retired top-level aliases 应已删) · 规范/产品 · 中
@@ -444,8 +681,8 @@
   **拥有** agent」(动机:9a84a98 同日批的 agent 粒度 callee 要求 device.* 系统能力有 owner
   agent)——这是一次**未经显式辩论的本体修正**(substrate → principal),语法已批、本体正文未改,
   文实不符(F-003 同类但在本体层)。
-- 佐证(语法前已有的身份糊化):`host_device_agent_ura` 字段,doc 注释写 agent URA
-  (local_agents.rs:24)而夹具存裸 device URA(profiles/mcp.rs:1182、discover_ability.rs:921)。
+- 已处理的佐证(语法前已有的身份糊化):retired `host_device_agent_ura` 字段已迁移到
+  `host_device_ura`; 新写入只保留 Device URA 语义，旧字段仅作为读取迁移输入。
 - 爆炸半径:小(一日龄;Cli 管理面未采用 = F-047;前端镜像已跟;铸造点在 EAL callee 下放)。
   **趁早决策成本最低。**
 - 选项(决策权在 CTO,走 DEC/RFC 修订):

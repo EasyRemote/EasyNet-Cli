@@ -375,7 +375,7 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 | 类型 | 角色 | 文件:行 |
 |---|---|---|
 | `RegistryBuildConfig` | 传给 fallible `build_registry_with_services_result()` 的不可变配置 | `src/daemon/ability/catalog/build.rs` |
-| `BuiltAbilityRegistry` | 构建输出：(catalog Arc, plugin_runtime_manager Arc, device_registrar_cell OnceLock) | `src/daemon/ability/catalog/build.rs:155` |
+| `BuiltAbilityRegistry` | 构建输出：(catalog Arc, plugin_runtime_manager Arc, ability_deployment_registrar_cell OnceLock) | `src/daemon/ability/catalog/build.rs:155` |
 | `HotAgentRegistrar` | post-boot 把 hosted-agent handler 集物化进 LocalRuntime + catalog | `src/daemon/axon_bridge/hot_agent_registrar.rs:160` |
 
 **late-binding 解决 bootstrap 鸡生蛋：** `local_registry_handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>`——handler 闭合在 `OnceLock` 而非 `Arc` 本身，使 handler 注册可以先于 catalog 被 `Arc::new` 包裹。`HotAgentRegistrar` 是 phase-5c"内存里注册 agent"与 phase-6"持久化 descriptor 元数据"之间的桥；把它放在 `axon_bridge/` 强调 **LocalRuntime 才是可用性的真理源，AxonAbilityCatalog 是元数据 + 派发**。

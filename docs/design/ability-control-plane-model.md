@@ -11,8 +11,9 @@ but they are not precise enough for daemon/plugin/receipt architecture.
 
 ## One-Line Model
 
-`AbilityDescriptor` is the governed interface. `AbilityImpl` is the executable
-binding. `Receipt` is the versioned, verifiable execution fact.
+`AbilityDescriptor` is the governed capability declaration. `AbilityImpl` is
+the optional executable binding. A descriptor is invokable only when that
+binding exists. `Receipt` is the versioned, verifiable execution fact.
 
 ## Core Terms
 
@@ -20,13 +21,16 @@ binding. `Receipt` is the versioned, verifiable execution fact.
 |---|---|
 | `Device` | Execution substrate identified by `device_ura`, with `node_id` and local resources. |
 | `Daemon` | Projection and dispatch runtime that registers descriptors, binds implementations, dispatches invocations, and emits receipts. |
-| `DeviceAgent` | Control-plane identity projection for a device. It advertises descriptors; it does not own authority by itself. |
-| `AbilityDescriptor` | Versioned, governed callable aggregate: identity, schema, call mode, receipt semantics, visibility, allow/deny policy, version, and hashes. |
+| `SystemAgent` | Restricted Agent sponsored by a Device for device-native callable surfaces. It owns and advertises migrated device-native descriptors while the Device remains substrate/custodian. |
+| `DeviceProfileProjection` | Historical/migration read-model for direct Device-owned daemon-local descriptor rows. The current live inventory is expected to be empty; this is not a target actor identity. |
+| `AbilityDescriptor` | Versioned, governed capability declaration: identity, schema, call mode, receipt semantics, visibility, allow/deny policy, version, and hashes. It may be discovery-only. |
 | `AuthorityBinding` | Governance predicate that authorizes both descriptor advertisement and invocation. |
-| `AbilityImpl` | Executable binding for a descriptor version, including entrypoint, implementation hash, and runtime environment. |
+| `AbilityImpl` | Optional executable binding for a descriptor version, including entrypoint, implementation hash, and runtime environment. |
+| `DescriptorOnly` | Explicit control-plane state for a discoverable descriptor with no execution binding. It never creates an execution-index or runtime-handler row. |
 | `PluginAbilityImpl` | Local plugin-provided ability implementation loaded and bound by the daemon. |
 | `Invocation` | Signed causal call pinned to a descriptor version and an `EntityRef` subject. |
 | `Receipt` | Auditable, cryptographically verifiable record of admission, execution, version, implementation, inputs, outputs, and causal parents. |
+| `DynamicAbilityDeployment` | Device-hosted deployed implementation whose descriptor is owned by the `ability-management` SystemAgent. The Device is execution host, not public owner/callee. |
 
 ## Object Model
 
@@ -46,9 +50,15 @@ class Daemon {
   +dispatch()
 }
 
-class DeviceAgent {
+class SystemAgent {
+  +owner_ura = device_sponsored_agent_ura
+  +sponsor = device_ura
+  +profile
+}
+
+class DeviceProfileProjection {
   +owner_ura = device_ura
-  +profile = device
+  +migration_scope = direct_device_owner_inventory
 }
 
 class AbilityDescriptor {
@@ -119,11 +129,13 @@ class Receipt {
 }
 
 Device "1" *-- "1" Daemon
-Device "1" *-- "1" DeviceAgent
-DeviceAgent "1" --> "*" AbilityDescriptor : advertises
+Device "1" *-- "*" SystemAgent : sponsors
+SystemAgent "1" --> "*" AbilityDescriptor : advertises migrated device-native descriptors
+Device "1" --> "1" DeviceProfileProjection : hosts historical direct-device projection
+DeviceProfileProjection "1" --> "*" AbilityDescriptor : exposes migration-only descriptors
 AuthorityBinding "1" --> "*" AbilityDescriptor : governs advertise + invoke
 Daemon "1" --> "*" AbilityDescriptor : registers descriptor
-Daemon "1" --> "*" AbilityImpl : binds implementation
+AbilityDescriptor "1" --> "0..1" AbilityImpl : optional execution binding
 PluginAbilityImpl --|> AbilityImpl
 Invocation --> AbilityDescriptor : calls pinned version
 Invocation --> EntityRef : subject
@@ -136,9 +148,10 @@ Receipt --> Receipt : parent_receipts
 
 ### Interface Plane
 
-`AbilityDescriptor` is the stable callable surface. It is the object that can be
-advertised, discovered, authorized, invoked, and audited. The daemon registers
-descriptors separately from implementations.
+`AbilityDescriptor` is the stable governed surface. Every descriptor can be
+advertised and discovered. Authorization and invocation additionally require a
+matching `AbilityImpl`; a `DescriptorOnly` row therefore remains intentionally
+non-invokable. The daemon registers descriptors separately from implementations.
 
 Minimum descriptor fields:
 
@@ -160,14 +173,37 @@ predicate for both:
 - whether a descriptor version may be advertised by this projection
 - whether this caller may invoke it for this subject under this causal context
 
-The owner/accountability root is `device_ura` or an explicit authority binding.
-`DeviceAgent` is a projection of that authority, not the authority source.
+The owner/accountability root is a routable Agent/SystemAgent/Authority identity
+plus an explicit authority binding. For historical direct Device-owned rows,
+`DeviceProfileProjection` is a migration read-model over device authority; it is
+not a Principal, not a normal public callee, and not the target actor model.
+
+Principal proof facts use canonical User URAs internally. Serialized
+`owner_user_id` and `session_owner_user_id` keys are compatibility names only;
+they must not leak into runtime `AuthorityProof` fields as bare account ids or
+as Agent identities.
+
+For dynamic/easyremote ability deployment, ownership and execution remain
+separate: descriptor `owner_ura` and invocation `callee_ura` resolve to the
+device-sponsored `ability-management` SystemAgent, while `target_ura` /
+`execution_host_ura` remains the Device. The default daemon-system invocation
+subject is the concrete deployed Ability URA; public ingress may provide a more
+specific resource or session subject. A User/Account Principal can authorize or
+be accountable for the deployment, but it is not converted into an Agent.
 
 ### Execution Plane
 
 `AbilityImpl` is the local executable binding. A plugin may provide a
 `PluginAbilityImpl`, but plugin loading is not the same as descriptor
 registration and not the same as invocation authorization.
+Daemon-bound plugin package contributions publish their descriptors through the
+device-sponsored `plugin-management` SystemAgent; the plugin package remains an
+implementation source and the Device remains only the local execution host.
+
+The canonical control plane contains both executable and descriptor-only rows.
+The execution index contains handlers only. Dynamic lifecycle ownership is kept
+in a separate catalog index so reconciliation and removal cover both row types
+without treating the execution registry as descriptor truth.
 
 Minimum implementation fields:
 
@@ -238,7 +274,12 @@ receipt cannot prove what was actually invoked at the time of execution.
 - Authority is not execution.
 - Invocation is not a raw handler call.
 - Receipt is not a return value.
-- `DeviceAgent advertises AbilityDescriptor`; it does not own Ability.
+- `SystemAgent advertises migrated device-native AbilityDescriptors`; Device is
+  substrate/custody, not ordinary public callee.
+- `DeviceProfileProjection` is only the explicit historical/migration inventory
+  for direct Device-owned descriptors; the live direct Device descriptor
+  inventory is expected to remain empty unless a future SPEC reserves a true
+  bootstrap/self-maintenance exception.
 - `AuthorityBinding` constrains both advertise and invoke.
 - `Daemon.register_descriptor` and `Daemon.bind_impl` are separate operations.
 - `Invocation.descriptor_version` must match the descriptor version admitted by policy.
@@ -248,7 +289,8 @@ receipt cannot prove what was actually invoked at the time of execution.
 
 Reject these designs:
 
-- Treating `DeviceAgent owns Ability` as the formal ownership rule.
+- Treating Device ownership or a device-profile projection as the formal target
+  actor model for ordinary device-native abilities.
 - Letting plugin registration implicitly publish a network ability.
 - Letting descriptor advertisement imply invocation permission.
 - Using `Resource` as the only possible invocation subject.
