@@ -5,8 +5,12 @@ import XCTest
 
 final class RuntimeCoreSeamTests: XCTestCase {
     private let caller = "easynet:///r/example/agent/alice.sdk"
-    private let callee = "easynet:///r/example/device/dev-a"
-    private let descriptor = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0"
+    private let deviceSubject = "easynet:///r/example/device/dev-a"
+    private let callee = "easynet:///r/example/agent/device.dev-a.runtime-health"
+    private let runtimeIntrospectionCallee = "easynet:///r/example/agent/device.dev-a.runtime-introspection"
+    private let runtimeGovernanceCallee = "easynet:///r/example/agent/device.dev-a.runtime-governance"
+    private let pluginManagementCallee = "easynet:///r/example/agent/device.dev-a.plugin-management"
+    private let descriptor = "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0"
     private let nonce = "AQIDBAUGBwgJCgsMDQ4PEA=="
 
     func testProductNeutralModuleExportsOnlyGenericRuntimeConcepts() throws {
@@ -31,6 +35,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 "JSONValue.swift",
                 "Runtime.swift",
                 "RuntimeAbilityProjection.swift",
+                "RuntimeGovernanceRoutesGen.swift",
                 "RuntimePrincipals.swift",
                 "RuntimeSubjects.swift",
                 "SDKError.swift",
@@ -61,6 +66,21 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 XCTAssertFalse(source.contains(symbol), "\(sourceName) exports \(symbol)")
             }
         }
+    }
+
+    func testGeneratedRuntimeGovernanceRoutesAreExact() {
+        XCTAssertEqual(
+            RuntimeGovernanceRoutesGen.descriptorProvider("invocation.record.get"),
+            RuntimeDescriptorRefRequest.receiptHistoryProvider
+        )
+        XCTAssertEqual(
+            RuntimeGovernanceRoutesGen.canonicalAbility("system-agent.dev-a.runtime-governance.invocation.record.get"),
+            "invocation.record.get"
+        )
+        XCTAssertEqual(
+            RuntimeGovernanceRoutesGen.descriptorProvider("invocation.history.delete"),
+            ""
+        )
     }
 
     func testDiscoveryAndLifecycleAreExplicit() async throws {
@@ -549,7 +569,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 sessionID: "session-1",
                 sessionOwnerUserID: "alice",
                 creatorPrincipalID: caller,
-                calleeURA: callee,
+                calleeURA: runtimeIntrospectionCallee,
                 subjectURA: "easynet:///r/example/user/alice",
                 audience: callee,
                 scopes: ["invoke"],
@@ -595,7 +615,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
             .withAuthorityMetadata(scopedSession.metadata())
             .inspect()
 
-        let readDescriptor = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+        let readDescriptor = "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
         let invokeOnlySession = try SessionAuthority.fromMetadata(
             sessionMetadataValue(scopes: ["observe.health"], allowedActions: ["invoke"])
         )
@@ -655,8 +675,8 @@ final class RuntimeCoreSeamTests: XCTestCase {
     func testRuntimeAbilityProjectionIsCanonical() throws {
         let admittedScopes = [
             "observe.health",
-            "easynet:///r/example/ability/device.dev-a.observe.health",
-            "easynet:///r/example/ability/device.dev-a.*",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.*",
         ]
         for scope in admittedScopes {
             let proof = try DelegationProof.fromMetadata(delegationMetadataValue(scopes: [scope]))
@@ -713,7 +733,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
 
         let mismatchedOwnerProof = try DelegationProof.fromMetadata(authorityMetadataValue([
             "issuer_ura": "easynet:///r/example/user/alice",
-            "subject_ura": callee,
+            "subject_ura": deviceSubject,
             "caller_ura": caller,
             "audience": callee,
             "scopes": ["namespace.resolve"],
@@ -880,7 +900,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 sessionID: "session-1",
                 sessionOwnerUserID: "alice",
                 creatorPrincipalID: caller,
-                calleeURA: callee,
+                calleeURA: runtimeIntrospectionCallee,
                 subjectURA: callee,
                 audience: callee,
                 scopes: ["invoke"],
@@ -1024,7 +1044,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
             _ = try InvocationBuilder()
                 .withCalleeURA(callee)
                 .withDescriptorRef(descriptor)
-                .withSubjectURA(callee)
+                .withSubjectURA(deviceSubject)
                 .withNonce(nonce)
                 .withCausalContext("{\"form\":\"none\"}")
                 .withArgsJSON("{}")
@@ -1106,7 +1126,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
     }
 
     func testCompleteTupleRejectsReceiptHistoryPublicInvocation() {
-        let historyDescriptor = "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+        let historyDescriptor = "easynet:///r/example/ability/system-agent.dev-a.runtime-governance.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
         expectSyncSDKError(.invalidArgument, "RuntimeReceiptProvider") {
             _ = try completeBuilder()
                 .withDescriptorRef(historyDescriptor)
@@ -1116,13 +1136,13 @@ final class RuntimeCoreSeamTests: XCTestCase {
 
     func testCompleteTupleRejectsCatalogueReadPublicInvocation() {
         for catalogueDescriptor in [
-            "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
-            "easynet:///r/example/ability/authority.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
         ] {
             expectSyncSDKError(.invalidArgument, "RuntimeAbilityDescriptorProvider") {
                 _ = try completeBuilder()
-                    .withCalleeURA("easynet:///r/example/authority")
-                    .withSubjectURA("easynet:///r/example/authority")
+                    .withCalleeURA(runtimeIntrospectionCallee)
+                    .withSubjectURA(runtimeIntrospectionCallee)
                     .withDescriptorRef(catalogueDescriptor)
                     .inspect()
             }
@@ -1147,15 +1167,15 @@ final class RuntimeCoreSeamTests: XCTestCase {
     func testRuntimeDescriptorProviderSubjectValidationUsesRuntimeGovernanceSubjects() throws {
         let runtimeStateSubject = try RuntimeSubjects.runtimeStateReadSubjectURA(realm: "example", userID: "alice")
         _ = try RuntimeDescriptorRefRequest(
-            calleeURA: callee,
+            calleeURA: runtimeIntrospectionCallee,
             ability: "meta.list_abilities",
             callMode: "rpc",
             callerURA: caller,
-            subjectURA: callee,
+            subjectURA: runtimeStateSubject,
             provider: RuntimeDescriptorRefRequest.abilityDescriptorProvider
         )
         _ = try RuntimeDescriptorRefRequest(
-            calleeURA: callee,
+            calleeURA: runtimeIntrospectionCallee,
             ability: "meta.list_resources",
             callMode: "rpc",
             callerURA: caller,
@@ -1163,7 +1183,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
             provider: RuntimeDescriptorRefRequest.abilityDescriptorProvider
         )
         _ = try RuntimeDescriptorRefRequest(
-            calleeURA: callee,
+            calleeURA: runtimeGovernanceCallee,
             ability: "invocation.history.list",
             callMode: "rpc",
             callerURA: caller,
@@ -1194,18 +1214,19 @@ final class RuntimeCoreSeamTests: XCTestCase {
     }
 
     func testRuntimeAbilityDescriptorProviderUsesCatalogueProvider() async throws {
-        let transport = MemoryRuntimeTransport(callee: callee, descriptor: descriptor)
+        let transport = MemoryRuntimeTransport(callee: runtimeIntrospectionCallee, descriptor: descriptor)
         let runtime = RuntimeClient(transport: transport)
         let ability = RuntimeAbilityClient(runtime: runtime)
         let provider = RuntimeAbilityDescriptorProvider(ability: ability)
-        let call = try runtimeCallContext()
+        let runtimeStateSubject = try RuntimeSubjects.runtimeStateReadSubjectURA(realm: "example", userID: "alice")
+        let call = try runtimeCallContext(calleeURA: runtimeIntrospectionCallee, subjectURA: runtimeStateSubject)
 
         let page = try await provider.list(
-            AbilityDescriptorListRequest(call: call, scope: "all", ownerURA: callee)
+            AbilityDescriptorListRequest(call: call, scope: "all", ownerURA: pluginManagementCallee)
         )
         XCTAssertEqual(page.descriptors.count, 1)
         XCTAssertEqual(page.descriptors[0].name, "browser.open_session")
-        XCTAssertEqual(page.descriptors[0].ownerURA, callee)
+        XCTAssertEqual(page.descriptors[0].ownerURA, pluginManagementCallee)
         XCTAssertEqual(page.descriptors[0].version, "1.0.0")
         XCTAssertEqual(page.descriptors[0].callMode, "rpc")
 
@@ -1218,32 +1239,32 @@ final class RuntimeCoreSeamTests: XCTestCase {
         XCTAssertEqual(abilityField, "meta.list_abilities")
         XCTAssertEqual(callModeField, "rpc")
         XCTAssertEqual(callerField, caller)
-        XCTAssertEqual(resolverSubjectField, callee)
+        XCTAssertEqual(resolverSubjectField, runtimeStateSubject)
 
         let invokedCalleeField = await transport.lastInvokedTupleField("callee_ura")
         let invokedSubjectField = await transport.lastInvokedTupleField("subject_ura")
         let scopeField = await transport.lastInvokedArgumentField("scope")
         let ownerField = await transport.lastInvokedArgumentField("owner_ura")
         let metadataAbilityField = await transport.lastInvokedMetadataField("ability_ura")
-        XCTAssertEqual(invokedCalleeField, callee)
-        XCTAssertEqual(invokedSubjectField, callee)
+        XCTAssertEqual(invokedCalleeField, runtimeIntrospectionCallee)
+        XCTAssertEqual(invokedSubjectField, runtimeStateSubject)
         XCTAssertEqual(scopeField, "all")
-        XCTAssertEqual(ownerField, callee)
-        XCTAssertEqual(metadataAbilityField, "easynet:///r/example/ability/device.dev-a.meta.list_abilities")
+        XCTAssertEqual(ownerField, pluginManagementCallee)
+        XCTAssertEqual(metadataAbilityField, "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_abilities")
 
         let descriptor = try await provider.get(
             AbilityDescriptorGetRequest(
                 call: call,
-                abilityURA: "easynet:///r/example/ability/device.dev-a.browser.open_session",
+                abilityURA: "easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session",
                 callMode: "rpc"
             )
         )
-        XCTAssertEqual(descriptor.descriptorRef, "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc")
+        XCTAssertEqual(descriptor.descriptorRef, "easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc")
         var typedScalarRow: [String: JSONValue] = [
-            "ability_ura": .string("easynet:///r/example/ability/device.dev-a.browser.open_session"),
-            "descriptor_ref": .string("easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc"),
+            "ability_ura": .string("easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session"),
+            "descriptor_ref": .string("easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc"),
             "name": .string("browser.open_session"),
-            "owner_ura": .string(callee),
+            "owner_ura": .string(pluginManagementCallee),
             "descriptor_version": .string("1.0.0"),
             "call_mode": .string("rpc"),
         ]
@@ -1365,7 +1386,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
             .withCallerURA(caller)
             .withCalleeURA(callee)
             .withDescriptorRef(descriptor)
-            .withSubjectURA(callee)
+            .withSubjectURA(deviceSubject)
             .withNonce(nonce)
             .withCausalContext("{\"form\":\"none\"}")
             .withArgsJSON("{\"probe\":true}")
@@ -1377,7 +1398,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
             .withCallerURA(caller)
             .withCalleeURA(callee)
             .withDescriptorRef(descriptor)
-            .withSubjectURA(callee)
+            .withSubjectURA(deviceSubject)
             .withNonce(nonce)
             .withCausalContext("{\"form\":\"none\"}")
             .withArgsJSON("{\"probe\":true}")
@@ -1386,10 +1407,14 @@ final class RuntimeCoreSeamTests: XCTestCase {
     }
 
     private func runtimeCallContext() throws -> RuntimeCallContext {
+        try runtimeCallContext(calleeURA: callee, subjectURA: deviceSubject)
+    }
+
+    private func runtimeCallContext(calleeURA: String, subjectURA: String) throws -> RuntimeCallContext {
         try RuntimeCallContext(
             callerURA: caller,
-            calleeURA: callee,
-            subjectURA: callee,
+            calleeURA: calleeURA,
+            subjectURA: subjectURA,
             nonceBase64: nonce,
             causalContext: ["form": .string("none")],
             metadata: ["trace_id": .string("trace-1")]
@@ -1403,7 +1428,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
     private func delegationMetadataValue(scopes: [String]) throws -> String {
         try authorityMetadataValue([
             "issuer_ura": "easynet:///r/example/user/alice",
-            "subject_ura": callee,
+            "subject_ura": deviceSubject,
             "caller_ura": caller,
             "audience": callee,
             "scopes": scopes,
@@ -1536,7 +1561,7 @@ actor MemoryHealthTransport: HealthTransport, DiagnosticsTransport {
 
 actor MemoryRuntimeTransport: RuntimeTransport {
     private let descriptor: String
-    private let catalogueDescriptor = "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+    private let catalogueDescriptor = "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
     private var signer = ""
     private var policyRef = ""
     private var eventHandleId: Int64 = 7
@@ -1560,10 +1585,10 @@ actor MemoryRuntimeTransport: RuntimeTransport {
             {
               "abilities": [
                 {
-                  "ability_ura": "easynet:///r/example/ability/device.dev-a.browser.open_session",
-                  "descriptor_ref": "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc",
+                  "ability_ura": "easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session",
+                  "descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc",
                   "name": "browser.open_session",
-                  "owner_ura": "easynet:///r/example/device/dev-a",
+                  "owner_ura": "easynet:///r/example/agent/device.dev-a.plugin-management",
                   "descriptor_version": "1.0.0",
                   "call_mode": "rpc",
                   "receipt_semantics": {},

@@ -346,6 +346,8 @@ func ownerURAFromAbilityParts(parts ParsedURA) string {
 	switch parts.AbilityOwner.Kind {
 	case AbilityOwnerAgent:
 		return AgentURA(parts.Realm, parts.AbilityOwner.UserID, parts.AbilityOwner.AgentID)
+	case abilityOwnerSystemAgent:
+		return DeviceAgentURA(parts.Realm, parts.AbilityOwner.OwnerID, parts.AbilityOwner.AgentID)
 	case abilityOwnerDevice:
 		return DeviceURA(parts.Realm, parts.AbilityOwner.OwnerID)
 	case abilityOwnerAuthority:

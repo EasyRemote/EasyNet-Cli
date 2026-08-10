@@ -1047,7 +1047,7 @@ func TestCABIRuntimeProviderResolvesDescriptorRefThroughNativeProvider(t *testin
 	client := openFakeCABIRuntime(t)
 
 	descriptorRef, err := client.ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
-		CalleeURA:  "easynet:///r/example/device/dev-a",
+		CalleeURA:  "easynet:///r/example/agent/device.dev-a.runtime-introspection",
 		Ability:    "meta.list_resources",
 		CallMode:   "rpc",
 		CallerURA:  "easynet:///r/example/device/caller",
@@ -1058,7 +1058,7 @@ func TestCABIRuntimeProviderResolvesDescriptorRefThroughNativeProvider(t *testin
 	if err != nil {
 		t.Fatalf("ResolveDescriptorRef: %v", err)
 	}
-	const want = "easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
+	const want = "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
 	if descriptorRef != want {
 		t.Fatalf("descriptor_ref = %q, want %q", descriptorRef, want)
 	}
@@ -1236,7 +1236,7 @@ int32_t runtime_resolve_descriptor_ref(uint64_t handle, const char *request_json
 		last_error_json = "{\"code\":\"DESCRIPTOR_NOT_FOUND\",\"stage\":\"routing\",\"message\":\"descriptor_ref not found in remote runtime catalog\",\"retry\":\"never\",\"details\":{\"source\":\"fake_native_provider\"}}";
 		return 4;
 	}
-	*out_descriptor_json = dup_json("{\"descriptor_ref\":\"easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read\",\"ability_ura\":\"easynet:///r/example/ability/device.dev-a.meta.list_resources\",\"owner_ura\":\"easynet:///r/example/device/dev-a\",\"name\":\"meta.list_resources\",\"call_mode\":\"rpc\",\"source\":\"fake_native_provider\"}");
+	*out_descriptor_json = dup_json("{\"descriptor_ref\":\"easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read\",\"ability_ura\":\"easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources\",\"owner_ura\":\"easynet:///r/example/agent/device.dev-a.runtime-introspection\",\"name\":\"meta.list_resources\",\"call_mode\":\"rpc\",\"source\":\"fake_native_provider\"}");
 	return 0;
 }
 int32_t runtime_invocation_invoke(uint64_t handle, const char *invocation_json, char **out_result_json) {

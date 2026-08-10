@@ -93,7 +93,7 @@ class MemoryRuntimeTransport:
 
     def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
         self.seen_descriptor_request = json.loads(request_json.decode("utf-8"))
-        return b'{"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"}'
+        return b'{"descriptor_ref":"easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"}'
 
     def open_stream(self, draft_json: bytes):
         self.seen_draft = json.loads(draft_json.decode("utf-8"))
@@ -211,9 +211,9 @@ def complete_draft():
     return (
         InvocationBuilder()
         .with_caller_ura("easynet:///r/example/agent/alice.sdk")
-        .with_callee_ura("easynet:///r/example/device/dev-a")
+        .with_callee_ura("easynet:///r/example/agent/device.dev-a.runtime-health")
         .with_descriptor_ref(
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
         )
         .with_subject_ura("easynet:///r/example/device/dev-a")
         .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -251,7 +251,7 @@ def canonical_runtime_receipt(
             "profile": "axon-strict-v2",
         },
         "callee_binding": {
-            "ura": "easynet:///r/example/device/dev-a",
+            "ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
             "profile": "axon-strict-v2",
         },
         "subject_binding": {
@@ -266,16 +266,16 @@ def canonical_runtime_receipt(
             "signature_base64": base64.b64encode(bytes([0x71]) * 64).decode(),
         },
         "signer_binding": {
-            "ura": "easynet:///r/example/device/dev-a",
+            "ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
             "profile": "axon-strict-v2",
         },
         "authority_binding_kind": "self",
         "authority_binding": {
             "kind": "self",
-            "principal_ura": "easynet:///r/example/device/dev-a",
+            "principal_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
         },
         "ability_binding": (
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
         ),
         "host_attestation_base64": "",
         "usage": {
@@ -298,12 +298,12 @@ def canonical_runtime_receipt(
             "binding_kind": "self",
             "binding": {
                 "kind": "self",
-                "principal_ura": "easynet:///r/example/device/dev-a",
+                "principal_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
             },
             "proof_payload_base64": base64.b64encode(proof_payload).decode(),
             "proof_hash_hex": hashlib.sha256(proof_payload).hexdigest(),
             "issuer": {
-                "ura": "easynet:///r/example/device/dev-a",
+                "ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                 "profile": "axon-strict-v2",
             },
             "signature": {
@@ -387,7 +387,7 @@ class RuntimeTests(unittest.TestCase):
 
         with self.assertRaises(SDKError) as raised:
             client.resolve_descriptor_ref(
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                 ability="observe.health",
                 call_mode="  ",
             )
@@ -401,19 +401,19 @@ class RuntimeTests(unittest.TestCase):
         client = RuntimeClient(transport)
 
         descriptor_ref = client.resolve_descriptor_ref(
-            callee_ura=" easynet:///r/example/device/dev-a ",
+            callee_ura=" easynet:///r/example/agent/device.dev-a.runtime-health ",
             ability=" observe.health ",
             call_mode=" read ",
         )
 
         self.assertEqual(
             descriptor_ref,
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
         )
         self.assertEqual(
             transport.seen_descriptor_request,
             {
-                "callee_ura": "easynet:///r/example/device/dev-a",
+                "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                 "ability": "observe.health",
                 "call_mode": "read",
             },
@@ -429,14 +429,14 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "call_mode": "read",
                 },
                 "ability is required",
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "observe.health",
                 },
                 "call_mode is required",
@@ -465,7 +465,7 @@ class RuntimeTests(unittest.TestCase):
         cases = [
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "invocation.history.list",
                     "call_mode": "read",
                     "subject_ura": "easynet:///r/example/device/dev-a",
@@ -475,7 +475,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_abilities",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -485,7 +485,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_abilities",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/request",
@@ -496,7 +496,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "invocation.history.list",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -507,7 +507,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_abilities",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -518,7 +518,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_abilities",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -528,7 +528,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_resources",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -538,7 +538,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_abilities",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -549,7 +549,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_resources",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -560,7 +560,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "observe.health",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -571,7 +571,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "meta.list_abilities",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -582,7 +582,7 @@ class RuntimeTests(unittest.TestCase):
             ),
             (
                 {
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "ability": "invocation.history.list",
                     "call_mode": "read",
                     "caller_ura": "easynet:///r/example/user/alice",
@@ -609,7 +609,7 @@ class RuntimeTests(unittest.TestCase):
         self,
     ) -> None:
         base_request: dict[str, object] = {
-            "callee_ura": "easynet:///r/example/device/dev-a",
+            "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
             "ability": "invocation.history.list",
             "call_mode": "read",
             "caller_ura": "easynet:///r/example/user/alice",
@@ -652,7 +652,7 @@ class RuntimeTests(unittest.TestCase):
         assert transport.seen_draft is not None
         self.assertEqual(
             transport.seen_draft["descriptor_ref"],
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
         )
 
     def test_invocation_result_derives_json_output_from_canonical_payload(self) -> None:
@@ -1417,7 +1417,9 @@ class RuntimeTests(unittest.TestCase):
         assert isinstance(proof, dict)
         proof["proof_payload_base64"] = ""
         proof["proof_hash_hex"] = authority_binding_proof_hash(
-            AuthorityBinding.self_("easynet:///r/example/device/dev-a")
+            AuthorityBinding.self_(
+                "easynet:///r/example/agent/device.dev-a.runtime-health"
+            )
         ).hex()
 
         receipt = RuntimeReceipt.from_mapping(complete)
@@ -1451,7 +1453,7 @@ class RuntimeTests(unittest.TestCase):
             "session_id": "session-1",
             "scopes": ["invoke"],
             "audiences": [
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+                "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             ],
             "issued_at_ms": 1,
             "expires_at_ms": 2,
@@ -1479,7 +1481,7 @@ class RuntimeTests(unittest.TestCase):
             "session_id": "session-1",
             "scopes": ["invoke"],
             "audiences": [
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+                "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             ],
             "issued_at_ms": 1,
             "expires_at_ms": 2,
@@ -1750,9 +1752,9 @@ class RuntimeTests(unittest.TestCase):
         builder = (
             client.new_invocation()
             .with_caller_ura("easynet:///r/example/agent/alice.sdk")
-            .with_callee_ura("easynet:///r/example/device/dev-a")
+            .with_callee_ura("easynet:///r/example/agent/device.dev-a.runtime-health")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+                "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/device/dev-a")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -1794,9 +1796,9 @@ class RuntimeTests(unittest.TestCase):
         draft = (
             client.new_invocation()
             .with_caller_ura("easynet:///r/example/agent/alice.sdk")
-            .with_callee_ura("easynet:///r/example/device/dev-a")
+            .with_callee_ura("easynet:///r/example/agent/device.dev-a.runtime-health")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+                "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/device/dev-a")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -1860,9 +1862,9 @@ class RuntimeTests(unittest.TestCase):
         builder = (
             InvocationBuilder()
             .with_caller_ura("easynet:///r/example/agent/alice.sdk")
-            .with_callee_ura("easynet:///r/example/device/dev-a")
+            .with_callee_ura("easynet:///r/example/agent/device.dev-a.runtime-health")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+                "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/device/dev-a")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -1886,9 +1888,9 @@ class RuntimeTests(unittest.TestCase):
         builder = (
             InvocationBuilder()
             .with_caller_ura("easynet:///r/example/agent/alice.sdk")
-            .with_callee_ura("easynet:///r/example/device/dev-a")
+            .with_callee_ura("easynet:///r/example/agent/device.dev-a.runtime-health")
             .with_descriptor_ref(
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+                "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
             )
             .with_subject_ura("easynet:///r/example/device/dev-a")
             .with_nonce_base64("AQIDBAUGBwgJCgsMDQ4PEA==")
@@ -1924,7 +1926,7 @@ class RuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             transport.seen_signed["prepared"]["tuple"]["descriptor_ref"],
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
         )
 
     def test_public_handle_json_does_not_grant_control_authority(self) -> None:

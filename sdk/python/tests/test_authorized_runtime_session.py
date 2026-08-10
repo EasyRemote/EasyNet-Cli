@@ -88,9 +88,9 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
             session_owner_ura="easynet:///r/example/user/alice",
             creator_principal_id="easynet:///r/example/agent/backend",
             creator_principal_ura="easynet:///r/example/agent/backend",
-            callee_ura="easynet:///r/example/device/dev-a",
+            callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
             subject_ura=retired_subject,
-            audience="easynet:///r/example/device/dev-a",
+            audience="easynet:///r/example/agent/device.dev-a.runtime-governance",
             scopes=("observe.health",),
             allowed_actions=("invoke",),
             allowed_followup_abilities=("observe.health",),
@@ -190,7 +190,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura=runtime_state_read_subject_ura("example", "alice"),
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -215,7 +215,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura="easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/invocation_history",
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -236,7 +236,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura="easynet:///r/example/resource/user.alice/session/invocation_history",
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -256,7 +256,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura=runtime_state_read_subject_ura("example", "alice"),
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -278,7 +278,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         )
         call = receipt_read_call_context(
             caller_ura="easynet:///r/example/agent/alice.backend",
-            callee_ura="easynet:///r/example/device/dev-a",
+            callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
             nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
             causal_context={"form": "none"},
             authority=authority,
@@ -298,7 +298,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura=runtime_state_read_subject_ura("example", "alice"),
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -321,7 +321,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura=runtime_state_read_subject_ura("example", "alice"),
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -373,7 +373,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura="easynet:///r/example/resource/device.dev-a/archive/resource/user.alice/session/session-1",
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -393,7 +393,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
         request = ReceiptListRequest(
             call=RuntimeCallContext(
                 caller_ura="easynet:///r/example/agent/backend",
-                callee_ura="easynet:///r/example/device/dev-a",
+                callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
                 subject_ura=runtime_state_read_subject_ura("example", "alice"),
                 nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                 causal_context={"form": "none"},
@@ -455,7 +455,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
                 return json.dumps(
                     {
                         "descriptor_ref": (
-                            "easynet:///r/example/ability/device.dev-a.meta.list_resources"
+                            "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources"
                             "@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"
                         )
                     }
@@ -472,9 +472,9 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
                 acting_principal=ActingPrincipalRef(
                     PrincipalRef("easynet:///r/example/user/alice")
                 ),
-                target=RuntimeTargetRef("easynet:///r/example/device/dev-a"),
+                target=RuntimeTargetRef("easynet:///r/example/agent/device.dev-a.runtime-introspection"),
                 ability=AbilityRef(
-                    "easynet:///r/example/ability/device.dev-a.meta.list_resources"
+                    "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources"
                 ),
                 subject=SubjectRef("easynet:///r/example/user/alice"),
                 call_mode="rpc",
@@ -507,7 +507,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
                 return json.dumps(
                     {
                         "descriptor_ref": (
-                            "easynet:///r/example/ability/device.dev-a.invocation.history.list"
+                            "easynet:///r/example/ability/system-agent.dev-a.runtime-governance.invocation.history.list"
                             "@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!read"
                         )
                     }
@@ -524,7 +524,7 @@ class AuthorizedRuntimeSessionTests(unittest.TestCase):
                 acting_principal=ActingPrincipalRef(
                     PrincipalRef("easynet:///r/example/user/alice")
                 ),
-                target=RuntimeTargetRef("easynet:///r/example/device/dev-a"),
+                target=RuntimeTargetRef("easynet:///r/example/agent/device.dev-a.runtime-governance"),
                 ability=AbilityRef("invocation.history.list"),
                 subject=SubjectRef("easynet:///r/example/user/alice"),
                 call_mode="rpc",
@@ -624,7 +624,7 @@ class _DescriptorProvider:
         self.calls += 1
         return DescriptorResolution(
             state=DescriptorResolutionState.RESOLVED,
-            descriptor_ref="easynet:///r/example/ability/invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+            descriptor_ref="easynet:///r/example/ability/system-agent.dev-a.runtime-governance.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
             descriptor_fingerprint="descriptor-fingerprint",
             owner_principal=PrincipalRef("easynet:///r/example/user/alice"),
         )
@@ -706,7 +706,9 @@ def _intent(caller: str = "easynet:///r/example/agent/backend") -> InvocationInt
         acting_principal=ActingPrincipalRef(
             PrincipalRef("easynet:///r/example/agent/backend")
         ),
-        target=RuntimeTargetRef("easynet:///r/example/device/dev-a"),
+        target=RuntimeTargetRef(
+            "easynet:///r/example/agent/device.dev-a.runtime-governance"
+        ),
         ability=AbilityRef("invocation.history.list"),
         subject=SubjectRef(
             "easynet:///r/example/resource/user.alice/session/session-1",
@@ -726,9 +728,9 @@ def _session_authority(override: dict[str, object] | None = None) -> SessionAuth
         "session_id": "session-1",
         "session_owner_user_id": "alice",
         "creator_principal_id": "easynet:///r/example/agent/backend",
-        "callee_ura": "easynet:///r/example/device/dev-a",
+        "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-governance",
         "subject_ura": "easynet:///r/example/resource/user.alice/session/session-1",
-        "audience": "easynet:///r/example/device/dev-a",
+        "audience": "easynet:///r/example/agent/device.dev-a.runtime-governance",
         "scopes": ["invocation.history.*"],
         "allowed_actions": ["read"],
         "allowed_followup_abilities": ["invocation.history.list"],

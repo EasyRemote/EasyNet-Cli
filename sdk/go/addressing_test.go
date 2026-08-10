@@ -15,7 +15,7 @@ func TestCanonicalAddressingBuildsDescriptorAndSubjectWithoutIdentityProfile(t *
 	descriptorProjection, err := addressing.BuildDescriptorRef(
 		ctx,
 		CanonicalDescriptorRefBuildRequest{
-			AbilityURA:        "easynet:///r/example/ability/device.dev-a.observe.health",
+			AbilityURA:        "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
 			DescriptorVersion: "1.0.0",
 			DescriptorHash:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			Action:            "invoke",
@@ -25,7 +25,7 @@ func TestCanonicalAddressingBuildsDescriptorAndSubjectWithoutIdentityProfile(t *
 		t.Fatalf("BuildDescriptorRef: %v", err)
 	}
 	descriptorRef := descriptorProjection.DescriptorRef
-	if descriptorRef != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke" {
+	if descriptorRef != "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke" {
 		t.Fatalf("descriptor_ref = %q", descriptorRef)
 	}
 	descriptorProjection, err = addressing.ProjectDescriptorRef(
@@ -58,12 +58,12 @@ func TestCanonicalAddressingBuildsDescriptorAndSubjectWithoutIdentityProfile(t *
 
 	owner, err := addressing.OwnerURAForAbility(
 		ctx,
-		"easynet:///r/example/ability/device.dev-a.observe.health",
+		"easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
 	)
 	if err != nil {
 		t.Fatalf("OwnerURAForAbility: %v", err)
 	}
-	if owner != "easynet:///r/example/device/dev-a" {
+	if owner != "easynet:///r/example/agent/device.dev-a.runtime-health" {
 		t.Fatalf("owner = %q", owner)
 	}
 	ownerProjection, err := addressing.ProjectIdentity(

@@ -19,7 +19,7 @@ func completeDraftForRuntimeTest(t *testing.T) InvocationDraft {
 	t.Helper()
 	draft, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
-		WithCalleeURA("easynet:///r/example/device/dev-a").
+		WithCalleeURA(runtimeTestCalleeURA).
 		WithDescriptorRef(runtimeTestDescriptorRef).
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
@@ -33,7 +33,8 @@ func completeDraftForRuntimeTest(t *testing.T) InvocationDraft {
 	return draft
 }
 
-const runtimeTestDescriptorRef = "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+const runtimeTestCalleeURA = "easynet:///r/example/agent/device.dev-a.runtime-health"
+const runtimeTestDescriptorRef = "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
 
 func canonicalRuntimeReceiptFixture(
 	invocationID string,
@@ -56,7 +57,7 @@ func canonicalRuntimeReceiptFixture(
 		"payload_content_type":    "application/json",
 		"cleanup_complete":        state != "admitted" && state != "Admitted" && state != "ADMITTED",
 		"caller_binding":          map[string]any{"ura": "easynet:///r/example/agent/alice.sdk", "profile": "axon-strict-v2"},
-		"callee_binding":          map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "axon-strict-v2"},
+		"callee_binding":          map[string]any{"ura": runtimeTestCalleeURA, "profile": "axon-strict-v2"},
 		"subject_binding":         map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "axon-strict-v2"},
 		"invocation_nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
 		"causal_binding_kind":     "none",
@@ -65,11 +66,11 @@ func canonicalRuntimeReceiptFixture(
 			"algorithm":        "ed25519",
 			"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x71}, 64)),
 		},
-		"signer_binding":         map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "axon-strict-v2"},
+		"signer_binding":         map[string]any{"ura": runtimeTestCalleeURA, "profile": "axon-strict-v2"},
 		"authority_binding_kind": "self",
 		"authority_binding": map[string]any{
 			"kind":          "self",
-			"principal_ura": "easynet:///r/example/device/dev-a",
+			"principal_ura": runtimeTestCalleeURA,
 		},
 		"ability_binding":         runtimeTestDescriptorRef,
 		"host_attestation_base64": "",
@@ -93,11 +94,11 @@ func canonicalRuntimeReceiptFixture(
 			"binding_kind": "self",
 			"binding": map[string]any{
 				"kind":          "self",
-				"principal_ura": "easynet:///r/example/device/dev-a",
+				"principal_ura": runtimeTestCalleeURA,
 			},
 			"proof_payload_base64": base64.StdEncoding.EncodeToString(proofPayload),
 			"proof_hash_hex":       fmt.Sprintf("%x", proofHash),
-			"issuer":               map[string]any{"ura": "easynet:///r/example/device/dev-a", "profile": "axon-strict-v2"},
+			"issuer":               map[string]any{"ura": runtimeTestCalleeURA, "profile": "axon-strict-v2"},
 			"signature": map[string]any{
 				"algorithm":        "ed25519",
 				"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x72}, 64)),
@@ -630,7 +631,7 @@ func TestRuntimeReceiptAcceptsBindingHashProofWithoutPayload(t *testing.T) {
 	proof := fixture["authority_proof"].(map[string]any)
 	proof["proof_payload_base64"] = ""
 	proofHash := axoninv.AuthorityBindingProofHash(
-		axoninv.SelfAuthority("easynet:///r/example/device/dev-a"),
+		axoninv.SelfAuthority(runtimeTestCalleeURA),
 	)
 	proof["proof_hash_hex"] = hex.EncodeToString(proofHash[:])
 
@@ -719,8 +720,8 @@ func TestRuntimeClientPrepareBuilderConsumesOnlyAfterSuccess(t *testing.T) {
 	}
 	builder := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
-		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
+		WithCalleeURA(runtimeTestCalleeURA).
+		WithDescriptorRef(runtimeTestDescriptorRef).
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -751,8 +752,8 @@ func TestRuntimeClientPrepareBuilderKeepsBuilderOnFailure(t *testing.T) {
 	}
 	builder := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
-		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
+		WithCalleeURA(runtimeTestCalleeURA).
+		WithDescriptorRef(runtimeTestDescriptorRef).
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -806,7 +807,7 @@ func TestRuntimeClientSubmitSignedPreservesSignature(t *testing.T) {
 	prepared := seenSigned["prepared"].(map[string]any)
 	tuple := prepared["tuple"].(map[string]any)
 	if tuple["caller_ura"] != "easynet:///r/example/agent/alice.sdk" ||
-		tuple["callee_ura"] != "easynet:///r/example/device/dev-a" ||
+		tuple["callee_ura"] != runtimeTestCalleeURA ||
 		tuple["descriptor_ref"] != runtimeTestDescriptorRef {
 		t.Fatalf("prepared tuple not preserved: %#v", seenSigned)
 	}

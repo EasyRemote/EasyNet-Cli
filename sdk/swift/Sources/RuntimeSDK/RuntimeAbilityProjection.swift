@@ -2,16 +2,6 @@ import Foundation
 
 struct RuntimeAbilityProjection: Sendable, Equatable {
     private static let realmPrefix = "easynet:///r/"
-    private static let runtimeGovernanceReadAbilities = [
-        "meta.list_abilities",
-        "meta.list_resources",
-        "invocation.history.list",
-        "invocation.history.get",
-        "invocation.history.path",
-        "invocation.record.get",
-        "invocation.trace.get",
-    ]
-
     let abilityURA: String
     let publicName: String
     let intrinsicName: String
@@ -34,18 +24,7 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
     }
 
     static func runtimeGovernanceDescriptorProvider(forAbility ability: String) -> String {
-        let clean = ability.trimmingCharacters(in: .whitespacesAndNewlines)
-        if clean == "meta.list_abilities" ||
-            clean == "meta.list_resources" ||
-            clean.hasSuffix(".meta.list_abilities") ||
-            clean.hasSuffix(".meta.list_resources")
-        {
-            return RuntimeDescriptorRefRequest.abilityDescriptorProvider
-        }
-        if runtimeGovernanceReadAbility(clean) != nil {
-            return RuntimeDescriptorRefRequest.receiptHistoryProvider
-        }
-        return ""
+        RuntimeGovernanceRoutesGen.descriptorProvider(ability)
     }
 
     static func abilityURAForDescriptorRef(_ descriptorRef: String) throws -> String {
@@ -102,10 +81,7 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
     }
 
     private static func runtimeGovernanceReadAbility(_ value: String) -> String? {
-        let clean = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return runtimeGovernanceReadAbilities.first { ability in
-            clean == ability || clean.hasSuffix(".\(ability)")
-        }
+        RuntimeGovernanceRoutesGen.canonicalAbility(value)
     }
 
     private static func publicAbilityName(calleeURA: String, intrinsicName: String) -> String {
@@ -123,6 +99,17 @@ struct RuntimeAbilityProjection: Sendable, Equatable {
             let deviceID = String(path.dropFirst("device/".count)).trimmingCharacters(in: .whitespacesAndNewlines)
             if !deviceID.isEmpty, !deviceID.contains("/") {
                 return "device.\(deviceID)"
+            }
+        }
+        if path.hasPrefix("agent/device.") {
+            let scopedAgentID = String(path.dropFirst("agent/device.".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if let separator = scopedAgentID.firstIndex(of: "."),
+               separator != scopedAgentID.startIndex,
+               separator != scopedAgentID.index(before: scopedAgentID.endIndex)
+            {
+                let deviceID = String(scopedAgentID[..<separator])
+                let agentID = String(scopedAgentID[scopedAgentID.index(after: separator)...])
+                return "system-agent.\(deviceID).\(agentID)"
             }
         }
         if path == "authority" {

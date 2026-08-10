@@ -58,6 +58,20 @@ public final class RuntimeSubjects {
     throw invalid("subject_ura kind is not descriptor-bound");
   }
 
+  static String runtimeGovernanceReadSubjectURA(String subjectURA) {
+    String subject = RuntimePrincipals.requiredString(subjectURA, "subject_ura", "runtime");
+    ResourceSubject resource = canonicalResourceSubject(subject);
+    if (resource != null && RUNTIME_STATE_READ_SUBJECT_PATH.equals(resource.path())) {
+      return subject;
+    }
+    ParsedSubject parsed = parsedSubject(subject);
+    if (parsed != null && parsed.path().startsWith("user/")) {
+      String userID = parsed.path().substring("user/".length()).trim();
+      return runtimeStateReadSubjectURA(parsed.realm(), userID);
+    }
+    throw invalid("runtime governance read subject must be a User or user-owned runtime-state resource");
+  }
+
   static ResourceSubject canonicalResourceSubject(String subjectURA) {
     if (subjectURA == null || RuntimePrincipals.containsAllZeroPrincipal(subjectURA)) {
       return null;

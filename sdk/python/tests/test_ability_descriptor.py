@@ -81,7 +81,7 @@ def test_project_ability_descriptor_ignores_nested_descriptor_compatibility_shap
             "descriptor": {
                 "name": "skill.list",
                 "owner_ura": "easynet:///r/localhost/device/node-a",
-                "ability_ura": "easynet:///r/localhost/ability/device.node-a.skill.list",
+                "ability_ura": "easynet:///r/localhost/ability/system-agent.node-a.skill-management.skill.list",
                 "metadata": {"tool_name": "skill.list"},
             },
             "name": "agent.list",

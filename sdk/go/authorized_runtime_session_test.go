@@ -586,7 +586,7 @@ func TestRuntimeClientDescriptorProviderUsesAbilityDescriptorProviderForCatalogu
 			if err := json.Unmarshal(requestJSON, &seen); err != nil {
 				return nil, err
 			}
-			return []byte(`{"descriptor_ref":"easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"}`), nil
+			return []byte(`{"descriptor_ref":"easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"}`), nil
 		},
 	}
 	runtime, err := NewRuntimeClient(transport)
@@ -597,8 +597,8 @@ func TestRuntimeClientDescriptorProviderUsesAbilityDescriptorProviderForCatalogu
 
 	resolution, err := provider.ResolveDescriptor(context.Background(), DescriptorResolutionRequest{
 		CallerIdentity: CallerIdentityRef{Principal: PrincipalRef{URA: "easynet:///r/example/user/alice"}},
-		Target:         RuntimeTargetRef{URA: "easynet:///r/example/device/dev-a"},
-		Ability:        AbilityRef{Name: "easynet:///r/example/ability/device.dev-a.meta.list_resources"},
+		Target:         RuntimeTargetRef{URA: "easynet:///r/example/agent/device.dev-a.runtime-introspection"},
+		Ability:        AbilityRef{Name: "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources"},
 		Subject:        IntentSubjectRef{URA: "easynet:///r/example/user/alice"},
 		CallMode:       "rpc",
 	})
@@ -623,7 +623,7 @@ func TestRuntimeClientDescriptorProviderUsesGovernanceSubjectForReceiptHistoryPr
 			if err := json.Unmarshal(requestJSON, &seen); err != nil {
 				return nil, err
 			}
-			return []byte(`{"descriptor_ref":"easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!read"}`), nil
+			return []byte(`{"descriptor_ref":"easynet:///r/example/ability/system-agent.dev-a.runtime-governance.invocation.history.list@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!read"}`), nil
 		},
 	}
 	runtime, err := NewRuntimeClient(transport)
@@ -634,7 +634,7 @@ func TestRuntimeClientDescriptorProviderUsesGovernanceSubjectForReceiptHistoryPr
 
 	resolution, err := provider.ResolveDescriptor(context.Background(), DescriptorResolutionRequest{
 		CallerIdentity: CallerIdentityRef{Principal: PrincipalRef{URA: "easynet:///r/example/user/alice"}},
-		Target:         RuntimeTargetRef{URA: "easynet:///r/example/device/dev-a"},
+		Target:         RuntimeTargetRef{URA: "easynet:///r/example/agent/device.dev-a.runtime-governance"},
 		Ability:        AbilityRef{Name: "invocation.history.list"},
 		Subject:        IntentSubjectRef{URA: "easynet:///r/example/user/alice"},
 		CallMode:       "rpc",

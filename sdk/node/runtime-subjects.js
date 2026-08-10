@@ -90,6 +90,13 @@ function canonicalRuntimeOwnerSubject(subjectURA) {
       return { kind: "device", realm: parsed.realm };
     }
   }
+  if (parsed.path.startsWith("agent/device.")) {
+    const scopedAgentID = parsed.path.slice("agent/device.".length).trim();
+    const separator = scopedAgentID.indexOf(".");
+    if (separator > 0 && separator < scopedAgentID.length - 1 && !scopedAgentID.includes("/")) {
+      return { kind: "system-agent", realm: parsed.realm };
+    }
+  }
   return null;
 }
 

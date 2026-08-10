@@ -4,9 +4,15 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import * as sdk from "../index.js";
 import {
+  canonicalRuntimeGovernanceAbility,
+  generatedRuntimeGovernanceDescriptorProvider,
+  RUNTIME_RECEIPT_HISTORY_PROVIDER,
+} from "../runtime-governance-routes.js";
+import {
   TEST_CALLEE as callee,
   TEST_CALLER as caller,
   TEST_DESCRIPTOR as descriptor,
+  TEST_DEVICE_SUBJECT as deviceSubject,
   TEST_NONCE as nonce,
   canonicalRuntimeReceipt,
 } from "../test-support/runtime-fixtures.mjs";
@@ -66,6 +72,18 @@ const expectedExports = [
   "runtimeStateReadSubjectURA",
 ];
 
+test("generated runtime governance routes are exact", () => {
+  assert.equal(
+    generatedRuntimeGovernanceDescriptorProvider("invocation.record.get"),
+    RUNTIME_RECEIPT_HISTORY_PROVIDER,
+  );
+  assert.equal(
+    canonicalRuntimeGovernanceAbility("device.dev-a.invocation.record.get"),
+    "invocation.record.get",
+  );
+  assert.equal(generatedRuntimeGovernanceDescriptorProvider("invocation.history.delete"), "");
+});
+
 const downstreamProfileSymbols = [
   "WorkflowClient",
   "WorkflowTransport",
@@ -81,12 +99,28 @@ const downstreamProfileSymbols = [
   "ServiceLocator",
 ];
 
+const runtimeHealthCallee = callee;
+const runtimeIntrospectionCallee = "easynet:///r/example/agent/device.dev-a.runtime-introspection";
+const runtimeGovernanceCallee = "easynet:///r/example/agent/device.dev-a.runtime-governance";
+const skillManagementCallee = "easynet:///r/example/agent/device.dev-a.skill-management";
+const pluginManagementCallee = "easynet:///r/example/agent/device.dev-a.plugin-management";
+const skillTreeReadDescriptor =
+  "easynet:///r/example/ability/system-agent.dev-a.skill-management.skill.tree@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+const catalogueReadDescriptor =
+  "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+const historyListReadDescriptor =
+  "easynet:///r/example/ability/system-agent.dev-a.runtime-governance.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
+const browserOpenAbility =
+  "easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session";
+const browserOpenDescriptor =
+  "easynet:///r/example/ability/system-agent.dev-a.plugin-management.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke";
+
 const completeDraft = () =>
   new sdk.InvocationBuilder()
     .withCallerURA(caller)
     .withCalleeURA(callee)
     .withDescriptorRef(descriptor)
-    .withSubjectURA(callee)
+    .withSubjectURA(deviceSubject)
     .withNonceBase64(nonce)
     .withCausalContext({ form: "none" })
     .withJSONArgs({ probe: true })
@@ -105,12 +139,12 @@ const authorityValue = (payload, wire = {}) =>
     }),
   ).toString("base64");
 
-const delegationValue = (scopes = ["observe.health"]) =>
+const delegationValue = (scopes = ["observe.health"], subjectURA = deviceSubject, audienceURA = runtimeHealthCallee) =>
   authorityValue({
     issuer_ura: "easynet:///r/example/user/alice",
-    subject_ura: callee,
+    subject_ura: subjectURA,
     caller_ura: caller,
-    audience: callee,
+    audience: audienceURA,
     scopes,
     issued_at_ms: 10,
     expires_at_ms: 20,
@@ -154,9 +188,9 @@ const historySessionValue = (override = {}) =>
     session_id: "session-1",
     session_owner_user_id: "alice",
     creator_principal_id: caller,
-    callee_ura: callee,
+    callee_ura: runtimeGovernanceCallee,
     subject_ura: "easynet:///r/example/resource/user.alice/session/session-1",
-    audience: callee,
+    audience: runtimeGovernanceCallee,
     scopes: ["invocation.history.list"],
     allowed_actions: ["read"],
     allowed_followup_abilities: ["invocation.history.list"],
@@ -940,7 +974,7 @@ test("authority metadata is typed, delegated, and mutually exclusive", async () 
 
   const proof = await authority.mintDelegationProof({
     issuer_ura: "easynet:///r/example/user/alice",
-    subject_ura: callee,
+    subject_ura: deviceSubject,
     caller_ura: caller,
     audience: callee,
     scopes: ["observe.health"],
@@ -972,7 +1006,7 @@ test("authority metadata is typed, delegated, and mutually exclusive", async () 
     .withCallerURA(caller)
     .withCalleeURA(callee)
     .withDescriptorRef(descriptor)
-    .withSubjectURA(callee)
+    .withSubjectURA(deviceSubject)
     .withNonceBase64(nonce)
     .withCausalContext({ form: "none" })
     .withJSONArgs({ probe: true })
@@ -1057,15 +1091,15 @@ test("authority metadata is typed, delegated, and mutually exclusive", async () 
 test("runtime ability projection is canonical for authority scope admission", () => {
   for (const scope of [
     "observe.health",
-    "easynet:///r/example/ability/device.dev-a.observe.health",
-    "easynet:///r/example/ability/device.dev-a.*",
+    "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
+    "easynet:///r/example/ability/system-agent.dev-a.runtime-health.*",
   ]) {
     const proof = sdk.DelegationProof.fromMetadata(delegationValue([scope]));
     const authorized = new sdk.InvocationBuilder()
       .withCallerURA(caller)
       .withCalleeURA(callee)
       .withDescriptorRef(descriptor)
-      .withSubjectURA(callee)
+      .withSubjectURA(deviceSubject)
       .withNonceBase64(nonce)
       .withCausalContext({ form: "none" })
       .withJSONArgs({ probe: true })
@@ -1084,7 +1118,7 @@ test("runtime ability projection is canonical for authority scope admission", ()
         .withCallerURA(caller)
         .withCalleeURA(callee)
         .withDescriptorRef(descriptor)
-        .withSubjectURA(callee)
+        .withSubjectURA(deviceSubject)
         .withNonceBase64(nonce)
         .withCausalContext({ form: "none" })
         .withJSONArgs({ probe: true })
@@ -1135,7 +1169,7 @@ test("runtime ability projection is canonical for authority scope admission", ()
         .withCallerURA(caller)
         .withCalleeURA(callee)
         .withDescriptorRef("observe.health")
-        .withSubjectURA(callee)
+        .withSubjectURA(deviceSubject)
         .withNonceBase64(nonce)
         .withCausalContext({ form: "none" })
         .withJSONArgs({ probe: true })
@@ -1150,8 +1184,6 @@ test("runtime ability projection is canonical for authority scope admission", ()
 });
 
 test("session authority allowed_actions follow descriptor action", () => {
-  const readDescriptor =
-    "easynet:///r/example/ability/device.dev-a.skill.tree@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
   const subjectURA = "easynet:///r/example/resource/user.alice/invoke/skill.tree";
   const invokeOnlySession = sdk.SessionAuthority.fromMetadata(
     authorityValue({
@@ -1159,9 +1191,9 @@ test("session authority allowed_actions follow descriptor action", () => {
       session_id: "session-1",
       session_owner_user_id: "alice",
       creator_principal_id: caller,
-      callee_ura: callee,
+      callee_ura: skillManagementCallee,
       subject_ura: "easynet:///r/example/resource/user.alice/session/session-1",
-      audience: callee,
+      audience: skillManagementCallee,
       scopes: ["skill.tree"],
       allowed_actions: ["invoke"],
       allowed_followup_abilities: ["skill.tree"],
@@ -1174,8 +1206,8 @@ test("session authority allowed_actions follow descriptor action", () => {
     () =>
       new sdk.InvocationBuilder()
         .withCallerURA(caller)
-        .withCalleeURA(callee)
-        .withDescriptorRef(readDescriptor)
+        .withCalleeURA(skillManagementCallee)
+        .withDescriptorRef(skillTreeReadDescriptor)
         .withSubjectURA(subjectURA)
         .withNonceBase64(nonce)
         .withCausalContext({ form: "none" })
@@ -1195,9 +1227,9 @@ test("session authority allowed_actions follow descriptor action", () => {
       session_id: "session-1",
       session_owner_user_id: "alice",
       creator_principal_id: caller,
-      callee_ura: callee,
+      callee_ura: skillManagementCallee,
       subject_ura: "easynet:///r/example/resource/user.alice/session/session-1",
-      audience: callee,
+      audience: skillManagementCallee,
       scopes: ["skill.tree"],
       allowed_actions: ["read"],
       allowed_followup_abilities: ["skill.tree"],
@@ -1208,8 +1240,8 @@ test("session authority allowed_actions follow descriptor action", () => {
 
   const draft = new sdk.InvocationBuilder()
     .withCallerURA(caller)
-    .withCalleeURA(callee)
-    .withDescriptorRef(readDescriptor)
+    .withCalleeURA(skillManagementCallee)
+    .withDescriptorRef(skillTreeReadDescriptor)
     .withSubjectURA(subjectURA)
     .withNonceBase64(nonce)
     .withCausalContext({ form: "none" })
@@ -1682,7 +1714,7 @@ test("authority metadata binds session subject to owner and session id", () => {
       session_id: "session-1",
       session_owner_user_id: "alice",
       creator_principal_id: caller,
-      callee_ura: callee,
+      callee_ura: runtimeGovernanceCallee,
       subject_ura: callee,
       audience: callee,
       scopes: ["invoke"],
@@ -1719,16 +1751,13 @@ test("runtime authority rejects path-substring owner subject before dispatch", (
 });
 
 test("public invocation builder rejects receipt history descriptor before dispatch", () => {
-  const historyDescriptor =
-    "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
-
   assert.throws(
     () =>
       new sdk.InvocationBuilder()
         .withCallerURA(caller)
-        .withCalleeURA(callee)
-        .withDescriptorRef(historyDescriptor)
-        .withSubjectURA(callee)
+        .withCalleeURA(runtimeGovernanceCallee)
+        .withDescriptorRef(historyListReadDescriptor)
+        .withSubjectURA(runtimeGovernanceCallee)
         .withNonceBase64(nonce)
         .withCausalContext({ form: "none" })
         .withJSONArgs({ probe: true })
@@ -1746,20 +1775,20 @@ test("public invocation builder rejects runtime catalogue descriptor before disp
   for (const [abilityName, catalogueDescriptor] of [
     [
       "meta.list_abilities",
-      "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+      "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
     ],
     [
       "meta.list_resources",
-      "easynet:///r/example/ability/authority.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+      "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
     ],
   ]) {
     assert.throws(
       () =>
         new sdk.InvocationBuilder()
           .withCallerURA(caller)
-          .withCalleeURA("easynet:///r/example/authority")
+          .withCalleeURA(runtimeIntrospectionCallee)
           .withDescriptorRef(catalogueDescriptor)
-          .withSubjectURA("easynet:///r/example/authority")
+          .withSubjectURA(runtimeIntrospectionCallee)
           .withNonceBase64(nonce)
           .withCausalContext({ form: "none" })
           .withJSONArgs({ scope: "realm" })
@@ -1850,7 +1879,7 @@ test("runtime ability public path descriptor-binds user subjects", async () => {
   const draft = await ability.build(
     {
       caller_ura: caller,
-      callee_ura: callee,
+      callee_ura: runtimeGovernanceCallee,
       subject_ura: subject,
       nonce_base64: nonce,
       causal_context: { form: "none" },
@@ -1995,47 +2024,43 @@ test("runtime descriptor resolver rejects provider mismatches before transport",
 
 test("runtime descriptor resolver admits runtime-owner catalogue provider tuple", async () => {
   let resolverRequest;
-  const catalogueDescriptor =
-    "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
   const runtime = new sdk.RuntimeClient({
     invoke: () => {
       throw new Error("invoke must not run");
     },
     resolveDescriptorRef: (requestJSON) => {
       resolverRequest = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
-      return JSON.stringify({ descriptor_ref: catalogueDescriptor });
+      return JSON.stringify({ descriptor_ref: catalogueReadDescriptor });
     },
   });
 
   const resolved = await runtime.resolveDescriptorRef({
-    callee_ura: callee,
+    callee_ura: runtimeIntrospectionCallee,
     ability: "meta.list_abilities",
     call_mode: "rpc",
     caller_ura: caller,
-    subject_ura: callee,
+    subject_ura: runtimeIntrospectionCallee,
     provider: "ability_descriptor",
   });
 
-  assert.equal(resolved, catalogueDescriptor);
+  assert.equal(resolved, catalogueReadDescriptor);
   assert.deepEqual(resolverRequest, {
-    callee_ura: callee,
+    callee_ura: runtimeIntrospectionCallee,
     ability: "meta.list_abilities",
     call_mode: "rpc",
     caller_ura: caller,
-    subject_ura: callee,
+    subject_ura: runtimeIntrospectionCallee,
     provider: "ability_descriptor",
   });
 });
 
 test("runtime ability descriptor provider uses catalogue provider and runtime-owner envelope", async () => {
   const calls = [];
-  const catalogueDescriptor =
-    "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
   const runtime = new sdk.RuntimeClient({
     resolveDescriptorRef: (requestJSON) => {
       const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
       calls.push(["resolve", request]);
-      return JSON.stringify({ descriptor_ref: catalogueDescriptor });
+      return JSON.stringify({ descriptor_ref: catalogueReadDescriptor });
     },
     invoke: (draftJSON) => {
       const draft = JSON.parse(Buffer.from(draftJSON).toString("utf8"));
@@ -2046,11 +2071,10 @@ test("runtime ability descriptor provider uses catalogue provider and runtime-ow
         output: {
           abilities: [
             {
-              ability_ura: "easynet:///r/example/ability/device.dev-a.browser.open_session",
-              descriptor_ref:
-                "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke",
+              ability_ura: browserOpenAbility,
+              descriptor_ref: browserOpenDescriptor,
               name: "browser.open_session",
-              owner_ura: callee,
+              owner_ura: pluginManagementCallee,
               descriptor_version: "1.0.0",
               call_mode: "rpc",
               hints: { read_only: false },
@@ -2068,13 +2092,13 @@ test("runtime ability descriptor provider uses catalogue provider and runtime-ow
   const page = await client.list({
     call: {
       caller_ura: caller,
-      callee_ura: callee,
+      callee_ura: runtimeIntrospectionCallee,
       subject_ura: "easynet:///r/example/resource/ignored-product-subject",
       nonce_base64: nonce,
       causal_context: { form: "none" },
     },
     scope: "device",
-    owner_ura: callee,
+    owner_ura: pluginManagementCallee,
   });
 
   assert.equal(page.descriptors.length, 1);
@@ -2082,24 +2106,22 @@ test("runtime ability descriptor provider uses catalogue provider and runtime-ow
   assert.deepEqual(calls[0], [
     "resolve",
     {
-      callee_ura: callee,
+      callee_ura: runtimeIntrospectionCallee,
       ability: "meta.list_abilities",
       call_mode: "rpc",
       caller_ura: caller,
-      subject_ura: callee,
+      subject_ura: runtimeIntrospectionCallee,
       provider: "ability_descriptor",
     },
   ]);
-  assert.equal(calls[1][1].descriptor_ref, catalogueDescriptor);
-  assert.equal(calls[1][1].subject_ura, callee);
-  assert.deepEqual(calls[1][1].args, { scope: "device", owner_ura: callee });
+  assert.equal(calls[1][1].descriptor_ref, catalogueReadDescriptor);
+  assert.equal(calls[1][1].subject_ura, runtimeIntrospectionCallee);
+  assert.deepEqual(calls[1][1].args, { scope: "device", owner_ura: pluginManagementCallee });
 });
 
 test("runtime ability descriptor provider rejects retired version alias", async () => {
-  const catalogueDescriptor =
-    "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
   const runtime = new sdk.RuntimeClient({
-    resolveDescriptorRef: () => JSON.stringify({ descriptor_ref: catalogueDescriptor }),
+    resolveDescriptorRef: () => JSON.stringify({ descriptor_ref: catalogueReadDescriptor }),
     invoke: () =>
       JSON.stringify({
         ok: true,
@@ -2107,11 +2129,10 @@ test("runtime ability descriptor provider rejects retired version alias", async 
         output: {
           abilities: [
             {
-              ability_ura: "easynet:///r/example/ability/device.dev-a.browser.open_session",
-              descriptor_ref:
-                "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke",
+              ability_ura: browserOpenAbility,
+              descriptor_ref: browserOpenDescriptor,
               name: "browser.open_session",
-              owner_ura: callee,
+              owner_ura: pluginManagementCallee,
               version: "1.0.0",
             },
           ],
@@ -2126,8 +2147,8 @@ test("runtime ability descriptor provider rejects retired version alias", async 
       provider.list({
         call: {
           caller_ura: caller,
-          callee_ura: callee,
-          subject_ura: callee,
+          callee_ura: runtimeIntrospectionCallee,
+          subject_ura: runtimeIntrospectionCallee,
           nonce_base64: nonce,
           causal_context: { form: "none" },
         },
@@ -2140,10 +2161,8 @@ test("runtime ability descriptor provider rejects retired version alias", async 
 });
 
 test("runtime ability descriptor provider rejects typed descriptor projection fields", async () => {
-  const catalogueDescriptor =
-    "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
   const runtime = new sdk.RuntimeClient({
-    resolveDescriptorRef: () => JSON.stringify({ descriptor_ref: catalogueDescriptor }),
+    resolveDescriptorRef: () => JSON.stringify({ descriptor_ref: catalogueReadDescriptor }),
     invoke: () =>
       JSON.stringify({
         ok: true,
@@ -2151,11 +2170,10 @@ test("runtime ability descriptor provider rejects typed descriptor projection fi
         output: {
           abilities: [
             {
-              ability_ura: "easynet:///r/example/ability/device.dev-a.browser.open_session",
-              descriptor_ref:
-                "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke",
+              ability_ura: browserOpenAbility,
+              descriptor_ref: browserOpenDescriptor,
               name: "browser.open_session",
-              owner_ura: callee,
+              owner_ura: pluginManagementCallee,
               descriptor_version: "1.0.0",
               schema_hash: 42,
             },
@@ -2171,8 +2189,8 @@ test("runtime ability descriptor provider rejects typed descriptor projection fi
       provider.list({
         call: {
           caller_ura: caller,
-          callee_ura: callee,
-          subject_ura: callee,
+          callee_ura: runtimeIntrospectionCallee,
+          subject_ura: runtimeIntrospectionCallee,
           nonce_base64: nonce,
           causal_context: { form: "none" },
         },
@@ -2185,10 +2203,8 @@ test("runtime ability descriptor provider rejects typed descriptor projection fi
 });
 
 test("runtime ability descriptor provider rejects noncanonical row fields", async () => {
-  const catalogueDescriptor =
-    "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
   const runtime = new sdk.RuntimeClient({
-    resolveDescriptorRef: () => JSON.stringify({ descriptor_ref: catalogueDescriptor }),
+    resolveDescriptorRef: () => JSON.stringify({ descriptor_ref: catalogueReadDescriptor }),
     invoke: () =>
       JSON.stringify({
         ok: true,
@@ -2196,11 +2212,10 @@ test("runtime ability descriptor provider rejects noncanonical row fields", asyn
         output: {
           abilities: [
             {
-              ability_ura: "easynet:///r/example/ability/device.dev-a.browser.open_session",
-              descriptor_ref:
-                "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke",
+              ability_ura: browserOpenAbility,
+              descriptor_ref: browserOpenDescriptor,
               name: "browser.open_session",
-              owner_ura: callee,
+              owner_ura: pluginManagementCallee,
               descriptor_version: "1.0.0",
               state_code: "J200",
             },
@@ -2216,8 +2231,8 @@ test("runtime ability descriptor provider rejects noncanonical row fields", asyn
       provider.list({
         call: {
           caller_ura: caller,
-          callee_ura: callee,
-          subject_ura: callee,
+          callee_ura: runtimeIntrospectionCallee,
+          subject_ura: runtimeIntrospectionCallee,
           nonce_base64: nonce,
           causal_context: { form: "none" },
         },
@@ -2231,13 +2246,11 @@ test("runtime ability descriptor provider rejects noncanonical row fields", asyn
 
 test("runtime ability governance read auto-selects catalogue provider", async () => {
   const seen = [];
-  const catalogueDescriptor =
-    "easynet:///r/example/ability/device.dev-a.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
   const runtime = new sdk.RuntimeClient({
     resolveDescriptorRef: (requestJSON) => {
       const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
       seen.push(request);
-      return JSON.stringify({ descriptor_ref: catalogueDescriptor });
+      return JSON.stringify({ descriptor_ref: catalogueReadDescriptor });
     },
     invoke: () =>
       JSON.stringify({
@@ -2251,8 +2264,8 @@ test("runtime ability governance read auto-selects catalogue provider", async ()
   await new sdk.RuntimeAbilityClient(runtime).invokeGovernanceRead(
     {
       caller_ura: caller,
-      callee_ura: callee,
-      subject_ura: callee,
+      callee_ura: runtimeIntrospectionCallee,
+      subject_ura: runtimeIntrospectionCallee,
       nonce_base64: nonce,
       causal_context: { form: "none" },
     },
@@ -2261,16 +2274,15 @@ test("runtime ability governance read auto-selects catalogue provider", async ()
   );
 
   assert.equal(seen[0].provider, "ability_descriptor");
-  assert.equal(seen[0].subject_ura, callee);
+  assert.equal(seen[0].subject_ura, runtimeIntrospectionCallee);
 });
 
 test("ability descriptor client normalizes provider projections", async () => {
   const descriptorRow = {
-    ability_ura: "easynet:///r/example/ability/device.dev-a.browser.open_session",
-    descriptor_ref:
-      "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke",
+    ability_ura: browserOpenAbility,
+    descriptor_ref: browserOpenDescriptor,
     name: "browser.open_session",
-    owner_ura: callee,
+    owner_ura: pluginManagementCallee,
     version: "1.0.0",
   };
   const client = new sdk.AbilityDescriptorClient({
@@ -2279,8 +2291,8 @@ test("ability descriptor client normalizes provider projections", async () => {
   });
   const call = {
     caller_ura: caller,
-    callee_ura: callee,
-    subject_ura: callee,
+    callee_ura: pluginManagementCallee,
+    subject_ura: pluginManagementCallee,
     nonce_base64: nonce,
     causal_context: { form: "none" },
   };
@@ -2300,11 +2312,10 @@ test("ability descriptor client normalizes provider projections", async () => {
 
 test("ability descriptor projections reject noncanonical direct fields", () => {
   const descriptorRow = {
-    ability_ura: "easynet:///r/example/ability/device.dev-a.browser.open_session",
-    descriptor_ref:
-      "easynet:///r/example/ability/device.dev-a.browser.open_session@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!invoke",
+    ability_ura: browserOpenAbility,
+    descriptor_ref: browserOpenDescriptor,
     name: "browser.open_session",
-    owner_ura: callee,
+    owner_ura: pluginManagementCallee,
     version: "1.0.0",
   };
 
@@ -2326,13 +2337,11 @@ test("ability descriptor projections reject noncanonical direct fields", () => {
 
 test("runtime receipt provider uses governance descriptor provider and complete tuple", async () => {
   const calls = [];
-  const historyDescriptor =
-    "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
   const runtime = new sdk.RuntimeClient({
     resolveDescriptorRef: (requestJSON) => {
       const request = JSON.parse(Buffer.from(requestJSON).toString("utf8"));
       calls.push(["resolve", request]);
-      return JSON.stringify({ descriptor_ref: historyDescriptor });
+      return JSON.stringify({ descriptor_ref: historyListReadDescriptor });
     },
     invoke: (draftJSON) => {
       const draft = JSON.parse(Buffer.from(draftJSON).toString("utf8"));
@@ -2356,12 +2365,16 @@ test("runtime receipt provider uses governance descriptor provider and complete 
   const page = await history.list({
     call: {
       caller_ura: caller,
-      callee_ura: callee,
-      subject_ura: callee,
+      callee_ura: runtimeGovernanceCallee,
+      subject_ura: runtimeGovernanceCallee,
       nonce_base64: nonce,
       causal_context: { form: "none" },
       metadata: {
-        [sdk.DELEGATION_METADATA_KEY]: delegationValue(["invocation.history.*"]),
+        [sdk.DELEGATION_METADATA_KEY]: delegationValue(
+          ["invocation.history.*"],
+          runtimeGovernanceCallee,
+          runtimeGovernanceCallee,
+        ),
       },
     },
     limit: 5,
@@ -2372,18 +2385,18 @@ test("runtime receipt provider uses governance descriptor provider and complete 
   assert.deepEqual(calls[0], [
     "resolve",
     {
-      callee_ura: callee,
+      callee_ura: runtimeGovernanceCallee,
       ability: "invocation.history.list",
       call_mode: "rpc",
       caller_ura: caller,
-      subject_ura: callee,
+      subject_ura: runtimeGovernanceCallee,
       provider: "receipt_history",
     },
   ]);
-  assert.equal(calls[1][1].descriptor_ref, historyDescriptor);
+  assert.equal(calls[1][1].descriptor_ref, historyListReadDescriptor);
   assert.equal(calls[1][1].caller_ura, caller);
-  assert.equal(calls[1][1].callee_ura, callee);
-  assert.equal(calls[1][1].subject_ura, callee);
+  assert.equal(calls[1][1].callee_ura, runtimeGovernanceCallee);
+  assert.equal(calls[1][1].subject_ura, runtimeGovernanceCallee);
   assert.equal(calls[1][1].nonce_base64, nonce);
   assert.deepEqual(calls[1][1].causal_context, { form: "none" });
 });
@@ -2392,7 +2405,7 @@ test("receipt read call context derives session runtime-state subject from autho
   const authority = sdk.SessionAuthority.fromMetadata(historySessionValue());
   const call = sdk.receiptReadCallContext({
     caller_ura: caller,
-    callee_ura: callee,
+    callee_ura: runtimeGovernanceCallee,
     nonce_base64: nonce,
     causal_context: { form: "none" },
     authority,
@@ -2401,12 +2414,10 @@ test("receipt read call context derives session runtime-state subject from autho
   assert.equal(call.subjectURA, sdk.runtimeStateReadSubjectURA("example", "alice"));
 
   const calls = [];
-  const historyDescriptor =
-    "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read";
   const runtime = new sdk.RuntimeClient({
     resolveDescriptorRef: (requestJSON) => {
       calls.push(["resolve", JSON.parse(Buffer.from(requestJSON).toString("utf8"))]);
-      return JSON.stringify({ descriptor_ref: historyDescriptor });
+      return JSON.stringify({ descriptor_ref: historyListReadDescriptor });
     },
     invoke: (draftJSON) => {
       calls.push(["invoke", JSON.parse(Buffer.from(draftJSON).toString("utf8"))]);
@@ -2429,24 +2440,28 @@ test("receipt read call context derives session runtime-state subject from autho
 });
 
 test("receipt read call context keeps delegation subject exact", () => {
-  const authority = sdk.DelegationProof.fromMetadata(delegationValue(["invocation.history.*"]));
+  const authority = sdk.DelegationProof.fromMetadata(
+    delegationValue(["invocation.history.*"], runtimeGovernanceCallee, runtimeGovernanceCallee),
+  );
   const call = sdk.receiptReadCallContext({
     caller_ura: caller,
-    callee_ura: callee,
+    callee_ura: runtimeGovernanceCallee,
     nonce_base64: nonce,
     causal_context: { form: "none" },
     authority,
   });
 
-  assert.equal(call.subjectURA, callee);
+  assert.equal(call.subjectURA, runtimeGovernanceCallee);
 });
 
 test("receipt read call context requires complete tuple fields", () => {
-  const authority = sdk.DelegationProof.fromMetadata(delegationValue(["invocation.history.*"]));
+  const authority = sdk.DelegationProof.fromMetadata(
+    delegationValue(["invocation.history.*"], runtimeGovernanceCallee, runtimeGovernanceCallee),
+  );
   for (const omitted of ["nonce_base64", "causal_context"]) {
     const fields = {
       caller_ura: caller,
-      callee_ura: callee,
+      callee_ura: runtimeGovernanceCallee,
       nonce_base64: nonce,
       causal_context: { form: "none" },
       authority,
@@ -2479,7 +2494,7 @@ test("session history preflight rejects authority subject mismatch before receip
   const request = new sdk.ReceiptListRequest({
     call: {
       caller_ura: caller,
-      callee_ura: callee,
+      callee_ura: runtimeGovernanceCallee,
       subject_ura: sdk.runtimeStateReadSubjectURA("example", "alice"),
       nonce_base64: nonce,
       causal_context: { form: "none" },
@@ -2508,7 +2523,7 @@ test("receipt list request requires complete call context before history provide
   for (const omitted of ["nonce_base64", "causal_context"]) {
     const call = {
       caller_ura: caller,
-      callee_ura: callee,
+      callee_ura: runtimeGovernanceCallee,
       subject_ura: sdk.runtimeStateReadSubjectURA("example", "alice"),
       nonce_base64: nonce,
       causal_context: { form: "none" },
@@ -2545,7 +2560,7 @@ test("session history preflight rejects path-substring owner subject before rece
   const request = new sdk.ReceiptListRequest({
     call: {
       caller_ura: caller,
-      callee_ura: callee,
+      callee_ura: runtimeGovernanceCallee,
       subject_ura: "easynet:///r/example/device/dev-a/resource/user.alice/runtime-state/read",
       nonce_base64: nonce,
       causal_context: { form: "none" },
@@ -2619,23 +2634,27 @@ test("session history preflight accepts exact runtime-owner subject with delegat
       };
     },
   });
-  const deviceSubject = callee;
+  const runtimeOwnerSubject = runtimeGovernanceCallee;
 
   const page = await history.list({
     call: {
       caller_ura: caller,
-      callee_ura: callee,
-      subject_ura: deviceSubject,
+      callee_ura: runtimeGovernanceCallee,
+      subject_ura: runtimeOwnerSubject,
       nonce_base64: nonce,
       causal_context: { form: "none" },
       metadata: {
-        [sdk.DELEGATION_METADATA_KEY]: delegationValue(["invocation.history.*"]),
+        [sdk.DELEGATION_METADATA_KEY]: delegationValue(
+          ["invocation.history.*"],
+          runtimeOwnerSubject,
+          runtimeGovernanceCallee,
+        ),
       },
     },
     limit: 50,
   });
 
-  assert.equal(seenRequest.call.subjectURA, deviceSubject);
+  assert.equal(seenRequest.call.subjectURA, runtimeOwnerSubject);
   assert.equal(page.source, receiptLedgerURA);
 });
 
@@ -2658,12 +2677,16 @@ test("session history preflight rejects non-callee runtime-owner subject before 
       history.list({
         call: {
           caller_ura: caller,
-          callee_ura: callee,
+          callee_ura: runtimeGovernanceCallee,
           subject_ura: "easynet:///r/example/device/dev-b",
           nonce_base64: nonce,
           causal_context: { form: "none" },
           metadata: {
-            [sdk.DELEGATION_METADATA_KEY]: delegationValue(["invocation.history.*"]),
+            [sdk.DELEGATION_METADATA_KEY]: delegationValue(
+              ["invocation.history.*"],
+              "easynet:///r/example/device/dev-b",
+              runtimeGovernanceCallee,
+            ),
           },
         },
         limit: 50,
@@ -2696,8 +2719,8 @@ test("session history preflight rejects runtime-owner subject with session autho
       history.list({
         call: {
           caller_ura: caller,
-          callee_ura: callee,
-          subject_ura: callee,
+          callee_ura: runtimeGovernanceCallee,
+          subject_ura: runtimeGovernanceCallee,
           nonce_base64: nonce,
           causal_context: { form: "none" },
           metadata: {
@@ -2732,7 +2755,7 @@ test("session history keeps subject filters as ledger predicates", async () => {
   const page = await history.list({
     call: {
       caller_ura: caller,
-      callee_ura: callee,
+      callee_ura: runtimeGovernanceCallee,
       subject_ura: sdk.runtimeStateReadSubjectURA("example", "alice"),
       nonce_base64: nonce,
       causal_context: { form: "none" },
@@ -2742,13 +2765,13 @@ test("session history keeps subject filters as ledger predicates", async () => {
     },
     filter: {
       caller_ura: caller,
-      callee_ura: callee,
-      subject_ura: callee,
+      callee_ura: runtimeGovernanceCallee,
+      subject_ura: runtimeGovernanceCallee,
     },
     limit: 25,
   });
 
-  assert.equal(seenRequest.filter.subjectURA, callee);
+  assert.equal(seenRequest.filter.subjectURA, runtimeGovernanceCallee);
   assert.equal(page.source, receiptLedgerURA);
   assert.equal(page.records.length, 1);
 });
@@ -2757,8 +2780,7 @@ test("runtime receipt provider rejects legacy history source field", async () =>
   const runtime = new sdk.RuntimeClient({
     resolveDescriptorRef: () =>
       JSON.stringify({
-        descriptor_ref:
-          "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+        descriptor_ref: historyListReadDescriptor,
       }),
     invoke: () =>
       JSON.stringify({
@@ -2777,12 +2799,16 @@ test("runtime receipt provider rejects legacy history source field", async () =>
       history.list({
         call: {
           caller_ura: caller,
-          callee_ura: callee,
-          subject_ura: callee,
+          callee_ura: runtimeGovernanceCallee,
+          subject_ura: runtimeGovernanceCallee,
           nonce_base64: nonce,
           causal_context: { form: "none" },
           metadata: {
-            [sdk.DELEGATION_METADATA_KEY]: delegationValue(["invocation.history.*"]),
+            [sdk.DELEGATION_METADATA_KEY]: delegationValue(
+              ["invocation.history.*"],
+              runtimeGovernanceCallee,
+              runtimeGovernanceCallee,
+            ),
           },
         },
         limit: 5,
@@ -2799,8 +2825,7 @@ test("runtime receipt provider requires canonical ledger_ura", async () => {
   const runtime = new sdk.RuntimeClient({
     resolveDescriptorRef: () =>
       JSON.stringify({
-        descriptor_ref:
-          "easynet:///r/example/ability/device.dev-a.invocation.history.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+        descriptor_ref: historyListReadDescriptor,
       }),
     invoke: () =>
       JSON.stringify({
@@ -2819,12 +2844,16 @@ test("runtime receipt provider requires canonical ledger_ura", async () => {
       history.list({
         call: {
           caller_ura: caller,
-          callee_ura: callee,
-          subject_ura: callee,
+          callee_ura: runtimeGovernanceCallee,
+          subject_ura: runtimeGovernanceCallee,
           nonce_base64: nonce,
           causal_context: { form: "none" },
           metadata: {
-            [sdk.DELEGATION_METADATA_KEY]: delegationValue(["invocation.history.*"]),
+            [sdk.DELEGATION_METADATA_KEY]: delegationValue(
+              ["invocation.history.*"],
+              runtimeGovernanceCallee,
+              runtimeGovernanceCallee,
+            ),
           },
         },
         limit: 5,
@@ -2868,7 +2897,7 @@ test("runtime-state read subject predicate rejects all-zero owner before history
       new sdk.ReceiptListRequest({
         call: {
           caller_ura: caller,
-          callee_ura: callee,
+          callee_ura: runtimeGovernanceCallee,
           subject_ura:
             "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/runtime-state/read",
           metadata: {

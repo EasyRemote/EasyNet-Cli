@@ -90,7 +90,7 @@ func TestNativeRuntimeHandleAlwaysProvidesCanonicalAddressing(t *testing.T) {
 	projection, err := addressing.BuildDescriptorRef(
 		context.Background(),
 		CanonicalDescriptorRefBuildRequest{
-			AbilityURA:        "easynet:///r/example/ability/device.dev-a.observe.health",
+			AbilityURA:        "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
 			DescriptorVersion: "1.0.0",
 			DescriptorHash:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			Action:            "invoke",
@@ -100,7 +100,7 @@ func TestNativeRuntimeHandleAlwaysProvidesCanonicalAddressing(t *testing.T) {
 		t.Fatalf("BuildDescriptorRef: %v", err)
 	}
 	ref := projection.DescriptorRef
-	if ref != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke" {
+	if ref != "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke" {
 		t.Fatalf("descriptor_ref = %q", ref)
 	}
 }
@@ -124,7 +124,7 @@ func TestNativeRuntimeHandleProvidesRuntimeAbilityFacade(t *testing.T) {
 	}
 	draft, err := ability.Build(context.Background(), RuntimeCallContext{
 		CallerURA:     "easynet:///r/example/agent/alice.client",
-		CalleeURA:     "easynet:///r/example/device/dev-a",
+		CalleeURA:     "easynet:///r/example/agent/device.dev-a.runtime-health",
 		SubjectURA:    "easynet:///r/example/device/dev-a",
 		NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 		CausalContext: map[string]any{"form": "none"},
@@ -132,7 +132,7 @@ func TestNativeRuntimeHandleProvidesRuntimeAbilityFacade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if draft.DescriptorRef() != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" {
+	if draft.DescriptorRef() != "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" {
 		t.Fatalf("descriptor_ref = %q", draft.DescriptorRef())
 	}
 

@@ -312,7 +312,7 @@ public final class RuntimeAbilityClient: @unchecked Sendable {
         )
         static let catalogueRead = RuntimeAbilityDispatchPolicy(
             allowGovernanceRead: true,
-            subjectPolicy: .runtimeOwner,
+            subjectPolicy: .runtimeStateRead,
             descriptorProvider: RuntimeDescriptorRefRequest.abilityDescriptorProvider
         )
 
@@ -320,8 +320,8 @@ public final class RuntimeAbilityClient: @unchecked Sendable {
             switch subjectPolicy {
             case .descriptorBound:
                 return try RuntimeSubjects.descriptorBoundSubjectURA(call.subjectURA, abilityName: abilityName)
-            case .runtimeOwner:
-                return call.calleeURA
+            case .runtimeStateRead:
+                return try RuntimeSubjects.runtimeGovernanceReadSubjectURA(call.subjectURA)
             }
         }
 
@@ -332,7 +332,7 @@ public final class RuntimeAbilityClient: @unchecked Sendable {
             if descriptorProvider == RuntimeDescriptorRefRequest.abilityDescriptorProvider {
                 return selectedSubjectURA
             }
-            if subjectPolicy == .runtimeOwner {
+            if subjectPolicy == .runtimeStateRead {
                 return selectedSubjectURA
             }
             return call.subjectURA
@@ -340,7 +340,7 @@ public final class RuntimeAbilityClient: @unchecked Sendable {
 
         enum SubjectPolicy {
             case descriptorBound
-            case runtimeOwner
+            case runtimeStateRead
         }
     }
 }

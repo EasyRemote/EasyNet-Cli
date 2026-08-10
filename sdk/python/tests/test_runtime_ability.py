@@ -244,7 +244,7 @@ def test_runtime_ability_catalogue_read_resolves_descriptor_with_governance_read
     client, transport = _client()
     call = replace(
         _call(),
-        callee_ura="easynet:///r/example/device/device-1",
+        callee_ura="easynet:///r/example/agent/device.device-1.runtime-introspection",
         subject_ura="easynet:///r/example/user/alice",
     )
 
@@ -258,7 +258,7 @@ def test_runtime_ability_catalogue_read_resolves_descriptor_with_governance_read
         "easynet:///r/example/resource/user.alice/runtime-state/read"
     )
     assert transport.descriptor_requests[-1]["callee_ura"] == (
-        "easynet:///r/example/device/device-1"
+        "easynet:///r/example/agent/device.device-1.runtime-introspection"
     )
 
 
@@ -272,7 +272,7 @@ def test_runtime_ability_catalogue_read_uses_session_owner_for_governance_subjec
             return json.dumps(
                 {
                     "descriptor_ref": (
-                        "easynet:///r/example/ability/device.device-1.meta.list_resources@1.0.0#"
+                        "easynet:///r/example/ability/system-agent.device-1.runtime-introspection.meta.list_resources@1.0.0#"
                         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                         "!read"
                     )
@@ -286,7 +286,7 @@ def test_runtime_ability_catalogue_read_uses_session_owner_for_governance_subjec
     )
     call = replace(
         _call(),
-        callee_ura="easynet:///r/example/device/device-1",
+        callee_ura="easynet:///r/example/agent/device.device-1.runtime-introspection",
         subject_ura="easynet:///r/example/user/alice",
     )
     authority = replace(

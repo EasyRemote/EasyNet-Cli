@@ -2,16 +2,6 @@ package run.runtime.sdk;
 
 final class RuntimeAbilityProjection {
   private static final String REALM_PREFIX = "easynet:///r/";
-  private static final String[] RUNTIME_GOVERNANCE_READ_ABILITIES = {
-    "meta.list_abilities",
-    "meta.list_resources",
-    "invocation.history.list",
-    "invocation.history.get",
-    "invocation.history.path",
-    "invocation.record.get",
-    "invocation.trace.get"
-  };
-
   private final String abilityURA;
   private final String publicName;
   private final String intrinsicName;
@@ -70,14 +60,7 @@ final class RuntimeAbilityProjection {
   }
 
   static String runtimeGovernanceDescriptorProviderForAbility(String ability) {
-    String clean = ability == null ? "" : ability.trim();
-    if (runtimeCatalogueReadAbility(clean)) {
-      return RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER;
-    }
-    if (runtimeReceiptReadAbility(clean)) {
-      return RuntimeDescriptorRefRequest.RECEIPT_HISTORY_PROVIDER;
-    }
-    return "";
+    return RuntimeGovernanceRoutesGen.descriptorProvider(ability);
   }
 
   private static DescriptorAbilityProjection descriptorAbilityProjection(String descriptorRef) {
@@ -108,27 +91,7 @@ final class RuntimeAbilityProjection {
   }
 
   private static String runtimeGovernanceReadAbility(String value) {
-    String clean = value == null ? "" : value.trim();
-    for (String ability : RUNTIME_GOVERNANCE_READ_ABILITIES) {
-      if (clean.equals(ability) || clean.endsWith("." + ability)) {
-        return ability;
-      }
-    }
-    return "";
-  }
-
-  private static boolean runtimeCatalogueReadAbility(String value) {
-    return value.equals("meta.list_abilities")
-        || value.equals("meta.list_resources")
-        || value.endsWith(".meta.list_abilities")
-        || value.endsWith(".meta.list_resources");
-  }
-
-  private static boolean runtimeReceiptReadAbility(String value) {
-    return value.startsWith("invocation.history.")
-        || value.startsWith("invocation.trace.")
-        || value.contains(".invocation.history.")
-        || value.contains(".invocation.trace.");
+    return RuntimeGovernanceRoutesGen.canonicalAbility(value);
   }
 
   private static String publicAbilityName(String calleeURA, String intrinsicName) {
@@ -146,6 +109,16 @@ final class RuntimeAbilityProjection {
       String deviceID = path.substring("device/".length()).trim();
       if (!deviceID.isBlank() && !deviceID.contains("/")) {
         return "device." + deviceID;
+      }
+    }
+    if (path.startsWith("agent/device.")) {
+      String scopedAgentID = path.substring("agent/device.".length()).trim();
+      int separator = scopedAgentID.indexOf('.');
+      if (separator > 0 && separator < scopedAgentID.length() - 1) {
+        return "system-agent."
+            + scopedAgentID.substring(0, separator)
+            + "."
+            + scopedAgentID.substring(separator + 1);
       }
     }
     if ("authority".equals(path)) {

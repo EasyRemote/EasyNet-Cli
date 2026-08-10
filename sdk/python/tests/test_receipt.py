@@ -324,7 +324,7 @@ def test_receipt_read_call_context_requires_complete_tuple_fields() -> None:
     )
     required = {
         "caller_ura": "easynet:///r/example/user/backend",
-        "callee_ura": "easynet:///r/example/device/dev-a",
+        "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
         "authority": authority,
         "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",
         "causal_context": {"form": "none"},
@@ -346,7 +346,7 @@ def test_receipt_read_call_context_requires_complete_tuple_fields() -> None:
 
 def test_runtime_receipt_provider_rejects_wrong_device_owner_subject_before_descriptor_resolution() -> None:
     provider, transport = _provider()
-    call = _history_call(callee_ura="easynet:///r/example/device/dev-a")
+    call = _history_call(callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health")
     bad_call = RuntimeCallContext(
         caller_ura=call.caller_ura,
         callee_ura=call.callee_ura,

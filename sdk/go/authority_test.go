@@ -305,8 +305,8 @@ func TestInvocationBuilderAttachesOneAuthorityMetadata(t *testing.T) {
 
 	draft, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/backend").
-		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
+		WithCalleeURA("easynet:///r/example/agent/device.dev-a.runtime-health").
+		WithDescriptorRef("easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
 		WithSubjectURA("easynet:///r/example/user/alice").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).
@@ -326,8 +326,8 @@ func TestInvocationBuilderAttachesOneAuthorityMetadata(t *testing.T) {
 func TestInvocationBuilderRejectsAmbiguousAuthorityMetadata(t *testing.T) {
 	_, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/backend").
-		WithCalleeURA("easynet:///r/example/device/dev-a").
-		WithDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
+		WithCalleeURA("easynet:///r/example/agent/device.dev-a.runtime-health").
+		WithDescriptorRef("easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke").
 		WithSubjectURA("easynet:///r/example/user/alice").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
 		WithCausalContext(map[string]any{"form": "none"}).

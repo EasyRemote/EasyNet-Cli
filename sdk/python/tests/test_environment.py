@@ -77,13 +77,13 @@ class SdkEnvironmentTests(unittest.TestCase):
             self.assertTrue(provider.health().runtime_health().ready())
             self.assertEqual(
                 provider.addressing().owner_ability_descriptor_ref(
-                    "easynet:///r/example/device/dev-a",
+                    "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "observe.health",
                     "1.0.0",
                     descriptor_hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     action="invoke",
                 ),
-                "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+                "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
             )
 
             provider.close()

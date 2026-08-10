@@ -518,8 +518,8 @@ func directRuntimeSignedDraft(t *testing.T) InvocationDraft {
 	t.Helper()
 	raw, err := json.Marshal(map[string]any{
 		"caller_ura":     "easynet:///r/example/agent/alice",
-		"callee_ura":     "easynet:///r/example/device/dev-a",
-		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+		"callee_ura":     "easynet:///r/example/agent/device.dev-a.ability-management",
+		"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.ability-management.er.weather@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		"subject_ura":    "easynet:///r/example/device/dev-a",
 		"nonce_base64":   "AQIDBAUGBwgJCgsMDQ4PEA==",
 		"causal_context": map[string]any{

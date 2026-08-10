@@ -68,9 +68,10 @@ func (d *directRuntimeFakeDaemon) Invoke(ctx context.Context, req *axonpb.Invoke
 
 func canonicalDirectRuntimeReceiptPair(invocationID string) (*axonpb.InvocationReceipt, *axonpb.InvocationReceipt) {
 	const (
-		callerURA = "easynet:///r/example/agent/alice.sdk"
-		calleeURA = "easynet:///r/example/device/dev-a"
-		profile   = "axon-strict-v2"
+		callerURA     = "easynet:///r/example/agent/alice.sdk"
+		calleeURA     = runtimeTestCalleeURA
+		deviceSubject = "easynet:///r/example/device/dev-a"
+		profile       = "axon-strict-v2"
 	)
 	proofPayload := []byte("canonical-direct-runtime-test-proof")
 	proofHash := sha256.Sum256(proofPayload)
@@ -101,14 +102,14 @@ func canonicalDirectRuntimeReceiptPair(invocationID string) (*axonpb.InvocationR
 			CleanupComplete:    cleanupComplete,
 			CallerBinding:      &axonpb.AgentIdentity{Ura: callerURA, Profile: profile},
 			CalleeBinding:      &axonpb.AgentIdentity{Ura: calleeURA, Profile: profile},
-			SubjectBinding:     &axonpb.SubjectIdentity{Ura: calleeURA, Profile: profile},
+			SubjectBinding:     &axonpb.SubjectIdentity{Ura: deviceSubject, Profile: profile},
 			InvocationNonce:    []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
 			CausalBinding:      &axonpb.CausalContext{Form: &axonpb.CausalContext_None{None: &axonpb.Empty{}}},
 			CalleeSignature:    &axonpb.CalleeSignature{Algorithm: "ed25519", Signature: bytes.Repeat([]byte{0x71}, 64)},
 			AuthorityBinding:   binding(),
 			AbilityBinding:     runtimeTestDescriptorRef,
 			Usage:              &axonpb.InvocationUsage{},
-			SubjectRef:         &axonpb.EntityRef{Kind: axonpb.EntityRefKind_ENTITY_REF_KIND_DEVICE, Ura: calleeURA, Profile: profile},
+			SubjectRef:         &axonpb.EntityRef{Kind: axonpb.EntityRefKind_ENTITY_REF_KIND_DEVICE, Ura: deviceSubject, Profile: profile},
 			DescriptorVersion:  "1.0.0",
 			SchemaHash:         bytes.Repeat([]byte{0x11}, 32),
 			ImplHash:           bytes.Repeat([]byte{0x22}, 32),
@@ -1187,8 +1188,8 @@ func directRuntimeDraftWithMetadataAndSignature(
 	t.Helper()
 	fields := map[string]any{
 		"caller_ura":     "easynet:///r/example/agent/alice",
-		"callee_ura":     "easynet:///r/example/device/dev-a",
-		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.er.weather@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+		"callee_ura":     "easynet:///r/example/agent/device.dev-a.ability-management",
+		"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.ability-management.er.weather@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		"subject_ura":    "easynet:///r/example/device/dev-a",
 		"nonce_base64":   "AQIDBAUGBwgJCgsMDQ4PEA==",
 		"causal_context": map[string]any{"form": "none"},
@@ -1218,8 +1219,8 @@ func directRuntimeUserSubjectDraft(t *testing.T) InvocationDraft {
 	t.Helper()
 	raw, err := json.Marshal(map[string]any{
 		"caller_ura":     "easynet:///r/example/user/alice",
-		"callee_ura":     "easynet:///r/example/device/dev-a",
-		"descriptor_ref": "easynet:///r/example/ability/device.dev-a.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+		"callee_ura":     "easynet:///r/example/agent/device.dev-a.runtime-introspection",
+		"descriptor_ref": "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 		"subject_ura":    "easynet:///r/example/user/alice",
 		"nonce_base64":   "AQIDBAUGBwgJCgsMDQ4PEA==",
 		"causal_context": map[string]any{"form": "none"},

@@ -50,6 +50,20 @@ enum RuntimeSubjects {
         throw invalidRuntime("subject_ura kind is not descriptor-bound")
     }
 
+    static func runtimeGovernanceReadSubjectURA(_ subjectURA: String) throws -> String {
+        let subject = try RuntimePrincipals.requiredString(subjectURA, "subject_ura", stage: "runtime")
+        if let resource = canonicalResourceSubject(subject),
+           resource.path == runtimeStateReadSubjectPath
+        {
+            return subject
+        }
+        if let parsed = parsedSubject(subject), parsed.path.hasPrefix("user/") {
+            let userID = String(parsed.path.dropFirst("user/".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return try runtimeStateReadSubjectURA(realm: parsed.realm, userID: userID)
+        }
+        throw invalidRuntime("runtime governance read subject must be a User or user-owned runtime-state resource")
+    }
+
     static func canonicalResourceSubject(_ subjectURA: String) -> ResourceSubject? {
         guard !RuntimePrincipals.containsAllZeroPrincipal(subjectURA) else {
             return nil

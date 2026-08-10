@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
 import { containsAllZeroPrincipal } from "./runtime-principals.js";
 import {
+  canonicalRuntimeGovernanceAbility,
+  generatedRuntimeGovernanceDescriptorProvider,
+  RUNTIME_ABILITY_DESCRIPTOR_PROVIDER,
+  RUNTIME_RECEIPT_HISTORY_PROVIDER,
+} from "./runtime-governance-routes.js";
+import {
   canonicalResourceSubject,
   isRuntimeOwnerReadSubjectURA,
   isRuntimeStateReadSubjectURA,
@@ -189,17 +195,6 @@ const RUNTIME_DESCRIPTOR_ROW_FIELDS = new Set([
 const ABILITY_DESCRIPTOR_PAGE_FIELDS = new Set(["descriptors"]);
 export const MAX_STREAM_BUFFERED_EVENTS = 1024;
 export const MAX_BIDI_BUFFERED_FRAMES = 1024;
-const RUNTIME_GOVERNANCE_READ_ABILITIES = Object.freeze([
-  "meta.list_abilities",
-  "meta.list_resources",
-  "invocation.history.list",
-  "invocation.history.get",
-  "invocation.history.path",
-  "invocation.record.get",
-  "invocation.trace.get",
-]);
-const RUNTIME_ABILITY_DESCRIPTOR_PROVIDER = "ability_descriptor";
-const RUNTIME_RECEIPT_HISTORY_PROVIDER = "receipt_history";
 const CANONICAL_SESSION_AUTHORITY_ID = /^[A-Za-z0-9.-]+$/u;
 
 export class SDKError extends Error {
@@ -4027,40 +4022,11 @@ function rejectGovernanceReadPublicInvocationDescriptor(calleeURA, descriptorRef
 }
 
 function runtimeGovernanceReadAbility(value) {
-  const clean = String(value ?? "").trim();
-  const explicit = runtimeExplicitGovernanceReadAbility(clean);
-  if (explicit) {
-    return explicit;
-  }
-  if (runtimeCatalogueReadAbility(clean)) {
-    return clean.endsWith(".meta.list_resources")
-      ? "meta.list_resources"
-      : "meta.list_abilities";
-  }
-  if (runtimeReceiptReadAbility(clean)) {
-    return "invocation.history.list";
-  }
-  return "";
-}
-
-function runtimeExplicitGovernanceReadAbility(value) {
-  for (const ability of RUNTIME_GOVERNANCE_READ_ABILITIES) {
-    if (value === ability || value.endsWith(`.${ability}`)) {
-      return ability;
-    }
-  }
-  return "";
+  return canonicalRuntimeGovernanceAbility(value);
 }
 
 function runtimeGovernanceDescriptorProviderForAbility(value) {
-  const clean = String(value ?? "").trim();
-  if (runtimeCatalogueReadAbility(clean)) {
-    return RUNTIME_ABILITY_DESCRIPTOR_PROVIDER;
-  }
-  if (runtimeReceiptReadAbility(clean)) {
-    return RUNTIME_RECEIPT_HISTORY_PROVIDER;
-  }
-  return "";
+  return generatedRuntimeGovernanceDescriptorProvider(value);
 }
 
 function runtimeGovernanceDescriptorProviderForRequest(abilityName, provider) {
@@ -4086,24 +4052,6 @@ function runtimeGovernanceDescriptorProviderForRequest(abilityName, provider) {
     );
   }
   return requestedProvider;
-}
-
-function runtimeCatalogueReadAbility(value) {
-  return (
-    value === "meta.list_abilities" ||
-    value === "meta.list_resources" ||
-    value.endsWith(".meta.list_abilities") ||
-    value.endsWith(".meta.list_resources")
-  );
-}
-
-function runtimeReceiptReadAbility(value) {
-  return (
-    value.startsWith("invocation.history.") ||
-    value.startsWith("invocation.trace.") ||
-    value.includes(".invocation.history.") ||
-    value.includes(".invocation.trace.")
-  );
 }
 
 class InvocationAuthorityBindingValidator {
@@ -4561,6 +4509,13 @@ class RuntimeAbilityProjection {
       const deviceID = path.slice("device/".length).trim();
       if (deviceID && !deviceID.includes("/")) {
         return `device.${deviceID}`;
+      }
+    }
+    if (path.startsWith("agent/device.")) {
+      const scopedAgentID = path.slice("agent/device.".length).trim();
+      const separator = scopedAgentID.indexOf(".");
+      if (separator > 0 && separator < scopedAgentID.length - 1) {
+        return `system-agent.${scopedAgentID.slice(0, separator)}.${scopedAgentID.slice(separator + 1)}`;
       }
     }
     if (path === "authority") {

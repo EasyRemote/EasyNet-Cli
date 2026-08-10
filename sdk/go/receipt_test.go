@@ -329,21 +329,6 @@ func TestReceiptReferenceDelegatesScalarCausalProjectionToAxon(t *testing.T) {
 	}
 }
 
-func TestParseReceiptRecordsAcceptsLedgerRecordWrapper(t *testing.T) {
-	records, err := parseReceiptRecords([]any{
-		map[string]any{
-			"record": receiptLedgerRecordFixture(),
-			"source": "invocation.history.list",
-		},
-	})
-	if err != nil {
-		t.Fatalf("parseReceiptRecords: %v", err)
-	}
-	if len(records) != 1 || records[0].RequestID != "req-1" {
-		t.Fatalf("records = %#v", records)
-	}
-}
-
 func TestReceiptReferenceFromRuntimeReceiptUsesSummaryAnchor(t *testing.T) {
 	reference, err := ReceiptReferenceFromRuntimeReceipt(RuntimeReceipt{
 		ReceiptURA:  "easynet:///r/example/resource/device.dev-a/invocation/req-1/receipt/1",
@@ -481,6 +466,42 @@ func TestRuntimeReceiptProviderRejectsMalformedBoundedResults(t *testing.T) {
 	})
 	if _, err := provider.Trace(context.Background(), ReceiptTraceRequest{Call: runtimeReceiptHistoryTestContextWithScope(t, "invocation.trace.get"), Lookup: ReceiptLookup{TraceID: "trace-1"}}); err == nil || !strings.Contains(err.Error(), "nodes must be an array") {
 		t.Fatalf("malformed trace error = %v", err)
+	}
+}
+
+func TestRuntimeReceiptProviderParsesBoundedHistorySummaryWithoutFullLedgerPayloads(t *testing.T) {
+	provider := runtimeReceiptProviderWithOutput(t, map[string]any{
+		"ledger_ura": "easynet:///r/example/resource/device.dev-a/billing/invocations",
+		"records": []any{map[string]any{
+			"invocation_ura":    "easynet:///r/example/resource/device.dev-a/invocation/inv-1",
+			"request_id":        "req-1",
+			"trace_id":          "trace-1",
+			"span_id":           "span-1",
+			"caller_ura":        "easynet:///r/example/authority",
+			"callee_ura":        "easynet:///r/example/agent/device.dev-a.runtime-governance",
+			"subject_ura":       "easynet:///r/example/resource/user.alice/runtime-state/read",
+			"ability_ura":       "easynet:///r/example/ability/system-agent.dev-a.runtime-governance.invocation.history.list",
+			"ability_name":      "invocation.history.list",
+			"state":             "Completed",
+			"started_unix_ms":   1_700_000_000_000,
+			"completed_unix_ms": 1_700_000_000_100,
+			"elapsed_ms":        100,
+			"error": map[string]any{
+				"source": "runtime", "code": "EXAMPLE", "message": "bounded", "retryable": false, "truncated": true,
+			},
+		}},
+	})
+
+	page, err := provider.List(context.Background(), ReceiptListRequest{Call: runtimeReceiptHistoryTestContext(t), Limit: 1})
+	if err != nil {
+		t.Fatalf("List bounded summary: %v", err)
+	}
+	if len(page.Records) != 1 || page.Records[0].RequestID != "req-1" {
+		t.Fatalf("summary records = %#v", page.Records)
+	}
+	var summaryError invocationHistoryErrorSummary
+	if err := json.Unmarshal(page.Records[0].Error, &summaryError); err != nil || !summaryError.Truncated {
+		t.Fatalf("summary error = %s, decode error = %v", page.Records[0].Error, err)
 	}
 }
 

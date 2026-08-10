@@ -84,7 +84,7 @@ def test_directory_client_scan_collects_every_page() -> None:
                     records=tuple(
                         directory_module.DirectoryRecord(
                             kind="ABILITY",
-                            ability_ura=f"easynet:///r/example/ability/device.dev-a.test.{index:02d}",
+                            ability_ura=f"easynet:///r/example/ability/system-agent.dev-a.runtime-health.test.{index:02d}",
                             raw={},
                         )
                         for index in range(50)
@@ -97,7 +97,7 @@ def test_directory_client_scan_collects_every_page() -> None:
                 records=(
                     directory_module.DirectoryRecord(
                         kind="ABILITY",
-                        ability_ura="easynet:///r/example/ability/device.dev-a.observe.health",
+                        ability_ura="easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
                         raw={},
                     ),
                 ),

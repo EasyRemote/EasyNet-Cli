@@ -11,8 +11,8 @@ func TestProjectAbilityDescriptorIgnoresNestedDescriptorCompatibilityShape(t *te
 	projection := ProjectAbilityDescriptor(map[string]any{
 		"descriptor": map[string]any{
 			"name":        "skill.list",
-			"owner_ura":   "easynet:///r/localhost/device/node-a",
-			"ability_ura": "easynet:///r/localhost/ability/device.node-a.skill.list",
+			"owner_ura":   "easynet:///r/localhost/agent/device.node-a.skill-management",
+			"ability_ura": "easynet:///r/localhost/ability/system-agent.node-a.skill-management.skill.list",
 			"metadata": map[string]any{
 				"tool_name":    "skill.list",
 				"host_node_id": "node-a",
@@ -37,8 +37,8 @@ func TestProjectAbilityDescriptorIgnoresNestedDescriptorCompatibilityShape(t *te
 
 func TestProjectAbilityDescriptorReadsSummaryNameHintsAndSchema(t *testing.T) {
 	projection := ProjectAbilityDescriptor(map[string]any{
-		"ability_ura": "easynet:///r/localhost/ability/device.node-a.agent.list",
-		"owner_ura":   "easynet:///r/localhost/device/node-a",
+		"ability_ura": "easynet:///r/localhost/ability/system-agent.node-a.agent-management.agent.list",
+		"owner_ura":   "easynet:///r/localhost/agent/device.node-a.agent-management",
 		"name":        "agent.list",
 		"description": "List agents",
 		"hints": map[string]any{
@@ -72,8 +72,8 @@ func TestProjectAbilityDescriptorReadsSummaryNameHintsAndSchema(t *testing.T) {
 
 func TestProjectAbilityDescriptorDoesNotDeriveRetiredNameOrInputSchemaAliases(t *testing.T) {
 	projection := ProjectAbilityDescriptor(map[string]any{
-		"ability_ura": "easynet:///r/localhost/ability/device.node-a.agent.list",
-		"owner_ura":   "easynet:///r/localhost/device/node-a",
+		"ability_ura": "easynet:///r/localhost/ability/system-agent.node-a.agent-management.agent.list",
+		"owner_ura":   "easynet:///r/localhost/agent/device.node-a.agent-management",
 		"namespace":   "agent",
 		"local_name":  "list",
 		"schema_summary": map[string]any{
@@ -93,13 +93,13 @@ func TestProjectAbilityDescriptorRefDelegatesToAddressing(t *testing.T) {
 	ref, err := ProjectAbilityDescriptorRef(
 		context.Background(),
 		NewCanonicalAddressing(),
-		"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+		"easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
 	)
 	if err != nil {
 		t.Fatalf("ProjectAbilityDescriptorRef: %v", err)
 	}
 
-	if ref.AbilityURA != "easynet:///r/example/ability/device.dev-a.observe.health" ||
+	if ref.AbilityURA != "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health" ||
 		ref.Version != "1.0.0" ||
 		ref.DescriptorHash != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ||
 		ref.Action != "invoke" {
@@ -108,12 +108,12 @@ func TestProjectAbilityDescriptorRefDelegatesToAddressing(t *testing.T) {
 }
 
 func TestParseAbilityDescriptorRefUsesCanonicalAxonProjection(t *testing.T) {
-	ref, err := ParseAbilityDescriptorRef("easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke")
+	ref, err := ParseAbilityDescriptorRef("easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke")
 	if err != nil {
 		t.Fatalf("ParseAbilityDescriptorRef: %v", err)
 	}
-	if ref.Raw != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke" ||
-		ref.AbilityURA != "easynet:///r/example/ability/device.dev-a.observe.health" ||
+	if ref.Raw != "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke" ||
+		ref.AbilityURA != "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health" ||
 		ref.Version != "1.0.0" ||
 		ref.DescriptorHash != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ||
 		ref.Action != "invoke" {

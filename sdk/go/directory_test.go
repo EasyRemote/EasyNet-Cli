@@ -46,7 +46,7 @@ func TestDirectoryClientDelegatesResolveToInjectedProvider(t *testing.T) {
 func TestDirectoryClientScanCollectsEveryPage(t *testing.T) {
 	firstPage := make([]DirectoryRecord, 50)
 	for i := range firstPage {
-		firstPage[i] = DirectoryRecord{Kind: "ABILITY", AbilityURA: fmt.Sprintf("easynet:///r/example/ability/device.dev-a.test.%02d", i)}
+		firstPage[i] = DirectoryRecord{Kind: "ABILITY", AbilityURA: fmt.Sprintf("easynet:///r/example/ability/system-agent.dev-a.runtime-health.test.%02d", i)}
 	}
 	provider := &fakeDirectoryProvider{}
 	provider.resolveFunc = func(request DirectoryResolveRequest) (DirectoryResolution, error) {
@@ -60,7 +60,7 @@ func TestDirectoryClientScanCollectsEveryPage(t *testing.T) {
 		case "page-2":
 			return DirectoryResolution{
 				AnswerKind: "RESOLVE_ANSWER_KIND_NON_DISPATCHABLE",
-				Records:    []DirectoryRecord{{Kind: "ABILITY", AbilityURA: "easynet:///r/example/ability/device.dev-a.observe.health"}},
+				Records:    []DirectoryRecord{{Kind: "ABILITY", AbilityURA: "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health"}},
 			}, nil
 		default:
 			t.Fatalf("unexpected cursor %q", request.Cursor)
@@ -86,7 +86,7 @@ func TestDirectoryClientScanCollectsEveryPage(t *testing.T) {
 	if !snapshot.Complete || snapshot.Pages != 2 || snapshot.RecordCount != 51 || len(snapshot.Resolution.Records) != 51 {
 		t.Fatalf("unexpected snapshot: %#v", snapshot)
 	}
-	if got := snapshot.Resolution.Records[50].AbilityURA; got != "easynet:///r/example/ability/device.dev-a.observe.health" {
+	if got := snapshot.Resolution.Records[50].AbilityURA; got != "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health" {
 		t.Fatalf("last page ability = %q", got)
 	}
 	if len(provider.resolveRequests) != 2 || provider.resolveRequests[1].Cursor != "page-2" || provider.resolveRequests[1].Limit != 50 {

@@ -23,14 +23,14 @@ from test_runtime import MemoryRuntimeTransport, canonical_runtime_receipt_pair
 from test_signing import signer_with_signature
 
 
-ABILITY_URA = "easynet:///r/example/ability/device.dev-a.observe.health"
+ABILITY_URA = "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health"
 DESCRIPTOR_REF = f"{ABILITY_URA}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
 HISTORY_ABILITY_URA = (
-    "easynet:///r/example/ability/device.dev-a.invocation.history.list"
+    "easynet:///r/example/ability/system-agent.dev-a.runtime-governance.invocation.history.list"
 )
 HISTORY_DESCRIPTOR_REF = f"{HISTORY_ABILITY_URA}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
 CATALOGUE_ABILITY_URA = (
-    "easynet:///r/example/ability/device.dev-a.meta.list_abilities"
+    "easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_abilities"
 )
 
 
@@ -186,7 +186,13 @@ class AbilityInvocationClientTests(unittest.TestCase):
                 )
 
                 with self.assertRaises(SDKError) as caught:
-                    client.build_invocation(_request(ability_ura=ability_ura))
+                    owner_ura = _identity_transport_for(
+                        ability_ura, public_name
+                    ).identity_json
+                    owner = json.loads(owner_ura)["components"]["owner_ura"]
+                    client.build_invocation(
+                        _request_with(callee_ura=owner, ability_ura=ability_ura)
+                    )
 
                 self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
                 self.assertIn("RuntimeReceiptProvider", caught.exception.message)
@@ -226,7 +232,12 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
 
         with self.assertRaises(SDKError) as caught:
-            client.build_invocation(_request(descriptor_ref=HISTORY_DESCRIPTOR_REF))
+            client.build_invocation(
+                _request_with(
+                    callee_ura="easynet:///r/example/agent/device.dev-a.runtime-governance",
+                    descriptor_ref=HISTORY_DESCRIPTOR_REF,
+                )
+            )
 
         self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
         self.assertIn("RuntimeReceiptProvider", caught.exception.message)
@@ -314,7 +325,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         adapter = InvocationObjectAdapter(client)
         tuple_ = {
             "caller": "easynet:///r/example/agent/alice.sdk",
-            "callee": "easynet:///r/example/device/dev-a",
+            "callee": "easynet:///r/example/agent/device.dev-a.runtime-health",
             "ability": ABILITY_URA,
             "subject": "easynet:///r/example/device/dev-a",
             "nonce": bytes(range(1, 17)),
@@ -361,7 +372,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         assert runtime.seen_draft is not None
         self.assertEqual(
             runtime.seen_draft["callee_ura"],
-            "easynet:///r/example/device/dev-a",
+            "easynet:///r/example/agent/device.dev-a.runtime-health",
         )
         self.assertEqual(
             runtime.seen_draft["subject_ura"],
@@ -393,7 +404,10 @@ class AbilityInvocationClientTests(unittest.TestCase):
             _target_request(descriptor_ref=(DESCRIPTOR_REF))
         )
 
-        self.assertEqual(draft.callee_ura, "easynet:///r/example/device/dev-a")
+        self.assertEqual(
+            draft.callee_ura,
+            "easynet:///r/example/agent/device.dev-a.runtime-health",
+        )
         self.assertEqual(
             draft.subject_ura,
             "easynet:///r/example/device/dev-a",
@@ -472,7 +486,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         assert runtime.seen_draft is not None
         self.assertEqual(
             runtime.seen_draft["callee_ura"],
-            "easynet:///r/example/device/dev-a",
+            "easynet:///r/example/agent/device.dev-a.runtime-health",
         )
         self.assertEqual(
             runtime.seen_draft["subject_ura"],
@@ -520,7 +534,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
             _target_request(ability_ura=ABILITY_URA, subject_ura=""),
             _target_request(
                 ability_ura=(
-                    " easynet:///r/example/ability/device.dev-a.observe.health"
+                    " easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health"
                 )
             ),
             _target_request(
@@ -557,7 +571,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
             client.build_invocation(
                 AbilityCallRequest(
                     caller_ura="",
-                    callee_ura="easynet:///r/example/device/dev-a",
+                    callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
                     subject_ura="easynet:///r/example/device/dev-a",
                     nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
                     causal_context={"form": "none"},
@@ -602,7 +616,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
             metadata={"trace_id": "parent-1"},
         )
         request = child.call_request(
-            callee_ura="easynet:///r/example/device/dev-a",
+            callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
             subject_ura="easynet:///r/example/device/dev-a",
             ability_ura=ABILITY_URA,
             args={"child": True},
@@ -610,7 +624,7 @@ class AbilityInvocationClientTests(unittest.TestCase):
         )
 
         result = child.invoke(
-            callee_ura="easynet:///r/example/device/dev-a",
+            callee_ura="easynet:///r/example/agent/device.dev-a.runtime-health",
             subject_ura="easynet:///r/example/device/dev-a",
             ability_ura=ABILITY_URA,
             args={"child": True},
@@ -756,6 +770,11 @@ def _identity_transport_for(
     descriptor_ref: str | None = None,
 ) -> MemoryAddressingTransport:
     descriptor_ref = descriptor_ref or f"{ability_ura}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+    owner_ura = "easynet:///r/example/agent/device.dev-a.runtime-health"
+    if "/ability/system-agent.dev-a.runtime-governance." in ability_ura:
+        owner_ura = "easynet:///r/example/agent/device.dev-a.runtime-governance"
+    elif "/ability/system-agent.dev-a.runtime-introspection." in ability_ura:
+        owner_ura = "easynet:///r/example/agent/device.dev-a.runtime-introspection"
     transport = MemoryAddressingTransport()
     transport.expected_identity_ura = ability_ura
     transport.identity_json = json.dumps(
@@ -765,11 +784,11 @@ def _identity_transport_for(
             "ura": ability_ura,
             "profile": "axon-strict-v2",
             "components": {
-                "owner_ura": "easynet:///r/example/device/dev-a",
-                "owner_kind": "device",
+                "owner_ura": owner_ura,
+                "owner_kind": "system-agent",
                 "public_name": public_name,
                 "local_registry_ability": (
-                    f"easynet:///r/example/device/dev-a:{public_name}"
+                    public_name
                 ),
                 "namespace": public_name.rsplit(".", 1)[0],
                 "local_name": public_name.rsplit(".", 1)[-1],
@@ -788,7 +807,7 @@ def _identity_transport_for(
             "descriptor_version": "1.0.0",
             "profile": "axon-strict-v2",
             "components": {
-                "owner_ura": "easynet:///r/example/device/dev-a",
+                "owner_ura": owner_ura,
                 "public_name": public_name,
             },
             "metadata": {"grammar_owner": "axon"},
@@ -833,7 +852,7 @@ def _descriptor_request(
     call_mode: str = "rpc",
 ) -> dict[str, object]:
     return {
-        "callee_ura": "easynet:///r/example/device/dev-a",
+        "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
         "ability": "observe.health",
         "call_mode": call_mode,
         "caller_ura": "easynet:///r/example/agent/alice.sdk",
@@ -844,7 +863,7 @@ def _descriptor_request(
 def _request_with(
     *,
     caller_ura: str = "easynet:///r/example/agent/alice.sdk",
-    callee_ura: str = "easynet:///r/example/device/dev-a",
+    callee_ura: str = "easynet:///r/example/agent/device.dev-a.runtime-health",
     subject_ura: str = "easynet:///r/example/device/dev-a",
     nonce_base64: str = "AQIDBAUGBwgJCgsMDQ4PEA==",
     content_type: str = "application/json",
@@ -878,9 +897,9 @@ def _parent_result_with_receipt() -> InvocationResult:
                 "ok": True,
                 "tuple": {
                     "caller_ura": "easynet:///r/example/agent/alice.sdk",
-                    "callee_ura": "easynet:///r/example/device/dev-a",
+                    "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
                     "descriptor_ref": (
-                        "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+                        "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
                     ),
                     "subject_ura": "easynet:///r/example/device/dev-a",
                     "nonce_base64": "AQIDBAUGBwgJCgsMDQ4PEA==",

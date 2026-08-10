@@ -20,7 +20,7 @@ func TestRuntimeClientResolveDescriptorRefRequiresCallMode(t *testing.T) {
 	}
 
 	_, err = runtime.ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
-		CalleeURA: "easynet:///r/example/device/dev-a",
+		CalleeURA: "easynet:///r/example/agent/device.dev-a.runtime-health",
 		Ability:   "observe.health",
 	})
 	var sdkErr *SDKError
@@ -36,7 +36,7 @@ func TestRuntimeClientResolveDescriptorRefAdmitsCompleteGenericRequest(t *testin
 			if err := json.Unmarshal(requestJSON, &seen); err != nil {
 				t.Fatalf("request JSON: %v", err)
 			}
-			return []byte(`{"descriptor_ref":"easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"}`), nil
+			return []byte(`{"descriptor_ref":"easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"}`), nil
 		},
 	})
 	if err != nil {
@@ -81,7 +81,7 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteRequestBeforeTranspor
 		{
 			name: "missing ability",
 			req: RuntimeDescriptorRefRequest{
-				CalleeURA: "easynet:///r/example/device/dev-a",
+				CalleeURA: "easynet:///r/example/agent/device.dev-a.runtime-health",
 				CallMode:  "read",
 			},
 			want: "ability is required",
@@ -89,7 +89,7 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteRequestBeforeTranspor
 		{
 			name: "missing call mode",
 			req: RuntimeDescriptorRefRequest{
-				CalleeURA: "easynet:///r/example/device/dev-a",
+				CalleeURA: "easynet:///r/example/agent/device.dev-a.runtime-health",
 				Ability:   "observe.health",
 			},
 			want: "call_mode is required",
@@ -124,7 +124,7 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBefore
 		{
 			name: "missing caller",
 			req: RuntimeDescriptorRefRequest{
-				CalleeURA:  "easynet:///r/example/device/dev-a",
+				CalleeURA:  "easynet:///r/example/agent/device.dev-a.runtime-health",
 				Ability:    "invocation.history.list",
 				CallMode:   "read",
 				SubjectURA: "easynet:///r/example/device/dev-a",
@@ -135,7 +135,7 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBefore
 		{
 			name: "missing subject",
 			req: RuntimeDescriptorRefRequest{
-				CalleeURA: "easynet:///r/example/device/dev-a",
+				CalleeURA: "easynet:///r/example/agent/device.dev-a.runtime-health",
 				Ability:   "meta.list_abilities",
 				CallMode:  "read",
 				CallerURA: "easynet:///r/example/user/alice",
@@ -146,7 +146,7 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBefore
 		{
 			name: "all-zero caller",
 			req: RuntimeDescriptorRefRequest{
-				CalleeURA:  "easynet:///r/example/device/dev-a",
+				CalleeURA:  "easynet:///r/example/agent/device.dev-a.runtime-health",
 				Ability:    "meta.list_abilities",
 				CallMode:   "read",
 				CallerURA:  "easynet:///r/example/resource/user.00000000-0000-0000-0000-000000000000/session/request",
@@ -158,7 +158,7 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBefore
 		{
 			name: "all-zero subject",
 			req: RuntimeDescriptorRefRequest{
-				CalleeURA:  "easynet:///r/example/device/dev-a",
+				CalleeURA:  "easynet:///r/example/agent/device.dev-a.runtime-health",
 				Ability:    "invocation.history.list",
 				CallMode:   "read",
 				CallerURA:  "easynet:///r/example/user/alice",
@@ -170,7 +170,7 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBefore
 		{
 			name: "unknown provider",
 			req: RuntimeDescriptorRefRequest{
-				CalleeURA:  "easynet:///r/example/device/dev-a",
+				CalleeURA:  "easynet:///r/example/agent/device.dev-a.runtime-health",
 				Ability:    "meta.list_abilities",
 				CallMode:   "read",
 				CallerURA:  "easynet:///r/example/user/alice",
@@ -182,7 +182,7 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBefore
 		{
 			name: "governance ability missing provider",
 			req: RuntimeDescriptorRefRequest{
-				CalleeURA:  "easynet:///r/example/device/dev-a",
+				CalleeURA:  "easynet:///r/example/agent/device.dev-a.runtime-health",
 				Ability:    "meta.list_abilities",
 				CallMode:   "read",
 				CallerURA:  "easynet:///r/example/user/alice",
@@ -193,7 +193,7 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBefore
 		{
 			name: "resource catalogue missing provider",
 			req: RuntimeDescriptorRefRequest{
-				CalleeURA:  "easynet:///r/example/device/dev-a",
+				CalleeURA:  "easynet:///r/example/agent/device.dev-a.runtime-health",
 				Ability:    "meta.list_resources",
 				CallMode:   "read",
 				CallerURA:  "easynet:///r/example/user/alice",
@@ -204,7 +204,7 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBefore
 		{
 			name: "wrong provider for catalogue read",
 			req: RuntimeDescriptorRefRequest{
-				CalleeURA:  "easynet:///r/example/device/dev-a",
+				CalleeURA:  "easynet:///r/example/agent/device.dev-a.runtime-health",
 				Ability:    "meta.list_abilities",
 				CallMode:   "read",
 				CallerURA:  "easynet:///r/example/user/alice",
@@ -216,7 +216,7 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBefore
 		{
 			name: "wrong provider for resource catalogue read",
 			req: RuntimeDescriptorRefRequest{
-				CalleeURA:  "easynet:///r/example/device/dev-a",
+				CalleeURA:  "easynet:///r/example/agent/device.dev-a.runtime-health",
 				Ability:    "meta.list_resources",
 				CallMode:   "read",
 				CallerURA:  "easynet:///r/example/user/alice",
@@ -228,7 +228,7 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBefore
 		{
 			name: "provider for non-governance ability",
 			req: RuntimeDescriptorRefRequest{
-				CalleeURA:  "easynet:///r/example/device/dev-a",
+				CalleeURA:  "easynet:///r/example/agent/device.dev-a.runtime-health",
 				Ability:    "observe.health",
 				CallMode:   "read",
 				CallerURA:  "easynet:///r/example/user/alice",
@@ -240,7 +240,7 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBefore
 		{
 			name: "catalogue provider rejects non-callee authority subject",
 			req: RuntimeDescriptorRefRequest{
-				CalleeURA:  "easynet:///r/example/device/dev-a",
+				CalleeURA:  "easynet:///r/example/agent/device.dev-a.runtime-health",
 				Ability:    "meta.list_abilities",
 				CallMode:   "read",
 				CallerURA:  "easynet:///r/example/user/alice",
@@ -252,7 +252,7 @@ func TestRuntimeClientResolveDescriptorRefRejectsIncompleteProviderRequestBefore
 		{
 			name: "receipt provider rejects catalogue authority subject",
 			req: RuntimeDescriptorRefRequest{
-				CalleeURA:  "easynet:///r/example/device/dev-a",
+				CalleeURA:  "easynet:///r/example/agent/device.dev-a.runtime-health",
 				Ability:    "invocation.history.list",
 				CallMode:   "read",
 				CallerURA:  "easynet:///r/example/user/alice",

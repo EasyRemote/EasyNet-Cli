@@ -85,13 +85,13 @@ class AxonAddressingProviderTests(unittest.TestCase):
 
         self.assertEqual(
             addressing.owner_ability_descriptor_ref(
-                "easynet:///r/example/device/dev-a",
+                "easynet:///r/example/agent/device.dev-a.runtime-health",
                 "observe.health",
                 "1.0.0",
                 descriptor_hash="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 action="invoke",
             ),
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
         )
         self.assertEqual(
             addressing.descriptor_bound_resource_subject_ura(
@@ -101,7 +101,7 @@ class AxonAddressingProviderTests(unittest.TestCase):
             "easynet:///r/example/resource/user.alice/invoke/observe.health",
         )
         descriptor = addressing.project_descriptor_ref(
-            "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
         )
         self.assertEqual(descriptor.profile, "axon-strict-v2")
         self.assertEqual(descriptor.descriptor_version, "1.0.0")
@@ -114,15 +114,15 @@ class AxonAddressingProviderTests(unittest.TestCase):
             descriptor.components,
             {
                 "ability_ura": (
-                    "easynet:///r/example/ability/device.dev-a.observe.health"
+                    "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health"
                 ),
                 "descriptor_version": "1.0.0",
                 "descriptor_hash": (
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                 ),
                 "action": "invoke",
-                "owner_ura": "easynet:///r/example/device/dev-a",
-                "owner_kind": "device",
+                "owner_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+                "owner_kind": "system-agent",
                 "public_name": "observe.health",
                 "local_registry_ability": "observe.health",
             },
@@ -202,17 +202,17 @@ class AxonAddressingProviderTests(unittest.TestCase):
         addressing = environment.addressing_client()
 
         projection = addressing.project_ability_ura(
-            "easynet:///r/example/ability/device.dev-a.observe.health"
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health"
         )
 
         self.assertEqual(projection.kind, "ability")
         self.assertEqual(
             projection.ura,
-            "easynet:///r/example/ability/device.dev-a.observe.health",
+            "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
         )
         self.assertEqual(
             projection.owner_ura,
-            "easynet:///r/example/device/dev-a",
+            "easynet:///r/example/agent/device.dev-a.runtime-health",
         )
         self.assertEqual(projection.public_name, "observe.health")
         environment.close()

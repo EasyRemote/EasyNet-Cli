@@ -77,7 +77,7 @@ func TestRuntimeSigningTransportPreservesPresignedDraft(t *testing.T) {
 	}
 	presigned, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/agent/alice.sdk").
-		WithCalleeURA("easynet:///r/example/device/dev-a").
+		WithCalleeURA("easynet:///r/example/agent/device.dev-a.runtime-health").
 		WithDescriptorRef(runtimeTestDescriptorRef).
 		WithSubjectURA("easynet:///r/example/device/dev-a").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
@@ -166,7 +166,7 @@ func TestRuntimeSigningTransportRejectsUnsignedDraftForDifferentCaller(t *testin
 	}
 	draft, err := NewInvocationBuilder().
 		WithCallerURA("easynet:///r/example/user/bob").
-		WithCalleeURA("easynet:///r/example/device/dev-a").
+		WithCalleeURA("easynet:///r/example/agent/device.dev-a.runtime-health").
 		WithDescriptorRef(runtimeTestDescriptorRef).
 		WithSubjectURA("easynet:///r/example/user/bob").
 		WithNonceBase64("AQIDBAUGBwgJCgsMDQ4PEA==").
@@ -380,7 +380,7 @@ func TestRuntimeSigningTransportPreservesDescriptorResolverCapability(t *testing
 	}
 
 	descriptorRef, err := NewRuntimeClientMust(t, transport).ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
-		CalleeURA:  "easynet:///r/example/device/dev-a",
+		CalleeURA:  "easynet:///r/example/agent/device.dev-a.runtime-health",
 		Ability:    "observe.health",
 		CallMode:   "stream",
 		CallerURA:  "easynet:///r/example/agent/alice.sdk",
@@ -389,7 +389,7 @@ func TestRuntimeSigningTransportPreservesDescriptorResolverCapability(t *testing
 	if err != nil {
 		t.Fatalf("ResolveDescriptorRef: %v", err)
 	}
-	if descriptorRef != "easynet:///r/example/ability/device.dev-a.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!stream" {
+	if descriptorRef != "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!stream" {
 		t.Fatalf("descriptor_ref = %q", descriptorRef)
 	}
 	if seen.CallMode != "stream" || seen.CallerURA != "easynet:///r/example/agent/alice.sdk" {
@@ -412,7 +412,7 @@ func TestRuntimeSigningTransportReportsMissingDescriptorResolver(t *testing.T) {
 	}
 
 	_, err = NewRuntimeClientMust(t, transport).ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
-		CalleeURA: "easynet:///r/example/device/dev-a",
+		CalleeURA: "easynet:///r/example/agent/device.dev-a.runtime-health",
 		Ability:   "observe.health",
 	})
 	if !IsCode(err, ErrInvalidArgument) {

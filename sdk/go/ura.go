@@ -72,9 +72,10 @@ type ParsedAbility struct {
 }
 
 const (
-	abilityOwnerAuthority AbilityOwnerKind = "authority"
-	AbilityOwnerAgent     AbilityOwnerKind = "agent"
-	abilityOwnerDevice    AbilityOwnerKind = "device"
+	abilityOwnerAuthority   AbilityOwnerKind = "authority"
+	AbilityOwnerAgent       AbilityOwnerKind = "agent"
+	abilityOwnerDevice      AbilityOwnerKind = "device"
+	abilityOwnerSystemAgent AbilityOwnerKind = "system-agent"
 )
 
 func IsResourceNamespace(namespace string) bool {

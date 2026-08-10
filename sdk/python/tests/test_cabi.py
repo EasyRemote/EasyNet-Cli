@@ -815,8 +815,8 @@ class CABITransportTests(unittest.TestCase):
         self,
     ) -> None:
         caller_ura = "easynet:///r/acme/device/caller"
-        callee_ura = "easynet:///r/acme/device/provider"
-        target_ability = "easynet:///r/acme/ability/device.provider.er.add"
+        callee_ura = "easynet:///r/acme/agent/device.provider.ability-management"
+        target_ability = "easynet:///r/acme/ability/system-agent.provider.ability-management.er.add"
         target_ref = f"{target_ability}@1.0.0#{'b' * 64}!stream"
 
         class NativeDescriptorRaw(FakeRawCABI):

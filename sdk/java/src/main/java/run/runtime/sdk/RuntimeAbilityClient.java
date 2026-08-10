@@ -131,12 +131,12 @@ public final class RuntimeAbilityClient {
 
     static RuntimeAbilityDispatchPolicy catalogueRead() {
       return new RuntimeAbilityDispatchPolicy(
-          true, "runtime_owner", RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER);
+          true, "runtime_state_read", RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER);
     }
 
     String subjectURA(RuntimeCallContext call, String abilityName) {
-      if ("runtime_owner".equals(subjectPolicy)) {
-        return call.calleeURA();
+      if ("runtime_state_read".equals(subjectPolicy)) {
+        return RuntimeSubjects.runtimeGovernanceReadSubjectURA(call.subjectURA());
       }
       if ("descriptor_bound".equals(subjectPolicy)) {
         return RuntimeSubjects.descriptorBoundSubjectURA(call.subjectURA(), abilityName);
@@ -148,7 +148,7 @@ public final class RuntimeAbilityClient {
       if (RuntimeDescriptorRefRequest.ABILITY_DESCRIPTOR_PROVIDER.equals(descriptorProvider)) {
         return selectedSubjectURA;
       }
-      if ("runtime_owner".equals(subjectPolicy)) {
+      if ("runtime_state_read".equals(subjectPolicy)) {
         return selectedSubjectURA;
       }
       return call.subjectURA();
