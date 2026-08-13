@@ -347,7 +347,12 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_failed_with_context(
 mod tests {
     use serde_json::json;
 
-    use super::{preview_transport_connected, webrtc_failed_with_context, webrtc_sender_ready};
+    use crate::daemon::plugins::remote_desktop::target::TargetResolutionError;
+
+    use super::{
+        media_source_lost, preview_transport_connected, webrtc_failed_with_context,
+        webrtc_sender_ready,
+    };
 
     #[test]
     fn remote_desktop_event_payloads_keep_transport_kind_explicit() {
@@ -379,5 +384,19 @@ mod tests {
         assert_eq!(payload["failure_domain"], json!("target"));
         assert_eq!(payload["frontend_action"], json!("refresh_targets"));
         assert_eq!(payload["binding_id"], json!("tb_test"));
+    }
+
+    #[test]
+    fn media_source_loss_projects_typed_frontend_action() {
+        let (event_type, payload) =
+            media_source_lost(TargetResolutionError::TargetPermissionMissing, 9);
+
+        assert_eq!(event_type, "MEDIA_SOURCE_LOST");
+        assert_eq!(payload["reason"], json!("target_permission_missing"));
+        assert_eq!(payload["failure_domain"], json!("target"));
+        assert_eq!(payload["frontend_action"], json!("request_permission"));
+        assert_eq!(payload["transport_kind"], json!("webrtc"));
+        assert_eq!(payload["media_transport_ready"], json!(false));
+        assert_eq!(payload["transport_epoch"], json!(9));
     }
 }

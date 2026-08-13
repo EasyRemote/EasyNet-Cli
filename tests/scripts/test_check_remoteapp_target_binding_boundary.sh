@@ -10,6 +10,24 @@ mkdir -p "$SANDBOX/plugins/remote-desktop/src/handlers"
 mkdir -p "$SANDBOX/plugins/remote-desktop/src/transport"
 
 cat >"$SANDBOX/plugins/remote-desktop/src/target.rs" <<'RS'
+const ALL_TARGET_RESOLUTION_ERRORS: &[TargetResolutionError] = &[
+    TargetResolutionError::TargetNotFound,
+];
+const ALL_FRONTEND_ACTIONS: &[FrontendAction] = &[
+    FrontendAction::RefreshTargets,
+];
+impl TargetResolutionError {
+    fn frontend_action(self) -> FrontendAction {
+        FrontendAction::RefreshTargets
+    }
+}
+impl RemoteAppTargetError {
+    fn to_axon(&self) -> AxonError {
+        AxonError::new()
+            .with_context("target_reason", self.reason.as_str())
+            .with_context("frontend_action", self.reason.frontend_action().as_str())
+    }
+}
 pub struct ResourceEntryTargetResolver;
 impl RemoteDesktopTargetKind {
     fn target_model(self) -> &'static str {
@@ -51,6 +69,16 @@ impl ResourceEntryTargetResolver {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn every_target_resolution_reason_has_canonical_frontend_action_and_axon_context() {
+        for reason in ALL_TARGET_RESOLUTION_ERRORS {
+            assert!(ALL_FRONTEND_ACTIONS.contains(&reason.frontend_action()));
+        }
+    }
+}
 RS
 
 cat >"$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs" <<'RS'
@@ -88,6 +116,30 @@ RS
 cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_media.rs" <<'RS'
 fn run(binding: Binding, config: Config) {
     start_remote_app_media_source(&DirectWebRtcMediaSourceFactory, binding, MediaStartRequest { config });
+}
+
+fn project_failure(err: anyhow::Error) {
+    err.downcast_ref::<RemoteAppTargetError>();
+}
+RS
+
+cat >"$SANDBOX/plugins/remote-desktop/src/registration.rs" <<'RS'
+fn classify_handler_result(err: anyhow::Error) {
+    err.downcast_ref::<RemoteAppTargetError>();
+}
+RS
+
+cat >"$SANDBOX/plugins/remote-desktop/src/session_events.rs" <<'RS'
+fn media_source_lost(reason: TargetResolutionError) {
+    reason.frontend_action().as_str();
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn media_source_loss_projects_typed_frontend_action() {
+        media_source_lost(TargetResolutionError::TargetNotFound);
+    }
 }
 RS
 
@@ -177,6 +229,14 @@ perl -0pi -e 's/display_scoped_application_window_set/application/g' \
 
 if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp target binding checker accepted missing application target model" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/\\.with_context\\("frontend_action", self\\.reason\\.frontend_action\\(\\)\\.as_str\\(\\)\\)//' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted missing frontend_action Axon context" >&2
   exit 1
 fi
 

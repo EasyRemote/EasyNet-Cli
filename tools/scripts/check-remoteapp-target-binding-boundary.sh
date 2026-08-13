@@ -119,6 +119,36 @@ require '"target_model": target_kind\.target_model\(\)' \
 require 'display_scoped_application_window_set' \
   "$REMOTE_ROOT/target.rs" \
   'application projection must identify the display-scoped application window-set model'
+require 'fn frontend_action\(self\) -> FrontendAction' \
+  "$REMOTE_ROOT/target.rs" \
+  'canonical target failures must map to frontend recovery actions in the target domain'
+require 'ALL_TARGET_RESOLUTION_ERRORS' \
+  "$REMOTE_ROOT/target.rs" \
+  'canonical target failure reasons must be maintained as one explicit table'
+require 'ALL_FRONTEND_ACTIONS' \
+  "$REMOTE_ROOT/target.rs" \
+  'frontend recovery actions must be maintained as one explicit table'
+require 'with_context\("target_reason", self\.reason\.as_str\(\)\)' \
+  "$REMOTE_ROOT/target.rs" \
+  'RemoteAppTargetError must project target_reason into Axon context'
+require 'with_context\("frontend_action", self\.reason\.frontend_action\(\)\.as_str\(\)\)' \
+  "$REMOTE_ROOT/target.rs" \
+  'RemoteAppTargetError must project frontend_action into Axon context'
+require 'every_target_resolution_reason_has_canonical_frontend_action_and_axon_context' \
+  "$REMOTE_ROOT/target.rs" \
+  'target domain must test every canonical target reason projection'
+require 'downcast_ref::<RemoteAppTargetError>' \
+  "$REMOTE_ROOT/registration.rs" \
+  'remote desktop registration must preserve typed target failures instead of string parsing'
+require 'downcast_ref::<RemoteAppTargetError>' \
+  "$REMOTE_ROOT/transport/webrtc_media.rs" \
+  'WebRTC media failure projection must preserve typed target failures instead of string parsing'
+require 'reason\.frontend_action\(\)\.as_str\(\)' \
+  "$REMOTE_ROOT/session_events.rs" \
+  'session events must project target failure frontend_action from typed reason'
+require 'media_source_loss_projects_typed_frontend_action' \
+  "$REMOTE_ROOT/session_events.rs" \
+  'session events must test typed target failure frontend_action projection'
 require 'input_policy_for_binding\(' \
   "$REMOTE_ROOT/transport/webrtc_negotiation.rs" \
   'WebRTC input policy must consume RemoteAppTargetBinding'

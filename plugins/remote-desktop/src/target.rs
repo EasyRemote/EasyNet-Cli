@@ -1563,6 +1563,54 @@ mod tests {
     }
 
     #[test]
+    fn every_target_resolution_reason_has_canonical_frontend_action_and_axon_context() {
+        let mut reason_codes = std::collections::BTreeSet::new();
+        for reason in ALL_TARGET_RESOLUTION_ERRORS {
+            let reason_code = reason.as_str();
+            assert!(
+                reason_codes.insert(reason_code),
+                "{reason_code} must be unique"
+            );
+            assert!(
+                ALL_FRONTEND_ACTIONS.contains(&reason.frontend_action()),
+                "{reason_code} must map to a declared frontend action"
+            );
+
+            let error = RemoteAppTargetError::new(
+                "remote_desktop.create_session",
+                *reason,
+                "synthetic target failure",
+            );
+            let axon = error.to_axon();
+
+            assert_eq!(
+                axon.reason, reason_code,
+                "{reason_code} must be the canonical Axon reason"
+            );
+            assert_eq!(
+                axon.context.get("target_reason").map(String::as_str),
+                Some(reason_code),
+                "{reason_code} must be projected as target_reason context"
+            );
+            assert_eq!(
+                axon.context.get("frontend_action").map(String::as_str),
+                Some(reason.frontend_action().as_str()),
+                "{reason_code} must carry its frontend recovery action"
+            );
+            assert!(
+                !axon.message.is_empty() && axon.message.contains(reason_code),
+                "{reason_code} must remain visible in the diagnostic message"
+            );
+        }
+
+        assert_eq!(
+            reason_codes.len(),
+            ALL_TARGET_RESOLUTION_ERRORS.len(),
+            "canonical target reason table must not contain aliases"
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "remote_desktop.target.verify_target_binding_for_session")]
     fn live_target_proof_refuses_to_run_while_session_store_lock_is_held() {
         let resolver = ResourceEntryTargetResolver;
