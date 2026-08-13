@@ -45,6 +45,14 @@ impl RemoteDesktopTargetKind {
             Self::Application => ResourceType::Application,
         }
     }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_model(self) -> &'static str {
+        match self {
+            Self::Display => "display_surface",
+            Self::Window => "window_surface",
+            Self::Application => "display_scoped_application_window_set",
+        }
+    }
 }
 
 impl TryFrom<ResourceType> for RemoteDesktopTargetKind {
@@ -763,6 +771,7 @@ impl ScopeAudit {
         json!({
             "requested_target_kind": self.requested_target_kind.as_str(),
             "effective_target_kind": self.effective_target_kind.as_str(),
+            "target_model": self.effective_target_kind.target_model(),
             "capture_surface": self.capture_scope.as_str(),
             "input_mode": self.input_scope.as_str(),
             "scope_widened": self.scope_widened,
@@ -1009,6 +1018,7 @@ impl RemoteAppTargetBinding {
         json!({
             "subject_ura": self.subject_ura,
             "target_kind": self.target_kind.as_str(),
+            "target_model": self.target_kind.target_model(),
             "binding_id": self.binding_id,
             "binding_epoch": self.binding_epoch,
             "target_identity_epoch": self.target_identity_epoch,
@@ -1042,6 +1052,8 @@ impl RemoteAppTargetBinding {
     pub(in crate::daemon::plugins::remote_desktop) fn target_bound_event_payload(&self) -> Value {
         json!({
             "subject_ura": self.subject_ura,
+            "target_kind": self.target_kind.as_str(),
+            "target_model": self.target_kind.target_model(),
             "binding_id": self.binding_id,
             "binding_epoch": self.binding_epoch,
             "target_identity_epoch": self.target_identity_epoch,
@@ -1212,6 +1224,7 @@ impl RemoteAppTargetResolver for ResourceEntryTargetResolver {
             "resolved_identity": resolved_identity.to_value(),
             "match_strategy": match_strategy_for_kind(target_kind),
             "capture_backend": capture_backend,
+            "target_model": target_kind.target_model(),
             "display_fallback_used": false,
             "frontend_action": Value::Null,
         });
@@ -1866,6 +1879,10 @@ mod tests {
             .expect("display-scoped application identity must resolve");
         let projection = binding.to_value();
         assert_eq!(projection["target_kind"], json!("application"));
+        assert_eq!(
+            projection["target_model"],
+            json!("display_scoped_application_window_set")
+        );
         assert_eq!(projection["capture_scope"], json!("AppSurface"));
         assert_eq!(projection["input_scope"], json!("view_only"));
         assert_eq!(
@@ -1873,5 +1890,17 @@ mod tests {
             json!("com.apple.Safari")
         );
         assert_eq!(projection["resolved_identity"]["display_id"], json!(1));
+        assert_eq!(
+            binding.scope_audit_value()["target_model"],
+            json!("display_scoped_application_window_set")
+        );
+        assert_eq!(
+            binding.latest_target_diagnostic_value()["target_model"],
+            json!("display_scoped_application_window_set")
+        );
+        assert_eq!(
+            binding.target_bound_event_payload()["target_model"],
+            json!("display_scoped_application_window_set")
+        );
     }
 }

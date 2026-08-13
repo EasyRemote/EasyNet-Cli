@@ -11,6 +11,44 @@ mkdir -p "$SANDBOX/plugins/remote-desktop/src/transport"
 
 cat >"$SANDBOX/plugins/remote-desktop/src/target.rs" <<'RS'
 pub struct ResourceEntryTargetResolver;
+impl RemoteDesktopTargetKind {
+    fn target_model(self) -> &'static str {
+        match self {
+            Self::Application => "display_scoped_application_window_set",
+            _ => "surface",
+        }
+    }
+}
+
+impl RemoteAppTargetBinding {
+    fn to_value(&self) {
+        json!({
+            "target_model": self.target_kind.target_model(),
+        });
+    }
+
+    fn target_bound_event_payload(&self) {
+        json!({
+            "target_model": self.target_kind.target_model(),
+        });
+    }
+}
+
+impl ScopeAudit {
+    fn to_value(&self) {
+        json!({
+            "target_model": self.effective_target_kind.target_model(),
+        });
+    }
+}
+
+impl ResourceEntryTargetResolver {
+    fn resolve_for_session(&self, target_kind: RemoteDesktopTargetKind) {
+        json!({
+            "target_model": target_kind.target_model(),
+        });
+    }
+}
 RS
 
 cat >"$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs" <<'RS'
@@ -111,6 +149,19 @@ perl -0pi -e 's/binding\.target_kind\(\) == RemoteDesktopTargetKind::Display/tru
 
 if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp target binding checker accepted unguarded baseline fallback" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/if true/if binding.target_kind\(\) == RemoteDesktopTargetKind::Display/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+perl -0pi -e 's/display_scoped_application_window_set/application/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted missing application target model" >&2
   exit 1
 fi
 

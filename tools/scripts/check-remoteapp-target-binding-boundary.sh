@@ -16,6 +16,18 @@ require() {
   rg -q -- "$pattern" "$path" || fail "$message"
 }
 
+require_count_at_least() {
+  local pattern="$1"
+  local path="$2"
+  local minimum="$3"
+  local message="$4"
+  local count
+  count="$(rg -o -- "$pattern" "$path" | wc -l | tr -d ' ')"
+  if (( count < minimum )); then
+    fail "$message"
+  fi
+}
+
 reject() {
   local pattern="$1"
   local path="$2"
@@ -88,6 +100,19 @@ require 'RemoteAppMediaSource::DisplayBaseline' \
 require 'TargetResolutionError::DisplayFallbackForbidden' \
   "$REMOTE_ROOT/transport/media_source.rs" \
   'direct WebRTC baseline guard must fail app/window sessions with typed display_fallback_forbidden reason'
+require_count_at_least '"target_model": self\.target_kind\.target_model\(\)' \
+  "$REMOTE_ROOT/target.rs" \
+  2 \
+  'target binding projection and target-bound event must expose the concrete capture target model'
+require '"target_model": self\.effective_target_kind\.target_model\(\)' \
+  "$REMOTE_ROOT/target.rs" \
+  'scope audit projection must expose the effective capture target model'
+require '"target_model": target_kind\.target_model\(\)' \
+  "$REMOTE_ROOT/target.rs" \
+  'target resolver diagnostic must expose the resolved capture target model'
+require 'display_scoped_application_window_set' \
+  "$REMOTE_ROOT/target.rs" \
+  'application projection must identify the display-scoped application window-set model'
 require 'input_policy_for_binding\(' \
   "$REMOTE_ROOT/transport/webrtc_negotiation.rs" \
   'WebRTC input policy must consume RemoteAppTargetBinding'
