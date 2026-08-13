@@ -301,29 +301,33 @@ pub(in crate::daemon::plugins::remote_desktop) fn client_media_state_changed(
     )
 }
 
-/// Build a WebRTC failure payload.
-pub(in crate::daemon::plugins::remote_desktop) fn webrtc_failed(
+/// Build a WebRTC failure payload with typed domain context.
+pub(in crate::daemon::plugins::remote_desktop) fn webrtc_failed_with_context(
     reason: &str,
     message: String,
     transport_epoch: u64,
+    context: Value,
 ) -> RemoteDesktopEventProjection {
-    (
-        "SESSION_FAILED",
-        json!({
-            "reason": reason,
-            "message": message,
-            "transport_kind": TRANSPORT_WEBRTC,
-            "media_transport_ready": false,
-            "transport_epoch": transport_epoch,
-        }),
-    )
+    let mut payload = json!({
+        "reason": reason,
+        "message": message,
+        "transport_kind": TRANSPORT_WEBRTC,
+        "media_transport_ready": false,
+        "transport_epoch": transport_epoch,
+    });
+    if let (Some(payload), Some(context)) = (payload.as_object_mut(), context.as_object()) {
+        for (key, value) in context {
+            payload.insert(key.clone(), value.clone());
+        }
+    }
+    ("SESSION_FAILED", payload)
 }
 
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{preview_transport_connected, webrtc_sender_ready};
+    use super::{preview_transport_connected, webrtc_failed_with_context, webrtc_sender_ready};
 
     #[test]
     fn remote_desktop_event_payloads_keep_transport_kind_explicit() {
@@ -332,5 +336,28 @@ mod tests {
 
         assert_eq!(preview_payload["transport_kind"], json!("invoke_bidi"));
         assert_eq!(webrtc_payload["transport_kind"], json!("webrtc"));
+    }
+
+    #[test]
+    fn webrtc_failure_payload_preserves_typed_target_context() {
+        let (event_type, payload) = webrtc_failed_with_context(
+            "target_identity_changed",
+            "target changed".to_string(),
+            7,
+            json!({
+                "failure_domain": "target",
+                "frontend_action": "refresh_targets",
+                "binding_id": "tb_test",
+            }),
+        );
+
+        assert_eq!(event_type, "SESSION_FAILED");
+        assert_eq!(payload["reason"], json!("target_identity_changed"));
+        assert_eq!(payload["message"], json!("target changed"));
+        assert_eq!(payload["transport_kind"], json!("webrtc"));
+        assert_eq!(payload["transport_epoch"], json!(7));
+        assert_eq!(payload["failure_domain"], json!("target"));
+        assert_eq!(payload["frontend_action"], json!("refresh_targets"));
+        assert_eq!(payload["binding_id"], json!("tb_test"));
     }
 }

@@ -133,11 +133,30 @@ impl RemoteDesktopSessionStore {
         reason: &str,
         message: String,
     ) {
+        self.mark_direct_webrtc_failed_with_context(
+            session_id,
+            epoch,
+            reason,
+            message,
+            Value::Null,
+        );
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_direct_webrtc_failed_with_context(
+        &self,
+        session_id: &str,
+        epoch: TransportEpoch,
+        reason: &str,
+        message: String,
+        context: Value,
+    ) {
         let mut sessions = self.lock();
         let Some(session) = sessions.get_mut(session_id) else {
             return;
         };
-        if let Some(preview_stop) = session.mark_webrtc_failed(epoch, reason, message) {
+        if let Some(preview_stop) =
+            session.mark_webrtc_failed_with_context(epoch, reason, message, context)
+        {
             let _ = preview_stop.send(true);
         }
     }

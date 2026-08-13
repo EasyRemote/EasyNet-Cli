@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rtc::rtp_transceiver::PayloadType;
+use serde_json::{json, Value};
 use tokio::sync::watch;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::media_stream::Track;
@@ -20,7 +21,7 @@ use crate::daemon::plugins::remote_desktop::media::encode::BuiltinH264Config;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, RemoteDesktopTargetKind,
+    RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind,
 };
 #[cfg(feature = "native-media")]
 use crate::daemon::plugins::remote_desktop::transport::webrtc_baseline_media::run_direct_webrtc_recorder_stream;
@@ -55,6 +56,13 @@ enum DirectWebRtcMediaSourcePlan {
     NativeProduction,
     DisplayBaseline,
     Unsupported { reason: &'static str },
+}
+
+#[derive(Debug)]
+struct DirectWebRtcFailureProjection {
+    reason: String,
+    message: String,
+    context: Value,
 }
 
 impl DirectWebRtcMediaSourcePlan {
@@ -166,17 +174,19 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
                         return;
                     }
                     Err(err) => {
-                        let message = err.to_string();
+                        let failure =
+                            direct_webrtc_native_failure_projection(&err, &target_binding);
                         crate::op_event!(
                             component = remote_desktop,
                             kind = direct_webrtc_native_unavailable,
-                            reason = message.clone(),
+                            reason = failure.message.clone(),
                         );
-                        sessions.mark_direct_webrtc_failed(
+                        sessions.mark_direct_webrtc_failed_with_context(
                             &session_id,
                             epoch,
-                            "native_media_pipeline_failed",
-                            message,
+                            &failure.reason,
+                            failure.message,
+                            failure.context,
                         );
                         let _ = peer_connection.close().await;
                         return;
@@ -272,9 +282,47 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
     let _ = peer_connection.close().await;
 }
 
+fn direct_webrtc_native_failure_projection(
+    err: &anyhow::Error,
+    target_binding: &RemoteAppTargetBinding,
+) -> DirectWebRtcFailureProjection {
+    let message = err.to_string();
+    let Some(target_error) = err.downcast_ref::<RemoteAppTargetError>() else {
+        return DirectWebRtcFailureProjection {
+            reason: "native_media_pipeline_failed".to_string(),
+            message,
+            context: Value::Null,
+        };
+    };
+    let target_reason = target_error.reason();
+    DirectWebRtcFailureProjection {
+        reason: target_reason.as_str().to_string(),
+        message,
+        context: json!({
+            "failure_domain": "target",
+            "target_reason": target_reason.as_str(),
+            "frontend_action": target_reason.frontend_action().as_str(),
+            "subject_ura": target_binding.subject_ura(),
+            "target_kind": target_binding.target_kind().as_str(),
+            "binding_id": target_binding.binding_id(),
+            "binding_epoch": target_binding.binding_epoch(),
+            "target_identity_epoch": target_binding.target_identity_epoch(),
+            "target_geometry_revision": target_binding.target_geometry_revision(),
+            "media_source_epoch": target_binding.media_source_epoch(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use serde_json::json;
+
+    use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
+    use crate::daemon::plugins::remote_desktop::target::{
+        RemoteAppTargetResolver, ResourceEntryTargetResolver, TargetResolutionError,
+    };
 
     #[test]
     fn non_native_window_and_application_sources_fail_closed_before_display_baseline() {
@@ -300,5 +348,79 @@ mod tests {
             ),
             DirectWebRtcMediaSourcePlan::DisplayBaseline
         );
+    }
+
+    #[test]
+    fn native_target_failure_preserves_frontend_recovery_context() {
+        let binding = ResourceEntryTargetResolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &ResourceEntry {
+                    resource_ura: "easynet:///r/acme/resource/window.7".to_string(),
+                    owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
+                    kind: ResourceType::Window,
+                    binding: ResourceBinding::LocalDevice,
+                    hardware_id: "window:7".to_string(),
+                    display_name: "Editor".to_string(),
+                    metadata: json!({
+                        "platform": "macos",
+                        "backend": "macos_core_graphics",
+                        "window_id": 7,
+                        "pid": 9001,
+                        "bundle_id": "com.example.Editor",
+                    }),
+                    first_seen_at: "2026-06-01T00:00:00Z".to_string(),
+                },
+                "view_only",
+                1,
+            )
+            .expect("window binding");
+        let err = anyhow::Error::new(RemoteAppTargetError::new(
+            "remote_desktop.set_description",
+            TargetResolutionError::TargetIdentityChanged,
+            "live capture target no longer matches committed binding",
+        ));
+
+        let failure = direct_webrtc_native_failure_projection(&err, &binding);
+
+        assert_eq!(failure.reason, "target_identity_changed");
+        assert_eq!(failure.context["failure_domain"], json!("target"));
+        assert_eq!(failure.context["frontend_action"], json!("refresh_targets"));
+        assert_eq!(
+            failure.context["subject_ura"],
+            json!("easynet:///r/acme/resource/window.7")
+        );
+        assert_eq!(failure.context["target_kind"], json!("window"));
+        assert_eq!(failure.context["binding_epoch"], json!(1));
+    }
+
+    #[test]
+    fn native_non_target_failure_stays_pipeline_failure() {
+        let binding = ResourceEntryTargetResolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &ResourceEntry {
+                    resource_ura: "easynet:///r/acme/resource/display.1".to_string(),
+                    owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
+                    kind: ResourceType::Display,
+                    binding: ResourceBinding::LocalDevice,
+                    hardware_id: "display:1".to_string(),
+                    display_name: "Display".to_string(),
+                    metadata: json!({
+                        "display_id": 1,
+                    }),
+                    first_seen_at: "2026-06-01T00:00:00Z".to_string(),
+                },
+                "view_only",
+                1,
+            )
+            .expect("display binding");
+        let err = anyhow::anyhow!("encoder queue closed");
+
+        let failure = direct_webrtc_native_failure_projection(&err, &binding);
+
+        assert_eq!(failure.reason, "native_media_pipeline_failed");
+        assert_eq!(failure.message, "encoder queue closed");
+        assert!(failure.context.is_null());
     }
 }

@@ -663,11 +663,12 @@ impl RemoteDesktopSession {
     }
 
     /// Mark a non-terminal session failed and record the failure event.
-    pub(in crate::daemon::plugins::remote_desktop) fn mark_webrtc_failed(
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_webrtc_failed_with_context(
         &mut self,
         epoch: TransportEpoch,
         reason: &str,
         message: String,
+        context: serde_json::Value,
     ) -> Option<watch::Sender<bool>> {
         if !self.transport.accepts_epoch(epoch) {
             return None;
@@ -679,10 +680,11 @@ impl RemoteDesktopSession {
         let preview_stop = self.transport.detach_preview_transport();
         self.signaling.set_webrtc_error(reason);
         self.touch();
-        self.push_projected_event(session_events::webrtc_failed(
+        self.push_projected_event(session_events::webrtc_failed_with_context(
             reason,
             message,
             epoch.value(),
+            context,
         ));
         self.event_log.close();
         preview_stop
