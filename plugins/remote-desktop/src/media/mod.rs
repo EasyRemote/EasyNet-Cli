@@ -540,6 +540,9 @@ fn non_empty_metadata_str(entry: &ResourceEntry, key: &str) -> bool {
 mod tests {
     use super::*;
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry};
+    use crate::daemon::plugins::remote_desktop::target::{
+        RemoteAppTargetResolver, ResourceEntryTargetResolver,
+    };
     use serde_json::json;
 
     fn xcap_display_entry() -> ResourceEntry {
@@ -575,6 +578,34 @@ mod tests {
         }
     }
 
+    fn discovered_application_entry(backend: &str) -> ResourceEntry {
+        ResourceEntry {
+            resource_ura: "easynet:///r/acme/resource/application.test".into(),
+            owner_agent: "easynet:///r/acme/agent/device.01DEV.media".into(),
+            kind: ResourceType::Application,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: format!("application:{backend}:1:com.apple.Safari"),
+            display_name: "Safari on display 1".into(),
+            metadata: json!({
+                "backend": backend,
+                "capture_target": "application",
+                "display_id": 1,
+                "app_name": "Safari",
+                "bundle_id": "com.apple.Safari",
+                "resolved_window_ids": [10, 11],
+                "window_set_epoch": 42,
+                "primary_pid": 123,
+            }),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        }
+    }
+
+    fn binding_for(entry: &ResourceEntry) -> RemoteAppTargetBinding {
+        ResourceEntryTargetResolver
+            .resolve_for_session("remote_desktop.create_session", entry, "view_only", 1)
+            .expect("resource entry resolves into a session target binding")
+    }
+
     #[test]
     fn selects_only_available_xcap_display_backend() {
         let backend = select_builtin_h264_backend(&xcap_display_entry()).unwrap();
@@ -599,6 +630,26 @@ mod tests {
         assert!(
             backend.is_none_or(|backend| backend.backend_id() != XCAP_OPENH264_WEBRTC_BACKEND_ID)
         );
+    }
+
+    #[test]
+    fn direct_webrtc_binding_never_uses_xcap_fallback_for_window_or_application() {
+        for entry in [
+            discovered_window_entry("xcap"),
+            discovered_application_entry("macos_core_graphics"),
+        ] {
+            let binding = binding_for(&entry);
+            let backend = webrtc_transport_backend_for_binding(&binding);
+
+            assert!(
+                backend
+                    .is_none_or(|backend| backend.backend_id() != XCAP_OPENH264_WEBRTC_BACKEND_ID),
+                "direct WebRTC app/window sessions must use native binding capture or fail typed; \
+                 target_kind={}, backend={:?}",
+                binding.target_kind().as_str(),
+                backend.map(|backend| backend.backend_id())
+            );
+        }
     }
 
     #[test]
