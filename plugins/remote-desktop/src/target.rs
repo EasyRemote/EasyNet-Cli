@@ -606,8 +606,7 @@ impl RemoteAppTargetBinding {
                 self.native_locator.window_id.is_some()
                     && (self.native_locator.pid.is_some()
                         || self.native_locator.app_identity.is_some()
-                        || self.native_locator.bundle_id.is_some()
-                        || self.native_locator.app_name.is_some())
+                        || self.native_locator.bundle_id.is_some())
             }
             RemoteDesktopTargetKind::Display => true,
         }
@@ -839,12 +838,11 @@ fn validate_required_identity(
             if metadata_i64(entry, "pid").is_none()
                 && metadata_string(entry, "app_identity").is_none()
                 && metadata_string(entry, "bundle_id").is_none()
-                && metadata_string(entry, "app_name").is_none()
             {
                 return Err(RemoteAppTargetError::new(
                     ability,
                     TargetResolutionError::TargetMetadataIncomplete,
-                    "window targets require owner pid, app_identity, bundle_id, or app_name in addition to window_id",
+                    "window targets require owner pid, app_identity, or bundle_id in addition to window_id; app_name/title are diagnostic hints, not production routing identity",
                 ));
             }
             Ok(())
@@ -1027,6 +1025,60 @@ mod tests {
                 1,
             )
             .is_ok());
+    }
+
+    #[test]
+    fn window_requires_stable_owner_identity_not_app_name_only() {
+        let resolver = ResourceEntryTargetResolver;
+        let err = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Window,
+                    json!({
+                        "window_id": 7,
+                        "app_name": "Terminal",
+                        "title": "same-looking shell",
+                    }),
+                ),
+                "view_only",
+                1,
+            )
+            .unwrap_err();
+        assert_eq!(
+            err.reason(),
+            TargetResolutionError::TargetMetadataIncomplete
+        );
+        assert!(
+            err.to_string().contains("app_name/title are diagnostic"),
+            "unexpected error: {err}"
+        );
+
+        let binding = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Window,
+                    json!({
+                        "window_id": 7,
+                        "pid": 4242,
+                        "app_name": "Terminal",
+                        "title": "same-looking shell",
+                    }),
+                ),
+                "view_only",
+                1,
+            )
+            .expect("window_id plus pid is stable enough for session binding");
+        let projection = binding.to_value();
+        assert_eq!(projection["target_kind"], json!("window"));
+        assert_eq!(projection["native_locator"]["window_id"], json!(7));
+        assert_eq!(projection["native_locator"]["pid"], json!(4242));
+        assert_eq!(projection["native_locator"]["app_name"], json!("Terminal"));
+        assert_eq!(
+            projection["native_locator"]["title"],
+            json!("same-looking shell")
+        );
     }
 
     #[test]
