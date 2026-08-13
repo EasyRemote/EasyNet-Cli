@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="${CHECK_REMOTEAPP_TARGET_BINDING_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 REMOTE_ROOT="$ROOT/plugins/remote-desktop/src"
+SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 
 fail() {
   printf 'check-remoteapp-target-binding-boundary: %s\n' "$1" >&2
@@ -38,6 +39,12 @@ reject() {
 }
 
 [[ -d "$REMOTE_ROOT" ]] || fail "missing remote desktop source root"
+[[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
+
+require 'E2E-05 stale window fail-closed' "$SPEC" \
+  'SPEC must retain stale window fail-closed acceptance'
+require 'E2E-06 no media re-resolution' "$SPEC" \
+  'SPEC must retain no media re-resolution acceptance'
 
 is_test_context() {
   local file="$1"
@@ -73,6 +80,18 @@ require 'verify_target_binding_for_session\(' \
 require 'RemoteDesktopSessionCreationWorkflow::start' \
   "$REMOTE_ROOT/handlers/create_session.rs" \
   'create_session handler must delegate pre-row lifecycle to RemoteDesktopSessionCreationWorkflow'
+require 'create_session_rejects_stale_window_inventory_before_session_insert' \
+  "$REMOTE_ROOT/handlers/create_session.rs" \
+  'E2E-05 must have a stale window create_session fail-closed test'
+require 'target_not_found' \
+  "$REMOTE_ROOT/handlers/create_session.rs" \
+  'E2E-05 stale target failure must expose target_not_found'
+require 'frontend_action=refresh_targets' \
+  "$REMOTE_ROOT/handlers/create_session.rs" \
+  'E2E-05 stale target failure must return refresh_targets frontend action'
+require '!sessions\.contains_key\("rd-stale-window"\)' \
+  "$REMOTE_ROOT/handlers/create_session.rs" \
+  'E2E-05 stale target failure must prove no active session row is inserted'
 require 'session\.target_binding\(\)\.clone\(\)' \
   "$REMOTE_ROOT/transport/webrtc_negotiation.rs" \
   'WebRTC negotiation must consume the session-owned target binding'
@@ -88,6 +107,15 @@ require 'fn start_from_binding\(' \
 require 'fn start_remote_app_media_source\(' \
   "$REMOTE_ROOT/transport/media_source.rs" \
   'direct WebRTC media source selection must expose an injectable factory boundary'
+require 'fake_factory_receives_session_owned_binding_without_resource_re_resolution' \
+  "$REMOTE_ROOT/transport/media_source.rs" \
+  'E2E-06 must prove fake media-source factory receives the stored binding_id'
+require 'seen_binding_id' \
+  "$REMOTE_ROOT/transport/media_source.rs" \
+  'E2E-06 fake media-source factory must record the committed session binding_id'
+require 'Some\(expected_binding_id\)' \
+  "$REMOTE_ROOT/transport/media_source.rs" \
+  'E2E-06 fake media-source factory must assert the stored binding_id is preserved'
 require 'start_remote_app_media_source\(' \
   "$REMOTE_ROOT/transport/webrtc_media.rs" \
   'direct WebRTC media loop must call through the injectable media-source boundary'

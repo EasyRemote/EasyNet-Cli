@@ -8,6 +8,12 @@ trap 'rm -rf "$SANDBOX"' EXIT
 
 mkdir -p "$SANDBOX/plugins/remote-desktop/src/handlers"
 mkdir -p "$SANDBOX/plugins/remote-desktop/src/transport"
+mkdir -p "$SANDBOX/docs/design"
+
+cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
+| E2E-05 stale window fail-closed | stale window/application targets must fail closed before active session insertion |
+| E2E-06 no media re-resolution | native media startup must consume the committed target binding instead of re-resolving a ResourceEntry |
+MD
 
 cat >"$SANDBOX/plugins/remote-desktop/src/target.rs" <<'RS'
 const ALL_TARGET_RESOLUTION_ERRORS: &[TargetResolutionError] = &[
@@ -84,6 +90,16 @@ RS
 cat >"$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs" <<'RS'
 fn create_session() {
     RemoteDesktopSessionCreationWorkflow::start();
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn create_session_rejects_stale_window_inventory_before_session_insert() {
+        assert!(err.to_string().contains("target_not_found"));
+        assert!(err.to_string().contains("frontend_action=refresh_targets"));
+        assert!(!sessions.contains_key("rd-stale-window"));
+    }
 }
 RS
 
@@ -181,7 +197,62 @@ impl RemoteAppMediaSourceFactory for DirectWebRtcMediaSourceFactory {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn fake_factory_receives_session_owned_binding_without_resource_re_resolution() {
+        let seen_binding_id = Some(expected_binding_id);
+        assert_eq!(seen_binding_id, Some(expected_binding_id));
+    }
+}
 RS
+
+CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+perl -0pi -e 's/create_session_rejects_stale_window_inventory_before_session_insert/create_session_accepts_stale_window_inventory/' \
+  "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted missing stale-window fail-closed test" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/create_session_accepts_stale_window_inventory/create_session_rejects_stale_window_inventory_before_session_insert/' \
+  "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
+
+perl -0pi -e 's/assert!\(!sessions\.contains_key\("rd-stale-window"\)\);/assert!(sessions.contains_key("rd-stale-window"));/' \
+  "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted stale target session insertion" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/assert!\(sessions\.contains_key\("rd-stale-window"\)\);/assert!(!sessions.contains_key("rd-stale-window"));/' \
+  "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
+
+perl -0pi -e 's/fake_factory_receives_session_owned_binding_without_resource_re_resolution/fake_factory_re_resolves_resource_entry/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted missing no-re-resolution media factory test" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/fake_factory_re_resolves_resource_entry/fake_factory_receives_session_owned_binding_without_resource_re_resolution/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+perl -0pi -e 's/Some\(expected_binding_id\)/None/g' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted media factory without stored binding assertion" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/None/Some(expected_binding_id)/g' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
 
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 
