@@ -40,19 +40,28 @@ fn media(binding: Binding) {
 RS
 
 cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_media.rs" <<'RS'
-enum DirectWebRtcMediaSourcePlan {
-    DisplayBaseline,
-    Unsupported { reason: &'static str },
+fn run(binding: Binding, config: Config) {
+    DirectWebRtcMediaSourceFactory.start_from_binding(binding, MediaStartRequest { config });
+}
+RS
+
+cat >"$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs" <<'RS'
+trait RemoteAppMediaSourceFactory {
+    fn start_from_binding();
 }
 
-impl DirectWebRtcMediaSourcePlan {
-    fn from_backend_state(target_kind: RemoteDesktopTargetKind) -> Self {
-        if target_kind == RemoteDesktopTargetKind::Display {
-            DirectWebRtcMediaSourcePlan::DisplayBaseline
+enum RemoteAppMediaSource {
+    DisplayBaseline,
+}
+
+struct DirectWebRtcMediaSourceFactory;
+
+impl RemoteAppMediaSourceFactory for DirectWebRtcMediaSourceFactory {
+    fn start_from_binding(binding: Binding) -> Result<RemoteAppMediaSource, RemoteAppTargetError> {
+        if binding.target_kind() == RemoteDesktopTargetKind::Display {
+            Ok(RemoteAppMediaSource::DisplayBaseline)
         } else {
-            DirectWebRtcMediaSourcePlan::Unsupported {
-                reason: "display_fallback_forbidden",
-            }
+            Err(TargetResolutionError::DisplayFallbackForbidden.into())
         }
     }
 }
@@ -87,8 +96,8 @@ fi
 perl -0pi -e 's/\nfn bad_resolver\(\) \{\n    ResourceEntryTargetResolver\.resolve_for_session\(\);\n\}\n//' \
   "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_negotiation.rs"
 
-perl -0pi -e 's/target_kind == RemoteDesktopTargetKind::Display/true/' \
-  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_media.rs"
+perl -0pi -e 's/binding\.target_kind\(\) == RemoteDesktopTargetKind::Display/true/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
 
 if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp target binding checker accepted unguarded baseline fallback" >&2

@@ -21,7 +21,11 @@ use crate::daemon::plugins::remote_desktop::media::encode::BuiltinH264Config;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind,
+    RemoteAppTargetBinding, RemoteAppTargetError,
+};
+use crate::daemon::plugins::remote_desktop::transport::media_source::{
+    DirectWebRtcMediaSourceFactory, MediaStartRequest, RemoteAppMediaSource,
+    RemoteAppMediaSourceFactory,
 };
 #[cfg(feature = "native-media")]
 use crate::daemon::plugins::remote_desktop::transport::webrtc_baseline_media::run_direct_webrtc_recorder_stream;
@@ -51,68 +55,11 @@ pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcSession {
     pub(in crate::daemon::plugins::remote_desktop) config: BuiltinH264Config,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DirectWebRtcMediaSourcePlan {
-    NativeProduction,
-    DisplayBaseline,
-    Unsupported { reason: &'static str },
-}
-
 #[derive(Debug)]
 struct DirectWebRtcFailureProjection {
     reason: String,
     message: String,
     context: Value,
-}
-
-impl DirectWebRtcMediaSourcePlan {
-    fn for_binding(config: &BuiltinH264Config, binding: &RemoteAppTargetBinding) -> Self {
-        Self::from_backend_state(config.backend.production_ready(), binding.target_kind())
-    }
-
-    fn from_backend_state(production_ready: bool, target_kind: RemoteDesktopTargetKind) -> Self {
-        if production_ready {
-            #[cfg(target_os = "macos")]
-            {
-                return Self::NativeProduction;
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                return Self::Unsupported {
-                    reason: "native_media_unavailable",
-                };
-            }
-        }
-        if target_kind == RemoteDesktopTargetKind::Display {
-            Self::DisplayBaseline
-        } else {
-            Self::Unsupported {
-                reason: "display_fallback_forbidden",
-            }
-        }
-    }
-
-    fn unsupported_message(self, binding: &RemoteAppTargetBinding) -> String {
-        match self {
-            Self::Unsupported {
-                reason: "display_fallback_forbidden",
-            } => format!(
-                "direct WebRTC baseline capture is display-only and cannot satisfy a {} target binding",
-                binding.target_kind().as_str()
-            ),
-            Self::Unsupported {
-                reason: "native_media_unavailable",
-            } => format!(
-                "direct WebRTC native media is required for a production-ready {} target binding on this platform",
-                binding.target_kind().as_str()
-            ),
-            Self::Unsupported { reason } => format!(
-                "direct WebRTC media source is unavailable for {} target binding; reason={reason}",
-                binding.target_kind().as_str()
-            ),
-            Self::NativeProduction | Self::DisplayBaseline => String::new(),
-        }
-    }
 }
 
 pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_loop(
@@ -151,8 +98,10 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
         let _ = peer_connection.close().await;
         return;
     };
-    match DirectWebRtcMediaSourcePlan::for_binding(&config, &target_binding) {
-        DirectWebRtcMediaSourcePlan::NativeProduction => {
+    let source = DirectWebRtcMediaSourceFactory
+        .start_from_binding(&target_binding, MediaStartRequest { config: &config });
+    match source {
+        Ok(RemoteAppMediaSource::NativeProduction) => {
             #[cfg(target_os = "macos")]
             {
                 let native_inputs =
@@ -205,18 +154,19 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
                 return;
             }
         }
-        DirectWebRtcMediaSourcePlan::Unsupported { reason } => {
-            let plan = DirectWebRtcMediaSourcePlan::Unsupported { reason };
-            sessions.mark_direct_webrtc_failed(
+        Err(err) => {
+            let failure = direct_webrtc_target_failure_projection(&err, &target_binding);
+            sessions.mark_direct_webrtc_failed_with_context(
                 &session_id,
                 epoch,
-                reason,
-                plan.unsupported_message(&target_binding),
+                &failure.reason,
+                failure.message,
+                failure.context,
             );
             let _ = peer_connection.close().await;
             return;
         }
-        DirectWebRtcMediaSourcePlan::DisplayBaseline => {}
+        Ok(RemoteAppMediaSource::DisplayBaseline) => {}
     }
 
     let baseline_inputs = BaselineMediaInputs {
@@ -282,22 +232,14 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
     let _ = peer_connection.close().await;
 }
 
-fn direct_webrtc_native_failure_projection(
-    err: &anyhow::Error,
+fn direct_webrtc_target_failure_projection(
+    target_error: &RemoteAppTargetError,
     target_binding: &RemoteAppTargetBinding,
 ) -> DirectWebRtcFailureProjection {
-    let message = err.to_string();
-    let Some(target_error) = err.downcast_ref::<RemoteAppTargetError>() else {
-        return DirectWebRtcFailureProjection {
-            reason: "native_media_pipeline_failed".to_string(),
-            message,
-            context: Value::Null,
-        };
-    };
     let target_reason = target_error.reason();
     DirectWebRtcFailureProjection {
         reason: target_reason.as_str().to_string(),
-        message,
+        message: target_error.to_string(),
         context: json!({
             "failure_domain": "target",
             "target_reason": target_reason.as_str(),
@@ -313,6 +255,21 @@ fn direct_webrtc_native_failure_projection(
     }
 }
 
+fn direct_webrtc_native_failure_projection(
+    err: &anyhow::Error,
+    target_binding: &RemoteAppTargetBinding,
+) -> DirectWebRtcFailureProjection {
+    let message = err.to_string();
+    let Some(target_error) = err.downcast_ref::<RemoteAppTargetError>() else {
+        return DirectWebRtcFailureProjection {
+            reason: "native_media_pipeline_failed".to_string(),
+            message,
+            context: Value::Null,
+        };
+    };
+    direct_webrtc_target_failure_projection(target_error, target_binding)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,32 +280,6 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::target::{
         RemoteAppTargetResolver, ResourceEntryTargetResolver, TargetResolutionError,
     };
-
-    #[test]
-    fn non_native_window_and_application_sources_fail_closed_before_display_baseline() {
-        for target_kind in [
-            RemoteDesktopTargetKind::Window,
-            RemoteDesktopTargetKind::Application,
-        ] {
-            assert_eq!(
-                DirectWebRtcMediaSourcePlan::from_backend_state(false, target_kind),
-                DirectWebRtcMediaSourcePlan::Unsupported {
-                    reason: "display_fallback_forbidden"
-                }
-            );
-        }
-    }
-
-    #[test]
-    fn display_source_may_use_baseline_when_native_backend_is_not_selected() {
-        assert_eq!(
-            DirectWebRtcMediaSourcePlan::from_backend_state(
-                false,
-                RemoteDesktopTargetKind::Display
-            ),
-            DirectWebRtcMediaSourcePlan::DisplayBaseline
-        );
-    }
 
     #[test]
     fn native_target_failure_preserves_frontend_recovery_context() {

@@ -64,17 +64,20 @@ require 'session\.target_binding\(\)\.clone\(\)' \
 require 'target_for_binding\(' \
   "$REMOTE_ROOT/transport/webrtc_native_media.rs" \
   'native media must start from RemoteAppTargetBinding'
-require 'enum DirectWebRtcMediaSourcePlan' \
-  "$REMOTE_ROOT/transport/webrtc_media.rs" \
-  'direct WebRTC media source selection must be an explicit plan'
-require 'if target_kind == RemoteDesktopTargetKind::Display' \
-  "$REMOTE_ROOT/transport/webrtc_media.rs" \
+require 'trait RemoteAppMediaSourceFactory' \
+  "$REMOTE_ROOT/transport/media_source.rs" \
+  'direct WebRTC media source selection must use the RemoteAppMediaSourceFactory boundary'
+require 'fn start_from_binding\(' \
+  "$REMOTE_ROOT/transport/media_source.rs" \
+  'direct WebRTC media source selection must start from RemoteAppTargetBinding'
+require 'if binding\.target_kind\(\) == RemoteDesktopTargetKind::Display' \
+  "$REMOTE_ROOT/transport/media_source.rs" \
   'direct WebRTC display baseline plan must be guarded as display-only'
-require 'DirectWebRtcMediaSourcePlan::DisplayBaseline' \
-  "$REMOTE_ROOT/transport/webrtc_media.rs" \
-  'direct WebRTC display baseline must be an explicit media-source plan'
-require 'display_fallback_forbidden' \
-  "$REMOTE_ROOT/transport/webrtc_media.rs" \
+require 'RemoteAppMediaSource::DisplayBaseline' \
+  "$REMOTE_ROOT/transport/media_source.rs" \
+  'direct WebRTC display baseline must be an explicit media-source selection'
+require 'TargetResolutionError::DisplayFallbackForbidden' \
+  "$REMOTE_ROOT/transport/media_source.rs" \
   'direct WebRTC baseline guard must fail app/window sessions with typed display_fallback_forbidden reason'
 require 'input_policy_for_binding\(' \
   "$REMOTE_ROOT/transport/webrtc_negotiation.rs" \

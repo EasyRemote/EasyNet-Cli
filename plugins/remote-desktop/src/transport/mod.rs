@@ -11,6 +11,7 @@
 // modules respectively.
 
 mod manager;
+mod media_source;
 mod terminal;
 mod webrtc;
 mod webrtc_baseline_media;
