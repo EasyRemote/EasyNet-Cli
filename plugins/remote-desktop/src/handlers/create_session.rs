@@ -21,7 +21,7 @@ use crate::daemon::plugins::remote_desktop::session::{
 use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::prune_inactive_sessions;
 use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetResolver, ResourceEntryTargetResolver,
+    verify_target_binding_for_session, RemoteAppTargetResolver, ResourceEntryTargetResolver,
 };
 use crate::daemon::plugins::remote_desktop::view::serialize_session_with_token;
 
@@ -58,6 +58,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         &mode,
         1,
     )?;
+    verify_target_binding_for_session(ABILITY_CREATE_SESSION, &target_binding)?;
     let session = RemoteDesktopSession::new(RemoteDesktopSessionInit {
         session_id: session_id.clone(),
         session_token,

@@ -672,6 +672,39 @@ pub(in crate::daemon::plugins::remote_desktop) trait RemoteAppTargetResolver {
     ) -> Result<RemoteAppTargetBinding, RemoteAppTargetError>;
 }
 
+pub(in crate::daemon::plugins::remote_desktop) fn verify_target_binding_for_session(
+    ability: &'static str,
+    binding: &RemoteAppTargetBinding,
+) -> Result<(), RemoteAppTargetError> {
+    platform_live_resolution::verify_target_binding_for_session(ability, binding)
+}
+
+#[cfg(all(target_os = "macos", feature = "native-media"))]
+mod platform_live_resolution {
+    use super::{RemoteAppTargetBinding, RemoteAppTargetError};
+
+    pub(super) fn verify_target_binding_for_session(
+        ability: &'static str,
+        binding: &RemoteAppTargetBinding,
+    ) -> Result<(), RemoteAppTargetError> {
+        crate::daemon::plugins::remote_desktop::screencapturekit_capture::verify_target_binding_for_session(
+            ability, binding,
+        )
+    }
+}
+
+#[cfg(not(all(target_os = "macos", feature = "native-media")))]
+mod platform_live_resolution {
+    use super::{RemoteAppTargetBinding, RemoteAppTargetError};
+
+    pub(super) fn verify_target_binding_for_session(
+        _ability: &'static str,
+        _binding: &RemoteAppTargetBinding,
+    ) -> Result<(), RemoteAppTargetError> {
+        Ok(())
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct ResourceEntryTargetResolver;
 

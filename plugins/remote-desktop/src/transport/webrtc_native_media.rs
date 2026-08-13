@@ -15,6 +15,7 @@ use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::peer_connection::PeerConnection;
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions;
+use crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION;
 use crate::daemon::plugins::remote_desktop::media::encode::BuiltinH264Config;
 use crate::daemon::plugins::remote_desktop::media::native::{
     is_webrtc_sender_backpressure, latest_native_rtp_units, native_capture_dimensions,
@@ -82,7 +83,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
         config,
     } = *inputs;
 
-    let capture_target = target_for_binding(target_binding)?;
+    let capture_target = target_for_binding(ABILITY_SET_DESCRIPTION, target_binding)?;
     let (req_width, req_height) =
         native_capture_dimensions(options, || Ok(capture_target.native_dimensions()))?;
     let fps = config.fps.max(1);

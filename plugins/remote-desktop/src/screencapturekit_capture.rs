@@ -35,9 +35,6 @@ use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, RemoteDesktopTargetKind,
-};
 use block2::RcBlock;
 use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2::rc::Retained;
@@ -51,7 +48,9 @@ use objc2_screen_capture_kit::{
     SCStreamConfiguration, SCStreamOutput, SCStreamOutputType, SCWindow,
 };
 
-const REASON_PERMISSION_DENIED: &str = "permission_denied";
+use crate::daemon::plugins::remote_desktop::target::{
+    RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind, TargetResolutionError,
+};
 
 /// ScreenCaptureKit queue depth for live remote desktop.
 ///
@@ -145,7 +144,9 @@ impl StreamOutputDelegate {
 
 /// Synchronously enumerate shareable content (bridges the async
 /// SCShareableContent completion handler).
-fn shareable_content() -> anyhow::Result<Retained<SCShareableContent>> {
+fn shareable_content(
+    ability: &'static str,
+) -> Result<Retained<SCShareableContent>, RemoteAppTargetError> {
     let (tx, rx) = sync_channel::<Result<Retained<SCShareableContent>, String>>(1);
     let tx = Mutex::new(Some(tx));
 
@@ -179,8 +180,16 @@ fn shareable_content() -> anyhow::Result<Retained<SCShareableContent>> {
     // recv with timeout is sufficient; we are not blocking its queue.
     match rx.recv_timeout(Duration::from_secs(10)) {
         Ok(Ok(displays)) => Ok(displays),
-        Ok(Err(msg)) => anyhow::bail!("{msg}"),
-        Err(_) => anyhow::bail!("SCShareableContent enumeration timed out"),
+        Ok(Err(msg)) => Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::ScreenCaptureKitEnumerationFailed,
+            msg,
+        )),
+        Err(_) => Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::ScreenCaptureKitEnumerationFailed,
+            "SCShareableContent enumeration timed out",
+        )),
     }
 }
 
@@ -192,28 +201,33 @@ pub fn request_screen_capture_permission() -> bool {
     unsafe { macos_screen_capture_tcc::request_screen_capture_access() }
 }
 
-fn ensure_screen_capture_permission() -> anyhow::Result<()> {
+fn ensure_screen_capture_permission(ability: &'static str) -> Result<(), RemoteAppTargetError> {
     if screen_capture_permission_granted() || request_screen_capture_permission() {
         return Ok(());
     }
-    anyhow::bail!(
-        "macOS Screen Recording permission is not granted for {}; \
-         open System Settings > Privacy & Security > Screen & System Audio Recording, \
-         grant access to this binary, then restart the daemon; reason={REASON_PERMISSION_DENIED}",
-        std::env::current_exe()
-            .ok()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "the EasyNet daemon process".to_string())
-    )
+    Err(RemoteAppTargetError::new(
+        ability,
+        TargetResolutionError::TargetPermissionMissing,
+        format!(
+            "macOS Screen Recording permission is not granted for {}; \
+             open System Settings > Privacy & Security > Screen & System Audio Recording, \
+             grant access to this binary, then restart the daemon",
+            std::env::current_exe()
+                .ok()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "the EasyNet daemon process".to_string())
+        ),
+    ))
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn target_for_binding(
+    ability: &'static str,
     binding: &RemoteAppTargetBinding,
-) -> anyhow::Result<ScreenCaptureKitTarget> {
-    ensure_screen_capture_permission()?;
-    let content = shareable_content()?;
+) -> Result<ScreenCaptureKitTarget, RemoteAppTargetError> {
+    ensure_screen_capture_permission(ability)?;
+    let content = shareable_content(ability)?;
     let displays = unsafe { content.displays() };
-    let display = select_display_for_binding(&displays, binding)?;
+    let display = select_display_for_binding(ability, &displays, binding)?;
     let filter = match binding.target_kind() {
         RemoteDesktopTargetKind::Display => {
             let empty: Retained<NSArray<SCWindow>> = NSArray::new();
@@ -227,14 +241,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn target_for_binding(
         }
         RemoteDesktopTargetKind::Window => {
             let windows = unsafe { content.windows() };
-            let window = select_window_for_binding(&windows, binding)?;
+            let window = select_window_for_binding(ability, &windows, binding)?;
             unsafe {
                 SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &window)
             }
         }
         RemoteDesktopTargetKind::Application => {
             let applications = unsafe { content.applications() };
-            let app = select_application_for_binding(&applications, binding)?;
+            let app = select_application_for_binding(ability, &applications, binding)?;
             let apps = NSArray::from_slice(&[&*app]);
             let empty: Retained<NSArray<SCWindow>> = NSArray::new();
             unsafe {
@@ -248,12 +262,19 @@ pub(in crate::daemon::plugins::remote_desktop) fn target_for_binding(
         }
     };
     let (native_width, native_height) =
-        filter_dimensions_for_kind(&filter, binding.target_kind(), &display)?;
+        filter_dimensions_for_kind(ability, &filter, binding.target_kind(), &display)?;
     Ok(ScreenCaptureKitTarget {
         filter,
         native_width,
         native_height,
     })
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn verify_target_binding_for_session(
+    ability: &'static str,
+    binding: &RemoteAppTargetBinding,
+) -> Result<(), RemoteAppTargetError> {
+    target_for_binding(ability, binding).map(|_| ())
 }
 
 mod macos_screen_capture_tcc {
@@ -355,9 +376,10 @@ impl ScreenCaptureKitStream {
 }
 
 fn select_display_for_binding(
+    ability: &'static str,
     displays: &NSArray<SCDisplay>,
     binding: &RemoteAppTargetBinding,
-) -> anyhow::Result<Retained<SCDisplay>> {
+) -> Result<Retained<SCDisplay>, RemoteAppTargetError> {
     let expected_id = binding.native_locator().display_id();
     for display in displays.iter() {
         if expected_id.is_some_and(|id| unsafe { display.displayID() as u64 == id }) {
@@ -365,22 +387,33 @@ fn select_display_for_binding(
         }
     }
     if binding.native_locator().primary_display() {
-        return displays
-            .firstObject()
-            .ok_or_else(|| anyhow::anyhow!("no shareable primary display available"));
+        return displays.firstObject().ok_or_else(|| {
+            RemoteAppTargetError::new(
+                ability,
+                TargetResolutionError::TargetDisplayUnavailable,
+                "no shareable primary display available",
+            )
+        });
     }
     if expected_id.is_some() {
-        anyhow::bail!(
-            "requested display identity is not available; reason=display_identity_mismatch"
-        );
+        return Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::DisplayIdentityMismatch,
+            "requested display identity is not available",
+        ));
     }
-    anyhow::bail!("display identity is required for ScreenCaptureKit binding; reason=display_identity_missing")
+    Err(RemoteAppTargetError::new(
+        ability,
+        TargetResolutionError::DisplayIdentityMissing,
+        "display identity is required for ScreenCaptureKit binding",
+    ))
 }
 
 fn select_window_for_binding(
+    ability: &'static str,
     windows: &NSArray<SCWindow>,
     binding: &RemoteAppTargetBinding,
-) -> anyhow::Result<Retained<SCWindow>> {
+) -> Result<Retained<SCWindow>, RemoteAppTargetError> {
     let locator = binding.native_locator();
     let expected_id = locator.window_id();
     let expected_pid = locator.pid();
@@ -433,17 +466,30 @@ fn select_window_for_binding(
         }
     }
     match candidates.len() {
-        0 if id_seen => anyhow::bail!("requested ScreenCaptureKit window owner identity does not match the bound target; reason=target_identity_mismatch"),
-        0 => anyhow::bail!("requested ScreenCaptureKit window is no longer available; reason=target_not_found"),
+        0 if id_seen => Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::TargetIdentityMismatch,
+            "requested ScreenCaptureKit window owner identity does not match the bound target",
+        )),
+        0 => Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::TargetNotFound,
+            "requested ScreenCaptureKit window is no longer available",
+        )),
         1 => Ok(candidates.remove(0)),
-        _ => anyhow::bail!("requested ScreenCaptureKit window identity is ambiguous; reason=target_identity_ambiguous"),
+        _ => Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::TargetIdentityAmbiguous,
+            "requested ScreenCaptureKit window identity is ambiguous",
+        )),
     }
 }
 
 fn select_application_for_binding(
+    ability: &'static str,
     applications: &NSArray<SCRunningApplication>,
     binding: &RemoteAppTargetBinding,
-) -> anyhow::Result<Retained<SCRunningApplication>> {
+) -> Result<Retained<SCRunningApplication>, RemoteAppTargetError> {
     let locator = binding.native_locator();
     let expected_pid = locator.pid();
     let expected_app_identity = locator.app_identity();
@@ -480,34 +526,55 @@ fn select_application_for_binding(
         }
     }
     match candidates.len() {
-        0 if identity_seen => anyhow::bail!("requested ScreenCaptureKit application metadata no longer matches the bound target; reason=target_identity_mismatch"),
-        0 => anyhow::bail!("requested ScreenCaptureKit application is no longer available; reason=target_not_found"),
+        0 if identity_seen => Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::TargetIdentityMismatch,
+            "requested ScreenCaptureKit application metadata no longer matches the bound target",
+        )),
+        0 => Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::TargetNotFound,
+            "requested ScreenCaptureKit application is no longer available",
+        )),
         1 => Ok(candidates.remove(0)),
-        _ => anyhow::bail!("requested ScreenCaptureKit application identity is ambiguous; reason=target_identity_ambiguous"),
+        _ => Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::TargetIdentityAmbiguous,
+            "requested ScreenCaptureKit application identity is ambiguous",
+        )),
     }
 }
 
 fn filter_dimensions_for_kind(
+    ability: &'static str,
     filter: &SCContentFilter,
     target_kind: RemoteDesktopTargetKind,
     fallback_display: &SCDisplay,
-) -> anyhow::Result<(usize, usize)> {
+) -> Result<(usize, usize), RemoteAppTargetError> {
     if target_kind == RemoteDesktopTargetKind::Display {
         let info = unsafe { SCShareableContent::infoForFilter(filter) };
         let scale = f64::from(unsafe { info.pointPixelScale() }.max(1.0));
         let width = unsafe { fallback_display.width() };
         let height = unsafe { fallback_display.height() };
-        return positive_dimensions(width as f64 * scale, height as f64 * scale);
+        return positive_dimensions(ability, width as f64 * scale, height as f64 * scale);
     }
     let info = unsafe { SCShareableContent::infoForFilter(filter) };
     let rect = unsafe { info.contentRect() };
     let scale = f64::from(unsafe { info.pointPixelScale() }.max(1.0));
-    positive_dimensions(rect.size.width * scale, rect.size.height * scale)
+    positive_dimensions(ability, rect.size.width * scale, rect.size.height * scale)
 }
 
-fn positive_dimensions(width: f64, height: f64) -> anyhow::Result<(usize, usize)> {
+fn positive_dimensions(
+    ability: &'static str,
+    width: f64,
+    height: f64,
+) -> Result<(usize, usize), RemoteAppTargetError> {
     if width <= 0.0 || height <= 0.0 {
-        anyhow::bail!("ScreenCaptureKit target returned invalid dimensions {width}x{height}");
+        return Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::ScreenCaptureKitFilterFailed,
+            format!("ScreenCaptureKit target returned invalid dimensions {width}x{height}"),
+        ));
     }
     Ok((
         width.round().max(2.0) as usize,
