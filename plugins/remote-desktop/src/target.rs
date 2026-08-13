@@ -506,6 +506,16 @@ impl AppWindowSetProof {
             "window_set_epoch": self.window_set_epoch,
         })
     }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn matches_window_identity(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.display_id == other.display_id
+            && self.bundle_id == other.bundle_id
+            && self.primary_pid == other.primary_pid
+            && self.resolved_window_ids == other.resolved_window_ids
+    }
 }
 
 impl ResolvedCaptureTargetProof {
@@ -880,6 +890,12 @@ impl RemoteAppTargetBinding {
         &self,
     ) -> &NativeTargetLocator {
         &self.native_locator
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn committed_app_window_set(
+        &self,
+    ) -> Option<&AppWindowSetProof> {
+        self.app_window_set.as_ref()
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn geometry(&self) -> &TargetGeometry {

@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, RemoteDesktopTargetKind, TargetGeometry, TargetResolutionError,
+    AppWindowSetProof, RemoteAppTargetBinding, RemoteDesktopTargetKind, TargetGeometry,
+    TargetResolutionError,
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::{
     TargetObservation, TargetTrackerSnapshot, TargetVisibilityState,
@@ -255,6 +256,11 @@ fn observe_application(
             "bound application has no windows on the selected display",
         ));
     }
+    if let Some(observation) =
+        application_window_set_drift_observation(binding, &selected_display_windows)
+    {
+        return Some(observation);
+    }
     let visible_selected_display_windows: Vec<&ObservedWindow> = selected_display_windows
         .into_iter()
         .filter(|window| window.visible)
@@ -273,6 +279,37 @@ fn observe_application(
         ));
     };
     geometry_observation(snapshot, geometry)
+}
+
+fn application_window_set_drift_observation(
+    binding: &RemoteAppTargetBinding,
+    selected_display_windows: &[&ObservedWindow],
+) -> Option<TargetObservation> {
+    let locator = binding.native_locator();
+    let expected_display = locator.display_id()?;
+    let Some(committed) = binding.committed_app_window_set() else {
+        return Some(lost(
+            TargetResolutionError::TargetMetadataIncomplete,
+            "application target binding has no committed display-scoped window set",
+        ));
+    };
+    let live_window_ids = selected_display_windows
+        .iter()
+        .map(|window| window.window_id)
+        .collect::<Vec<_>>();
+    let live = AppWindowSetProof::new(
+        expected_display,
+        locator.bundle_id().map(str::to_string),
+        locator.pid(),
+        live_window_ids,
+    );
+    if committed.matches_window_identity(&live) {
+        return None;
+    }
+    Some(lost(
+        TargetResolutionError::TargetIdentityChanged,
+        "bound application window set changed after session binding",
+    ))
 }
 
 fn geometry_observation(
@@ -945,6 +982,101 @@ mod tests {
                 assert_eq!(geometry.height, Some(80.0));
             }
             other => panic!("expected app window-set union geometry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn application_observation_rejects_committed_window_set_drift() {
+        let binding = ResourceEntryTargetResolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &ResourceEntry {
+                    resource_ura: "easynet:///r/acme/resource/application.editor.drift".to_string(),
+                    owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
+                    kind: ResourceType::Application,
+                    binding: ResourceBinding::LocalDevice,
+                    hardware_id: "application:macos:cgwindow:42:bundle:com.example.Editor"
+                        .to_string(),
+                    display_name: "Editor on display 42".to_string(),
+                    metadata: json!({
+                        "platform": "macos",
+                        "backend": "macos_core_graphics",
+                        "display_id": 42,
+                        "bundle_id": "com.example.Editor",
+                        "app_identity": "com.example.Editor",
+                        "primary_pid": 9001,
+                        "resolved_window_ids": [10, 11],
+                        "window_set_epoch": 123,
+                        "primary_x": 10,
+                        "primary_y": 20,
+                        "primary_width": 100,
+                        "primary_height": 80,
+                    }),
+                    first_seen_at: "2026-06-01T00:00:00Z".to_string(),
+                },
+                "view_only",
+                1,
+            )
+            .expect("application target binding resolves");
+        let snapshot = TargetTrackerSnapshot::from_binding(&binding);
+        let observation = observe_binding_against_host_snapshot(
+            &binding,
+            &snapshot,
+            &HostTargetSnapshot {
+                windows: vec![
+                    ObservedWindow {
+                        window_id: 10,
+                        pid: Some(9001),
+                        bundle_id: Some("com.example.Editor".to_string()),
+                        display_id: Some(42),
+                        geometry: TargetGeometry {
+                            x: Some(10.0),
+                            y: Some(20.0),
+                            width: Some(100.0),
+                            height: Some(80.0),
+                        },
+                        visible: true,
+                    },
+                    ObservedWindow {
+                        window_id: 11,
+                        pid: Some(9001),
+                        bundle_id: Some("com.example.Editor".to_string()),
+                        display_id: Some(42),
+                        geometry: TargetGeometry {
+                            x: Some(130.0),
+                            y: Some(60.0),
+                            width: Some(70.0),
+                            height: Some(40.0),
+                        },
+                        visible: true,
+                    },
+                    ObservedWindow {
+                        window_id: 12,
+                        pid: Some(9001),
+                        bundle_id: Some("com.example.Editor".to_string()),
+                        display_id: Some(42),
+                        geometry: TargetGeometry {
+                            x: Some(220.0),
+                            y: Some(30.0),
+                            width: Some(60.0),
+                            height: Some(60.0),
+                        },
+                        visible: true,
+                    },
+                ],
+            },
+        )
+        .expect("application observation");
+
+        match observation {
+            TargetObservation::Lost { reason, detail, .. } => {
+                assert_eq!(reason.as_str(), "target_identity_changed");
+                assert!(
+                    detail.contains("window set changed"),
+                    "unexpected drift detail: {detail}"
+                );
+            }
+            other => panic!("expected application window-set drift to fail closed, got {other:?}"),
         }
     }
 
