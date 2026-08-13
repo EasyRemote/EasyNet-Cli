@@ -46,6 +46,7 @@ use crate::daemon::ability::builtins::{
         context::{ability as context_ability, loaders as context_loaders},
         files_store as files, list as list_resources_ability, media,
         pages::{self, PagesIdentity},
+        refresh_remote_targets as refresh_remote_targets_ability,
         skills::{install as skill_install_ability, publish as skill_publish_ability},
         voice as voice_call_ability,
     },
@@ -730,6 +731,15 @@ fn build_registry_with_services_result_inner(
         media::mic_subscribe::register(&mut reg);
     }
     list_resources_ability::register(&mut reg);
+    if let Some(device_ura) = reg.hosted_device_authority_root().map(str::to_string) {
+        refresh_remote_targets_ability::register(
+            &mut reg,
+            refresh_remote_targets_ability::RemoteTargetInventoryContext::from_device_ura(
+                &device_ura,
+            )
+            .context("construct remote target inventory refresh context")?,
+        );
+    }
     // agent.start / agent.stop / agent.refresh —
     // Invoke-side surface of `easynet agent add/remove/refresh`. LLM sub-agents are registry
     // rows (not resident processes), so start ≡ insert into

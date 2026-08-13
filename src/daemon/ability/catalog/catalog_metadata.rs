@@ -46,6 +46,7 @@ use crate::daemon::ability::builtins::{
     resources::{
         context::ability as context_ability,
         list as list_resources_ability, media,
+        refresh_remote_targets as refresh_remote_targets_ability,
         skills::{install as skill_install_ability, publish as skill_publish_ability},
         voice as voice_call_ability,
     },
@@ -655,6 +656,9 @@ pub fn description_for(name: &str) -> &'static str {
         list_resources_ability::ABILITY_META_LIST_RESOURCES => {
             list_resources_ability::description()
         }
+        refresh_remote_targets_ability::ABILITY_RESOURCE_REFRESH_REMOTE_TARGETS => {
+            refresh_remote_targets_ability::description()
+        }
         // RFC-006-C v0.1 — device-local OpenAI protocol shim. The
         // handler runs on this host and only sees host-local
         // chat-base abilities; there is no hub round-trip in the
@@ -943,6 +947,9 @@ fn authored_static_input_schema(name: &str) -> Option<serde_json::Value> {
         name if media::input_schema(name).is_some() => return media::input_schema(name),
         list_resources_ability::ABILITY_META_LIST_RESOURCES => {
             list_resources_ability::input_schema()
+        }
+        refresh_remote_targets_ability::ABILITY_RESOURCE_REFRESH_REMOTE_TARGETS => {
+            refresh_remote_targets_ability::input_schema()
         }
         // RFC-006-C v0.1 — device-local OpenAI shim. Schemas mirror
         // the OpenAI request envelopes the handler accepts (chat

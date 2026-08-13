@@ -31,6 +31,7 @@ pub const MEDIA_SPEAKER_PUBLISH: &str = "speaker.publish";
 pub const MEDIA_SYSTEM_AGENT_ID: &str = "media";
 
 pub const META_LIST_RESOURCES: &str = "meta.list_resources";
+pub const RESOURCE_REFRESH_REMOTE_TARGETS: &str = "resource.refresh_remote_targets";
 
 pub const SKILL_INSTALL: &str = "skill.install";
 pub const SKILL_REMOVE: &str = "skill.remove";

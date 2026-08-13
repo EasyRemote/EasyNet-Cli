@@ -73,6 +73,81 @@ impl ResourceListResponse {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteTargetListEntry {
+    pub resource_ura: String,
+    pub owner_agent: String,
+    pub host_device_ura: String,
+    #[serde(rename = "type")]
+    pub entry_type: String,
+    pub binding: String,
+    pub display_name: String,
+    pub availability: String,
+    pub observed_at_ms: u64,
+    pub freshness_ttl_ms: u64,
+    pub stale_reason: Option<String>,
+    pub metadata: Value,
+}
+
+impl RemoteTargetListEntry {
+    pub fn from_resource_entry(entry: &ResourceEntry) -> anyhow::Result<Self> {
+        let host_device_ura = required_metadata_str(entry, "host_device_ura")?;
+        let parsed = crate::core::ura::parse_ura(&host_device_ura)?;
+        if parsed.kind != crate::core::ura::URAKind::Device {
+            anyhow::bail!(
+                "remote target {:?} host_device_ura must be a Device URA, got {host_device_ura}",
+                entry.resource_ura
+            );
+        }
+        Ok(Self {
+            resource_ura: entry.resource_ura.clone(),
+            owner_agent: entry.owner_agent.clone(),
+            host_device_ura,
+            entry_type: entry.kind.as_str().to_string(),
+            binding: entry.binding.as_str().to_string(),
+            display_name: entry.display_name.clone(),
+            availability: required_metadata_str(entry, "availability")?,
+            observed_at_ms: required_metadata_u64(entry, "observed_at_ms")?,
+            freshness_ttl_ms: required_metadata_u64(entry, "freshness_ttl_ms")?,
+            stale_reason: optional_metadata_str(entry, "stale_reason"),
+            metadata: entry.metadata.clone(),
+        })
+    }
+}
+
+fn required_metadata_str(entry: &ResourceEntry, key: &str) -> anyhow::Result<String> {
+    optional_metadata_str(entry, key).ok_or_else(|| {
+        anyhow::anyhow!(
+            "remote target {:?} metadata must include non-empty string field {key:?}",
+            entry.resource_ura
+        )
+    })
+}
+
+fn optional_metadata_str(entry: &ResourceEntry, key: &str) -> Option<String> {
+    entry
+        .metadata
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn required_metadata_u64(entry: &ResourceEntry, key: &str) -> anyhow::Result<u64> {
+    entry
+        .metadata
+        .get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "remote target {:?} metadata must include u64 field {key:?}",
+                entry.resource_ura
+            )
+        })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct FilesPutResponse {
@@ -478,6 +553,54 @@ mod tests {
 
         assert_eq!(wire["resources"][0]["type"], "camera");
         assert_eq!(wire["resources"][0]["binding"], "local_device");
+    }
+
+    #[test]
+    fn remote_target_list_entry_promotes_live_inventory_contract() {
+        let mut entry = resource_entry();
+        entry.kind = ResourceType::Window;
+        entry.resource_ura =
+            "easynet:///r/acme/resource/device.dev-1/streams/window.cursor".to_string();
+        entry.metadata = json!({
+            "host_device_ura": "easynet:///r/acme/device/dev-1",
+            "availability": "available",
+            "observed_at_ms": 123_456,
+            "freshness_ttl_ms": 5_000,
+            "stale_reason": null,
+            "window_id": 42,
+        });
+
+        let target =
+            RemoteTargetListEntry::from_resource_entry(&entry).expect("remote target projection");
+        let wire = serde_json::to_value(&target).expect("target serializes");
+
+        assert_eq!(wire["type"], "window");
+        assert_eq!(wire["host_device_ura"], "easynet:///r/acme/device/dev-1");
+        assert_eq!(wire["availability"], "available");
+        assert_eq!(wire["observed_at_ms"], 123_456);
+        assert_eq!(wire["freshness_ttl_ms"], 5_000);
+        assert_eq!(wire["metadata"]["window_id"], 42);
+        assert!(wire.get("hardware_id").is_none());
+        assert!(wire.get("first_seen_at").is_none());
+    }
+
+    #[test]
+    fn remote_target_list_entry_requires_host_device_ura() {
+        let mut entry = resource_entry();
+        entry.kind = ResourceType::Window;
+        entry.metadata = json!({
+            "availability": "available",
+            "observed_at_ms": 123_456,
+            "freshness_ttl_ms": 5_000,
+        });
+
+        let error = RemoteTargetListEntry::from_resource_entry(&entry)
+            .expect_err("remote target projection must fail without host Device URA");
+
+        assert!(
+            error.to_string().contains("host_device_ura"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
