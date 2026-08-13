@@ -26,9 +26,12 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
+use crate::daemon::plugins::remote_desktop::session::TargetMediaSourceLost;
+use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target_observer::{
     observe_bound_session_target_once, PlatformTargetObservationProvider,
 };
+use crate::daemon::plugins::remote_desktop::transport::RemoteDesktopTransportManager;
 
 const TARGET_MONITOR_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -45,6 +48,16 @@ enum TargetMonitorCommand {
     Track { session_id: String },
     Cancel { session_id: String },
     Shutdown,
+}
+
+trait TargetMediaSourceStopper {
+    fn stop_endpoint_if_epoch(&self, session_id: &str, epoch: TransportEpoch) -> bool;
+}
+
+impl TargetMediaSourceStopper for RemoteDesktopTransportManager {
+    fn stop_endpoint_if_epoch(&self, session_id: &str, epoch: TransportEpoch) -> bool {
+        RemoteDesktopTransportManager::stop_endpoint_if_epoch(self, session_id, epoch)
+    }
 }
 
 impl RemoteDesktopTargetMonitor {
@@ -194,8 +207,90 @@ fn poll_tracked_sessions(
         return false;
     };
     let sessions = plugin.session_store();
+    let transports = plugin.transport_manager();
     let provider = PlatformTargetObservationProvider;
-    tracked
-        .retain(|session_id| observe_bound_session_target_once(&sessions, session_id, &provider));
+    tracked.retain(|session_id| {
+        let result = observe_bound_session_target_once(&sessions, session_id, &provider);
+        stop_lost_media_source(transports.as_ref(), session_id, result.media_source_lost);
+        result.keep_tracking
+    });
     true
+}
+
+fn stop_lost_media_source<T>(
+    transports: &T,
+    session_id: &str,
+    media_source_lost: Option<TargetMediaSourceLost>,
+) -> bool
+where
+    T: TargetMediaSourceStopper + ?Sized,
+{
+    let Some(media_source_lost) = media_source_lost else {
+        return false;
+    };
+    transports.stop_endpoint_if_epoch(session_id, media_source_lost.transport_epoch)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Mutex, MutexGuard};
+
+    use crate::daemon::plugins::remote_desktop::session::TargetMediaSourceLost;
+    use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
+    use crate::daemon::plugins::remote_desktop::target::TargetResolutionError;
+    use crate::daemon::plugins::remote_desktop::target_monitor::{
+        stop_lost_media_source, TargetMediaSourceStopper,
+    };
+
+    #[derive(Default)]
+    struct RecordingStopper {
+        calls: Mutex<Vec<(String, TransportEpoch)>>,
+        stopped: bool,
+    }
+
+    impl RecordingStopper {
+        fn calls(&self) -> MutexGuard<'_, Vec<(String, TransportEpoch)>> {
+            self.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
+    }
+
+    impl TargetMediaSourceStopper for RecordingStopper {
+        fn stop_endpoint_if_epoch(&self, session_id: &str, epoch: TransportEpoch) -> bool {
+            self.calls().push((session_id.to_string(), epoch));
+            self.stopped
+        }
+    }
+
+    #[test]
+    fn target_loss_poll_result_stops_endpoint_by_epoch() {
+        let stopper = RecordingStopper {
+            calls: Mutex::new(Vec::new()),
+            stopped: true,
+        };
+        let epoch = TransportEpoch::new(42);
+        let stopped = stop_lost_media_source(
+            &stopper,
+            "rd-target-loss",
+            Some(TargetMediaSourceLost {
+                transport_epoch: epoch,
+                reason: TargetResolutionError::TargetNotFound,
+            }),
+        );
+
+        assert!(stopped);
+        assert_eq!(
+            stopper.calls().as_slice(),
+            &[("rd-target-loss".into(), epoch)]
+        );
+    }
+
+    #[test]
+    fn healthy_poll_result_does_not_touch_transport_manager() {
+        let stopper = RecordingStopper::default();
+
+        assert!(!stop_lost_media_source(&stopper, "rd-healthy", None));
+        assert!(stopper.calls().is_empty());
+    }
 }

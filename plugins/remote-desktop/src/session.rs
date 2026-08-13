@@ -25,10 +25,18 @@ pub(in crate::daemon::plugins::remote_desktop) use crate::daemon::plugins::remot
 use crate::daemon::plugins::remote_desktop::session_transport_state::{
     PrimaryMediaPhase, RemoteDesktopTransportState, TransportEpoch,
 };
-use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
+use crate::daemon::plugins::remote_desktop::target::{
+    RemoteAppTargetBinding, TargetResolutionError,
+};
 use crate::daemon::plugins::remote_desktop::target_tracking::{
     TargetObservation, TargetTrackerSnapshot, TargetTrackerState, TargetVisibilityState,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) struct TargetMediaSourceLost {
+    pub(in crate::daemon::plugins::remote_desktop) transport_epoch: TransportEpoch,
+    pub(in crate::daemon::plugins::remote_desktop) reason: TargetResolutionError,
+}
 
 /// Runtime state for one remote desktop session.
 ///
@@ -302,18 +310,43 @@ impl RemoteDesktopSession {
     pub(in crate::daemon::plugins::remote_desktop) fn record_target_observation(
         &mut self,
         observation: TargetObservation,
-    ) {
+    ) -> Option<TargetMediaSourceLost> {
         if self.lifecycle.is_terminal() {
-            return;
+            return None;
         }
-        let Some(event) = self.target_tracker.commit_observation(observation) else {
-            return;
+        let target_loss_reason = match &observation {
+            TargetObservation::Lost { reason, .. } => Some(*reason),
+            TargetObservation::VisibilityChanged {
+                visibility_state: TargetVisibilityState::Lost,
+                ..
+            } => Some(TargetResolutionError::TargetNotFound),
+            _ => None,
         };
+        let Some(event) = self.target_tracker.commit_observation(observation) else {
+            return None;
+        };
+        let mut media_loss = None;
         if event.event_type() == "TARGET_LOST" {
             self.lifecycle.mark_degraded();
+            if let (Some(reason), Some(epoch)) = (target_loss_reason, self.transport.active_epoch())
+            {
+                if self.transport.mark_media_source_lost(epoch) {
+                    media_loss = Some(TargetMediaSourceLost {
+                        transport_epoch: epoch,
+                        reason,
+                    });
+                }
+            }
         }
         self.touch();
         self.push_event(event.event_type(), event.payload());
+        if let Some(media_loss) = media_loss {
+            self.push_projected_event(session_events::media_source_lost(
+                media_loss.reason,
+                media_loss.transport_epoch.value(),
+            ));
+        }
+        media_loss
     }
 
     fn touch(&mut self) {
@@ -328,7 +361,11 @@ impl RemoteDesktopSession {
             Some(PrimaryMediaPhase::ClientPresenting) => {
                 self.lifecycle.mark_connected();
             }
-            Some(PrimaryMediaPhase::Degraded | PrimaryMediaPhase::Failed) => {
+            Some(
+                PrimaryMediaPhase::Degraded
+                | PrimaryMediaPhase::MediaSourceLost
+                | PrimaryMediaPhase::Failed,
+            ) => {
                 self.lifecycle.mark_degraded();
             }
             Some(PrimaryMediaPhase::Negotiating | PrimaryMediaPhase::DeviceSending) | None => {
@@ -703,6 +740,7 @@ mod tests {
     use serde_json::json;
 
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+    use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::target::{TargetGeometry, TargetResolutionError};
     use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
     use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
@@ -765,6 +803,64 @@ mod tests {
             .any(|event| event["event_type"] == json!("TARGET_LOST")));
         assert_eq!(
             session.latest_target_diagnostic()["frontend_action"],
+            json!("refresh_targets")
+        );
+    }
+
+    #[test]
+    fn target_lost_stops_active_media_source_without_transport_failure() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-target-media-lost",
+            "easynet:///r/acme/resource/display.test",
+            vec!["webrtc".into()],
+        ));
+        let epoch = TransportEpoch::new(7);
+        session.begin_webrtc_negotiation(epoch);
+        session.mark_webrtc_media_sending(epoch, "easynet-rd://rd-target-media-lost".to_string());
+        assert_eq!(
+            session.transport_state()["primary"],
+            json!("device_sending")
+        );
+        assert_eq!(session.transport_state()["device_sending"], json!(true));
+
+        assert!(session
+            .record_target_observation(TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "target disappeared".into(),
+                observed_at_ms: 200,
+            })
+            .is_none());
+        let media_loss = session
+            .record_target_observation(TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "target still disappeared".into(),
+                observed_at_ms: 300,
+            })
+            .expect("debounced target loss must request active media source stop");
+
+        assert_eq!(media_loss.transport_epoch, epoch);
+        assert_eq!(media_loss.reason, TargetResolutionError::TargetNotFound);
+        assert_eq!(
+            session.transport_state()["primary"],
+            json!("media_source_lost")
+        );
+        assert_eq!(session.transport_state()["device_sending"], json!(false));
+
+        let events = session.events();
+        let target_lost_index = events
+            .iter()
+            .position(|event| event["event_type"] == json!("TARGET_LOST"))
+            .expect("TARGET_LOST event");
+        let media_source_lost_index = events
+            .iter()
+            .position(|event| event["event_type"] == json!("MEDIA_SOURCE_LOST"))
+            .expect("MEDIA_SOURCE_LOST event");
+        assert!(
+            target_lost_index < media_source_lost_index,
+            "target lifecycle event must precede media source stop projection"
+        );
+        assert_eq!(
+            events[media_source_lost_index]["payload"]["frontend_action"],
             json!("refresh_targets")
         );
     }

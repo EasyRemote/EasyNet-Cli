@@ -11,7 +11,9 @@ use serde_json::Value;
 
 use crate::daemon::plugins::remote_desktop::constants::DIRECT_WEBRTC_ENDPOINT_PREFIX;
 use crate::daemon::plugins::remote_desktop::sdp::ice_candidate_text;
-use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+use crate::daemon::plugins::remote_desktop::session::{
+    RemoteDesktopSession, TargetMediaSourceLost,
+};
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 use crate::daemon::plugins::remote_desktop::target_tracking::{
@@ -107,19 +109,19 @@ impl RemoteDesktopSessionStore {
         binding_id: &str,
         binding_epoch: u64,
         observation: TargetObservation,
-    ) {
+    ) -> Option<TargetMediaSourceLost> {
         let mut sessions = self.lock();
         let Some(session) = sessions.get_mut(session_id) else {
-            return;
+            return None;
         };
         let binding = session.target_binding();
         if session.is_terminal()
             || binding.binding_id() != binding_id
             || binding.binding_epoch() != binding_epoch
         {
-            return;
+            return None;
         }
-        session.record_target_observation(observation);
+        session.record_target_observation(observation)
     }
 
     /// Mark a direct WebRTC endpoint failed for one non-terminal session.

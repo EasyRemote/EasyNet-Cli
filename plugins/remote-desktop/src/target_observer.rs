@@ -15,6 +15,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::daemon::plugins::remote_desktop::session::now_ms;
+use crate::daemon::plugins::remote_desktop::session::TargetMediaSourceLost;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::target::{
     AppWindowSetProof, RemoteAppTargetBinding, RemoteDesktopTargetKind, TargetGeometry,
@@ -32,6 +33,28 @@ pub(in crate::daemon::plugins::remote_desktop) trait TargetObservationProvider {
         binding: &RemoteAppTargetBinding,
         snapshot: &TargetTrackerSnapshot,
     ) -> Option<TargetObservation>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) struct TargetObservationPollResult {
+    pub(in crate::daemon::plugins::remote_desktop) keep_tracking: bool,
+    pub(in crate::daemon::plugins::remote_desktop) media_source_lost: Option<TargetMediaSourceLost>,
+}
+
+impl TargetObservationPollResult {
+    fn keep_tracking() -> Self {
+        Self {
+            keep_tracking: true,
+            media_source_lost: None,
+        }
+    }
+
+    fn stop_tracking() -> Self {
+        Self {
+            keep_tracking: false,
+            media_source_lost: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -152,23 +175,26 @@ pub(in crate::daemon::plugins::remote_desktop) fn observe_bound_session_target_o
     sessions: &RemoteDesktopSessionStore,
     session_id: &str,
     provider: &P,
-) -> bool
+) -> TargetObservationPollResult
 where
     P: TargetObservationProvider,
 {
     let Some(inputs) = sessions.target_observation_inputs_for_session(session_id) else {
-        return false;
+        return TargetObservationPollResult::stop_tracking();
     };
     let Some(observation) = provider.observe(&inputs.binding, &inputs.snapshot) else {
-        return true;
+        return TargetObservationPollResult::keep_tracking();
     };
-    sessions.record_target_observation_for_session(
+    let media_source_lost = sessions.record_target_observation_for_session(
         session_id,
         &inputs.binding_id,
         inputs.binding_epoch,
         observation,
     );
-    true
+    TargetObservationPollResult {
+        keep_tracking: true,
+        media_source_lost,
+    }
 }
 
 fn observe_binding_against_host_snapshot(
@@ -703,9 +729,10 @@ mod tests {
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
     use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
+    use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::target::{
         RemoteAppTargetBinding, RemoteAppTargetResolver, ResourceEntryTargetResolver,
-        TargetGeometry,
+        TargetGeometry, TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::target_observer::{
         observe_bound_session_target_once, TargetObservationProvider,
@@ -746,6 +773,22 @@ mod tests {
                 },
                 target_geometry_revision: snapshot.target_geometry_revision() + 1,
                 observed_at_ms: 123,
+            })
+        }
+    }
+
+    struct LostTargetProvider;
+
+    impl TargetObservationProvider for LostTargetProvider {
+        fn observe(
+            &self,
+            _binding: &RemoteAppTargetBinding,
+            _snapshot: &TargetTrackerSnapshot,
+        ) -> Option<TargetObservation> {
+            Some(TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "target disappeared from observer".into(),
+                observed_at_ms: 456,
             })
         }
     }
@@ -796,11 +839,14 @@ mod tests {
             sessions.insert("rd-provider-observation".to_string(), session);
         });
 
-        assert!(observe_bound_session_target_once(
-            &store,
-            "rd-provider-observation",
-            &FakeGeometryProvider,
-        ));
+        assert!(
+            observe_bound_session_target_once(
+                &store,
+                "rd-provider-observation",
+                &FakeGeometryProvider,
+            )
+            .keep_tracking
+        );
 
         store.with_sessions(|sessions| {
             let session = sessions.get("rd-provider-observation").unwrap();
@@ -827,11 +873,14 @@ mod tests {
             sessions.insert("rd-bound-observation".to_string(), session);
         });
 
-        assert!(observe_bound_session_target_once(
-            &store,
-            "rd-bound-observation",
-            &FakeGeometryProvider,
-        ));
+        assert!(
+            observe_bound_session_target_once(
+                &store,
+                "rd-bound-observation",
+                &FakeGeometryProvider,
+            )
+            .keep_tracking
+        );
 
         store.with_sessions(|sessions| {
             let session = sessions.get("rd-bound-observation").unwrap();
@@ -858,14 +907,17 @@ mod tests {
             sessions.insert("rd-reused-observation".to_string(), session);
         });
 
-        assert!(observe_bound_session_target_once(
-            &store,
-            "rd-reused-observation",
-            &ReplacingGeometryProvider {
-                store: Arc::clone(&store),
-                session_id: "rd-reused-observation",
-            },
-        ));
+        assert!(
+            observe_bound_session_target_once(
+                &store,
+                "rd-reused-observation",
+                &ReplacingGeometryProvider {
+                    store: Arc::clone(&store),
+                    session_id: "rd-reused-observation",
+                },
+            )
+            .keep_tracking
+        );
 
         store.with_sessions(|sessions| {
             let session = sessions.get("rd-reused-observation").unwrap();
@@ -882,6 +934,40 @@ mod tests {
                 .iter()
                 .any(|event| event["event_type"] == json!("TARGET_RESIZED")));
         });
+    }
+
+    #[test]
+    fn lost_observation_returns_media_source_stop_effect_after_debounce() {
+        let store = Arc::new(RemoteDesktopSessionStore::new());
+        let epoch = TransportEpoch::new(9);
+        store.with_sessions(|sessions| {
+            let mut session = RemoteDesktopSession::new(test_session_init(
+                "rd-lost-observation",
+                "easynet:///r/acme/resource/display.lost",
+                vec!["webrtc".into()],
+            ));
+            session.begin_webrtc_negotiation(epoch);
+            session
+                .mark_webrtc_media_sending(epoch, "easynet-rd://rd-lost-observation".to_string());
+            sessions.insert("rd-lost-observation".to_string(), session);
+        });
+
+        let first =
+            observe_bound_session_target_once(&store, "rd-lost-observation", &LostTargetProvider);
+        assert!(first.keep_tracking);
+        assert!(first.media_source_lost.is_none());
+
+        let second =
+            observe_bound_session_target_once(&store, "rd-lost-observation", &LostTargetProvider);
+        assert!(second.keep_tracking);
+        let media_source_lost = second
+            .media_source_lost
+            .expect("debounced target loss must surface media source stop effect");
+        assert_eq!(media_source_lost.transport_epoch, epoch);
+        assert_eq!(
+            media_source_lost.reason,
+            TargetResolutionError::TargetNotFound
+        );
     }
 
     #[test]

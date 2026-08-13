@@ -8,7 +8,9 @@
 use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::constants::{TRANSPORT_INVOKE_BIDI, TRANSPORT_WEBRTC};
-use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
+use crate::daemon::plugins::remote_desktop::target::{
+    RemoteAppTargetBinding, TargetResolutionError,
+};
 
 type RemoteDesktopEventProjection = (&'static str, Value);
 
@@ -296,6 +298,24 @@ pub(in crate::daemon::plugins::remote_desktop) fn client_media_state_changed(
             "transport_kind": TRANSPORT_WEBRTC,
             "client_state": state,
             "client_media_ready": state == "presenting",
+            "transport_epoch": transport_epoch,
+        }),
+    )
+}
+
+/// Build a target-scoped media source loss event.
+pub(in crate::daemon::plugins::remote_desktop) fn media_source_lost(
+    reason: TargetResolutionError,
+    transport_epoch: u64,
+) -> RemoteDesktopEventProjection {
+    (
+        "MEDIA_SOURCE_LOST",
+        json!({
+            "reason": reason.as_str(),
+            "failure_domain": "target",
+            "frontend_action": reason.frontend_action().as_str(),
+            "transport_kind": TRANSPORT_WEBRTC,
+            "media_transport_ready": false,
             "transport_epoch": transport_epoch,
         }),
     )

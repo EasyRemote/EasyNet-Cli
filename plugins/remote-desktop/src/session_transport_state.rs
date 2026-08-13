@@ -40,6 +40,7 @@ pub(in crate::daemon::plugins::remote_desktop) enum PrimaryMediaPhase {
     DeviceSending,
     ClientPresenting,
     Degraded,
+    MediaSourceLost,
     Failed,
 }
 
@@ -50,6 +51,7 @@ impl PrimaryMediaPhase {
             Self::DeviceSending => "device_sending",
             Self::ClientPresenting => "client_presenting",
             Self::Degraded => "degraded",
+            Self::MediaSourceLost => "media_source_lost",
             Self::Failed => "failed",
         }
     }
@@ -179,6 +181,16 @@ impl RemoteDesktopTransportState {
         self.transition_primary(epoch, PrimaryMediaPhase::Failed)
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_media_source_lost(
+        &mut self,
+        epoch: TransportEpoch,
+    ) -> bool {
+        if self.primary_phase() == Some(PrimaryMediaPhase::Failed) {
+            return false;
+        }
+        self.transition_primary(epoch, PrimaryMediaPhase::MediaSourceLost)
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn media_transport_ready(&self) -> bool {
         self.primary
             .is_some_and(|state| state.phase.device_sending())
@@ -289,5 +301,39 @@ mod tests {
         assert!(transport.mark_device_sending(epoch));
         assert!(transport.mark_client_presenting(epoch));
         assert!(transport.client_media_ready());
+    }
+
+    #[test]
+    fn media_source_lost_clears_device_sending_readiness() {
+        let mut transport = RemoteDesktopTransportState::new();
+        let epoch = TransportEpoch::new(1);
+        transport.begin_primary(epoch);
+        assert!(transport.mark_device_sending(epoch));
+        assert!(transport.media_transport_ready());
+
+        assert!(transport.mark_media_source_lost(epoch));
+
+        assert_eq!(
+            transport.primary_phase(),
+            Some(PrimaryMediaPhase::MediaSourceLost)
+        );
+        assert!(!transport.media_transport_ready());
+        assert_eq!(
+            transport.projection()["primary"],
+            json!("media_source_lost")
+        );
+        assert_eq!(transport.projection()["device_sending"], json!(false));
+    }
+
+    #[test]
+    fn media_source_lost_does_not_rewrite_terminal_transport_failure() {
+        let mut transport = RemoteDesktopTransportState::new();
+        let epoch = TransportEpoch::new(2);
+        transport.begin_primary(epoch);
+        assert!(transport.mark_failed(epoch));
+
+        assert!(!transport.mark_media_source_lost(epoch));
+
+        assert_eq!(transport.primary_phase(), Some(PrimaryMediaPhase::Failed));
     }
 }
