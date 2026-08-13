@@ -23,6 +23,7 @@ use crate::daemon::plugins::remote_desktop::target_tracking::TargetTrackerSnapsh
 
 pub const INPUT_DATA_CHANNEL_LABEL: &str = "easynet.remote_desktop.input.v1";
 pub const MAX_INPUT_FRAME_BYTES: usize = 16 * 1024;
+const INPUT_REJECTION_DIAGNOSTIC_INTERVAL: u64 = 120;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteDesktopInputKind {
@@ -255,6 +256,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
 ) {
     let mut accepted_count = 0_u64;
     let mut rejected_count = 0_u64;
+    let mut reject_diagnostics = InputRejectCoalescer::default();
     while let Some(event) = data_channel.poll().await {
         match event {
             DataChannelEvent::OnOpen => record_input_channel_event(
@@ -268,6 +270,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                 }),
             ),
             DataChannelEvent::OnClose | DataChannelEvent::OnClosing => {
+                flush_input_rejections(&mut reject_diagnostics, &sessions, &session_id, epoch);
                 record_input_channel_event(
                     &sessions,
                     &session_id,
@@ -281,6 +284,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                 break;
             }
             DataChannelEvent::OnError => {
+                flush_input_rejections(&mut reject_diagnostics, &sessions, &session_id, epoch);
                 record_input_channel_event(
                     &sessions,
                     &session_id,
@@ -292,29 +296,23 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
             DataChannelEvent::OnMessage(message) => {
                 if !message.is_string {
                     rejected_count = rejected_count.saturating_add(1);
-                    record_input_channel_event(
+                    record_input_rejection(
+                        &mut reject_diagnostics,
                         &sessions,
                         &session_id,
                         epoch,
-                        "INPUT_FRAME_REJECTED",
-                        json!({
-                            "reason": "binary_input_frame_rejected",
-                            "rejected_count": rejected_count,
-                        }),
+                        InputRejectSample::new("binary_input_frame_rejected", rejected_count),
                     );
                     continue;
                 }
                 let Ok(text) = String::from_utf8(message.data.to_vec()) else {
                     rejected_count = rejected_count.saturating_add(1);
-                    record_input_channel_event(
+                    record_input_rejection(
+                        &mut reject_diagnostics,
                         &sessions,
                         &session_id,
                         epoch,
-                        "INPUT_FRAME_REJECTED",
-                        json!({
-                            "reason": "invalid_utf8",
-                            "rejected_count": rejected_count,
-                        }),
+                        InputRejectSample::new("invalid_utf8", rejected_count),
                     );
                     continue;
                 };
@@ -322,16 +320,13 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     Ok(frame) => frame,
                     Err(err) => {
                         rejected_count = rejected_count.saturating_add(1);
-                        record_input_channel_event(
+                        record_input_rejection(
+                            &mut reject_diagnostics,
                             &sessions,
                             &session_id,
                             epoch,
-                            "INPUT_FRAME_REJECTED",
-                            json!({
-                                "reason": "invalid_input_frame",
-                                "message": err.to_string(),
-                                "rejected_count": rejected_count,
-                            }),
+                            InputRejectSample::new("invalid_input_frame", rejected_count)
+                                .message(err.to_string()),
                         );
                         continue;
                     }
@@ -341,33 +336,27 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     current_input_policy(&sessions, &session_id, epoch, &input_policy)
                 else {
                     rejected_count = rejected_count.saturating_add(1);
-                    record_input_channel_event(
+                    record_input_rejection(
+                        &mut reject_diagnostics,
                         &sessions,
                         &session_id,
                         epoch,
-                        "INPUT_FRAME_REJECTED",
-                        json!({
-                            "reason": "target_input_not_ready",
-                            "kind": kind,
-                            "action": frame.action(),
-                            "rejected_count": rejected_count,
-                        }),
+                        InputRejectSample::new("target_input_not_ready", rejected_count)
+                            .kind(kind)
+                            .action(frame.action()),
                     );
                     continue;
                 };
                 if !input_policy_allows(&effective_input_policy, kind) {
                     rejected_count = rejected_count.saturating_add(1);
-                    record_input_channel_event(
+                    record_input_rejection(
+                        &mut reject_diagnostics,
                         &sessions,
                         &session_id,
                         epoch,
-                        "INPUT_FRAME_REJECTED",
-                        json!({
-                            "reason": "input_policy_denied",
-                            "kind": kind,
-                            "action": frame.action(),
-                            "rejected_count": rejected_count,
-                        }),
+                        InputRejectSample::new("input_policy_denied", rejected_count)
+                            .kind(kind)
+                            .action(frame.action()),
                     );
                     continue;
                 }
@@ -375,6 +364,12 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                 if outcome.applied {
                     accepted_count = accepted_count.saturating_add(1);
                     if accepted_count == 1 || accepted_count.is_multiple_of(120) {
+                        flush_input_rejections(
+                            &mut reject_diagnostics,
+                            &sessions,
+                            &session_id,
+                            epoch,
+                        );
                         record_input_channel_event(
                             &sessions,
                             &session_id,
@@ -390,22 +385,193 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     }
                 } else {
                     rejected_count = rejected_count.saturating_add(1);
-                    record_input_channel_event(
+                    record_input_rejection(
+                        &mut reject_diagnostics,
                         &sessions,
                         &session_id,
                         epoch,
-                        "INPUT_FRAME_REJECTED",
-                        json!({
-                            "reason": outcome.reason.unwrap_or("input_injection_failed"),
-                            "kind": kind,
-                            "action": frame.action(),
-                            "rejected_count": rejected_count,
-                        }),
+                        InputRejectSample::new(
+                            outcome.reason.unwrap_or("input_injection_failed"),
+                            rejected_count,
+                        )
+                        .kind(kind)
+                        .action(frame.action()),
                     );
                 }
             }
             DataChannelEvent::OnBufferedAmountLow | DataChannelEvent::OnBufferedAmountHigh => {}
         }
+    }
+    flush_input_rejections(&mut reject_diagnostics, &sessions, &session_id, epoch);
+}
+
+#[derive(Debug, Default)]
+struct InputRejectCoalescer {
+    pending: Option<PendingInputReject>,
+}
+
+impl InputRejectCoalescer {
+    fn observe(&mut self, sample: InputRejectSample) -> Vec<Value> {
+        let mut events = Vec::new();
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.signature != sample.signature)
+        {
+            if let Some(payload) = self.flush() {
+                events.push(payload);
+            }
+        }
+        let pending = self
+            .pending
+            .get_or_insert_with(|| PendingInputReject::new(sample.clone()));
+        pending.observe(sample);
+        if pending.observed_total == 1 {
+            events.push(pending.payload("first"));
+            pending.emitted_total = 1;
+        } else if pending
+            .observed_total
+            .is_multiple_of(INPUT_REJECTION_DIAGNOSTIC_INTERVAL)
+        {
+            events.push(pending.payload("interval"));
+            pending.emitted_total = pending.observed_total;
+        }
+        events
+    }
+
+    fn flush(&mut self) -> Option<Value> {
+        let pending = self.pending.take()?;
+        if pending.observed_total <= pending.emitted_total {
+            return None;
+        }
+        Some(pending.payload("flush"))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InputRejectSignature {
+    reason: String,
+    kind: Option<String>,
+    action: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct InputRejectSample {
+    signature: InputRejectSignature,
+    message: Option<String>,
+    rejected_count: u64,
+}
+
+impl InputRejectSample {
+    fn new(reason: impl Into<String>, rejected_count: u64) -> Self {
+        Self {
+            signature: InputRejectSignature {
+                reason: reason.into(),
+                kind: None,
+                action: None,
+            },
+            message: None,
+            rejected_count,
+        }
+    }
+
+    fn kind(mut self, kind: &str) -> Self {
+        self.signature.kind = Some(kind.to_string());
+        self
+    }
+
+    fn action(mut self, action: &str) -> Self {
+        self.signature.action = Some(action.to_string());
+        self
+    }
+
+    fn message(mut self, message: String) -> Self {
+        self.message = Some(message);
+        self
+    }
+}
+
+#[derive(Debug)]
+struct PendingInputReject {
+    signature: InputRejectSignature,
+    latest_message: Option<String>,
+    first_rejected_count: u64,
+    last_rejected_count: u64,
+    observed_total: u64,
+    emitted_total: u64,
+}
+
+impl PendingInputReject {
+    fn new(sample: InputRejectSample) -> Self {
+        Self {
+            signature: sample.signature,
+            latest_message: sample.message,
+            first_rejected_count: sample.rejected_count,
+            last_rejected_count: sample.rejected_count,
+            observed_total: 0,
+            emitted_total: 0,
+        }
+    }
+
+    fn observe(&mut self, sample: InputRejectSample) {
+        self.latest_message = sample.message;
+        self.last_rejected_count = sample.rejected_count;
+        self.observed_total = self.observed_total.saturating_add(1);
+    }
+
+    fn payload(&self, diagnostic_sample: &'static str) -> Value {
+        let mut payload = serde_json::Map::new();
+        payload.insert("reason".to_string(), json!(self.signature.reason.as_str()));
+        if let Some(kind) = self.signature.kind.as_deref() {
+            payload.insert("kind".to_string(), json!(kind));
+        }
+        if let Some(action) = self.signature.action.as_deref() {
+            payload.insert("action".to_string(), json!(action));
+        }
+        if let Some(message) = self.latest_message.as_deref() {
+            payload.insert("message".to_string(), json!(message));
+        }
+        payload.insert(
+            "rejected_count".to_string(),
+            json!(self.last_rejected_count),
+        );
+        payload.insert(
+            "first_rejected_count".to_string(),
+            json!(self.first_rejected_count),
+        );
+        payload.insert(
+            "coalesced_rejections".to_string(),
+            json!(self.observed_total),
+        );
+        payload.insert(
+            "suppressed_since_last_event".to_string(),
+            json!(self.observed_total.saturating_sub(self.emitted_total)),
+        );
+        payload.insert("diagnostic_sample".to_string(), json!(diagnostic_sample));
+        Value::Object(payload)
+    }
+}
+
+fn record_input_rejection(
+    coalescer: &mut InputRejectCoalescer,
+    sessions: &RemoteDesktopSessionStore,
+    session_id: &str,
+    epoch: TransportEpoch,
+    sample: InputRejectSample,
+) {
+    for payload in coalescer.observe(sample) {
+        record_input_channel_event(sessions, session_id, epoch, "INPUT_FRAME_REJECTED", payload);
+    }
+}
+
+fn flush_input_rejections(
+    coalescer: &mut InputRejectCoalescer,
+    sessions: &RemoteDesktopSessionStore,
+    session_id: &str,
+    epoch: TransportEpoch,
+) {
+    if let Some(payload) = coalescer.flush() {
+        record_input_channel_event(sessions, session_id, epoch, "INPUT_FRAME_REJECTED", payload);
     }
 }
 
@@ -932,6 +1098,83 @@ mod tests {
         )
         .unwrap();
         assert_eq!(frame.kind(), RemoteDesktopInputKind::Pointer);
+    }
+
+    #[test]
+    fn input_reject_diagnostics_are_coalesced_under_high_rate_storm() {
+        const REJECT_STORM: u64 = 10_000;
+        let mut coalescer = InputRejectCoalescer::default();
+        let mut emitted = Vec::new();
+
+        for rejected_count in 1..=REJECT_STORM {
+            emitted.extend(
+                coalescer.observe(
+                    InputRejectSample::new("input_policy_denied", rejected_count)
+                        .kind("pointer")
+                        .action("move"),
+                ),
+            );
+        }
+        if let Some(payload) = coalescer.flush() {
+            emitted.push(payload);
+        }
+
+        assert_eq!(
+            emitted.len() as u64,
+            1 + (REJECT_STORM / INPUT_REJECTION_DIAGNOSTIC_INTERVAL) + 1,
+            "input rejection diagnostics must be sampled instead of emitted per frame"
+        );
+        assert_eq!(
+            emitted.first().unwrap()["diagnostic_sample"],
+            json!("first")
+        );
+        assert_eq!(emitted.last().unwrap()["diagnostic_sample"], json!("flush"));
+        assert_eq!(
+            emitted.last().unwrap()["rejected_count"],
+            json!(REJECT_STORM)
+        );
+        assert_eq!(
+            emitted.last().unwrap()["coalesced_rejections"],
+            json!(REJECT_STORM)
+        );
+        assert!(
+            emitted.last().unwrap()["suppressed_since_last_event"]
+                .as_u64()
+                .unwrap()
+                > 0,
+            "flush summary should report suppressed rejected frames"
+        );
+    }
+
+    #[test]
+    fn input_reject_diagnostics_flush_when_signature_changes() {
+        let mut coalescer = InputRejectCoalescer::default();
+        let mut emitted = Vec::new();
+
+        for rejected_count in 1..5 {
+            emitted.extend(
+                coalescer.observe(
+                    InputRejectSample::new("input_policy_denied", rejected_count)
+                        .kind("pointer")
+                        .action("move"),
+                ),
+            );
+        }
+        emitted.extend(
+            coalescer.observe(
+                InputRejectSample::new("target_input_not_ready", 5)
+                    .kind("pointer")
+                    .action("move"),
+            ),
+        );
+
+        assert_eq!(emitted.len(), 3);
+        assert_eq!(emitted[0]["diagnostic_sample"], json!("first"));
+        assert_eq!(emitted[1]["diagnostic_sample"], json!("flush"));
+        assert_eq!(emitted[1]["reason"], json!("input_policy_denied"));
+        assert_eq!(emitted[1]["coalesced_rejections"], json!(4));
+        assert_eq!(emitted[2]["diagnostic_sample"], json!("first"));
+        assert_eq!(emitted[2]["reason"], json!("target_input_not_ready"));
     }
 
     #[test]
