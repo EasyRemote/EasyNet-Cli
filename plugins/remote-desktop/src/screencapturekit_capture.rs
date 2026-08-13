@@ -393,13 +393,14 @@ impl ScreenCaptureKitStream {
     ///
     /// `fps` is clamped to >= 1. Pixel format is BGRA (the format
     /// VideoToolbox accepts directly for H.264).
-    pub fn start(
+    pub(in crate::daemon::plugins::remote_desktop) fn start(
+        ability: &'static str,
         target: ScreenCaptureKitTarget,
         width: usize,
         height: usize,
         fps: u32,
         sink: FrameSink,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, RemoteAppTargetError> {
         let config = unsafe {
             let c = SCStreamConfiguration::new();
             c.setWidth(width);
@@ -438,14 +439,18 @@ impl ScreenCaptureKitStream {
                     Some(&queue),
                 )
                 .map_err(|err| {
-                    anyhow::anyhow!(
-                        "SCStream addStreamOutput failed: {}",
-                        err.localizedDescription()
+                    RemoteAppTargetError::new(
+                        ability,
+                        TargetResolutionError::ScreenCaptureKitFilterFailed,
+                        format!(
+                            "SCStream addStreamOutput failed: {}",
+                            err.localizedDescription()
+                        ),
                     )
                 })?;
         }
 
-        start_capture_sync(&stream)?;
+        start_capture_sync(ability, &stream)?;
 
         Ok(Self {
             stream,
@@ -689,7 +694,10 @@ impl Drop for ScreenCaptureKitStream {
     }
 }
 
-fn start_capture_sync(stream: &SCStream) -> anyhow::Result<()> {
+fn start_capture_sync(
+    ability: &'static str,
+    stream: &SCStream,
+) -> Result<(), RemoteAppTargetError> {
     let (tx, rx) = sync_channel::<Result<(), String>>(1);
     let tx = Mutex::new(Some(tx));
     let handler = RcBlock::new(move |error: *mut NSError| {
@@ -711,8 +719,16 @@ fn start_capture_sync(stream: &SCStream) -> anyhow::Result<()> {
     }
     match rx.recv_timeout(Duration::from_secs(10)) {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(msg)) => anyhow::bail!("{msg}"),
-        Err(_) => anyhow::bail!("SCStream startCapture timed out (screen recording permission?)"),
+        Ok(Err(msg)) => Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::ScreenCaptureKitStreamStartFailed,
+            msg,
+        )),
+        Err(_) => Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::ScreenCaptureKitStreamStartFailed,
+            "SCStream startCapture timed out after 10s",
+        )),
     }
 }
 

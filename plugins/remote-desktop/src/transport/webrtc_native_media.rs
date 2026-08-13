@@ -112,7 +112,14 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
             let _ = encoder_for_sink.encode(&frame.image_buffer, pts, duration);
         });
 
-    let capture = ScreenCaptureKitStream::start(capture_target, req_width, req_height, fps, sink)?;
+    let capture = ScreenCaptureKitStream::start(
+        ABILITY_SET_DESCRIPTION,
+        capture_target,
+        req_width,
+        req_height,
+        fps,
+        sink,
+    )?;
 
     let frame_dur = Duration::from_secs_f64(1.0 / fps as f64);
     let mut written_units = 0_u64;

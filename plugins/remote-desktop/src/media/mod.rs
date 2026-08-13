@@ -33,7 +33,9 @@ use serde_json::{json, Value};
 #[cfg(test)]
 use crate::daemon::persistence::resources::ResourceEntry;
 use crate::daemon::persistence::resources::ResourceType;
-use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
+use crate::daemon::plugins::remote_desktop::target::{
+    RemoteAppTargetBinding, RemoteDesktopTargetKind,
+};
 
 pub(in crate::daemon::plugins::remote_desktop) mod encode;
 pub(in crate::daemon::plugins::remote_desktop) mod native;
@@ -377,7 +379,7 @@ pub fn webrtc_transport_backend_for_entry(
     if let Some(native) = production_backend_for_entry(entry) {
         return Some(native);
     }
-    if xcap_supported_screen_entry(entry) {
+    if entry.kind == ResourceType::Display && xcap_supported_screen_entry(entry) {
         return Some(XCAP_OPENH264_WEBRTC_BACKEND);
     }
     None
@@ -389,7 +391,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_transport_backend_for_b
     if let Some(native) = production_backend_for_binding(binding) {
         return Some(native);
     }
-    if binding.supports_xcap_adapter() {
+    if binding.target_kind() == RemoteDesktopTargetKind::Display && binding.supports_xcap_adapter()
+    {
         return Some(XCAP_OPENH264_WEBRTC_BACKEND);
     }
     None
@@ -499,6 +502,16 @@ fn screen_target_metadata_resolvable(entry: &ResourceEntry) -> bool {
                         .get("primary_pid")
                         .and_then(Value::as_i64)
                         .is_some())
+                && entry
+                    .metadata
+                    .get("resolved_window_ids")
+                    .and_then(Value::as_array)
+                    .is_some_and(|items| !items.is_empty())
+                && entry
+                    .metadata
+                    .get("window_set_epoch")
+                    .and_then(Value::as_u64)
+                    .is_some()
         }
         ResourceType::Window => {
             entry
@@ -532,7 +545,7 @@ mod tests {
     fn xcap_display_entry() -> ResourceEntry {
         ResourceEntry {
             resource_ura: "easynet:///r/acme/resource/display.test".into(),
-            owner_agent: "easynet:///r/acme/device/01DEV".into(),
+            owner_agent: "easynet:///r/acme/agent/device.01DEV.media".into(),
             kind: ResourceType::Display,
             binding: ResourceBinding::LocalDevice,
             hardware_id: "display:xcap:test".into(),
@@ -545,7 +558,7 @@ mod tests {
     fn discovered_window_entry(backend: &str) -> ResourceEntry {
         ResourceEntry {
             resource_ura: "easynet:///r/acme/resource/window.test".into(),
-            owner_agent: "easynet:///r/acme/device/01DEV".into(),
+            owner_agent: "easynet:///r/acme/agent/device.01DEV.media".into(),
             kind: ResourceType::Window,
             binding: ResourceBinding::LocalDevice,
             hardware_id: format!("window:{backend}:123:456"),
@@ -581,13 +594,11 @@ mod tests {
     }
 
     #[test]
-    fn discovered_window_targets_can_negotiate_direct_webrtc() {
-        let backend =
-            webrtc_transport_backend_for_entry(&discovered_window_entry("macos_core_graphics"))
-                .expect("bootstrapped window targets must have a WebRTC-capable media path");
-
-        assert!(backend.is_webrtc_transport());
-        assert!(backend.supports_entry(&discovered_window_entry("macos_core_graphics")));
+    fn discovered_window_targets_do_not_use_xcap_baseline_for_direct_webrtc() {
+        let backend = webrtc_transport_backend_for_entry(&discovered_window_entry("xcap"));
+        assert!(
+            backend.is_none_or(|backend| backend.backend_id() != XCAP_OPENH264_WEBRTC_BACKEND_ID)
+        );
     }
 
     #[test]
@@ -615,7 +626,7 @@ mod tests {
 
         let mut application = ResourceEntry {
             resource_ura: "easynet:///r/acme/resource/application.test".into(),
-            owner_agent: "easynet:///r/acme/device/01DEV".into(),
+            owner_agent: "easynet:///r/acme/agent/device.01DEV.media".into(),
             kind: ResourceType::Application,
             binding: ResourceBinding::LocalDevice,
             hardware_id: "application:macos_core_graphics:safari".into(),
@@ -628,6 +639,9 @@ mod tests {
         };
         assert!(!screen_target_metadata_resolvable(&application));
         application.metadata["bundle_id"] = json!("com.apple.Safari");
+        assert!(!screen_target_metadata_resolvable(&application));
+        application.metadata["resolved_window_ids"] = json!([10, 11]);
+        application.metadata["window_set_epoch"] = json!(123);
         assert!(screen_target_metadata_resolvable(&application));
         application
             .metadata
