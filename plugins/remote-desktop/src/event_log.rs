@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 
 use super::contract::RemoteDesktopSessionState;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
 use crate::daemon::plugins::remote_desktop::session::now_ms;
@@ -115,8 +115,13 @@ pub(in crate::daemon::plugins::remote_desktop) fn event_type_proto_name(
         "SESSION_CREATED" => "REMOTE_DESKTOP_EVENT_SESSION_CREATED",
         "CAPTURE_TARGET_RESOLVED" => "REMOTE_DESKTOP_EVENT_CAPTURE_TARGET_RESOLVED",
         "TARGET_BOUND" => "REMOTE_DESKTOP_EVENT_TARGET_BOUND",
-        "TARGET_MOVED" | "TARGET_RESIZED" | "TARGET_VISIBLE" | "TARGET_HIDDEN"
-        | "TARGET_MINIMIZED" | "TARGET_LOST" => "REMOTE_DESKTOP_EVENT_TARGET_CHANGED",
+        "TARGET_MOVED"
+        | "TARGET_RESIZED"
+        | "TARGET_VISIBLE"
+        | "TARGET_HIDDEN"
+        | "TARGET_MINIMIZED"
+        | "TARGET_LOST"
+        | "TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_TARGET_CHANGED",
         "DESCRIPTION_SET" => "REMOTE_DESKTOP_EVENT_DESCRIPTION_SET",
         "ICE_CANDIDATE_ADDED" => "REMOTE_DESKTOP_EVENT_CANDIDATE_ADDED",
         "LOCAL_ICE_CANDIDATE" => "REMOTE_DESKTOP_EVENT_LOCAL_CANDIDATE",
@@ -145,7 +150,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn event_type_proto_name(
 mod tests {
     use serde_json::json;
 
-    use super::{RemoteDesktopEventLog, MAX_EVENTS_PER_SESSION};
+    use super::{MAX_EVENTS_PER_SESSION, RemoteDesktopEventLog, event_type_proto_name};
     use crate::daemon::plugins::remote_desktop::contract::RemoteDesktopSessionState;
 
     #[test]
@@ -194,5 +199,13 @@ mod tests {
                 "retained event sequences must remain contiguous and monotonic"
             );
         }
+    }
+
+    #[test]
+    fn target_rebind_failed_projects_as_target_change_event() {
+        assert_eq!(
+            event_type_proto_name("TARGET_REBIND_FAILED"),
+            "REMOTE_DESKTOP_EVENT_TARGET_CHANGED"
+        );
     }
 }

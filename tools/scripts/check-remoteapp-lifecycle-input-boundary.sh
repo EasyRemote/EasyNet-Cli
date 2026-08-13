@@ -52,6 +52,7 @@ CONTRACT="$REMOTE_ROOT/contract.rs"
 SESSION_STATE="$REMOTE_ROOT/session_state.rs"
 SESSION_TRANSPORT_STATE="$REMOTE_ROOT/session_transport_state.rs"
 SESSION_EVENTS="$REMOTE_ROOT/session_events.rs"
+EVENT_LOG="$REMOTE_ROOT/event_log.rs"
 INPUT="$REMOTE_ROOT/input.rs"
 TARGET="$REMOTE_ROOT/target.rs"
 SCK="$REMOTE_ROOT/screencapturekit_capture.rs"
@@ -60,7 +61,7 @@ CREATE_SESSION="$REMOTE_ROOT/handlers/create_session.rs"
 SESSION_CREATION="$REMOTE_ROOT/session_creation.rs"
 INVOKE_BIDI="$REMOTE_ROOT/invoke_bidi.rs"
 
-for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$SESSION" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$INPUT" "$TARGET" "$SCK" "$REQUEST" "$CREATE_SESSION" "$SESSION_CREATION" "$INVOKE_BIDI"; do
+for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$SESSION" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$INPUT" "$TARGET" "$SCK" "$REQUEST" "$CREATE_SESSION" "$SESSION_CREATION" "$INVOKE_BIDI"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -161,6 +162,20 @@ require '"media_transport_ready": false' "$SESSION_EVENTS" \
   'MEDIA_SOURCE_LOST must mark media transport unavailable'
 reject 'TRANSPORT_FAILED' "$SESSION" \
   'session target-loss tests must not rely on a transport-failed event'
+require '"TARGET_REBIND_FAILED"' "$TARGET_TRACKING" \
+  'post-loss target observations must emit an explicit rebind failure when no Rebinding policy exists'
+require 'explicit_rebind_required' "$TARGET_TRACKING" \
+  'TARGET_REBIND_FAILED must expose explicit_rebind_required'
+require 'target_status' "$TARGET_TRACKING" \
+  'TARGET_REBIND_FAILED must expose lost target status so frontend cannot treat it as a normal geometry update'
+require '"input_enabled": false' "$TARGET_TRACKING" \
+  'TARGET_REBIND_FAILED must keep target-scoped input disabled'
+require 'tracker_reports_rebind_failure_after_target_loss_without_policy' "$TARGET_TRACKING" \
+  'target tracker must test explicit rebind failure instead of silently swallowing post-loss observations'
+require 'target_reappearance_after_loss_emits_explicit_rebind_failure' "$SESSION" \
+  'session aggregate must test post-loss target reappearance as TARGET_REBIND_FAILED'
+require_multiline '/"TARGET_REBIND_FAILED"\s*=>\s*"REMOTE_DESKTOP_EVENT_TARGET_CHANGED"/s' "$EVENT_LOG" \
+  'event log must project TARGET_REBIND_FAILED as a canonical target change'
 
 # E2E-10: weak identity must fail closed as ambiguity or metadata-incomplete
 # before any stream starts. Native ScreenCaptureKit selection must also return

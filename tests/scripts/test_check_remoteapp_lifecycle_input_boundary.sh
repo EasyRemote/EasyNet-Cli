@@ -28,6 +28,14 @@ pub struct TargetTrackerSnapshot {
 
 fn commit_geometry() {
     geometry_event_type();
+    if target_lost {
+        "TARGET_REBIND_FAILED";
+        "explicit_rebind_required";
+        json!({
+            "target_status": "lost",
+            "input_enabled": false,
+        });
+    }
 }
 
 fn geometry_event_type() -> &'static str {
@@ -42,6 +50,9 @@ fn geometry_event_type() -> &'static str {
 mod tests {
     #[test]
     fn tracker_commits_move_resize_and_lost_without_rebinding() {}
+
+    #[test]
+    fn tracker_reports_rebind_failure_after_target_loss_without_policy() {}
 }
 RS
 
@@ -70,6 +81,11 @@ mod tests {
         assert_eq!(session.state(), RemoteDesktopState::Suspended);
         assert_eq!(session.transport_state()["primary"], json!("media_source_lost"));
         assert_eq!(session.transport_state()["device_sending"], json!(false));
+    }
+
+    #[test]
+    fn target_reappearance_after_loss_emits_explicit_rebind_failure() {
+        assert_eq!(event["event_type"], json!("TARGET_REBIND_FAILED"));
     }
 }
 RS
@@ -120,6 +136,15 @@ fn media_source_lost() {
         "failure_domain": "target",
         "media_transport_ready": false,
     });
+}
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/event_log.rs" <<'RS'
+fn event_type_proto_name(event_type: &str) -> &'static str {
+    match event_type {
+        "TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_TARGET_CHANGED",
+        _ => "REMOTE_DESKTOP_EVENT_STATE_CHANGED",
+    }
 }
 RS
 
@@ -338,6 +363,16 @@ write_fixture
 perl -0pi -e 's/target_lost_index < media_source_lost_index/media_source_lost_index < target_lost_index/' \
   "$SANDBOX/plugins/remote-desktop/src/session.rs"
 run_fail 'E2E-09 must prove TARGET_LOST is ordered before MEDIA_SOURCE_LOST'
+
+write_fixture
+perl -0pi -e 's/tracker_reports_rebind_failure_after_target_loss_without_policy/tracker_swallows_rebind_signal/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'target tracker must test explicit rebind failure instead of silently swallowing post-loss observations'
+
+write_fixture
+perl -0pi -e 's/"TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_TARGET_CHANGED"/"TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_STATE_CHANGED"/' \
+  "$SANDBOX/plugins/remote-desktop/src/event_log.rs"
+run_fail 'event log must project TARGET_REBIND_FAILED as a canonical target change'
 
 write_fixture
 perl -0pi -e 's/mark_suspended/mark_degraded/g' \

@@ -982,4 +982,85 @@ mod tests {
         );
         assert_eq!(session.transport_state()["device_sending"], json!(false));
     }
+
+    #[test]
+    fn target_reappearance_after_loss_emits_explicit_rebind_failure() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-target-rebind-failed",
+            "easynet:///r/acme/resource/display.test",
+            vec!["webrtc".into()],
+        ));
+        let epoch = TransportEpoch::new(11);
+        session.begin_webrtc_negotiation(epoch);
+        session.set_local_webrtc_answer(
+            epoch,
+            json!({"type": "answer", "sdp": "v=0"}),
+            "sck-native",
+            true,
+            "easynet:///r/acme/ability/remote-desktop.transport".into(),
+        );
+        session.mark_webrtc_media_sending(epoch, "easynet-rd://rd-target-rebind-failed".into());
+        assert!(session.production_media_ready());
+
+        session.record_target_observation(TargetObservation::Lost {
+            reason: TargetResolutionError::TargetNotFound,
+            detail: "target disappeared".into(),
+            observed_at_ms: 200,
+        });
+        session
+            .record_target_observation(TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "target still disappeared".into(),
+                observed_at_ms: 300,
+            })
+            .expect("debounced target loss must stop the active media source");
+        assert_eq!(session.state(), RemoteDesktopState::Suspended);
+        assert!(!session.production_media_ready());
+
+        assert!(
+            session
+                .record_target_observation(TargetObservation::GeometryChanged {
+                    geometry: TargetGeometry {
+                        x: Some(240.0),
+                        y: Some(260.0),
+                        width: Some(1280.0),
+                        height: Some(720.0),
+                    },
+                    target_geometry_revision: 9,
+                    observed_at_ms: 400,
+                })
+                .is_none()
+        );
+
+        assert_eq!(session.state(), RemoteDesktopState::Suspended);
+        assert!(!session.production_media_ready());
+        assert_eq!(
+            session.transport_state()["primary"],
+            json!("media_source_lost")
+        );
+        assert_eq!(
+            session.target_tracking_state()["input_enabled"],
+            json!(false)
+        );
+        let events = session.events();
+        let rebind_failed = events
+            .iter()
+            .find(|event| event["event_type"] == json!("TARGET_REBIND_FAILED"))
+            .expect("reappearance without explicit rebind policy must be typed");
+        assert_eq!(rebind_failed["state"], json!("suspended"));
+        assert_eq!(
+            rebind_failed["event_type_proto"],
+            json!("REMOTE_DESKTOP_EVENT_TARGET_CHANGED")
+        );
+        assert_eq!(
+            rebind_failed["payload"]["reason_code"],
+            json!("explicit_rebind_required")
+        );
+        assert_eq!(
+            rebind_failed["payload"]["frontend_action"],
+            json!("refresh_targets")
+        );
+        assert_eq!(rebind_failed["payload"]["target_status"], json!("lost"));
+        assert_eq!(rebind_failed["payload"]["input_enabled"], json!(false));
+    }
 }

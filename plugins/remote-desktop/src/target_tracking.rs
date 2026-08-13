@@ -13,7 +13,7 @@
 //   submit TargetObservation values. The session aggregate remains the single
 //   writer for state transitions and ordered event-log rows.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::daemon::plugins::remote_desktop::target::{
     RemoteAppTargetBinding, TargetGeometry, TargetResolutionError,
@@ -218,6 +218,8 @@ impl TargetTrackingEvent {
 pub(in crate::daemon::plugins::remote_desktop) struct TargetTrackerState {
     snapshot: TargetTrackerSnapshot,
     pending_lost: Option<PendingLostObservation>,
+    latest_loss_observed_at_ms: Option<u64>,
+    rebind_failure_emitted: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -236,6 +238,8 @@ impl TargetTrackerState {
         Self {
             snapshot: TargetTrackerSnapshot::from_binding(binding),
             pending_lost: None,
+            latest_loss_observed_at_ms: None,
+            rebind_failure_emitted: false,
         }
     }
 
@@ -273,7 +277,7 @@ impl TargetTrackerState {
         observed_at_ms: u64,
     ) -> Option<TargetTrackingEvent> {
         if self.snapshot.status == TargetTrackingStatus::Lost {
-            return None;
+            return self.commit_rebind_failed("target_geometry_after_loss", observed_at_ms);
         }
         self.clear_pending_lost();
         let previous = self.snapshot.target_geometry_revision;
@@ -304,7 +308,10 @@ impl TargetTrackerState {
         observed_at_ms: u64,
     ) -> Option<TargetTrackingEvent> {
         if self.snapshot.status == TargetTrackingStatus::Lost {
-            return None;
+            if visibility_state == TargetVisibilityState::Lost {
+                return None;
+            }
+            return self.commit_rebind_failed("target_visibility_after_loss", observed_at_ms);
         }
         if visibility_state == TargetVisibilityState::Lost {
             return self.commit_lost(
@@ -359,6 +366,10 @@ impl TargetTrackerState {
         observed_at_ms: u64,
     ) -> Option<TargetTrackingEvent> {
         if self.snapshot.status == TargetTrackingStatus::Lost {
+            self.latest_loss_observed_at_ms = Some(
+                self.latest_loss_observed_at_ms
+                    .map_or(observed_at_ms, |latest| latest.max(observed_at_ms)),
+            );
             return None;
         }
         let pending_snapshot = {
@@ -393,6 +404,7 @@ impl TargetTrackerState {
         let previous = self.snapshot.target_geometry_revision;
         self.snapshot.status = TargetTrackingStatus::Lost;
         self.snapshot.visibility_state = TargetVisibilityState::Lost;
+        self.latest_loss_observed_at_ms = Some(observed_at_ms);
         self.snapshot.diagnostic = json!({
             "status": TargetTrackingStatus::Lost.as_str(),
             "reason": pending.reason.as_str(),
@@ -414,6 +426,59 @@ impl TargetTrackerState {
         Some(TargetTrackingEvent {
             event_type: "TARGET_LOST",
             payload: self.event_payload(pending.reason.as_str(), observed_at_ms, Some(previous)),
+        })
+    }
+
+    fn commit_rebind_failed(
+        &mut self,
+        detail: &'static str,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEvent> {
+        if self
+            .latest_loss_observed_at_ms
+            .is_some_and(|lost_observed_at_ms| observed_at_ms <= lost_observed_at_ms)
+        {
+            return None;
+        }
+        if self.rebind_failure_emitted {
+            return None;
+        }
+        self.rebind_failure_emitted = true;
+        let reason_code = "explicit_rebind_required";
+        self.snapshot.diagnostic = json!({
+            "status": TargetTrackingStatus::Lost.as_str(),
+            "reason": reason_code,
+            "detail": detail,
+            "binding_id": self.snapshot.binding_id,
+            "binding_epoch": self.snapshot.binding_epoch,
+            "target_identity_epoch": self.snapshot.target_identity_epoch,
+            "target_geometry_revision": self.snapshot.target_geometry_revision,
+            "visibility_state": self.snapshot.visibility_state.as_str(),
+            "target_status": TargetTrackingStatus::Lost.as_str(),
+            "input_enabled": false,
+            "recoverability": "new_session_required",
+            "frontend_action": "refresh_targets",
+            "observed_at_ms": observed_at_ms,
+        });
+        Some(TargetTrackingEvent {
+            event_type: "TARGET_REBIND_FAILED",
+            payload: json!({
+                "binding_id": self.snapshot.binding_id,
+                "binding_epoch": self.snapshot.binding_epoch,
+                "target_identity_epoch": self.snapshot.target_identity_epoch,
+                "previous_target_geometry_revision": self.snapshot.target_geometry_revision,
+                "target_geometry_revision": self.snapshot.target_geometry_revision,
+                "media_source_epoch": self.snapshot.media_source_epoch,
+                "visibility_state": self.snapshot.visibility_state.as_str(),
+                "target_status": TargetTrackingStatus::Lost.as_str(),
+                "input_enabled": false,
+                "reason_code": reason_code,
+                "detail": detail,
+                "recoverability": "new_session_required",
+                "frontend_action": "refresh_targets",
+                "observed_at_ms": observed_at_ms,
+                "geometry": self.snapshot.geometry.to_value(),
+            }),
         })
     }
 
@@ -673,6 +738,107 @@ mod tests {
         assert_eq!(
             tracker.snapshot().latest_diagnostic()["lost_debounce"]["latest_observed_at_ms"],
             json!(1_010)
+        );
+    }
+
+    #[test]
+    fn tracker_reports_rebind_failure_after_target_loss_without_policy() {
+        let binding = window_binding();
+        let mut tracker = TargetTrackerState::from_binding(&binding);
+
+        assert!(
+            tracker
+                .commit_observation(TargetObservation::Lost {
+                    reason: TargetResolutionError::TargetNotFound,
+                    detail: "window disappeared".into(),
+                    observed_at_ms: 10,
+                })
+                .is_none()
+        );
+        tracker
+            .commit_observation(TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "window still missing".into(),
+                observed_at_ms: 20,
+            })
+            .expect("lost commits after debounce");
+
+        assert!(
+            tracker
+                .commit_observation(TargetObservation::GeometryChanged {
+                    geometry: TargetGeometry {
+                        x: Some(180.0),
+                        y: Some(230.0),
+                        width: Some(800.0),
+                        height: Some(600.0),
+                    },
+                    target_geometry_revision: 7,
+                    observed_at_ms: 20,
+                })
+                .is_none(),
+            "stale queued observations at or before committed loss must not look like rebind"
+        );
+        assert!(
+            tracker
+                .commit_observation(TargetObservation::Lost {
+                    reason: TargetResolutionError::TargetNotFound,
+                    detail: "window still lost".into(),
+                    observed_at_ms: 40,
+                })
+                .is_none()
+        );
+        assert!(
+            tracker
+                .commit_observation(TargetObservation::VisibilityChanged {
+                    visibility_state: TargetVisibilityState::Visible,
+                    target_geometry_revision: 7,
+                    observed_at_ms: 30,
+                })
+                .is_none(),
+            "observations older than the latest lost signal must stay silent"
+        );
+
+        let rebind_failed = tracker
+            .commit_observation(TargetObservation::GeometryChanged {
+                geometry: TargetGeometry {
+                    x: Some(200.0),
+                    y: Some(250.0),
+                    width: Some(800.0),
+                    height: Some(600.0),
+                },
+                target_geometry_revision: 8,
+                observed_at_ms: 50,
+            })
+            .expect("post-loss target observation must produce explicit rebind failure");
+
+        assert_eq!(rebind_failed.event_type(), "TARGET_REBIND_FAILED");
+        assert_eq!(
+            rebind_failed.payload()["reason_code"],
+            json!("explicit_rebind_required")
+        );
+        assert_eq!(
+            rebind_failed.payload()["frontend_action"],
+            json!("refresh_targets")
+        );
+        assert_eq!(rebind_failed.payload()["target_status"], json!("lost"));
+        assert_eq!(rebind_failed.payload()["input_enabled"], json!(false));
+        assert_eq!(
+            rebind_failed.payload()["previous_target_geometry_revision"],
+            rebind_failed.payload()["target_geometry_revision"]
+        );
+        assert_eq!(
+            tracker.snapshot().latest_diagnostic()["recoverability"],
+            json!("new_session_required")
+        );
+        assert_eq!(tracker.snapshot().to_value()["status"], json!("lost"));
+        assert!(
+            tracker
+                .commit_observation(TargetObservation::VisibilityChanged {
+                    visibility_state: TargetVisibilityState::Visible,
+                    target_geometry_revision: 9,
+                    observed_at_ms: 60,
+                })
+                .is_none()
         );
     }
 
