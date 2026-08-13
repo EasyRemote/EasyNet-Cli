@@ -230,6 +230,9 @@ if transport is None:
     transport = {"kind": "webrtc"}
 if not isinstance(transport, dict):
     raise SystemExit("frame analysis transport must be an object")
+production_readiness = frame.get("production_readiness")
+if not isinstance(production_readiness, dict):
+    raise SystemExit("frame analysis missing production_readiness object from post-negotiation session view")
 
 def parse_rgb_env(name):
     raw = os.environ.get(name, "").strip()
@@ -305,6 +308,8 @@ evidence = {
         "unrelated": unrelated_fixture,
     },
     "transport": transport,
+    "production_media_ready": frame.get("production_media_ready"),
+    "production_readiness": production_readiness,
     "decoded_frames": decoded_frames,
     "artifacts": artifacts,
 }

@@ -1390,6 +1390,31 @@ impl LocalRemoteDesktopSessionIssuer {
         )
     }
 
+    pub fn show_session(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+    ) -> anyhow::Result<Value> {
+        Self::show_session_timeout(
+            binding,
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn show_session_timeout(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        invoke_remote_desktop_session_control_rpc(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_SHOW_SESSION,
+            binding,
+            args,
+            timeout,
+        )
+    }
+
     pub fn add_ice_candidate(
         binding: &LocalRemoteDesktopSessionControlBinding,
         args: Value,

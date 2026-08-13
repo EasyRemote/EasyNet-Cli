@@ -268,10 +268,16 @@ Required create-session response field:
       "width": 1600,
       "height": 1000
     },
-    "production_ready": true
+    "binding_ready": true,
+    "scope_ready": true
   }
 }
 ```
+
+`target_binding.binding_ready` / `scope_ready` only means the resolved capture
+binding did not widen scope or use display fallback. It is not a production
+online signal. Session views must expose a separate `production_media_ready`
+predicate derived from a production backend plus active media transport.
 
 Required semantics:
 
@@ -1460,10 +1466,11 @@ E2E checkpoints with authoritative evidence:
 | E2E-10 weak identity ambiguity | Create two windows with same app/title, select a row without stable native identity | resolver returns `target_identity_ambiguous`; no stream starts |
 | E2E-11 view-only input safety | Start app/window session without proven focus-safe input routing | response reports `input_mode=view_only`; keyboard frames are rejected or ignored with `input_scope_unsupported` |
 | E2E-12 frontend invocation subject | Create session from frontend selected target | Axon Invocation has selected resource URA in envelope subject and no `subject` inside args |
+| E2E-13 production online predicate | Complete WebRTC offer/answer and receive decoded frames for a selected window/application | post-negotiation session evidence reports `production_media_ready=true`, `production_readiness.production_codec_negotiated=true`, and `production_readiness.media_transport_ready=true`; UI online state must not be derived from `target_binding`, `production_gate`, or decoded-frame presence alone |
 
 Passing only unit tests for resolver matching, descriptor registration, or JSON
 schema does not prove the feature. M1 requires at least E2E-01 through E2E-07
-and E2E-12. Full acceptance requires all E2E checkpoints above.
+and E2E-12 through E2E-13. Full acceptance requires all E2E checkpoints above.
 
 Performance/resource integration checkpoints:
 

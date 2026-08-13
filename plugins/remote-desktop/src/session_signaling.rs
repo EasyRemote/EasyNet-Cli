@@ -4,7 +4,7 @@
 // File: plugins/remote-desktop/src/session_signaling.rs
 // Description: SDP, ICE, and WebRTC diagnostic state for one remote desktop session.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::daemon::plugins::remote_desktop::constants::{
     MAX_LOCAL_ICE_CANDIDATES, MAX_REMOTE_ICE_CANDIDATES, TRANSPORT_WEBRTC,
@@ -99,6 +99,10 @@ impl RemoteDesktopNegotiatedCodec {
             "backend_id": self.backend_id,
             "production_ready": self.production_ready,
         })
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn production_ready(&self) -> bool {
+        self.production_ready
     }
 }
 
@@ -209,6 +213,12 @@ impl RemoteDesktopSignalingState {
         self.negotiated_codec
             .as_ref()
             .map(RemoteDesktopNegotiatedCodec::to_value)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn production_codec_negotiated(&self) -> bool {
+        self.negotiated_codec
+            .as_ref()
+            .is_some_and(RemoteDesktopNegotiatedCodec::production_ready)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn has_description(&self) -> bool {

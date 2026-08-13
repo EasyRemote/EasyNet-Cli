@@ -4,10 +4,10 @@
 // File: plugins/remote-desktop/src/view.rs
 // Description: JSON response projection for remote desktop sessions.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::daemon::plugins::remote_desktop::input::{
-    input_injection_available, INPUT_DATA_CHANNEL_LABEL,
+    INPUT_DATA_CHANNEL_LABEL, input_injection_available,
 };
 use crate::daemon::plugins::remote_desktop::media::{
     backend_catalog_view, production_gate_view, sdk_contract_view,
@@ -32,6 +32,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
     let remote_ice_candidates = session.remote_ice_candidates();
     let local_ice_candidates = session.local_ice_candidates();
     let media_stats = session.media_stats();
+    let production_media_ready = session.production_media_ready();
+    let production_readiness = json!({
+        "ready": production_media_ready,
+        "requires_production_codec": true,
+        "production_codec_negotiated": session.production_codec_negotiated(),
+        "media_transport_ready": session.media_transport_ready(),
+        "client_media_ready": session.client_media_ready(),
+    });
     let mut view = json!({
         "session_id": session.session_id(),
         "state": session.state().json_name(),
@@ -87,6 +95,11 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
             "target_tracking".to_string(),
             session.target_tracking_state(),
         );
+        map.insert(
+            "production_media_ready".to_string(),
+            Value::Bool(production_media_ready),
+        );
+        map.insert("production_readiness".to_string(), production_readiness);
     }
     view
 }

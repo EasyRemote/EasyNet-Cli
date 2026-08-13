@@ -66,6 +66,10 @@ mod tests {
             .to_string();
         assert_eq!(created["transport"]["kind"], json!("webrtc"));
         assert_eq!(created["media_transport_ready"], json!(false));
+        assert_eq!(created["production_media_ready"], json!(false));
+        assert!(created["target_binding"].get("production_ready").is_none());
+        assert_eq!(created["target_binding"]["binding_ready"], json!(true));
+        assert_eq!(created["target_binding"]["scope_ready"], json!(true));
         assert_eq!(created["quality"]["target_fps"], json!(144));
         assert_eq!(created["quality"]["max_frame_queue_depth"], json!(1));
         assert_eq!(

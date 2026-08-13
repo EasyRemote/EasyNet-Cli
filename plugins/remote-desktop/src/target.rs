@@ -1015,6 +1015,8 @@ impl RemoteAppTargetBinding {
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
+        let binding_ready =
+            !self.scope_audit.scope_widened && !self.scope_audit.display_fallback_used;
         json!({
             "subject_ura": self.subject_ura,
             "target_kind": self.target_kind.as_str(),
@@ -1034,8 +1036,8 @@ impl RemoteAppTargetBinding {
             "app_window_set": self.app_window_set.as_ref().map(AppWindowSetProof::to_value),
             "capture_proof": self.capture_proof.as_ref().map(ResolvedCaptureTargetProof::to_value),
             "bounds": self.geometry.to_value(),
-            "production_ready": !self.scope_audit.scope_widened
-                && !self.scope_audit.display_fallback_used,
+            "binding_ready": binding_ready,
+            "scope_ready": binding_ready,
         })
     }
 

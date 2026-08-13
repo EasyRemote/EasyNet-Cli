@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="${CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 SCRIPT="$ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 PROBE="$ROOT/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
+RECEIVER="$ROOT/examples/easynet-remoteapp-frame-receiver.rs"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 
 fail() {
@@ -20,6 +21,7 @@ require() {
 
 [[ -f "$SCRIPT" ]] || fail "missing host decoded-frame E2E harness"
 [[ -f "$PROBE" ]] || fail "missing bundled host decoded-frame probe"
+[[ -f "$RECEIVER" ]] || fail "missing bundled host decoded-frame receiver"
 [[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
 
 require 'E2E-03 exact window session' "$SPEC" \
@@ -51,6 +53,12 @@ require 'resolved_identity' "$SCRIPT" \
   'host decoded-frame E2E must require application resolved identity evidence'
 require 'transport\.kind.*webrtc|transport_kind.*webrtc|"webrtc"' "$SCRIPT" \
   'host decoded-frame E2E must validate WebRTC transport evidence'
+require 'production_media_ready' "$SCRIPT" \
+  'host decoded-frame E2E must validate post-negotiation production media readiness'
+require 'production_readiness\.production_codec_negotiated|production_codec_negotiated' "$SCRIPT" \
+  'host decoded-frame E2E must prove a production codec was negotiated'
+require 'production_readiness\.media_transport_ready|media_transport_ready' "$SCRIPT" \
+  'host decoded-frame E2E must prove the production media transport is active'
 require 'decoded_frames\.count' "$SCRIPT" \
   'host decoded-frame E2E must validate positive decoded frame count'
 require 'decoded_frames\.width|decoded_width' "$SCRIPT" \
@@ -120,12 +128,25 @@ require '\bsentinel_fixture\b' "$PROBE" \
   'bundled host probe must publish canonical dual-target sentinel fixture evidence'
 require 'EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON' "$PROBE" \
   'bundled host probe must consume decoded-frame analysis from the receiver'
+require 'production_readiness = frame\.get\("production_readiness"\)' "$PROBE" \
+  'bundled host probe must require post-negotiation production readiness from the frame receiver'
+require '"production_media_ready": frame\.get\("production_media_ready"\)' "$PROBE" \
+  'bundled host probe must carry post-negotiation production_media_ready into canonical evidence'
 require 'verified Invocation\.subject|invocation\.get\("subject_ura"\)' "$PROBE" \
   'bundled host probe must validate verified Invocation.subject against the selected Resource URA'
 require 'resolved_identity' "$PROBE" \
   'bundled host probe must preserve target resolved identity evidence'
 require 'ambiguous target selection|TARGET_HINT|TARGET_RESOURCE_URA' "$PROBE" \
   'bundled host probe must fail closed on ambiguous picker target selection'
+
+require 'show-remote-desktop-session' "$RECEIVER" \
+  'bundled frame receiver must read the latest post-decoded-frame session projection'
+require 'show_session_view\(config\)' "$RECEIVER" \
+  'bundled frame receiver must source readiness from remote_desktop.show_session after decoded frames'
+require '"production_media_ready": session_view' "$RECEIVER" \
+  'bundled frame receiver must write production_media_ready from the latest session projection'
+require '"production_readiness": session_view' "$RECEIVER" \
+  'bundled frame receiver must write production_readiness from the latest session projection'
 
 bash "$SCRIPT" --self-test >/dev/null
 

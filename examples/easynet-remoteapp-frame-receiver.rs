@@ -18,31 +18,31 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use openh264::decoder::Decoder;
 use openh264::formats::YUVSource;
 use rtc::interceptor::Registry;
-use rtc::media::io::h26x_writer::H26xWriter;
 use rtc::media::io::Writer as H26xRtpWriter;
-use rtc::peer_connection::configuration::interceptor_registry::register_default_interceptors;
-use rtc::peer_connection::configuration::media_engine::{MediaEngine, MIME_TYPE_H264};
+use rtc::media::io::h26x_writer::H26xWriter;
 use rtc::peer_connection::configuration::RTCConfigurationBuilder;
+use rtc::peer_connection::configuration::interceptor_registry::register_default_interceptors;
+use rtc::peer_connection::configuration::media_engine::{MIME_TYPE_H264, MediaEngine};
 use rtc::peer_connection::sdp::RTCSessionDescription;
 use rtc::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
 use rtc::rtp_transceiver::rtp_sender::{RTCRtpCodec, RTCRtpCodecParameters, RtpCodecKind};
 use rtc::rtp_transceiver::{RTCRtpTransceiverDirection, RTCRtpTransceiverInit};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use webrtc::media_stream::track_remote::{TrackRemote, TrackRemoteEvent};
 use webrtc::peer_connection::{
     PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCIceGatheringState,
     RTCPeerConnectionState,
 };
-use webrtc::runtime::{block_on, channel, default_runtime, sleep, Runtime, Sender};
+use webrtc::runtime::{Runtime, Sender, block_on, channel, default_runtime, sleep};
 
 const H264_PAYLOAD_TYPE: u8 = 102;
 const H264_CLOCK_RATE: u32 = 90_000;
@@ -64,7 +64,7 @@ async fn async_main() -> Result<()> {
             Ok(())
         }
         Err(error) => {
-            let fallback = FrameObservation::failed();
+            let fallback = ReceiverObservation::failed();
             let _ = write_analysis(
                 &config,
                 AnalysisStatus::Failed,
@@ -230,6 +230,26 @@ impl FrameObservation {
     }
 }
 
+#[derive(Debug, Clone)]
+struct SignalingAnswer {
+    answer: RTCSessionDescription,
+}
+
+#[derive(Debug, Clone)]
+struct ReceiverObservation {
+    session_view: Option<Value>,
+    frame: FrameObservation,
+}
+
+impl ReceiverObservation {
+    fn failed() -> Self {
+        Self {
+            session_view: None,
+            frame: FrameObservation::failed(),
+        }
+    }
+}
+
 enum AnalysisStatus {
     Passed,
     Failed,
@@ -310,7 +330,7 @@ impl PeerConnectionEventHandler for Handler {
     }
 }
 
-async fn run_receiver(config: &ReceiverConfig) -> Result<FrameObservation> {
+async fn run_receiver(config: &ReceiverConfig) -> Result<ReceiverObservation> {
     let mut media_engine = MediaEngine::default();
     media_engine.register_codec(
         RTCRtpCodecParameters {
@@ -370,15 +390,22 @@ async fn run_receiver(config: &ReceiverConfig) -> Result<FrameObservation> {
         .local_description()
         .await
         .ok_or_else(|| anyhow!("local WebRTC offer missing"))?;
-    let answer = signal_offer(config, &offer).context("invoke remote_desktop.set_description")?;
-    peer_connection.set_remote_description(answer).await?;
+    let signal = signal_offer(config, &offer).context("invoke remote_desktop.set_description")?;
+    peer_connection
+        .set_remote_description(signal.answer.clone())
+        .await?;
 
     let started = Instant::now();
     loop {
         match observation_rx.try_recv() {
             Ok(observation) => {
+                let latest_session_view = show_session_view(config)
+                    .context("invoke remote_desktop.show_session after decoded frame")?;
                 peer_connection.close().await?;
-                return Ok(observation);
+                return Ok(ReceiverObservation {
+                    session_view: Some(latest_session_view),
+                    frame: observation,
+                });
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 bail!("decoded frame observation channel closed before assertions passed");
@@ -492,10 +519,7 @@ async fn receive_decode_and_assert(
     Ok(())
 }
 
-fn signal_offer(
-    config: &ReceiverConfig,
-    offer: &RTCSessionDescription,
-) -> Result<RTCSessionDescription> {
+fn signal_offer(config: &ReceiverConfig, offer: &RTCSessionDescription) -> Result<SignalingAnswer> {
     let offer_path = config.out_dir.join("remoteapp-receiver-offer.json");
     fs::write(&offer_path, serde_json::to_vec_pretty(offer)?)?;
     let output = easynet_command(config)
@@ -525,7 +549,26 @@ fn signal_offer(
         .ok_or_else(|| {
             anyhow!("remote_desktop.set_description response missing signaling.local_description")
         })?;
-    serde_json::from_value(answer).context("parse WebRTC answer from signaling.local_description")
+    let answer = serde_json::from_value(answer)
+        .context("parse WebRTC answer from signaling.local_description")?;
+    Ok(SignalingAnswer { answer })
+}
+
+fn show_session_view(config: &ReceiverConfig) -> Result<Value> {
+    let output = easynet_command(config)
+        .args(["ability", "show-remote-desktop-session", "--session-json"])
+        .arg(&config.session_json)
+        .args(["--format", "json"])
+        .output()
+        .context("spawn easynet ability show-remote-desktop-session")?;
+    if !output.status.success() {
+        bail!(
+            "easynet show-remote-desktop-session failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    serde_json::from_slice(&output.stdout)
+        .context("parse remote_desktop.show_session JSON response")
 }
 
 fn easynet_command(config: &ReceiverConfig) -> Command {
@@ -588,13 +631,15 @@ fn write_ppm(path: &Path, width: usize, height: usize, rgb: &[u8]) -> Result<()>
 fn write_analysis(
     config: &ReceiverConfig,
     status: AnalysisStatus,
-    observation: FrameObservation,
+    observation: ReceiverObservation,
     error: Option<String>,
 ) -> Result<()> {
     let decoded_frame_sample = observation
+        .frame
         .decoded_frame_sample
         .as_ref()
         .map(|path| path.display().to_string());
+    let session_view = observation.session_view.clone().unwrap_or(Value::Null);
     let analysis = json!({
         "status": status.as_str(),
         "error": error,
@@ -603,16 +648,25 @@ fn write_analysis(
             "codec": "h264",
             "carrier": "rtp_srtp"
         },
+        "session_view": session_view.clone(),
+        "production_readiness": session_view
+            .get("production_readiness")
+            .cloned()
+            .unwrap_or(Value::Null),
+        "production_media_ready": session_view
+            .get("production_media_ready")
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
         "decoded_frames": {
-            "count": observation.count,
-            "rtp_packet_count": observation.rtp_packet_count,
-            "width": observation.width,
-            "height": observation.height,
-            "selected_content_present": observation.selected_content_present,
-            "unrelated_sentinel_present": observation.unrelated_sentinel_present,
-            "full_display_leak_detected": observation.full_display_leak_detected,
-            "selected_pixel_count": observation.selected_pixel_count,
-            "unrelated_pixel_count": observation.unrelated_pixel_count
+            "count": observation.frame.count,
+            "rtp_packet_count": observation.frame.rtp_packet_count,
+            "width": observation.frame.width,
+            "height": observation.frame.height,
+            "selected_content_present": observation.frame.selected_content_present,
+            "unrelated_sentinel_present": observation.frame.unrelated_sentinel_present,
+            "full_display_leak_detected": observation.frame.full_display_leak_detected,
+            "selected_pixel_count": observation.frame.selected_pixel_count,
+            "unrelated_pixel_count": observation.frame.unrelated_pixel_count
         },
         "artifacts": {
             "decoded_frame_sample": decoded_frame_sample,

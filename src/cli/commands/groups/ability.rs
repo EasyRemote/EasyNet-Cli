@@ -115,6 +115,9 @@ pub enum AbilityAction {
     /// Apply a remote desktop WebRTC signaling description for a created session.
     #[command(name = "set-remote-desktop-description", hide = true)]
     SetRemoteDesktopDescription(SetRemoteDesktopDescriptionArgs),
+    /// Read the current remote desktop session projection for host E2E verification.
+    #[command(name = "show-remote-desktop-session", hide = true)]
+    ShowRemoteDesktopSession(ShowRemoteDesktopSessionArgs),
     /// Add a remote desktop WebRTC ICE candidate for a created session.
     #[command(name = "add-remote-desktop-ice-candidate", hide = true)]
     AddRemoteDesktopIceCandidate(AddRemoteDesktopIceCandidateArgs),
@@ -237,6 +240,16 @@ pub struct SetRemoteDesktopDescriptionArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct ShowRemoteDesktopSessionArgs {
+    /// JSON response from create-remote-desktop-session; carries subject, token, and consent receipt.
+    #[arg(long, value_name = "PATH")]
+    pub session_json: PathBuf,
+    /// Output format. JSON is the host receiver contract.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Args)]
 pub struct AddRemoteDesktopIceCandidateArgs {
     /// JSON response from create-remote-desktop-session; carries subject, token, and consent receipt.
     #[arg(long, value_name = "PATH")]
@@ -285,6 +298,7 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
         AbilityAction::WatchRemoteTargets(a) => run_watch_remote_targets(a),
         AbilityAction::CreateRemoteDesktopSession(a) => run_create_remote_desktop_session(a),
         AbilityAction::SetRemoteDesktopDescription(a) => run_set_remote_desktop_description(a),
+        AbilityAction::ShowRemoteDesktopSession(a) => run_show_remote_desktop_session(a),
         AbilityAction::AddRemoteDesktopIceCandidate(a) => run_add_remote_desktop_ice_candidate(a),
         AbilityAction::WatchRemoteDesktopEvents(a) => run_watch_remote_desktop_events(a),
         AbilityAction::Exec(a) => exec::run(a),
@@ -562,6 +576,27 @@ fn run_set_remote_desktop_description(args: SetRemoteDesktopDescriptionArgs) -> 
     output::success("set remote desktop description");
     println!("{}", serde_json::to_string_pretty(&response)?);
     Ok(())
+}
+
+fn run_show_remote_desktop_session(args: ShowRemoteDesktopSessionArgs) -> anyhow::Result<()> {
+    let binding = remote_desktop_session_control_binding_from_file(&args.session_json)?;
+    let response = LocalRemoteDesktopSessionIssuer::show_session(
+        &binding,
+        show_remote_desktop_session_request(&args),
+    )
+    .context("invoke remote_desktop.show_session")?;
+    if args.format == OutputFormat::Json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+
+    output::success("showed remote desktop session");
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+fn show_remote_desktop_session_request(_args: &ShowRemoteDesktopSessionArgs) -> Value {
+    serde_json::json!({})
 }
 
 fn set_remote_desktop_description_request(
@@ -865,6 +900,20 @@ mod tests {
 
         assert_eq!(request["side"], serde_json::json!("remote"));
         assert_eq!(request["description"]["type"], serde_json::json!("offer"));
+        assert!(request.get("subject").is_none());
+        assert!(request.get("resource_ura").is_none());
+        assert!(request.get("session_id").is_none());
+        assert!(request.get("session_token").is_none());
+    }
+
+    #[test]
+    fn show_remote_desktop_session_request_keeps_session_fields_out_of_args() {
+        let request = show_remote_desktop_session_request(&ShowRemoteDesktopSessionArgs {
+            session_json: PathBuf::from("session.json"),
+            format: OutputFormat::Json,
+        });
+
+        assert_eq!(request, serde_json::json!({}));
         assert!(request.get("subject").is_none());
         assert!(request.get("resource_ura").is_none());
         assert!(request.get("session_id").is_none());

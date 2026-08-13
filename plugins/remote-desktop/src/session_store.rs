@@ -557,10 +557,67 @@ mod tests {
         store.with_sessions(|sessions| {
             let session = sessions.get("rd-peer-connected-only").unwrap();
             assert!(!session.media_transport_ready());
-            assert!(session
-                .events()
-                .iter()
-                .any(|event| event["event_type"] == json!("PEER_CONNECTION_STATE_CHANGED")));
+            assert!(
+                session
+                    .events()
+                    .iter()
+                    .any(|event| event["event_type"] == json!("PEER_CONNECTION_STATE_CHANGED"))
+            );
+        });
+    }
+
+    #[test]
+    fn production_media_ready_requires_production_codec_and_sender_ready() {
+        let store = RemoteDesktopSessionStore::new();
+        insert_test_session(&store, "rd-non-production-ready");
+
+        store.with_sessions(|sessions| {
+            sessions
+                .get_mut("rd-non-production-ready")
+                .unwrap()
+                .set_local_webrtc_answer(
+                    TransportEpoch::new(1),
+                    json!({"type": "answer", "sdp": "v=0\r\n"}),
+                    "xcap-openh264-webrtc",
+                    false,
+                    "easynet:///r/acme/session/rd-non-production-ready/webrtc/1".to_string(),
+                );
+        });
+        store.mark_direct_webrtc_media_ready("rd-non-production-ready", TransportEpoch::new(1));
+        store.with_sessions(|sessions| {
+            let view = serialize_session(sessions.get("rd-non-production-ready").unwrap());
+            assert_eq!(view["media_transport_ready"], json!(true));
+            assert_eq!(
+                view["production_readiness"]["production_codec_negotiated"],
+                json!(false)
+            );
+            assert_eq!(view["production_media_ready"], json!(false));
+            assert_eq!(view["production_readiness"]["ready"], json!(false));
+        });
+
+        insert_test_session(&store, "rd-production-ready");
+        store.with_sessions(|sessions| {
+            sessions
+                .get_mut("rd-production-ready")
+                .unwrap()
+                .set_local_webrtc_answer(
+                    TransportEpoch::new(1),
+                    json!({"type": "answer", "sdp": "v=0\r\n"}),
+                    "macos-sck-videotoolbox-webrtc",
+                    true,
+                    "easynet:///r/acme/session/rd-production-ready/webrtc/1".to_string(),
+                );
+        });
+        store.mark_direct_webrtc_media_ready("rd-production-ready", TransportEpoch::new(1));
+        store.with_sessions(|sessions| {
+            let view = serialize_session(sessions.get("rd-production-ready").unwrap());
+            assert_eq!(view["media_transport_ready"], json!(true));
+            assert_eq!(
+                view["production_readiness"]["production_codec_negotiated"],
+                json!(true)
+            );
+            assert_eq!(view["production_media_ready"], json!(true));
+            assert_eq!(view["production_readiness"]["ready"], json!(true));
         });
     }
 }

@@ -249,6 +249,18 @@ impl RemoteDesktopSession {
         self.transport.media_transport_ready()
     }
 
+    /// Whether a production backend is negotiated and actively sending media.
+    ///
+    /// Diagnostic previews and non-production fallback media can make transport
+    /// progress, but they must not be reported to the UI as production online.
+    pub(in crate::daemon::plugins::remote_desktop) fn production_media_ready(&self) -> bool {
+        self.signaling.production_codec_negotiated() && self.transport.media_transport_ready()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn production_codec_negotiated(&self) -> bool {
+        self.signaling.production_codec_negotiated()
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn client_media_ready(&self) -> bool {
         self.transport.client_media_ready()
     }

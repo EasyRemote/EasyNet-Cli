@@ -168,6 +168,8 @@ display_fallback_used = get("target_binding.scope_audit.display_fallback_used")
 decoded_frame_count = get("decoded_frames.count")
 rtp_packet_count = get("decoded_frames.rtp_packet_count")
 transport_kind = get("transport.kind")
+production_media_ready = get("production_media_ready")
+production_readiness = get("production_readiness")
 decoded_frame_sample = get("artifacts.decoded_frame_sample")
 decoded_width = get("decoded_frames.width")
 decoded_height = get("decoded_frames.height")
@@ -334,6 +336,19 @@ else:
 require(scope_widened is False, "scope_audit.scope_widened must be false")
 require(display_fallback_used is False, "scope_audit.display_fallback_used must be false")
 require(transport_kind == "webrtc", "transport.kind must be webrtc")
+require(production_media_ready is True,
+        "production_media_ready must be true after the WebRTC production media path is negotiated and sending")
+require(isinstance(production_readiness, dict),
+        "production_readiness must be present as post-negotiation session evidence")
+if isinstance(production_readiness, dict):
+    require(production_readiness.get("ready") is True,
+            "production_readiness.ready must be true")
+    require(production_readiness.get("requires_production_codec") is True,
+            "production_readiness.requires_production_codec must be true")
+    require(production_readiness.get("production_codec_negotiated") is True,
+            "production_readiness.production_codec_negotiated must be true")
+    require(production_readiness.get("media_transport_ready") is True,
+            "production_readiness.media_transport_ready must be true")
 require(isinstance(rtp_packet_count, int) and rtp_packet_count > 0,
         "decoded_frames.rtp_packet_count must be a positive integer")
 require(isinstance(decoded_frame_count, int) and decoded_frame_count > 0,
@@ -390,6 +405,8 @@ report = {
         "binding_epoch": binding_epoch,
         "app_window_set": app_window_set,
         "display_fallback_used": display_fallback_used,
+        "production_media_ready": production_media_ready,
+        "production_readiness": production_readiness,
         "rtp_packet_count": rtp_packet_count,
         "decoded_frame_count": decoded_frame_count,
         "decoded_width": decoded_width,
@@ -426,6 +443,8 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "Invocation.subject" "$0"
   grep -q "decoded_frames.unrelated_sentinel_present" "$0"
   grep -q "display_fallback_used" "$0"
+  grep -q "production_media_ready" "$0"
+  grep -q "production_readiness.production_codec_negotiated" "$0"
   cat >"$EVIDENCE_JSON" <<'JSON'
 {
   "status": "passed",
@@ -462,6 +481,14 @@ if [[ "$SELF_TEST" == "1" ]]; then
     }
   },
   "transport": {"kind": "webrtc"},
+  "production_media_ready": true,
+  "production_readiness": {
+    "ready": true,
+    "requires_production_codec": true,
+    "production_codec_negotiated": true,
+    "media_transport_ready": true,
+    "client_media_ready": true
+  },
   "decoded_frames": {
     "count": 3,
     "rtp_packet_count": 10,
