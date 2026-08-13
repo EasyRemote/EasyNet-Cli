@@ -130,3 +130,77 @@ fn ensure_session_subject_consistent(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{ensure_session_control_identity, ensure_session_resource_identity};
+    use crate::daemon::plugins::remote_desktop::constants::ABILITY_SHOW_SESSION;
+    use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+    use crate::daemon::plugins::remote_desktop::test_support::{env_for, test_session_init};
+
+    #[test]
+    fn session_control_subject_contract_is_original_resource_ura_not_session_ura() {
+        let resource_ura = "easynet:///r/acme/resource/device.01DEV/streams/display.contract";
+        let session = RemoteDesktopSession::new(test_session_init(
+            "rd-subject-contract",
+            resource_ura,
+            vec!["webrtc".to_string()],
+        ));
+        let args = json!({
+            "session_id": "rd-subject-contract",
+            "session_token": "token",
+        });
+
+        ensure_session_control_identity(
+            ABILITY_SHOW_SESSION,
+            &env_for(resource_ura),
+            &args,
+            &session,
+        )
+        .expect("resource subject is the remote desktop session control contract");
+        ensure_session_resource_identity(
+            ABILITY_SHOW_SESSION,
+            &env_for(resource_ura),
+            &args,
+            &session,
+        )
+        .expect("resource data-plane access uses the same selected resource subject");
+
+        let session_ura = "easynet:///r/acme/resource/remote-desktop-session/rd-subject-contract";
+        let err = ensure_session_control_identity(
+            ABILITY_SHOW_SESSION,
+            &env_for(session_ura),
+            &args,
+            &session,
+        )
+        .expect_err("session URA must not replace the selected resource subject");
+        assert!(err.to_string().contains("does not match session subject"));
+    }
+
+    #[test]
+    fn session_control_rejects_subject_in_args_even_when_token_matches() {
+        let resource_ura = "easynet:///r/acme/resource/device.01DEV/streams/display.args-subject";
+        let session = RemoteDesktopSession::new(test_session_init(
+            "rd-args-subject",
+            resource_ura,
+            vec!["webrtc".to_string()],
+        ));
+        let args = json!({
+            "session_id": "rd-args-subject",
+            "session_token": "token",
+            "subject": resource_ura,
+        });
+
+        let err = ensure_session_control_identity(
+            ABILITY_SHOW_SESSION,
+            &env_for(resource_ura),
+            &args,
+            &session,
+        )
+        .expect_err("Invocation.subject must not be duplicated in ability args");
+
+        assert!(err.to_string().contains("subject_in_args"));
+    }
+}
