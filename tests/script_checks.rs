@@ -255,6 +255,14 @@ fn remoteapp_e2e_acceptance_boundary_script_holds() {
 }
 
 #[test]
+fn frontend_ability_contract_boundary_script_holds() {
+    // Pins every governed ability descriptor to one explicit execution surface
+    // and subject-construction owner. Remote desktop abilities must stay on
+    // the dedicated remote_desktop surface, not the generic media/catalog UI.
+    run_bash_script("tests/scripts/test_check_frontend_ability_contract_boundary.sh");
+}
+
+#[test]
 fn browser_cdp_axon_boundary_script_holds() {
     // Pins the browser executor to a package-owned provider, current headed
     // Chrome with isolated debugging profiles, and CDP application frames

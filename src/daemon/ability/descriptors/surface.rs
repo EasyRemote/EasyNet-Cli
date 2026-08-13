@@ -501,9 +501,8 @@ pub struct AbilityDescriptor {
     /// Canonical URA of the entity that publishes this ability — the public
     /// `callee` in any Invoke targeting this name. Per the current Invocation
     /// ontology, ordinary public callees are Agent, device-sponsored
-    /// SystemAgent, or realm Authority. Device URAs may remain only as
-    /// bootstrap/self-maintenance/DeviceProfileProjection migration owners,
-    /// not ordinary device-native public callees.
+    /// SystemAgent, or realm Authority. A Device is the execution host and
+    /// sponsor, never an AbilityDescriptor owner/callee.
     ///
     ///   * `agent/<user-uuid>.<agent-id>` — hosted user Agent
     ///     (consent / policy / mcp / llm sub-agent abilities).
@@ -516,9 +515,8 @@ pub struct AbilityDescriptor {
     /// every existing daemon. §A.URA-5's agent-scoped ability URA
     /// rule applies to `/ability/<...>`-shaped URAs — it does not
     /// constrain who may publish a descriptor for a realm Authority verb or for
-    /// explicitly gated bootstrap/migration Device projections. A migrated
-    /// device-native verb such as `shell.run` is owned by a device-sponsored
-    /// SystemAgent.
+    /// explicitly gated bootstrap transport operations. A device-native verb
+    /// such as `shell.run` is owned by a device-sponsored SystemAgent.
     pub owner_ura: String,
     /// Governed interface version. This is distinct from
     /// `AbilityManifest.schema_version`, which versions the TOML file
@@ -796,7 +794,7 @@ impl std::fmt::Display for DescriptorError {
             }
             DescriptorError::InvalidOwnerUra { owner_ura } => write!(
                 f,
-                "owner_ura {owner_ura:?} must be a canonical Agent, Device, or Authority URA"
+                "owner_ura {owner_ura:?} must be a canonical Agent, Service, or Authority URA"
             ),
             DescriptorError::InvalidVersion { version } => {
                 write!(f, "descriptor version {version:?} is not a valid semver")
@@ -832,9 +830,13 @@ impl AbilityDescriptor {
         }
         Self::validate_owner_ura(&owner_ura)?;
         if !name.contains('.') {
-            let agent_owned = crate::core::ura::parse_ura(&owner_ura)
-                .is_ok_and(|parsed| parsed.kind == crate::core::ura::URAKind::Agent);
-            if !agent_owned {
+            let bare_name_owner = crate::core::ura::parse_ura(&owner_ura).is_ok_and(|parsed| {
+                matches!(
+                    parsed.kind,
+                    crate::core::ura::URAKind::Agent | crate::core::ura::URAKind::Service
+                )
+            });
+            if !bare_name_owner {
                 return Err(DescriptorError::UnnamespacedName);
             }
         }
@@ -882,9 +884,11 @@ impl AbilityDescriptor {
                         crate::core::ura::agent_ura(&parsed.realm, user_id, agent_id)
                     })
                 }),
-            crate::core::ura::URAKind::Device => parsed
-                .device_id()
-                .map(|device_id| crate::core::ura::device_ura(&parsed.realm, device_id)),
+            crate::core::ura::URAKind::Service => {
+                parsed.service_ids().map(|(principal_id, service_id)| {
+                    crate::core::ura::service_ura(&parsed.realm, principal_id, service_id)
+                })
+            }
             crate::core::ura::URAKind::Authority => Some(crate::core::ura::hub_ura(&parsed.realm)),
             _ => None,
         };
@@ -932,8 +936,27 @@ impl AbilityDescriptor {
         if let Some(output_schema) = manifest.output_schema() {
             descriptor = descriptor.with_output_schema(output_schema.clone());
         }
-        if let Some(exposure) = manifest.exposure() {
-            descriptor = descriptor.with_metadata_entry("exposure", exposure.as_str());
+        let exposure = manifest
+            .exposure()
+            .unwrap_or(crate::daemon::ability::manifest::AbilityExposure::Internal);
+        let dedicated_surface = manifest
+            .dedicated_surface()
+            .unwrap_or(crate::daemon::ability::manifest::AbilityDedicatedSurface::None);
+        let subject_contract_kind = manifest
+            .subject_contract_kind()
+            .unwrap_or(crate::daemon::ability::manifest::AbilitySubjectContractKind::RouteTarget);
+        descriptor = descriptor
+            .with_metadata_entry("exposure", exposure.as_str())
+            .with_metadata_entry("dedicated_surface", dedicated_surface.as_str())
+            .with_metadata_entry("subject_contract_kind", subject_contract_kind.as_str());
+        if let Some(subject_contract_ura) = manifest.subject_contract_ura() {
+            crate::core::ura::parse_ura(subject_contract_ura).map_err(|error| {
+                DescriptorError::InvalidDescriptorIdentity {
+                    detail: format!("subject_contract_ura must be canonical: {error}"),
+                }
+            })?;
+            descriptor =
+                descriptor.with_metadata_entry("subject_contract_ura", subject_contract_ura);
         }
         Ok(descriptor)
     }
@@ -1317,7 +1340,7 @@ fn sorted_scope_values(values: &[String]) -> Vec<String> {
 mod tests {
     use super::*;
 
-    const DEVICE_OWNER: &str = "easynet:///r/acme/device/dev-1";
+    const SYSTEM_AGENT_OWNER: &str = "easynet:///r/acme/agent/device.dev-1.runtime-introspection";
 
     fn must(name: &str, owner: &str, vis: Visibility) -> AbilityDescriptor {
         AbilityDescriptor::new(name, owner, vis, AdmissionAction::Invoke)
@@ -1329,7 +1352,7 @@ mod tests {
         assert_eq!(
             AbilityDescriptor::new(
                 "",
-                DEVICE_OWNER,
+                SYSTEM_AGENT_OWNER,
                 Visibility::Public,
                 AdmissionAction::Invoke
             )
@@ -1339,7 +1362,7 @@ mod tests {
         assert_eq!(
             AbilityDescriptor::new(
                 "   ",
-                DEVICE_OWNER,
+                SYSTEM_AGENT_OWNER,
                 Visibility::Public,
                 AdmissionAction::Invoke
             )
@@ -1349,17 +1372,15 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_constructor_rejects_unnamespaced_name() {
-        assert_eq!(
-            AbilityDescriptor::new(
-                "nodot",
-                DEVICE_OWNER,
-                Visibility::Public,
-                AdmissionAction::Invoke,
-            )
-            .unwrap_err(),
-            DescriptorError::UnnamespacedName,
-        );
+    fn descriptor_constructor_accepts_owner_local_system_agent_name() {
+        let descriptor = AbilityDescriptor::new(
+            "nodot",
+            SYSTEM_AGENT_OWNER,
+            Visibility::Public,
+            AdmissionAction::Invoke,
+        )
+        .expect("SystemAgent abilities may use owner-local names");
+        assert_eq!(descriptor.public_name(), "runtime-introspection.nodot");
     }
 
     #[test]
@@ -1372,11 +1393,12 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_constructor_rejects_non_authority_and_legacy_owner_locators() {
+    fn descriptor_constructor_rejects_non_actor_and_device_owner_locators() {
         for owner_ura in [
             "self",
             "agent://claude",
             "easynet:///r/acme/user/alice",
+            "easynet:///r/acme/device/dev-1",
             "easynet:///r/acme/ability/device.dev-1.fs.read",
             "easynet:///r/acme/resource/device.dev-1/fs/file",
         ] {
@@ -1398,8 +1420,8 @@ mod tests {
 
     #[test]
     fn owner_rebind_preserves_governed_facets_and_rebinds_self_scope() {
-        let previous_owner = "easynet:///r/acme/device/dev-a";
-        let owner = "easynet:///r/acme/device/dev-b";
+        let previous_owner = "easynet:///r/acme/agent/device.dev-a.locomotion";
+        let owner = "easynet:///r/acme/agent/device.dev-b.locomotion";
         let previous_ability =
             crate::core::ura::owner_ability_ura(previous_owner, "fs.read").unwrap();
         let external = "easynet:///r/acme/agent/user.external".to_string();
@@ -1480,7 +1502,7 @@ mod tests {
     fn public_visibility_is_visible_to_anyone() {
         let d = must(
             "observe.health",
-            "easynet:///r/acme/device/dev-1",
+            "easynet:///r/acme/agent/device.dev-1.runtime-health",
             Visibility::Public,
         );
         assert!(d.is_visible_to("anybody", "anybody"));
@@ -1498,12 +1520,13 @@ mod tests {
 
     #[test]
     fn denied_agents_are_canonical_and_override_visibility() {
-        let descriptor = must("agent.list", DEVICE_OWNER, Visibility::Public).with_denied_agents([
-            " mallory ".to_string(),
-            "alice".to_string(),
-            "mallory".to_string(),
-            "".to_string(),
-        ]);
+        let descriptor = must("agent.list", SYSTEM_AGENT_OWNER, Visibility::Public)
+            .with_denied_agents([
+                " mallory ".to_string(),
+                "alice".to_string(),
+                "mallory".to_string(),
+                "".to_string(),
+            ]);
         assert_eq!(descriptor.denied_agents(), &["alice", "mallory"]);
         assert!(!descriptor.is_visible_to("mallory", "anything"));
         assert!(descriptor.is_visible_to("bob", "anything"));
@@ -1517,7 +1540,7 @@ mod tests {
 
     #[test]
     fn denied_agent_name_matches_canonical_agent_ura() {
-        let descriptor = must("agent.list", DEVICE_OWNER, Visibility::Public)
+        let descriptor = must("agent.list", SYSTEM_AGENT_OWNER, Visibility::Public)
             .with_denied_agents(["mallory".to_string()]);
         assert!(!descriptor.is_visible_to(
             "easynet:///r/acme/agent/alice.mallory",
@@ -1527,7 +1550,7 @@ mod tests {
 
     #[test]
     fn policy_hash_binds_deny_rules() {
-        let base = must("agent.list", DEVICE_OWNER, Visibility::Scoped);
+        let base = must("agent.list", SYSTEM_AGENT_OWNER, Visibility::Scoped);
         let denied = base.clone().with_denied_agents(["mallory".to_string()]);
         assert_ne!(
             base.access_policy_hash_bytes(),
@@ -1612,7 +1635,7 @@ mod tests {
         let operator = "easynet:///r/acme/user/alice";
         let d = must(
             "agent.list",
-            "easynet:///r/acme/device/dev-1",
+            "easynet:///r/acme/agent/device.dev-1.agent-management",
             Visibility::Scoped,
         )
         .with_scope_subjects(ScopeRule::OnlyMatching(vec![operator.into()]))
@@ -1628,7 +1651,7 @@ mod tests {
     fn scope_rule_none_denies_everything_on_that_axis() {
         let d = must(
             "admin.failover",
-            "easynet:///r/acme/device/dev-1",
+            "easynet:///r/acme/agent/device.dev-1.runtime-health",
             Visibility::Scoped,
         )
         .with_scope_subjects(ScopeRule::None);
@@ -1668,7 +1691,7 @@ mod tests {
         // blank means there is nothing to identify.
         let mut blank_name = must(
             "agent.list",
-            "easynet:///r/acme/device/dev-1",
+            "easynet:///r/acme/agent/device.dev-1.agent-management",
             Visibility::Scoped,
         );
         blank_name.name = "   ".into();
@@ -1676,7 +1699,7 @@ mod tests {
 
         let mut blank_owner = must(
             "agent.list",
-            "easynet:///r/acme/device/dev-1",
+            "easynet:///r/acme/agent/device.dev-1.agent-management",
             Visibility::Scoped,
         );
         blank_owner.owner_ura = "  ".into();
@@ -1687,7 +1710,7 @@ mod tests {
     fn descriptor_ref_derivation_fails_closed_for_corrupt_identity() {
         let mut descriptor = must(
             "agent.list",
-            "easynet:///r/acme/device/dev-1",
+            "easynet:///r/acme/agent/device.dev-1.agent-management",
             Visibility::Scoped,
         );
         descriptor.owner_ura = "not-a-ura".into();
@@ -1695,9 +1718,7 @@ mod tests {
             .descriptor_ref()
             .expect_err("descriptor_ref derivation must fail closed");
         assert!(
-            error
-                .to_string()
-                .contains("do not derive a canonical Ability URA"),
+            error.to_string().contains("invalid descriptor identity"),
             "unexpected descriptor_ref error: {error}"
         );
     }
@@ -1706,16 +1727,14 @@ mod tests {
     fn descriptor_wire_projection_fails_closed_for_corrupt_identity() {
         let mut descriptor = must(
             "agent.list",
-            "easynet:///r/acme/device/dev-1",
+            "easynet:///r/acme/agent/device.dev-1.agent-management",
             Visibility::Scoped,
         );
         descriptor.name = "   ".into();
         let error =
             serde_json::to_value(&descriptor).expect_err("wire projection must fail closed");
         assert!(
-            error
-                .to_string()
-                .contains("do not derive a canonical Ability URA"),
+            error.to_string().contains("invalid derived Ability URA"),
             "unexpected descriptor wire projection error: {error}"
         );
     }
@@ -1739,20 +1758,20 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_exposes_canonical_device_owned_ability_identity() {
+    fn descriptor_exposes_canonical_system_agent_owned_ability_identity() {
         let d = must(
             "fs.read",
-            "easynet:///r/acme/device/dev-1",
+            "easynet:///r/acme/agent/device.dev-1.locomotion",
             Visibility::Scoped,
         );
         assert_eq!(d.public_name(), "fs.read");
         assert_eq!(
             d.canonical_ability_ura().as_deref(),
-            Some("easynet:///r/acme/ability/device.dev-1.fs.read")
+            Some("easynet:///r/acme/ability/system-agent.dev-1.locomotion.fs.read")
         );
         assert_eq!(
             d.identity().map(|id| id.into_string()),
-            Some("easynet:///r/acme/ability/device.dev-1.fs.read".to_string())
+            Some("easynet:///r/acme/ability/system-agent.dev-1.locomotion.fs.read".to_string())
         );
     }
 
@@ -1760,7 +1779,7 @@ mod tests {
     fn descriptor_wire_exposes_canonical_descriptor_ref() {
         let descriptor = must(
             "meta.list_abilities",
-            "easynet:///r/acme/device/dev-1",
+            "easynet:///r/acme/agent/device.dev-1.runtime-introspection",
             Visibility::Scoped,
         )
         .with_description("List abilities");
@@ -1776,26 +1795,23 @@ mod tests {
                 .descriptor_ref()
                 .expect("descriptor derives canonical descriptor_ref")
         );
-        let expected_ref_prefix = format!(
-            "{}@1.0.0#",
-            crate::core::ura::device_ability_ura("acme", "dev-1", "meta.list_abilities")
-        );
-        assert!(descriptor_ref.starts_with(&expected_ref_prefix));
+        let expected_ref_prefix = "easynet:///r/acme/ability/system-agent.dev-1.runtime-introspection.meta.list_abilities@1.0.0#";
+        assert!(descriptor_ref.starts_with(expected_ref_prefix));
         assert!(descriptor_ref.ends_with("!invoke"));
     }
 
     #[test]
     fn descriptor_wire_name_is_owner_local_public_name() {
-        let device = must(
+        let system_agent = must(
             "fs.read",
-            "easynet:///r/acme/device/dev-1",
+            "easynet:///r/acme/agent/device.dev-1.locomotion",
             Visibility::Scoped,
         );
-        let device_json = serde_json::to_value(&device).unwrap();
-        assert_eq!(device_json["name"], "fs.read");
+        let system_agent_json = serde_json::to_value(&system_agent).unwrap();
+        assert_eq!(system_agent_json["name"], "fs.read");
         assert_eq!(
-            device_json["ability_ura"],
-            "easynet:///r/acme/ability/device.dev-1.fs.read"
+            system_agent_json["ability_ura"],
+            "easynet:///r/acme/ability/system-agent.dev-1.locomotion.fs.read"
         );
 
         let agent = must(
@@ -1832,7 +1848,7 @@ mod tests {
     fn behavior_hints_do_not_select_call_mode() {
         let rpc = must(
             "agent.list",
-            "easynet:///r/acme/device/dev-1",
+            "easynet:///r/acme/agent/device.dev-1.agent-management",
             Visibility::Scoped,
         );
         assert_eq!(rpc.call_mode(), CallMode::Rpc);
@@ -1855,7 +1871,7 @@ mod tests {
                 .unwrap();
         let descriptor = must(
             "page.publish",
-            "easynet:///r/acme/agent/alice.pages",
+            "easynet:///r/acme/service/alice.pages",
             Visibility::Scoped,
         )
         .with_call_mode(CallMode::Stream)
@@ -1937,7 +1953,7 @@ mod tests {
     fn wire_projects_input_schema_without_making_it_deserialization_authority() {
         let descriptor = must(
             "admission.explain",
-            "easynet:///r/acme/device/device-a",
+            "easynet:///r/acme/agent/device.device-a.runtime-governance",
             Visibility::Scoped,
         )
         .with_input_schema(serde_json::json!({
@@ -2015,7 +2031,7 @@ mod tests {
 
     #[test]
     fn descriptor_wire_rejects_transport_hint_call_mode_conflicts() {
-        let descriptor = must("fs.read", DEVICE_OWNER, Visibility::Scoped);
+        let descriptor = must("fs.read", SYSTEM_AGENT_OWNER, Visibility::Scoped);
         let mut json = serde_json::to_value(descriptor).unwrap();
         json["hints"]["streaming_only"] = serde_json::json!(true);
 
@@ -2030,7 +2046,7 @@ mod tests {
 
     #[test]
     fn descriptor_wire_rejects_non_canonical_owner_even_without_identity_fields() {
-        let descriptor = must("fs.read", DEVICE_OWNER, Visibility::Scoped);
+        let descriptor = must("fs.read", SYSTEM_AGENT_OWNER, Visibility::Scoped);
         let mut json = serde_json::to_value(descriptor).unwrap();
         json["owner_ura"] = serde_json::json!("self");
         json.as_object_mut().unwrap().remove("ability_ura");
@@ -2041,7 +2057,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("canonical Agent, Device, or Authority URA"),
+                .contains("canonical Agent or Authority URA"),
             "{error}"
         );
     }
@@ -2234,7 +2250,7 @@ mod tests {
 
     #[test]
     fn with_call_mode_derives_wire_transport_hints() {
-        let owner = "easynet:///r/acme/device/dev-1";
+        let owner = "easynet:///r/acme/agent/device.dev-1.agent-management";
         let descriptor = must("agent.list", owner, Visibility::Scoped)
             .with_hints(AbilityHints {
                 read_only: true,
@@ -2250,7 +2266,7 @@ mod tests {
 
     #[test]
     fn visibility_serde_uses_uppercase_form() {
-        let d = must("a.b", DEVICE_OWNER, Visibility::Public);
+        let d = must("a.b", SYSTEM_AGENT_OWNER, Visibility::Public);
         let json = serde_json::to_value(&d).unwrap();
         assert_eq!(json["visibility"], "PUBLIC");
     }

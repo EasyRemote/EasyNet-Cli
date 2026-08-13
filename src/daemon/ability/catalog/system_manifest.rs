@@ -55,7 +55,13 @@ pub(crate) fn registration_manifest(ability_key: &str) -> anyhow::Result<Ability
     }
     manifest
         .with_descriptor_version(contract.descriptor_version)?
-        .with_admission_action(contract.admission_action.as_str())
+        .with_admission_action(contract.admission_action.as_str())?
+        .with_frontend_contract(
+            contract.exposure,
+            contract.dedicated_surface,
+            contract.subject_contract_kind,
+            contract.subject_contract_ura,
+        )
 }
 
 /// Build the manifest metadata attached to a daemon-owned ability registration.
@@ -88,6 +94,14 @@ pub(crate) fn registry_manifest(
     manifest
         .with_descriptor_version(contract.descriptor_version)
         .and_then(|manifest| manifest.with_admission_action(contract.admission_action.as_str()))
+        .and_then(|manifest| {
+            manifest.with_frontend_contract(
+                contract.exposure,
+                contract.dedicated_surface,
+                contract.subject_contract_kind,
+                contract.subject_contract_ura,
+            )
+        })
         .unwrap_or_else(|error| {
             panic!("{ability_key} governed manifest fields are invalid: {error}")
         })

@@ -72,6 +72,10 @@ pub struct SystemAbilityContract {
     pub name: String,
     pub descriptor_version: String,
     pub description: String,
+    pub exposure: crate::daemon::ability::manifest::AbilityExposure,
+    pub dedicated_surface: crate::daemon::ability::manifest::AbilityDedicatedSurface,
+    pub subject_contract_kind: crate::daemon::ability::manifest::AbilitySubjectContractKind,
+    pub subject_contract_ura: Option<String>,
     pub input_schema: serde_json::Value,
     pub output_receipt_schema: serde_json::Value,
     pub call_mode: DescriptorCallMode,
@@ -219,6 +223,24 @@ pub fn system_ability_contract_inventory_for_voice_assembly(
             name: name.clone(),
             descriptor_version: descriptor.version.clone(),
             description: descriptor.description.clone(),
+            exposure: descriptor
+                .metadata
+                .get("exposure")
+                .and_then(|value| parse_descriptor_exposure(value))
+                .unwrap_or(crate::daemon::ability::manifest::AbilityExposure::Internal),
+            dedicated_surface: descriptor
+                .metadata
+                .get("dedicated_surface")
+                .and_then(|value| parse_descriptor_dedicated_surface(value))
+                .unwrap_or(crate::daemon::ability::manifest::AbilityDedicatedSurface::None),
+            subject_contract_kind: descriptor
+                .metadata
+                .get("subject_contract_kind")
+                .and_then(|value| parse_descriptor_subject_contract_kind(value))
+                .unwrap_or(
+                    crate::daemon::ability::manifest::AbilitySubjectContractKind::RouteTarget,
+                ),
+            subject_contract_ura: descriptor.metadata.get("subject_contract_ura").cloned(),
             input_schema,
             output_receipt_schema: match descriptor.output_receipt_schema() {
                 serde_json::Value::Null => serde_json::json!({}),
@@ -242,6 +264,24 @@ pub fn system_ability_contract_inventory_for_voice_assembly(
     }
 
     contracts.into_values().collect()
+}
+
+fn parse_descriptor_exposure(
+    value: &str,
+) -> Option<crate::daemon::ability::manifest::AbilityExposure> {
+    serde_json::from_value(serde_json::Value::String(value.to_string())).ok()
+}
+
+fn parse_descriptor_dedicated_surface(
+    value: &str,
+) -> Option<crate::daemon::ability::manifest::AbilityDedicatedSurface> {
+    serde_json::from_value(serde_json::Value::String(value.to_string())).ok()
+}
+
+fn parse_descriptor_subject_contract_kind(
+    value: &str,
+) -> Option<crate::daemon::ability::manifest::AbilitySubjectContractKind> {
+    serde_json::from_value(serde_json::Value::String(value.to_string())).ok()
 }
 
 /// Voice static contracts derived only from typed capability-state evidence.
@@ -1496,6 +1536,26 @@ mod canonical_contract_tests {
         let variants: Vec<SystemAbilityContract> = vec![
             SystemAbilityContract {
                 descriptor_version: "9.9.9".to_string(),
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                exposure: crate::daemon::ability::manifest::AbilityExposure::Internal,
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                dedicated_surface:
+                    crate::daemon::ability::manifest::AbilityDedicatedSurface::Terminal,
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                subject_contract_kind:
+                    crate::daemon::ability::manifest::AbilitySubjectContractKind::ExplicitUra,
+                ..baseline.clone()
+            },
+            SystemAbilityContract {
+                subject_contract_ura: Some(
+                    "easynet:///r/test/resource/device.dev-a/session/test".to_string(),
+                ),
                 ..baseline.clone()
             },
             SystemAbilityContract {

@@ -15,26 +15,26 @@ scope_agents_kind = "any"
 scope_agents_uras = []
 denied_agents = []
 output_receipt_schema_json = "{}"
-hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":true,\"bidi_only\":false,\"refreshes_resource_cache\":true}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":true,\"bidi_only\":false}"
 receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
 additionalProperties = false
 
+[input_schema.properties.max_events]
+type = "integer"
+description = "Optional bounded event count for diagnostics and tests. Omit for an open-ended watch."
+minimum = 1
+
+[input_schema.properties.poll_interval_ms]
+type = "integer"
+description = "Bounded host-local polling interval for inventory diffs. Values outside the supported range are clamped."
+minimum = 250
+maximum = 10000
+default = 1000
+
 [input_schema.properties.types]
 type = "array"
 items = { enum = ["display", "application", "window"], type = "string" }
 description = "Optional filter for watched remote targets. Absent or empty returns display, application, and window rows."
-
-[input_schema.properties.poll_interval_ms]
-type = "integer"
-minimum = 250
-maximum = 10000
-default = 1000
-description = "Bounded host-local polling interval for inventory diffs. Values outside the supported range are clamped."
-
-[input_schema.properties.max_events]
-type = "integer"
-minimum = 1
-description = "Optional bounded event count for diagnostics and tests. Omit for an open-ended watch."

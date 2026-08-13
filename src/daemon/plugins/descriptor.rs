@@ -25,6 +25,10 @@ pub struct PluginAbilityMetadata {
     pub hints: AbilityHints,
     pub admission_action: crate::daemon::ability::descriptors::AdmissionAction,
     pub subject_ura_kinds: Vec<String>,
+    pub exposure: crate::daemon::ability::manifest::AbilityExposure,
+    pub dedicated_surface: crate::daemon::ability::manifest::AbilityDedicatedSurface,
+    pub subject_contract_kind: crate::daemon::ability::manifest::AbilitySubjectContractKind,
+    pub subject_contract_ura: Option<String>,
 }
 
 /// Convert plugin discovery metadata into the canonical generated descriptor
@@ -32,8 +36,12 @@ pub struct PluginAbilityMetadata {
 pub fn plugin_ability_contract(meta: &PluginAbilityMetadata) -> SystemAbilityContract {
     SystemAbilityContract {
         name: meta.name.clone(),
-        descriptor_version: crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION.to_string(),
+        descriptor_version: meta.descriptor_version.clone(),
         description: meta.description.clone(),
+        exposure: meta.exposure,
+        dedicated_surface: meta.dedicated_surface,
+        subject_contract_kind: meta.subject_contract_kind,
+        subject_contract_ura: meta.subject_contract_ura.clone(),
         input_schema: meta.input_schema.clone(),
         output_receipt_schema: meta
             .output_schema
@@ -82,6 +90,10 @@ impl PluginDescriptorProjector {
                     hints: descriptor.hints().clone(),
                     admission_action: descriptor.admission_action(),
                     subject_ura_kinds: descriptor.subject_ura_kinds().to_vec(),
+                    exposure: descriptor.exposure(),
+                    dedicated_surface: descriptor.dedicated_surface(),
+                    subject_contract_kind: descriptor.subject_contract_kind(),
+                    subject_contract_ura: descriptor.subject_contract_ura().map(str::to_string),
                 });
             }
         }
@@ -148,6 +160,23 @@ mod tests {
             crate::daemon::ability::CallMode::Stream
         );
         assert_eq!(attach.call_mode, crate::daemon::ability::CallMode::Bidi);
+        for descriptor in descriptors
+            .iter()
+            .filter(|descriptor| descriptor.name.starts_with("remote_desktop."))
+        {
+            assert_eq!(
+                descriptor.exposure,
+                crate::daemon::ability::manifest::AbilityExposure::Operator
+            );
+            assert_eq!(
+                descriptor.dedicated_surface,
+                crate::daemon::ability::manifest::AbilityDedicatedSurface::RemoteDesktop
+            );
+            assert_eq!(
+                descriptor.subject_contract_kind,
+                crate::daemon::ability::manifest::AbilitySubjectContractKind::DedicatedSurface
+            );
+        }
     }
 
     #[test]
@@ -176,5 +205,30 @@ mod tests {
             .expect("browser close descriptor");
         assert!(close.hints.destructive);
         assert!(close.hints.idempotent);
+
+        let browser = descriptors
+            .iter()
+            .filter(|descriptor| descriptor.name.starts_with("browser."))
+            .collect::<Vec<_>>();
+        assert_eq!(browser.len(), 6);
+        for descriptor in browser {
+            assert_eq!(
+                descriptor.exposure,
+                crate::daemon::ability::manifest::AbilityExposure::Operator
+            );
+            assert_eq!(
+                descriptor.dedicated_surface,
+                crate::daemon::ability::manifest::AbilityDedicatedSurface::Browser
+            );
+            assert_eq!(
+                descriptor.subject_contract_kind,
+                crate::daemon::ability::manifest::AbilitySubjectContractKind::DedicatedSurface
+            );
+            let generated = plugin_ability_contract(descriptor);
+            assert_eq!(
+                generated.dedicated_surface,
+                crate::daemon::ability::manifest::AbilityDedicatedSurface::Browser
+            );
+        }
     }
 }

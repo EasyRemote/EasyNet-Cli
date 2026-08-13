@@ -51,31 +51,7 @@ use serde_json::Value;
 
 use super::SystemAbilityContract;
 
-pub const CONTRACT_SCHEMA_VERSION: &str = "2";
-
-/// Render one ability descriptor to its canonical TOML form.
-///
-/// The output ends with exactly one trailing newline (POSIX
-/// text-file convention) so a `git diff` after regenerate stays
-/// minimal. Field order is fixed: `schema_version`, `name`,
-/// `description`, blank line, `[input_schema]` block, then per-
-/// property tables in the order they appear in `input_schema`'s
-/// `properties` object.
-pub fn render_ability_toml(name: &str, description: &str, input_schema: &Value) -> String {
-    let mut out = String::with_capacity(512);
-    out.push_str("schema_version = \"1\"\n");
-    out.push_str(&format!("name = \"{}\"\n", escape_toml_basic(name)));
-    out.push_str(&format!(
-        "description = \"{}\"\n",
-        escape_toml_basic(description)
-    ));
-    out.push('\n');
-    render_schema(input_schema, "input_schema", &mut out);
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out
-}
+pub const CONTRACT_SCHEMA_VERSION: &str = "3";
 
 /// Render the complete governed static contract. Every field used for
 /// admission, authority conflict checks, or capability publication is
@@ -97,6 +73,21 @@ pub fn render_ability_contract_toml(contract: &SystemAbilityContract) -> String 
         "description = \"{}\"\n",
         escape_toml_basic(&contract.description)
     ));
+    out.push_str(&format!("exposure = \"{}\"\n", contract.exposure.as_str()));
+    out.push_str(&format!(
+        "dedicated_surface = \"{}\"\n",
+        contract.dedicated_surface.as_str()
+    ));
+    out.push_str(&format!(
+        "subject_contract_kind = \"{}\"\n",
+        contract.subject_contract_kind.as_str()
+    ));
+    if let Some(subject_contract_ura) = contract.subject_contract_ura.as_deref() {
+        out.push_str(&format!(
+            "subject_contract_ura = \"{}\"\n",
+            escape_toml_basic(subject_contract_ura)
+        ));
+    }
     out.push_str(&format!(
         "call_mode = \"{}\"\n",
         contract.call_mode.as_str()
@@ -206,6 +197,11 @@ struct RawAbilityContractToml {
     name: String,
     descriptor_version: String,
     description: String,
+    exposure: String,
+    dedicated_surface: String,
+    subject_contract_kind: String,
+    #[serde(default)]
+    subject_contract_ura: Option<String>,
     call_mode: String,
     capability_state: String,
     admission_action: String,
@@ -249,6 +245,31 @@ pub fn parse_ability_contract_toml(body: &str) -> anyhow::Result<SystemAbilityCo
     let admission_action =
         parse_enum::<AdmissionAction>(&raw.admission_action, "admission_action")?;
     let visibility = parse_enum::<Visibility>(&raw.visibility, "visibility")?;
+    let exposure =
+        parse_enum::<crate::daemon::ability::manifest::AbilityExposure>(&raw.exposure, "exposure")?;
+    let dedicated_surface = parse_enum::<crate::daemon::ability::manifest::AbilityDedicatedSurface>(
+        &raw.dedicated_surface,
+        "dedicated_surface",
+    )?;
+    let subject_contract_kind = parse_enum::<
+        crate::daemon::ability::manifest::AbilitySubjectContractKind,
+    >(&raw.subject_contract_kind, "subject_contract_kind")?;
+    crate::daemon::ability::manifest::AbilityManifest::new(
+        "contract",
+        "validate frontend contract",
+        serde_json::json!({"type": "object"}),
+    )?
+    .with_frontend_contract(
+        exposure,
+        dedicated_surface,
+        subject_contract_kind,
+        raw.subject_contract_ura.clone(),
+    )?;
+    if let Some(subject_contract_ura) = raw.subject_contract_ura.as_deref() {
+        crate::core::ura::parse_ura(subject_contract_ura).map_err(|error| {
+            anyhow::anyhow!("subject_contract_ura must be a canonical URA: {error}")
+        })?;
+    }
     let receipt_semantics = match raw.receipt_semantics.as_str() {
         "operational" if raw.transition_id.is_none() && raw.transition_class.is_none() => {
             ReceiptSemantics::Operational
@@ -270,6 +291,10 @@ pub fn parse_ability_contract_toml(body: &str) -> anyhow::Result<SystemAbilityCo
         name: raw.name,
         descriptor_version: raw.descriptor_version,
         description: raw.description,
+        exposure,
+        dedicated_surface,
+        subject_contract_kind,
+        subject_contract_ura: raw.subject_contract_ura,
         input_schema: serde_json::to_value(raw.input_schema)?,
         output_receipt_schema: serde_json::from_str(&raw.output_receipt_schema_json)?,
         call_mode,
@@ -459,15 +484,31 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn render_schema_fixture_toml(name: &str, description: &str, input_schema: &Value) -> String {
+        let mut out = String::with_capacity(512);
+        out.push_str("schema_version = \"fixture\"\n");
+        out.push_str(&format!("name = \"{}\"\n", escape_toml_basic(name)));
+        out.push_str(&format!(
+            "description = \"{}\"\n",
+            escape_toml_basic(description)
+        ));
+        out.push('\n');
+        render_schema(input_schema, "input_schema", &mut out);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out
+    }
+
     #[test]
     fn renders_minimal_schema() {
-        let toml = render_ability_toml(
+        let toml = render_schema_fixture_toml(
             "x.y",
             "An ability.",
             &json!({"type":"object","additionalProperties":false}),
         );
         let expected = "\
-schema_version = \"1\"
+schema_version = \"fixture\"
 name = \"x.y\"
 description = \"An ability.\"
 
@@ -480,7 +521,7 @@ additionalProperties = false
 
     #[test]
     fn renders_required_array() {
-        let toml = render_ability_toml(
+        let toml = render_schema_fixture_toml(
             "x",
             "d",
             &json!({"type":"object","required":["a","b"],"additionalProperties":false}),
@@ -490,7 +531,7 @@ additionalProperties = false
 
     #[test]
     fn renders_simple_schema_combinator() {
-        let toml = render_ability_toml(
+        let toml = render_schema_fixture_toml(
             "x",
             "d",
             &json!({
@@ -510,7 +551,7 @@ additionalProperties = false
 
     #[test]
     fn renders_property_with_description_and_min_length() {
-        let toml = render_ability_toml(
+        let toml = render_schema_fixture_toml(
             "x",
             "d",
             &json!({
@@ -528,7 +569,7 @@ additionalProperties = false
 
     #[test]
     fn renders_enum() {
-        let toml = render_ability_toml(
+        let toml = render_schema_fixture_toml(
             "x",
             "d",
             &json!({"type":"object","properties":{"e":{"type":"string","enum":["a","b","c"]}}}),
@@ -538,7 +579,7 @@ additionalProperties = false
 
     #[test]
     fn renders_additional_properties_inline_table() {
-        let toml = render_ability_toml(
+        let toml = render_schema_fixture_toml(
             "x",
             "d",
             &json!({
@@ -553,7 +594,7 @@ additionalProperties = false
 
     #[test]
     fn renders_items_inline_table() {
-        let toml = render_ability_toml(
+        let toml = render_schema_fixture_toml(
             "x",
             "d",
             &json!({
@@ -568,7 +609,7 @@ additionalProperties = false
 
     #[test]
     fn escapes_quote_and_backslash_in_description() {
-        let toml = render_ability_toml(
+        let toml = render_schema_fixture_toml(
             "x",
             r#"He said "hi" with a backslash \"#,
             &json!({"type":"object"}),
@@ -579,13 +620,13 @@ additionalProperties = false
 
     #[test]
     fn escapes_newline_in_description() {
-        let toml = render_ability_toml("x", "line1\nline2", &json!({"type":"object"}));
+        let toml = render_schema_fixture_toml("x", "line1\nline2", &json!({"type":"object"}));
         assert!(toml.contains("description = \"line1\\nline2\""));
     }
 
     #[test]
     fn nested_property_renders_as_subtable() {
-        let toml = render_ability_toml(
+        let toml = render_schema_fixture_toml(
             "x",
             "d",
             &json!({
@@ -609,7 +650,7 @@ additionalProperties = false
         // Use toml_edit (already in dev-deps) to confirm the
         // emitted bytes parse back to a structurally-equivalent
         // value. Catches any escaping or quoting we got wrong.
-        let toml = render_ability_toml(
+        let toml = render_schema_fixture_toml(
             "x.y",
             "Mixed: \"quotes\", \\backslash, and § symbol.",
             &json!({
@@ -699,5 +740,20 @@ additionalProperties = false
             error.to_string().contains("scope_agents_kind"),
             "error should name rejected caller scope axis: {error}"
         );
+    }
+
+    #[test]
+    fn governed_contract_rejects_incoherent_frontend_subject_contract() {
+        let contract = super::super::system_ability_contract_inventory()
+            .into_iter()
+            .find(|contract| contract.name == "voice.report_metrics")
+            .expect("voice report metrics contract");
+        let body = render_ability_contract_toml(&contract).replace(
+            "subject_contract_kind = \"dedicated-surface\"",
+            "subject_contract_kind = \"route-target\"",
+        );
+        let error = parse_ability_contract_toml(&body)
+            .expect_err("dedicated surface without its subject owner must fail closed");
+        assert!(error.to_string().contains("subject_contract_kind"));
     }
 }

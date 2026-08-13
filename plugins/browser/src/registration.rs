@@ -26,7 +26,9 @@ use crate::daemon::ability::dispatch::{
     AbilityHandlerFailure, BidiSource, EnvelopeContext, StreamSource,
 };
 use crate::daemon::ability::{AbilityImplSource, CallMode};
-use crate::daemon::plugins::package::{BuiltinPluginAbilityHints, BuiltinPluginAbilitySpec};
+use crate::daemon::plugins::package::{
+    BuiltinPluginAbilityHints, BuiltinPluginAbilitySpec, BuiltinPluginFrontendContract,
+};
 use crate::daemon::plugins::{
     PluginAbilityLayer, PluginBidiWireKind, PluginContributionBuilder, PluginRuntimeLimits, Result,
 };
@@ -131,6 +133,7 @@ fn compiled_abilities() -> [BrowserCompiledAbility; 6] {
                 bidi_wire_kind: None,
                 subject_ura_kinds: OPEN_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_BROWSER,
                 description: schema::open_session_description,
                 input_schema: schema::open_session_input_schema,
             },
@@ -145,6 +148,7 @@ fn compiled_abilities() -> [BrowserCompiledAbility; 6] {
                 bidi_wire_kind: None,
                 subject_ura_kinds: SESSION_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::READ_ONLY_IDEMPOTENT,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_BROWSER,
                 description: schema::show_session_description,
                 input_schema: schema::show_session_input_schema,
             },
@@ -159,6 +163,7 @@ fn compiled_abilities() -> [BrowserCompiledAbility; 6] {
                 bidi_wire_kind: None,
                 subject_ura_kinds: SESSION_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_BROWSER,
                 description: schema::send_input_description,
                 input_schema: schema::send_input_input_schema,
             },
@@ -173,6 +178,7 @@ fn compiled_abilities() -> [BrowserCompiledAbility; 6] {
                 bidi_wire_kind: None,
                 subject_ura_kinds: SESSION_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::READ_ONLY,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_BROWSER,
                 description: schema::capture_viewport_description,
                 input_schema: schema::capture_viewport_input_schema,
             },
@@ -187,6 +193,7 @@ fn compiled_abilities() -> [BrowserCompiledAbility; 6] {
                 bidi_wire_kind: Some(PluginBidiWireKind::JsonFrames),
                 subject_ura_kinds: SESSION_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_BROWSER,
                 description: schema::attach_session_description,
                 input_schema: schema::attach_session_input_schema,
             },
@@ -201,6 +208,7 @@ fn compiled_abilities() -> [BrowserCompiledAbility; 6] {
                 bidi_wire_kind: None,
                 subject_ura_kinds: SESSION_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::DESTRUCTIVE_IDEMPOTENT,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_BROWSER,
                 description: schema::close_session_description,
                 input_schema: schema::close_session_input_schema,
             },
@@ -253,5 +261,33 @@ mod tests {
             .find(|row| row.spec.name == ABILITY_OPEN_SESSION)
             .expect("open row");
         assert_eq!(open.spec.subject_ura_kinds, &["agent"]);
+    }
+
+    #[test]
+    fn every_browser_binding_publishes_one_dedicated_product_surface() {
+        for row in compiled_abilities() {
+            assert_eq!(
+                row.spec.frontend_contract,
+                BuiltinPluginFrontendContract::OPERATOR_BROWSER
+            );
+            let manifest = row
+                .spec
+                .to_registry_manifest()
+                .expect("browser registry manifest");
+            assert_eq!(
+                manifest.exposure(),
+                Some(crate::daemon::ability::manifest::AbilityExposure::Operator)
+            );
+            assert_eq!(
+                manifest.dedicated_surface(),
+                Some(crate::daemon::ability::manifest::AbilityDedicatedSurface::Browser)
+            );
+            assert_eq!(
+                manifest.subject_contract_kind(),
+                Some(
+                    crate::daemon::ability::manifest::AbilitySubjectContractKind::DedicatedSurface
+                )
+            );
+        }
     }
 }

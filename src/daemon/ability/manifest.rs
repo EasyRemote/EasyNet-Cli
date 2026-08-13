@@ -248,6 +248,18 @@ pub struct AbilityManifest {
     /// never grants invocation authority.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     exposure: Option<AbilityExposure>,
+    /// Product-owned lifecycle surface for abilities that must not be driven
+    /// by the generic invocation workbench. Descriptive only: call geometry
+    /// remains governed by the descriptor's canonical `call_mode`.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    dedicated_surface: Option<AbilityDedicatedSurface>,
+    /// Product materialization rule for the Invocation subject. This is an
+    /// explicit producer fact; consumers must not infer it from ability names.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    subject_contract_kind: Option<AbilitySubjectContractKind>,
+    /// Optional fixed subject URA used only by an explicit subject contract.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    subject_contract_ura: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout_seconds: Option<u64>,
     input_schema: Value,
@@ -313,6 +325,64 @@ pub enum AbilityExposure {
     Task,
     Operator,
     Internal,
+}
+
+/// Named product lifecycle surface required to operate an ability safely.
+///
+/// `None` is explicit: the generic workbench may use the descriptor when its
+/// canonical call mode and subject constraint are supported. Other variants
+/// direct product clients to a stateful surface that owns setup, frames, and
+/// terminal closure; they never alter admission or routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AbilityDedicatedSurface {
+    None,
+    Terminal,
+    FileTransfer,
+    Media,
+    RemoteDesktop,
+    Voice,
+    Browser,
+    Pages,
+}
+
+impl AbilityDedicatedSurface {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Terminal => "terminal",
+            Self::FileTransfer => "file_transfer",
+            Self::Media => "media",
+            Self::RemoteDesktop => "remote_desktop",
+            Self::Voice => "voice",
+            Self::Browser => "browser",
+            Self::Pages => "pages",
+        }
+    }
+}
+
+/// Product rule for materializing the canonical Invocation subject.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AbilitySubjectContractKind {
+    #[serde(rename = "authenticated-user")]
+    AuthenticatedUser,
+    #[serde(rename = "route-target")]
+    RouteTarget,
+    #[serde(rename = "explicit-ura")]
+    ExplicitUra,
+    #[serde(rename = "dedicated-surface")]
+    DedicatedSurface,
+}
+
+impl AbilitySubjectContractKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AuthenticatedUser => "authenticated-user",
+            Self::RouteTarget => "route-target",
+            Self::ExplicitUra => "explicit-ura",
+            Self::DedicatedSurface => "dedicated-surface",
+        }
+    }
 }
 
 impl AbilityExposure {
@@ -829,6 +899,9 @@ impl AbilityManifest {
             name: name.into(),
             description: description.into(),
             exposure: None,
+            dedicated_surface: None,
+            subject_contract_kind: None,
+            subject_contract_ura: None,
             timeout_seconds: None,
             input_schema,
             output_schema: None,
@@ -943,6 +1016,49 @@ impl AbilityManifest {
         Ok(self)
     }
 
+    /// Select the product lifecycle surface. This is catalog metadata, not a
+    /// transport fallback: callers must still obey the descriptor call mode.
+    pub fn with_dedicated_surface(
+        mut self,
+        surface: AbilityDedicatedSurface,
+    ) -> anyhow::Result<Self> {
+        self.dedicated_surface = Some(surface);
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Declare how product callers materialize `Invocation.subject`.
+    pub fn with_subject_contract(
+        mut self,
+        kind: AbilitySubjectContractKind,
+        subject_ura: Option<String>,
+    ) -> anyhow::Result<Self> {
+        self.subject_contract_kind = Some(kind);
+        self.subject_contract_ura = subject_ura;
+        self.validate()?;
+        Ok(self)
+    }
+
+    /// Set the complete frontend invocation contract atomically.
+    ///
+    /// Dedicated surfaces and their subject contract are one invariant, so
+    /// validating those fields one builder call at a time would necessarily
+    /// create an invalid intermediate manifest.
+    pub fn with_frontend_contract(
+        mut self,
+        exposure: AbilityExposure,
+        dedicated_surface: AbilityDedicatedSurface,
+        subject_contract_kind: AbilitySubjectContractKind,
+        subject_contract_ura: Option<String>,
+    ) -> anyhow::Result<Self> {
+        self.exposure = Some(exposure);
+        self.dedicated_surface = Some(dedicated_surface);
+        self.subject_contract_kind = Some(subject_contract_kind);
+        self.subject_contract_ura = subject_contract_ura;
+        self.validate()?;
+        Ok(self)
+    }
+
     /// Override the default `None` timeout. Returns `self` for the
     /// builder-style chain a caller of `new(...)` might use.
     pub fn with_timeout_seconds(mut self, seconds: u64) -> anyhow::Result<Self> {
@@ -1009,6 +1125,18 @@ impl AbilityManifest {
 
     pub fn exposure(&self) -> Option<AbilityExposure> {
         self.exposure
+    }
+
+    pub fn dedicated_surface(&self) -> Option<AbilityDedicatedSurface> {
+        self.dedicated_surface
+    }
+
+    pub fn subject_contract_kind(&self) -> Option<AbilitySubjectContractKind> {
+        self.subject_contract_kind
+    }
+
+    pub fn subject_contract_ura(&self) -> Option<&str> {
+        self.subject_contract_ura.as_deref()
     }
 
     /// Effective governed interface version. Absent manifest field means the
@@ -1168,6 +1296,35 @@ impl AbilityManifest {
         }
         if let Some(subject_scope) = &self.subject_scope {
             subject_scope.validate()?;
+        }
+        if self.dedicated_surface.is_some_and(|surface| {
+            surface != AbilityDedicatedSurface::None
+                && self.subject_contract_kind != Some(AbilitySubjectContractKind::DedicatedSurface)
+        }) {
+            anyhow::bail!(
+                "ability.toml `dedicated_surface` requires subject_contract_kind = \"dedicated-surface\""
+            );
+        }
+        if self.subject_contract_kind == Some(AbilitySubjectContractKind::DedicatedSurface)
+            && !self
+                .dedicated_surface
+                .is_some_and(|surface| surface != AbilityDedicatedSurface::None)
+        {
+            anyhow::bail!(
+                "ability.toml subject_contract_kind = \"dedicated-surface\" requires a named dedicated_surface"
+            );
+        }
+        if let Some(subject_contract_ura) = self.subject_contract_ura.as_deref() {
+            if self.subject_contract_kind != Some(AbilitySubjectContractKind::ExplicitUra) {
+                anyhow::bail!(
+                    "ability.toml `subject_contract_ura` is valid only with subject_contract_kind = \"explicit-ura\""
+                );
+            }
+            if subject_contract_ura.trim().is_empty()
+                || subject_contract_ura.trim() != subject_contract_ura
+            {
+                anyhow::bail!("ability.toml `subject_contract_ura` must be non-empty and trimmed");
+            }
         }
         if let Some(boot) = &self.boot {
             boot.validate()?;
@@ -1763,6 +1920,11 @@ pub fn default_chat_manifest() -> AbilityManifest {
         "the embedded chat exposure is a constant canonical catalog lane; validation \
          failure here would be a compile-time contract violation in this file",
     )
+    .with_subject_contract(AbilitySubjectContractKind::AuthenticatedUser, None)
+    .expect(
+        "the embedded chat subject contract is a canonical authenticated-user contract; \
+         validation failure here would be a compile-time contract violation in this file",
+    )
     .with_admission_action("invoke")
     .expect(
         "the embedded chat admission action is a constant canonical enum value; validation \
@@ -1801,6 +1963,9 @@ mod tests {
         assert!(m.input_schema().is_object());
         assert!(m.output_schema().is_none());
         assert_eq!(m.exposure(), None);
+        assert_eq!(m.dedicated_surface(), None);
+        assert_eq!(m.subject_contract_kind(), None);
+        assert_eq!(m.subject_contract_ura(), None);
         assert_eq!(m.timeout_seconds(), None);
     }
 
@@ -1824,6 +1989,78 @@ mod tests {
             Some(AbilityExposure::Task)
         );
         assert_eq!(manifest.access().visibility, ManifestAccessScope::Device);
+    }
+
+    #[test]
+    fn dedicated_surface_round_trips_as_descriptive_catalog_metadata() {
+        let error = AbilityManifest::new("attach", "attach terminal", object_schema())
+            .unwrap()
+            .with_subject_contract(AbilitySubjectContractKind::DedicatedSurface, None)
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("requires a named dedicated_surface"));
+
+        let error = AbilityManifest::new("attach", "attach terminal", object_schema())
+            .unwrap()
+            .with_dedicated_surface(AbilityDedicatedSurface::Terminal)
+            .unwrap_err();
+        assert!(error.to_string().contains("requires subject_contract_kind"));
+
+        let manifest = AbilityManifest::new("attach", "attach terminal", object_schema())
+            .unwrap()
+            .with_frontend_contract(
+                AbilityExposure::Operator,
+                AbilityDedicatedSurface::Terminal,
+                AbilitySubjectContractKind::RouteTarget,
+                None,
+            )
+            .unwrap_err();
+        assert!(manifest
+            .to_string()
+            .contains("requires subject_contract_kind = \"dedicated-surface\""));
+
+        let manifest = AbilityManifest::new("attach", "attach terminal", object_schema())
+            .unwrap()
+            .with_frontend_contract(
+                AbilityExposure::Operator,
+                AbilityDedicatedSurface::Terminal,
+                AbilitySubjectContractKind::DedicatedSurface,
+                None,
+            )
+            .unwrap();
+
+        let wire = manifest.to_toml_string().unwrap();
+        assert!(wire.contains("dedicated_surface = \"terminal\""));
+        assert_eq!(
+            AbilityManifest::from_toml_str(&wire)
+                .unwrap()
+                .dedicated_surface(),
+            Some(AbilityDedicatedSurface::Terminal)
+        );
+    }
+
+    #[test]
+    fn subject_contract_round_trips_without_name_inference() {
+        let manifest = AbilityManifest::new("inspect", "inspect resource", object_schema())
+            .unwrap()
+            .with_subject_contract(
+                AbilitySubjectContractKind::ExplicitUra,
+                Some("easynet:///r/acme/resource/device.dev-a/session/pty-1".to_string()),
+            )
+            .unwrap();
+
+        let wire = manifest.to_toml_string().unwrap();
+        assert!(wire.contains("subject_contract_kind = \"explicit-ura\""));
+        let parsed = AbilityManifest::from_toml_str(&wire).unwrap();
+        assert_eq!(
+            parsed.subject_contract_kind(),
+            Some(AbilitySubjectContractKind::ExplicitUra)
+        );
+        assert_eq!(
+            parsed.subject_contract_ura(),
+            Some("easynet:///r/acme/resource/device.dev-a/session/pty-1")
+        );
     }
 
     #[test]
