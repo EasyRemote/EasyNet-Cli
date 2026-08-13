@@ -82,6 +82,12 @@ fn validate_remote_target_freshness(entry: ResourceEntry) {
     entry.metadata["freshness"]["stale_after_ms"];
     entry.metadata["freshness"]["source"];
 }
+
+fn resource_entry() -> ResourceEntry {
+    ResourceEntry {
+        owner_agent: "easynet:///r/acme/agent/device.dev-1.media".to_string(),
+    }
+}
 RS
 
 cat >"$SANDBOX/src/daemon/ability/builtins/resources/media/resource_bootstrap.rs" <<'RS'
@@ -187,6 +193,24 @@ fn remote_target_projection_without_freshness(entry: ResourceEntry) {
 RS
 if CHECK_REMOTEAPP_PICKER_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp picker subject checker accepted missing freshness projection contract" >&2
+  exit 1
+fi
+
+cat >"$SANDBOX/src/daemon/resources/projection.rs" <<'RS'
+fn validate_remote_target_freshness(entry: ResourceEntry) {
+    entry.metadata["freshness"]["observed_at_ms"];
+    entry.metadata["freshness"]["stale_after_ms"];
+    entry.metadata["freshness"]["source"];
+}
+
+fn resource_entry() -> ResourceEntry {
+    ResourceEntry {
+        owner_agent: "easynet:///r/acme/device/dev-1".to_string(),
+    }
+}
+RS
+if CHECK_REMOTEAPP_PICKER_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp picker subject checker accepted Device URA owner_agent fixture" >&2
   exit 1
 fi
 

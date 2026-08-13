@@ -13,8 +13,9 @@ use axon_sdk::invocation::{CausalContext, ReceiptRef};
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
 use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::daemon::persistence::resources::{
-    upsert_resource, ResourceBinding, ResourceEntry, ResourceType, ResourceUpsert, ResourcesFile,
+    ResourceBinding, ResourceEntry, ResourceType, ResourceUpsert, ResourcesFile, upsert_resource,
 };
+use crate::daemon::plugins::PluginRuntimeLimits;
 use crate::daemon::plugins::remote_desktop::constants::DEFAULT_FRAME_QUEUE_DEPTH;
 use crate::daemon::plugins::remote_desktop::request::{
     RemoteDesktopInputPolicy, RemoteDesktopVideoConstraints,
@@ -26,7 +27,6 @@ use crate::daemon::plugins::remote_desktop::session_lifecycle::stop_session_tran
 use crate::daemon::plugins::remote_desktop::target::{
     RemoteAppTargetResolver, ResourceEntryTargetResolver,
 };
-use crate::daemon::plugins::PluginRuntimeLimits;
 
 static REMOTE_DESKTOP_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -166,7 +166,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn seed_display(
         file,
         ResourceUpsert {
             realm: "acme",
-            owner_agent: "easynet:///r/acme/device/01DEV",
+            owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
             kind: ResourceType::Display,
             binding: ResourceBinding::LocalDevice,
             hardware_id,
@@ -185,7 +185,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn seed_xcap_display(
         file,
         ResourceUpsert {
             realm: "acme",
-            owner_agent: "easynet:///r/acme/device/01DEV",
+            owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
             kind: ResourceType::Display,
             binding: ResourceBinding::LocalDevice,
             hardware_id,
@@ -205,7 +205,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn seed_window(
         file,
         ResourceUpsert {
             realm: "acme",
-            owner_agent: "easynet:///r/acme/device/01DEV",
+            owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
             kind: ResourceType::Window,
             binding: ResourceBinding::LocalDevice,
             hardware_id,

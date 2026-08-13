@@ -78,6 +78,10 @@ require 'resource_ura' "$CLI_ABILITY" \
 
 require 'validate_remote_target_freshness' "$RESOURCE_PROJECTION" \
   'remote target picker projection must fail closed without freshness metadata'
+require 'owner_agent: "easynet:///r/acme/agent/device\.dev-1\.media"' "$RESOURCE_PROJECTION" \
+  'remote target picker projection fixtures must use a device-sponsored SystemAgent owner_agent'
+reject '"owner_agent"[[:space:]]*:[[:space:]]*"easynet:///r/[^"]*/device/' "$RESOURCE_PROJECTION" \
+  'remote target picker projection must not model owner_agent as a Device URA'
 require '"freshness"' "$RESOURCE_BOOTSTRAP" \
   'live target refresh must annotate picker rows with metadata.freshness'
 require 'stale_after_ms' "$RESOURCE_BOOTSTRAP" \

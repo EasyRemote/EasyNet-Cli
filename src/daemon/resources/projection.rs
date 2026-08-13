@@ -577,7 +577,7 @@ mod tests {
         ResourceEntry {
             resource_ura: "easynet:///r/acme/resource/device.dev-1/streams/camera.front"
                 .to_string(),
-            owner_agent: "easynet:///r/acme/device/dev-1".to_string(),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".to_string(),
             kind: ResourceType::Camera,
             binding: ResourceBinding::LocalDevice,
             hardware_id: "platform-camera-0".to_string(),
@@ -596,7 +596,10 @@ mod tests {
             wire["resource_ura"],
             "easynet:///r/acme/resource/device.dev-1/streams/camera.front"
         );
-        assert_eq!(wire["owner_agent"], "easynet:///r/acme/device/dev-1");
+        assert_eq!(
+            wire["owner_agent"],
+            "easynet:///r/acme/agent/device.dev-1.media"
+        );
         assert_eq!(wire["type"], "camera");
         assert_eq!(wire["binding"], "local_device");
         assert_eq!(wire["display_name"], "Front Camera");
@@ -700,7 +703,7 @@ mod tests {
     fn resource_list_entry_rejects_unknown_fields() {
         let error = serde_json::from_value::<ResourceListEntry>(json!({
             "resource_ura": "easynet:///r/acme/resource/device.dev-1/streams/camera.front",
-            "owner_agent": "easynet:///r/acme/device/dev-1",
+            "owner_agent": "easynet:///r/acme/agent/device.dev-1.media",
             "type": "camera",
             "binding": "local_device",
             "display_name": "Front Camera",
