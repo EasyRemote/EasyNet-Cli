@@ -18,7 +18,6 @@ use crate::daemon::plugins::remote_desktop::request::require_str;
 use crate::daemon::plugins::remote_desktop::request::{
     parse_attach_capture_options, parse_attach_encoding,
 };
-use crate::daemon::plugins::remote_desktop::resource::resolve_screen_resource;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_access;
 
@@ -29,7 +28,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
     args: Value,
 ) -> anyhow::Result<BidiSource> {
     let session_id = require_str(&args, "session_id", ABILITY_ATTACH_SESSION)?.to_string();
-    let (entry, options, input_policy, encoding, stop_tx, stop_rx) = {
+    let (target_binding, options, input_policy, encoding, stop_tx, stop_rx) = {
         plugin
             .session_store()
             .with_sessions(|sessions| -> anyhow::Result<_> {
@@ -40,7 +39,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                     }
                 })?;
                 ensure_session_access(&plugin, ABILITY_ATTACH_SESSION, &env, &args, session)?;
-                let entry = resolve_screen_resource(ABILITY_ATTACH_SESSION, session.subject_ura())?;
+                let target_binding = session.target_binding().clone();
                 let options = parse_attach_capture_options(&args, session)?;
                 let encoding = parse_attach_encoding(&args)?;
                 let input_policy = session.input_policy().to_value();
@@ -48,7 +47,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                 if let Some(old_stop) = session.attach_preview_transport(stop_tx.clone()) {
                     let _ = old_stop.send(true);
                 }
-                Ok((entry, options, input_policy, encoding, stop_tx, stop_rx))
+                Ok((
+                    target_binding,
+                    options,
+                    input_policy,
+                    encoding,
+                    stop_tx,
+                    stop_rx,
+                ))
             })?
     };
 
@@ -59,7 +65,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         session_store: plugin.session_store(),
         session_id,
         backend: plugin.screen_backend(),
-        entry,
+        target_binding,
         options,
         encoding,
         input_policy,

@@ -28,6 +28,7 @@ use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
     capture_rgb_with_xcap, RawRgbFrame, ScreenCaptureOptions,
 };
 use crate::daemon::ability::dispatch::BidiOutputFrame;
+#[cfg(test)]
 use crate::daemon::persistence::resources::ResourceEntry;
 use crate::daemon::plugins::remote_desktop::config::MIN_FRAME_QUEUE_DEPTH;
 use crate::daemon::plugins::remote_desktop::constants::{
@@ -35,9 +36,14 @@ use crate::daemon::plugins::remote_desktop::constants::{
     NATIVE_MAX_BITRATE_KBPS, NATIVE_MIN_BITRATE_KBPS, REASON_PREVIEW_CAPTURE_FAILED,
     REASON_PREVIEW_CLIENT_CLOSED, REASON_RESOURCE_UNAVAILABLE, TRANSPORT_INVOKE_BIDI,
 };
+#[cfg(test)]
+use crate::daemon::plugins::remote_desktop::media::webrtc_transport_backend_for_entry;
 use crate::daemon::plugins::remote_desktop::media::{
-    select_builtin_h264_backend, webrtc_transport_backend_for_entry,
+    select_builtin_h264_backend_for_binding, webrtc_transport_backend_for_binding,
     RemoteDesktopMediaBackendDescriptor,
+};
+use crate::daemon::plugins::remote_desktop::target::{
+    DiagnosticCaptureSubject, RemoteAppTargetBinding,
 };
 use crate::daemon::plugins::remote_desktop::transport::BidiTerminalGuard;
 
@@ -90,7 +96,7 @@ pub(in crate::daemon::plugins::remote_desktop) type BuiltinH264TerminalCallback 
     Arc<dyn Fn(BuiltinH264StreamTerminal) + Send + Sync + 'static>;
 
 pub(in crate::daemon::plugins::remote_desktop) fn spawn_builtin_h264_stream(
-    entry: ResourceEntry,
+    binding: RemoteAppTargetBinding,
     options: ScreenCaptureOptions,
     max_frame_queue_depth: usize,
     to_client: mpsc::Sender<BidiOutputFrame>,
@@ -98,14 +104,23 @@ pub(in crate::daemon::plugins::remote_desktop) fn spawn_builtin_h264_stream(
     terminal_guard: BidiTerminalGuard,
     terminal_callback: BuiltinH264TerminalCallback,
 ) -> bool {
-    let Some(config) = build_builtin_h264_config(&entry, &options, max_frame_queue_depth) else {
+    let Some(config) =
+        build_builtin_h264_config_for_binding(&binding, &options, max_frame_queue_depth)
+    else {
         return false;
     };
+    let capture_subject = binding.diagnostic_capture_subject().clone();
     std::thread::Builder::new()
         .name("easynet-remote-desktop-openh264".into())
         .spawn(move || {
-            let terminal =
-                run_builtin_h264_stream(entry, options, config, to_client, stop_rx, terminal_guard);
+            let terminal = run_builtin_h264_stream(
+                capture_subject,
+                options,
+                config,
+                to_client,
+                stop_rx,
+                terminal_guard,
+            );
             terminal_callback(terminal);
         })
         .map(|_| true)
@@ -119,12 +134,12 @@ pub(in crate::daemon::plugins::remote_desktop) fn spawn_builtin_h264_stream(
         })
 }
 
-pub(in crate::daemon::plugins::remote_desktop) fn build_builtin_h264_config(
-    entry: &ResourceEntry,
+pub(in crate::daemon::plugins::remote_desktop) fn build_builtin_h264_config_for_binding(
+    binding: &RemoteAppTargetBinding,
     options: &ScreenCaptureOptions,
     max_frame_queue_depth: usize,
 ) -> Option<BuiltinH264Config> {
-    let backend = select_builtin_h264_backend(entry)?;
+    let backend = select_builtin_h264_backend_for_binding(binding)?;
     let requested_fps = options.fps.clamp(MIN_ATTACH_FPS, MAX_ATTACH_FPS);
     let actual_fps = backend.effective_fps(requested_fps);
     Some(BuiltinH264Config {
@@ -137,6 +152,27 @@ pub(in crate::daemon::plugins::remote_desktop) fn build_builtin_h264_config(
     })
 }
 
+#[cfg(test)]
+pub(in crate::daemon::plugins::remote_desktop) fn build_builtin_h264_config(
+    entry: &ResourceEntry,
+    options: &ScreenCaptureOptions,
+    max_frame_queue_depth: usize,
+) -> Option<BuiltinH264Config> {
+    let backend =
+        crate::daemon::plugins::remote_desktop::media::select_builtin_h264_backend(entry)?;
+    let requested_fps = options.fps.clamp(MIN_ATTACH_FPS, MAX_ATTACH_FPS);
+    let actual_fps = backend.effective_fps(requested_fps);
+    Some(BuiltinH264Config {
+        backend,
+        requested_fps,
+        fps: actual_fps,
+        bitrate_kbps: DEFAULT_VIDEO_STREAM_BITRATE_KBPS,
+        max_frame_queue_depth: max_frame_queue_depth.max(MIN_FRAME_QUEUE_DEPTH),
+        keyframe_interval_frames: actual_fps.clamp(1, DIAGNOSTIC_RELAY_GOP_MAX_FRAMES),
+    })
+}
+
+#[cfg(test)]
 pub(in crate::daemon::plugins::remote_desktop) fn build_direct_webrtc_h264_config(
     entry: &ResourceEntry,
     options: &ScreenCaptureOptions,
@@ -158,8 +194,29 @@ pub(in crate::daemon::plugins::remote_desktop) fn build_direct_webrtc_h264_confi
     Some(config)
 }
 
+pub(in crate::daemon::plugins::remote_desktop) fn build_direct_webrtc_h264_config_for_binding(
+    binding: &RemoteAppTargetBinding,
+    options: &ScreenCaptureOptions,
+    target_bitrate_kbps: u32,
+    max_frame_queue_depth: usize,
+) -> Option<BuiltinH264Config> {
+    let backend = webrtc_transport_backend_for_binding(binding)?;
+    let requested_fps = options.fps.clamp(MIN_ATTACH_FPS, MAX_ATTACH_FPS);
+    let actual_fps = backend.effective_fps(requested_fps);
+    let mut config = BuiltinH264Config {
+        backend,
+        requested_fps,
+        fps: actual_fps,
+        bitrate_kbps: target_bitrate_kbps.clamp(NATIVE_MIN_BITRATE_KBPS, NATIVE_MAX_BITRATE_KBPS),
+        max_frame_queue_depth: max_frame_queue_depth.clamp(1, MAX_FRAME_QUEUE_DEPTH as usize),
+        keyframe_interval_frames: actual_fps.clamp(1, DIAGNOSTIC_RELAY_GOP_MAX_FRAMES),
+    };
+    config.keyframe_interval_frames = config.fps.clamp(1, 30);
+    Some(config)
+}
+
 fn run_builtin_h264_stream(
-    entry: ResourceEntry,
+    capture_subject: DiagnosticCaptureSubject,
     options: ScreenCaptureOptions,
     config: BuiltinH264Config,
     to_client: mpsc::Sender<BidiOutputFrame>,
@@ -169,7 +226,7 @@ fn run_builtin_h264_stream(
     #[cfg(feature = "native-media")]
     {
         if let Some(terminal) = run_builtin_h264_recorder_stream(
-            &entry,
+            &capture_subject,
             &options,
             &config,
             to_client.clone(),
@@ -179,7 +236,14 @@ fn run_builtin_h264_stream(
             return terminal;
         }
     }
-    run_builtin_h264_polling_stream(entry, options, config, to_client, stop_rx, terminal_guard)
+    run_builtin_h264_polling_stream(
+        capture_subject,
+        options,
+        config,
+        to_client,
+        stop_rx,
+        terminal_guard,
+    )
 }
 
 fn h264_failure(
@@ -197,14 +261,15 @@ fn h264_failure(
 
 #[cfg(feature = "native-media")]
 fn run_builtin_h264_recorder_stream(
-    entry: &ResourceEntry,
+    capture_subject: &DiagnosticCaptureSubject,
     options: &ScreenCaptureOptions,
     config: &BuiltinH264Config,
     to_client: mpsc::Sender<BidiOutputFrame>,
     mut stop_rx: watch::Receiver<bool>,
     terminal_guard: BidiTerminalGuard,
 ) -> Option<BuiltinH264StreamTerminal> {
-    let Ok((recorder, rx)) = open_display_recorder_with_xcap(entry) else {
+    let entry = capture_subject.to_backend_resource_entry();
+    let Ok((recorder, rx)) = open_display_recorder_with_xcap(&entry) else {
         return None;
     };
     let mut encoder = match build_openh264_encoder(config) {
@@ -253,7 +318,7 @@ fn run_builtin_h264_recorder_stream(
                         if !announced {
                             if announce_h264_stream(
                                 &to_client,
-                                entry,
+                                capture_subject,
                                 &frame,
                                 config,
                                 "xcap_video_recorder",
@@ -321,13 +386,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn latest_recorder_frame(
 }
 
 fn run_builtin_h264_polling_stream(
-    entry: ResourceEntry,
+    capture_subject: DiagnosticCaptureSubject,
     options: ScreenCaptureOptions,
     config: BuiltinH264Config,
     to_client: mpsc::Sender<BidiOutputFrame>,
     mut stop_rx: watch::Receiver<bool>,
     terminal_guard: BidiTerminalGuard,
 ) -> BuiltinH264StreamTerminal {
+    let entry = capture_subject.to_backend_resource_entry();
     let mut encoder = match build_openh264_encoder(&config) {
         Ok(encoder) => encoder,
         Err(err) => {
@@ -358,7 +424,7 @@ fn run_builtin_h264_polling_stream(
                 if !announced {
                     if announce_h264_stream(
                         &to_client,
-                        &entry,
+                        &capture_subject,
                         &frame,
                         &config,
                         "xcap_capture_image",
@@ -395,7 +461,7 @@ fn run_builtin_h264_polling_stream(
 
 fn announce_h264_stream(
     to_client: &mpsc::Sender<BidiOutputFrame>,
-    entry: &ResourceEntry,
+    capture_subject: &DiagnosticCaptureSubject,
     frame: &RawRgbFrame,
     config: &BuiltinH264Config,
     capture_source: &str,
@@ -425,7 +491,7 @@ fn announce_h264_stream(
         "capture_api": config.backend.capture_api(),
         "backend_id": config.backend.backend_id(),
         "media_sdk": config.backend.to_json(),
-        "hardware_id": entry.hardware_id,
+        "hardware_id": capture_subject.hardware_id(),
         "message": "Built-in OpenH264 Annex-B stream; no external encoder binary required.",
     })))
 }

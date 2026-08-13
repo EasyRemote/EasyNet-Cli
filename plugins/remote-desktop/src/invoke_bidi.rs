@@ -14,26 +14,28 @@ use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
     EncodedFrame, ScreenCaptureOptions, ScreenSnapshotBackend,
 };
 use crate::daemon::ability::dispatch::BidiOutputFrame;
-use crate::daemon::persistence::resources::ResourceEntry;
 use crate::daemon::plugins::remote_desktop::constants::{
     ABILITY_ATTACH_SESSION, REASON_PREVIEW_CAPTURE_FAILED, REASON_PREVIEW_CLIENT_CLOSED,
     REASON_RESOURCE_UNAVAILABLE, TRANSPORT_INVOKE_BIDI,
 };
 use crate::daemon::plugins::remote_desktop::input::{
-    apply_input_frame_with_policy, input_policy_allows, input_policy_for_entry, parse_input_frame,
+    apply_input_frame_with_policy, input_policy_allows, input_policy_for_binding, parse_input_frame,
 };
 use crate::daemon::plugins::remote_desktop::media::encode::{
     spawn_builtin_h264_stream, BuiltinH264StreamTerminal, BuiltinH264TerminalCallback,
 };
 use crate::daemon::plugins::remote_desktop::request::AttachEncoding;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
+use crate::daemon::plugins::remote_desktop::target::{
+    DiagnosticCaptureSubject, RemoteAppTargetBinding,
+};
 use crate::daemon::plugins::remote_desktop::transport::BidiTerminalGuard;
 
 pub(in crate::daemon::plugins::remote_desktop) struct BidiCaptureWorkerConfig {
     pub(in crate::daemon::plugins::remote_desktop) session_store: Arc<RemoteDesktopSessionStore>,
     pub(in crate::daemon::plugins::remote_desktop) session_id: String,
     pub(in crate::daemon::plugins::remote_desktop) backend: Arc<dyn ScreenSnapshotBackend>,
-    pub(in crate::daemon::plugins::remote_desktop) entry: ResourceEntry,
+    pub(in crate::daemon::plugins::remote_desktop) target_binding: RemoteAppTargetBinding,
     pub(in crate::daemon::plugins::remote_desktop) options: ScreenCaptureOptions,
     pub(in crate::daemon::plugins::remote_desktop) encoding: AttachEncoding,
     pub(in crate::daemon::plugins::remote_desktop) input_policy: Value,
@@ -48,7 +50,9 @@ pub(in crate::daemon::plugins::remote_desktop) fn spawn_bidi_capture_worker(
     config: BidiCaptureWorkerConfig,
 ) {
     let (latest_frame_tx, latest_frame_rx) = watch::channel::<Option<Vec<BidiOutputFrame>>>(None);
-    let input_policy = input_policy_for_entry(config.input_policy, &config.entry);
+    let input_policy = input_policy_for_binding(config.input_policy, &config.target_binding);
+    let capture_subject = config.target_binding.diagnostic_capture_subject().clone();
+    let target_binding = config.target_binding;
     spawn_bidi_control_loop(
         config.from_client,
         config.to_client.clone(),
@@ -64,7 +68,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn spawn_bidi_capture_worker(
         session_store: config.session_store,
         session_id: config.session_id,
         backend: config.backend,
-        entry: config.entry,
+        target_binding,
+        capture_subject,
         options: config.options,
         encoding: config.encoding,
         latest_frame: latest_frame_tx,
@@ -127,9 +132,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle_bidi_input_frame(
 
 async fn capture_bidi_frame(
     backend: Arc<dyn ScreenSnapshotBackend>,
-    entry: ResourceEntry,
+    capture_subject: DiagnosticCaptureSubject,
     options: ScreenCaptureOptions,
 ) -> anyhow::Result<EncodedFrame> {
+    let entry = capture_subject.to_backend_resource_entry();
     tokio::task::spawn_blocking(move || backend.capture_jpeg(&entry, &options))
         .await
         .map_err(|err| anyhow::anyhow!("{ABILITY_ATTACH_SESSION}: capture task failed: {err}"))?
@@ -231,7 +237,8 @@ struct BidiFrameLoopConfig {
     session_store: Arc<RemoteDesktopSessionStore>,
     session_id: String,
     backend: Arc<dyn ScreenSnapshotBackend>,
-    entry: ResourceEntry,
+    target_binding: RemoteAppTargetBinding,
+    capture_subject: DiagnosticCaptureSubject,
     options: ScreenCaptureOptions,
     encoding: AttachEncoding,
     latest_frame: watch::Sender<Option<Vec<BidiOutputFrame>>>,
@@ -245,7 +252,8 @@ fn spawn_bidi_frame_loop(config: BidiFrameLoopConfig) {
         session_store,
         session_id,
         backend,
-        entry,
+        target_binding,
+        capture_subject,
         options,
         encoding,
         latest_frame,
@@ -256,7 +264,7 @@ fn spawn_bidi_frame_loop(config: BidiFrameLoopConfig) {
     let terminal_guard = BidiTerminalGuard::new();
     if encoding == AttachEncoding::AnnexBH264
         && spawn_builtin_h264_stream(
-            entry.clone(),
+            target_binding,
             options.clone(),
             max_frame_queue_depth,
             control_to_client.clone(),
@@ -284,11 +292,15 @@ fn spawn_bidi_frame_loop(config: BidiFrameLoopConfig) {
                 break;
             }
             let started = Instant::now();
-            let capture =
-                capture_bidi_frame(Arc::clone(&backend), entry.clone(), options.clone()).await;
+            let capture = capture_bidi_frame(
+                Arc::clone(&backend),
+                capture_subject.clone(),
+                options.clone(),
+            )
+            .await;
             match capture {
                 Ok(frame) => {
-                    let frame = build_bidi_frames(seq, &entry.hardware_id, frame);
+                    let frame = build_bidi_frames(seq, capture_subject.hardware_id(), frame);
                     seq = seq.saturating_add(1);
                     if latest_frame.send(Some(frame)).is_err() {
                         break;

@@ -8,6 +8,7 @@
 use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::constants::{TRANSPORT_INVOKE_BIDI, TRANSPORT_WEBRTC};
+use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 
 type RemoteDesktopEventProjection = (&'static str, Value);
 
@@ -26,6 +27,30 @@ pub(in crate::daemon::plugins::remote_desktop) fn session_created() -> RemoteDes
             "preview_ability": "screen.subscribe",
         }),
     )
+}
+
+/// Build the target-resolution audit payload emitted when session construction
+/// starts from a resolved binding rather than an unresolved ResourceEntry.
+pub(in crate::daemon::plugins::remote_desktop) fn capture_target_resolved(
+    binding: &RemoteAppTargetBinding,
+) -> RemoteDesktopEventProjection {
+    (
+        "CAPTURE_TARGET_RESOLVED",
+        json!({
+            "target_binding": binding.to_value(),
+            "scope_audit": binding.scope_audit_value(),
+            "latest_target_diagnostic": binding.latest_target_diagnostic_value(),
+        }),
+    )
+}
+
+/// Build the target-bound event payload. The session aggregate owns the
+/// binding; this event is an ordered audit projection, not a second source of
+/// target truth.
+pub(in crate::daemon::plugins::remote_desktop) fn target_bound(
+    binding: &RemoteAppTargetBinding,
+) -> RemoteDesktopEventProjection {
+    ("TARGET_BOUND", binding.target_bound_event_payload())
 }
 
 /// Build a generic SDP description-set payload.

@@ -17,7 +17,6 @@ use crate::daemon::ability::builtins::resources::media::screen_snapshot::rgba_by
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
     capture_rgb_with_xcap, ScreenCaptureOptions,
 };
-use crate::daemon::persistence::resources::ResourceEntry;
 #[cfg(feature = "native-media")]
 use crate::daemon::plugins::remote_desktop::media::encode::latest_recorder_frame;
 use crate::daemon::plugins::remote_desktop::media::encode::{
@@ -25,6 +24,7 @@ use crate::daemon::plugins::remote_desktop::media::encode::{
 };
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
+use crate::daemon::plugins::remote_desktop::target::DiagnosticCaptureSubject;
 
 #[cfg(feature = "native-media")]
 const RECORDER_FRAME_TIMEOUT_MS: u64 = 250;
@@ -105,7 +105,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_pollin
     session_id: &str,
     epoch: TransportEpoch,
     inputs: &BaselineMediaInputs<'_>,
-    entry: &ResourceEntry,
+    capture_subject: &DiagnosticCaptureSubject,
     done_rx: &mut webrtc::runtime::Receiver<()>,
     stop_rx: &mut watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
@@ -116,6 +116,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_pollin
         options,
         config,
     } = *inputs;
+    let entry = capture_subject.to_backend_resource_entry();
     let mut encoder = build_openh264_encoder(config)?;
     let interval = Duration::from_secs_f64(1.0 / config.fps as f64);
     let mut seq = 0_u64;
@@ -125,7 +126,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_pollin
             break;
         }
         let started = Instant::now();
-        let frame = capture_rgb_with_xcap(entry, options).map(even_rgb_frame)?;
+        let frame = capture_rgb_with_xcap(&entry, options).map(even_rgb_frame)?;
         let wrote_sample = write_h264_sample(
             track,
             ssrc,

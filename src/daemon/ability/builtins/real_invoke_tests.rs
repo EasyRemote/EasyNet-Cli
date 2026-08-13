@@ -3437,7 +3437,7 @@ fn seed_real_invoke_display_resource(hardware_id: &str) -> String {
             binding: crate::daemon::persistence::resources::ResourceBinding::LocalDevice,
             hardware_id,
             display_name: "Real Invoke Display",
-            metadata: json!({}),
+            metadata: json!({"primary_display": true, "backend": "xcap"}),
         },
     )
     .expect("seed real-invoke display resource");

@@ -35,6 +35,9 @@ use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::daemon::plugins::remote_desktop::target::{
+    RemoteAppTargetBinding, RemoteDesktopTargetKind,
+};
 use block2::RcBlock;
 use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2::rc::Retained;
@@ -47,9 +50,6 @@ use objc2_screen_capture_kit::{
     SCContentFilter, SCDisplay, SCRunningApplication, SCShareableContent, SCStream,
     SCStreamConfiguration, SCStreamOutput, SCStreamOutputType, SCWindow,
 };
-use serde_json::Value;
-
-use crate::daemon::persistence::resources::{ResourceEntry, ResourceType};
 
 const REASON_PERMISSION_DENIED: &str = "permission_denied";
 
@@ -207,13 +207,15 @@ fn ensure_screen_capture_permission() -> anyhow::Result<()> {
     )
 }
 
-pub fn target_for_entry(entry: &ResourceEntry) -> anyhow::Result<ScreenCaptureKitTarget> {
+pub(in crate::daemon::plugins::remote_desktop) fn target_for_binding(
+    binding: &RemoteAppTargetBinding,
+) -> anyhow::Result<ScreenCaptureKitTarget> {
     ensure_screen_capture_permission()?;
     let content = shareable_content()?;
     let displays = unsafe { content.displays() };
-    let display = select_display(&displays, entry)?;
-    let filter = match entry.kind {
-        ResourceType::Display => {
+    let display = select_display_for_binding(&displays, binding)?;
+    let filter = match binding.target_kind() {
+        RemoteDesktopTargetKind::Display => {
             let empty: Retained<NSArray<SCWindow>> = NSArray::new();
             unsafe {
                 SCContentFilter::initWithDisplay_excludingWindows(
@@ -223,16 +225,16 @@ pub fn target_for_entry(entry: &ResourceEntry) -> anyhow::Result<ScreenCaptureKi
                 )
             }
         }
-        ResourceType::Window => {
+        RemoteDesktopTargetKind::Window => {
             let windows = unsafe { content.windows() };
-            let window = select_window(&windows, entry)?;
+            let window = select_window_for_binding(&windows, binding)?;
             unsafe {
                 SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &window)
             }
         }
-        ResourceType::Application => {
+        RemoteDesktopTargetKind::Application => {
             let applications = unsafe { content.applications() };
-            let app = select_application(&applications, entry)?;
+            let app = select_application_for_binding(&applications, binding)?;
             let apps = NSArray::from_slice(&[&*app]);
             let empty: Retained<NSArray<SCWindow>> = NSArray::new();
             unsafe {
@@ -244,9 +246,9 @@ pub fn target_for_entry(entry: &ResourceEntry) -> anyhow::Result<ScreenCaptureKi
                 )
             }
         }
-        _ => anyhow::bail!("ScreenCaptureKit target must be display/window/application"),
     };
-    let (native_width, native_height) = filter_dimensions(&filter, entry, &display)?;
+    let (native_width, native_height) =
+        filter_dimensions_for_kind(&filter, binding.target_kind(), &display)?;
     Ok(ScreenCaptureKitTarget {
         filter,
         native_width,
@@ -352,87 +354,145 @@ impl ScreenCaptureKitStream {
     }
 }
 
-fn select_display(
+fn select_display_for_binding(
     displays: &NSArray<SCDisplay>,
-    entry: &ResourceEntry,
+    binding: &RemoteAppTargetBinding,
 ) -> anyhow::Result<Retained<SCDisplay>> {
-    let expected_id = entry.metadata.get("monitor_id").and_then(Value::as_u64);
+    let expected_id = binding.native_locator().display_id();
     for display in displays.iter() {
         if expected_id.is_some_and(|id| unsafe { display.displayID() as u64 == id }) {
             return Ok(display);
         }
     }
-    displays
-        .firstObject()
-        .ok_or_else(|| anyhow::anyhow!("no shareable display available"))
+    if binding.native_locator().primary_display() {
+        return displays
+            .firstObject()
+            .ok_or_else(|| anyhow::anyhow!("no shareable primary display available"));
+    }
+    if expected_id.is_some() {
+        anyhow::bail!(
+            "requested display identity is not available; reason=display_identity_mismatch"
+        );
+    }
+    anyhow::bail!("display identity is required for ScreenCaptureKit binding; reason=display_identity_missing")
 }
 
-fn select_window(
+fn select_window_for_binding(
     windows: &NSArray<SCWindow>,
-    entry: &ResourceEntry,
+    binding: &RemoteAppTargetBinding,
 ) -> anyhow::Result<Retained<SCWindow>> {
-    let expected_id = entry.metadata.get("window_id").and_then(Value::as_u64);
-    let expected_pid = entry.metadata.get("pid").and_then(Value::as_i64);
-    let expected_title = entry.metadata.get("title").and_then(Value::as_str);
-    let expected_app = entry.metadata.get("app_name").and_then(Value::as_str);
+    let locator = binding.native_locator();
+    let expected_id = locator.window_id();
+    let expected_pid = locator.pid();
+    let expected_app_identity = locator.app_identity();
+    let expected_bundle_id = locator.bundle_id();
+    let expected_title = locator.title();
+    let expected_app = locator.app_name();
+    let mut candidates = Vec::new();
+    let mut id_seen = false;
     for window in windows.iter() {
-        if expected_id.is_some_and(|id| unsafe { window.windowID() as u64 == id }) {
-            return Ok(window);
+        let id_matches = expected_id.is_some_and(|id| unsafe { window.windowID() as u64 == id });
+        if !id_matches {
+            continue;
         }
+        id_seen = true;
         let app = unsafe { window.owningApplication() };
-        let pid_matches = expected_pid.is_some_and(|pid| {
+        let pid_matches = expected_pid.map(|pid| {
             app.as_deref()
                 .map(|app| unsafe { app.processID() as i64 == pid })
                 .unwrap_or(false)
         });
-        let app_matches = expected_app.is_some_and(|name| {
+        let bundle_matches = expected_bundle_id.map(|bundle_id| {
+            app.as_deref()
+                .map(|app| ns_string_eq(unsafe { app.bundleIdentifier() }.as_ref(), bundle_id))
+                .unwrap_or(false)
+        });
+        let app_identity_matches = expected_app_identity.map(|app_identity| {
+            app.as_deref()
+                .map(|app| ns_string_eq(unsafe { app.bundleIdentifier() }.as_ref(), app_identity))
+                .unwrap_or(false)
+        });
+        let app_matches = expected_app.map(|name| {
             app.as_deref()
                 .map(|app| ns_string_eq(unsafe { app.applicationName() }.as_ref(), name))
                 .unwrap_or(false)
         });
-        let title_matches = expected_title.is_some_and(|title| {
+        let title_matches = expected_title.map(|title| {
             unsafe { window.title() }
                 .as_deref()
                 .map(|actual| ns_string_eq(actual, title))
                 .unwrap_or(false)
         });
-        if pid_matches && app_matches && title_matches {
-            return Ok(window);
+        let owner_matches = pid_matches.unwrap_or(true)
+            && bundle_matches.unwrap_or(true)
+            && app_identity_matches.unwrap_or(true)
+            && app_matches.unwrap_or(true);
+        let title_ok = title_matches.unwrap_or(true);
+        if owner_matches && title_ok {
+            candidates.push(window);
         }
     }
-    anyhow::bail!("requested ScreenCaptureKit window is no longer available")
+    match candidates.len() {
+        0 if id_seen => anyhow::bail!("requested ScreenCaptureKit window owner identity does not match the bound target; reason=target_identity_mismatch"),
+        0 => anyhow::bail!("requested ScreenCaptureKit window is no longer available; reason=target_not_found"),
+        1 => Ok(candidates.remove(0)),
+        _ => anyhow::bail!("requested ScreenCaptureKit window identity is ambiguous; reason=target_identity_ambiguous"),
+    }
 }
 
-fn select_application(
+fn select_application_for_binding(
     applications: &NSArray<SCRunningApplication>,
-    entry: &ResourceEntry,
+    binding: &RemoteAppTargetBinding,
 ) -> anyhow::Result<Retained<SCRunningApplication>> {
-    let expected_pid = entry.metadata.get("primary_pid").and_then(Value::as_i64);
-    let expected_app = entry.metadata.get("app_name").and_then(Value::as_str);
+    let locator = binding.native_locator();
+    let expected_pid = locator.pid();
+    let expected_app_identity = locator.app_identity();
+    let expected_bundle_id = locator.bundle_id();
+    let expected_app = locator.app_name();
+    let mut candidates = Vec::new();
+    let mut identity_seen = false;
     for app in applications.iter() {
-        if expected_pid.is_some_and(|pid| unsafe { app.processID() as i64 == pid }) {
-            return Ok(app);
+        let pid_matches = expected_pid
+            .map(|pid| unsafe { app.processID() as i64 == pid })
+            .unwrap_or(true);
+        if expected_pid.is_some() && pid_matches {
+            identity_seen = true;
         }
-        if expected_app
-            .is_some_and(|name| ns_string_eq(unsafe { app.applicationName() }.as_ref(), name))
-        {
-            return Ok(app);
+        let bundle_matches = expected_bundle_id
+            .map(|bundle_id| ns_string_eq(unsafe { app.bundleIdentifier() }.as_ref(), bundle_id))
+            .unwrap_or(true);
+        if expected_bundle_id.is_some() && bundle_matches {
+            identity_seen = true;
+        }
+        let app_identity_matches = expected_app_identity
+            .map(|app_identity| {
+                ns_string_eq(unsafe { app.bundleIdentifier() }.as_ref(), app_identity)
+            })
+            .unwrap_or(true);
+        if expected_app_identity.is_some() && app_identity_matches {
+            identity_seen = true;
+        }
+        let app_name_matches = expected_app
+            .map(|name| ns_string_eq(unsafe { app.applicationName() }.as_ref(), name))
+            .unwrap_or(true);
+        if pid_matches && bundle_matches && app_identity_matches && app_name_matches {
+            candidates.push(app);
         }
     }
-    anyhow::bail!("requested ScreenCaptureKit application is no longer available")
+    match candidates.len() {
+        0 if identity_seen => anyhow::bail!("requested ScreenCaptureKit application metadata no longer matches the bound target; reason=target_identity_mismatch"),
+        0 => anyhow::bail!("requested ScreenCaptureKit application is no longer available; reason=target_not_found"),
+        1 => Ok(candidates.remove(0)),
+        _ => anyhow::bail!("requested ScreenCaptureKit application identity is ambiguous; reason=target_identity_ambiguous"),
+    }
 }
 
-fn filter_dimensions(
+fn filter_dimensions_for_kind(
     filter: &SCContentFilter,
-    entry: &ResourceEntry,
+    target_kind: RemoteDesktopTargetKind,
     fallback_display: &SCDisplay,
 ) -> anyhow::Result<(usize, usize)> {
-    if entry.kind == ResourceType::Display {
-        // SCDisplay reports width/height in POINTS, while
-        // SCStreamConfiguration wants PIXELS. Without the
-        // pointPixelScale multiply, a 2x Retina panel captures at
-        // half resolution and the browser-side upscale blurs every
-        // glyph (observed: 1470×956 captured on a 2940×1912 panel).
+    if target_kind == RemoteDesktopTargetKind::Display {
         let info = unsafe { SCShareableContent::infoForFilter(filter) };
         let scale = f64::from(unsafe { info.pointPixelScale() }.max(1.0));
         let width = unsafe { fallback_display.width() };

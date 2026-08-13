@@ -156,19 +156,15 @@ mod tests {
     use tokio::sync::watch;
 
     use super::*;
-    use crate::daemon::persistence::resources::{self, ResourceType, ResourcesFile};
+    use crate::daemon::persistence::resources::{self, ResourcesFile};
     use crate::daemon::plugins::remote_desktop::constants::{
         REASON_SESSION_EXPIRED, TRANSPORT_WEBRTC,
     };
-    use crate::daemon::plugins::remote_desktop::request::{
-        RemoteDesktopInputPolicy, RemoteDesktopVideoConstraints,
-    };
     use crate::daemon::plugins::remote_desktop::session::{
-        RemoteDesktopSessionInit, RemoteDesktopState,
+        RemoteDesktopSession, RemoteDesktopState,
     };
-    use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
     use crate::daemon::plugins::remote_desktop::test_support::{
-        env_for, reset_store, seed_display, test_lock, test_plugin,
+        env_for, reset_store, seed_display, test_lock, test_plugin, test_session_init,
     };
 
     #[test]
@@ -322,20 +318,11 @@ mod tests {
                 for index in 0..plugin.config().max_sessions() {
                     let now = now_ms();
                     let session_id = format!("stale-{index}");
-                    let mut session = RemoteDesktopSession::new(RemoteDesktopSessionInit {
-                        session_id: session_id.clone(),
-                        session_token: format!("token-{index}"),
-                        creator_caller_ura: "easynet:///r/acme/user/test".to_string(),
-                        consent: RemoteDesktopConsentGrant::from_envelope_for_test(&env_for(&ura)),
-                        subject_ura: ura.clone(),
-                        subject_type: ResourceType::Display,
-                        subject_display_name: "Test Display".to_string(),
-                        mode: "view_only".to_string(),
-                        lease_ttl_ms: 1,
-                        transport_preferences: vec![TRANSPORT_WEBRTC.to_string()],
-                        video: RemoteDesktopVideoConstraints::default(),
-                        input_policy: RemoteDesktopInputPolicy::default(),
-                    });
+                    let mut session = RemoteDesktopSession::new(test_session_init(
+                        &session_id,
+                        &ura,
+                        vec![TRANSPORT_WEBRTC.to_string()],
+                    ));
                     session.set_lease_expires_at_for_test(now.saturating_sub(1));
                     session.close("test_stale");
                     sessions.insert(session_id, session);

@@ -25,6 +25,7 @@ pub(in crate::daemon::plugins::remote_desktop) use crate::daemon::plugins::remot
 use crate::daemon::plugins::remote_desktop::session_transport_state::{
     PrimaryMediaPhase, RemoteDesktopTransportState, TransportEpoch,
 };
+use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 
 /// Runtime state for one remote desktop session.
 ///
@@ -62,6 +63,12 @@ impl RemoteDesktopSession {
             event_log: RemoteDesktopEventLog::new(),
         };
         session.push_projected_event(session_events::session_created());
+        session.push_projected_event(session_events::capture_target_resolved(
+            session.profile.target_binding(),
+        ));
+        session.push_projected_event(session_events::target_bound(
+            session.profile.target_binding(),
+        ));
         session
     }
 
@@ -112,6 +119,13 @@ impl RemoteDesktopSession {
     /// Human-facing display name for the acted-on resource.
     pub(in crate::daemon::plugins::remote_desktop) fn subject_display_name(&self) -> &str {
         self.profile.subject_display_name()
+    }
+
+    /// Resolved target binding that owns the session's capture/input/audit boundary.
+    pub(in crate::daemon::plugins::remote_desktop) fn target_binding(
+        &self,
+    ) -> &RemoteAppTargetBinding {
+        self.profile.target_binding()
     }
 
     /// Requested session mode.

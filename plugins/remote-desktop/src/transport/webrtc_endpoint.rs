@@ -46,18 +46,18 @@ use webrtc::peer_connection::{
 use webrtc::runtime::{channel, default_runtime};
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions;
-use crate::daemon::persistence::resources::ResourceEntry;
 use crate::daemon::plugins::remote_desktop::constants::{
     ABILITY_SET_DESCRIPTION, DIRECT_WEBRTC_ENDPOINT_PREFIX,
     DIRECT_WEBRTC_H264_PREFERRED_PAYLOAD_TYPE, REASON_RESOURCE_TYPE_MISMATCH, TRANSPORT_WEBRTC,
 };
-use crate::daemon::plugins::remote_desktop::media::encode::build_direct_webrtc_h264_config;
+use crate::daemon::plugins::remote_desktop::media::encode::build_direct_webrtc_h264_config_for_binding;
 use crate::daemon::plugins::remote_desktop::network::direct_webrtc_udp_addrs;
 use crate::daemon::plugins::remote_desktop::sdp::{
     ensure_answer_sends_video, normalize_browser_answer_sdp, normalize_remote_offer_sdp,
 };
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
+use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 use crate::daemon::plugins::remote_desktop::transport::{
     apply_pending_remote_ice_candidates, run_direct_webrtc_media_loop, DirectWebRtcEndpoint,
     DirectWebRtcHandler, DirectWebRtcSession, RemoteDesktopTransportManager,
@@ -70,7 +70,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct StartDirectWebRtcEndpointR
     pub(in crate::daemon::plugins::remote_desktop) transports: Arc<RemoteDesktopTransportManager>,
     pub(in crate::daemon::plugins::remote_desktop) session_id: String,
     pub(in crate::daemon::plugins::remote_desktop) epoch: TransportEpoch,
-    pub(in crate::daemon::plugins::remote_desktop) entry: ResourceEntry,
+    pub(in crate::daemon::plugins::remote_desktop) target_binding: RemoteAppTargetBinding,
     pub(in crate::daemon::plugins::remote_desktop) options: ScreenCaptureOptions,
     pub(in crate::daemon::plugins::remote_desktop) target_bitrate_kbps: u32,
     pub(in crate::daemon::plugins::remote_desktop) max_frame_queue_depth: usize,
@@ -86,7 +86,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn start_direct_webrtc_endpoint(
         transports,
         session_id,
         epoch,
-        entry,
+        target_binding,
         options,
         target_bitrate_kbps,
         max_frame_queue_depth,
@@ -101,7 +101,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn start_direct_webrtc_endpoint(
             transports: Arc::clone(&transports),
             session_id: session_id.clone(),
             epoch,
-            entry,
+            target_binding,
             options,
             target_bitrate_kbps,
             max_frame_queue_depth,
@@ -132,7 +132,7 @@ struct DirectWebRtcEndpointConfig {
     transports: Arc<RemoteDesktopTransportManager>,
     session_id: String,
     epoch: TransportEpoch,
-    entry: ResourceEntry,
+    target_binding: RemoteAppTargetBinding,
     options: ScreenCaptureOptions,
     target_bitrate_kbps: u32,
     max_frame_queue_depth: usize,
@@ -144,8 +144,8 @@ struct DirectWebRtcEndpointConfig {
 async fn create_direct_webrtc_endpoint(
     endpoint_config: DirectWebRtcEndpointConfig,
 ) -> anyhow::Result<(Value, Arc<dyn PeerConnection>, std::thread::JoinHandle<()>)> {
-    let media_config = build_direct_webrtc_h264_config(
-        &endpoint_config.entry,
+    let media_config = build_direct_webrtc_h264_config_for_binding(
+        &endpoint_config.target_binding,
         &endpoint_config.options,
         endpoint_config.target_bitrate_kbps,
         endpoint_config.max_frame_queue_depth,
@@ -153,7 +153,7 @@ async fn create_direct_webrtc_endpoint(
     .ok_or_else(|| {
         anyhow::anyhow!(
             "{ABILITY_SET_DESCRIPTION}: no compatible direct WebRTC media backend for subject type {}; reason={REASON_RESOURCE_TYPE_MISMATCH}",
-            endpoint_config.entry.kind.as_str()
+            endpoint_config.target_binding.target_kind().as_str()
         )
     })?;
 
@@ -299,7 +299,7 @@ async fn create_direct_webrtc_endpoint(
                     peer_connection,
                     track,
                     payload_type,
-                    entry: endpoint_config.entry,
+                    target_binding: endpoint_config.target_binding,
                     options: endpoint_config.options,
                     config: media_config,
                 },

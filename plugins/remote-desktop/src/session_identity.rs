@@ -9,6 +9,7 @@ use crate::daemon::plugins::remote_desktop::request::{
     RemoteDesktopInputPolicy, RemoteDesktopVideoConstraints,
 };
 use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
+use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 
 /// Construction payload for a remote desktop session row.
 ///
@@ -21,9 +22,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSessionInit {
     pub(in crate::daemon::plugins::remote_desktop) session_token: String,
     pub(in crate::daemon::plugins::remote_desktop) creator_caller_ura: String,
     pub(in crate::daemon::plugins::remote_desktop) consent: RemoteDesktopConsentGrant,
-    pub(in crate::daemon::plugins::remote_desktop) subject_ura: String,
-    pub(in crate::daemon::plugins::remote_desktop) subject_type: ResourceType,
-    pub(in crate::daemon::plugins::remote_desktop) subject_display_name: String,
+    pub(in crate::daemon::plugins::remote_desktop) target_binding: RemoteAppTargetBinding,
     pub(in crate::daemon::plugins::remote_desktop) mode: String,
     pub(in crate::daemon::plugins::remote_desktop) lease_ttl_ms: u64,
     pub(in crate::daemon::plugins::remote_desktop) transport_preferences: Vec<String>,
@@ -48,9 +47,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSessionProfil
     session_token: String,
     creator_caller_ura: String,
     consent: RemoteDesktopConsentGrant,
-    subject_ura: String,
-    subject_type: ResourceType,
-    subject_display_name: String,
+    target_binding: RemoteAppTargetBinding,
     mode: String,
     transport_preferences: Vec<String>,
     video: RemoteDesktopVideoConstraints,
@@ -67,9 +64,7 @@ impl RemoteDesktopSessionProfile {
             session_token: init.session_token,
             creator_caller_ura: init.creator_caller_ura,
             consent: init.consent,
-            subject_ura: init.subject_ura,
-            subject_type: init.subject_type,
-            subject_display_name: init.subject_display_name,
+            target_binding: init.target_binding,
             mode: init.mode,
             transport_preferences: init.transport_preferences,
             video: init.video,
@@ -110,17 +105,24 @@ impl RemoteDesktopSessionProfile {
 
     /// Canonical resource URA that this session is allowed to operate on.
     pub(in crate::daemon::plugins::remote_desktop) fn subject_ura(&self) -> &str {
-        &self.subject_ura
+        self.target_binding.subject_ura()
     }
 
     /// Resource type captured at session creation.
     pub(in crate::daemon::plugins::remote_desktop) fn subject_type(&self) -> ResourceType {
-        self.subject_type
+        self.target_binding.target_kind().resource_type()
     }
 
     /// Human-facing display name for the acted-on resource.
     pub(in crate::daemon::plugins::remote_desktop) fn subject_display_name(&self) -> &str {
-        &self.subject_display_name
+        self.target_binding.subject_display_name()
+    }
+
+    /// Resolved target binding captured before the active session row exists.
+    pub(in crate::daemon::plugins::remote_desktop) fn target_binding(
+        &self,
+    ) -> &RemoteAppTargetBinding {
+        &self.target_binding
     }
 
     /// Requested session mode.

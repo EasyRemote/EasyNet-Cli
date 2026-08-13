@@ -16,9 +16,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use webrtc::data_channel::{DataChannel, DataChannelEvent};
 
-use crate::daemon::persistence::resources::{ResourceEntry, ResourceType};
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
+use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 
 pub const INPUT_DATA_CHANNEL_LABEL: &str = "easynet.remote_desktop.input.v1";
 pub const MAX_INPUT_FRAME_BYTES: usize = 16 * 1024;
@@ -179,27 +179,17 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_input_frame_with_policy(
     }
 }
 
-pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_entry(
+pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_binding(
     mut input_policy: Value,
-    entry: &ResourceEntry,
+    binding: &RemoteAppTargetBinding,
 ) -> Value {
-    let Some(target) = pointer_target_for_entry(entry) else {
+    let Some(pointer_target) = binding.geometry().pointer_target_value(binding) else {
         return input_policy;
     };
     let Some(map) = input_policy.as_object_mut() else {
         return input_policy;
     };
-    map.insert(
-        "pointer_target".to_string(),
-        json!({
-            "subject_type": entry.kind.as_str(),
-            "hardware_id": entry.hardware_id.as_str(),
-            "origin_x": target.origin_x,
-            "origin_y": target.origin_y,
-            "width": target.width,
-            "height": target.height,
-        }),
-    );
+    map.insert("pointer_target".to_string(), pointer_target);
     input_policy
 }
 
@@ -414,34 +404,6 @@ struct MappedPointerPoint {
     y: f64,
 }
 
-fn pointer_target_for_entry(entry: &ResourceEntry) -> Option<PointerTargetGeometry> {
-    match entry.kind {
-        ResourceType::Display => {
-            let origin_x = metadata_f64(entry, "x").unwrap_or(0.0);
-            let origin_y = metadata_f64(entry, "y").unwrap_or(0.0);
-            Some(PointerTargetGeometry {
-                origin_x,
-                origin_y,
-                width: metadata_f64(entry, "width"),
-                height: metadata_f64(entry, "height"),
-            })
-        }
-        ResourceType::Window => Some(PointerTargetGeometry {
-            origin_x: metadata_f64(entry, "x")?,
-            origin_y: metadata_f64(entry, "y")?,
-            width: metadata_f64(entry, "width"),
-            height: metadata_f64(entry, "height"),
-        }),
-        ResourceType::Application => Some(PointerTargetGeometry {
-            origin_x: metadata_f64(entry, "primary_x").or_else(|| metadata_f64(entry, "x"))?,
-            origin_y: metadata_f64(entry, "primary_y").or_else(|| metadata_f64(entry, "y"))?,
-            width: metadata_f64(entry, "primary_width").or_else(|| metadata_f64(entry, "width")),
-            height: metadata_f64(entry, "primary_height").or_else(|| metadata_f64(entry, "height")),
-        }),
-        _ => None,
-    }
-}
-
 fn pointer_target_from_policy(policy: &Value) -> Option<PointerTargetGeometry> {
     let target = policy.get("pointer_target")?;
     Some(PointerTargetGeometry {
@@ -450,10 +412,6 @@ fn pointer_target_from_policy(policy: &Value) -> Option<PointerTargetGeometry> {
         width: target.get("width").and_then(value_f64),
         height: target.get("height").and_then(value_f64),
     })
-}
-
-fn metadata_f64(entry: &ResourceEntry, key: &str) -> Option<f64> {
-    entry.metadata.get(key).and_then(value_f64)
 }
 
 fn value_f64(value: &Value) -> Option<f64> {
@@ -869,7 +827,18 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry};
+    use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
+    use crate::daemon::plugins::remote_desktop::target::{
+        RemoteAppTargetResolver, ResourceEntryTargetResolver,
+    };
+
+    fn binding_for(
+        entry: &ResourceEntry,
+    ) -> crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding {
+        ResourceEntryTargetResolver
+            .resolve_for_session("remote_desktop.create_session", entry, "view_only", 1)
+            .expect("test target binding resolves")
+    }
 
     #[test]
     fn parses_pointer_input_frame() {
@@ -935,6 +904,9 @@ mod tests {
             hardware_id: "window:macos:cgwindow:10:42".into(),
             display_name: "Cursor".into(),
             metadata: json!({
+                "window_id": 42,
+                "pid": 10,
+                "app_name": "Cursor",
                 "x": 100,
                 "y": 200,
                 "width": 800,
@@ -942,7 +914,8 @@ mod tests {
             }),
             first_seen_at: "2026-06-01T00:00:00Z".into(),
         };
-        let policy = input_policy_for_entry(json!({"pointer_enabled": true}), &entry);
+        let binding = binding_for(&entry);
+        let policy = input_policy_for_binding(json!({"pointer_enabled": true}), &binding);
         let frame = match parse_input_frame(
             r#"{"type":"pointer","action":"move","x":0,"y":0,"normalized_x":0.5,"normalized_y":0.25}"#,
         )
@@ -967,6 +940,8 @@ mod tests {
             hardware_id: "application:macos:cgwindow:Cursor".into(),
             display_name: "Cursor".into(),
             metadata: json!({
+                "display_id": 1,
+                "primary_pid": 10,
                 "primary_x": 300,
                 "primary_y": 400,
                 "primary_width": 1000,
@@ -974,7 +949,8 @@ mod tests {
             }),
             first_seen_at: "2026-06-01T00:00:00Z".into(),
         };
-        let policy = input_policy_for_entry(json!({"pointer_enabled": true}), &entry);
+        let binding = binding_for(&entry);
+        let policy = input_policy_for_binding(json!({"pointer_enabled": true}), &binding);
         let frame = match parse_input_frame(
             r#"{"type":"pointer","action":"down","x":250,"y":100,"target_width":500,"target_height":250}"#,
         )

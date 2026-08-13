@@ -15,7 +15,6 @@ use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::peer_connection::PeerConnection;
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions;
-use crate::daemon::persistence::resources::ResourceEntry;
 use crate::daemon::plugins::remote_desktop::media::encode::BuiltinH264Config;
 use crate::daemon::plugins::remote_desktop::media::native::{
     is_webrtc_sender_backpressure, latest_native_rtp_units, native_capture_dimensions,
@@ -23,11 +22,12 @@ use crate::daemon::plugins::remote_desktop::media::native::{
     NativeLatencyStats,
 };
 use crate::daemon::plugins::remote_desktop::screencapturekit_capture::{
-    target_for_entry, CapturedFrame, ScreenCaptureKitStream,
+    target_for_binding, CapturedFrame, ScreenCaptureKitStream,
 };
 use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
+use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 use crate::daemon::plugins::remote_desktop::videotoolbox_encoder::VideoToolboxEncoder;
 
 /// Immutable inputs for the macOS native direct-WebRTC strategy.
@@ -68,7 +68,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
     inputs: &NativeMediaInputs<'_>,
     session_id: &str,
     epoch: TransportEpoch,
-    entry: &ResourceEntry,
+    target_binding: &RemoteAppTargetBinding,
     done_rx: &mut webrtc::runtime::Receiver<()>,
     stop_rx: &mut watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
@@ -82,7 +82,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
         config,
     } = *inputs;
 
-    let capture_target = target_for_entry(entry)?;
+    let capture_target = target_for_binding(target_binding)?;
     let (req_width, req_height) =
         native_capture_dimensions(options, || Ok(capture_target.native_dimensions()))?;
     let fps = config.fps.max(1);

@@ -30,7 +30,10 @@ use super::contract::{
 };
 use serde_json::{json, Value};
 
-use crate::daemon::persistence::resources::{ResourceEntry, ResourceType};
+#[cfg(test)]
+use crate::daemon::persistence::resources::ResourceEntry;
+use crate::daemon::persistence::resources::ResourceType;
+use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 
 pub(in crate::daemon::plugins::remote_desktop) mod encode;
 pub(in crate::daemon::plugins::remote_desktop) mod native;
@@ -116,8 +119,19 @@ impl RemoteDesktopMediaBackendDescriptor {
         self.unavailable_reason
     }
 
+    #[cfg(test)]
     pub fn supports_entry(self, entry: &ResourceEntry) -> bool {
         let subject = match entry.kind {
+            ResourceType::Display => "display",
+            ResourceType::Window => "window",
+            ResourceType::Application => "application",
+            _ => return false,
+        };
+        self.supported_subjects.contains(&subject)
+    }
+
+    pub fn supports_subject(self, subject: ResourceType) -> bool {
+        let subject = match subject {
             ResourceType::Display => "display",
             ResourceType::Window => "window",
             ResourceType::Application => "application",
@@ -325,6 +339,7 @@ pub fn production_gate_view() -> Value {
     }
 }
 
+#[cfg(test)]
 pub fn production_backend_for_entry(
     entry: &ResourceEntry,
 ) -> Option<RemoteDesktopMediaBackendDescriptor> {
@@ -340,6 +355,22 @@ pub fn production_backend_for_entry(
         })
 }
 
+pub(in crate::daemon::plugins::remote_desktop) fn production_backend_for_binding(
+    binding: &RemoteAppTargetBinding,
+) -> Option<RemoteDesktopMediaBackendDescriptor> {
+    [native_webrtc_backend_runtime_descriptor()]
+        .into_iter()
+        .find(|backend| {
+            backend.is_available()
+                && backend.is_webrtc_transport()
+                && backend.transport_ready()
+                && backend.production_ready()
+                && backend.supports_subject(binding.target_kind().resource_type())
+                && binding.supports_native_adapter()
+        })
+}
+
+#[cfg(test)]
 pub fn webrtc_transport_backend_for_entry(
     entry: &ResourceEntry,
 ) -> Option<RemoteDesktopMediaBackendDescriptor> {
@@ -347,6 +378,18 @@ pub fn webrtc_transport_backend_for_entry(
         return Some(native);
     }
     if xcap_supported_screen_entry(entry) {
+        return Some(XCAP_OPENH264_WEBRTC_BACKEND);
+    }
+    None
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn webrtc_transport_backend_for_binding(
+    binding: &RemoteAppTargetBinding,
+) -> Option<RemoteDesktopMediaBackendDescriptor> {
+    if let Some(native) = production_backend_for_binding(binding) {
+        return Some(native);
+    }
+    if binding.supports_xcap_adapter() {
         return Some(XCAP_OPENH264_WEBRTC_BACKEND);
     }
     None
@@ -385,6 +428,7 @@ mod macos_screen_capture_tcc {
     }
 }
 
+#[cfg(test)]
 pub fn select_builtin_h264_backend(
     entry: &ResourceEntry,
 ) -> Option<RemoteDesktopMediaBackendDescriptor> {
@@ -394,6 +438,16 @@ pub fn select_builtin_h264_backend(
     None
 }
 
+pub(in crate::daemon::plugins::remote_desktop) fn select_builtin_h264_backend_for_binding(
+    binding: &RemoteAppTargetBinding,
+) -> Option<RemoteDesktopMediaBackendDescriptor> {
+    if binding.supports_xcap_adapter() {
+        return Some(XCAP_OPENH264_BACKEND);
+    }
+    None
+}
+
+#[cfg(test)]
 fn xcap_supported_screen_entry(entry: &ResourceEntry) -> bool {
     let backend = entry.metadata.get("backend").and_then(Value::as_str);
     match entry.kind {
@@ -413,6 +467,7 @@ fn xcap_supported_screen_entry(entry: &ResourceEntry) -> bool {
     }
 }
 
+#[cfg(test)]
 fn native_supported_screen_entry(entry: &ResourceEntry) -> bool {
     match entry.kind {
         ResourceType::Display => true,
@@ -423,6 +478,7 @@ fn native_supported_screen_entry(entry: &ResourceEntry) -> bool {
     }
 }
 
+#[cfg(test)]
 fn screen_target_metadata_resolvable(entry: &ResourceEntry) -> bool {
     match entry.kind {
         ResourceType::Application => {
@@ -447,6 +503,7 @@ fn screen_target_metadata_resolvable(entry: &ResourceEntry) -> bool {
     }
 }
 
+#[cfg(test)]
 fn non_empty_metadata_str(entry: &ResourceEntry, key: &str) -> bool {
     entry
         .metadata

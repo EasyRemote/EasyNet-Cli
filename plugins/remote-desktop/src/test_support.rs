@@ -13,7 +13,7 @@ use axon_sdk::invocation::{CausalContext, ReceiptRef};
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
 use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::daemon::persistence::resources::{
-    upsert_resource, ResourceBinding, ResourceType, ResourceUpsert, ResourcesFile,
+    upsert_resource, ResourceBinding, ResourceEntry, ResourceType, ResourceUpsert, ResourcesFile,
 };
 use crate::daemon::plugins::remote_desktop::constants::DEFAULT_FRAME_QUEUE_DEPTH;
 use crate::daemon::plugins::remote_desktop::request::{
@@ -23,6 +23,9 @@ use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSessionInit;
 use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::stop_session_transports;
+use crate::daemon::plugins::remote_desktop::target::{
+    RemoteAppTargetResolver, ResourceEntryTargetResolver,
+};
 use crate::daemon::plugins::PluginRuntimeLimits;
 
 static REMOTE_DESKTOP_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -128,14 +131,25 @@ pub(in crate::daemon::plugins::remote_desktop) fn test_session_init(
     transport_preferences: Vec<String>,
 ) -> RemoteDesktopSessionInit {
     let env = env_for(subject);
+    let entry = ResourceEntry {
+        resource_ura: subject.to_string(),
+        owner_agent: "easynet:///r/acme/agent/device.01DEV.remote-desktop".to_string(),
+        kind: ResourceType::Display,
+        binding: ResourceBinding::LocalDevice,
+        hardware_id: "test-display".to_string(),
+        display_name: "Test Display".to_string(),
+        metadata: json!({"primary_display": true, "backend": "xcap"}),
+        first_seen_at: "2026-01-01T00:00:00Z".to_string(),
+    };
+    let target_binding = ResourceEntryTargetResolver
+        .resolve_for_session("test.ability", &entry, "view_only", 1)
+        .expect("test target binding resolves");
     RemoteDesktopSessionInit {
         session_id: session_id.to_string(),
         session_token: "token".to_string(),
         creator_caller_ura: env.caller().to_string(),
         consent: RemoteDesktopConsentGrant::from_envelope_for_test(&env),
-        subject_ura: subject.to_string(),
-        subject_type: ResourceType::Display,
-        subject_display_name: "Test Display".to_string(),
+        target_binding,
         mode: "view_only".to_string(),
         lease_ttl_ms: 5_000,
         transport_preferences,
@@ -157,7 +171,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn seed_display(
             binding: ResourceBinding::LocalDevice,
             hardware_id,
             display_name: "Test Display",
-            metadata: json!({}),
+            metadata: json!({"primary_display": true, "backend": "xcap"}),
         },
     )
     .expect("seed remote desktop display")
@@ -176,7 +190,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn seed_xcap_display(
             binding: ResourceBinding::LocalDevice,
             hardware_id,
             display_name: "xcap Display",
-            metadata: json!({"backend": "xcap"}),
+            metadata: json!({"backend": "xcap", "primary_display": true}),
         },
     )
     .expect("seed remote desktop xcap display")

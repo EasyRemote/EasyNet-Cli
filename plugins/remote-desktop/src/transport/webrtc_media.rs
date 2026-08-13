@@ -16,10 +16,10 @@ use webrtc::peer_connection::PeerConnection;
 #[cfg(feature = "native-media")]
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::open_display_recorder_with_xcap;
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions;
-use crate::daemon::persistence::resources::ResourceEntry;
 use crate::daemon::plugins::remote_desktop::media::encode::BuiltinH264Config;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
+use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 #[cfg(feature = "native-media")]
 use crate::daemon::plugins::remote_desktop::transport::webrtc_baseline_media::run_direct_webrtc_recorder_stream;
 use crate::daemon::plugins::remote_desktop::transport::webrtc_baseline_media::{
@@ -43,7 +43,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcSession {
     pub(in crate::daemon::plugins::remote_desktop) track: Arc<TrackLocalStaticSample>,
     /// Payload type selected by the completed offer/answer negotiation.
     pub(in crate::daemon::plugins::remote_desktop) payload_type: PayloadType,
-    pub(in crate::daemon::plugins::remote_desktop) entry: ResourceEntry,
+    pub(in crate::daemon::plugins::remote_desktop) target_binding: RemoteAppTargetBinding,
     pub(in crate::daemon::plugins::remote_desktop) options: ScreenCaptureOptions,
     pub(in crate::daemon::plugins::remote_desktop) config: BuiltinH264Config,
 }
@@ -61,7 +61,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
         peer_connection,
         track,
         payload_type,
-        entry,
+        target_binding,
         options,
         config,
     } = session;
@@ -93,7 +93,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
             &native_inputs,
             &session_id,
             epoch,
-            &entry,
+            &target_binding,
             &mut done_rx,
             &mut stop_rx,
         )
@@ -131,7 +131,9 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
     };
     #[cfg(feature = "native-media")]
     let result = {
-        if let Ok((recorder, rx)) = open_display_recorder_with_xcap(&entry) {
+        let capture_subject = target_binding.diagnostic_capture_subject().clone();
+        let recorder_entry = capture_subject.to_backend_resource_entry();
+        if let Ok((recorder, rx)) = open_display_recorder_with_xcap(&recorder_entry) {
             run_direct_webrtc_recorder_stream(
                 &sessions,
                 &session_id,
@@ -149,7 +151,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
                 &session_id,
                 epoch,
                 &baseline_inputs,
-                &entry,
+                &capture_subject,
                 &mut done_rx,
                 &mut stop_rx,
             )
@@ -162,7 +164,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
         &session_id,
         epoch,
         &baseline_inputs,
-        &entry,
+        target_binding.diagnostic_capture_subject(),
         &mut done_rx,
         &mut stop_rx,
     )
