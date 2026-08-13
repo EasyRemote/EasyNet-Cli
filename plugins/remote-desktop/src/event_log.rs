@@ -4,6 +4,8 @@
 // File: plugins/remote-desktop/src/event_log.rs
 // Description: Bounded event log and live event broadcast for sessions.
 
+use std::collections::VecDeque;
+
 use super::contract::RemoteDesktopSessionState;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
@@ -42,7 +44,7 @@ impl RemoteDesktopEventRecord {
 /// not know Axon protobuf enum labels.
 #[derive(Debug, Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopEventLog {
-    events: Vec<RemoteDesktopEventRecord>,
+    events: VecDeque<RemoteDesktopEventRecord>,
     event_tx: Option<broadcast::Sender<Value>>,
     next_sequence: u64,
 }
@@ -51,7 +53,7 @@ impl RemoteDesktopEventLog {
     pub(in crate::daemon::plugins::remote_desktop) fn new() -> Self {
         let (event_tx, _) = broadcast::channel(MAX_EVENTS_PER_SESSION);
         Self {
-            events: Vec::new(),
+            events: VecDeque::with_capacity(MAX_EVENTS_PER_SESSION),
             event_tx: Some(event_tx),
             next_sequence: 1,
         }
@@ -96,10 +98,10 @@ impl RemoteDesktopEventLog {
             "payload": payload,
         });
         if self.events.len() == MAX_EVENTS_PER_SESSION {
-            self.events.remove(0);
+            self.events.pop_front();
         }
         self.events
-            .push(RemoteDesktopEventRecord::new(event.clone()));
+            .push_back(RemoteDesktopEventRecord::new(event.clone()));
         if let Some(event_tx) = self.event_tx.as_ref() {
             let _ = event_tx.send(event);
         }
@@ -136,5 +138,61 @@ pub(in crate::daemon::plugins::remote_desktop) fn event_type_proto_name(
         "SESSION_CLOSED" => "REMOTE_DESKTOP_EVENT_SESSION_CLOSED",
         "SESSION_FAILED" => "REMOTE_DESKTOP_EVENT_SESSION_FAILED",
         _ => "REMOTE_DESKTOP_EVENT_STATE_CHANGED",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{RemoteDesktopEventLog, MAX_EVENTS_PER_SESSION};
+    use crate::daemon::plugins::remote_desktop::contract::RemoteDesktopSessionState;
+
+    #[test]
+    fn event_log_retains_fixed_ring_and_monotonic_sequences_under_large_storm() {
+        const EVENT_STORM: usize = 100_000;
+        let mut log = RemoteDesktopEventLog::new();
+
+        for index in 0..EVENT_STORM {
+            log.push(
+                "rd-event-ring",
+                RemoteDesktopSessionState::Negotiating,
+                "INPUT_FRAME_REJECTED",
+                json!({ "index": index }),
+            );
+        }
+
+        let events = log.events();
+        assert_eq!(
+            events.len(),
+            MAX_EVENTS_PER_SESSION,
+            "retained event projection must stay fixed at the session cap"
+        );
+
+        let first_sequence = events
+            .first()
+            .and_then(|event| event.get("sequence"))
+            .and_then(serde_json::Value::as_u64)
+            .expect("first retained event has sequence");
+        let last_sequence = events
+            .last()
+            .and_then(|event| event.get("sequence"))
+            .and_then(serde_json::Value::as_u64)
+            .expect("last retained event has sequence");
+        assert_eq!(
+            first_sequence,
+            (EVENT_STORM - MAX_EVENTS_PER_SESSION + 1) as u64
+        );
+        assert_eq!(last_sequence, EVENT_STORM as u64);
+
+        for pair in events.windows(2) {
+            let previous = pair[0]["sequence"].as_u64().unwrap();
+            let next = pair[1]["sequence"].as_u64().unwrap();
+            assert_eq!(
+                next,
+                previous + 1,
+                "retained event sequences must remain contiguous and monotonic"
+            );
+        }
     }
 }
