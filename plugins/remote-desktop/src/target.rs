@@ -424,6 +424,264 @@ impl TargetIdentity {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) struct ResolvedCaptureTargetProof {
+    backend: String,
+    target_kind: RemoteDesktopTargetKind,
+    display_id: Option<u64>,
+    window_id: Option<u64>,
+    pid: Option<i64>,
+    app_identity: Option<String>,
+    bundle_id: Option<String>,
+    app_window_set: Option<AppWindowSetProof>,
+    native_width: Option<usize>,
+    native_height: Option<usize>,
+    verified_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) struct AppWindowSetProof {
+    display_id: u64,
+    bundle_id: Option<String>,
+    primary_pid: Option<i64>,
+    resolved_window_ids: Vec<u64>,
+    window_set_epoch: u64,
+}
+
+impl AppWindowSetProof {
+    pub(in crate::daemon::plugins::remote_desktop) fn new(
+        display_id: u64,
+        bundle_id: Option<String>,
+        primary_pid: Option<i64>,
+        resolved_window_ids: Vec<u64>,
+    ) -> Self {
+        let mut resolved_window_ids = resolved_window_ids;
+        resolved_window_ids.sort_unstable();
+        resolved_window_ids.dedup();
+        let window_set_epoch = compute_window_set_epoch(
+            Some(display_id),
+            bundle_id.as_deref(),
+            primary_pid,
+            &resolved_window_ids,
+        );
+        Self {
+            display_id,
+            bundle_id,
+            primary_pid,
+            resolved_window_ids,
+            window_set_epoch,
+        }
+    }
+
+    fn from_entry(entry: &ResourceEntry, display_id: Option<u64>) -> Option<Self> {
+        let display_id = display_id?;
+        let resolved_window_ids = metadata_u64_array(entry, "resolved_window_ids");
+        if resolved_window_ids.is_empty() {
+            return None;
+        }
+        let bundle_id = metadata_string(entry, "bundle_id");
+        let primary_pid = metadata_i64(entry, "primary_pid").or_else(|| metadata_i64(entry, "pid"));
+        let window_set_epoch = metadata_u64(entry, "window_set_epoch").unwrap_or_else(|| {
+            compute_window_set_epoch(
+                Some(display_id),
+                bundle_id.as_deref(),
+                primary_pid,
+                &resolved_window_ids,
+            )
+        });
+        Some(Self {
+            display_id,
+            bundle_id,
+            primary_pid,
+            resolved_window_ids,
+            window_set_epoch,
+        })
+    }
+
+    fn to_value(&self) -> Value {
+        json!({
+            "display_id": self.display_id,
+            "bundle_id": self.bundle_id,
+            "primary_pid": self.primary_pid,
+            "resolved_window_ids": self.resolved_window_ids,
+            "window_set_epoch": self.window_set_epoch,
+        })
+    }
+}
+
+impl ResolvedCaptureTargetProof {
+    pub(in crate::daemon::plugins::remote_desktop) fn new(
+        backend: impl Into<String>,
+        target_kind: RemoteDesktopTargetKind,
+        display_id: Option<u64>,
+        window_id: Option<u64>,
+        pid: Option<i64>,
+        app_identity: Option<String>,
+        bundle_id: Option<String>,
+        native_dimensions: Option<(usize, usize)>,
+    ) -> Self {
+        let (native_width, native_height) = native_dimensions
+            .map(|(width, height)| (Some(width), Some(height)))
+            .unwrap_or((None, None));
+        Self {
+            backend: backend.into(),
+            target_kind,
+            display_id,
+            window_id,
+            pid,
+            app_identity,
+            bundle_id,
+            app_window_set: None,
+            native_width,
+            native_height,
+            verified_at_ms: unix_epoch_ms(),
+        }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn with_app_window_set(
+        mut self,
+        app_window_set: AppWindowSetProof,
+    ) -> Self {
+        self.app_window_set = Some(app_window_set);
+        self
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
+        json!({
+            "backend": self.backend,
+            "target_kind": self.target_kind.as_str(),
+            "display_id": self.display_id,
+            "window_id": self.window_id,
+            "pid": self.pid,
+            "app_identity": self.app_identity,
+            "bundle_id": self.bundle_id,
+            "app_window_set": self.app_window_set.as_ref().map(AppWindowSetProof::to_value),
+            "native_width": self.native_width,
+            "native_height": self.native_height,
+            "verified_at_ms": self.verified_at_ms,
+        })
+    }
+
+    fn validate_for_binding(
+        &self,
+        ability: &'static str,
+        binding: &RemoteAppTargetBinding,
+    ) -> Result<(), RemoteAppTargetError> {
+        if self.backend != binding.backend {
+            return Err(RemoteAppTargetError::new(
+                ability,
+                TargetResolutionError::TargetIdentityMismatch,
+                format!(
+                    "capture proof backend {} does not match binding backend {}",
+                    self.backend, binding.backend
+                ),
+            ));
+        }
+        if self.target_kind != binding.target_kind {
+            return Err(RemoteAppTargetError::new(
+                ability,
+                TargetResolutionError::TargetIdentityMismatch,
+                format!(
+                    "capture proof kind {} does not match binding kind {}",
+                    self.target_kind.as_str(),
+                    binding.target_kind.as_str()
+                ),
+            ));
+        }
+        let locator = binding.native_locator();
+        if let Some(expected) = locator.display_id() {
+            if self.display_id != Some(expected) {
+                return Err(RemoteAppTargetError::new(
+                    ability,
+                    TargetResolutionError::DisplayIdentityMismatch,
+                    format!(
+                        "capture proof display {:?} does not match binding display {expected}",
+                        self.display_id
+                    ),
+                ));
+            }
+        }
+        if let Some(expected) = locator.window_id() {
+            if self.window_id != Some(expected) {
+                return Err(RemoteAppTargetError::new(
+                    ability,
+                    TargetResolutionError::TargetIdentityMismatch,
+                    format!(
+                        "capture proof window {:?} does not match binding window {expected}",
+                        self.window_id
+                    ),
+                ));
+            }
+        }
+        if let Some(expected) = locator.pid() {
+            if self.pid != Some(expected) {
+                return Err(RemoteAppTargetError::new(
+                    ability,
+                    TargetResolutionError::TargetIdentityMismatch,
+                    format!(
+                        "capture proof pid {:?} does not match binding pid {expected}",
+                        self.pid
+                    ),
+                ));
+            }
+        }
+        if let Some(expected) = locator.bundle_id() {
+            if self.bundle_id.as_deref() != Some(expected) {
+                return Err(RemoteAppTargetError::new(
+                    ability,
+                    TargetResolutionError::TargetIdentityMismatch,
+                    format!(
+                        "capture proof bundle {:?} does not match binding bundle {expected}",
+                        self.bundle_id
+                    ),
+                ));
+            }
+        }
+        if let Some(expected) = locator.app_identity() {
+            let app_identity_matches = self.app_identity.as_deref() == Some(expected)
+                || self.bundle_id.as_deref() == Some(expected);
+            if !app_identity_matches {
+                return Err(RemoteAppTargetError::new(
+                    ability,
+                    TargetResolutionError::TargetIdentityMismatch,
+                    format!(
+                        "capture proof app identity {:?}/{:?} does not match binding app identity {expected}",
+                        self.app_identity, self.bundle_id
+                    ),
+                ));
+            }
+        }
+        if binding.target_kind == RemoteDesktopTargetKind::Application {
+            let expected = binding.app_window_set.as_ref().ok_or_else(|| {
+                RemoteAppTargetError::new(
+                    ability,
+                    TargetResolutionError::TargetMetadataIncomplete,
+                    "application target binding has no resolved display-scoped window-set proof",
+                )
+            })?;
+            if self.app_window_set.as_ref() != Some(expected) {
+                return Err(RemoteAppTargetError::new(
+                    ability,
+                    TargetResolutionError::TargetIdentityChanged,
+                    "capture proof application window set no longer matches the bound target",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn matches_committed_identity(&self, committed: &Self) -> bool {
+        self.backend == committed.backend
+            && self.target_kind == committed.target_kind
+            && self.display_id == committed.display_id
+            && self.window_id == committed.window_id
+            && self.pid == committed.pid
+            && self.app_identity == committed.app_identity
+            && self.bundle_id == committed.bundle_id
+            && self.app_window_set == committed.app_window_set
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) struct NativeTargetLocator {
     platform: String,
     discovery_backend: String,
@@ -455,20 +713,12 @@ impl NativeTargetLocator {
         self.pid
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn app_name(&self) -> Option<&str> {
-        self.app_name.as_deref()
-    }
-
     pub(in crate::daemon::plugins::remote_desktop) fn app_identity(&self) -> Option<&str> {
         self.app_identity.as_deref()
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn bundle_id(&self) -> Option<&str> {
         self.bundle_id.as_deref()
-    }
-
-    pub(in crate::daemon::plugins::remote_desktop) fn title(&self) -> Option<&str> {
-        self.title.as_deref()
     }
 
     fn to_value(&self) -> Value {
@@ -579,10 +829,12 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteAppTargetBinding {
     input_scope: InputScope,
     native_locator: NativeTargetLocator,
     resolved_identity: TargetIdentity,
+    app_window_set: Option<AppWindowSetProof>,
     geometry: TargetGeometry,
     scope_audit: ScopeAudit,
     diagnostic: Value,
     diagnostic_capture_subject: DiagnosticCaptureSubject,
+    capture_proof: Option<ResolvedCaptureTargetProof>,
 }
 
 impl RemoteAppTargetBinding {
@@ -634,6 +886,46 @@ impl RemoteAppTargetBinding {
         &self,
     ) -> &DiagnosticCaptureSubject {
         &self.diagnostic_capture_subject
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn require_capture_proof(
+        &self,
+        ability: &'static str,
+    ) -> Result<&ResolvedCaptureTargetProof, RemoteAppTargetError> {
+        self.capture_proof.as_ref().ok_or_else(|| {
+            RemoteAppTargetError::new(
+                ability,
+                TargetResolutionError::TargetMetadataIncomplete,
+                "session target binding has no committed capture proof",
+            )
+        })
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn commit_capture_proof(
+        &mut self,
+        ability: &'static str,
+        proof: ResolvedCaptureTargetProof,
+    ) -> Result<(), RemoteAppTargetError> {
+        proof.validate_for_binding(ability, self)?;
+        self.capture_proof = Some(proof);
+        Ok(())
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn validate_reverified_capture_proof(
+        &self,
+        ability: &'static str,
+        proof: &ResolvedCaptureTargetProof,
+    ) -> Result<(), RemoteAppTargetError> {
+        proof.validate_for_binding(ability, self)?;
+        let committed = self.require_capture_proof(ability)?;
+        if !proof.matches_committed_identity(committed) {
+            return Err(RemoteAppTargetError::new(
+                ability,
+                TargetResolutionError::TargetIdentityChanged,
+                "live capture target no longer matches the session committed capture proof",
+            ));
+        }
+        Ok(())
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn supports_xcap_adapter(&self) -> bool {
@@ -692,6 +984,8 @@ impl RemoteAppTargetBinding {
             "input_scope": self.input_scope.as_str(),
             "native_locator": self.native_locator.to_value(),
             "resolved_identity": self.resolved_identity.to_value(),
+            "app_window_set": self.app_window_set.as_ref().map(AppWindowSetProof::to_value),
+            "capture_proof": self.capture_proof.as_ref().map(ResolvedCaptureTargetProof::to_value),
             "bounds": self.geometry.to_value(),
             "production_ready": !self.scope_audit.scope_widened
                 && !self.scope_audit.display_fallback_used,
@@ -718,6 +1012,8 @@ impl RemoteAppTargetBinding {
             "media_source_epoch": self.media_source_epoch,
             "capture_scope": self.capture_scope.as_str(),
             "input_scope": self.input_scope.as_str(),
+            "app_window_set": self.app_window_set.as_ref().map(AppWindowSetProof::to_value),
+            "capture_proof": self.capture_proof.as_ref().map(ResolvedCaptureTargetProof::to_value),
             "reason_code": "target_bound",
             "recoverability": "continue",
             "display_fallback_used": false,
@@ -738,18 +1034,18 @@ pub(in crate::daemon::plugins::remote_desktop) trait RemoteAppTargetResolver {
 pub(in crate::daemon::plugins::remote_desktop) fn verify_target_binding_for_session(
     ability: &'static str,
     binding: &RemoteAppTargetBinding,
-) -> Result<(), RemoteAppTargetError> {
+) -> Result<ResolvedCaptureTargetProof, RemoteAppTargetError> {
     platform_live_resolution::verify_target_binding_for_session(ability, binding)
 }
 
 #[cfg(all(target_os = "macos", feature = "native-media"))]
 mod platform_live_resolution {
-    use super::{RemoteAppTargetBinding, RemoteAppTargetError};
+    use super::{RemoteAppTargetBinding, RemoteAppTargetError, ResolvedCaptureTargetProof};
 
     pub(super) fn verify_target_binding_for_session(
         ability: &'static str,
         binding: &RemoteAppTargetBinding,
-    ) -> Result<(), RemoteAppTargetError> {
+    ) -> Result<ResolvedCaptureTargetProof, RemoteAppTargetError> {
         crate::daemon::plugins::remote_desktop::screencapturekit_capture::verify_target_binding_for_session(
             ability, binding,
         )
@@ -760,15 +1056,24 @@ mod platform_live_resolution {
 mod platform_live_resolution {
     use super::{
         RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind,
-        TargetResolutionError,
+        ResolvedCaptureTargetProof, TargetResolutionError,
     };
 
     pub(super) fn verify_target_binding_for_session(
         ability: &'static str,
         binding: &RemoteAppTargetBinding,
-    ) -> Result<(), RemoteAppTargetError> {
+    ) -> Result<ResolvedCaptureTargetProof, RemoteAppTargetError> {
         match binding.target_kind() {
-            RemoteDesktopTargetKind::Display => Ok(()),
+            RemoteDesktopTargetKind::Display => Ok(ResolvedCaptureTargetProof::new(
+                binding.native_locator().capture_backend.clone(),
+                RemoteDesktopTargetKind::Display,
+                binding.native_locator().display_id(),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )),
             RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application => {
                 Err(RemoteAppTargetError::new(
                     ability,
@@ -842,6 +1147,7 @@ impl RemoteAppTargetResolver for ResourceEntryTargetResolver {
             title: metadata_string(entry, "title"),
         };
         let resolved_identity = TargetIdentity::from_entry(entry, display_id);
+        let app_window_set = AppWindowSetProof::from_entry(entry, display_id);
         let binding_id = mint_binding_id(entry, &native_locator);
         let target_identity_epoch = metadata_u64(entry, "lifecycle_epoch")
             .or_else(|| metadata_u64(entry, "target_identity_epoch"))
@@ -882,10 +1188,12 @@ impl RemoteAppTargetResolver for ResourceEntryTargetResolver {
             input_scope,
             native_locator,
             resolved_identity,
+            app_window_set,
             geometry,
             scope_audit,
             diagnostic,
             diagnostic_capture_subject: DiagnosticCaptureSubject::from_entry(entry),
+            capture_proof: None,
         })
     }
 }
@@ -943,6 +1251,15 @@ fn validate_required_identity(
                     ability,
                     TargetResolutionError::TargetMetadataIncomplete,
                     "application targets require primary_pid, app_identity, or bundle_id; app_name alone is not production routing identity",
+                ));
+            }
+            if metadata_u64_array(entry, "resolved_window_ids").is_empty()
+                || metadata_u64(entry, "window_set_epoch").is_none()
+            {
+                return Err(RemoteAppTargetError::new(
+                    ability,
+                    TargetResolutionError::TargetMetadataIncomplete,
+                    "application targets require resolved_window_ids and window_set_epoch so capture can prove the display-scoped app window set",
                 ));
             }
             Ok(())
@@ -1049,6 +1366,18 @@ fn metadata_string(entry: &ResourceEntry, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+fn metadata_u64_array(entry: &ResourceEntry, key: &str) -> Vec<u64> {
+    let mut values = entry
+        .metadata
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_u64).collect::<Vec<_>>())
+        .unwrap_or_default();
+    values.sort_unstable();
+    values.dedup();
+    values
+}
+
 fn mint_binding_id(entry: &ResourceEntry, locator: &NativeTargetLocator) -> String {
     let mut hasher = DefaultHasher::new();
     entry.resource_ura.hash(&mut hasher);
@@ -1060,11 +1389,29 @@ fn mint_binding_id(entry: &ResourceEntry, locator: &NativeTargetLocator) -> Stri
     locator.bundle_id.hash(&mut hasher);
     locator.app_name.hash(&mut hasher);
     locator.title.hash(&mut hasher);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0);
+    let now = unix_epoch_ms();
     format!("tb_{now:x}_{:016x}", hasher.finish())
+}
+
+fn compute_window_set_epoch(
+    display_id: Option<u64>,
+    bundle_id: Option<&str>,
+    primary_pid: Option<i64>,
+    resolved_window_ids: &[u64],
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    display_id.hash(&mut hasher);
+    bundle_id.hash(&mut hasher);
+    primary_pid.hash(&mut hasher);
+    resolved_window_ids.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn unix_epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -1168,13 +1515,14 @@ mod tests {
         let display = resolver
             .resolve_for_session(
                 "remote_desktop.create_session",
-                &entry(ResourceType::Display, json!({"primary_display": true})),
+                &entry(ResourceType::Display, json!({"display_id": 7})),
                 "view_only",
                 1,
             )
             .expect("display binding");
-        verify_target_binding_for_session("remote_desktop.create_session", &display)
+        let proof = verify_target_binding_for_session("remote_desktop.create_session", &display)
             .expect("display binding remains supported by headless/display providers");
+        assert_eq!(proof.to_value()["display_id"], json!(7));
 
         let window = resolver
             .resolve_for_session(
@@ -1198,6 +1546,8 @@ mod tests {
             TargetResolutionError::CaptureBackendUnavailable
         );
 
+        let application_window_set =
+            AppWindowSetProof::new(1, Some("com.apple.Safari".to_string()), Some(42), vec![70]);
         let application = resolver
             .resolve_for_session(
                 "remote_desktop.create_session",
@@ -1208,6 +1558,8 @@ mod tests {
                         "bundle_id": "com.apple.Safari",
                         "app_identity": "com.apple.Safari",
                         "primary_pid": 42,
+                        "resolved_window_ids": [70],
+                        "window_set_epoch": application_window_set.window_set_epoch,
                     }),
                 ),
                 "view_only",
@@ -1220,6 +1572,146 @@ mod tests {
             err.reason(),
             TargetResolutionError::CaptureBackendUnavailable
         );
+    }
+
+    #[test]
+    fn capture_proof_is_committed_into_session_binding_and_revalidated_exactly() {
+        let resolver = ResourceEntryTargetResolver;
+        let mut binding = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Window,
+                    json!({
+                        "window_id": 7,
+                        "pid": 4242,
+                        "bundle_id": "com.apple.Terminal",
+                    }),
+                ),
+                "view_only",
+                1,
+            )
+            .expect("window binding");
+        assert!(binding.to_value()["capture_proof"].is_null());
+
+        let wrong_window = ResolvedCaptureTargetProof::new(
+            binding.native_locator().capture_backend.clone(),
+            RemoteDesktopTargetKind::Window,
+            None,
+            Some(8),
+            Some(4242),
+            Some("com.apple.Terminal".to_string()),
+            Some("com.apple.Terminal".to_string()),
+            Some((1280, 720)),
+        );
+        let err = binding
+            .commit_capture_proof("remote_desktop.create_session", wrong_window)
+            .expect_err("proof must match the binding identity before it is stored");
+        assert_eq!(err.reason(), TargetResolutionError::TargetIdentityMismatch);
+
+        let proof = ResolvedCaptureTargetProof::new(
+            binding.native_locator().capture_backend.clone(),
+            RemoteDesktopTargetKind::Window,
+            None,
+            Some(7),
+            Some(4242),
+            Some("com.apple.Terminal".to_string()),
+            Some("com.apple.Terminal".to_string()),
+            Some((1280, 720)),
+        );
+        binding
+            .commit_capture_proof("remote_desktop.create_session", proof.clone())
+            .expect("matching proof commits");
+        assert_eq!(binding.to_value()["capture_proof"]["window_id"], json!(7));
+        binding
+            .validate_reverified_capture_proof("remote_desktop.set_description", &proof)
+            .expect("same live proof remains valid");
+
+        let drifted_pid = ResolvedCaptureTargetProof::new(
+            binding.native_locator().capture_backend.clone(),
+            RemoteDesktopTargetKind::Window,
+            None,
+            Some(7),
+            Some(5150),
+            Some("com.apple.Terminal".to_string()),
+            Some("com.apple.Terminal".to_string()),
+            Some((1280, 720)),
+        );
+        let err = binding
+            .validate_reverified_capture_proof("remote_desktop.set_description", &drifted_pid)
+            .expect_err("media path must fail if live target drifts from committed proof");
+        assert_eq!(err.reason(), TargetResolutionError::TargetIdentityMismatch);
+    }
+
+    #[test]
+    fn application_capture_proof_requires_exact_display_scoped_window_set() {
+        let resolver = ResourceEntryTargetResolver;
+        let expected_window_set = AppWindowSetProof::new(
+            42,
+            Some("com.example.Editor".to_string()),
+            Some(9001),
+            vec![11, 10, 10],
+        );
+        let mut binding = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Application,
+                    json!({
+                        "display_id": 42,
+                        "bundle_id": "com.example.Editor",
+                        "app_identity": "com.example.Editor",
+                        "primary_pid": 9001,
+                        "resolved_window_ids": [10, 11],
+                        "window_set_epoch": expected_window_set.window_set_epoch,
+                        "target_identity_epoch": expected_window_set.window_set_epoch,
+                    }),
+                ),
+                "view_only",
+                1,
+            )
+            .expect("application binding");
+
+        let proof = ResolvedCaptureTargetProof::new(
+            binding.native_locator().capture_backend.clone(),
+            RemoteDesktopTargetKind::Application,
+            Some(42),
+            None,
+            Some(9001),
+            Some("com.example.Editor".to_string()),
+            Some("com.example.Editor".to_string()),
+            Some((1440, 900)),
+        )
+        .with_app_window_set(expected_window_set);
+        binding
+            .commit_capture_proof("remote_desktop.create_session", proof.clone())
+            .expect("matching app window set proof commits");
+        assert_eq!(
+            binding.to_value()["capture_proof"]["app_window_set"]["resolved_window_ids"],
+            json!([10, 11])
+        );
+
+        let drifted_window_set = AppWindowSetProof::new(
+            42,
+            Some("com.example.Editor".to_string()),
+            Some(9001),
+            vec![10, 12],
+        );
+        let drifted_proof = ResolvedCaptureTargetProof::new(
+            binding.native_locator().capture_backend.clone(),
+            RemoteDesktopTargetKind::Application,
+            Some(42),
+            None,
+            Some(9001),
+            Some("com.example.Editor".to_string()),
+            Some("com.example.Editor".to_string()),
+            Some((1440, 900)),
+        )
+        .with_app_window_set(drifted_window_set);
+        let err = binding
+            .validate_reverified_capture_proof("remote_desktop.set_description", &drifted_proof)
+            .expect_err("application media proof must fail when the live window set drifts");
+        assert_eq!(err.reason(), TargetResolutionError::TargetIdentityChanged);
     }
 
     #[test]
@@ -1249,5 +1741,54 @@ mod tests {
             err.reason(),
             TargetResolutionError::TargetMetadataIncomplete
         );
+        let err = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Application,
+                    json!({
+                        "display_id": 1,
+                        "bundle_id": "com.apple.Safari",
+                        "app_identity": "com.apple.Safari",
+                        "primary_pid": 42,
+                    }),
+                ),
+                "view_only",
+                1,
+            )
+            .unwrap_err();
+        assert_eq!(
+            err.reason(),
+            TargetResolutionError::TargetMetadataIncomplete
+        );
+        let binding = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Application,
+                    json!({
+                        "display_id": 1,
+                        "bundle_id": "com.apple.Safari",
+                        "app_identity": "com.apple.Safari",
+                        "app_name": "Safari",
+                        "primary_pid": 42,
+                        "resolved_window_ids": [7, 8],
+                        "window_set_epoch": 99,
+                        "target_identity_epoch": 99,
+                    }),
+                ),
+                "interactive",
+                1,
+            )
+            .expect("display-scoped application identity must resolve");
+        let projection = binding.to_value();
+        assert_eq!(projection["target_kind"], json!("application"));
+        assert_eq!(projection["capture_scope"], json!("AppSurface"));
+        assert_eq!(projection["input_scope"], json!("view_only"));
+        assert_eq!(
+            projection["resolved_identity"]["bundle_id"],
+            json!("com.apple.Safari")
+        );
+        assert_eq!(projection["resolved_identity"]["display_id"], json!(1));
     }
 }

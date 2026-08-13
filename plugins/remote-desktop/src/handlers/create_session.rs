@@ -52,13 +52,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         &env,
         authorization,
     )?;
-    let target_binding = ResourceEntryTargetResolver.resolve_for_session(
+    let mut target_binding = ResourceEntryTargetResolver.resolve_for_session(
         ABILITY_CREATE_SESSION,
         &entry,
         &mode,
         1,
     )?;
-    verify_target_binding_for_session(ABILITY_CREATE_SESSION, &target_binding)?;
+    let capture_proof = verify_target_binding_for_session(ABILITY_CREATE_SESSION, &target_binding)?;
+    target_binding.commit_capture_proof(ABILITY_CREATE_SESSION, capture_proof)?;
     let session = RemoteDesktopSession::new(RemoteDesktopSessionInit {
         session_id: session_id.clone(),
         session_token,
@@ -216,7 +217,7 @@ mod tests {
             &mut file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 kind: ResourceType::Display,
                 binding: ResourceBinding::LocalDevice,
                 hardware_id: "remote-desktop-display-without-identity",

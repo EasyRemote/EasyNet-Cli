@@ -49,7 +49,8 @@ use objc2_screen_capture_kit::{
 };
 
 use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind, TargetResolutionError,
+    AppWindowSetProof, RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind,
+    ResolvedCaptureTargetProof, TargetResolutionError,
 };
 
 /// ScreenCaptureKit queue depth for live remote desktop.
@@ -89,11 +90,16 @@ pub struct ScreenCaptureKitTarget {
     filter: Retained<SCContentFilter>,
     native_width: usize,
     native_height: usize,
+    capture_proof: ResolvedCaptureTargetProof,
 }
 
 impl ScreenCaptureKitTarget {
     pub fn native_dimensions(&self) -> (usize, usize) {
         (self.native_width, self.native_height)
+    }
+
+    fn capture_proof(&self) -> &ResolvedCaptureTargetProof {
+        &self.capture_proof
     }
 }
 
@@ -224,10 +230,25 @@ pub(in crate::daemon::plugins::remote_desktop) fn target_for_binding(
     ability: &'static str,
     binding: &RemoteAppTargetBinding,
 ) -> Result<ScreenCaptureKitTarget, RemoteAppTargetError> {
+    let target = resolve_target_for_binding(ability, binding)?;
+    binding.validate_reverified_capture_proof(ability, target.capture_proof())?;
+    Ok(target)
+}
+
+fn resolve_target_for_binding(
+    ability: &'static str,
+    binding: &RemoteAppTargetBinding,
+) -> Result<ScreenCaptureKitTarget, RemoteAppTargetError> {
     ensure_screen_capture_permission(ability)?;
     let content = shareable_content(ability)?;
     let displays = unsafe { content.displays() };
     let display = select_display_for_binding(ability, &displays, binding)?;
+    let mut proof_display_id = Some(unsafe { display.displayID() as u64 });
+    let mut proof_window_id = None;
+    let mut proof_pid = None;
+    let mut proof_app_identity = None;
+    let mut proof_bundle_id = None;
+    let mut proof_app_window_set = None;
     let filter = match binding.target_kind() {
         RemoteDesktopTargetKind::Display => {
             let empty: Retained<NSArray<SCWindow>> = NSArray::new();
@@ -242,6 +263,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn target_for_binding(
         RemoteDesktopTargetKind::Window => {
             let windows = unsafe { content.windows() };
             let window = select_window_for_binding(ability, &windows, binding)?;
+            proof_display_id = binding.native_locator().display_id();
+            proof_window_id = Some(unsafe { window.windowID() as u64 });
+            if let Some(app) = unsafe { window.owningApplication() }.as_deref() {
+                let identity = running_application_identity(app);
+                proof_pid = identity.0;
+                proof_app_identity = identity.1.clone();
+                proof_bundle_id = identity.1;
+            }
             unsafe {
                 SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &window)
             }
@@ -249,6 +278,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn target_for_binding(
         RemoteDesktopTargetKind::Application => {
             let applications = unsafe { content.applications() };
             let app = select_application_for_binding(ability, &applications, binding)?;
+            let identity = running_application_identity(&app);
+            proof_pid = identity.0;
+            proof_app_identity = identity.1.clone();
+            proof_bundle_id = identity.1;
+            let windows = unsafe { content.windows() };
+            proof_app_window_set = Some(select_application_window_set_for_binding(
+                ability, &windows, binding,
+            )?);
             let apps = NSArray::from_slice(&[&*app]);
             let empty: Retained<NSArray<SCWindow>> = NSArray::new();
             unsafe {
@@ -263,18 +300,75 @@ pub(in crate::daemon::plugins::remote_desktop) fn target_for_binding(
     };
     let (native_width, native_height) =
         filter_dimensions_for_kind(ability, &filter, binding.target_kind(), &display)?;
+    let mut capture_proof = ResolvedCaptureTargetProof::new(
+        "screencapturekit",
+        binding.target_kind(),
+        proof_display_id,
+        proof_window_id,
+        proof_pid,
+        proof_app_identity,
+        proof_bundle_id,
+        Some((native_width, native_height)),
+    );
+    if let Some(app_window_set) = proof_app_window_set {
+        capture_proof = capture_proof.with_app_window_set(app_window_set);
+    }
     Ok(ScreenCaptureKitTarget {
         filter,
         native_width,
         native_height,
+        capture_proof,
     })
 }
 
+fn select_application_window_set_for_binding(
+    ability: &'static str,
+    windows: &NSArray<SCWindow>,
+    binding: &RemoteAppTargetBinding,
+) -> Result<AppWindowSetProof, RemoteAppTargetError> {
+    let locator = binding.native_locator();
+    let display_id = locator.display_id().ok_or_else(|| {
+        RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::DisplayIdentityMissing,
+            "application ScreenCaptureKit proof requires a display-scoped binding",
+        )
+    })?;
+    let mut window_ids = Vec::new();
+    for window in windows.iter() {
+        let Some(app) = (unsafe { window.owningApplication() }) else {
+            continue;
+        };
+        if sck_app_matches_binding(
+            locator.pid(),
+            locator.bundle_id(),
+            locator.app_identity(),
+            &app,
+        ) {
+            window_ids.push(unsafe { window.windowID() as u64 });
+        }
+    }
+    if window_ids.is_empty() {
+        return Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::TargetNotFound,
+            "bound application has no ScreenCaptureKit windows in the current shareable content",
+        ));
+    }
+    Ok(AppWindowSetProof::new(
+        display_id,
+        locator.bundle_id().map(str::to_string),
+        locator.pid(),
+        window_ids,
+    ))
+}
+
+#[cfg_attr(not(feature = "native-media"), allow(dead_code))]
 pub(in crate::daemon::plugins::remote_desktop) fn verify_target_binding_for_session(
     ability: &'static str,
     binding: &RemoteAppTargetBinding,
-) -> Result<(), RemoteAppTargetError> {
-    target_for_binding(ability, binding).map(|_| ())
+) -> Result<ResolvedCaptureTargetProof, RemoteAppTargetError> {
+    resolve_target_for_binding(ability, binding).map(|target| target.capture_proof)
 }
 
 mod macos_screen_capture_tcc {
@@ -419,8 +513,6 @@ fn select_window_for_binding(
     let expected_pid = locator.pid();
     let expected_app_identity = locator.app_identity();
     let expected_bundle_id = locator.bundle_id();
-    let expected_title = locator.title();
-    let expected_app = locator.app_name();
     let mut candidates = Vec::new();
     let mut id_seen = false;
     for window in windows.iter() {
@@ -445,23 +537,10 @@ fn select_window_for_binding(
                 .map(|app| ns_string_eq(unsafe { app.bundleIdentifier() }.as_ref(), app_identity))
                 .unwrap_or(false)
         });
-        let app_matches = expected_app.map(|name| {
-            app.as_deref()
-                .map(|app| ns_string_eq(unsafe { app.applicationName() }.as_ref(), name))
-                .unwrap_or(false)
-        });
-        let title_matches = expected_title.map(|title| {
-            unsafe { window.title() }
-                .as_deref()
-                .map(|actual| ns_string_eq(actual, title))
-                .unwrap_or(false)
-        });
         let owner_matches = pid_matches.unwrap_or(true)
             && bundle_matches.unwrap_or(true)
-            && app_identity_matches.unwrap_or(true)
-            && app_matches.unwrap_or(true);
-        let title_ok = title_matches.unwrap_or(true);
-        if owner_matches && title_ok {
+            && app_identity_matches.unwrap_or(true);
+        if owner_matches {
             candidates.push(window);
         }
     }
@@ -494,7 +573,6 @@ fn select_application_for_binding(
     let expected_pid = locator.pid();
     let expected_app_identity = locator.app_identity();
     let expected_bundle_id = locator.bundle_id();
-    let expected_app = locator.app_name();
     let mut candidates = Vec::new();
     let mut identity_seen = false;
     for app in applications.iter() {
@@ -518,10 +596,7 @@ fn select_application_for_binding(
         if expected_app_identity.is_some() && app_identity_matches {
             identity_seen = true;
         }
-        let app_name_matches = expected_app
-            .map(|name| ns_string_eq(unsafe { app.applicationName() }.as_ref(), name))
-            .unwrap_or(true);
-        if pid_matches && bundle_matches && app_identity_matches && app_name_matches {
+        if pid_matches && bundle_matches && app_identity_matches {
             candidates.push(app);
         }
     }
@@ -543,6 +618,21 @@ fn select_application_for_binding(
             "requested ScreenCaptureKit application identity is ambiguous",
         )),
     }
+}
+
+fn sck_app_matches_binding(
+    expected_pid: Option<i64>,
+    expected_bundle_id: Option<&str>,
+    expected_app_identity: Option<&str>,
+    app: &SCRunningApplication,
+) -> bool {
+    expected_pid.is_none_or(|pid| unsafe { app.processID() as i64 == pid })
+        && expected_bundle_id.is_none_or(|bundle_id| {
+            ns_string_eq(unsafe { app.bundleIdentifier() }.as_ref(), bundle_id)
+        })
+        && expected_app_identity.is_none_or(|app_identity| {
+            ns_string_eq(unsafe { app.bundleIdentifier() }.as_ref(), app_identity)
+        })
 }
 
 fn filter_dimensions_for_kind(
@@ -584,6 +674,13 @@ fn positive_dimensions(
 
 fn ns_string_eq(value: &NSString, expected: &str) -> bool {
     value.to_string() == expected
+}
+
+fn running_application_identity(app: &SCRunningApplication) -> (Option<i64>, Option<String>) {
+    let pid = Some(unsafe { app.processID() as i64 });
+    let bundle_id = Some(unsafe { app.bundleIdentifier() }.to_string())
+        .filter(|value| !value.trim().is_empty());
+    (pid, bundle_id)
 }
 
 impl Drop for ScreenCaptureKitStream {
