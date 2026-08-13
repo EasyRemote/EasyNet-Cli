@@ -168,6 +168,7 @@ fn stable_remote_target_entry_signature(resource: &ResourceEntry) -> String {
     if let Value::Object(map) = &mut metadata {
         map.remove("observed_at_ms");
         map.remove("freshness_ttl_ms");
+        map.remove("freshness");
     }
     serde_json::to_string(&json!({
         "resource_ura": resource.resource_ura,
@@ -299,6 +300,10 @@ fn annotate_live_remote_target(
             "freshness_ttl_ms".to_string(),
             Value::Number(serde_json::Number::from(REMOTE_TARGET_FRESHNESS_TTL_MS)),
         );
+        metadata.insert(
+            "freshness".to_string(),
+            live_remote_target_freshness(observed_at_ms),
+        );
         metadata.insert("stale_reason".to_string(), Value::Null);
         metadata.insert(
             "inventory_source".to_string(),
@@ -306,6 +311,14 @@ fn annotate_live_remote_target(
         );
     }
     resource
+}
+
+fn live_remote_target_freshness(observed_at_ms: u64) -> Value {
+    json!({
+        "observed_at_ms": observed_at_ms,
+        "stale_after_ms": observed_at_ms.saturating_add(REMOTE_TARGET_FRESHNESS_TTL_MS),
+        "source": "live_refresh",
+    })
 }
 
 fn discover_remote_target_resources() -> DiscoveredResources {
@@ -1554,6 +1567,11 @@ mod tests {
                     "backend": "xcap",
                     "observed_at_ms": 10,
                     "freshness_ttl_ms": 5_000,
+                    "freshness": {
+                        "observed_at_ms": 10,
+                        "stale_after_ms": 5_010,
+                        "source": "live_refresh",
+                    },
                     "bounds": {"x": 1, "y": 2, "width": 300, "height": 200}
                 }),
             },
@@ -1571,6 +1589,18 @@ mod tests {
             .as_object_mut()
             .expect("metadata object")
             .insert("freshness_ttl_ms".to_string(), json!(10_000));
+        second.resources[0]
+            .metadata
+            .as_object_mut()
+            .expect("metadata object")
+            .insert(
+                "freshness".to_string(),
+                json!({
+                    "observed_at_ms": 20,
+                    "stale_after_ms": 10_020,
+                    "source": "live_refresh",
+                }),
+            );
 
         assert_eq!(
             stable_remote_target_cache_signature(&first, "acme", owner_agent),
@@ -1684,6 +1714,24 @@ mod tests {
                 .get("freshness_ttl_ms")
                 .and_then(Value::as_u64),
             Some(REMOTE_TARGET_FRESHNESS_TTL_MS)
+        );
+        assert_eq!(
+            live.metadata
+                .pointer("/freshness/source")
+                .and_then(Value::as_str),
+            Some("live_refresh")
+        );
+        assert_eq!(
+            live.metadata
+                .pointer("/freshness/observed_at_ms")
+                .and_then(Value::as_u64),
+            Some(123_456)
+        );
+        assert_eq!(
+            live.metadata
+                .pointer("/freshness/stale_after_ms")
+                .and_then(Value::as_u64),
+            Some(123_456 + REMOTE_TARGET_FRESHNESS_TTL_MS)
         );
         assert!(file
             .resources

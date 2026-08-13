@@ -290,6 +290,18 @@ mod tests {
         assert_eq!(target.availability, "available");
         assert_eq!(target.observed_at_ms, 123_456);
         assert_eq!(target.freshness_ttl_ms, 5_000);
+        assert_eq!(
+            target.metadata["freshness"]["source"],
+            json!("live_refresh")
+        );
+        assert_eq!(
+            target.metadata["freshness"]["observed_at_ms"],
+            json!(123_456)
+        );
+        assert_eq!(
+            target.metadata["freshness"]["stale_after_ms"],
+            json!(128_456)
+        );
         assert_eq!(target.metadata["capture_target"], json!("window"));
         assert!(
             serde_json::to_value(target)
@@ -320,6 +332,11 @@ mod tests {
                 "availability": "available",
                 "observed_at_ms": observed_at_ms,
                 "freshness_ttl_ms": 5_000,
+                "freshness": {
+                    "observed_at_ms": observed_at_ms,
+                    "stale_after_ms": observed_at_ms + 5_000,
+                    "source": "live_refresh",
+                },
                 "capture_target": kind.as_str(),
                 "window_id": 42,
             }),

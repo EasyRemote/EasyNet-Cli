@@ -8,6 +8,9 @@ trap 'rm -rf "$SANDBOX"' EXIT
 
 mkdir -p \
   "$SANDBOX/src/cli/commands/groups" \
+  "$SANDBOX/src/daemon/ability/builtins/resources/media" \
+  "$SANDBOX/src/daemon/ability/builtins/resources" \
+  "$SANDBOX/src/daemon/resources" \
   "$SANDBOX/src/support/platform" \
   "$SANDBOX/plugins/remote-desktop/src/handlers" \
   "$SANDBOX/plugins/remote-desktop/src"
@@ -45,6 +48,34 @@ fn run(action: AbilityAction) {
             println!("{}", frames.len());
         }
     }
+}
+RS
+
+cat >"$SANDBOX/src/daemon/resources/projection.rs" <<'RS'
+fn validate_remote_target_freshness(entry: ResourceEntry) {
+    entry.metadata["freshness"]["observed_at_ms"];
+    entry.metadata["freshness"]["stale_after_ms"];
+    entry.metadata["freshness"]["source"];
+}
+RS
+
+cat >"$SANDBOX/src/daemon/ability/builtins/resources/media/resource_bootstrap.rs" <<'RS'
+fn annotate_live_remote_target(metadata: &mut Map) {
+    metadata.insert("freshness", json!({
+        "observed_at_ms": 10,
+        "stale_after_ms": 5010,
+        "source": "live_refresh",
+    }));
+}
+
+fn stable_remote_target_entry_signature(map: &mut Map) {
+    map.remove("freshness");
+}
+RS
+
+cat >"$SANDBOX/src/daemon/ability/builtins/resources/watch_remote_targets.rs" <<'RS'
+fn stable_resource_signature(map: &mut Map) {
+    map.remove("freshness");
 }
 RS
 
@@ -120,6 +151,17 @@ export function loadRemoteDesktopPicker() {
 TS
 if CHECK_REMOTEAPP_PICKER_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp picker subject checker accepted meta.list_resources as live picker" >&2
+  exit 1
+fi
+
+rm "$SANDBOX/src/daemon/resources/projection.rs"
+cat >"$SANDBOX/src/daemon/resources/projection.rs" <<'RS'
+fn remote_target_projection_without_freshness(entry: ResourceEntry) {
+    entry.metadata["observed_at_ms"];
+}
+RS
+if CHECK_REMOTEAPP_PICKER_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp picker subject checker accepted missing freshness projection contract" >&2
   exit 1
 fi
 

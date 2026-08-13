@@ -100,6 +100,7 @@ impl RemoteTargetListEntry {
                 entry.resource_ura
             );
         }
+        validate_remote_target_freshness(entry)?;
         Ok(Self {
             resource_ura: entry.resource_ura.clone(),
             owner_agent: entry.owner_agent.clone(),
@@ -114,6 +115,65 @@ impl RemoteTargetListEntry {
             metadata: entry.metadata.clone(),
         })
     }
+}
+
+fn validate_remote_target_freshness(entry: &ResourceEntry) -> anyhow::Result<()> {
+    let freshness = entry
+        .metadata
+        .get("freshness")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "remote target {:?} metadata must include freshness object",
+                entry.resource_ura
+            )
+        })?;
+    let observed_at_ms = freshness
+        .get("observed_at_ms")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "remote target {:?} freshness must include observed_at_ms",
+                entry.resource_ura
+            )
+        })?;
+    let stale_after_ms = freshness
+        .get("stale_after_ms")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "remote target {:?} freshness must include stale_after_ms",
+                entry.resource_ura
+            )
+        })?;
+    if stale_after_ms < observed_at_ms {
+        anyhow::bail!(
+            "remote target {:?} freshness stale_after_ms must be >= observed_at_ms",
+            entry.resource_ura
+        );
+    }
+    required_nested_metadata_str(entry, freshness, "freshness", "source")?;
+    Ok(())
+}
+
+fn required_nested_metadata_str(
+    entry: &ResourceEntry,
+    object: &serde_json::Map<String, Value>,
+    object_key: &str,
+    key: &str,
+) -> anyhow::Result<String> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "remote target {:?} metadata.{object_key} must include non-empty string field {key:?}",
+                entry.resource_ura
+            )
+        })
 }
 
 fn required_metadata_str(entry: &ResourceEntry, key: &str) -> anyhow::Result<String> {
@@ -566,6 +626,11 @@ mod tests {
             "availability": "available",
             "observed_at_ms": 123_456,
             "freshness_ttl_ms": 5_000,
+            "freshness": {
+                "observed_at_ms": 123_456,
+                "stale_after_ms": 128_456,
+                "source": "live_refresh",
+            },
             "stale_reason": null,
             "window_id": 42,
         });
@@ -579,6 +644,9 @@ mod tests {
         assert_eq!(wire["availability"], "available");
         assert_eq!(wire["observed_at_ms"], 123_456);
         assert_eq!(wire["freshness_ttl_ms"], 5_000);
+        assert_eq!(wire["metadata"]["freshness"]["source"], "live_refresh");
+        assert_eq!(wire["metadata"]["freshness"]["observed_at_ms"], 123_456);
+        assert_eq!(wire["metadata"]["freshness"]["stale_after_ms"], 128_456);
         assert_eq!(wire["metadata"]["window_id"], 42);
         assert!(wire.get("hardware_id").is_none());
         assert!(wire.get("first_seen_at").is_none());
@@ -592,6 +660,11 @@ mod tests {
             "availability": "available",
             "observed_at_ms": 123_456,
             "freshness_ttl_ms": 5_000,
+            "freshness": {
+                "observed_at_ms": 123_456,
+                "stale_after_ms": 128_456,
+                "source": "live_refresh",
+            },
         });
 
         let error = RemoteTargetListEntry::from_resource_entry(&entry)
@@ -599,6 +672,26 @@ mod tests {
 
         assert!(
             error.to_string().contains("host_device_ura"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn remote_target_list_entry_requires_picker_freshness_contract() {
+        let mut entry = resource_entry();
+        entry.kind = ResourceType::Window;
+        entry.metadata = json!({
+            "host_device_ura": "easynet:///r/acme/device/dev-1",
+            "availability": "available",
+            "observed_at_ms": 123_456,
+            "freshness_ttl_ms": 5_000,
+        });
+
+        let error = RemoteTargetListEntry::from_resource_entry(&entry)
+            .expect_err("remote target projection must fail without freshness contract");
+
+        assert!(
+            error.to_string().contains("freshness"),
             "unexpected error: {error}"
         );
     }

@@ -315,6 +315,7 @@ fn stable_resource_signature(resource: &RemoteTargetListEntry) -> anyhow::Result
     if let Value::Object(map) = &mut metadata {
         map.remove("observed_at_ms");
         map.remove("freshness_ttl_ms");
+        map.remove("freshness");
     }
     serde_json::to_string(&json!({
         "resource_ura": resource.resource_ura,
@@ -485,6 +486,11 @@ mod tests {
                 "window_id": resource_id,
                 "observed_at_ms": observed_at_ms,
                 "freshness_ttl_ms": 5_000,
+                "freshness": {
+                    "observed_at_ms": observed_at_ms,
+                    "stale_after_ms": observed_at_ms + 5_000,
+                    "source": "live_refresh",
+                },
             }),
         }
     }

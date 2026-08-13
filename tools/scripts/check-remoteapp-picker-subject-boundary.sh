@@ -30,8 +30,11 @@ CREATE_SESSION="$ROOT/plugins/remote-desktop/src/handlers/create_session.rs"
 SESSION_CREATION="$ROOT/plugins/remote-desktop/src/session_creation.rs"
 SCHEMA="$ROOT/plugins/remote-desktop/src/schema.rs"
 RESOURCE_SUBJECT="$ROOT/plugins/remote-desktop/src/resource.rs"
+RESOURCE_PROJECTION="$ROOT/src/daemon/resources/projection.rs"
+RESOURCE_BOOTSTRAP="$ROOT/src/daemon/ability/builtins/resources/media/resource_bootstrap.rs"
+WATCH_TARGETS="$ROOT/src/daemon/ability/builtins/resources/watch_remote_targets.rs"
 
-for file in "$CLI_ABILITY" "$LOCAL_INVOKE" "$CREATE_SESSION" "$SESSION_CREATION" "$SCHEMA" "$RESOURCE_SUBJECT"; do
+for file in "$CLI_ABILITY" "$LOCAL_INVOKE" "$CREATE_SESSION" "$SESSION_CREATION" "$SCHEMA" "$RESOURCE_SUBJECT" "$RESOURCE_PROJECTION" "$RESOURCE_BOOTSTRAP" "$WATCH_TARGETS"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -56,6 +59,17 @@ require 'LocalRemoteTargetInventoryIssuer::watch_remote_targets' "$CLI_ABILITY" 
   'CLI watch action must use the live inventory issuer, not meta.list_resources'
 require 'resource_ura' "$CLI_ABILITY" \
   'CLI refresh output must surface selectable resource_ura subjects'
+
+require 'validate_remote_target_freshness' "$RESOURCE_PROJECTION" \
+  'remote target picker projection must fail closed without freshness metadata'
+require '"freshness"' "$RESOURCE_BOOTSTRAP" \
+  'live target refresh must annotate picker rows with metadata.freshness'
+require 'stale_after_ms' "$RESOURCE_BOOTSTRAP" \
+  'live target freshness must expose stale_after_ms for picker staleness decisions'
+require 'map\.remove\("freshness"\)' "$RESOURCE_BOOTSTRAP" \
+  'remote target cache signature must ignore freshness-only metadata'
+require 'map\.remove\("freshness"\)' "$WATCH_TARGETS" \
+  'remote target watch signatures must ignore freshness-only metadata'
 
 require 'RemoteDesktopSessionCreationWorkflow::start' "$CREATE_SESSION" \
   'create_session handler must delegate subject validation to RemoteDesktopSessionCreationWorkflow'
