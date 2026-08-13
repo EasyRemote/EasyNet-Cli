@@ -1233,6 +1233,77 @@ impl LocalRemoteTargetInventoryIssuer {
 /// context itself.
 pub struct LocalRemoteDesktopSessionIssuer;
 
+/// Local control binding for one daemon-owned remote desktop session.
+///
+/// This is intentionally not a protocol or SDK abstraction. It is the CLI
+/// support-layer projection of the create-session response fields required to
+/// issue later lifecycle/signaling Invocations without hiding tuple facts:
+/// the envelope subject remains the session's selected Resource URA and the
+/// causal context carries the original consent approval receipt.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalRemoteDesktopSessionControlBinding {
+    subject_ura: String,
+    session_id: String,
+    session_token: String,
+    consent_causal_parent: Value,
+}
+
+impl LocalRemoteDesktopSessionControlBinding {
+    pub fn from_create_session_response(value: &Value) -> anyhow::Result<Self> {
+        let session = value.get("session").unwrap_or(value);
+        Self::from_session_view(session)
+    }
+
+    pub fn from_session_view(session: &Value) -> anyhow::Result<Self> {
+        let subject_ura = required_nonempty_string(
+            session,
+            "subject_ura",
+            "remote desktop session control binding",
+        )?;
+        let session_id = required_nonempty_string(
+            session,
+            "session_id",
+            "remote desktop session control binding",
+        )?;
+        let session_token = required_nonempty_string(
+            session,
+            "session_token",
+            "remote desktop session control binding",
+        )?;
+        let consent_causal_parent = session
+            .get("consent")
+            .and_then(|consent| consent.get("approval_receipt"))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "remote desktop session control binding requires consent.approval_receipt"
+                )
+            })
+            .and_then(canonical_causal_parent_from_value)?;
+        Ok(Self {
+            subject_ura: canonical_selected_remote_target_resource_ura(subject_ura)?,
+            session_id: session_id.to_string(),
+            session_token: session_token.to_string(),
+            consent_causal_parent,
+        })
+    }
+
+    pub fn subject_ura(&self) -> &str {
+        &self.subject_ura
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn session_token(&self) -> &str {
+        &self.session_token
+    }
+
+    fn consent_causal_context(&self) -> anyhow::Result<axon_sdk::invocation::CausalContext> {
+        causal_context_from_single_parent(&self.consent_causal_parent)
+    }
+}
+
 impl LocalRemoteDesktopSessionIssuer {
     pub fn create_session(
         selected_resource_ura: &str,
@@ -1293,6 +1364,113 @@ impl LocalRemoteDesktopSessionIssuer {
         )?;
         invoke_local_target_with_invocation_meta(&create_target, create_args, create_context)
     }
+
+    pub fn set_description(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+    ) -> anyhow::Result<Value> {
+        Self::set_description_timeout(
+            binding,
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn set_description_timeout(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        invoke_remote_desktop_session_control_rpc(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION,
+            binding,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn add_ice_candidate(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+    ) -> anyhow::Result<Value> {
+        Self::add_ice_candidate_timeout(
+            binding,
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn add_ice_candidate_timeout(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        invoke_remote_desktop_session_control_rpc(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_ADD_ICE_CANDIDATE,
+            binding,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn watch_events(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        Self::watch_events_timeout(
+            binding,
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+            max_frames,
+        )
+    }
+
+    pub fn watch_events_timeout(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        timeout: std::time::Duration,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        let target = local_remote_desktop_ability_target(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_WATCH_EVENTS,
+        )?;
+        let args = remote_desktop_session_control_args(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_WATCH_EVENTS,
+            binding,
+            args,
+        )?;
+        invoke_local_target_stream_explicit_causal(
+            &target,
+            args,
+            binding.subject_ura(),
+            axon_sdk::invocation::fresh_nonce(),
+            binding.consent_causal_context()?,
+            timeout,
+            max_frames,
+        )
+    }
+}
+
+fn invoke_remote_desktop_session_control_rpc(
+    ability: &'static str,
+    binding: &LocalRemoteDesktopSessionControlBinding,
+    args: Value,
+    timeout: std::time::Duration,
+) -> anyhow::Result<Value> {
+    let target = local_remote_desktop_ability_target(ability)?;
+    let args = remote_desktop_session_control_args(ability, binding, args)?;
+    invoke_local_target_explicit_causal_timeout(
+        &target,
+        args,
+        binding.subject_ura(),
+        axon_sdk::invocation::fresh_nonce(),
+        binding.consent_causal_context()?,
+        timeout,
+    )
 }
 
 fn local_remote_desktop_ability_target(ability: &str) -> anyhow::Result<LocalAbilityTarget> {
@@ -1334,6 +1512,89 @@ fn create_session_args_with_consent_ticket(
         Value::String(consent_ticket.to_string()),
     );
     Ok(Value::Object(object))
+}
+
+fn remote_desktop_session_control_args(
+    ability: &'static str,
+    binding: &LocalRemoteDesktopSessionControlBinding,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let mut object = match args {
+        Value::Object(object) => object,
+        _ => anyhow::bail!("{ability} args must be a JSON object"),
+    };
+    for forbidden in [
+        "subject",
+        "resource_ura",
+        "consent",
+        "consent_ticket",
+        "session_id",
+        "session_token",
+    ] {
+        if object.contains_key(forbidden) {
+            anyhow::bail!(
+                "{ability} {forbidden} MUST come from the session control binding/envelope, not args"
+            );
+        }
+    }
+    object.insert(
+        "session_id".to_string(),
+        Value::String(binding.session_id().to_string()),
+    );
+    object.insert(
+        "session_token".to_string(),
+        Value::String(binding.session_token().to_string()),
+    );
+    Ok(Value::Object(object))
+}
+
+fn required_nonempty_string<'a>(
+    value: &'a Value,
+    field: &'static str,
+    context: &'static str,
+) -> anyhow::Result<&'a str> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("{context} requires non-empty {field}"))
+}
+
+fn canonical_causal_parent_from_value(value: &Value) -> anyhow::Result<Value> {
+    let receipt_ura = required_nonempty_string(value, "receipt_ura", "remote desktop consent")?;
+    let receipt_hash = required_nonempty_string(value, "receipt_hash", "remote desktop consent")?;
+    if hex::decode(receipt_hash)
+        .ok()
+        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+        .is_none()
+    {
+        anyhow::bail!("remote desktop consent receipt_hash must be 32-byte hex");
+    }
+    Ok(serde_json::json!({
+        "receipt_ura": receipt_ura,
+        "receipt_hash": receipt_hash,
+    }))
+}
+
+fn causal_context_from_single_parent(
+    parent: &Value,
+) -> anyhow::Result<axon_sdk::invocation::CausalContext> {
+    let receipt_ura = required_nonempty_string(parent, "receipt_ura", "causal parent")?;
+    let receipt_hash = required_nonempty_string(parent, "receipt_hash", "causal parent")?;
+    let receipt_hash = hex::decode(receipt_hash)?;
+    let receipt_hash: [u8; 32] = receipt_hash.try_into().map_err(|bytes: Vec<u8>| {
+        anyhow::anyhow!(
+            "causal parent receipt_hash must decode to 32 bytes, got {}",
+            bytes.len()
+        )
+    })?;
+    Ok(axon_sdk::invocation::CausalContext::Scalar(
+        axon_sdk::invocation::ReceiptRef {
+            receipt_ura: receipt_ura.to_string(),
+            receipt_hash,
+        },
+    ))
 }
 
 /// Stream a canonical local Ability URA target with public-ingress tuple facts.
@@ -1893,6 +2154,108 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    fn remote_desktop_session_response_for_control() -> serde_json::Value {
+        serde_json::json!({
+            "session": {
+                "subject_ura": "easynet:///r/acme/resource/device.dev/streams/window.7",
+                "session_id": "rd-control",
+                "session_token": "token-control",
+                "consent": {
+                    "approval_receipt": {
+                        "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/approve/receipt/1",
+                        "receipt_hash": "2222222222222222222222222222222222222222222222222222222222222222"
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn remote_desktop_session_control_binding_projects_tuple_facts_from_session_view() {
+        let response = remote_desktop_session_response_for_control();
+        let binding =
+            LocalRemoteDesktopSessionControlBinding::from_create_session_response(&response)
+                .expect("session control binding");
+
+        assert_eq!(
+            binding.subject_ura(),
+            "easynet:///r/acme/resource/device.dev/streams/window.7"
+        );
+        assert_eq!(binding.session_id(), "rd-control");
+        assert_eq!(binding.session_token(), "token-control");
+        assert_eq!(
+            binding.consent_causal_parent,
+            serde_json::json!({
+                "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/approve/receipt/1",
+                "receipt_hash": "2222222222222222222222222222222222222222222222222222222222222222"
+            })
+        );
+    }
+
+    #[test]
+    fn remote_desktop_session_control_args_insert_session_fields_without_tuple_args() {
+        let response = remote_desktop_session_response_for_control();
+        let binding =
+            LocalRemoteDesktopSessionControlBinding::from_create_session_response(&response)
+                .expect("session control binding");
+        let args = remote_desktop_session_control_args(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION,
+            &binding,
+            serde_json::json!({
+                "side": "remote",
+                "description": {"type": "offer", "sdp": "v=0\r\n"}
+            }),
+        )
+        .expect("control args");
+
+        assert_eq!(args["session_id"], serde_json::json!("rd-control"));
+        assert_eq!(args["session_token"], serde_json::json!("token-control"));
+        assert!(args.get("subject").is_none());
+        assert!(args.get("resource_ura").is_none());
+        assert!(args.get("consent").is_none());
+    }
+
+    #[test]
+    fn remote_desktop_session_control_args_reject_caller_owned_binding_fields() {
+        let response = remote_desktop_session_response_for_control();
+        let binding =
+            LocalRemoteDesktopSessionControlBinding::from_create_session_response(&response)
+                .expect("session control binding");
+        for (field, args) in [
+            ("subject", serde_json::json!({"subject": "bad"})),
+            ("resource_ura", serde_json::json!({"resource_ura": "bad"})),
+            ("consent", serde_json::json!({"consent": {}})),
+            (
+                "consent_ticket",
+                serde_json::json!({"consent_ticket": "bad"}),
+            ),
+            ("session_id", serde_json::json!({"session_id": "bad"})),
+            ("session_token", serde_json::json!({"session_token": "bad"})),
+        ] {
+            let err = remote_desktop_session_control_args(
+                crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION,
+                &binding,
+                args,
+            )
+            .expect_err("caller-owned binding field must be rejected");
+            assert!(
+                err.to_string().contains(field),
+                "expected error to mention {field}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_desktop_session_control_binding_rejects_malformed_consent_hash() {
+        let mut response = remote_desktop_session_response_for_control();
+        response["session"]["consent"]["approval_receipt"]["receipt_hash"] =
+            serde_json::json!("abc");
+        let err = LocalRemoteDesktopSessionControlBinding::from_create_session_response(&response)
+            .expect_err("malformed consent hash must fail");
+
+        assert!(err.to_string().contains("32-byte hex"));
     }
 
     #[test]

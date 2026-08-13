@@ -56,6 +56,7 @@ use anyhow::Context;
 use clap::{Args, Subcommand};
 use console::style;
 use serde_json::Value;
+use std::path::PathBuf;
 
 use crate::cli::commands::{
     abilities, ability_bidi, ability_record, ability_scaffold, ability_stream, deploy, discover,
@@ -63,7 +64,8 @@ use crate::cli::commands::{
 };
 use crate::cli::daemon_client::ability_catalog::{AbilityCatalogueClient, AbilityCatalogueQuery};
 use crate::support::platform::local_invoke::{
-    LocalRemoteDesktopSessionIssuer, LocalRemoteTargetInventoryIssuer, LocalStreamFrame,
+    LocalRemoteDesktopSessionControlBinding, LocalRemoteDesktopSessionIssuer,
+    LocalRemoteTargetInventoryIssuer, LocalStreamFrame,
 };
 use crate::support::platform::output::{self, OutputFormat};
 
@@ -110,6 +112,15 @@ pub enum AbilityAction {
     /// Create a remote desktop session from one selected display/window/application resource.
     #[command(name = "create-remote-desktop-session", hide = true)]
     CreateRemoteDesktopSession(CreateRemoteDesktopSessionArgs),
+    /// Apply a remote desktop WebRTC signaling description for a created session.
+    #[command(name = "set-remote-desktop-description", hide = true)]
+    SetRemoteDesktopDescription(SetRemoteDesktopDescriptionArgs),
+    /// Add a remote desktop WebRTC ICE candidate for a created session.
+    #[command(name = "add-remote-desktop-ice-candidate", hide = true)]
+    AddRemoteDesktopIceCandidate(AddRemoteDesktopIceCandidateArgs),
+    /// Watch remote desktop session lifecycle/signaling events.
+    #[command(name = "watch-remote-desktop-events", hide = true)]
+    WatchRemoteDesktopEvents(WatchRemoteDesktopEventsArgs),
     /// Run a one-shot ad-hoc command on a device (ephemeral ability).
     Exec(exec::ExecArgs),
     /// Grant one agent permission to import a declaration-only descriptor.
@@ -206,6 +217,57 @@ pub struct CreateRemoteDesktopSessionArgs {
     pub format: OutputFormat,
 }
 
+#[derive(Debug, Args)]
+pub struct SetRemoteDesktopDescriptionArgs {
+    /// JSON response from create-remote-desktop-session; carries subject, token, and consent receipt.
+    #[arg(long, value_name = "PATH")]
+    pub session_json: PathBuf,
+    /// Description side for remote_desktop.set_description.
+    #[arg(long, value_parser = ["local", "remote"])]
+    pub side: String,
+    /// Inline WebRTC RTCSessionDescription JSON.
+    #[arg(long, value_name = "JSON", conflicts_with = "description_json_file")]
+    pub description_json: Option<String>,
+    /// Path to WebRTC RTCSessionDescription JSON.
+    #[arg(long, value_name = "PATH")]
+    pub description_json_file: Option<PathBuf>,
+    /// Output format. JSON is the host receiver contract.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Args)]
+pub struct AddRemoteDesktopIceCandidateArgs {
+    /// JSON response from create-remote-desktop-session; carries subject, token, and consent receipt.
+    #[arg(long, value_name = "PATH")]
+    pub session_json: PathBuf,
+    /// Inline RTCIceCandidateInit JSON.
+    #[arg(long, value_name = "JSON", conflicts_with = "candidate_json_file")]
+    pub candidate_json: Option<String>,
+    /// Path to RTCIceCandidateInit JSON.
+    #[arg(long, value_name = "PATH")]
+    pub candidate_json_file: Option<PathBuf>,
+    /// Output format. JSON is the host receiver contract.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Args)]
+pub struct WatchRemoteDesktopEventsArgs {
+    /// JSON response from create-remote-desktop-session; carries subject, token, and consent receipt.
+    #[arg(long, value_name = "PATH")]
+    pub session_json: PathBuf,
+    /// Return events strictly after this sequence number.
+    #[arg(long, value_name = "SEQ")]
+    pub from_sequence: Option<u64>,
+    /// Maximum stream frames to drain before the CLI exits.
+    #[arg(long, default_value_t = 1)]
+    pub max_events: usize,
+    /// Output format. JSON preserves stream frame metadata for host tests.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub format: OutputFormat,
+}
+
 pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
     match args.action {
         AbilityAction::New(a) => ability_scaffold::run_new(a),
@@ -222,6 +284,9 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
         AbilityAction::RefreshRemoteTargets(a) => run_refresh_remote_targets(a),
         AbilityAction::WatchRemoteTargets(a) => run_watch_remote_targets(a),
         AbilityAction::CreateRemoteDesktopSession(a) => run_create_remote_desktop_session(a),
+        AbilityAction::SetRemoteDesktopDescription(a) => run_set_remote_desktop_description(a),
+        AbilityAction::AddRemoteDesktopIceCandidate(a) => run_add_remote_desktop_ice_candidate(a),
+        AbilityAction::WatchRemoteDesktopEvents(a) => run_watch_remote_desktop_events(a),
         AbilityAction::Exec(a) => exec::run(a),
         AbilityAction::Teach(a) => teach::run_teach(a),
         AbilityAction::Learn(a) => teach::run_learn(a),
@@ -484,6 +549,142 @@ fn create_remote_desktop_session_request(args: &CreateRemoteDesktopSessionArgs) 
     Value::Object(object)
 }
 
+fn run_set_remote_desktop_description(args: SetRemoteDesktopDescriptionArgs) -> anyhow::Result<()> {
+    let binding = remote_desktop_session_control_binding_from_file(&args.session_json)?;
+    let request = set_remote_desktop_description_request(&args)?;
+    let response = LocalRemoteDesktopSessionIssuer::set_description(&binding, request)
+        .context("invoke remote_desktop.set_description")?;
+    if args.format == OutputFormat::Json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+
+    output::success("set remote desktop description");
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+fn set_remote_desktop_description_request(
+    args: &SetRemoteDesktopDescriptionArgs,
+) -> anyhow::Result<Value> {
+    Ok(serde_json::json!({
+        "side": args.side,
+        "description": json_value_from_inline_or_file(
+            "remote_desktop.set_description description",
+            args.description_json.as_deref(),
+            args.description_json_file.as_ref(),
+        )?,
+    }))
+}
+
+fn run_add_remote_desktop_ice_candidate(
+    args: AddRemoteDesktopIceCandidateArgs,
+) -> anyhow::Result<()> {
+    let binding = remote_desktop_session_control_binding_from_file(&args.session_json)?;
+    let request = add_remote_desktop_ice_candidate_request(&args)?;
+    let response = LocalRemoteDesktopSessionIssuer::add_ice_candidate(&binding, request)
+        .context("invoke remote_desktop.add_ice_candidate")?;
+    if args.format == OutputFormat::Json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+
+    output::success("added remote desktop ICE candidate");
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+fn add_remote_desktop_ice_candidate_request(
+    args: &AddRemoteDesktopIceCandidateArgs,
+) -> anyhow::Result<Value> {
+    Ok(serde_json::json!({
+        "candidate": json_value_from_inline_or_file(
+            "remote_desktop.add_ice_candidate candidate",
+            args.candidate_json.as_deref(),
+            args.candidate_json_file.as_ref(),
+        )?,
+    }))
+}
+
+fn run_watch_remote_desktop_events(args: WatchRemoteDesktopEventsArgs) -> anyhow::Result<()> {
+    if args.max_events == 0 {
+        anyhow::bail!("--max-events must be greater than zero");
+    }
+    let binding = remote_desktop_session_control_binding_from_file(&args.session_json)?;
+    let request = watch_remote_desktop_events_request(&args);
+    let frames =
+        LocalRemoteDesktopSessionIssuer::watch_events(&binding, request, Some(args.max_events))
+            .context("invoke remote_desktop.watch_events")?;
+    if args.format == OutputFormat::Json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&stream_frames_to_json(&frames))?
+        );
+        return Ok(());
+    }
+
+    output::success(&format!(
+        "received {} remote desktop event frame(s)",
+        frames.len()
+    ));
+    for frame in frames {
+        let event_type = frame
+            .payload
+            .get("event_type")
+            .or_else(|| frame.payload.get("type"))
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        println!("{}\t{}", frame.sequence, event_type);
+    }
+    Ok(())
+}
+
+fn watch_remote_desktop_events_request(args: &WatchRemoteDesktopEventsArgs) -> Value {
+    let mut object = serde_json::Map::new();
+    if let Some(from_sequence) = args.from_sequence {
+        object.insert(
+            "from_sequence".to_string(),
+            serde_json::json!(from_sequence),
+        );
+    }
+    Value::Object(object)
+}
+
+fn remote_desktop_session_control_binding_from_file(
+    path: &PathBuf,
+) -> anyhow::Result<LocalRemoteDesktopSessionControlBinding> {
+    let value = json_file(path)
+        .with_context(|| format!("read remote desktop session JSON from {}", path.display()))?;
+    LocalRemoteDesktopSessionControlBinding::from_create_session_response(&value)
+}
+
+fn json_value_from_inline_or_file(
+    label: &'static str,
+    inline: Option<&str>,
+    file: Option<&PathBuf>,
+) -> anyhow::Result<Value> {
+    match (
+        inline.map(str::trim).filter(|value| !value.is_empty()),
+        file,
+    ) {
+        (Some(raw), None) => {
+            serde_json::from_str(raw).with_context(|| format!("parse inline {label} JSON"))
+        }
+        (None, Some(path)) => {
+            json_file(path).with_context(|| format!("read {label} JSON from {}", path.display()))
+        }
+        (Some(_), Some(_)) => {
+            anyhow::bail!("{label} accepts either inline JSON or file JSON, not both")
+        }
+        (None, None) => anyhow::bail!("{label} requires inline JSON or file JSON"),
+    }
+}
+
+fn json_file(path: &PathBuf) -> anyhow::Result<Value> {
+    let raw = std::fs::read_to_string(path)?;
+    serde_json::from_str(&raw).with_context(|| format!("parse JSON from {}", path.display()))
+}
+
 fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
     ensure_ability_ura(&args.ability_ura)?;
     if !args.yes {
@@ -649,5 +850,67 @@ mod tests {
         );
         assert!(request.get("subject").is_none());
         assert!(request.get("resource_ura").is_none());
+    }
+
+    #[test]
+    fn set_remote_desktop_description_request_keeps_session_fields_out_of_args() {
+        let request = set_remote_desktop_description_request(&SetRemoteDesktopDescriptionArgs {
+            session_json: PathBuf::from("session.json"),
+            side: "remote".to_string(),
+            description_json: Some(r#"{"type":"offer","sdp":"v=0\r\n"}"#.to_string()),
+            description_json_file: None,
+            format: OutputFormat::Json,
+        })
+        .expect("description request");
+
+        assert_eq!(request["side"], serde_json::json!("remote"));
+        assert_eq!(request["description"]["type"], serde_json::json!("offer"));
+        assert!(request.get("subject").is_none());
+        assert!(request.get("resource_ura").is_none());
+        assert!(request.get("session_id").is_none());
+        assert!(request.get("session_token").is_none());
+    }
+
+    #[test]
+    fn add_remote_desktop_ice_candidate_request_keeps_session_fields_out_of_args() {
+        let request = add_remote_desktop_ice_candidate_request(&AddRemoteDesktopIceCandidateArgs {
+            session_json: PathBuf::from("session.json"),
+            candidate_json: Some(
+                r#"{"candidate":"candidate:1 1 UDP 1 127.0.0.1 9 typ host"}"#.to_string(),
+            ),
+            candidate_json_file: None,
+            format: OutputFormat::Json,
+        })
+        .expect("candidate request");
+
+        assert!(request["candidate"]["candidate"]
+            .as_str()
+            .unwrap()
+            .starts_with("candidate:"));
+        assert!(request.get("subject").is_none());
+        assert!(request.get("resource_ura").is_none());
+        assert!(request.get("session_id").is_none());
+        assert!(request.get("session_token").is_none());
+    }
+
+    #[test]
+    fn watch_remote_desktop_events_request_preserves_resume_without_session_fields() {
+        let request = watch_remote_desktop_events_request(&WatchRemoteDesktopEventsArgs {
+            session_json: PathBuf::from("session.json"),
+            from_sequence: Some(41),
+            max_events: 2,
+            format: OutputFormat::Json,
+        });
+
+        assert_eq!(
+            request,
+            serde_json::json!({
+                "from_sequence": 41,
+            })
+        );
+        assert!(request.get("subject").is_none());
+        assert!(request.get("resource_ura").is_none());
+        assert!(request.get("session_id").is_none());
+        assert!(request.get("session_token").is_none());
     }
 }
