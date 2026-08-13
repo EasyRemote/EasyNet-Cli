@@ -758,13 +758,29 @@ mod platform_live_resolution {
 
 #[cfg(not(all(target_os = "macos", feature = "native-media")))]
 mod platform_live_resolution {
-    use super::{RemoteAppTargetBinding, RemoteAppTargetError};
+    use super::{
+        RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind,
+        TargetResolutionError,
+    };
 
     pub(super) fn verify_target_binding_for_session(
-        _ability: &'static str,
-        _binding: &RemoteAppTargetBinding,
+        ability: &'static str,
+        binding: &RemoteAppTargetBinding,
     ) -> Result<(), RemoteAppTargetError> {
-        Ok(())
+        match binding.target_kind() {
+            RemoteDesktopTargetKind::Display => Ok(()),
+            RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application => {
+                Err(RemoteAppTargetError::new(
+                    ability,
+                    TargetResolutionError::CaptureBackendUnavailable,
+                    format!(
+                        "{} targets require a native platform capture backend; \
+                         headless/display providers cannot prove app/window binding",
+                        binding.target_kind().as_str()
+                    ),
+                ))
+            }
+        }
     }
 }
 
@@ -1142,6 +1158,67 @@ mod tests {
         assert_eq!(
             projection["native_locator"]["title"],
             json!("same-looking shell")
+        );
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "native-media")))]
+    #[test]
+    fn non_native_target_proof_fails_closed_for_app_and_window_targets() {
+        let resolver = ResourceEntryTargetResolver;
+        let display = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(ResourceType::Display, json!({"primary_display": true})),
+                "view_only",
+                1,
+            )
+            .expect("display binding");
+        verify_target_binding_for_session("remote_desktop.create_session", &display)
+            .expect("display binding remains supported by headless/display providers");
+
+        let window = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Window,
+                    json!({
+                        "window_id": 7,
+                        "pid": 4242,
+                        "app_name": "Terminal",
+                    }),
+                ),
+                "view_only",
+                1,
+            )
+            .expect("window binding metadata resolves before live proof");
+        let err = verify_target_binding_for_session("remote_desktop.create_session", &window)
+            .expect_err("window proof must fail closed without native platform capture");
+        assert_eq!(
+            err.reason(),
+            TargetResolutionError::CaptureBackendUnavailable
+        );
+
+        let application = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Application,
+                    json!({
+                        "display_id": 1,
+                        "bundle_id": "com.apple.Safari",
+                        "app_identity": "com.apple.Safari",
+                        "primary_pid": 42,
+                    }),
+                ),
+                "view_only",
+                1,
+            )
+            .expect("application binding metadata resolves before live proof");
+        let err = verify_target_binding_for_session("remote_desktop.create_session", &application)
+            .expect_err("application proof must fail closed without native platform capture");
+        assert_eq!(
+            err.reason(),
+            TargetResolutionError::CaptureBackendUnavailable
         );
     }
 
