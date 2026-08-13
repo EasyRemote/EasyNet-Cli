@@ -1156,6 +1156,36 @@ impl LocalRuntimeCatalogueReadIssuer {
     }
 }
 
+/// Named issuer for daemon-local remote target inventory refreshes.
+///
+/// This is the mutable counterpart to [`LocalRuntimeCatalogueReadIssuer`].
+/// Target pickers that need live display/window/application rows must invoke
+/// `resource.refresh_remote_targets` through this issuer before presenting
+/// selectable resources. `meta.list_resources` intentionally remains a
+/// read-only cache projection.
+pub struct LocalRemoteTargetInventoryIssuer;
+
+impl LocalRemoteTargetInventoryIssuer {
+    pub fn refresh_remote_targets(args: Value) -> anyhow::Result<Value> {
+        Self::refresh_remote_targets_timeout(
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn refresh_remote_targets_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity_timeout(
+            crate::daemon::ability::names::resources::RESOURCE_REFRESH_REMOTE_TARGETS,
+            args,
+            timeout,
+        )
+    }
+}
+
 /// Stream a canonical local Ability URA target with public-ingress tuple facts.
 pub fn invoke_local_target_stream_explicit_causal(
     target: &LocalAbilityTarget,

@@ -62,6 +62,7 @@ use crate::cli::commands::{
     exec, invoke, teach,
 };
 use crate::cli::daemon_client::ability_catalog::{AbilityCatalogueClient, AbilityCatalogueQuery};
+use crate::support::platform::local_invoke::LocalRemoteTargetInventoryIssuer;
 use crate::support::platform::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
@@ -98,6 +99,9 @@ pub enum AbilityAction {
     Bidi(ability_bidi::BidiArgs),
     /// Ergonomic wrapper for resource-backed recording streams.
     Record(ability_record::RecordArgs),
+    /// Refresh display/window/application targets for dedicated remote desktop surfaces.
+    #[command(name = "refresh-remote-targets", hide = true)]
+    RefreshRemoteTargets(RefreshRemoteTargetsArgs),
     /// Run a one-shot ad-hoc command on a device (ephemeral ability).
     Exec(exec::ExecArgs),
     /// Grant one agent permission to import a declaration-only descriptor.
@@ -141,6 +145,20 @@ pub struct UninstallArgs {
     pub yes: bool,
 }
 
+#[derive(Debug, Args)]
+pub struct RefreshRemoteTargetsArgs {
+    /// Restrict refresh output to one or more remote target types.
+    #[arg(
+        long = "type",
+        value_name = "TYPE",
+        value_parser = ["display", "application", "window"]
+    )]
+    pub types: Vec<String>,
+    /// Output format. JSON is the frontend contract; table is an operator summary.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub format: OutputFormat,
+}
+
 pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
     match args.action {
         AbilityAction::New(a) => ability_scaffold::run_new(a),
@@ -154,6 +172,7 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
         AbilityAction::Stream(a) => ability_stream::run(a),
         AbilityAction::Bidi(a) => ability_bidi::run(a),
         AbilityAction::Record(a) => ability_record::run(a),
+        AbilityAction::RefreshRemoteTargets(a) => run_refresh_remote_targets(a),
         AbilityAction::Exec(a) => exec::run(a),
         AbilityAction::Teach(a) => teach::run_teach(a),
         AbilityAction::Learn(a) => teach::run_learn(a),
@@ -260,6 +279,51 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn run_refresh_remote_targets(args: RefreshRemoteTargetsArgs) -> anyhow::Result<()> {
+    let request = refresh_remote_targets_request(&args);
+    let response = LocalRemoteTargetInventoryIssuer::refresh_remote_targets(request)
+        .context("invoke resource.refresh_remote_targets")?;
+    if args.format == OutputFormat::Json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+
+    let resources = response
+        .get("resources")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            anyhow::anyhow!("resource.refresh_remote_targets response missing resources array")
+        })?;
+    output::success(&format!("refreshed {} remote targets", resources.len()));
+    if let Some(observed_at_ms) = response.get("observed_at_ms").and_then(Value::as_u64) {
+        output::detail("observed_at_ms", &observed_at_ms.to_string());
+    }
+    if let Some(freshness_ttl_ms) = response.get("freshness_ttl_ms").and_then(Value::as_u64) {
+        output::detail("freshness_ttl_ms", &freshness_ttl_ms.to_string());
+    }
+    for resource in resources {
+        let kind = resource.get("type").and_then(Value::as_str).unwrap_or("-");
+        let name = resource
+            .get("display_name")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let ura = resource
+            .get("resource_ura")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        println!("{kind}\t{name}\t{ura}");
+    }
+    Ok(())
+}
+
+fn refresh_remote_targets_request(args: &RefreshRemoteTargetsArgs) -> Value {
+    if args.types.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::json!({ "types": args.types.clone() })
+    }
+}
+
 fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
     ensure_ability_ura(&args.ability_ura)?;
     if !args.yes {
@@ -335,5 +399,28 @@ mod tests {
         })
         .expect_err("blank target must fail before daemon payload");
         assert!(err.to_string().contains("target must not be empty"));
+    }
+
+    #[test]
+    fn refresh_remote_targets_request_omits_empty_type_filter() {
+        let request = refresh_remote_targets_request(&RefreshRemoteTargetsArgs {
+            types: Vec::new(),
+            format: OutputFormat::Json,
+        });
+
+        assert_eq!(request, serde_json::json!({}));
+    }
+
+    #[test]
+    fn refresh_remote_targets_request_preserves_picker_type_filter() {
+        let request = refresh_remote_targets_request(&RefreshRemoteTargetsArgs {
+            types: vec!["window".to_string(), "application".to_string()],
+            format: OutputFormat::Json,
+        });
+
+        assert_eq!(
+            request,
+            serde_json::json!({"types": ["window", "application"]})
+        );
     }
 }
