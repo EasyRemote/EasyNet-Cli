@@ -31,7 +31,7 @@ If a user selects a window or application, the implementation must not silently 
 
 ## 2. Current implementation evidence
 
-The current tree already contains useful foundations:
+The current tree already contains these implementation foundations:
 
 - `ResourceType` already includes `Display`, `Application`, and `Window` in `src/daemon/persistence/resources.rs`.
 - `remote_desktop.create_session` already resolves the acted-on target from the invocation envelope subject in `plugins/remote-desktop/src/handlers/create_session.rs`.
@@ -40,13 +40,15 @@ The current tree already contains useful foundations:
 - macOS ScreenCaptureKit native capture already branches by `ResourceType::Display`, `ResourceType::Window`, and `ResourceType::Application` in `plugins/remote-desktop/src/screencapturekit_capture.rs`.
 - WebRTC native media now starts ScreenCaptureKit from the session-owned `RemoteAppTargetBinding` in `plugins/remote-desktop/src/transport/webrtc_native_media.rs`.
 - `remote_desktop.watch_events` already exposes a session event stream in `plugins/remote-desktop/src/handlers/watch_events.rs`.
+- `remote_desktop.*` is projected through `AbilityDedicatedSurface::RemoteDesktop` and `BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP`, not the generic media surface.
+- `resource.refresh_remote_targets` and `resource.watch_remote_targets` exist as daemon resource-inventory abilities. They are backend/frontend-contract foundations for live target pickers, not remote desktop session abilities.
+- Session target tracking has a plugin-owned monitor and platform observation seam; it samples host target state independently of WebRTC media transport.
 
 Remaining implementation gaps for the product effect:
 
-- `remote_desktop.*` is still published under the `media` frontend surface, not a dedicated remote desktop surface.
 - `meta.list_resources` reads the persisted resource table; it does not guarantee live refresh at the time the frontend asks for current windows/applications.
-- The frontend picker path has not yet been proven to call `resource.refresh_remote_targets` and use the refreshed `resource_ura` as `Invocation.subject`.
-- Decoded-frame E2E evidence is still required to prove that window/application sessions never leak full-display content.
+- The repository still needs frontend or backend-surface E2E evidence proving the picker calls `resource.refresh_remote_targets` or `resource.watch_remote_targets` and then uses the selected `resource_ura` as `Invocation.subject`.
+- Decoded-frame E2E evidence is still required to prove that window/application sessions never leak full-display content or unrelated application content.
 - Full rebind and multi-display application sessions are not complete.
 - Interactive app/window input must remain view-only until focus validation, coordinate mapping, and target epoch checks are proven on the execution path.
 - Transport only has local host candidate discovery today; production remote usability needs STUN/TURN/EasyNet relay state.
@@ -85,7 +87,7 @@ Forbidden model changes:
 
 ## 4. Dedicated frontend surface
 
-Add a dedicated surface:
+Use a dedicated surface:
 
 ```rust
 AbilityDedicatedSurface::RemoteDesktop
@@ -99,7 +101,7 @@ dedicated_surface = "remote_desktop"
 subject_contract_kind = "dedicated-surface"
 ```
 
-The current `media` surface is not precise enough. Remote desktop is a lifecycle surface with permissions, target binding, signaling, media, input, and target events. It is not a normal media snapshot/subscribe button.
+The generic `media` surface is not precise enough. Remote desktop is a lifecycle surface with permissions, target binding, signaling, media, input, and target events. It is not a normal media snapshot/subscribe button.
 
 ## 5. Frontend lifecycle
 
