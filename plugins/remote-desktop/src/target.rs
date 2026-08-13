@@ -1520,6 +1520,11 @@ mod tests {
             .expect("window_id plus pid is stable enough for session binding");
         let projection = binding.to_value();
         assert_eq!(projection["target_kind"], json!("window"));
+        assert_eq!(projection["native_locator"]["display_id"], Value::Null);
+        assert!(
+            binding.supports_native_adapter(),
+            "exact window capture is desktop-independent and must not require display identity"
+        );
         assert_eq!(projection["native_locator"]["window_id"], json!(7));
         assert_eq!(projection["native_locator"]["pid"], json!(4242));
         assert_eq!(projection["native_locator"]["app_name"], json!("Terminal"));

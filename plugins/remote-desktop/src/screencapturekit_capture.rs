@@ -242,29 +242,29 @@ fn resolve_target_for_binding(
 ) -> Result<ScreenCaptureKitTarget, RemoteAppTargetError> {
     ensure_screen_capture_permission(ability)?;
     let content = shareable_content(ability)?;
-    let displays = unsafe { content.displays() };
-    let display = select_display_for_binding(ability, &displays, binding)?;
-    let mut proof_display_id = Some(unsafe { display.displayID() as u64 });
     let mut proof_window_id = None;
     let mut proof_pid = None;
     let mut proof_app_identity = None;
     let mut proof_bundle_id = None;
     let mut proof_app_window_set = None;
-    let filter = match binding.target_kind() {
+    let (filter, proof_display_id, selected_display) = match binding.target_kind() {
         RemoteDesktopTargetKind::Display => {
+            let displays = unsafe { content.displays() };
+            let display = select_display_for_binding(ability, &displays, binding)?;
+            let proof_display_id = Some(unsafe { display.displayID() as u64 });
             let empty: Retained<NSArray<SCWindow>> = NSArray::new();
-            unsafe {
+            let filter = unsafe {
                 SCContentFilter::initWithDisplay_excludingWindows(
                     SCContentFilter::alloc(),
                     &display,
                     &empty,
                 )
-            }
+            };
+            (filter, proof_display_id, Some(display))
         }
         RemoteDesktopTargetKind::Window => {
             let windows = unsafe { content.windows() };
             let window = select_window_for_binding(ability, &windows, binding)?;
-            proof_display_id = binding.native_locator().display_id();
             proof_window_id = Some(unsafe { window.windowID() as u64 });
             if let Some(app) = unsafe { window.owningApplication() }.as_deref() {
                 let identity = running_application_identity(app);
@@ -272,11 +272,15 @@ fn resolve_target_for_binding(
                 proof_app_identity = identity.1.clone();
                 proof_bundle_id = identity.1;
             }
-            unsafe {
+            let filter = unsafe {
                 SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &window)
-            }
+            };
+            (filter, binding.native_locator().display_id(), None)
         }
         RemoteDesktopTargetKind::Application => {
+            let displays = unsafe { content.displays() };
+            let display = select_display_for_binding(ability, &displays, binding)?;
+            let proof_display_id = Some(unsafe { display.displayID() as u64 });
             let applications = unsafe { content.applications() };
             let app = select_application_for_binding(ability, &applications, binding)?;
             let identity = running_application_identity(&app);
@@ -293,17 +297,22 @@ fn resolve_target_for_binding(
                 .collect::<Vec<_>>();
             let included_windows = NSArray::from_slice(&window_refs);
             proof_app_window_set = Some(app_window_set.proof);
-            unsafe {
+            let filter = unsafe {
                 SCContentFilter::initWithDisplay_includingWindows(
                     SCContentFilter::alloc(),
                     &display,
                     &included_windows,
                 )
-            }
+            };
+            (filter, proof_display_id, None)
         }
     };
-    let (native_width, native_height) =
-        filter_dimensions_for_kind(ability, &filter, binding.target_kind(), &display)?;
+    let (native_width, native_height) = filter_dimensions_for_kind(
+        ability,
+        &filter,
+        binding.target_kind(),
+        selected_display.as_deref(),
+    )?;
     let mut capture_proof = ResolvedCaptureTargetProof::new(
         "screencapturekit",
         binding.target_kind(),
@@ -687,9 +696,16 @@ fn filter_dimensions_for_kind(
     ability: &'static str,
     filter: &SCContentFilter,
     target_kind: RemoteDesktopTargetKind,
-    fallback_display: &SCDisplay,
+    display: Option<&SCDisplay>,
 ) -> Result<(usize, usize), RemoteAppTargetError> {
     if target_kind == RemoteDesktopTargetKind::Display {
+        let fallback_display = display.ok_or_else(|| {
+            RemoteAppTargetError::new(
+                ability,
+                TargetResolutionError::DisplayIdentityMissing,
+                "display dimensions require a resolved ScreenCaptureKit display",
+            )
+        })?;
         let info = unsafe { SCShareableContent::infoForFilter(filter) };
         let scale = f64::from(unsafe { info.pointPixelScale() }.max(1.0));
         let width = unsafe { fallback_display.width() };
