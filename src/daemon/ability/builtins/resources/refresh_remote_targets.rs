@@ -183,6 +183,7 @@ pub fn description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry};
 
     #[test]
     fn context_requires_device_ura() {
@@ -232,5 +233,97 @@ mod tests {
             reg.control_plane_owner(ABILITY_RESOURCE_REFRESH_REMOTE_TARGETS),
             Some(OwnerKind::media_system())
         );
+    }
+
+    #[test]
+    fn refresh_response_returns_select_ready_live_target_projection() {
+        let context =
+            RemoteTargetInventoryContext::from_device_ura("easynet:///r/acme/device/dev-a")
+                .expect("context");
+        let response = remote_target_response(
+            json!({"types": ["window"]}),
+            &context,
+            |realm, owner_agent| {
+                assert_eq!(realm, "acme");
+                assert_eq!(owner_agent, context.owner_agent());
+                Ok(resource_bootstrap::RemoteTargetInventoryRefresh {
+                    observed_at_ms: 123_456,
+                    freshness_ttl_ms: 5_000,
+                    retired_count: 1,
+                    screen_target_discovery_available: true,
+                    resources: vec![
+                        remote_target_entry(
+                            ResourceType::Display,
+                            "display.main",
+                            "Main Display",
+                            context.owner_agent(),
+                            context.host_device_ura(),
+                            123_456,
+                        ),
+                        remote_target_entry(
+                            ResourceType::Window,
+                            "window.cursor",
+                            "Cursor - EasyNet",
+                            context.owner_agent(),
+                            context.host_device_ura(),
+                            123_456,
+                        ),
+                    ],
+                })
+            },
+        )
+        .expect("refresh response");
+
+        assert_eq!(response.observed_at_ms, 123_456);
+        assert_eq!(response.freshness_ttl_ms, 5_000);
+        assert_eq!(response.retired_count, 1);
+        assert!(response.screen_target_discovery_available);
+        assert_eq!(response.resources.len(), 1);
+        let target = &response.resources[0];
+        assert_eq!(
+            target.resource_ura,
+            "easynet:///r/acme/resource/window.cursor"
+        );
+        assert_eq!(target.owner_agent, context.owner_agent());
+        assert_eq!(target.host_device_ura, context.host_device_ura());
+        assert_eq!(target.entry_type, "window");
+        assert_eq!(target.availability, "available");
+        assert_eq!(target.observed_at_ms, 123_456);
+        assert_eq!(target.freshness_ttl_ms, 5_000);
+        assert_eq!(target.metadata["capture_target"], json!("window"));
+        assert!(
+            serde_json::to_value(target)
+                .expect("target serializes")
+                .get("hardware_id")
+                .is_none(),
+            "picker projection must not expose persistence-only hardware_id"
+        );
+    }
+
+    fn remote_target_entry(
+        kind: ResourceType,
+        id: &str,
+        display_name: &str,
+        owner_agent: &str,
+        host_device_ura: &str,
+        observed_at_ms: u64,
+    ) -> ResourceEntry {
+        ResourceEntry {
+            resource_ura: format!("easynet:///r/acme/resource/{id}"),
+            owner_agent: owner_agent.to_string(),
+            kind,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: format!("macos:{id}"),
+            display_name: display_name.to_string(),
+            metadata: json!({
+                "host_device_ura": host_device_ura,
+                "availability": "available",
+                "observed_at_ms": observed_at_ms,
+                "freshness_ttl_ms": 5_000,
+                "capture_target": kind.as_str(),
+                "window_id": 42,
+            }),
+            first_seen_at: "2026-08-14T00:00:00Z".to_string(),
+        }
     }
 }
