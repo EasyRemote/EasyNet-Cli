@@ -9,7 +9,7 @@ use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION;
 use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
-use crate::daemon::plugins::remote_desktop::session::{now_ms, RemoteDesktopSession};
+use crate::daemon::plugins::remote_desktop::session::{RemoteDesktopSession, now_ms};
 use crate::daemon::plugins::remote_desktop::session_creation::RemoteDesktopSessionCreationWorkflow;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::prune_inactive_sessions;
 use crate::daemon::plugins::remote_desktop::view::serialize_session_with_token;
@@ -251,6 +251,52 @@ mod tests {
             assert!(
                 !sessions.contains_key("rd-stale-window"),
                 "stale target failure must not insert a session row"
+            );
+        });
+    }
+
+    #[test]
+    fn create_session_rejects_weak_window_identity_before_session_insert() {
+        let _lock = test_lock();
+        let plugin = test_plugin();
+        reset_store(&plugin);
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = ResourcesFile::default();
+        let ura = resources::upsert_resource(
+            &mut file,
+            ResourceUpsert {
+                realm: "acme",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
+                kind: ResourceType::Window,
+                binding: ResourceBinding::LocalDevice,
+                hardware_id: "remote-desktop-weak-window-identity",
+                display_name: "Terminal — same-looking shell",
+                metadata: json!({
+                    "window_id": 7,
+                    "app_name": "Terminal",
+                    "title": "same-looking shell",
+                }),
+            },
+        )
+        .unwrap();
+        resources::save(&file).unwrap();
+        let env = env_for(&ura);
+        let err = handle(
+            Arc::clone(&plugin),
+            env.clone(),
+            with_consent_ticket(
+                &plugin,
+                &env,
+                json!({"session_id": "rd-weak-window", "mode": "view_only"}),
+            ),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("target_identity_ambiguous"));
+        plugin.session_store().with_sessions(|sessions| {
+            assert!(
+                !sessions.contains_key("rd-weak-window"),
+                "weak target identity failure must not insert a session row"
             );
         });
     }

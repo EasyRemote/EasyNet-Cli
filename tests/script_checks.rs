@@ -239,6 +239,14 @@ fn remoteapp_target_binding_boundary_script_holds() {
 }
 
 #[test]
+fn remoteapp_lifecycle_input_boundary_script_holds() {
+    // Pins app/window lifecycle and input safety to target-owned move/resize
+    // revisions, target-loss media-source degradation, weak native identity
+    // ambiguity, and view-only input until focus-safe dispatch exists.
+    run_bash_script("tests/scripts/test_check_remoteapp_lifecycle_input_boundary.sh");
+}
+
+#[test]
 fn remoteapp_e2e_acceptance_boundary_script_holds() {
     // Pins host decoded-frame acceptance to live inventory, exact target
     // binding, WebRTC/H.264 evidence, and independently scanned artifact

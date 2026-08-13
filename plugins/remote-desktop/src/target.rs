@@ -18,7 +18,7 @@ use std::hash::{Hash, Hasher};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axon_sdk::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, SecurityClass};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
 
@@ -1333,7 +1333,7 @@ fn validate_required_identity(
             {
                 return Err(RemoteAppTargetError::new(
                     ability,
-                    TargetResolutionError::TargetMetadataIncomplete,
+                    TargetResolutionError::TargetIdentityAmbiguous,
                     "window targets require owner pid, app_identity, or bundle_id in addition to window_id; app_name/title are diagnostic hints, not production routing identity",
                 ));
             }
@@ -1353,7 +1353,7 @@ fn validate_required_identity(
             {
                 return Err(RemoteAppTargetError::new(
                     ability,
-                    TargetResolutionError::TargetMetadataIncomplete,
+                    TargetResolutionError::TargetIdentityAmbiguous,
                     "application targets require primary_pid, app_identity, or bundle_id; app_name alone is not production routing identity",
                 ));
             }
@@ -1640,14 +1640,16 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(err.reason(), TargetResolutionError::DisplayIdentityMissing);
-        assert!(resolver
-            .resolve_for_session(
-                "remote_desktop.create_session",
-                &entry(ResourceType::Display, json!({"primary_display": true})),
-                "view_only",
-                1,
-            )
-            .is_ok());
+        assert!(
+            resolver
+                .resolve_for_session(
+                    "remote_desktop.create_session",
+                    &entry(ResourceType::Display, json!({"primary_display": true})),
+                    "view_only",
+                    1,
+                )
+                .is_ok()
+        );
     }
 
     #[test]
@@ -1668,10 +1670,7 @@ mod tests {
                 1,
             )
             .unwrap_err();
-        assert_eq!(
-            err.reason(),
-            TargetResolutionError::TargetMetadataIncomplete
-        );
+        assert_eq!(err.reason(), TargetResolutionError::TargetIdentityAmbiguous);
         assert!(
             err.to_string().contains("app_name/title are diagnostic"),
             "unexpected error: {err}"
@@ -1990,10 +1989,7 @@ mod tests {
                 1,
             )
             .unwrap_err();
-        assert_eq!(
-            err.reason(),
-            TargetResolutionError::TargetMetadataIncomplete
-        );
+        assert_eq!(err.reason(), TargetResolutionError::TargetIdentityAmbiguous);
         let err = resolver
             .resolve_for_session(
                 "remote_desktop.create_session",

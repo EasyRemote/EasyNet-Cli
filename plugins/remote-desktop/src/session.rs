@@ -808,9 +808,11 @@ mod tests {
         });
 
         let events = session.events();
-        assert!(events
-            .iter()
-            .any(|event| event["event_type"] == json!("TARGET_RESIZED")));
+        assert!(
+            events
+                .iter()
+                .any(|event| event["event_type"] == json!("TARGET_RESIZED"))
+        );
         assert_eq!(
             session.target_tracking_state()["target_geometry_revision"],
             json!(2)
@@ -827,10 +829,12 @@ mod tests {
         });
 
         assert_eq!(session.target_tracking_state()["status"], json!("resolved"));
-        assert!(!session
-            .events()
-            .iter()
-            .any(|event| event["event_type"] == json!("TARGET_LOST")));
+        assert!(
+            !session
+                .events()
+                .iter()
+                .any(|event| event["event_type"] == json!("TARGET_LOST"))
+        );
 
         session.record_target_observation(TargetObservation::Lost {
             reason: TargetResolutionError::TargetNotFound,
@@ -839,10 +843,12 @@ mod tests {
         });
 
         assert_eq!(session.target_tracking_state()["status"], json!("lost"));
-        assert!(session
-            .events()
-            .iter()
-            .any(|event| event["event_type"] == json!("TARGET_LOST")));
+        assert!(
+            session
+                .events()
+                .iter()
+                .any(|event| event["event_type"] == json!("TARGET_LOST"))
+        );
         assert_eq!(
             session.latest_target_diagnostic()["frontend_action"],
             json!("refresh_targets")
@@ -865,13 +871,15 @@ mod tests {
         );
         assert_eq!(session.transport_state()["device_sending"], json!(true));
 
-        assert!(session
-            .record_target_observation(TargetObservation::Lost {
-                reason: TargetResolutionError::TargetNotFound,
-                detail: "target disappeared".into(),
-                observed_at_ms: 200,
-            })
-            .is_none());
+        assert!(
+            session
+                .record_target_observation(TargetObservation::Lost {
+                    reason: TargetResolutionError::TargetNotFound,
+                    detail: "target disappeared".into(),
+                    observed_at_ms: 200,
+                })
+                .is_none()
+        );
         let media_loss = session
             .record_target_observation(TargetObservation::Lost {
                 reason: TargetResolutionError::TargetNotFound,
@@ -887,6 +895,10 @@ mod tests {
             json!("media_source_lost")
         );
         assert_eq!(session.transport_state()["device_sending"], json!(false));
+        assert_eq!(
+            session.target_tracking_state()["input_enabled"],
+            json!(false)
+        );
 
         let events = session.events();
         let target_lost_index = events

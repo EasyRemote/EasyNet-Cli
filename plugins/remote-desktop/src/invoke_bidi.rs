@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
@@ -19,11 +19,11 @@ use crate::daemon::plugins::remote_desktop::constants::{
     REASON_RESOURCE_UNAVAILABLE, TRANSPORT_INVOKE_BIDI,
 };
 use crate::daemon::plugins::remote_desktop::input::{
-    apply_input_frame_with_policy, input_policy_allows, input_policy_for_binding,
+    apply_input_frame_with_policy, input_policy_for_binding, input_policy_reject_reason,
     parse_input_frame, unsupported_input_channel_reason,
 };
 use crate::daemon::plugins::remote_desktop::media::encode::{
-    spawn_builtin_h264_stream, BuiltinH264StreamTerminal, BuiltinH264TerminalCallback,
+    BuiltinH264StreamTerminal, BuiltinH264TerminalCallback, spawn_builtin_h264_stream,
 };
 use crate::daemon::plugins::remote_desktop::request::AttachEncoding;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
@@ -114,10 +114,15 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle_bidi_input_frame(
             "message": "clipboard and file-drop frames require dedicated remote desktop abilities",
         });
     }
-    if !input_policy_allows(input_policy, kind) {
+    if let Some(reason) = input_policy_reject_reason(input_policy, kind) {
+        let code = if reason == "input_policy_denied" {
+            "input_disabled"
+        } else {
+            reason
+        };
         return json!({
             "type": "warn",
-            "code": "input_disabled",
+            "code": code,
             "input_type": kind,
             "action": frame.action(),
             "message": "interactive input is disabled by this remote desktop session policy",
@@ -488,6 +493,21 @@ mod tests {
 
         assert_eq!(response["type"], json!("warn"));
         assert_eq!(response["code"], json!("input_disabled"));
+        assert_eq!(response["input_type"], json!("pointer"));
+    }
+
+    #[test]
+    fn diagnostic_bidi_view_only_input_reports_scope_unsupported() {
+        let response = handle_bidi_input_frame(
+            &json!({
+                "input_scope": "view_only",
+                "pointer_enabled": false,
+            }),
+            json!({"type": "pointer", "action": "move", "x": 10, "y": 20}),
+        );
+
+        assert_eq!(response["type"], json!("warn"));
+        assert_eq!(response["code"], json!("input_scope_unsupported"));
         assert_eq!(response["input_type"], json!("pointer"));
     }
 

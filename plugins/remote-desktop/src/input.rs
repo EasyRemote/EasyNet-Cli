@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use webrtc::data_channel::{DataChannel, DataChannelEvent};
 
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
@@ -349,14 +349,14 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     );
                     continue;
                 };
-                if !input_policy_allows(&effective_input_policy, kind) {
+                if let Some(reason) = input_policy_reject_reason(&effective_input_policy, kind) {
                     rejected_count = rejected_count.saturating_add(1);
                     record_input_rejection(
                         &mut reject_diagnostics,
                         &sessions,
                         &session_id,
                         epoch,
-                        InputRejectSample::new("input_policy_denied", rejected_count)
+                        InputRejectSample::new(reason, rejected_count)
                             .kind(kind)
                             .action(frame.action()),
                     );
@@ -577,19 +577,36 @@ fn flush_input_rejections(
     }
 }
 
+#[cfg(test)]
 pub(in crate::daemon::plugins::remote_desktop) fn input_policy_allows(
     policy: &Value,
     frame_type: &str,
 ) -> bool {
-    if unsupported_input_channel_reason(frame_type).is_some() {
-        return false;
+    input_policy_reject_reason(policy, frame_type).is_none()
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn input_policy_reject_reason(
+    policy: &Value,
+    frame_type: &str,
+) -> Option<&'static str> {
+    if let Some(reason) = unsupported_input_channel_reason(frame_type) {
+        return Some(reason);
+    }
+    let input_scope = policy.get("input_scope").and_then(Value::as_str);
+    if input_scope == Some(InputScope::ViewOnly.as_str()) && matches!(frame_type, "key" | "pointer")
+    {
+        return Some("input_scope_unsupported");
     }
     let key = match frame_type {
         "key" => "keyboard_enabled",
         "pointer" => "pointer_enabled",
-        _ => return false,
+        _ => return Some("input_policy_denied"),
     };
-    policy.get(key).and_then(Value::as_bool).unwrap_or(false)
+    if policy.get(key).and_then(Value::as_bool).unwrap_or(false) {
+        None
+    } else {
+        Some("input_policy_denied")
+    }
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn unsupported_input_channel_reason(
@@ -790,15 +807,15 @@ fn apply_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
 mod platform {
     use std::ffi::c_void;
 
+    use objc2::Message;
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
-    use objc2::Message;
     use objc2_core_foundation::CFString;
     use objc2_foundation::{NSMutableDictionary, NSNumber};
 
     use super::{
-        map_pointer_point, InputApplyOutcome, KeyInputFrame, PointerInputFrame,
-        PointerTargetGeometry,
+        InputApplyOutcome, KeyInputFrame, PointerInputFrame, PointerTargetGeometry,
+        map_pointer_point,
     };
 
     #[repr(C)]
@@ -1270,6 +1287,10 @@ mod tests {
 
         assert_eq!(point, MappedPointerPoint { x: 500.0, y: 350.0 });
         assert_eq!(policy["input_scope"], json!("view_only"));
+        assert_eq!(
+            input_policy_reject_reason(&policy, "pointer"),
+            Some("input_scope_unsupported")
+        );
         assert!(
             !input_policy_allows(&policy, "pointer"),
             "view-only window binding must not leave global pointer injection enabled"
@@ -1312,9 +1333,15 @@ mod tests {
         );
         assert!(input_policy_allows(&policy, "key"));
         assert!(input_policy_allows(&policy, "pointer"));
+        assert_eq!(input_policy_reject_reason(&policy, "key"), None);
+        assert_eq!(input_policy_reject_reason(&policy, "pointer"), None);
         assert!(
             !input_policy_allows(&policy, "clipboard"),
             "clipboard must remain unsupported on the input data channel"
+        );
+        assert_eq!(
+            input_policy_reject_reason(&policy, "clipboard"),
+            Some("clipboard_input_unsupported")
         );
         assert!(
             !input_policy_allows(&policy, "file_drop"),
