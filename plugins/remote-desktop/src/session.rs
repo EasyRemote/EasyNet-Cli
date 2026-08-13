@@ -26,6 +26,9 @@ use crate::daemon::plugins::remote_desktop::session_transport_state::{
     PrimaryMediaPhase, RemoteDesktopTransportState, TransportEpoch,
 };
 use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
+use crate::daemon::plugins::remote_desktop::target_tracking::{
+    TargetObservation, TargetTrackerSnapshot, TargetTrackerState, TargetVisibilityState,
+};
 
 /// Runtime state for one remote desktop session.
 ///
@@ -45,6 +48,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSession {
     lease: RemoteDesktopLease,
     signaling: RemoteDesktopSignalingState,
     transport: RemoteDesktopTransportState,
+    target_tracker: TargetTrackerState,
     event_log: RemoteDesktopEventLog,
 }
 
@@ -55,6 +59,7 @@ impl RemoteDesktopSession {
         let now = now_ms();
         let (profile, lease_ttl_ms) = RemoteDesktopSessionProfile::from_init(init);
         let mut session = Self {
+            target_tracker: TargetTrackerState::from_binding(profile.target_binding()),
             profile,
             lifecycle: RemoteDesktopSessionStateMachine::new(),
             lease: RemoteDesktopLease::new(now, lease_ttl_ms),
@@ -126,6 +131,20 @@ impl RemoteDesktopSession {
         &self,
     ) -> &RemoteAppTargetBinding {
         self.profile.target_binding()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_snapshot(
+        &self,
+    ) -> &TargetTrackerSnapshot {
+        self.target_tracker.snapshot()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_tracking_state(&self) -> Value {
+        self.target_tracker.snapshot().to_value()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn latest_target_diagnostic(&self) -> Value {
+        self.target_tracker.snapshot().latest_diagnostic()
     }
 
     /// Requested session mode.
@@ -278,6 +297,23 @@ impl RemoteDesktopSession {
     fn push_projected_event(&mut self, event: (&'static str, Value)) {
         let (event_type, payload) = event;
         self.push_event(event_type, payload);
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn record_target_observation(
+        &mut self,
+        observation: TargetObservation,
+    ) {
+        if self.lifecycle.is_terminal() {
+            return;
+        }
+        let Some(event) = self.target_tracker.commit_observation(observation) else {
+            return;
+        };
+        if event.event_type() == "TARGET_LOST" {
+            self.lifecycle.mark_degraded();
+        }
+        self.touch();
+        self.push_event(event.event_type(), event.payload());
     }
 
     fn touch(&mut self) {
@@ -588,6 +624,11 @@ impl RemoteDesktopSession {
         if self.lifecycle.is_terminal() || !self.transport.mark_device_sending(epoch) {
             return;
         }
+        self.record_target_observation(TargetObservation::VisibilityChanged {
+            visibility_state: TargetVisibilityState::Visible,
+            target_geometry_revision: self.target_tracker.snapshot().target_geometry_revision(),
+            observed_at_ms: now_ms(),
+        });
         self.reconcile_lifecycle();
         self.touch();
         self.push_projected_event(session_events::webrtc_sender_ready(
@@ -653,4 +694,64 @@ pub(in crate::daemon::plugins::remote_desktop) fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+    use crate::daemon::plugins::remote_desktop::target::{TargetGeometry, TargetResolutionError};
+    use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
+    use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
+
+    #[test]
+    fn session_commits_target_observations_through_owned_tracker() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-target-tracker",
+            "easynet:///r/acme/resource/display.test",
+            vec!["webrtc".into()],
+        ));
+        assert_eq!(session.target_tracking_state()["status"], json!("resolved"));
+
+        session.record_target_observation(TargetObservation::GeometryChanged {
+            geometry: TargetGeometry {
+                x: Some(40.0),
+                y: Some(60.0),
+                width: Some(900.0),
+                height: Some(700.0),
+            },
+            target_geometry_revision: 2,
+            observed_at_ms: 100,
+        });
+
+        let events = session.events();
+        assert!(events
+            .iter()
+            .any(|event| event["event_type"] == json!("TARGET_RESIZED")));
+        assert_eq!(
+            session.target_tracking_state()["target_geometry_revision"],
+            json!(2)
+        );
+        assert_eq!(
+            session.latest_target_diagnostic()["detail"],
+            json!("target_geometry_changed")
+        );
+
+        session.record_target_observation(TargetObservation::Lost {
+            reason: TargetResolutionError::TargetNotFound,
+            detail: "target disappeared".into(),
+            observed_at_ms: 200,
+        });
+
+        assert_eq!(session.target_tracking_state()["status"], json!("lost"));
+        assert!(session
+            .events()
+            .iter()
+            .any(|event| event["event_type"] == json!("TARGET_LOST")));
+        assert_eq!(
+            session.latest_target_diagnostic()["frontend_action"],
+            json!("refresh_targets")
+        );
+    }
 }

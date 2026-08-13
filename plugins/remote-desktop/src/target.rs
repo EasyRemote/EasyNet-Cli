@@ -310,26 +310,7 @@ impl TargetGeometry {
         }
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn pointer_target_value(
-        &self,
-        binding: &RemoteAppTargetBinding,
-    ) -> Option<Value> {
-        let origin_x = self.x?;
-        let origin_y = self.y?;
-        Some(json!({
-            "subject_type": binding.target_kind.as_str(),
-            "binding_id": binding.binding_id,
-            "binding_epoch": binding.binding_epoch,
-            "target_identity_epoch": binding.target_identity_epoch,
-            "target_geometry_revision": binding.target_geometry_revision,
-            "origin_x": origin_x,
-            "origin_y": origin_y,
-            "width": self.width,
-            "height": self.height,
-        }))
-    }
-
-    fn to_value(&self) -> Value {
+    pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
         json!({
             "x": self.x,
             "y": self.y,
@@ -554,6 +535,26 @@ impl RemoteAppTargetBinding {
         &self,
     ) -> RemoteDesktopTargetKind {
         self.target_kind
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn binding_id(&self) -> &str {
+        &self.binding_id
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn binding_epoch(&self) -> u64 {
+        self.binding_epoch
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_identity_epoch(&self) -> u64 {
+        self.target_identity_epoch
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_geometry_revision(&self) -> u64 {
+        self.target_geometry_revision
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn media_source_epoch(&self) -> u64 {
+        self.media_source_epoch
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn native_locator(

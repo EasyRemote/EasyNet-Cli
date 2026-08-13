@@ -32,7 +32,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
     let remote_ice_candidates = session.remote_ice_candidates();
     let local_ice_candidates = session.local_ice_candidates();
     let media_stats = session.media_stats();
-    json!({
+    let mut view = json!({
         "session_id": session.session_id(),
         "state": session.state().json_name(),
         "state_proto": session.state().wire_name(),
@@ -41,7 +41,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
         "subject_display_name": session.subject_display_name(),
         "target_binding": session.target_binding().to_value(),
         "scope_audit": session.target_binding().scope_audit_value(),
-        "latest_target_diagnostic": session.target_binding().latest_target_diagnostic_value(),
+        "latest_target_diagnostic": session.latest_target_diagnostic(),
         "mode": session.mode(),
         "created_at_ms": session.created_at_ms(),
         "updated_at_ms": session.updated_at_ms(),
@@ -81,7 +81,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
             "webrtc_error": session.webrtc_error(),
         },
         "events": session.events(),
-    })
+    });
+    if let Some(map) = view.as_object_mut() {
+        map.insert(
+            "target_tracking".to_string(),
+            session.target_tracking_state(),
+        );
+    }
+    view
 }
 
 /// Build the create-session response, where the opaque session token is

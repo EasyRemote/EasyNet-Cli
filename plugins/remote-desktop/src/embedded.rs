@@ -44,6 +44,7 @@ pub(crate) mod session_state;
 pub(crate) mod session_store;
 pub(crate) mod session_transport_state;
 pub(crate) mod target;
+pub(crate) mod target_tracking;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub(crate) mod transport;

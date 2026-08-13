@@ -19,6 +19,7 @@ use webrtc::data_channel::{DataChannel, DataChannelEvent};
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
+use crate::daemon::plugins::remote_desktop::target_tracking::TargetTrackerSnapshot;
 
 pub const INPUT_DATA_CHANNEL_LABEL: &str = "easynet.remote_desktop.input.v1";
 pub const MAX_INPUT_FRAME_BYTES: usize = 16 * 1024;
@@ -180,10 +181,18 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_input_frame_with_policy(
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_binding(
-    mut input_policy: Value,
+    input_policy: Value,
     binding: &RemoteAppTargetBinding,
 ) -> Value {
-    let Some(pointer_target) = binding.geometry().pointer_target_value(binding) else {
+    let snapshot = TargetTrackerSnapshot::from_binding(binding);
+    input_policy_for_target_snapshot(input_policy, &snapshot)
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_target_snapshot(
+    mut input_policy: Value,
+    snapshot: &TargetTrackerSnapshot,
+) -> Value {
+    let Some(pointer_target) = snapshot.pointer_target_value() else {
         return input_policy;
     };
     let Some(map) = input_policy.as_object_mut() else {
@@ -301,7 +310,25 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     }
                 };
                 let kind = frame.kind().as_policy_key();
-                if !input_policy_allows(&input_policy, kind) {
+                let Some(effective_input_policy) =
+                    current_input_policy(&sessions, &session_id, epoch, &input_policy)
+                else {
+                    rejected_count = rejected_count.saturating_add(1);
+                    record_input_channel_event(
+                        &sessions,
+                        &session_id,
+                        epoch,
+                        "INPUT_FRAME_REJECTED",
+                        json!({
+                            "reason": "target_input_not_ready",
+                            "kind": kind,
+                            "action": frame.action(),
+                            "rejected_count": rejected_count,
+                        }),
+                    );
+                    continue;
+                };
+                if !input_policy_allows(&effective_input_policy, kind) {
                     rejected_count = rejected_count.saturating_add(1);
                     record_input_channel_event(
                         &sessions,
@@ -317,7 +344,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     );
                     continue;
                 }
-                let outcome = apply_input_frame_with_policy(&input_policy, &frame);
+                let outcome = apply_input_frame_with_policy(&effective_input_policy, &frame);
                 if outcome.applied {
                     accepted_count = accepted_count.saturating_add(1);
                     if accepted_count == 1 || accepted_count.is_multiple_of(120) {
@@ -387,6 +414,27 @@ pub(in crate::daemon::plugins::remote_desktop) fn record_input_channel_event(
         return;
     }
     session.record_input_channel_event(event_type, payload);
+}
+
+fn current_input_policy(
+    sessions: &RemoteDesktopSessionStore,
+    session_id: &str,
+    epoch: TransportEpoch,
+    base_policy: &Value,
+) -> Option<Value> {
+    let mut s = sessions.lock();
+    let session = s.get_mut(session_id)?;
+    if session.is_terminal() || session.transport_epoch() != Some(epoch.value()) {
+        return None;
+    }
+    let snapshot = session.target_snapshot();
+    if !snapshot.input_enabled() {
+        return None;
+    }
+    Some(input_policy_for_target_snapshot(
+        base_policy.clone(),
+        snapshot,
+    ))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -829,7 +877,10 @@ mod tests {
     use super::*;
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::target::{
-        RemoteAppTargetResolver, ResourceEntryTargetResolver,
+        RemoteAppTargetResolver, ResourceEntryTargetResolver, TargetGeometry,
+    };
+    use crate::daemon::plugins::remote_desktop::target_tracking::{
+        TargetObservation, TargetTrackerState,
     };
 
     fn binding_for(
@@ -928,6 +979,61 @@ mod tests {
         let point = map_pointer_point(&frame, pointer_target_from_policy(&policy));
 
         assert_eq!(point, MappedPointerPoint { x: 500.0, y: 350.0 });
+    }
+
+    #[test]
+    fn pointer_policy_consumes_latest_target_tracker_snapshot() {
+        let entry = ResourceEntry {
+            resource_ura: "easynet:///r/acme/resource/window.test".into(),
+            owner_agent: "easynet:///r/acme/device/dev-1".into(),
+            kind: ResourceType::Window,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "window:macos:cgwindow:10:42".into(),
+            display_name: "Cursor".into(),
+            metadata: json!({
+                "window_id": 42,
+                "pid": 10,
+                "x": 100,
+                "y": 200,
+                "width": 800,
+                "height": 600,
+                "geometry_revision": 1,
+            }),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        let binding = binding_for(&entry);
+        let mut tracker = TargetTrackerState::from_binding(&binding);
+        tracker
+            .commit_observation(TargetObservation::GeometryChanged {
+                geometry: TargetGeometry {
+                    x: Some(250.0),
+                    y: Some(300.0),
+                    width: Some(400.0),
+                    height: Some(200.0),
+                },
+                target_geometry_revision: 2,
+                observed_at_ms: 1,
+            })
+            .expect("tracker commits updated geometry");
+
+        let policy =
+            input_policy_for_target_snapshot(json!({"pointer_enabled": true}), tracker.snapshot());
+        let frame = match parse_input_frame(
+            r#"{"type":"pointer","action":"move","x":0,"y":0,"normalized_x":0.5,"normalized_y":0.5}"#,
+        )
+        .unwrap()
+        {
+            RemoteDesktopInputFrame::Pointer(frame) => frame,
+            _ => unreachable!(),
+        };
+
+        let point = map_pointer_point(&frame, pointer_target_from_policy(&policy));
+
+        assert_eq!(point, MappedPointerPoint { x: 450.0, y: 400.0 });
+        assert_eq!(
+            policy["pointer_target"]["target_geometry_revision"],
+            json!(2)
+        );
     }
 
     #[test]
