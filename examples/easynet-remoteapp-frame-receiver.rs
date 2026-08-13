@@ -46,6 +46,7 @@ use webrtc::runtime::{block_on, channel, default_runtime, sleep, Runtime, Sender
 
 const H264_PAYLOAD_TYPE: u8 = 102;
 const H264_CLOCK_RATE: u32 = 90_000;
+const ICE_GATHER_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_TOLERANCE: u8 = 32;
 const DEFAULT_MIN_SELECTED_PIXELS: usize = 8;
@@ -364,7 +365,7 @@ async fn run_receiver(config: &ReceiverConfig) -> Result<FrameObservation> {
 
     let offer = peer_connection.create_offer(None).await?;
     peer_connection.set_local_description(offer).await?;
-    let _ = gather_complete_rx.recv().await;
+    wait_for_local_ice_gathering(&mut gather_complete_rx).await;
     let offer = peer_connection
         .local_description()
         .await
@@ -396,6 +397,23 @@ async fn run_receiver(config: &ReceiverConfig) -> Result<FrameObservation> {
             bail!("WebRTC peer connection closed before decoded frame assertions passed");
         }
         sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn wait_for_local_ice_gathering(gather_complete_rx: &mut webrtc::runtime::Receiver<()>) {
+    let started = Instant::now();
+    loop {
+        if gather_complete_rx.try_recv().is_ok() {
+            return;
+        }
+        if started.elapsed() >= Duration::from_millis(ICE_GATHER_TIMEOUT_MS) {
+            eprintln!(
+                "easynet remoteapp receiver ICE gathering did not complete within {} ms; continuing with current local description",
+                ICE_GATHER_TIMEOUT_MS
+            );
+            return;
+        }
+        sleep(Duration::from_millis(25)).await;
     }
 }
 

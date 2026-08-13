@@ -30,7 +30,7 @@ import pathlib
 subject = "easynet:///r/localhost/resource/device.dev/streams/window.test"
 out = pathlib.Path(os.environ["EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON"]).parent
 sample = out / "sample-frame.ppm"
-sample.write_bytes(b"P6\n1 1\n255\n\xff\x00\x00")
+sample.write_bytes(b"P6\n3 3\n255\n" + b"\xff\x00\x00" * 9)
 evidence = {
     "status": "passed",
     "live_inventory": {"ability": "resource.refresh_remote_targets"},
@@ -54,9 +54,13 @@ evidence = {
     "decoded_frames": {
         "count": 2,
         "rtp_packet_count": 10,
+        "width": 3,
+        "height": 3,
         "selected_content_present": True,
         "unrelated_sentinel_present": False,
         "full_display_leak_detected": False,
+        "selected_pixel_count": 9,
+        "unrelated_pixel_count": 0,
     },
     "artifacts": {
         "decoded_frame_sample": str(sample),
@@ -69,6 +73,8 @@ evidence = {
 with open(os.environ["EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON"], "w", encoding="utf-8") as f:
     json.dump(evidence, f)
 PY
+EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
+EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
 "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   --run \
   --probe-cmd "python3 '$PROBE'" \
@@ -151,7 +157,7 @@ import os
 import pathlib
 
 sample = pathlib.Path(os.environ["EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON"]).parent / "sample-frame.ppm"
-sample.write_bytes(b"P6\n1 1\n255\n\xff\x00\x00")
+sample.write_bytes(b"P6\n3 3\n255\n" + b"\xff\x00\x00" * 9)
 with open(os.environ["EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON"], "w", encoding="utf-8") as f:
     json.dump(
         {
@@ -160,9 +166,13 @@ with open(os.environ["EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON"], "w", encoding="ut
             "decoded_frames": {
                 "count": 2,
                 "rtp_packet_count": 10,
+                "width": 3,
+                "height": 3,
                 "selected_content_present": True,
                 "unrelated_sentinel_present": False,
                 "full_display_leak_detected": False,
+                "selected_pixel_count": 9,
+                "unrelated_pixel_count": 0,
             },
             "artifacts": {
                 "decoded_frame_sample": str(sample),

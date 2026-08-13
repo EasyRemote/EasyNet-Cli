@@ -163,6 +163,89 @@ decoded_frame_count = get("decoded_frames.count")
 rtp_packet_count = get("decoded_frames.rtp_packet_count")
 transport_kind = get("transport.kind")
 decoded_frame_sample = get("artifacts.decoded_frame_sample")
+decoded_width = get("decoded_frames.width")
+decoded_height = get("decoded_frames.height")
+
+def parse_rgb_env(name):
+    raw = os.environ.get(name, "").strip()
+    require(raw, f"{name} must be set so the harness can independently verify decoded pixels")
+    if not raw:
+        return None
+    try:
+        parts = [int(part.strip()) for part in raw.split(",")]
+    except ValueError:
+        require(False, f"{name} must be formatted as r,g,b")
+        return None
+    require(len(parts) == 3 and all(0 <= part <= 255 for part in parts),
+            f"{name} must contain exactly three RGB bytes")
+    return parts if len(parts) == 3 else None
+
+def env_int(name, default):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        require(False, f"{name} must be an integer")
+        return default
+    require(value >= 0, f"{name} must be non-negative")
+    return value
+
+def next_ppm_token(data, offset):
+    while True:
+        while offset < len(data) and data[offset] in b" \t\r\n":
+            offset += 1
+        if offset < len(data) and data[offset] == ord("#"):
+            while offset < len(data) and data[offset] not in b"\r\n":
+                offset += 1
+            continue
+        break
+    start = offset
+    while offset < len(data) and data[offset] not in b" \t\r\n":
+        offset += 1
+    return data[start:offset], offset
+
+def read_ppm_rgb(path):
+    with open(path, "rb") as f:
+        data = f.read()
+    require(data.startswith(b"P6"), "decoded_frame_sample must be a binary PPM (P6) artifact")
+    magic, offset = next_ppm_token(data, 0)
+    width_token, offset = next_ppm_token(data, offset)
+    height_token, offset = next_ppm_token(data, offset)
+    max_token, offset = next_ppm_token(data, offset)
+    require(magic == b"P6", "decoded_frame_sample PPM magic must be P6")
+    try:
+        width = int(width_token)
+        height = int(height_token)
+        max_value = int(max_token)
+    except ValueError:
+        require(False, "decoded_frame_sample PPM header must contain numeric width, height, and max value")
+        return 0, 0, b""
+    require(width > 0 and height > 0, "decoded_frame_sample PPM dimensions must be positive")
+    require(max_value == 255, "decoded_frame_sample PPM max value must be 255")
+    if offset < len(data) and data[offset] in b" \t\r\n":
+        offset += 1
+    expected_bytes = width * height * 3
+    raster = data[offset:]
+    require(len(raster) == expected_bytes,
+            "decoded_frame_sample PPM raster size must exactly match width*height*3")
+    return width, height, raster
+
+def count_rgb_matches(rgb, expected, tolerance):
+    if expected is None:
+        return 0
+    count = 0
+    for index in range(0, len(rgb), 3):
+        pixel = rgb[index:index + 3]
+        if len(pixel) == 3 and all(abs(pixel[channel] - expected[channel]) <= tolerance for channel in range(3)):
+            count += 1
+    return count
+
+selected_rgb = parse_rgb_env("EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB")
+unrelated_rgb = parse_rgb_env("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB")
+sentinel_tolerance = env_int("EASYNET_REMOTEAPP_SENTINEL_TOLERANCE", 32)
+selected_min_pixels = env_int("EASYNET_REMOTEAPP_SELECTED_SENTINEL_MIN_PIXELS", 8)
 
 require(evidence.get("status") == "passed", "probe status must be passed")
 require(inventory_ability in {"resource.refresh_remote_targets", "resource.watch_remote_targets"},
@@ -191,6 +274,10 @@ require(isinstance(rtp_packet_count, int) and rtp_packet_count > 0,
         "decoded_frames.rtp_packet_count must be a positive integer")
 require(isinstance(decoded_frame_count, int) and decoded_frame_count > 0,
         "decoded_frames.count must be a positive integer")
+require(isinstance(decoded_width, int) and decoded_width > 0,
+        "decoded_frames.width must be a positive integer")
+require(isinstance(decoded_height, int) and decoded_height > 0,
+        "decoded_frames.height must be a positive integer")
 require(get("decoded_frames.selected_content_present") is True,
         "decoded frames must include selected target content")
 require(get("decoded_frames.unrelated_sentinel_present") is False,
@@ -201,6 +288,20 @@ require(decoded_frame_sample,
         "evidence must include a decoded_frame_sample artifact path")
 require(isinstance(decoded_frame_sample, str) and os.path.isfile(decoded_frame_sample),
         "decoded_frame_sample artifact must exist on disk")
+if isinstance(decoded_frame_sample, str) and os.path.isfile(decoded_frame_sample):
+    ppm_width, ppm_height, ppm_rgb = read_ppm_rgb(decoded_frame_sample)
+    require(ppm_width == decoded_width and ppm_height == decoded_height,
+            "decoded_frame_sample dimensions must match decoded_frames.width/height")
+    selected_pixel_count = count_rgb_matches(ppm_rgb, selected_rgb, sentinel_tolerance)
+    unrelated_pixel_count = count_rgb_matches(ppm_rgb, unrelated_rgb, sentinel_tolerance)
+    require(selected_pixel_count >= selected_min_pixels,
+            "decoded_frame_sample pixels must independently contain the selected target sentinel")
+    require(unrelated_pixel_count == 0,
+            "decoded_frame_sample pixels must independently exclude the unrelated sentinel")
+    require(get("decoded_frames.selected_pixel_count") == selected_pixel_count,
+            "decoded_frames.selected_pixel_count must match independent artifact scan")
+    require(get("decoded_frames.unrelated_pixel_count") == unrelated_pixel_count,
+            "decoded_frames.unrelated_pixel_count must match independent artifact scan")
 require(get("artifacts.session_id") == get("session_id"),
         "decoded frame artifact session_id must match evidence session_id")
 require(get("artifacts.binding_id") == binding_id,
@@ -226,6 +327,8 @@ report = {
         "display_fallback_used": display_fallback_used,
         "rtp_packet_count": rtp_packet_count,
         "decoded_frame_count": decoded_frame_count,
+        "decoded_width": decoded_width,
+        "decoded_height": decoded_height,
         "selected_content_present": get("decoded_frames.selected_content_present"),
         "unrelated_sentinel_present": get("decoded_frames.unrelated_sentinel_present"),
         "full_display_leak_detected": get("decoded_frames.full_display_leak_detected"),
@@ -279,9 +382,13 @@ if [[ "$SELF_TEST" == "1" ]]; then
   "decoded_frames": {
     "count": 3,
     "rtp_packet_count": 10,
+    "width": 3,
+    "height": 3,
     "selected_content_present": true,
     "unrelated_sentinel_present": false,
-    "full_display_leak_detected": false
+    "full_display_leak_detected": false,
+    "selected_pixel_count": 9,
+    "unrelated_pixel_count": 0
   },
   "artifacts": {
     "decoded_frame_sample": "__SELF_TEST_SAMPLE__",
@@ -299,13 +406,15 @@ import sys
 
 path = pathlib.Path(sys.argv[1])
 sample = path.parent / "sample-frame.ppm"
-sample.write_bytes(b"P6\n1 1\n255\n\xff\x00\x00")
+sample.write_bytes(b"P6\n3 3\n255\n" + b"\xff\x00\x00" * 9)
 data = json.loads(path.read_text(encoding="utf-8"))
 data["artifacts"]["decoded_frame_sample"] = str(sample)
 data["target_binding"]["binding_id"] = "binding-test"
 data["target_binding"]["binding_epoch"] = 1
 path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
+  export EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0"
+  export EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0"
   validate_evidence
   echo "host-remoteapp-decoded-frame-e2e self-test ok"
   exit 0

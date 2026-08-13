@@ -45,6 +45,10 @@ require 'transport\.kind.*webrtc|transport_kind.*webrtc|"webrtc"' "$SCRIPT" \
   'host decoded-frame E2E must validate WebRTC transport evidence'
 require 'decoded_frames\.count' "$SCRIPT" \
   'host decoded-frame E2E must validate positive decoded frame count'
+require 'decoded_frames\.width|decoded_width' "$SCRIPT" \
+  'host decoded-frame E2E must validate decoded frame width'
+require 'decoded_frames\.height|decoded_height' "$SCRIPT" \
+  'host decoded-frame E2E must validate decoded frame height'
 require 'rtp_packet_count' "$SCRIPT" \
   'host decoded-frame E2E must validate positive RTP packet count'
 require 'selected_content_present' "$SCRIPT" \
@@ -63,6 +67,14 @@ require 'host-remoteapp-decoded-frame-probe\.sh|BUNDLED_PROBE' "$SCRIPT" \
   'host decoded-frame E2E must default to the bundled EasyNet host probe'
 require 'os\.path\.isfile|decoded_frame_sample.*exist' "$SCRIPT" \
   'host decoded-frame E2E must validate decoded frame artifact exists'
+require 'read_ppm_rgb|P6' "$SCRIPT" \
+  'host decoded-frame E2E must independently parse decoded PPM artifacts'
+require 'count_rgb_matches' "$SCRIPT" \
+  'host decoded-frame E2E must independently scan decoded artifact pixels'
+require 'selected_pixel_count' "$SCRIPT" \
+  'host decoded-frame E2E must validate selected sentinel pixel count'
+require 'unrelated_pixel_count' "$SCRIPT" \
+  'host decoded-frame E2E must validate unrelated sentinel pixel count'
 require 'artifacts\.binding_id|artifact binding_id' "$SCRIPT" \
   'host decoded-frame E2E must bind decoded frame artifact to target binding'
 require 'target_binding\.binding_id' "$SCRIPT" \
