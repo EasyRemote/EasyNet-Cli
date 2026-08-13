@@ -232,23 +232,40 @@ fn observe_application(
         .iter()
         .filter_map(|window| window.display_id)
         .collect();
-    if displays.len() > 1 {
+    if displays.len() > 1 && !displays.contains(&expected_display) {
         return Some(lost(
             TargetResolutionError::TargetMultiDisplayUnsupported,
             "bound application spans multiple displays but session is display-scoped",
         ));
     }
-    let Some(window) = matching
+    let selected_display_windows: Vec<&ObservedWindow> = matching
         .into_iter()
         .filter(|window| window.display_id == Some(expected_display))
-        .max_by_key(|window| geometry_area(&window.geometry))
-    else {
+        .collect();
+    if selected_display_windows.is_empty() {
         return Some(lost(
             TargetResolutionError::TargetDisplayUnavailable,
             "bound application has no windows on the selected display",
         ));
+    }
+    let visible_selected_display_windows: Vec<&ObservedWindow> = selected_display_windows
+        .into_iter()
+        .filter(|window| window.visible)
+        .collect();
+    if visible_selected_display_windows.is_empty() {
+        return Some(TargetObservation::VisibilityChanged {
+            visibility_state: TargetVisibilityState::Hidden,
+            target_geometry_revision: snapshot.target_geometry_revision() + 1,
+            observed_at_ms: now_ms(),
+        });
+    }
+    let Some(geometry) = union_geometry(&visible_selected_display_windows) else {
+        return Some(lost(
+            TargetResolutionError::TargetMetadataIncomplete,
+            "bound application window set has incomplete geometry in host target snapshot",
+        ));
     };
-    geometry_observation(snapshot, window.geometry.clone())
+    geometry_observation(snapshot, geometry)
 }
 
 fn geometry_observation(
@@ -292,10 +309,38 @@ fn app_owner_matches(binding: &RemoteAppTargetBinding, window: &ObservedWindow) 
             .is_none_or(|identity| window.bundle_id.as_deref() == Some(identity))
 }
 
-fn geometry_area(geometry: &TargetGeometry) -> u64 {
-    let width = geometry.width.unwrap_or(0.0).max(0.0).round() as u64;
-    let height = geometry.height.unwrap_or(0.0).max(0.0).round() as u64;
-    width.saturating_mul(height)
+fn union_geometry(windows: &[&ObservedWindow]) -> Option<TargetGeometry> {
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for window in windows {
+        let x = finite_dimension(window.geometry.x)?;
+        let y = finite_dimension(window.geometry.y)?;
+        let width = positive_dimension(window.geometry.width)?;
+        let height = positive_dimension(window.geometry.height)?;
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x + width);
+        max_y = max_y.max(y + height);
+    }
+    if !min_x.is_finite() || !min_y.is_finite() || !max_x.is_finite() || !max_y.is_finite() {
+        return None;
+    }
+    Some(TargetGeometry {
+        x: Some(min_x),
+        y: Some(min_y),
+        width: Some((max_x - min_x).max(0.0)),
+        height: Some((max_y - min_y).max(0.0)),
+    })
+}
+
+fn finite_dimension(value: Option<f64>) -> Option<f64> {
+    value.filter(|value| value.is_finite())
+}
+
+fn positive_dimension(value: Option<f64>) -> Option<f64> {
+    value.filter(|value| value.is_finite() && *value > 0.0)
 }
 
 #[cfg(target_os = "macos")]
@@ -607,11 +652,18 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{HostTargetSnapshot, HostTargetSnapshotProvider, SharedHostTargetSnapshotProvider};
+    use super::{
+        observe_binding_against_host_snapshot, HostTargetSnapshot, HostTargetSnapshotProvider,
+        ObservedWindow, SharedHostTargetSnapshotProvider,
+    };
+    use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
     use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
     use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
-    use crate::daemon::plugins::remote_desktop::target::{RemoteAppTargetBinding, TargetGeometry};
+    use crate::daemon::plugins::remote_desktop::target::{
+        RemoteAppTargetBinding, RemoteAppTargetResolver, ResourceEntryTargetResolver,
+        TargetGeometry,
+    };
     use crate::daemon::plugins::remote_desktop::target_observer::{
         observe_session_target_once, TargetObservationProvider,
     };
@@ -706,6 +758,100 @@ mod tests {
             1,
             "shared target observer must not multiply OS enumeration by session count"
         );
+    }
+
+    #[test]
+    fn application_observation_tracks_display_scoped_window_set_union() {
+        let binding = ResourceEntryTargetResolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &ResourceEntry {
+                    resource_ura: "easynet:///r/acme/resource/application.editor".to_string(),
+                    owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
+                    kind: ResourceType::Application,
+                    binding: ResourceBinding::LocalDevice,
+                    hardware_id: "application:macos:cgwindow:42:bundle:com.example.Editor"
+                        .to_string(),
+                    display_name: "Editor on display 42".to_string(),
+                    metadata: json!({
+                        "platform": "macos",
+                        "backend": "macos_core_graphics",
+                        "display_id": 42,
+                        "bundle_id": "com.example.Editor",
+                        "app_identity": "com.example.Editor",
+                        "primary_pid": 9001,
+                        "resolved_window_ids": [10, 11],
+                        "window_set_epoch": 123,
+                        "primary_x": 10,
+                        "primary_y": 20,
+                        "primary_width": 100,
+                        "primary_height": 80,
+                    }),
+                    first_seen_at: "2026-06-01T00:00:00Z".to_string(),
+                },
+                "view_only",
+                1,
+            )
+            .expect("application target binding resolves");
+        let snapshot = TargetTrackerSnapshot::from_binding(&binding);
+        let observation = observe_binding_against_host_snapshot(
+            &binding,
+            &snapshot,
+            &HostTargetSnapshot {
+                windows: vec![
+                    ObservedWindow {
+                        window_id: 10,
+                        pid: Some(9001),
+                        bundle_id: Some("com.example.Editor".to_string()),
+                        display_id: Some(42),
+                        geometry: TargetGeometry {
+                            x: Some(10.0),
+                            y: Some(20.0),
+                            width: Some(100.0),
+                            height: Some(80.0),
+                        },
+                        visible: true,
+                    },
+                    ObservedWindow {
+                        window_id: 11,
+                        pid: Some(9001),
+                        bundle_id: Some("com.example.Editor".to_string()),
+                        display_id: Some(42),
+                        geometry: TargetGeometry {
+                            x: Some(130.0),
+                            y: Some(60.0),
+                            width: Some(70.0),
+                            height: Some(40.0),
+                        },
+                        visible: true,
+                    },
+                    ObservedWindow {
+                        window_id: 12,
+                        pid: Some(9001),
+                        bundle_id: Some("com.example.Editor".to_string()),
+                        display_id: Some(99),
+                        geometry: TargetGeometry {
+                            x: Some(500.0),
+                            y: Some(500.0),
+                            width: Some(50.0),
+                            height: Some(50.0),
+                        },
+                        visible: true,
+                    },
+                ],
+            },
+        )
+        .expect("application observation");
+
+        match observation {
+            TargetObservation::GeometryChanged { geometry, .. } => {
+                assert_eq!(geometry.x, Some(10.0));
+                assert_eq!(geometry.y, Some(20.0));
+                assert_eq!(geometry.width, Some(190.0));
+                assert_eq!(geometry.height, Some(80.0));
+            }
+            other => panic!("expected app window-set union geometry, got {other:?}"),
+        }
     }
 }
 
