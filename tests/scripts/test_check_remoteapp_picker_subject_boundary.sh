@@ -50,12 +50,20 @@ RS
 
 cat >"$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs" <<'RS'
 fn handle(env: EnvelopeContext, args: Value) {
-    let entry = resolve_screen_resource_from_envelope(ABILITY_CREATE_SESSION, &env, &args).unwrap();
+    let workflow = RemoteDesktopSessionCreationWorkflow::start(&env, &args).unwrap();
 }
 
 #[test]
 fn create_session_rejects_subject_in_args() {
     assert!("subject_in_args".contains("subject_in_args"));
+}
+RS
+
+cat >"$SANDBOX/plugins/remote-desktop/src/session_creation.rs" <<'RS'
+impl RemoteDesktopSessionCreationWorkflow {
+    fn start(env: &EnvelopeContext, args: &Value) {
+        let entry = resolve_screen_resource_from_envelope(ABILITY_CREATE_SESSION, env, args).unwrap();
+    }
 }
 RS
 

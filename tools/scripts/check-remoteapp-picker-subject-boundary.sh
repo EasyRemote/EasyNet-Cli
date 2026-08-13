@@ -27,10 +27,11 @@ reject() {
 CLI_ABILITY="$ROOT/src/cli/commands/groups/ability.rs"
 LOCAL_INVOKE="$ROOT/src/support/platform/local_invoke.rs"
 CREATE_SESSION="$ROOT/plugins/remote-desktop/src/handlers/create_session.rs"
+SESSION_CREATION="$ROOT/plugins/remote-desktop/src/session_creation.rs"
 SCHEMA="$ROOT/plugins/remote-desktop/src/schema.rs"
 RESOURCE_SUBJECT="$ROOT/plugins/remote-desktop/src/resource.rs"
 
-for file in "$CLI_ABILITY" "$LOCAL_INVOKE" "$CREATE_SESSION" "$SCHEMA" "$RESOURCE_SUBJECT"; do
+for file in "$CLI_ABILITY" "$LOCAL_INVOKE" "$CREATE_SESSION" "$SESSION_CREATION" "$SCHEMA" "$RESOURCE_SUBJECT"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -56,8 +57,10 @@ require 'LocalRemoteTargetInventoryIssuer::watch_remote_targets' "$CLI_ABILITY" 
 require 'resource_ura' "$CLI_ABILITY" \
   'CLI refresh output must surface selectable resource_ura subjects'
 
-require 'resolve_screen_resource_from_envelope\(ABILITY_CREATE_SESSION, &env, &args\)' "$CREATE_SESSION" \
-  'create_session must resolve the selected resource from Invocation.subject'
+require 'RemoteDesktopSessionCreationWorkflow::start' "$CREATE_SESSION" \
+  'create_session handler must delegate subject validation to RemoteDesktopSessionCreationWorkflow'
+require 'resolve_screen_resource_from_envelope\(ABILITY_CREATE_SESSION, env, args\)' "$SESSION_CREATION" \
+  'create_session workflow must resolve the selected resource from Invocation.subject'
 require 'create_session_rejects_subject_in_args' "$CREATE_SESSION" \
   'create_session must have a regression test rejecting args.subject'
 require 'subject_in_args' "$CREATE_SESSION" \
