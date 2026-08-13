@@ -24,8 +24,8 @@ use crate::daemon::plugins::remote_desktop::target::{
     RemoteAppTargetBinding, RemoteAppTargetError,
 };
 use crate::daemon::plugins::remote_desktop::transport::media_source::{
-    DirectWebRtcMediaSourceFactory, MediaStartRequest, RemoteAppMediaSource,
-    RemoteAppMediaSourceFactory,
+    start_remote_app_media_source, DirectWebRtcMediaSourceFactory, MediaStartRequest,
+    RemoteAppMediaSource,
 };
 #[cfg(feature = "native-media")]
 use crate::daemon::plugins::remote_desktop::transport::webrtc_baseline_media::run_direct_webrtc_recorder_stream;
@@ -98,8 +98,11 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
         let _ = peer_connection.close().await;
         return;
     };
-    let source = DirectWebRtcMediaSourceFactory
-        .start_from_binding(&target_binding, MediaStartRequest { config: &config });
+    let source = start_remote_app_media_source(
+        &DirectWebRtcMediaSourceFactory,
+        &target_binding,
+        MediaStartRequest { config: &config },
+    );
     match source {
         Ok(RemoteAppMediaSource::NativeProduction) => {
             #[cfg(target_os = "macos")]

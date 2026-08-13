@@ -73,6 +73,12 @@ require 'trait RemoteAppMediaSourceFactory' \
 require 'fn start_from_binding\(' \
   "$REMOTE_ROOT/transport/media_source.rs" \
   'direct WebRTC media source selection must start from RemoteAppTargetBinding'
+require 'fn start_remote_app_media_source\(' \
+  "$REMOTE_ROOT/transport/media_source.rs" \
+  'direct WebRTC media source selection must expose an injectable factory boundary'
+require 'start_remote_app_media_source\(' \
+  "$REMOTE_ROOT/transport/webrtc_media.rs" \
+  'direct WebRTC media loop must call through the injectable media-source boundary'
 require 'if binding\.target_kind\(\) == RemoteDesktopTargetKind::Display' \
   "$REMOTE_ROOT/transport/media_source.rs" \
   'direct WebRTC display baseline plan must be guarded as display-only'

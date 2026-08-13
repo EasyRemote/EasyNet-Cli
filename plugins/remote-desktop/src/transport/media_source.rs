@@ -43,6 +43,18 @@ pub(in crate::daemon::plugins::remote_desktop) trait RemoteAppMediaSourceFactory
     ) -> Result<RemoteAppMediaSource, RemoteAppTargetError>;
 }
 
+/// Start media-source selection from the committed session target binding.
+///
+/// This function is the injectable boundary used by tests to prove that the
+/// transport layer passes the stored binding into the media source factory.
+pub(in crate::daemon::plugins::remote_desktop) fn start_remote_app_media_source(
+    factory: &dyn RemoteAppMediaSourceFactory,
+    binding: &RemoteAppTargetBinding,
+    request: MediaStartRequest<'_>,
+) -> Result<RemoteAppMediaSource, RemoteAppTargetError> {
+    factory.start_from_binding(binding, request)
+}
+
 /// Direct WebRTC media-source factory for the builtin remote desktop plugin.
 #[derive(Debug, Default, Clone, Copy)]
 pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcMediaSourceFactory;
@@ -89,6 +101,8 @@ impl RemoteAppMediaSourceFactory for DirectWebRtcMediaSourceFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::cell::RefCell;
 
     use serde_json::json;
 
@@ -148,6 +162,52 @@ mod tests {
             .expect("display baseline is allowed");
 
         assert_eq!(source, RemoteAppMediaSource::DisplayBaseline);
+    }
+
+    #[test]
+    fn fake_factory_receives_session_owned_binding_without_resource_re_resolution() {
+        struct RecordingFactory {
+            seen_binding_id: RefCell<Option<String>>,
+        }
+
+        impl RemoteAppMediaSourceFactory for RecordingFactory {
+            fn start_from_binding(
+                &self,
+                binding: &RemoteAppTargetBinding,
+                _request: MediaStartRequest<'_>,
+            ) -> Result<RemoteAppMediaSource, RemoteAppTargetError> {
+                self.seen_binding_id
+                    .replace(Some(binding.binding_id().to_string()));
+                Ok(RemoteAppMediaSource::DisplayBaseline)
+            }
+        }
+
+        let binding = binding_for(
+            ResourceType::Display,
+            json!({
+                "backend": "xcap",
+                "display_id": 1,
+            }),
+        );
+        let expected_binding_id = binding.binding_id().to_string();
+        let config = display_baseline_config();
+        let factory = RecordingFactory {
+            seen_binding_id: RefCell::new(None),
+        };
+
+        let source = start_remote_app_media_source(
+            &factory,
+            &binding,
+            MediaStartRequest { config: &config },
+        )
+        .expect("fake factory selects source");
+
+        assert_eq!(source, RemoteAppMediaSource::DisplayBaseline);
+        assert_eq!(
+            factory.seen_binding_id.into_inner(),
+            Some(expected_binding_id),
+            "transport media source selection must pass the committed session binding"
+        );
     }
 
     #[test]

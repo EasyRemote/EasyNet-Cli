@@ -47,13 +47,17 @@ RS
 
 cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_media.rs" <<'RS'
 fn run(binding: Binding, config: Config) {
-    DirectWebRtcMediaSourceFactory.start_from_binding(binding, MediaStartRequest { config });
+    start_remote_app_media_source(&DirectWebRtcMediaSourceFactory, binding, MediaStartRequest { config });
 }
 RS
 
 cat >"$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs" <<'RS'
 trait RemoteAppMediaSourceFactory {
     fn start_from_binding();
+}
+
+fn start_remote_app_media_source(factory: &dyn RemoteAppMediaSourceFactory, binding: Binding, request: MediaStartRequest) {
+    factory.start_from_binding(binding, request);
 }
 
 enum RemoteAppMediaSource {
