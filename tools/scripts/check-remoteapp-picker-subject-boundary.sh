@@ -38,6 +38,10 @@ require 'LocalRemoteTargetInventoryIssuer' "$LOCAL_INVOKE" \
   'remote target pickers need a named live inventory issuer'
 require 'RESOURCE_REFRESH_REMOTE_TARGETS' "$LOCAL_INVOKE" \
   'live remote target inventory issuer must call resource.refresh_remote_targets'
+require 'RESOURCE_WATCH_REMOTE_TARGETS' "$LOCAL_INVOKE" \
+  'live remote target inventory issuer must call resource.watch_remote_targets for streaming pickers'
+require 'watch_remote_targets' "$LOCAL_INVOKE" \
+  'live remote target inventory issuer must expose a watch_remote_targets stream facade'
 require 'Target pickers that need live display/window/application rows must invoke' "$LOCAL_INVOKE" \
   'live picker contract must be documented at the issuer boundary'
 
@@ -45,6 +49,10 @@ require 'AbilityAction::RefreshRemoteTargets' "$CLI_ABILITY" \
   'CLI must expose a live remote target refresh action for picker/debug flows'
 require 'LocalRemoteTargetInventoryIssuer::refresh_remote_targets' "$CLI_ABILITY" \
   'CLI refresh action must use the live inventory issuer, not meta.list_resources'
+require 'AbilityAction::WatchRemoteTargets' "$CLI_ABILITY" \
+  'CLI must expose a live remote target watch action for picker/debug flows'
+require 'LocalRemoteTargetInventoryIssuer::watch_remote_targets' "$CLI_ABILITY" \
+  'CLI watch action must use the live inventory issuer, not meta.list_resources'
 require 'resource_ura' "$CLI_ABILITY" \
   'CLI refresh output must surface selectable resource_ura subjects'
 

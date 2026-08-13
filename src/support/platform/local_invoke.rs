@@ -359,6 +359,18 @@ impl LocalDaemonSystemAbilityIssuer {
         Self::invoke_root_for_subject_timeout(ability, args, &subject_ura, timeout)
     }
 
+    pub fn stream_root_for_local_daemon_identity_timeout(
+        ability: &str,
+        args: Value,
+        timeout: std::time::Duration,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        let subject_ura = Self::local_daemon_identity_subject_ura()?;
+        let execution_host_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
+        let target = local_daemon_system_ability_target(ability, &execution_host_ura)?;
+        Self::stream_target_root(&target, args, &subject_ura, timeout, max_frames)
+    }
+
     pub fn invoke_root_for_subject(
         ability: &str,
         args: Value,
@@ -1156,13 +1168,13 @@ impl LocalRuntimeCatalogueReadIssuer {
     }
 }
 
-/// Named issuer for daemon-local remote target inventory refreshes.
+/// Named issuer for daemon-local remote target inventory refresh/watch.
 ///
 /// This is the mutable counterpart to [`LocalRuntimeCatalogueReadIssuer`].
 /// Target pickers that need live display/window/application rows must invoke
-/// `resource.refresh_remote_targets` through this issuer before presenting
-/// selectable resources. `meta.list_resources` intentionally remains a
-/// read-only cache projection.
+/// `resource.refresh_remote_targets` or `resource.watch_remote_targets`
+/// through this issuer before presenting selectable resources.
+/// `meta.list_resources` intentionally remains a read-only cache projection.
 pub struct LocalRemoteTargetInventoryIssuer;
 
 impl LocalRemoteTargetInventoryIssuer {
@@ -1182,6 +1194,31 @@ impl LocalRemoteTargetInventoryIssuer {
             crate::daemon::ability::names::resources::RESOURCE_REFRESH_REMOTE_TARGETS,
             args,
             timeout,
+        )
+    }
+
+    pub fn watch_remote_targets(
+        args: Value,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        Self::watch_remote_targets_timeout(
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+            max_frames,
+        )
+    }
+
+    pub fn watch_remote_targets_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        LocalDaemonSystemAbilityIssuer::stream_root_for_local_daemon_identity_timeout(
+            crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS,
+            args,
+            timeout,
+            max_frames,
         )
     }
 }

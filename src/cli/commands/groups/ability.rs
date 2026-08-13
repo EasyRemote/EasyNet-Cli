@@ -62,7 +62,7 @@ use crate::cli::commands::{
     exec, invoke, teach,
 };
 use crate::cli::daemon_client::ability_catalog::{AbilityCatalogueClient, AbilityCatalogueQuery};
-use crate::support::platform::local_invoke::LocalRemoteTargetInventoryIssuer;
+use crate::support::platform::local_invoke::{LocalRemoteTargetInventoryIssuer, LocalStreamFrame};
 use crate::support::platform::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
@@ -102,6 +102,9 @@ pub enum AbilityAction {
     /// Refresh display/window/application targets for dedicated remote desktop surfaces.
     #[command(name = "refresh-remote-targets", hide = true)]
     RefreshRemoteTargets(RefreshRemoteTargetsArgs),
+    /// Watch display/window/application target inventory for dedicated remote desktop surfaces.
+    #[command(name = "watch-remote-targets", hide = true)]
+    WatchRemoteTargets(WatchRemoteTargetsArgs),
     /// Run a one-shot ad-hoc command on a device (ephemeral ability).
     Exec(exec::ExecArgs),
     /// Grant one agent permission to import a declaration-only descriptor.
@@ -159,6 +162,26 @@ pub struct RefreshRemoteTargetsArgs {
     pub format: OutputFormat,
 }
 
+#[derive(Debug, Args)]
+pub struct WatchRemoteTargetsArgs {
+    /// Restrict watch output to one or more remote target types.
+    #[arg(
+        long = "type",
+        value_name = "TYPE",
+        value_parser = ["display", "application", "window"]
+    )]
+    pub types: Vec<String>,
+    /// Poll interval for the daemon-side live inventory watcher.
+    #[arg(long, value_name = "MS")]
+    pub poll_interval_ms: Option<u64>,
+    /// Maximum stream events to drain before the CLI exits.
+    #[arg(long, default_value_t = 1)]
+    pub max_events: usize,
+    /// Output format. JSON preserves stream frame metadata for frontend tests.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub format: OutputFormat,
+}
+
 pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
     match args.action {
         AbilityAction::New(a) => ability_scaffold::run_new(a),
@@ -173,6 +196,7 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
         AbilityAction::Bidi(a) => ability_bidi::run(a),
         AbilityAction::Record(a) => ability_record::run(a),
         AbilityAction::RefreshRemoteTargets(a) => run_refresh_remote_targets(a),
+        AbilityAction::WatchRemoteTargets(a) => run_watch_remote_targets(a),
         AbilityAction::Exec(a) => exec::run(a),
         AbilityAction::Teach(a) => teach::run_teach(a),
         AbilityAction::Learn(a) => teach::run_learn(a),
@@ -324,6 +348,74 @@ fn refresh_remote_targets_request(args: &RefreshRemoteTargetsArgs) -> Value {
     }
 }
 
+fn run_watch_remote_targets(args: WatchRemoteTargetsArgs) -> anyhow::Result<()> {
+    if args.max_events == 0 {
+        anyhow::bail!("--max-events must be greater than zero");
+    }
+    let request = watch_remote_targets_request(&args);
+    let frames =
+        LocalRemoteTargetInventoryIssuer::watch_remote_targets(request, Some(args.max_events))
+            .context("invoke resource.watch_remote_targets")?;
+    if args.format == OutputFormat::Json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&stream_frames_to_json(&frames))?
+        );
+        return Ok(());
+    }
+
+    output::success(&format!("received {} remote target event(s)", frames.len()));
+    for frame in frames {
+        let event_type = frame
+            .payload
+            .get("event_type")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let resources = frame
+            .payload
+            .get("resources")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0);
+        println!(
+            "{}\t{}\t{} resource(s)",
+            frame.sequence, event_type, resources
+        );
+    }
+    Ok(())
+}
+
+fn watch_remote_targets_request(args: &WatchRemoteTargetsArgs) -> Value {
+    let mut object = serde_json::Map::new();
+    if !args.types.is_empty() {
+        object.insert("types".to_string(), serde_json::json!(args.types));
+    }
+    if let Some(poll_interval_ms) = args.poll_interval_ms {
+        object.insert(
+            "poll_interval_ms".to_string(),
+            serde_json::json!(poll_interval_ms),
+        );
+    }
+    object.insert("max_events".to_string(), serde_json::json!(args.max_events));
+    Value::Object(object)
+}
+
+fn stream_frames_to_json(frames: &[LocalStreamFrame]) -> Value {
+    Value::Array(
+        frames
+            .iter()
+            .map(|frame| {
+                serde_json::json!({
+                    "sequence": frame.sequence,
+                    "content_type": frame.content_type,
+                    "terminal": frame.terminal,
+                    "payload": frame.payload,
+                })
+            })
+            .collect(),
+    )
+}
+
 fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
     ensure_ability_ura(&args.ability_ura)?;
     if !args.yes {
@@ -421,6 +513,51 @@ mod tests {
         assert_eq!(
             request,
             serde_json::json!({"types": ["window", "application"]})
+        );
+    }
+
+    #[test]
+    fn watch_remote_targets_request_preserves_stream_picker_controls() {
+        let request = watch_remote_targets_request(&WatchRemoteTargetsArgs {
+            types: vec!["window".to_string()],
+            poll_interval_ms: Some(250),
+            max_events: 3,
+            format: OutputFormat::Json,
+        });
+
+        assert_eq!(
+            request,
+            serde_json::json!({
+                "types": ["window"],
+                "poll_interval_ms": 250,
+                "max_events": 3,
+            })
+        );
+    }
+
+    #[test]
+    fn stream_frames_to_json_preserves_transport_metadata() {
+        let frames = vec![LocalStreamFrame {
+            sequence: 7,
+            content_type: "application/json".to_string(),
+            terminal: false,
+            payload: serde_json::json!({
+                "event_type": "target_inventory_snapshot",
+                "resources": [],
+            }),
+        }];
+
+        assert_eq!(
+            stream_frames_to_json(&frames),
+            serde_json::json!([{
+                "sequence": 7,
+                "content_type": "application/json",
+                "terminal": false,
+                "payload": {
+                    "event_type": "target_inventory_snapshot",
+                    "resources": [],
+                },
+            }])
         );
     }
 }

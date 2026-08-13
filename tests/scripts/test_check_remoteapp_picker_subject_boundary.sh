@@ -21,9 +21,16 @@ impl LocalRemoteTargetInventoryIssuer {
             args,
         )
     }
+    pub fn watch_remote_targets(args: Value) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        LocalDaemonSystemAbilityIssuer::stream(
+            crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS,
+            args,
+        )
+    }
 }
 /// Target pickers that need live display/window/application rows must invoke
-/// resource.refresh_remote_targets through this issuer before presenting rows.
+/// resource.refresh_remote_targets or resource.watch_remote_targets through
+/// this issuer before presenting rows.
 RS
 
 cat >"$SANDBOX/src/cli/commands/groups/ability.rs" <<'RS'
@@ -32,6 +39,10 @@ fn run(action: AbilityAction) {
         AbilityAction::RefreshRemoteTargets(args) => {
             let response = LocalRemoteTargetInventoryIssuer::refresh_remote_targets(args).unwrap();
             println!("{}", response["resources"][0]["resource_ura"]);
+        }
+        AbilityAction::WatchRemoteTargets(args) => {
+            let frames = LocalRemoteTargetInventoryIssuer::watch_remote_targets(args).unwrap();
+            println!("{}", frames.len());
         }
     }
 }
@@ -74,6 +85,15 @@ fn screen_resource_subject_spec() {
 RS
 
 CHECK_REMOTEAPP_PICKER_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+cp "$SANDBOX/src/support/platform/local_invoke.rs" "$SANDBOX/src/support/platform/local_invoke.rs.good"
+perl -0pi -e 's/\n    pub fn watch_remote_targets\(args: Value\) -> anyhow::Result<Vec<LocalStreamFrame>> \{\n        LocalDaemonSystemAbilityIssuer::stream\(\n            crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS,\n            args,\n        \)\n    \}//' \
+  "$SANDBOX/src/support/platform/local_invoke.rs"
+if CHECK_REMOTEAPP_PICKER_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp picker subject checker accepted missing watch_remote_targets issuer" >&2
+  exit 1
+fi
+mv "$SANDBOX/src/support/platform/local_invoke.rs.good" "$SANDBOX/src/support/platform/local_invoke.rs"
 
 perl -0pi -e 's/"consent_ticket": \{ "type": "string" \}/"consent_ticket": { "type": "string" }, "subject": { "type": "string" }/' \
   "$SANDBOX/plugins/remote-desktop/src/schema.rs"
