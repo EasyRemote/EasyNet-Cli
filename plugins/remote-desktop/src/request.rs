@@ -106,20 +106,18 @@ impl RemoteDesktopInputPolicy {
         mut self,
         binding: &RemoteAppTargetBinding,
     ) -> Self {
+        self.clipboard_enabled = false;
+        self.file_drop_enabled = false;
         match binding.input_scope() {
             InputScope::ViewOnly => {
                 self.keyboard_enabled = false;
                 self.pointer_enabled = false;
-                self.clipboard_enabled = false;
-                self.file_drop_enabled = false;
             }
             InputScope::TargetLocal => {
                 // Target-local pointer input may become safe once platform focus
                 // and hit-test validation are implemented. Keyboard, clipboard,
                 // and file-drop are never target-local on macOS today.
                 self.keyboard_enabled = false;
-                self.clipboard_enabled = false;
-                self.file_drop_enabled = false;
             }
             InputScope::DisplayGlobal => {}
         }
@@ -132,6 +130,7 @@ impl RemoteDesktopInputPolicy {
             "pointer_enabled": self.pointer_enabled,
             "clipboard_enabled": self.clipboard_enabled,
             "file_drop_enabled": self.file_drop_enabled,
+            "unsupported_input_types": ["clipboard", "file_drop"],
         })
     }
 }
@@ -360,13 +359,17 @@ pub(crate) fn parse_input_policy(
     let read_bool = |key: &'static str| -> anyhow::Result<bool> {
         Ok(optional_bool_field(requested, key, ABILITY_CREATE_SESSION)?.unwrap_or(false))
     };
+    let keyboard_enabled = read_bool("keyboard_enabled")? || read_bool("keyboard")?;
+    let pointer_enabled = read_bool("pointer_enabled")? || read_bool("pointer")?;
+    let _clipboard_enabled = read_bool("clipboard_enabled")?;
+    let _clipboard = read_bool("clipboard")?;
+    let _file_drop_enabled = read_bool("file_drop_enabled")?;
+    let _file_drop = read_bool("file_drop")?;
     Ok(RemoteDesktopInputPolicy {
-        keyboard_enabled: interactive && (read_bool("keyboard_enabled")? || read_bool("keyboard")?),
-        pointer_enabled: interactive && (read_bool("pointer_enabled")? || read_bool("pointer")?),
-        clipboard_enabled: interactive
-            && (read_bool("clipboard_enabled")? || read_bool("clipboard")?),
-        file_drop_enabled: interactive
-            && (read_bool("file_drop_enabled")? || read_bool("file_drop")?),
+        keyboard_enabled: interactive && keyboard_enabled,
+        pointer_enabled: interactive && pointer_enabled,
+        clipboard_enabled: false,
+        file_drop_enabled: false,
     })
 }
 
@@ -779,6 +782,14 @@ mod tests {
                 "`keyboard_enabled` must be a boolean",
             ),
             (
+                json!({"input_policy": {"clipboard_enabled": "true"}}),
+                "`clipboard_enabled` must be a boolean",
+            ),
+            (
+                json!({"input_policy": {"file_drop_enabled": "true"}}),
+                "`file_drop_enabled` must be a boolean",
+            ),
+            (
                 json!({"input_policy": {"legacy_pointer": true}}),
                 "input_policy.legacy_pointer is not supported",
             ),
@@ -792,5 +803,31 @@ mod tests {
                 "error must carry invalid_argument reason; got: {err}"
             );
         }
+    }
+
+    #[test]
+    fn input_policy_reports_clipboard_and_file_drop_unsupported_even_when_requested() {
+        let policy = parse_input_policy(
+            &json!({
+                "input_policy": {
+                    "keyboard_enabled": true,
+                    "pointer_enabled": true,
+                    "clipboard_enabled": true,
+                    "file_drop_enabled": true
+                }
+            }),
+            "interactive",
+        )
+        .expect("well-formed interactive input policy parses");
+        let value = policy.to_value();
+
+        assert_eq!(value["keyboard_enabled"], json!(true));
+        assert_eq!(value["pointer_enabled"], json!(true));
+        assert_eq!(value["clipboard_enabled"], json!(false));
+        assert_eq!(value["file_drop_enabled"], json!(false));
+        assert_eq!(
+            value["unsupported_input_types"],
+            json!(["clipboard", "file_drop"])
+        );
     }
 }

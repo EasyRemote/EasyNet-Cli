@@ -19,7 +19,8 @@ use crate::daemon::plugins::remote_desktop::constants::{
     REASON_RESOURCE_UNAVAILABLE, TRANSPORT_INVOKE_BIDI,
 };
 use crate::daemon::plugins::remote_desktop::input::{
-    apply_input_frame_with_policy, input_policy_allows, input_policy_for_binding, parse_input_frame,
+    apply_input_frame_with_policy, input_policy_allows, input_policy_for_binding,
+    parse_input_frame, unsupported_input_channel_reason,
 };
 use crate::daemon::plugins::remote_desktop::media::encode::{
     spawn_builtin_h264_stream, BuiltinH264StreamTerminal, BuiltinH264TerminalCallback,
@@ -104,6 +105,15 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle_bidi_input_frame(
         }
     };
     let kind = frame.kind().as_policy_key();
+    if let Some(reason) = unsupported_input_channel_reason(kind) {
+        return json!({
+            "type": "warn",
+            "code": reason,
+            "input_type": kind,
+            "action": frame.action(),
+            "message": "clipboard and file-drop frames require dedicated remote desktop abilities",
+        });
+    }
     if !input_policy_allows(input_policy, kind) {
         return json!({
             "type": "warn",
@@ -465,7 +475,7 @@ mod tests {
         );
 
         assert_eq!(response["type"], json!("warn"));
-        assert_eq!(response["code"], json!("clipboard_injection_not_enabled"));
+        assert_eq!(response["code"], json!("clipboard_input_unsupported"));
         assert_ne!(response["code"], json!("input_not_wired"));
     }
 

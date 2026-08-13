@@ -173,10 +173,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_input_frame_with_policy(
         }
         RemoteDesktopInputFrame::Key(frame) => apply_key_frame(frame),
         RemoteDesktopInputFrame::Clipboard(_) => {
-            InputApplyOutcome::rejected("clipboard_injection_not_enabled")
+            InputApplyOutcome::rejected("clipboard_input_unsupported")
         }
         RemoteDesktopInputFrame::FileDrop(_) => {
-            InputApplyOutcome::rejected("file_drop_not_enabled")
+            InputApplyOutcome::rejected("file_drop_input_unsupported")
         }
     }
 }
@@ -209,17 +209,19 @@ fn input_policy_for_scope(mut input_policy: Value, input_scope: InputScope) -> V
         return input_policy;
     };
     map.insert("input_scope".to_string(), json!(input_scope.as_str()));
+    disable_input_policy_key(map, "clipboard_enabled");
+    disable_input_policy_key(map, "file_drop_enabled");
+    map.insert(
+        "unsupported_input_types".to_string(),
+        json!(["clipboard", "file_drop"]),
+    );
     match input_scope {
         InputScope::ViewOnly => {
             disable_input_policy_key(map, "keyboard_enabled");
             disable_input_policy_key(map, "pointer_enabled");
-            disable_input_policy_key(map, "clipboard_enabled");
-            disable_input_policy_key(map, "file_drop_enabled");
         }
         InputScope::TargetLocal => {
             disable_input_policy_key(map, "keyboard_enabled");
-            disable_input_policy_key(map, "clipboard_enabled");
-            disable_input_policy_key(map, "file_drop_enabled");
         }
         InputScope::DisplayGlobal => {}
     }
@@ -579,14 +581,25 @@ pub(in crate::daemon::plugins::remote_desktop) fn input_policy_allows(
     policy: &Value,
     frame_type: &str,
 ) -> bool {
+    if unsupported_input_channel_reason(frame_type).is_some() {
+        return false;
+    }
     let key = match frame_type {
         "key" => "keyboard_enabled",
         "pointer" => "pointer_enabled",
-        "clipboard" => "clipboard_enabled",
-        "file_drop" => "file_drop_enabled",
         _ => return false,
     };
     policy.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn unsupported_input_channel_reason(
+    frame_type: &str,
+) -> Option<&'static str> {
+    match frame_type {
+        "clipboard" => Some("clipboard_input_unsupported"),
+        "file_drop" => Some("file_drop_input_unsupported"),
+        _ => None,
+    }
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn record_input_channel_event(
@@ -1293,10 +1306,50 @@ mod tests {
         );
 
         assert_eq!(policy["input_scope"], json!("display_global"));
+        assert_eq!(
+            policy["unsupported_input_types"],
+            json!(["clipboard", "file_drop"])
+        );
         assert!(input_policy_allows(&policy, "key"));
         assert!(input_policy_allows(&policy, "pointer"));
-        assert!(input_policy_allows(&policy, "clipboard"));
-        assert!(input_policy_allows(&policy, "file_drop"));
+        assert!(
+            !input_policy_allows(&policy, "clipboard"),
+            "clipboard must remain unsupported on the input data channel"
+        );
+        assert!(
+            !input_policy_allows(&policy, "file_drop"),
+            "file drop must remain unsupported on the input data channel"
+        );
+    }
+
+    #[test]
+    fn clipboard_and_file_drop_frames_are_explicitly_unsupported_on_input_channel() {
+        let clipboard = parse_input_frame(r#"{"type":"clipboard","text":"hello"}"#).unwrap();
+        let file_drop = parse_input_frame(r#"{"type":"file_drop","files":["/tmp/a"]}"#).unwrap();
+
+        let clipboard_outcome =
+            apply_input_frame_with_policy(&json!({"clipboard_enabled": true}), &clipboard);
+        let file_drop_outcome =
+            apply_input_frame_with_policy(&json!({"file_drop_enabled": true}), &file_drop);
+
+        assert!(!clipboard_outcome.applied);
+        assert_eq!(
+            clipboard_outcome.reason,
+            Some("clipboard_input_unsupported")
+        );
+        assert!(!file_drop_outcome.applied);
+        assert_eq!(
+            file_drop_outcome.reason,
+            Some("file_drop_input_unsupported")
+        );
+        assert_eq!(
+            unsupported_input_channel_reason("clipboard"),
+            Some("clipboard_input_unsupported")
+        );
+        assert_eq!(
+            unsupported_input_channel_reason("file_drop"),
+            Some("file_drop_input_unsupported")
+        );
     }
 
     #[test]
