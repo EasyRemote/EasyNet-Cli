@@ -18018,8 +18018,8 @@ if remote_desktop_registration.exists():
             "remote-desktop resource-bound specs must name the dynamic Resource subject kind explicitly",
         ),
         (
-            'const PERMISSION_PROBE_SUBJECT_KINDS: &[&str] = &["agent", "user"];',
-            "remote-desktop permission probes must name Agent/User probe subject kinds explicitly",
+            'const PERMISSION_PROBE_SUBJECT_KINDS: &[&str] = &["agent", "resource", "user"];',
+            "remote-desktop permission probes must name Agent/User and descriptor-bound Resource probe subject kinds explicitly",
         ),
         (
             "subject_ura_kinds: RESOURCE_SUBJECT_KINDS",
@@ -18061,12 +18061,12 @@ if remote_desktop_ability_dir.exists():
             "remote_desktop.permission_status.ability.toml",
             "remote_desktop.request_permission.ability.toml",
         ):
-            if 'scope_subjects_uras = ["agent", "user"]' not in raw_text:
+            if 'scope_subjects_uras = ["agent", "resource", "user"]' not in raw_text:
                 add(
                     "R146_REMOTE_DESKTOP_SUBJECT_SCOPE_BOUNDARY",
                     ability_toml,
                     1,
-                    "remote-desktop permission probes must only admit Agent/User subjects",
+                    "remote-desktop permission probes must admit Agent/User and descriptor-bound Resource subjects",
                 )
         elif 'scope_subjects_uras = ["resource"]' not in raw_text:
             add(

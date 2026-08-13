@@ -556,6 +556,30 @@ mod tests {
     }
 
     #[test]
+    fn permission_probe_subject_failures_are_machine_readable_invalid_arguments() {
+        let err = classify_handler_result::<()>(Err(RemoteDesktopError::InvalidArgument {
+            ability: ABILITY_PERMISSION_STATUS,
+            detail: "screen-capture permission probes are host-local".to_string(),
+        }
+        .into()))
+        .unwrap_err();
+        let failure = err
+            .downcast_ref::<AbilityHandlerFailure>()
+            .expect("registration must preserve structured permission failure");
+        let axon_error = failure.axon_error();
+
+        assert_eq!(axon_error.kind, AxonErrorKind::InvalidArgument);
+        assert_eq!(axon_error.code, ErrorCode::RequestPayloadInvalid);
+        assert_eq!(axon_error.stage, Some(ErrorStage::RequestValidation));
+        assert_eq!(axon_error.security_class, Some(SecurityClass::Resource));
+        assert!(
+            axon_error.message.contains("reason=invalid_argument"),
+            "permission subject failure must keep canonical reason in message: {}",
+            axon_error.message
+        );
+    }
+
+    #[test]
     fn unknown_handler_failures_still_have_structured_payloads() {
         let err = classify_handler_result::<()>(Err(anyhow::anyhow!("boom"))).unwrap_err();
         let failure = err

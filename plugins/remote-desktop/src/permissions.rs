@@ -6,19 +6,18 @@
 
 use serde_json::{json, Value};
 
-use crate::daemon::ability::builtins::resources::media::resource_subject::reject_subject_in_args;
 use crate::daemon::ability::dispatch::EnvelopeContext;
-use crate::daemon::plugins::remote_desktop::constants::REASON_INVALID_ARGUMENT;
+use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::input::{
     input_injection_available, request_input_injection_permission,
 };
 
 pub(in crate::daemon::plugins::remote_desktop) fn ensure_permission_probe_access(
-    ability: &str,
+    ability: &'static str,
     env: &EnvelopeContext,
     args: &Value,
 ) -> anyhow::Result<()> {
-    reject_subject_in_args(ability, args)?;
+    reject_permission_subject_in_args(ability, args)?;
     HostLocalPermissionProbeSubject::try_from_envelope(ability, env).map(|_| ())
 }
 
@@ -30,7 +29,7 @@ enum HostLocalPermissionProbeSubject {
 }
 
 impl HostLocalPermissionProbeSubject {
-    fn try_from_envelope(ability: &str, env: &EnvelopeContext) -> anyhow::Result<Self> {
+    fn try_from_envelope(ability: &'static str, env: &EnvelopeContext) -> anyhow::Result<Self> {
         let caller = env.caller().trim();
         let subject = env.subject().trim();
         if caller == crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA {
@@ -109,7 +108,7 @@ fn remote_desktop_resource_probe_subject(subject: &crate::core::ura::ParsedURA) 
 fn user_descriptor_bound_permission_probe_subject(
     caller: &crate::core::ura::ParsedURA,
     subject: &crate::core::ura::ParsedURA,
-    ability: &str,
+    ability: &'static str,
 ) -> bool {
     let Some(caller_user_id) = caller.user_id() else {
         return false;
@@ -125,8 +124,23 @@ fn user_descriptor_bound_permission_probe_subject(
         && subject.resource_path() == Some(format!("invoke/{}", ability.trim()).as_str())
 }
 
-fn host_local_subject_error(ability: &str, detail: &str) -> anyhow::Error {
-    anyhow::anyhow!("{ability}: {detail}; reason={REASON_INVALID_ARGUMENT}")
+fn host_local_subject_error(ability: &'static str, detail: &str) -> anyhow::Error {
+    anyhow::Error::new(RemoteDesktopError::InvalidArgument {
+        ability,
+        detail: detail.to_string(),
+    })
+}
+
+fn reject_permission_subject_in_args(ability: &'static str, args: &Value) -> anyhow::Result<()> {
+    if let Value::Object(map) = args {
+        if map.contains_key("subject") {
+            return Err(host_local_subject_error(
+                ability,
+                "`subject` MUST come from the invocation envelope, not args",
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn screen_capture_permission_status() -> Value {

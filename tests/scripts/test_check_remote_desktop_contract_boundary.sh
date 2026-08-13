@@ -12,7 +12,7 @@ fail() {
 SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 
-mkdir -p "$SB/tools/scripts" "$SB/plugins/remote-desktop/src/handlers"
+mkdir -p "$SB/tools/scripts" "$SB/plugins/remote-desktop/src/handlers" "$SB/plugins/remote-desktop/abilities"
 cp "$SCRIPT" "$SB/tools/scripts/check-remote-desktop-contract-boundary.sh"
 
 cat >"$SB/plugins/remote-desktop/src/contract.rs" <<'RS'
@@ -33,13 +33,32 @@ RS
 cat >"$SB/plugins/remote-desktop/src/permissions.rs" <<'RS'
 enum HostLocalPermissionProbeSubject {
     UserSelf,
+    UserInvokeResource,
     LocalSystemLoopback,
+}
+
+fn host_local_subject_error() {
+    RemoteDesktopError::InvalidArgument;
 }
 RS
 
+cat >"$SB/plugins/remote-desktop/src/registration.rs" <<'RS'
+const PERMISSION_PROBE_SUBJECT_KINDS: &[&str] = &["agent", "resource", "user"];
+RS
+
 cat >"$SB/plugins/remote-desktop/src/handlers/permission_status.rs" <<'RS'
+fn handle() {
+    ensure_permission_probe_access();
+}
+
 #[test]
 fn permission_probe_accepts_authenticated_user_self_subject() {}
+
+#[test]
+fn permission_probe_accepts_descriptor_bound_user_invoke_resource_subject() {}
+
+#[test]
+fn permission_probe_rejects_device_stream_resource_subject() {}
 
 #[test]
 fn permission_probe_rejects_non_caller_user_subject() {}
@@ -50,6 +69,26 @@ fn permission_probe_rejects_device_subject_before_defaulting() {}
 #[test]
 fn permission_probe_accepts_local_system_loopback_subject() {}
 RS
+
+cat >"$SB/plugins/remote-desktop/src/handlers/request_permission.rs" <<'RS'
+fn handle() {
+    ensure_permission_probe_access();
+}
+
+#[test]
+fn request_permission_rejects_device_stream_resource_subject_before_os_prompt() {}
+
+#[test]
+fn request_permission_rejects_target_subject_in_args_before_os_prompt() {}
+RS
+
+cat >"$SB/plugins/remote-desktop/abilities/remote_desktop.permission_status.ability.toml" <<'TOML'
+scope_subjects_uras = ["agent", "resource", "user"]
+TOML
+
+cat >"$SB/plugins/remote-desktop/abilities/remote_desktop.request_permission.ability.toml" <<'TOML'
+scope_subjects_uras = ["agent", "resource", "user"]
+TOML
 
 (
   cd "$SB"
@@ -94,5 +133,19 @@ set +e
 rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "default-subject permission probe vocabulary should exit 1 (got $rc)"
+
+perl -0pi -e 's/permission_probe_accepts_default_user_subject/permission_probe_accepts_authenticated_user_self_subject/' \
+  "$SB/plugins/remote-desktop/src/handlers/permission_status.rs"
+perl -0pi -e 's/scope_subjects_uras = \["agent", "resource", "user"\]/scope_subjects_uras = ["agent", "user"]/' \
+  "$SB/plugins/remote-desktop/abilities/remote_desktop.request_permission.ability.toml"
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-remote-desktop-contract-boundary.sh
+) >/tmp/check-remote-desktop-contract-boundary-toml.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "permission descriptor scope drift should exit 1 (got $rc)"
 
 echo "test_check_remote_desktop_contract_boundary.sh: all cases passed"
