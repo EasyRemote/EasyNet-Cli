@@ -23,8 +23,12 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{add_ice_candidate, end_session, set_description, watch_events};
+    use super::{
+        add_ice_candidate, create_session, end_session, grant_consent, set_description,
+        watch_events,
+    };
     use crate::daemon::persistence::resources::{self, ResourcesFile};
+    use crate::daemon::plugins::remote_desktop::consent_registry::CONSENT_INTENT;
     use crate::daemon::plugins::remote_desktop::constants::MAX_ATTACH_FPS;
     use crate::daemon::plugins::remote_desktop::media::{
         REMOTE_DESKTOP_MEDIA_SDK_ID, XCAP_MACOS_RECORDER_MAX_FPS,
@@ -151,6 +155,52 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ended_again["already_ended"], json!(true));
+    }
+
+    #[test]
+    fn frontend_subject_flow_uses_selected_resource_as_invocation_subject() {
+        let _lock = test_lock();
+        let plugin = test_plugin();
+        reset_store(&plugin);
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = ResourcesFile::default();
+        let ura = seed_display(&mut file, "remote-desktop-frontend-subject");
+        resources::save(&file).unwrap();
+
+        let env = env_for(&ura);
+        let consent = grant_consent::handle(
+            Arc::clone(&plugin),
+            env.clone(),
+            json!({ "intent": CONSENT_INTENT }),
+        )
+        .expect("grant_consent accepts selected target as envelope subject");
+        assert_eq!(consent["subject_ura"], json!(ura));
+        assert_eq!(consent["subject_type"], json!("display"));
+        let consent_ticket = consent["consent_ticket"]
+            .as_str()
+            .expect("grant_consent returns a local consent ticket");
+
+        let created = create_session::handle(
+            Arc::clone(&plugin),
+            env.clone(),
+            json!({
+                "session_id": "rd-frontend-subject",
+                "mode": "view_only",
+                "consent_ticket": consent_ticket,
+            }),
+        )
+        .expect("create_session consumes the same selected target envelope subject");
+
+        assert_eq!(created["target_binding"]["subject_ura"], json!(ura));
+        assert_eq!(created["scope_audit"]["scope_widened"], json!(false));
+        assert_eq!(
+            created["scope_audit"]["display_fallback_used"],
+            json!(false)
+        );
+        assert!(
+            created.get("subject").is_none(),
+            "remote desktop lifecycle responses must not teach clients to pass subject in args"
+        );
     }
 
     #[test]
