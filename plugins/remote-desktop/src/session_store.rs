@@ -18,6 +18,13 @@ use crate::daemon::plugins::remote_desktop::target_tracking::{
     TargetObservation, TargetTrackerSnapshot,
 };
 
+pub(in crate::daemon::plugins::remote_desktop) struct TargetObservationInputs {
+    pub(in crate::daemon::plugins::remote_desktop) binding: RemoteAppTargetBinding,
+    pub(in crate::daemon::plugins::remote_desktop) snapshot: TargetTrackerSnapshot,
+    pub(in crate::daemon::plugins::remote_desktop) binding_id: String,
+    pub(in crate::daemon::plugins::remote_desktop) binding_epoch: u64,
+}
+
 /// Runtime-owned synchronized map of remote desktop sessions.
 ///
 /// Invariant 1: callers mutate session rows only while holding the store lock.
@@ -74,33 +81,42 @@ impl RemoteDesktopSessionStore {
         );
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn target_observation_inputs(
+    pub(in crate::daemon::plugins::remote_desktop) fn target_observation_inputs_for_session(
         &self,
         session_id: &str,
-        epoch: TransportEpoch,
-    ) -> Option<(RemoteAppTargetBinding, TargetTrackerSnapshot)> {
+    ) -> Option<TargetObservationInputs> {
         let sessions = self.lock();
         let session = sessions.get(session_id)?;
-        if session.is_terminal() || session.transport_epoch() != Some(epoch.value()) {
+        if session.is_terminal() {
             return None;
         }
-        Some((
-            session.target_binding().clone(),
-            session.target_snapshot().clone(),
-        ))
+        let binding = session.target_binding().clone();
+        let binding_id = binding.binding_id().to_string();
+        let binding_epoch = binding.binding_epoch();
+        Some(TargetObservationInputs {
+            binding,
+            snapshot: session.target_snapshot().clone(),
+            binding_id,
+            binding_epoch,
+        })
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn record_target_observation(
+    pub(in crate::daemon::plugins::remote_desktop) fn record_target_observation_for_session(
         &self,
         session_id: &str,
-        epoch: TransportEpoch,
+        binding_id: &str,
+        binding_epoch: u64,
         observation: TargetObservation,
     ) {
         let mut sessions = self.lock();
         let Some(session) = sessions.get_mut(session_id) else {
             return;
         };
-        if session.transport_epoch() != Some(epoch.value()) {
+        let binding = session.target_binding();
+        if session.is_terminal()
+            || binding.binding_id() != binding_id
+            || binding.binding_epoch() != binding_epoch
+        {
             return;
         }
         session.record_target_observation(observation);

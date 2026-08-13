@@ -73,35 +73,41 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         input_policy,
     });
     let now = now_ms();
-    let (watchdog_session_id, lease_expires_at_ms, view) =
-        plugin
-            .session_store()
-            .with_sessions(|sessions| -> anyhow::Result<_> {
-                prune_inactive_sessions(&plugin, sessions, now);
-                let active_sessions = sessions
-                    .values()
-                    .filter(|session| !session.is_terminal())
-                    .count();
-                if active_sessions >= plugin.config().max_sessions() {
-                    return Err(RemoteDesktopError::SessionStoreFull {
-                        ability: ABILITY_CREATE_SESSION,
-                    }
-                    .into());
+    let (watchdog_session_id, tracker_session_id, lease_expires_at_ms, view) = plugin
+        .session_store()
+        .with_sessions(|sessions| -> anyhow::Result<_> {
+            prune_inactive_sessions(&plugin, sessions, now);
+            let active_sessions = sessions
+                .values()
+                .filter(|session| !session.is_terminal())
+                .count();
+            if active_sessions >= plugin.config().max_sessions() {
+                return Err(RemoteDesktopError::SessionStoreFull {
+                    ability: ABILITY_CREATE_SESSION,
                 }
-                if sessions.contains_key(&session_id) {
-                    return Err(RemoteDesktopError::InvalidArgument {
-                        ability: ABILITY_CREATE_SESSION,
-                        detail: format!("session_id {session_id:?} already exists"),
-                    }
-                    .into());
+                .into());
+            }
+            if sessions.contains_key(&session_id) {
+                return Err(RemoteDesktopError::InvalidArgument {
+                    ability: ABILITY_CREATE_SESSION,
+                    detail: format!("session_id {session_id:?} already exists"),
                 }
-                let watchdog_session_id = session_id.clone();
-                let lease_expires_at_ms = session.lease_expires_at_ms();
-                let view = serialize_session_with_token(&session);
-                sessions.insert(session_id, session);
-                Ok((watchdog_session_id, lease_expires_at_ms, view))
-            })?;
+                .into());
+            }
+            let watchdog_session_id = session_id.clone();
+            let tracker_session_id = session_id.clone();
+            let lease_expires_at_ms = session.lease_expires_at_ms();
+            let view = serialize_session_with_token(&session);
+            sessions.insert(session_id, session);
+            Ok((
+                watchdog_session_id,
+                tracker_session_id,
+                lease_expires_at_ms,
+                view,
+            ))
+        })?;
     RemoteDesktopPlugin::schedule_session_lease(&plugin, watchdog_session_id, lease_expires_at_ms);
+    RemoteDesktopPlugin::track_session_target(&plugin, tracker_session_id);
     Ok(view)
 }
 

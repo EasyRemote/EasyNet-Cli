@@ -80,6 +80,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn stop_session_transports(
     session: &mut RemoteDesktopSession,
 ) {
     plugin.cancel_session_lease(session_id);
+    plugin.cancel_session_target_tracking(session_id);
     if let Some(stop_tx) = session.detach_preview_transport() {
         let _ = stop_tx.send(true);
     }

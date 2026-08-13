@@ -29,9 +29,6 @@ use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
-use crate::daemon::plugins::remote_desktop::target_observer::{
-    observe_session_target_once, PlatformTargetObservationProvider,
-};
 use crate::daemon::plugins::remote_desktop::videotoolbox_encoder::VideoToolboxEncoder;
 
 /// Immutable inputs for the macOS native direct-WebRTC strategy.
@@ -132,15 +129,9 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
     let mut latency_stats = NativeLatencyStats::default();
     let mut decoder_primed = false;
     let mut last_written_pts_ms: Option<u64> = None;
-    let target_observer = PlatformTargetObservationProvider;
-    let mut last_target_observation_at = Instant::now();
     loop {
         if *stop_rx.borrow() || done_rx.try_recv().is_ok() {
             break;
-        }
-        if last_target_observation_at.elapsed() >= Duration::from_millis(250) {
-            observe_session_target_once(sessions, session_id, epoch, &target_observer);
-            last_target_observation_at = Instant::now();
         }
         let (units, stale_dropped) = latest_native_rtp_units(encoder.poll(), decoder_primed);
         rtp_stale_units_dropped = rtp_stale_units_dropped.saturating_add(stale_dropped as u64);

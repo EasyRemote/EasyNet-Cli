@@ -949,7 +949,7 @@ mod tests {
     fn maps_window_relative_pointer_to_global_screen_point() {
         let entry = ResourceEntry {
             resource_ura: "easynet:///r/acme/resource/window.test".into(),
-            owner_agent: "easynet:///r/acme/device/dev-1".into(),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
             kind: ResourceType::Window,
             binding: ResourceBinding::LocalDevice,
             hardware_id: "window:macos:cgwindow:10:42".into(),
@@ -985,7 +985,7 @@ mod tests {
     fn pointer_policy_consumes_latest_target_tracker_snapshot() {
         let entry = ResourceEntry {
             resource_ura: "easynet:///r/acme/resource/window.test".into(),
-            owner_agent: "easynet:///r/acme/device/dev-1".into(),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
             kind: ResourceType::Window,
             binding: ResourceBinding::LocalDevice,
             hardware_id: "window:macos:cgwindow:10:42".into(),
@@ -1040,7 +1040,7 @@ mod tests {
     fn maps_application_pointer_through_primary_window_bounds() {
         let entry = ResourceEntry {
             resource_ura: "easynet:///r/acme/resource/application.test".into(),
-            owner_agent: "easynet:///r/acme/device/dev-1".into(),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
             kind: ResourceType::Application,
             binding: ResourceBinding::LocalDevice,
             hardware_id: "application:macos:cgwindow:Cursor".into(),
@@ -1052,6 +1052,8 @@ mod tests {
                 "primary_y": 400,
                 "primary_width": 1000,
                 "primary_height": 500,
+                "resolved_window_ids": [70],
+                "window_set_epoch": 1,
             }),
             first_seen_at: "2026-06-01T00:00:00Z".into(),
         };

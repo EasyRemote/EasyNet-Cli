@@ -40,6 +40,7 @@ use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
+use objc2_core_foundation::CGRect;
 use objc2_core_media::{CMSampleBuffer, CMTime};
 use objc2_core_video::CVImageBuffer;
 use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol, NSString};
@@ -283,17 +284,20 @@ fn resolve_target_for_binding(
             proof_app_identity = identity.1.clone();
             proof_bundle_id = identity.1;
             let windows = unsafe { content.windows() };
-            proof_app_window_set = Some(select_application_window_set_for_binding(
-                ability, &windows, binding,
-            )?);
-            let apps = NSArray::from_slice(&[&*app]);
-            let empty: Retained<NSArray<SCWindow>> = NSArray::new();
+            let app_window_set =
+                select_application_window_set_for_binding(ability, &windows, binding, &display)?;
+            let window_refs = app_window_set
+                .windows
+                .iter()
+                .map(|window| window.as_ref())
+                .collect::<Vec<_>>();
+            let included_windows = NSArray::from_slice(&window_refs);
+            proof_app_window_set = Some(app_window_set.proof);
             unsafe {
-                SCContentFilter::initWithDisplay_includingApplications_exceptingWindows(
+                SCContentFilter::initWithDisplay_includingWindows(
                     SCContentFilter::alloc(),
                     &display,
-                    &apps,
-                    &empty,
+                    &included_windows,
                 )
             }
         }
@@ -321,11 +325,17 @@ fn resolve_target_for_binding(
     })
 }
 
+struct ApplicationWindowSetTarget {
+    windows: Vec<Retained<SCWindow>>,
+    proof: AppWindowSetProof,
+}
+
 fn select_application_window_set_for_binding(
     ability: &'static str,
     windows: &NSArray<SCWindow>,
     binding: &RemoteAppTargetBinding,
-) -> Result<AppWindowSetProof, RemoteAppTargetError> {
+    display: &SCDisplay,
+) -> Result<ApplicationWindowSetTarget, RemoteAppTargetError> {
     let locator = binding.native_locator();
     let display_id = locator.display_id().ok_or_else(|| {
         RemoteAppTargetError::new(
@@ -334,8 +344,12 @@ fn select_application_window_set_for_binding(
             "application ScreenCaptureKit proof requires a display-scoped binding",
         )
     })?;
+    let mut selected_windows = Vec::new();
     let mut window_ids = Vec::new();
     for window in windows.iter() {
+        if !sck_window_overlaps_display(&window, display) {
+            continue;
+        }
         let Some(app) = (unsafe { window.owningApplication() }) else {
             continue;
         };
@@ -346,6 +360,7 @@ fn select_application_window_set_for_binding(
             &app,
         ) {
             window_ids.push(unsafe { window.windowID() as u64 });
+            selected_windows.push(window);
         }
     }
     if window_ids.is_empty() {
@@ -355,12 +370,40 @@ fn select_application_window_set_for_binding(
             "bound application has no ScreenCaptureKit windows in the current shareable content",
         ));
     }
-    Ok(AppWindowSetProof::new(
+    let proof = AppWindowSetProof::new(
         display_id,
         locator.bundle_id().map(str::to_string),
         locator.pid(),
         window_ids,
-    ))
+    );
+    Ok(ApplicationWindowSetTarget {
+        windows: selected_windows,
+        proof,
+    })
+}
+
+fn sck_window_overlaps_display(window: &SCWindow, display: &SCDisplay) -> bool {
+    rects_overlap(unsafe { window.frame() }, unsafe { display.frame() })
+}
+
+fn rects_overlap(a: CGRect, b: CGRect) -> bool {
+    let a_min_x = a.origin.x;
+    let a_min_y = a.origin.y;
+    let a_max_x = a.origin.x + a.size.width;
+    let a_max_y = a.origin.y + a.size.height;
+    let b_min_x = b.origin.x;
+    let b_min_y = b.origin.y;
+    let b_max_x = b.origin.x + b.size.width;
+    let b_max_y = b.origin.y + b.size.height;
+
+    a.size.width > 0.0
+        && a.size.height > 0.0
+        && b.size.width > 0.0
+        && b.size.height > 0.0
+        && a_min_x < b_max_x
+        && a_max_x > b_min_x
+        && a_min_y < b_max_y
+        && a_max_y > b_min_y
 }
 
 #[cfg_attr(not(feature = "native-media"), allow(dead_code))]

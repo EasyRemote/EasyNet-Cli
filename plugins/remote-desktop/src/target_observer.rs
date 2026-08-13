@@ -16,7 +16,6 @@ use std::time::{Duration, Instant};
 
 use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
-use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::{
     RemoteAppTargetBinding, RemoteDesktopTargetKind, TargetGeometry, TargetResolutionError,
 };
@@ -144,23 +143,31 @@ where
     }
 }
 
-/// Sample one session target without holding the session-store lock while the
-/// platform provider enumerates OS state.
-pub(in crate::daemon::plugins::remote_desktop) fn observe_session_target_once<P>(
+/// Sample one session target independently from media transport state.
+///
+/// Returns false only when the session is missing or terminal, allowing the
+/// plugin-owned TargetMonitor to stop tracking without relying on WebRTC epoch.
+pub(in crate::daemon::plugins::remote_desktop) fn observe_bound_session_target_once<P>(
     sessions: &RemoteDesktopSessionStore,
     session_id: &str,
-    epoch: TransportEpoch,
     provider: &P,
-) where
+) -> bool
+where
     P: TargetObservationProvider,
 {
-    let Some((binding, snapshot)) = sessions.target_observation_inputs(session_id, epoch) else {
-        return;
+    let Some(inputs) = sessions.target_observation_inputs_for_session(session_id) else {
+        return false;
     };
-    let Some(observation) = provider.observe(&binding, &snapshot) else {
-        return;
+    let Some(observation) = provider.observe(&inputs.binding, &inputs.snapshot) else {
+        return true;
     };
-    sessions.record_target_observation(session_id, epoch, observation);
+    sessions.record_target_observation_for_session(
+        session_id,
+        &inputs.binding_id,
+        inputs.binding_epoch,
+        observation,
+    );
+    true
 }
 
 fn observe_binding_against_host_snapshot(
@@ -659,13 +666,12 @@ mod tests {
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
     use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
-    use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::target::{
         RemoteAppTargetBinding, RemoteAppTargetResolver, ResourceEntryTargetResolver,
         TargetGeometry,
     };
     use crate::daemon::plugins::remote_desktop::target_observer::{
-        observe_session_target_once, TargetObservationProvider,
+        observe_bound_session_target_once, TargetObservationProvider,
     };
     use crate::daemon::plugins::remote_desktop::target_tracking::{
         TargetObservation, TargetTrackerSnapshot,
@@ -707,25 +713,57 @@ mod tests {
         }
     }
 
+    struct ReplacingGeometryProvider {
+        store: Arc<RemoteDesktopSessionStore>,
+        session_id: &'static str,
+    }
+
+    impl TargetObservationProvider for ReplacingGeometryProvider {
+        fn observe(
+            &self,
+            _binding: &RemoteAppTargetBinding,
+            snapshot: &TargetTrackerSnapshot,
+        ) -> Option<TargetObservation> {
+            self.store.with_sessions(|sessions| {
+                sessions.insert(
+                    self.session_id.to_string(),
+                    RemoteDesktopSession::new(test_session_init(
+                        self.session_id,
+                        "easynet:///r/acme/resource/display.reused",
+                        vec!["webrtc".into()],
+                    )),
+                );
+            });
+            Some(TargetObservation::GeometryChanged {
+                geometry: TargetGeometry {
+                    x: Some(10.0),
+                    y: Some(20.0),
+                    width: Some(300.0),
+                    height: Some(200.0),
+                },
+                target_geometry_revision: snapshot.target_geometry_revision() + 1,
+                observed_at_ms: 123,
+            })
+        }
+    }
+
     #[test]
     fn observation_provider_commits_through_session_store_boundary() {
         let store = Arc::new(RemoteDesktopSessionStore::new());
         store.with_sessions(|sessions| {
-            let mut session = RemoteDesktopSession::new(test_session_init(
+            let session = RemoteDesktopSession::new(test_session_init(
                 "rd-provider-observation",
                 "easynet:///r/acme/resource/display.provider",
                 vec!["webrtc".into()],
             ));
-            session.begin_webrtc_negotiation(TransportEpoch::new(1));
             sessions.insert("rd-provider-observation".to_string(), session);
         });
 
-        observe_session_target_once(
+        assert!(observe_bound_session_target_once(
             &store,
             "rd-provider-observation",
-            TransportEpoch::new(1),
             &FakeGeometryProvider,
-        );
+        ));
 
         store.with_sessions(|sessions| {
             let session = sessions.get("rd-provider-observation").unwrap();
@@ -734,6 +772,75 @@ mod tests {
                 json!(2)
             );
             assert!(session
+                .events()
+                .iter()
+                .any(|event| event["event_type"] == json!("TARGET_RESIZED")));
+        });
+    }
+
+    #[test]
+    fn bound_session_observation_does_not_require_media_transport_epoch() {
+        let store = Arc::new(RemoteDesktopSessionStore::new());
+        store.with_sessions(|sessions| {
+            let session = RemoteDesktopSession::new(test_session_init(
+                "rd-bound-observation",
+                "easynet:///r/acme/resource/display.bound",
+                vec!["webrtc".into()],
+            ));
+            sessions.insert("rd-bound-observation".to_string(), session);
+        });
+
+        assert!(observe_bound_session_target_once(
+            &store,
+            "rd-bound-observation",
+            &FakeGeometryProvider,
+        ));
+
+        store.with_sessions(|sessions| {
+            let session = sessions.get("rd-bound-observation").unwrap();
+            assert_eq!(
+                session.target_tracking_state()["target_geometry_revision"],
+                json!(2)
+            );
+            assert!(session
+                .events()
+                .iter()
+                .any(|event| event["event_type"] == json!("TARGET_RESIZED")));
+        });
+    }
+
+    #[test]
+    fn stale_observation_cannot_commit_after_session_binding_reuse() {
+        let store = Arc::new(RemoteDesktopSessionStore::new());
+        store.with_sessions(|sessions| {
+            let session = RemoteDesktopSession::new(test_session_init(
+                "rd-reused-observation",
+                "easynet:///r/acme/resource/display.original",
+                vec!["webrtc".into()],
+            ));
+            sessions.insert("rd-reused-observation".to_string(), session);
+        });
+
+        assert!(observe_bound_session_target_once(
+            &store,
+            "rd-reused-observation",
+            &ReplacingGeometryProvider {
+                store: Arc::clone(&store),
+                session_id: "rd-reused-observation",
+            },
+        ));
+
+        store.with_sessions(|sessions| {
+            let session = sessions.get("rd-reused-observation").unwrap();
+            assert_eq!(
+                session.subject_ura(),
+                "easynet:///r/acme/resource/display.reused"
+            );
+            assert_eq!(
+                session.target_tracking_state()["target_geometry_revision"],
+                json!(1)
+            );
+            assert!(!session
                 .events()
                 .iter()
                 .any(|event| event["event_type"] == json!("TARGET_RESIZED")));

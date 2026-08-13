@@ -36,6 +36,7 @@ use crate::daemon::plugins::remote_desktop::config::RemoteDesktopRuntimeConfig;
 use crate::daemon::plugins::remote_desktop::consent_registry::RemoteDesktopConsentRegistry;
 use crate::daemon::plugins::remote_desktop::lease_monitor::RemoteDesktopLeaseMonitor;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
+use crate::daemon::plugins::remote_desktop::target_monitor::RemoteDesktopTargetMonitor;
 use crate::daemon::plugins::remote_desktop::transport::{
     DirectWebRtcEndpoint, RemoteDesktopTransportManager,
 };
@@ -52,6 +53,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopPlugin {
     sessions: Arc<RemoteDesktopSessionStore>,
     consent: Arc<RemoteDesktopConsentRegistry>,
     lease_monitor: Arc<RemoteDesktopLeaseMonitor>,
+    target_monitor: Arc<RemoteDesktopTargetMonitor>,
     transports: Arc<RemoteDesktopTransportManager>,
     screen_backend: Arc<dyn ScreenSnapshotBackend>,
     config: RemoteDesktopRuntimeConfig,
@@ -68,6 +70,7 @@ impl RemoteDesktopPlugin {
                 config.max_sessions().saturating_mul(4),
             )),
             lease_monitor: Arc::new(RemoteDesktopLeaseMonitor::new()),
+            target_monitor: Arc::new(RemoteDesktopTargetMonitor::new()),
             transports: Arc::new(RemoteDesktopTransportManager::new()),
             screen_backend,
             config,
@@ -107,6 +110,20 @@ impl RemoteDesktopPlugin {
         session_id: &str,
     ) {
         self.lease_monitor.cancel(session_id);
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn track_session_target(
+        plugin: &Arc<Self>,
+        session_id: String,
+    ) {
+        plugin.target_monitor.track(plugin, session_id);
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn cancel_session_target_tracking(
+        &self,
+        session_id: &str,
+    ) {
+        self.target_monitor.cancel(session_id);
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn endpoint(
