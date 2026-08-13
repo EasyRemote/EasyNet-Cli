@@ -8,13 +8,16 @@
 # must not contain unrelated full-display sentinel content.
 #
 # The script is a harness boundary, not a static source check. With --run it
-# requires a probe command that performs host GUI/WebRTC work and writes the
-# evidence JSON described below. If no probe is supplied, --run fails closed.
+# runs the bundled EasyNet host probe by default. The bundled probe performs
+# live inventory/session invocation and requires a frame receiver command for
+# WebRTC decode + pixel assertions. Callers may still provide --probe-cmd to use
+# an equivalent external probe.
 
 set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
+BUNDLED_PROBE="$SELF_DIR/host-remoteapp-decoded-frame-probe.sh"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 OUT_DIR="${EASYNET_REMOTEAPP_E2E_OUT_DIR:-$REPO_ROOT/target/e2e/host-remoteapp-decoded-frame/$TIMESTAMP}"
 RUN="${EASYNET_HOST_REMOTEAPP_DECODED_FRAME_E2E:-0}"
@@ -30,7 +33,8 @@ Usage:
 Options:
   --run                 Run the host decoded-frame E2E harness.
   --probe-cmd CMD       Command that drives the real GUI/WebRTC probe and writes
-                        EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON.
+                        EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON. If omitted,
+                        uses tools/scripts/host-remoteapp-decoded-frame-probe.sh.
   --target-kind KIND    Target kind: window or application. Default: window.
   --out-dir DIR         Report directory.
   --self-test           Validate harness structure with a synthetic probe.
@@ -41,6 +45,10 @@ Environment:
                         Equivalent to --run.
   EASYNET_REMOTEAPP_FRAME_PROBE_CMD
                         Same as --probe-cmd.
+  EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD
+                        Required by the bundled probe. The command must perform
+                        WebRTC receive/decode/pixel assertions and write
+                        EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON.
 
 Probe contract:
   The probe command receives:
@@ -261,7 +269,10 @@ if [[ "$RUN" != "1" ]]; then
   exit 0
 fi
 
-[[ -n "$PROBE_CMD" ]] || die "--run requires --probe-cmd or EASYNET_REMOTEAPP_FRAME_PROBE_CMD"
+if [[ -z "$PROBE_CMD" ]]; then
+  [[ -x "$BUNDLED_PROBE" ]] || die "missing executable bundled probe: $BUNDLED_PROBE"
+  PROBE_CMD="'$BUNDLED_PROBE'"
+fi
 
 rm -f "$EVIDENCE_JSON"
 export EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON="$EVIDENCE_JSON"

@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="${CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 SCRIPT="$ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+PROBE="$ROOT/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 
 fail() {
@@ -18,6 +19,7 @@ require() {
 }
 
 [[ -f "$SCRIPT" ]] || fail "missing host decoded-frame E2E harness"
+[[ -f "$PROBE" ]] || fail "missing bundled host decoded-frame probe"
 [[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
 
 require 'E2E-03 exact window session' "$SPEC" \
@@ -54,7 +56,22 @@ require 'display_fallback_used' "$SCRIPT" \
 require 'scope_widened' "$SCRIPT" \
   'host decoded-frame E2E must validate scope was not widened'
 require '--probe-cmd|EASYNET_REMOTEAPP_FRAME_PROBE_CMD' "$SCRIPT" \
-  'host decoded-frame E2E must fail closed without a real host probe command'
+  'host decoded-frame E2E must allow explicit host probe injection'
+require 'host-remoteapp-decoded-frame-probe\.sh|BUNDLED_PROBE' "$SCRIPT" \
+  'host decoded-frame E2E must default to the bundled EasyNet host probe'
+
+require 'ability refresh-remote-targets' "$PROBE" \
+  'bundled host probe must invoke live target inventory through the EasyNet CLI'
+require 'ability create-remote-desktop-session' "$PROBE" \
+  'bundled host probe must invoke selected-resource remote_desktop.create_session through the EasyNet CLI'
+require 'EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD' "$PROBE" \
+  'bundled host probe must require a real WebRTC frame receiver command'
+require 'EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON' "$PROBE" \
+  'bundled host probe must consume decoded-frame analysis from the receiver'
+require 'verified Invocation\.subject|invocation\.get\("subject_ura"\)' "$PROBE" \
+  'bundled host probe must validate verified Invocation.subject against the selected Resource URA'
+require 'ambiguous target selection|TARGET_HINT|TARGET_RESOURCE_URA' "$PROBE" \
+  'bundled host probe must fail closed on ambiguous picker target selection'
 
 bash "$SCRIPT" --self-test >/dev/null
 
