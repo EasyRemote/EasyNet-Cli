@@ -24,6 +24,10 @@
 use serde_json::Value;
 use webrtc::peer_connection::RTCIceCandidateInit;
 
+use crate::daemon::plugins::remote_desktop::constants::{
+    MAX_ICE_CANDIDATE_BYTES, MAX_SIGNALING_DESCRIPTION_BYTES,
+};
+
 /// Ensure a browser/device SDP carries an explicit end-of-candidates marker.
 pub(in crate::daemon::plugins::remote_desktop) fn ensure_sdp_end_of_candidates(
     sdp: &str,
@@ -72,6 +76,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn normalize_remote_offer_sdp(sdp
 pub(in crate::daemon::plugins::remote_desktop) fn validate_remote_offer_sdp(
     sdp: &str,
 ) -> anyhow::Result<()> {
+    validate_sdp_size(sdp)?;
     let mut has_version = false;
     let mut has_video = false;
     for line in sdp.lines().map(str::trim_end) {
@@ -86,6 +91,45 @@ pub(in crate::daemon::plugins::remote_desktop) fn validate_remote_offer_sdp(
         return Ok(());
     }
     anyhow::bail!("remote WebRTC offer SDP must include v=0 and a video media section")
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn validate_sdp_size(
+    sdp: &str,
+) -> anyhow::Result<()> {
+    if sdp.len() <= MAX_SIGNALING_DESCRIPTION_BYTES {
+        return Ok(());
+    }
+    anyhow::bail!("remote WebRTC SDP exceeds {MAX_SIGNALING_DESCRIPTION_BYTES} bytes")
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn validate_signaling_description_size(
+    description: &Value,
+) -> anyhow::Result<()> {
+    if let Some(sdp) = description.get("sdp").and_then(Value::as_str) {
+        validate_sdp_size(sdp)?;
+    }
+    let bytes = serde_json::to_vec(description)?;
+    if bytes.len() <= MAX_SIGNALING_DESCRIPTION_BYTES {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "remote desktop signaling description exceeds {MAX_SIGNALING_DESCRIPTION_BYTES} bytes"
+    )
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn validate_ice_candidate_size(
+    candidate: &Value,
+) -> anyhow::Result<()> {
+    if let Some(candidate_text) = candidate.get("candidate").and_then(Value::as_str) {
+        if candidate_text.len() > MAX_ICE_CANDIDATE_BYTES {
+            anyhow::bail!("ICE candidate row exceeds {MAX_ICE_CANDIDATE_BYTES} bytes");
+        }
+    }
+    let bytes = serde_json::to_vec(candidate)?;
+    if bytes.len() <= MAX_ICE_CANDIDATE_BYTES {
+        return Ok(());
+    }
+    anyhow::bail!("ICE candidate row exceeds {MAX_ICE_CANDIDATE_BYTES} bytes")
 }
 
 /// Require the answer's video media section to send device media.
@@ -143,6 +187,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn remote_ice_candidate_inits(
     if candidate.is_null() {
         return Ok(Vec::new());
     }
+    validate_ice_candidate_size(candidate)?;
     ice_candidate_text(candidate)?;
     let candidate_init: RTCIceCandidateInit = serde_json::from_value(candidate.clone())?;
     Ok(vec![candidate_init])
@@ -235,6 +280,31 @@ mod tests {
                 .to_string();
             assert!(err.contains(expected), "expected {expected:?}; got {err}");
         }
+    }
+
+    #[test]
+    fn signaling_rejects_oversized_sdp_and_ice_rows() {
+        let oversized_sdp = format!(
+            "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n{}",
+            "a=x\r\n".repeat((MAX_SIGNALING_DESCRIPTION_BYTES / 5) + 2)
+        );
+        let sdp_err = validate_remote_offer_sdp(&oversized_sdp)
+            .expect_err("oversized SDP must fail before transport setup")
+            .to_string();
+        assert!(sdp_err.contains("exceeds"), "got {sdp_err}");
+
+        let candidate = json!({
+            "candidate": format!(
+                "candidate:1 1 UDP 2122252543 {} 54400 typ host",
+                "x".repeat(MAX_ICE_CANDIDATE_BYTES)
+            ),
+            "sdpMid": "0",
+            "sdpMLineIndex": 0
+        });
+        let ice_err = remote_ice_candidate_inits(&candidate)
+            .expect_err("oversized ICE candidate must fail before storage")
+            .to_string();
+        assert!(ice_err.contains("exceeds"), "got {ice_err}");
     }
 
     #[test]

@@ -405,11 +405,11 @@ impl RemoteDesktopSession {
         candidate: Value,
         application_state: &str,
         transport_epoch: Option<TransportEpoch>,
-    ) {
+    ) -> anyhow::Result<()> {
         if self.lifecycle.is_terminal() {
-            return;
+            return Ok(());
         }
-        let candidate_count = self.signaling.push_remote_ice_candidate(candidate);
+        let candidate_count = self.signaling.push_remote_ice_candidate(candidate)?;
         self.touch();
         self.push_projected_event(session_events::remote_ice_candidate_added(
             candidate_count,
@@ -417,6 +417,47 @@ impl RemoteDesktopSession {
             transport_epoch.map(TransportEpoch::value),
             self.transport.media_transport_ready(),
         ));
+        Ok(())
+    }
+
+    /// Reserve capacity for one remote ICE candidate before transport side effects.
+    pub(in crate::daemon::plugins::remote_desktop) fn reserve_remote_ice_candidate_slot(
+        &mut self,
+    ) -> anyhow::Result<bool> {
+        if self.lifecycle.is_terminal() {
+            return Ok(false);
+        }
+        self.signaling.reserve_remote_ice_candidate_slot()?;
+        Ok(true)
+    }
+
+    /// Commit a previously reserved remote ICE candidate after transport apply.
+    pub(in crate::daemon::plugins::remote_desktop) fn commit_reserved_remote_ice_candidate(
+        &mut self,
+        candidate: Value,
+        application_state: &str,
+        transport_epoch: Option<TransportEpoch>,
+    ) -> anyhow::Result<()> {
+        if self.lifecycle.is_terminal() {
+            self.signaling.release_remote_ice_candidate_slot();
+            return Ok(());
+        }
+        let candidate_count = self
+            .signaling
+            .commit_reserved_remote_ice_candidate(candidate)?;
+        self.touch();
+        self.push_projected_event(session_events::remote_ice_candidate_added(
+            candidate_count,
+            application_state,
+            transport_epoch.map(TransportEpoch::value),
+            self.transport.media_transport_ready(),
+        ));
+        Ok(())
+    }
+
+    /// Release remote ICE candidate capacity reserved for an uncommitted apply.
+    pub(in crate::daemon::plugins::remote_desktop) fn release_remote_ice_candidate_slot(&mut self) {
+        self.signaling.release_remote_ice_candidate_slot();
     }
 
     /// Mark the diagnostic preview stream attached over InvokeBidi.
@@ -501,17 +542,18 @@ impl RemoteDesktopSession {
     pub(in crate::daemon::plugins::remote_desktop) fn record_local_ice_candidate(
         &mut self,
         candidate: Value,
-    ) {
+    ) -> anyhow::Result<()> {
         if self.lifecycle.is_terminal() {
-            return;
+            return Ok(());
         }
-        let candidate_count = self.signaling.push_local_ice_candidate(candidate.clone());
+        let candidate_count = self.signaling.push_local_ice_candidate(candidate.clone())?;
         self.touch();
         self.push_projected_event(session_events::local_ice_candidate(
             candidate,
             candidate_count,
             self.transport.media_transport_ready(),
         ));
+        Ok(())
     }
 
     /// Record a WebRTC diagnostic event and any state/error fields carried by it.

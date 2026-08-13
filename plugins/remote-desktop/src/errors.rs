@@ -6,9 +6,9 @@
 
 use crate::daemon::plugins::remote_desktop::constants::{
     REASON_CONSENT_RECEIPT_MISMATCH, REASON_CONSENT_RECEIPT_REQUIRED, REASON_INVALID_ARGUMENT,
-    REASON_SESSION_CALLER_MISMATCH, REASON_SESSION_EXPIRED, REASON_SESSION_NOT_FOUND,
-    REASON_SESSION_STORE_FULL, REASON_SESSION_TERMINAL, REASON_SESSION_TOKEN_MISMATCH,
-    REASON_SESSION_TOKEN_REQUIRED,
+    REASON_RESOURCE_EXHAUSTED, REASON_SESSION_CALLER_MISMATCH, REASON_SESSION_EXPIRED,
+    REASON_SESSION_NOT_FOUND, REASON_SESSION_STORE_FULL, REASON_SESSION_TERMINAL,
+    REASON_SESSION_TOKEN_MISMATCH, REASON_SESSION_TOKEN_REQUIRED,
 };
 use axon_sdk::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, SecurityClass};
 
@@ -22,6 +22,11 @@ use axon_sdk::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, Secu
 pub(in crate::daemon::plugins::remote_desktop) enum RemoteDesktopError {
     #[error("{ability}: {detail}; reason={REASON_INVALID_ARGUMENT}")]
     InvalidArgument {
+        ability: &'static str,
+        detail: String,
+    },
+    #[error("{ability}: {detail}; reason={REASON_RESOURCE_EXHAUSTED}")]
+    ResourceExhausted {
         ability: &'static str,
         detail: String,
     },
@@ -87,6 +92,12 @@ impl RemoteDesktopError {
                 AxonErrorKind::InvalidArgument,
                 ErrorCode::RequestPayloadInvalid,
                 ErrorStage::RequestValidation,
+                SecurityClass::Resource,
+            ),
+            Self::ResourceExhausted { .. } => (
+                AxonErrorKind::ResourceExhausted,
+                ErrorCode::ResourceExhausted,
+                ErrorStage::Quota,
                 SecurityClass::Resource,
             ),
             Self::SessionTokenRequired { .. } | Self::ConsentReceiptRequired { .. } => (

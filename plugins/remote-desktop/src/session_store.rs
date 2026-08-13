@@ -183,7 +183,7 @@ impl RemoteDesktopSessionStore {
         if session.transport_epoch() != Some(epoch.value()) {
             return Ok(());
         }
-        session.record_local_ice_candidate(candidate);
+        session.record_local_ice_candidate(candidate)?;
         Ok(())
     }
 
@@ -256,8 +256,12 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    use crate::daemon::plugins::remote_desktop::constants::TRANSPORT_WEBRTC;
+    use crate::daemon::plugins::remote_desktop::constants::{
+        MAX_ICE_CANDIDATE_BYTES, MAX_LOCAL_ICE_CANDIDATES, MAX_SIGNALING_DESCRIPTION_BYTES,
+        TRANSPORT_WEBRTC,
+    };
     use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
+    use crate::daemon::plugins::remote_desktop::view::serialize_session;
 
     fn insert_test_session(store: &RemoteDesktopSessionStore, session_id: &str) {
         store.with_sessions(|sessions| {
@@ -334,6 +338,106 @@ mod tests {
                 json!("candidate:1 1 UDP 2122252543 abc.local 54400 typ host")
             );
         });
+    }
+
+    #[test]
+    fn local_webrtc_candidate_rejects_flood_after_bounded_candidate_cap() {
+        let store = RemoteDesktopSessionStore::new();
+        insert_test_session(&store, "rd-local-candidate-flood");
+
+        for index in 0..MAX_LOCAL_ICE_CANDIDATES {
+            store
+                .record_local_webrtc_candidate(
+                    "rd-local-candidate-flood",
+                    TransportEpoch::new(1),
+                    json!({
+                        "candidate": format!("candidate:{index} 1 UDP 2122252543 127.0.0.1 {} typ host", 41000 + index),
+                        "sdpMid": "0",
+                        "sdpMLineIndex": 0
+                    }),
+                )
+                .expect("candidate within cap records");
+        }
+
+        let err = store
+            .record_local_webrtc_candidate(
+                "rd-local-candidate-flood",
+                TransportEpoch::new(1),
+                json!({
+                    "candidate": "candidate:overflow 1 UDP 2122252543 127.0.0.1 49999 typ host",
+                    "sdpMid": "0",
+                    "sdpMLineIndex": 0
+                }),
+            )
+            .expect_err("candidate over cap must fail closed")
+            .to_string();
+        assert!(
+            err.contains("local ICE candidate cap exceeded"),
+            "got {err}"
+        );
+
+        store.with_sessions(|sessions| {
+            let session = sessions.get("rd-local-candidate-flood").unwrap();
+            assert_eq!(
+                session.local_ice_candidates().len(),
+                MAX_LOCAL_ICE_CANDIDATES,
+                "serialized session view must remain bounded at the local candidate cap"
+            );
+        });
+    }
+
+    #[test]
+    fn serialized_session_view_remains_bounded_at_signaling_limits() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-serialized-bound",
+            "easynet:///r/acme/resource/display.serialized-bound",
+            vec![TRANSPORT_WEBRTC.to_string()],
+        ));
+        let sdp = format!(
+            "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n{}",
+            "a=x\r\n".repeat((MAX_SIGNALING_DESCRIPTION_BYTES / 8).saturating_sub(4096))
+        );
+        let description = json!({ "type": "answer", "sdp": sdp });
+        assert!(
+            serde_json::to_vec(&description).unwrap().len() <= MAX_SIGNALING_DESCRIPTION_BYTES,
+            "fixture must stay within the accepted SDP description cap"
+        );
+        session
+            .set_description("local", description)
+            .expect("max accepted local description records");
+
+        let candidate_pad = "x".repeat(MAX_ICE_CANDIDATE_BYTES.saturating_sub(256));
+        for index in 0..MAX_LOCAL_ICE_CANDIDATES {
+            let candidate = json!({
+                "candidate": format!(
+                    "candidate:{index} 1 UDP 2122252543 127.0.0.1 {} typ host {candidate_pad}",
+                    41000 + index
+                ),
+                "sdpMid": "0",
+                "sdpMLineIndex": 0
+            });
+            assert!(
+                serde_json::to_vec(&candidate).unwrap().len() <= MAX_ICE_CANDIDATE_BYTES,
+                "fixture must stay within the accepted candidate cap"
+            );
+            session
+                .record_local_ice_candidate(candidate)
+                .expect("candidate within cap records");
+        }
+
+        let view = serialize_session(&session);
+        assert_eq!(
+            view["signaling"]["local_ice_candidate_count"],
+            json!(MAX_LOCAL_ICE_CANDIDATES)
+        );
+        let serialized_len = serde_json::to_vec(&view).unwrap().len();
+        let derived_bound = (MAX_SIGNALING_DESCRIPTION_BYTES * 2)
+            + (MAX_LOCAL_ICE_CANDIDATES * MAX_ICE_CANDIDATE_BYTES * 3)
+            + (256 * 1024);
+        assert!(
+            serialized_len <= derived_bound,
+            "serialized session view grew past derived signaling bound: {serialized_len} > {derived_bound}"
+        );
     }
 
     #[test]

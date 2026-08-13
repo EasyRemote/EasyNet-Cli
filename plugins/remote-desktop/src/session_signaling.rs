@@ -6,7 +6,9 @@
 
 use serde_json::{json, Value};
 
-use crate::daemon::plugins::remote_desktop::constants::TRANSPORT_WEBRTC;
+use crate::daemon::plugins::remote_desktop::constants::{
+    MAX_LOCAL_ICE_CANDIDATES, MAX_REMOTE_ICE_CANDIDATES, TRANSPORT_WEBRTC,
+};
 
 /// SDP description accepted for one side of a remote desktop session.
 ///
@@ -52,6 +54,14 @@ impl RemoteDesktopIceCandidate {
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
         self.value.clone()
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(in crate::daemon::plugins::remote_desktop) enum RemoteDesktopSignalingError {
+    #[error("{side} ICE candidate cap exceeded ({limit})")]
+    IceCandidateLimitExceeded { side: &'static str, limit: usize },
+    #[error("remote ICE candidate reservation is missing")]
+    RemoteIceCandidateReservationMissing,
 }
 
 /// Negotiated media codec metadata for a direct WebRTC endpoint.
@@ -134,6 +144,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSignalingStat
     local_description: Option<RemoteDesktopSessionDescription>,
     remote_description: Option<RemoteDesktopSessionDescription>,
     remote_ice_candidates: Vec<RemoteDesktopIceCandidate>,
+    remote_ice_candidate_reservations: usize,
     local_ice_candidates: Vec<RemoteDesktopIceCandidate>,
     webrtc_ice_state: Option<String>,
     webrtc_peer_state: Option<String>,
@@ -147,6 +158,7 @@ impl RemoteDesktopSignalingState {
             local_description: None,
             remote_description: None,
             remote_ice_candidates: Vec::new(),
+            remote_ice_candidate_reservations: 0,
             local_ice_candidates: Vec::new(),
             webrtc_ice_state: None,
             webrtc_peer_state: None,
@@ -225,19 +237,67 @@ impl RemoteDesktopSignalingState {
     pub(in crate::daemon::plugins::remote_desktop) fn push_remote_ice_candidate(
         &mut self,
         candidate: Value,
-    ) -> usize {
+    ) -> anyhow::Result<usize> {
+        self.ensure_remote_ice_candidate_capacity()?;
         self.remote_ice_candidates
             .push(RemoteDesktopIceCandidate::new(candidate));
-        self.remote_ice_candidates.len()
+        Ok(self.remote_ice_candidates.len())
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn reserve_remote_ice_candidate_slot(
+        &mut self,
+    ) -> anyhow::Result<()> {
+        self.ensure_remote_ice_candidate_capacity()?;
+        self.remote_ice_candidate_reservations += 1;
+        Ok(())
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn commit_reserved_remote_ice_candidate(
+        &mut self,
+        candidate: Value,
+    ) -> anyhow::Result<usize> {
+        if self.remote_ice_candidate_reservations == 0 {
+            return Err(RemoteDesktopSignalingError::RemoteIceCandidateReservationMissing.into());
+        }
+        self.remote_ice_candidate_reservations -= 1;
+        self.remote_ice_candidates
+            .push(RemoteDesktopIceCandidate::new(candidate));
+        Ok(self.remote_ice_candidates.len())
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn release_remote_ice_candidate_slot(&mut self) {
+        if self.remote_ice_candidate_reservations > 0 {
+            self.remote_ice_candidate_reservations -= 1;
+        }
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn push_local_ice_candidate(
         &mut self,
         candidate: Value,
-    ) -> usize {
+    ) -> anyhow::Result<usize> {
+        if self.local_ice_candidates.len() >= MAX_LOCAL_ICE_CANDIDATES {
+            return Err(RemoteDesktopSignalingError::IceCandidateLimitExceeded {
+                side: "local",
+                limit: MAX_LOCAL_ICE_CANDIDATES,
+            }
+            .into());
+        }
         self.local_ice_candidates
             .push(RemoteDesktopIceCandidate::new(candidate));
-        self.local_ice_candidates.len()
+        Ok(self.local_ice_candidates.len())
+    }
+
+    fn ensure_remote_ice_candidate_capacity(&self) -> anyhow::Result<()> {
+        if self.remote_ice_candidates.len() + self.remote_ice_candidate_reservations
+            >= MAX_REMOTE_ICE_CANDIDATES
+        {
+            return Err(RemoteDesktopSignalingError::IceCandidateLimitExceeded {
+                side: "remote",
+                limit: MAX_REMOTE_ICE_CANDIDATES,
+            }
+            .into());
+        }
+        Ok(())
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn set_webrtc_error(&mut self, reason: &str) {
@@ -281,6 +341,10 @@ impl RemoteDesktopSignalingState {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    use crate::daemon::plugins::remote_desktop::constants::{
+        MAX_LOCAL_ICE_CANDIDATES, MAX_REMOTE_ICE_CANDIDATES,
+    };
 
     use super::RemoteDesktopSignalingState;
 
@@ -345,5 +409,94 @@ mod tests {
         );
 
         assert_eq!(signaling.webrtc_peer_state(), Some("connected"));
+    }
+
+    #[test]
+    fn remote_desktop_signaling_rejects_more_than_ten_thousand_candidates_without_growth() {
+        const FLOOD_CANDIDATES: usize = 10_001;
+        let mut signaling = RemoteDesktopSignalingState::new();
+        let mut remote_rejected = 0;
+        let mut local_rejected = 0;
+
+        for index in 0..FLOOD_CANDIDATES {
+            let candidate = json!({
+                "candidate": format!("candidate:{index} 1 UDP 2122252543 127.0.0.1 {} typ host", 42000 + (index % 1000)),
+                "sdpMid": "0",
+                "sdpMLineIndex": 0
+            });
+            if signaling
+                .push_remote_ice_candidate(candidate.clone())
+                .is_err()
+            {
+                remote_rejected += 1;
+            }
+            if signaling.push_local_ice_candidate(candidate).is_err() {
+                local_rejected += 1;
+            }
+        }
+
+        assert_eq!(
+            signaling.remote_ice_candidates().len(),
+            MAX_REMOTE_ICE_CANDIDATES,
+            "remote serialized session view must remain bounded under candidate flood"
+        );
+        assert_eq!(
+            signaling.local_ice_candidates().len(),
+            MAX_LOCAL_ICE_CANDIDATES,
+            "local serialized session view must remain bounded under candidate flood"
+        );
+        assert_eq!(
+            remote_rejected,
+            FLOOD_CANDIDATES - MAX_REMOTE_ICE_CANDIDATES
+        );
+        assert_eq!(local_rejected, FLOOD_CANDIDATES - MAX_LOCAL_ICE_CANDIDATES);
+    }
+
+    #[test]
+    fn remote_ice_candidate_reservations_count_against_candidate_cap() {
+        let mut signaling = RemoteDesktopSignalingState::new();
+        for index in 0..(MAX_REMOTE_ICE_CANDIDATES - 1) {
+            signaling
+                .push_remote_ice_candidate(json!({
+                    "candidate": format!("candidate:{index} 1 UDP 2122252543 127.0.0.1 {} typ host", 43000 + index),
+                    "sdpMid": "0",
+                    "sdpMLineIndex": 0
+                }))
+                .expect("candidate within cap records");
+        }
+
+        signaling
+            .reserve_remote_ice_candidate_slot()
+            .expect("last slot can be reserved before transport apply");
+        let err = signaling
+            .push_remote_ice_candidate(json!({
+                "candidate": "candidate:blocked 1 UDP 2122252543 127.0.0.1 49999 typ host",
+                "sdpMid": "0",
+                "sdpMLineIndex": 0
+            }))
+            .expect_err("reserved slot must block extra remote candidate admission")
+            .to_string();
+        assert!(
+            err.contains("remote ICE candidate cap exceeded"),
+            "got {err}"
+        );
+        assert_eq!(
+            signaling.remote_ice_candidates().len(),
+            MAX_REMOTE_ICE_CANDIDATES - 1,
+            "reserved but uncommitted candidate must not enter serialized state"
+        );
+
+        signaling.release_remote_ice_candidate_slot();
+        signaling
+            .push_remote_ice_candidate(json!({
+                "candidate": "candidate:after-release 1 UDP 2122252543 127.0.0.1 50000 typ host",
+                "sdpMid": "0",
+                "sdpMLineIndex": 0
+            }))
+            .expect("released reservation restores one candidate slot");
+        assert_eq!(
+            signaling.remote_ice_candidates().len(),
+            MAX_REMOTE_ICE_CANDIDATES
+        );
     }
 }
