@@ -26,7 +26,7 @@
 //   "resources": [
 //     {
 //       "resource_ura":  "easynet:///r/<realm>/resource/<id>",
-//       "owner_agent":   "easynet:///r/<realm>/agent/<id>",
+//       "owner_agent":   "easynet:///r/<realm>/agent/device.<device-id>.<system-agent-id>",
 //       "type":          "mic" | "camera" | "display" | "application" |
 //                        "window" | "speaker" | "voice" | "asr_model",
 //       "binding":       "local_device" | "virtual",
@@ -51,6 +51,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -172,9 +173,9 @@ pub struct ResourceEntry {
     /// operators clean and republish local state instead of silently rewriting
     /// subject authority.
     pub resource_ura: String,
-    /// Owner Agent's URA. Device-local media resources require this to be the
-    /// hosting device URA at insert/update time; pre-join local-device rows are
-    /// no longer persisted.
+    /// Owner Agent's URA. Device-local media resources require this to be a
+    /// device-sponsored SystemAgent URA at insert/update time; pre-join
+    /// local-device rows are no longer persisted.
     pub owner_agent: String,
     /// Resource type (renamed from `type` to a Rust-idiomatic
     /// `kind` so call sites avoid the `r#type` raw-identifier
@@ -280,12 +281,14 @@ fn build_device_stream_resource_ura(
     )
 }
 
-fn owner_device_id(realm: &str, owner_agent: &str) -> Option<String> {
+fn local_device_resource_host_device_id(realm: &str, owner_agent: &str) -> Option<String> {
     let parsed = crate::core::ura::parse_ura(owner_agent).ok()?;
-    if parsed.kind != crate::core::ura::URAKind::Device || parsed.realm != realm {
+    if parsed.kind != crate::core::ura::URAKind::Agent || parsed.realm != realm {
         return None;
     }
-    parsed.device_id().map(str::to_string)
+    parsed
+        .device_agent_ids()
+        .map(|(device_id, _system_agent_id)| device_id.to_string())
 }
 
 fn canonical_resource_ura_for_new(
@@ -293,9 +296,10 @@ fn canonical_resource_ura_for_new(
     resource_id: &str,
 ) -> anyhow::Result<String> {
     if spec.binding == ResourceBinding::LocalDevice {
-        let device_id = owner_device_id(spec.realm, spec.owner_agent).ok_or_else(|| {
+        let device_id = local_device_resource_host_device_id(spec.realm, spec.owner_agent)
+            .ok_or_else(|| {
             anyhow::anyhow!(
-                "local-device resource {:?} requires owner_agent to be a device URA in realm {:?}",
+                "local-device resource {:?} requires owner_agent to be a device-sponsored SystemAgent URA in realm {:?}",
                 spec.hardware_id,
                 spec.realm
             )
@@ -319,9 +323,9 @@ fn ensure_existing_resource_ura_is_canonical(
     if entry.binding != ResourceBinding::LocalDevice {
         return Ok(());
     }
-    let device_id = owner_device_id(realm, owner_agent).ok_or_else(|| {
+    let device_id = local_device_resource_host_device_id(realm, owner_agent).ok_or_else(|| {
         anyhow::anyhow!(
-            "local-device resource {:?} requires owner_agent to be a device URA in realm {:?}",
+            "local-device resource {:?} requires owner_agent to be a device-sponsored SystemAgent URA in realm {:?}",
             entry.hardware_id,
             realm
         )
@@ -392,12 +396,58 @@ pub fn upsert_resource(
     spec: ResourceUpsert<'_>,
 ) -> anyhow::Result<String> {
     let now = chrono::Utc::now().to_rfc3339();
-    if let Some(entry) = file
+    let existing_index = file
         .resources
-        .iter_mut()
-        .find(|e| e.hardware_id == spec.hardware_id)
-    {
+        .iter()
+        .position(|entry| entry.hardware_id == spec.hardware_id);
+    apply_resource_upsert(file, spec, existing_index, &now)
+}
+
+/// Insert/update a batch of resource entries using one hardware-id index.
+///
+/// This preserves the same canonical URA and update semantics as
+/// `upsert_resource`, but avoids the O(R*N) scan pattern that is unacceptable
+/// for live remote-target inventory refreshes with many persisted rows and
+/// many current windows/applications.
+pub fn upsert_resources_indexed<'a>(
+    file: &mut ResourcesFile,
+    specs: impl IntoIterator<Item = ResourceUpsert<'a>>,
+) -> anyhow::Result<Vec<String>> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut index = file
+        .resources
+        .iter()
+        .enumerate()
+        .map(|(idx, entry)| (entry.hardware_id.clone(), idx))
+        .collect::<HashMap<_, _>>();
+    let mut resource_uras = Vec::new();
+    for spec in specs {
+        let existing_index = index.get(spec.hardware_id).copied();
+        let hardware_id = spec.hardware_id.to_string();
+        let resource_ura = apply_resource_upsert(file, spec, existing_index, &now)?;
+        if existing_index.is_none() {
+            index.insert(hardware_id, file.resources.len() - 1);
+        }
+        resource_uras.push(resource_ura);
+    }
+    Ok(resource_uras)
+}
+
+fn apply_resource_upsert(
+    file: &mut ResourcesFile,
+    spec: ResourceUpsert<'_>,
+    existing_index: Option<usize>,
+    now: &str,
+) -> anyhow::Result<String> {
+    if let Some(index) = existing_index {
+        let entry = file.resources.get(index).ok_or_else(|| {
+            anyhow::anyhow!(
+                "resource upsert index for hardware_id {:?} is out of bounds",
+                spec.hardware_id
+            )
+        })?;
         ensure_existing_resource_ura_is_canonical(spec.realm, spec.owner_agent, entry.kind, entry)?;
+        let entry = &mut file.resources[index];
         entry.owner_agent = spec.owner_agent.to_string();
         entry.display_name = spec.display_name.to_string();
         entry.metadata = spec.metadata;
@@ -413,7 +463,7 @@ pub fn upsert_resource(
         hardware_id: spec.hardware_id.to_string(),
         display_name: spec.display_name.to_string(),
         metadata: spec.metadata,
-        first_seen_at: now,
+        first_seen_at: now.to_string(),
     });
     Ok(resource_ura)
 }
@@ -454,7 +504,7 @@ mod tests {
     ) -> ResourceUpsert<'a> {
         ResourceUpsert {
             realm: "acme",
-            owner_agent: "easynet:///r/acme/device/01DEV",
+            owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
             kind,
             binding: ResourceBinding::LocalDevice,
             hardware_id,
@@ -483,7 +533,7 @@ mod tests {
         let ura = upsert_resource(
             &mut f,
             ResourceUpsert {
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 metadata: json!({"sample_rates":[16000,48000]}),
                 ..spec(
                     ResourceType::Mic,
@@ -512,7 +562,10 @@ mod tests {
         assert_eq!(f.resources[0].kind, ResourceType::Mic);
         assert_eq!(f.resources[0].hardware_id, "BuiltInMic-AAPL-0001");
         assert_eq!(f.resources[0].display_name, "Built-in Microphone");
-        assert_eq!(f.resources[0].owner_agent, "easynet:///r/acme/device/01DEV");
+        assert_eq!(
+            f.resources[0].owner_agent,
+            "easynet:///r/acme/agent/device.01DEV.media"
+        );
     }
 
     #[test]
@@ -534,7 +587,7 @@ mod tests {
         let error = upsert_resource(
             &mut f,
             ResourceUpsert {
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 metadata: json!({"max_fps":30}),
                 ..spec(ResourceType::Camera, "Camera-USB-12345", "Renamed Camera")
             },
@@ -577,6 +630,43 @@ mod tests {
         // display_name + metadata mutated; resource_ura stable.
         assert_eq!(f.resources[0].display_name, "Logitech C920 (Renamed)");
         assert_eq!(f.resources[0].metadata["max_fps"], 30);
+    }
+
+    #[test]
+    fn indexed_batch_upsert_preserves_single_upsert_semantics() {
+        let mut f = empty();
+        let existing_ura = upsert_resource(
+            &mut f,
+            spec(ResourceType::Window, "window:1", "Original Window"),
+        )
+        .expect("seed existing window");
+
+        let uras = upsert_resources_indexed(
+            &mut f,
+            vec![
+                ResourceUpsert {
+                    metadata: json!({"window_id": 1, "title": "Renamed"}),
+                    ..spec(ResourceType::Window, "window:1", "Renamed Window")
+                },
+                ResourceUpsert {
+                    metadata: json!({"window_id": 2, "title": "New"}),
+                    ..spec(ResourceType::Window, "window:2", "New Window")
+                },
+            ],
+        )
+        .expect("indexed batch upsert");
+
+        assert_eq!(uras.len(), 2);
+        assert_eq!(uras[0], existing_ura);
+        assert_ne!(uras[1], existing_ura);
+        assert_eq!(f.resources.len(), 2);
+        let existing = lookup_by_hardware_id(&f, "window:1").expect("existing");
+        assert_eq!(existing.resource_ura, existing_ura);
+        assert_eq!(existing.display_name, "Renamed Window");
+        assert_eq!(existing.metadata["title"], json!("Renamed"));
+        let inserted = lookup_by_hardware_id(&f, "window:2").expect("inserted");
+        assert_eq!(inserted.display_name, "New Window");
+        assert_eq!(inserted.metadata["title"], json!("New"));
     }
 
     #[test]
@@ -653,7 +743,30 @@ mod tests {
         )
         .expect_err("local-device resources require a device owner");
         assert!(
-            error.to_string().contains("requires owner_agent"),
+            error
+                .to_string()
+                .contains("device-sponsored SystemAgent URA"),
+            "unexpected error: {error}"
+        );
+        assert!(f.resources.is_empty());
+    }
+
+    #[test]
+    fn local_device_upsert_rejects_device_ura_as_owner_agent() {
+        let mut f = empty();
+        let error = upsert_resource(
+            &mut f,
+            ResourceUpsert {
+                owner_agent: "easynet:///r/acme/device/01DEV",
+                ..spec(ResourceType::Mic, "h-device-owner", "Mic")
+            },
+        )
+        .expect_err("Device is host substrate, not the owner Agent");
+
+        assert!(
+            error
+                .to_string()
+                .contains("device-sponsored SystemAgent URA"),
             "unexpected error: {error}"
         );
         assert!(f.resources.is_empty());
@@ -671,7 +784,7 @@ mod tests {
         upsert_resource(
             &mut f,
             ResourceUpsert {
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 metadata: json!({"max_fps":60,"resolutions":["640x480","1280x720"]}),
                 ..spec(ResourceType::Camera, "h-cam-1", "Webcam")
             },
@@ -707,7 +820,7 @@ mod tests {
     fn existing_resource_entry_requires_owner_agent_display_name_and_metadata() {
         let base = serde_json::json!({
             "resource_ura": "easynet:///r/acme/resource/device.01DEV/streams/mic.01RES",
-            "owner_agent": "easynet:///r/acme/device/01DEV",
+            "owner_agent": "easynet:///r/acme/agent/device.01DEV.media",
             "type": "mic",
             "binding": "local_device",
             "hardware_id": "BuiltInMic-AAPL-0001",
@@ -752,7 +865,7 @@ mod tests {
         let row_error = serde_json::from_value::<ResourcesFile>(serde_json::json!({
             "resources": [{
                 "resource_ura": "easynet:///r/acme/resource/device.01DEV/streams/mic.01RES",
-                "owner_agent": "easynet:///r/acme/device/01DEV",
+                "owner_agent": "easynet:///r/acme/agent/device.01DEV.media",
                 "type": "mic",
                 "binding": "local_device",
                 "hardware_id": "BuiltInMic-AAPL-0001",
