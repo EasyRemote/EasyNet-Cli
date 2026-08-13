@@ -16,8 +16,8 @@ use crate::daemon::invocation::admission::decision::{
     PrincipalKind, TokenClass,
 };
 use crate::daemon::invocation::admission::device_caller::{
-    admitted_device_policy_purpose, classify_public_invocation_caller, CallerKindAdmission,
-    DeviceCallerAdmissionError, DeviceCallerPolicyScope, DeviceCallerPurpose,
+    admitted_device_policy_purpose, DeviceCallerPolicyScope, DeviceCallerPurpose,
+    VerifiedDeviceInvocationPurpose,
 };
 use crate::daemon::invocation::admission::owner_resolution::{
     OwnerFact, OwnerResolutionInput, OwnerResolver,
@@ -33,7 +33,7 @@ pub(crate) enum TrustedCallerPath {
     User,
     Hub,
     Backend,
-    DeviceCustody,
+    DeviceCustody(VerifiedDeviceInvocationPurpose),
     AgentDeviceCustody,
 }
 
@@ -46,27 +46,51 @@ pub(crate) enum VerifiedCallerEvidence {
 }
 
 impl TrustedCallerPath {
+    /// Classify the immediate actor of a runtime-derived child.
+    ///
+    /// This path is entered only after Axon has proven that the child caller
+    /// is the admitted parent's exact callee and bound the child to the
+    /// parent's scalar receipt capability. It therefore classifies the actor
+    /// shape without requiring a second, independently registered key for a
+    /// transient SystemAgent execution identity.
+    pub(crate) fn from_derived_child_caller(caller_ura: &str) -> Result<Self, Status> {
+        let caller = parse_ura(caller_ura).map_err(|error| {
+            Status::invalid_argument(format!(
+                "DERIVED_CHILD_CALLER_URA_INVALID: caller `{caller_ura}` is not canonical: {error}"
+            ))
+        })?;
+        match caller.kind {
+            URAKind::Agent | URAKind::Service => Ok(Self::AgentDeviceCustody),
+            URAKind::Authority => Ok(Self::Hub),
+            _ => Err(Status::invalid_argument(format!(
+                "DERIVED_CHILD_CALLER_KIND_MISMATCH: derived child caller `{caller_ura}` must be the parent callable Agent, Service, or Authority"
+            ))),
+        }
+    }
+
     pub(crate) fn from_verified_invocation_caller(
         caller_ura: &str,
         evidence: VerifiedCallerEvidence,
         public_ability: &str,
+        device_purpose: Option<VerifiedDeviceInvocationPurpose>,
     ) -> Result<Self, Status> {
-        let path = match evidence {
+        match evidence {
             VerifiedCallerEvidence::TrustAnchorRole(role)
             | VerifiedCallerEvidence::PrincipalLifecycleRole(role) => {
-                Self::from_trust_anchor_role_and_caller(role, caller_ura)?
+                Self::from_trust_anchor_role_and_caller(
+                    role,
+                    caller_ura,
+                    public_ability,
+                    device_purpose,
+                )
             }
             VerifiedCallerEvidence::LocalHostedAgentKey => {
-                Self::from_local_hosted_agent_custody(caller_ura)?
+                Self::from_local_hosted_agent_custody(caller_ura)
             }
             VerifiedCallerEvidence::Federated => {
-                Self::from_federated_invocation_caller(caller_ura, public_ability)?
+                Self::from_federated_invocation_caller(caller_ura, public_ability, device_purpose)
             }
-        };
-        if path == Self::DeviceCustody {
-            require_device_caller_purpose(caller_ura, public_ability)?;
         }
-        Ok(path)
     }
 
     pub(crate) fn from_local_hosted_agent_custody(caller_ura: &str) -> Result<Self, Status> {
@@ -86,6 +110,7 @@ impl TrustedCallerPath {
     pub(crate) fn from_federated_invocation_caller(
         caller_ura: &str,
         public_ability: &str,
+        device_purpose: Option<VerifiedDeviceInvocationPurpose>,
     ) -> Result<Self, Status> {
         let caller = parse_ura(caller_ura).map_err(|error| {
             Status::invalid_argument(format!(
@@ -95,8 +120,12 @@ impl TrustedCallerPath {
         match caller.kind {
             URAKind::Agent => Ok(Self::AgentDeviceCustody),
             URAKind::Device => {
-                require_device_caller_purpose(caller_ura, public_ability)?;
-                Ok(Self::DeviceCustody)
+                let purpose = require_device_caller_purpose(
+                    caller_ura,
+                    public_ability,
+                    device_purpose,
+                )?;
+                Ok(Self::DeviceCustody(purpose))
             }
             URAKind::User => Ok(Self::User),
             URAKind::Authority => Ok(Self::Hub),
@@ -109,6 +138,8 @@ impl TrustedCallerPath {
     fn from_trust_anchor_role_and_caller(
         role: TrustAnchorRole,
         caller_ura: &str,
+        public_ability: &str,
+        device_purpose: Option<VerifiedDeviceInvocationPurpose>,
     ) -> Result<Self, Status> {
         match role {
             TrustAnchorRole::User => Ok(Self::User),
@@ -122,7 +153,14 @@ impl TrustedCallerPath {
                 })?;
                 match caller.kind {
                     URAKind::Agent => Ok(Self::AgentDeviceCustody),
-                    URAKind::Device => Ok(Self::DeviceCustody),
+                    URAKind::Device => {
+                        let purpose = require_device_caller_purpose(
+                            caller_ura,
+                            public_ability,
+                            device_purpose,
+                        )?;
+                        Ok(Self::DeviceCustody(purpose))
+                    }
                     _ => Err(Status::invalid_argument(format!(
                         "TRUST_PATH_KIND_MISMATCH: device-custody caller `{caller_ura}` must be a Device or Agent URA"
                     ))),
@@ -135,26 +173,20 @@ impl TrustedCallerPath {
 fn require_device_caller_purpose(
     caller_ura: &str,
     public_ability: &str,
-) -> Result<DeviceCallerPurpose, Status> {
-    match classify_public_invocation_caller(caller_ura, public_ability) {
-        Ok(CallerKindAdmission::Device(purpose)) => Ok(purpose),
-        Ok(CallerKindAdmission::NonDevice) => Err(Status::invalid_argument(format!(
-            "DEVICE_CALLER_KIND_MISMATCH: caller `{caller_ura}` did not parse as a Device caller"
-        ))),
-        Err(DeviceCallerAdmissionError::DeviceCallerNotAllowed { public_ability }) => {
-            Err(Status::permission_denied(format!(
-                "DEVICE_CALLER_PURPOSE_DENIED: Device caller is not allowed for public ability `{public_ability}`"
-            )))
-        }
-        Err(DeviceCallerAdmissionError::InvalidCallerUra(message)) => {
-            Err(Status::invalid_argument(message))
-        }
-        Err(DeviceCallerAdmissionError::NonActorCaller { kind }) => {
-            Err(Status::invalid_argument(format!(
-                "DEVICE_CALLER_KIND_MISMATCH: Device caller purpose classifier rejected non-actor kind {kind:?}"
-            )))
-        }
+    device_purpose: Option<VerifiedDeviceInvocationPurpose>,
+) -> Result<VerifiedDeviceInvocationPurpose, Status> {
+    let Some(purpose) = device_purpose else {
+        return Err(Status::permission_denied(format!(
+            "DEVICE_CALLER_PURPOSE_UNVERIFIED: Device caller `{caller_ura}` has no verified invocation purpose for `{public_ability}`"
+        )));
+    };
+    if !purpose.supports_public_ability(public_ability) {
+        return Err(Status::permission_denied(format!(
+            "DEVICE_CALLER_PURPOSE_MISMATCH: Device caller `{caller_ura}` presented {:?} for `{public_ability}`",
+            purpose.purpose()
+        )));
     }
+    Ok(purpose)
 }
 
 #[derive(Debug, Clone)]
@@ -300,16 +332,44 @@ impl AdmissionPolicyGate {
         );
         push_system_rule(
             &mut system_rule_matches,
+            device_lifecycle_self_revoke_manage_scope(
+                &verified_caller.caller_ura,
+                &callee_ura,
+                &subject_ura,
+                &ability_ura,
+                context.daemon_ura,
+                verified_caller.trust_path,
+                context.action,
+            ),
+            SystemPolicyRuleMatch::DeviceLifecycleSelfRevokeManage,
+        );
+        push_system_rule(
+            &mut system_rule_matches,
+            device_hosted_agent_retraction_manage_scope(
+                &verified_caller.caller_ura,
+                &callee_ura,
+                &subject_ura,
+                &ability_ura,
+                context.daemon_ura,
+                verified_caller.trust_path,
+                context.action,
+            ),
+            SystemPolicyRuleMatch::DeviceHostedAgentRetractionManage,
+        );
+        push_system_rule(
+            &mut system_rule_matches,
             remote_owner_forward_allowed(
                 &verified_caller.caller_ura,
                 &callee_ura,
                 context.daemon_ura,
+                verified_caller.trust_path,
                 context.trust_anchor,
             ),
             SystemPolicyRuleMatch::RemoteOwnerForward,
         );
         let invocation_lifecycle_control =
             invocation_lifecycle_control_scope(context.ability, context.action);
+        let device_invocation_purpose = verified_caller.principal.device_invocation_purpose;
         let accountable_principal = context
             .accountable_principal
             .unwrap_or(verified_caller.principal);
@@ -321,6 +381,7 @@ impl AdmissionPolicyGate {
             principal_id: accountable_principal.id,
             token_id: accountable_principal.token_id,
             token_class: accountable_principal.token_class,
+            device_invocation_purpose,
             callee_ura,
             subject_ura,
             ability_ura,
@@ -397,6 +458,7 @@ pub(crate) struct PrincipalProjection {
     pub(crate) token_id: Option<String>,
     pub(crate) token_class: Option<TokenClass>,
     pub(crate) caller_user_ura: Option<String>,
+    pub(crate) device_invocation_purpose: Option<VerifiedDeviceInvocationPurpose>,
 }
 
 impl PrincipalProjection {
@@ -412,6 +474,7 @@ impl PrincipalProjection {
             token_id: None,
             token_class: None,
             caller_user_ura: Some(user_ura),
+            device_invocation_purpose: None,
         })
     }
 }
@@ -456,6 +519,7 @@ pub(crate) fn principal_for(
                 token_id: None,
                 token_class: None,
                 caller_user_ura: Some(user_ura),
+                device_invocation_purpose: None,
             })
         }
         TrustedCallerPath::Hub => Ok(PrincipalProjection {
@@ -464,6 +528,7 @@ pub(crate) fn principal_for(
             token_id: Some(caller_ura.to_string()),
             token_class: Some(TokenClass::HubLink),
             caller_user_ura: None,
+            device_invocation_purpose: None,
         }),
         TrustedCallerPath::AgentDeviceCustody => Ok(PrincipalProjection {
             kind: PrincipalKind::Agent,
@@ -471,13 +536,17 @@ pub(crate) fn principal_for(
             token_id: None,
             token_class: None,
             caller_user_ura: None,
+            device_invocation_purpose: None,
         }),
-        TrustedCallerPath::DeviceCustody => Ok(PrincipalProjection {
+        TrustedCallerPath::DeviceCustody(purpose) => Ok(PrincipalProjection {
             kind: PrincipalKind::DeviceCustody,
             id: caller_ura.to_string(),
             token_id: Some(caller_ura.to_string()),
-            token_class: Some(TokenClass::DevicePairing),
+            token_class: purpose
+                .carries_pairing_token_scope()
+                .then_some(TokenClass::DevicePairing),
             caller_user_ura: None,
+            device_invocation_purpose: Some(purpose),
         }),
         TrustedCallerPath::Backend => Ok(PrincipalProjection {
             kind: PrincipalKind::Service,
@@ -485,6 +554,7 @@ pub(crate) fn principal_for(
             token_id: None,
             token_class: None,
             caller_user_ura: None,
+            device_invocation_purpose: None,
         }),
     }
 }
@@ -534,6 +604,14 @@ fn owner_fact_from_ura(
                 None
             }
         }
+        URAKind::Service => {
+            if let Some((principal_id, _)) = parsed.service_ids() {
+                let owner_ura = crate::core::ura::user_ura(&parsed.realm, principal_id);
+                Some(OwnerFact::user_ura(owner_ura.clone(), owner_ura))
+            } else {
+                None
+            }
+        }
         URAKind::Ability => match parsed.ability().map(|ability| ability.owner) {
             Some(AbilityOwner::Agent { user_id, agent_id }) => owner_fact_from_trust_anchor(
                 &crate::core::ura::agent_ura(&parsed.realm, &user_id, &agent_id),
@@ -544,6 +622,10 @@ fn owner_fact_from_ura(
                 Some(OwnerFact::user_ura(owner_ura.clone(), owner_ura))
             }),
             Some(AbilityOwner::Device { .. }) => None,
+            Some(AbilityOwner::Service { principal_id, .. }) => {
+                let owner_ura = crate::core::ura::user_ura(&parsed.realm, &principal_id);
+                Some(OwnerFact::user_ura(owner_ura.clone(), owner_ura))
+            }
             Some(AbilityOwner::SystemAgent {
                 device_id,
                 agent_id: _,
@@ -595,8 +677,12 @@ fn remote_owner_forward_allowed(
     caller_ura: &str,
     callee_ura: &str,
     daemon_ura: Option<&str>,
+    trusted_path: TrustedCallerPath,
     trust_anchor: &RealmTrustAnchor,
 ) -> bool {
+    if matches!(trusted_path, TrustedCallerPath::DeviceCustody(_)) {
+        return false;
+    }
     let Some(daemon_ura) = daemon_ura else {
         return false;
     };
@@ -715,44 +801,135 @@ fn authority_peer_directory_stream_scope(
     action: AccessAction,
     trust_anchor: &RealmTrustAnchor,
 ) -> bool {
-    if action != AccessAction::Stream || trusted_path != TrustedCallerPath::Hub {
-        return false;
+    matches!(
+        VerifiedAuthorityPeerDirectoryStream::classify(
+            caller_ura,
+            callee_ura,
+            subject_ura,
+            ability_ura,
+            daemon_ura,
+            trusted_path,
+            action,
+            trust_anchor,
+        ),
+        AuthorityPeerDirectoryStreamMatch::Verified(_)
+    )
+}
+
+/// Typed proof that a signed peer Authority is opening the one canonical
+/// cross-realm directory stream owned by that caller. This is deliberately
+/// narrower than generic Resource authority and is shared by the pre-metadata
+/// authority gate and the RFC-014 system policy rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VerifiedAuthorityPeerDirectoryStream {
+    authority_id: String,
+    policy_ura: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AuthorityPeerDirectoryStreamMatch {
+    NotApplicable,
+    Verified(VerifiedAuthorityPeerDirectoryStream),
+    Denied(&'static str),
+}
+
+impl AuthorityPeerDirectoryStreamMatch {
+    pub(crate) fn into_result(
+        self,
+    ) -> Result<Option<VerifiedAuthorityPeerDirectoryStream>, &'static str> {
+        match self {
+            Self::NotApplicable => Ok(None),
+            Self::Verified(authority) => Ok(Some(authority)),
+            Self::Denied(reason) => Err(reason),
+        }
     }
-    if Some(callee_ura) != daemon_ura || caller_ura == callee_ura {
-        return false;
-    }
-    let Ok(caller) = parse_ura(caller_ura) else {
-        return false;
-    };
-    let Ok(callee) = parse_ura(callee_ura) else {
-        return false;
-    };
-    if caller.kind != URAKind::Authority
-        || callee.kind != URAKind::Authority
-        || caller.realm == callee.realm
-    {
-        return false;
-    }
-    if !trust_anchor.has_federation_peer_for_realm(&caller.realm) {
-        return false;
-    }
-    if ability_ura
-        != crate::core::ura::owner_ability_ura(
+}
+
+impl VerifiedAuthorityPeerDirectoryStream {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the proof binds every signed invocation and trust fact explicitly"
+    )]
+    pub(crate) fn classify(
+        caller_ura: &str,
+        callee_ura: &str,
+        subject_ura: &str,
+        ability_ura: &str,
+        daemon_ura: Option<&str>,
+        trusted_path: TrustedCallerPath,
+        action: AccessAction,
+        trust_anchor: &RealmTrustAnchor,
+    ) -> AuthorityPeerDirectoryStreamMatch {
+        let Ok(caller) = parse_ura(caller_ura) else {
+            return AuthorityPeerDirectoryStreamMatch::NotApplicable;
+        };
+        let Ok(callee) = parse_ura(callee_ura) else {
+            return AuthorityPeerDirectoryStreamMatch::NotApplicable;
+        };
+        let expected_ability_ura = crate::core::ura::owner_ability_ura(
             callee_ura,
             crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
         )
-        .unwrap_or_default()
-    {
-        return false;
+        .unwrap_or_default();
+        if trusted_path != TrustedCallerPath::Hub
+            || caller.kind != URAKind::Authority
+            || callee.kind != URAKind::Authority
+            || caller_ura == callee_ura
+            || ability_ura != expected_ability_ura
+        {
+            return AuthorityPeerDirectoryStreamMatch::NotApplicable;
+        }
+        if action != AccessAction::Stream {
+            return AuthorityPeerDirectoryStreamMatch::Denied(
+                "directory subscription requires stream action",
+            );
+        }
+        if Some(callee_ura) != daemon_ura {
+            return AuthorityPeerDirectoryStreamMatch::Denied(
+                "callee must be the selected local Authority",
+            );
+        }
+        if caller.realm == callee.realm {
+            return AuthorityPeerDirectoryStreamMatch::Denied(
+                "peer and local Authority realms must differ",
+            );
+        }
+        if !trust_anchor.has_federation_peer_for_realm(&caller.realm) {
+            return AuthorityPeerDirectoryStreamMatch::Denied(
+                "caller realm is not a trusted federation peer",
+            );
+        }
+        let Ok(subject) = parse_ura(subject_ura) else {
+            return AuthorityPeerDirectoryStreamMatch::Denied("directory subject is not canonical");
+        };
+        let expected_subject_path = format!("directory/{}", callee.realm);
+        if !(subject.kind == URAKind::Resource
+            && subject.realm == caller.realm
+            && subject.resource_owner_id() == Some("hub.federation")
+            && subject.resource_path() == Some(expected_subject_path.as_str()))
+        {
+            return AuthorityPeerDirectoryStreamMatch::Denied(
+                "directory subject does not exactly bind caller and callee realms",
+            );
+        }
+        let policy_ura = crate::core::ura::resource_dot_ura(
+            &callee.realm,
+            "hub.federation",
+            "policy/system.authority.peer_directory_stream",
+        );
+        AuthorityPeerDirectoryStreamMatch::Verified(Self {
+            authority_id: format!("peer-directory-stream:{caller_ura}:{callee_ura}"),
+            policy_ura,
+        })
     }
-    let Ok(subject) = parse_ura(subject_ura) else {
-        return false;
-    };
-    let expected_subject_path = format!("directory/{}", callee.realm);
-    subject.kind == URAKind::Resource
-        && subject.realm == caller.realm
-        && subject.resource_owner_id() == Some("hub.federation")
-        && subject.resource_path() == Some(expected_subject_path.as_str())
+
+    pub(crate) fn authority_id(&self) -> &str {
+        &self.authority_id
+    }
+
+    pub(crate) fn policy_ura(&self) -> &str {
+        &self.policy_ura
+    }
 }
 
 #[expect(
@@ -801,9 +978,9 @@ fn device_publication_custody_manage_scope(
     trusted_path: TrustedCallerPath,
     action: AccessAction,
 ) -> bool {
-    if trusted_path != TrustedCallerPath::DeviceCustody {
+    let TrustedCallerPath::DeviceCustody(path_purpose) = trusted_path else {
         return false;
-    }
+    };
     admitted_device_policy_purpose(DeviceCallerPolicyScope {
         caller_ura,
         callee_ura,
@@ -811,7 +988,8 @@ fn device_publication_custody_manage_scope(
         ability_ura,
         daemon_ura,
         action,
-    }) == Some(DeviceCallerPurpose::PublicationCustody)
+    }) == Some(path_purpose)
+        && path_purpose.is(DeviceCallerPurpose::PublicationCustody)
 }
 
 fn device_self_session_stream_scope(
@@ -823,9 +1001,9 @@ fn device_self_session_stream_scope(
     trusted_path: TrustedCallerPath,
     action: AccessAction,
 ) -> bool {
-    if trusted_path != TrustedCallerPath::DeviceCustody {
+    let TrustedCallerPath::DeviceCustody(path_purpose) = trusted_path else {
         return false;
-    }
+    };
     admitted_device_policy_purpose(DeviceCallerPolicyScope {
         caller_ura,
         callee_ura,
@@ -833,7 +1011,54 @@ fn device_self_session_stream_scope(
         ability_ura,
         daemon_ura,
         action,
-    }) == Some(DeviceCallerPurpose::SessionControl)
+    }) == Some(path_purpose)
+        && path_purpose.is(DeviceCallerPurpose::DeviceSelfSession)
+}
+
+fn device_lifecycle_self_revoke_manage_scope(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability_ura: &str,
+    daemon_ura: Option<&str>,
+    trusted_path: TrustedCallerPath,
+    action: AccessAction,
+) -> bool {
+    let TrustedCallerPath::DeviceCustody(path_purpose) = trusted_path else {
+        return false;
+    };
+    admitted_device_policy_purpose(DeviceCallerPolicyScope {
+        caller_ura,
+        callee_ura,
+        subject_ura,
+        ability_ura,
+        daemon_ura,
+        action,
+    }) == Some(path_purpose)
+        && path_purpose.is(DeviceCallerPurpose::LifecycleSelfRevoke)
+}
+
+fn device_hosted_agent_retraction_manage_scope(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    ability_ura: &str,
+    daemon_ura: Option<&str>,
+    trusted_path: TrustedCallerPath,
+    action: AccessAction,
+) -> bool {
+    let TrustedCallerPath::DeviceCustody(path_purpose) = trusted_path else {
+        return false;
+    };
+    admitted_device_policy_purpose(DeviceCallerPolicyScope {
+        caller_ura,
+        callee_ura,
+        subject_ura,
+        ability_ura,
+        daemon_ura,
+        action,
+    }) == Some(path_purpose)
+        && path_purpose.is(DeviceCallerPurpose::HostedAgentRetraction)
 }
 
 fn is_authority_owned_ura_in_realm(ura: &str, realm: &str) -> bool {

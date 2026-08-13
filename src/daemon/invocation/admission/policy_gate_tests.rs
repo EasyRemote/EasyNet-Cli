@@ -1,6 +1,9 @@
 use super::*;
 use crate::cli::commands::test_support::HomeGuard;
 use crate::daemon::invocation::admission::decision::{OwnerSource, PolicyDecisionReason};
+use crate::daemon::invocation::admission::device_caller::{
+    verify_device_invocation_purpose, DeviceInvocationPurposeScope,
+};
 use crate::daemon::invocation::admission::grant_matcher::{
     PermissionEffect, PermissionGrant, PermissionGrantLifetime, PermissionGrantState,
 };
@@ -14,6 +17,26 @@ fn identity(ura: &str) -> AgentIdentity {
         ura: ura.to_string(),
         profile: String::new(),
     }
+}
+
+fn verified_device_path(
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+    public_ability: &str,
+    action: AccessAction,
+    daemon_ura: Option<&str>,
+) -> TrustedCallerPath {
+    let purpose = verify_device_invocation_purpose(DeviceInvocationPurposeScope {
+        caller_ura,
+        callee_ura,
+        subject_ura,
+        public_ability,
+        daemon_ura,
+        action,
+    })
+    .expect("test invocation must have a valid Device purpose");
+    TrustedCallerPath::DeviceCustody(purpose)
 }
 
 fn save_test_credentials() {
@@ -87,7 +110,8 @@ fn trusted_caller_path_classifies_federated_actor_kinds() {
     assert_eq!(
         TrustedCallerPath::from_federated_invocation_caller(
             "easynet:///r/peer/user/alice",
-            "observe.health",
+            "chat",
+            None,
         )
         .expect("federated User caller"),
         TrustedCallerPath::User
@@ -95,7 +119,8 @@ fn trusted_caller_path_classifies_federated_actor_kinds() {
     assert_eq!(
         TrustedCallerPath::from_federated_invocation_caller(
             "easynet:///r/peer/agent/alice.worker",
-            "observe.health",
+            "chat",
+            None,
         )
         .expect("federated Agent caller"),
         TrustedCallerPath::AgentDeviceCustody
@@ -103,7 +128,8 @@ fn trusted_caller_path_classifies_federated_actor_kinds() {
     assert_eq!(
         TrustedCallerPath::from_federated_invocation_caller(
             "easynet:///r/peer/authority",
-            "observe.health",
+            "chat",
+            None,
         )
         .expect("federated Authority caller"),
         TrustedCallerPath::Hub
@@ -112,37 +138,70 @@ fn trusted_caller_path_classifies_federated_actor_kinds() {
 
 #[test]
 fn trusted_caller_path_requires_invocation_purpose_for_federated_device() {
+    let caller = "easynet:///r/peer/device/dev-1";
+    let authority = "easynet:///r/peer/authority";
+    let ability = crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES;
+    let TrustedCallerPath::DeviceCustody(purpose) = verified_device_path(
+        caller,
+        authority,
+        caller,
+        ability,
+        AccessAction::Manage,
+        Some(authority),
+    ) else {
+        unreachable!()
+    };
     assert_eq!(
-        TrustedCallerPath::from_federated_invocation_caller(
-            "easynet:///r/peer/device/dev-1",
-            crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
-        )
-        .expect("publication custody is an explicit Device-caller purpose"),
-        TrustedCallerPath::DeviceCustody
+        TrustedCallerPath::from_federated_invocation_caller(caller, ability, Some(purpose),)
+            .expect("verified federated Device custody requires publication purpose"),
+        TrustedCallerPath::DeviceCustody(purpose)
     );
-
-    let denied = TrustedCallerPath::from_federated_invocation_caller(
-        "easynet:///r/peer/device/dev-1",
-        "observe.health",
-    )
-    .expect_err("ordinary public ability must not classify a Device caller");
-    assert_eq!(denied.code(), tonic::Code::PermissionDenied);
-    assert!(
-        denied.message().contains("DEVICE_CALLER_PURPOSE_DENIED"),
-        "{denied:?}"
-    );
+    let error = TrustedCallerPath::from_federated_invocation_caller(caller, "shell.run", None)
+        .expect_err("ordinary public abilities must reject Device callers before policy");
+    assert_eq!(error.code(), tonic::Code::PermissionDenied);
+    assert!(error.message().contains("DEVICE_CALLER_PURPOSE_UNVERIFIED"));
 }
 
 #[test]
 fn trusted_caller_path_rejects_non_actor_federated_callers() {
     let error = TrustedCallerPath::from_federated_invocation_caller(
         "easynet:///r/peer/resource/user.alice/pages",
-        "observe.health",
+        "chat",
+        None,
     )
     .expect_err("resources are subjects, not caller actors");
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
     assert!(
         error.message().contains("FEDERATED_CALLER_KIND_MISMATCH"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn derived_child_path_accepts_only_callable_parent_actors() {
+    assert_eq!(
+        TrustedCallerPath::from_derived_child_caller(
+            "easynet:///r/test/agent/device.dev-1.automation"
+        )
+        .expect("derived SystemAgent caller"),
+        TrustedCallerPath::AgentDeviceCustody
+    );
+    assert_eq!(
+        TrustedCallerPath::from_derived_child_caller("easynet:///r/test/service/alice.pages")
+            .expect("derived Service caller"),
+        TrustedCallerPath::AgentDeviceCustody
+    );
+    assert_eq!(
+        TrustedCallerPath::from_derived_child_caller("easynet:///r/test/authority")
+            .expect("derived Authority caller"),
+        TrustedCallerPath::Hub
+    );
+    let error = TrustedCallerPath::from_derived_child_caller("easynet:///r/test/device/dev-1")
+        .expect_err("Device is an execution host, not a derived callable actor");
+    assert!(
+        error
+            .message()
+            .contains("DERIVED_CHILD_CALLER_KIND_MISMATCH"),
         "{error:?}"
     );
 }
@@ -242,7 +301,14 @@ fn device_principal_projection_ignores_malformed_local_credentials() {
     std::fs::write(state_dir.join("credentials.json"), b"{").expect("write malformed credentials");
 
     let principal = principal_for(
-        TrustedCallerPath::DeviceCustody,
+        verified_device_path(
+            "easynet:///r/test/device/dev-1",
+            "easynet:///r/test/authority",
+            "easynet:///r/test/device/dev-1",
+            crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+            AccessAction::Manage,
+            Some("easynet:///r/test/authority"),
+        ),
         "easynet:///r/test/device/dev-1",
         &empty_anchor(),
     )
@@ -255,14 +321,21 @@ fn device_principal_projection_ignores_malformed_local_credentials() {
 #[test]
 fn device_principal_projection_does_not_inherit_owner_allow() {
     let principal = principal_for(
-        TrustedCallerPath::DeviceCustody,
+        verified_device_path(
+            "easynet:///r/test/device/dev-1",
+            "easynet:///r/test/authority",
+            "easynet:///r/test/device/dev-1",
+            crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+            AccessAction::Manage,
+            Some("easynet:///r/test/authority"),
+        ),
         "easynet:///r/test/device/dev-1",
         &anchor_with_device_owner(),
     )
     .expect("device principal projection");
 
     assert_eq!(principal.kind, PrincipalKind::DeviceCustody);
-    assert_eq!(principal.token_class, Some(TokenClass::DevicePairing));
+    assert_eq!(principal.token_class, None);
     assert_eq!(principal.caller_user_ura, None);
 }
 
@@ -287,7 +360,8 @@ fn verified_caller_projection_separates_custody_path_from_principal_kind() {
     let trust_path = TrustedCallerPath::from_verified_invocation_caller(
         "easynet:///r/test/agent/alice.worker",
         VerifiedCallerEvidence::TrustAnchorRole(TrustAnchorRole::Device),
-        "observe.health",
+        "chat",
+        None,
     )
     .expect("device trust-anchor role plus Agent caller lowers to AgentDeviceCustody");
     let verified = VerifiedCallerProjection::from_trusted_path(
@@ -1163,6 +1237,35 @@ fn trusted_peer_authority_can_stream_federation_directory_without_user_owner() {
 }
 
 #[test]
+fn peer_directory_stream_matcher_denies_near_match_subject_without_grant_fallback() {
+    let local_authority = "easynet:///r/hub-b.local/authority";
+    let peer_authority = "easynet:///r/hub-a.local/authority";
+    let ability_ura = crate::core::ura::owner_ability_ura(
+        local_authority,
+        crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2,
+    )
+    .expect("directory ability URA");
+
+    let matched = VerifiedAuthorityPeerDirectoryStream::classify(
+        peer_authority,
+        local_authority,
+        "easynet:///r/hub-a.local/resource/hub.federation/directory/hub-b.local-extra",
+        &ability_ura,
+        Some(local_authority),
+        TrustedCallerPath::Hub,
+        AccessAction::Stream,
+        &anchor_with_hub_a_peer(),
+    );
+
+    assert!(matches!(
+        matched,
+        AuthorityPeerDirectoryStreamMatch::Denied(
+            "directory subject does not exactly bind caller and callee realms"
+        )
+    ));
+}
+
+#[test]
 fn local_authority_self_manage_can_revoke_owned_device_directory_entry() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let stores = AccessControlStoreRegistry::ephemeral();
@@ -1231,7 +1334,14 @@ fn device_publication_custody_can_advertise_device_projection_without_user_owner
             ability: crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
             action: AccessAction::Manage,
             safe_read: false,
-            trusted_path: TrustedCallerPath::DeviceCustody,
+            trusted_path: verified_device_path(
+                device,
+                authority,
+                device,
+                crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+                AccessAction::Manage,
+                Some(authority),
+            ),
             daemon_ura: Some(authority),
             trust_anchor: &empty_anchor(),
             access_control_stores: &stores,
@@ -1281,7 +1391,14 @@ fn device_publication_custody_can_advertise_hosted_agent_projection() {
         ability: crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
         action: AccessAction::Manage,
         safe_read: false,
-        trusted_path: TrustedCallerPath::DeviceCustody,
+        trusted_path: verified_device_path(
+            device,
+            authority,
+            agent,
+            crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+            AccessAction::Manage,
+            Some(authority),
+        ),
         daemon_ura: Some(authority),
         trust_anchor: &anchor_with_device_owner(),
         access_control_stores: &stores,
@@ -1325,7 +1442,14 @@ fn device_self_session_stream_can_open_authority_carrier_without_user_owner() {
         ability: crate::daemon::invocation::bidi::session_initiator::ABILITY_SESSION_OPEN,
         action: AccessAction::Stream,
         safe_read: false,
-        trusted_path: TrustedCallerPath::DeviceCustody,
+        trusted_path: verified_device_path(
+            device,
+            authority,
+            device,
+            crate::daemon::invocation::bidi::session_initiator::ABILITY_SESSION_OPEN,
+            AccessAction::Stream,
+            Some(authority),
+        ),
         daemon_ura: Some(authority),
         trust_anchor: &empty_anchor(),
         access_control_stores: &stores,
@@ -1351,6 +1475,197 @@ fn device_self_session_stream_can_open_authority_carrier_without_user_owner() {
     assert_eq!(
         decision.ability_ura,
         "easynet:///r/test/ability/authority.session.open"
+    );
+}
+
+#[test]
+fn device_lifecycle_self_revoke_can_only_revoke_the_calling_device() {
+    let stores = AccessControlStoreRegistry::ephemeral();
+    let authority = "easynet:///r/test/authority";
+    let device = "easynet:///r/test/device/dev-1";
+    let ability = crate::daemon::ability::conformance::ABILITY_FEDERATION_REVOKE;
+    let envelope = Envelope {
+        caller: Some(identity(device)),
+        callee: Some(identity(authority)),
+        subject: Some(SubjectIdentity {
+            ura: device.to_string(),
+            profile: String::new(),
+        }),
+        ..Envelope::default()
+    };
+
+    let decision = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+        envelope: &envelope,
+        ability,
+        action: AccessAction::Manage,
+        safe_read: false,
+        trusted_path: verified_device_path(
+            device,
+            authority,
+            device,
+            ability,
+            AccessAction::Manage,
+            Some(authority),
+        ),
+        daemon_ura: Some(authority),
+        trust_anchor: &empty_anchor(),
+        access_control_stores: &stores,
+        canonical_hash: Some("sha256:test".to_string()),
+        signature_key_id: Some("ed25519:device".to_string()),
+        verified_authority_id: None,
+        verified_session_id: None,
+        accountable_principal: None,
+        rejector_ura: Some(authority.to_string()),
+    })
+    .expect("a Device may revoke only its own lifecycle registration");
+
+    assert_eq!(decision.decision, PolicyDecisionOutcome::Allow);
+    assert_eq!(
+        decision.policy_rule_id.as_deref(),
+        Some("system.device.lifecycle_self_revoke_manage")
+    );
+}
+
+#[test]
+fn device_hosted_agent_retraction_reaches_durable_hub_authorization() {
+    let stores = AccessControlStoreRegistry::ephemeral();
+    let authority = "easynet:///r/test/authority";
+    let device = "easynet:///r/test/device/dev-1";
+    let agent = "easynet:///r/test/agent/alice.worker";
+    let ability = crate::daemon::ability::conformance::ABILITY_FEDERATION_REVOKE;
+    let envelope = Envelope {
+        caller: Some(identity(device)),
+        callee: Some(identity(authority)),
+        subject: Some(SubjectIdentity {
+            ura: agent.to_string(),
+            profile: String::new(),
+        }),
+        ..Envelope::default()
+    };
+
+    let decision = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+        envelope: &envelope,
+        ability,
+        action: AccessAction::Manage,
+        safe_read: false,
+        trusted_path: verified_device_path(
+            device,
+            authority,
+            agent,
+            ability,
+            AccessAction::Manage,
+            Some(authority),
+        ),
+        daemon_ura: Some(authority),
+        trust_anchor: &empty_anchor(),
+        access_control_stores: &stores,
+        canonical_hash: Some("sha256:test".to_string()),
+        signature_key_id: Some("ed25519:device".to_string()),
+        verified_authority_id: None,
+        verified_session_id: None,
+        accountable_principal: None,
+        rejector_ura: Some(authority.to_string()),
+    })
+    .expect("exact hosted-Agent retraction proceeds to durable host/incarnation checks");
+
+    assert_eq!(decision.decision, PolicyDecisionOutcome::Allow);
+    assert_eq!(
+        decision.policy_rule_id.as_deref(),
+        Some("system.device.hosted_agent_retraction_manage")
+    );
+}
+
+#[test]
+fn hosted_agent_retraction_purpose_cannot_be_reused_for_device_self_revoke() {
+    let stores = AccessControlStoreRegistry::ephemeral();
+    let authority = "easynet:///r/test/authority";
+    let device = "easynet:///r/test/device/dev-1";
+    let agent = "easynet:///r/test/agent/alice.worker";
+    let ability = crate::daemon::ability::conformance::ABILITY_FEDERATION_REVOKE;
+    let hosted_path = verified_device_path(
+        device,
+        authority,
+        agent,
+        ability,
+        AccessAction::Manage,
+        Some(authority),
+    );
+    let self_envelope = Envelope {
+        caller: Some(identity(device)),
+        callee: Some(identity(authority)),
+        subject: Some(SubjectIdentity {
+            ura: device.to_string(),
+            profile: String::new(),
+        }),
+        ..Envelope::default()
+    };
+
+    let error = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+        envelope: &self_envelope,
+        ability,
+        action: AccessAction::Manage,
+        safe_read: false,
+        trusted_path: hosted_path,
+        daemon_ura: Some(authority),
+        trust_anchor: &empty_anchor(),
+        access_control_stores: &stores,
+        canonical_hash: Some("sha256:test".to_string()),
+        signature_key_id: Some("ed25519:device".to_string()),
+        verified_authority_id: None,
+        verified_session_id: None,
+        accountable_principal: None,
+        rejector_ura: Some(authority.to_string()),
+    })
+    .expect_err("hosted-Agent purpose is tuple-bound and cannot revoke the Device");
+
+    assert_eq!(error.code(), tonic::Code::PermissionDenied);
+}
+
+#[test]
+fn device_session_purpose_cannot_be_reused_for_publication() {
+    let stores = AccessControlStoreRegistry::ephemeral();
+    let authority = "easynet:///r/test/authority";
+    let device = "easynet:///r/test/device/dev-1";
+    let envelope = Envelope {
+        caller: Some(identity(device)),
+        callee: Some(identity(authority)),
+        subject: Some(SubjectIdentity {
+            ura: device.to_string(),
+            profile: String::new(),
+        }),
+        ..Envelope::default()
+    };
+    let session_path = verified_device_path(
+        device,
+        authority,
+        device,
+        crate::daemon::invocation::bidi::session_initiator::ABILITY_SESSION_OPEN,
+        AccessAction::Stream,
+        Some(authority),
+    );
+
+    let error = AdmissionPolicyGate::verify(AdmissionPolicyContext {
+        envelope: &envelope,
+        ability: crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+        action: AccessAction::Manage,
+        safe_read: false,
+        trusted_path: session_path,
+        daemon_ura: Some(authority),
+        trust_anchor: &empty_anchor(),
+        access_control_stores: &stores,
+        canonical_hash: Some("sha256:test".to_string()),
+        signature_key_id: Some("ed25519:device".to_string()),
+        verified_authority_id: None,
+        verified_session_id: None,
+        accountable_principal: None,
+        rejector_ura: Some(authority.to_string()),
+    })
+    .expect_err("a session-purpose proof must not authorize publication custody");
+
+    assert_eq!(error.code(), tonic::Code::PermissionDenied);
+    assert!(
+        error.message().contains("OWNER_UNRESOLVED"),
+        "unexpected denial: {error:?}"
     );
 }
 
@@ -1517,7 +1832,7 @@ fn local_hub_allows_forwarding_to_trusted_remote_owner_realm() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let stores = AccessControlStoreRegistry::ephemeral();
     let envelope = Envelope {
-        caller: Some(identity("easynet:///r/local/device/caller")),
+        caller: Some(identity("easynet:///r/local/user/alice")),
         callee: Some(identity("easynet:///r/peer/device/callee")),
         subject: Some(SubjectIdentity {
             ura: "easynet:///r/peer/resource/user.bob/invoke/shell.run".to_string(),
@@ -1530,7 +1845,7 @@ fn local_hub_allows_forwarding_to_trusted_remote_owner_realm() {
         ability: "shell.run",
         action: AccessAction::Invoke,
         safe_read: false,
-        trusted_path: TrustedCallerPath::DeviceCustody,
+        trusted_path: TrustedCallerPath::User,
         daemon_ura: Some("easynet:///r/local/authority"),
         trust_anchor: &anchor_with_peer_realm(),
         access_control_stores: &stores,
@@ -1563,7 +1878,7 @@ fn local_hub_does_not_forward_to_untrusted_remote_owner_realm() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let stores = AccessControlStoreRegistry::ephemeral();
     let envelope = Envelope {
-        caller: Some(identity("easynet:///r/local/device/caller")),
+        caller: Some(identity("easynet:///r/local/user/alice")),
         callee: Some(identity("easynet:///r/peer/device/callee")),
         subject: Some(SubjectIdentity {
             ura: "easynet:///r/peer/resource/user.bob/invoke/shell.run".to_string(),
@@ -1576,7 +1891,7 @@ fn local_hub_does_not_forward_to_untrusted_remote_owner_realm() {
         ability: "shell.run",
         action: AccessAction::Invoke,
         safe_read: false,
-        trusted_path: TrustedCallerPath::DeviceCustody,
+        trusted_path: TrustedCallerPath::User,
         daemon_ura: Some("easynet:///r/local/authority"),
         trust_anchor: &empty_anchor(),
         access_control_stores: &stores,

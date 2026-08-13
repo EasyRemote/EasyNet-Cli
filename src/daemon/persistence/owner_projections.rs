@@ -7,11 +7,11 @@
 // daemon::federation::read_model::owner_projection. Keeping this layer dumb
 // prevents the on-disk schema from becoming a second resolver implementation.
 //
-// Ontology boundary: `owner_ura` is the public descriptor owner for Agent and
-// Authority rows. A Device URA is accepted only for the same-device
-// DeviceProfileProjection migration cursor/high-water mark; it is not a target
-// architecture Agent identity and must not be used to reintroduce public
-// Device-owned callable surfaces.
+// Ontology boundary: `owner_ura` is the public descriptor owner for Agent,
+// Service, and Authority rows. A Device URA is accepted only for the
+// same-device DeviceProfileProjection migration cursor/high-water mark; it is
+// not a target architecture Agent identity and must not be used to reintroduce
+// public Device-owned callable surfaces.
 
 use std::fs;
 use std::path::PathBuf;
@@ -98,6 +98,12 @@ pub(crate) fn validate_owner_projection_host_binding(
             }
             Ok(())
         }
+        URAKind::Service => {
+            if host.kind != URAKind::Device {
+                return Err("Service owner projections must be hosted by a Device URA".to_string());
+            }
+            Ok(())
+        }
         URAKind::Device => {
             if host.kind != URAKind::Device || owner_ura != host_device_ura {
                 return Err(
@@ -116,11 +122,12 @@ pub(crate) fn validate_owner_projection_host_binding(
             Ok(())
         }
         _ => Err(
-            "owner_ura must be a canonical Agent, Authority, or same-device DeviceProfileProjection URA".to_string(),
+            "owner_ura must be a canonical Agent, Service, Authority, or same-device DeviceProfileProjection URA".to_string(),
         ),
     }
 }
 
+#[cfg(test)]
 pub(crate) fn load() -> anyhow::Result<OwnerProjectionCursorFile> {
     let _thread_guard = lock_store();
     let data_path = path();
@@ -349,6 +356,26 @@ mod tests {
 
         replace(&file).expect("save cursor");
         assert_eq!(load().expect("load cursor"), file);
+    }
+
+    #[test]
+    fn save_load_round_trip_preserves_user_service_owner_projection_cursor() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = OwnerProjectionCursorFile::default();
+        file.upsert(OwnerProjectionCursor {
+            owner_ura: "easynet:///r/acme/service/user-1.pages".into(),
+            host_device_ura: "easynet:///r/acme/device/01DEV".into(),
+            generation: 1,
+            lifecycle: OwnerProjectionCursorLifecycle::Active,
+            projection_revision: 7,
+            projection_digest: "abc".into(),
+            content_fingerprint: "def".into(),
+            lease_expires_unix_ms: 0,
+            updated_at: "2026-06-07T00:00:00Z".into(),
+        });
+
+        replace(&file).expect("save Service cursor");
+        assert_eq!(load().expect("load Service cursor"), file);
     }
 
     #[test]

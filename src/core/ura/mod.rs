@@ -14,6 +14,7 @@
 //
 //   user      easynet:///r/<realm>/user/<user-id>
 //   device    easynet:///r/<realm>/device/<device-id>
+//   service   easynet:///r/<realm>/service/<principal-id>.<service-id>
 //   agent     easynet:///r/<realm>/agent/<user-id>.<agent-id>
 //   ability   easynet:///r/<realm>/ability/<owner>.<namespace>.<ability-id>
 //   hub       easynet:///r/<realm>/authority
@@ -74,6 +75,7 @@ pub const URA_KIND_SCOPE_LABELS: &[&str] = &[
     "authority",
     "device",
     "user",
+    "service",
     "agent",
     "ability",
     "resource",
@@ -88,6 +90,7 @@ pub fn ura_kind_scope_label(kind: URAKind) -> &'static str {
         URAKind::Authority => "authority",
         URAKind::Device => "device",
         URAKind::User => "user",
+        URAKind::Service => "service",
         URAKind::Agent => "agent",
         URAKind::Ability => "ability",
         URAKind::Resource => "resource",
@@ -200,6 +203,14 @@ impl AbilitySelector {
                 "agent",
                 agent_id.clone(),
             ),
+            AbilityOwner::Service {
+                principal_id,
+                service_id,
+            } => (
+                service_ura(&parsed.realm, &principal_id, &service_id),
+                "service",
+                service_id.clone(),
+            ),
             AbilityOwner::SystemAgent {
                 device_id,
                 agent_id,
@@ -242,8 +253,8 @@ impl AbilitySelector {
         &self.owner_ura
     }
 
-    /// Owner kind encoded by the Ability URA: `"agent"`, `"system-agent"`,
-    /// `"device"`, or `"authority"`. Derived from the typed `AbilityOwner`
+    /// Owner kind encoded by the Ability URA: `"agent"`, `"service"`,
+    /// `"system-agent"`, `"device"`, or `"authority"`. Derived from the typed `AbilityOwner`
     /// arm at parse time — consumers never re-sniff URA strings (F-047).
     pub fn owner_kind(&self) -> &'static str {
         self.owner_kind
@@ -324,7 +335,7 @@ impl OwnerLocalAbilityName {
 /// Project an internal registry ability name into the public name a
 /// given owner publishes under RFC-005.
 ///
-/// Agent, SystemAgent, Device, and Authority owners publish owner-local public
+/// Agent, Service, SystemAgent, Device, and Authority owners publish owner-local public
 /// ability names. The local daemon registry may store
 /// implementation-qualified keys such as `claude.chat` or `fs.read`; those
 /// prefixes identify the local dispatch table, not the public Ability URA tail.
@@ -387,7 +398,7 @@ pub fn descriptor_public_ability_name(owner_ura: &str, ability_name: &str) -> St
 
 /// Return whether an Ability URA is canonically published under `owner_ura`.
 ///
-/// For User-Agent, SystemAgent, Device, and Authority owners, this is a direct
+/// For User-Agent, Service, SystemAgent, Device, and Authority owners, this is a direct
 /// inverse check against Axon's Ability owner token. There is no fallback from
 /// a device-sponsored SystemAgent ability to the sponsoring Device owner:
 /// Device is substrate/custodian, not the logical ability callee.
@@ -439,7 +450,9 @@ pub fn local_dispatch_ability_key(target_ura: &str, ability: &str) -> String {
                 format!("{agent_id}.{public_name}")
             }
         }
-        URAKind::Device | URAKind::Authority => owner_local_ability_name(target_ura, name),
+        URAKind::Device | URAKind::Service | URAKind::Authority => {
+            owner_local_ability_name(target_ura, name)
+        }
         _ => name.to_string(),
     }
 }

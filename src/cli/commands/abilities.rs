@@ -195,10 +195,12 @@ impl AbilityCatalogueScope {
         let parsed = parse_ura(&scope_ura)?;
         match parsed.kind {
             URAKind::Ability => Ok(Self::Ability(scope_ura)),
-            URAKind::Agent | URAKind::Device | URAKind::Authority => Ok(Self::Owner(scope_ura)),
+            URAKind::Agent | URAKind::Service | URAKind::Device | URAKind::Authority => {
+                Ok(Self::Owner(scope_ura))
+            }
             URAKind::User => bail!(
                 "--subject-ura cannot scope ability ownership to a User Principal; \
-                 use an explicit Agent, SystemAgent, Authority, DeviceProfileProjection \
+                 use an explicit Agent, Service, SystemAgent, Authority, DeviceProfileProjection \
                  migration row, or Ability URA"
             ),
             other => bail!("--subject-ura must be an owner URA or Ability URA, got {other:?}"),
@@ -277,11 +279,12 @@ fn extract_columns(entry: &Value) -> (String, String, String, String) {
     // `fulfilled_by` describe how an ability runs, not who owns the catalogue
     // row, so they cannot override owner classification. User rows are rendered
     // only as legacy principal projections; target architecture uses Agent,
-    // SystemAgent, Authority, or DeviceProfileProjection owners.
+    // Service, SystemAgent, Authority, or DeviceProfileProjection owners.
     let kind = match parsed.as_ref().map(|p| p.kind) {
         Some(URAKind::Device) => "system".to_string(),
         Some(URAKind::Authority) => "hub".to_string(),
         Some(URAKind::Agent) => "agent".to_string(),
+        Some(URAKind::Service) => "service".to_string(),
         Some(URAKind::User) => "legacy_principal".to_string(),
         _ => "-".to_string(),
     };
@@ -303,6 +306,10 @@ fn extract_columns(entry: &Value) -> (String, String, String, String) {
                 dash(),
                 p.user_id().map(str::to_string).unwrap_or_else(dash),
             ),
+            URAKind::Service => {
+                let (principal_id, service_id) = p.service_ids().unwrap_or(("-", "-"));
+                (dash(), service_id.to_string(), principal_id.to_string())
+            }
             URAKind::Authority => (dash(), "hub".to_string(), dash()),
             _ => (dash(), dash(), dash()),
         },
@@ -334,6 +341,11 @@ enum GroupKey {
         agent: String,
         ura: String,
     },
+    Service {
+        user: String,
+        service: String,
+        ura: String,
+    },
     LegacyPrincipal {
         user: String,
         ura: String,
@@ -349,6 +361,9 @@ impl GroupKey {
             GroupKey::Agent { user, agent, ura } => {
                 format!("AGENT {user}.{agent} ({ura})")
             }
+            GroupKey::Service { user, service, ura } => {
+                format!("SERVICE {user}.{service} ({ura})")
+            }
             GroupKey::LegacyPrincipal { user, ura } => {
                 format!("LEGACY PRINCIPAL {user} ({ura})")
             }
@@ -362,9 +377,10 @@ impl GroupKey {
         match self {
             GroupKey::Hub(_) => 0,
             GroupKey::Agent { .. } => 1,
-            GroupKey::LegacyPrincipal { .. } => 2,
-            GroupKey::Device(_) => 3,
-            GroupKey::Other => 4,
+            GroupKey::Service { .. } => 2,
+            GroupKey::LegacyPrincipal { .. } => 3,
+            GroupKey::Device(_) => 4,
+            GroupKey::Other => 5,
         }
     }
 }
@@ -381,6 +397,16 @@ fn group_for(entry: &Value) -> GroupKey {
                 GroupKey::Agent {
                     user: user_id.to_string(),
                     agent: agent_id.to_string(),
+                    ura: owner_ura.to_string(),
+                }
+            }
+            URAKind::Service => {
+                let Some((principal_id, service_id)) = p.service_ids() else {
+                    return GroupKey::Other;
+                };
+                GroupKey::Service {
+                    user: principal_id.to_string(),
+                    service: service_id.to_string(),
                     ura: owner_ura.to_string(),
                 }
             }
@@ -423,6 +449,7 @@ fn render_grouped(filtered: &[Value]) {
         let header_style = match key {
             GroupKey::Hub(_) => style(&title).magenta().bold(),
             GroupKey::Agent { .. } => style(&title).green().bold(),
+            GroupKey::Service { .. } => style(&title).cyan().bold(),
             GroupKey::LegacyPrincipal { .. } => style(&title).yellow().bold(),
             GroupKey::Device(_) => style(&title).blue().bold(),
             GroupKey::Other => style(&title).red().bold(),
@@ -762,6 +789,39 @@ mod tests {
         assert!(body.get("ability_ura").is_none());
         assert!(body.get("subject_ura").is_none());
         assert!(body.get("agent_ura").is_none());
+    }
+
+    #[test]
+    fn catalogue_query_accepts_service_owner_scope() {
+        let query = AbilityCatalogueQuery::from_args(&AbilitiesArgs {
+            agent: None,
+            agent_ura: None,
+            subject_ura: Some("easynet:///r/test/service/alice.pages".into()),
+            node: None,
+            pattern: String::new(),
+            format: OutputFormat::Json,
+        })
+        .unwrap();
+        let body = query.to_request();
+
+        assert_eq!(body["owner_ura"], "easynet:///r/test/service/alice.pages");
+        assert!(body.get("ability_ura").is_none());
+        assert!(body.get("subject_ura").is_none());
+        assert!(body.get("agent_ura").is_none());
+    }
+
+    #[test]
+    fn extract_columns_projects_service_owner_identity() {
+        let entry = serde_json::json!({
+            "owner_ura": "easynet:///r/test/service/alice.pages",
+        });
+
+        let (device, agent, user, kind) = extract_columns(&entry);
+
+        assert_eq!(device, "-");
+        assert_eq!(agent, "pages");
+        assert_eq!(user, "alice");
+        assert_eq!(kind, "service");
     }
 
     #[test]

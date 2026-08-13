@@ -40,6 +40,8 @@ use axon_sdk::invocation::{
 };
 
 use crate::core::ura::{parse_ura, AbilitySelector, URAKind};
+use crate::daemon::ability::catalog::daemon_invocation_contracts::admission_action_for;
+use crate::daemon::ability::names::{federation, governance, resources};
 use crate::daemon::ability::{
     HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
@@ -62,6 +64,9 @@ use crate::daemon::invocation::admission::bootstrap_authority::{
 use crate::daemon::invocation::admission::decision::{
     AccessAction, PermissionRequestStatus, PolicyDecision, SignatureDecisionReason,
 };
+use crate::daemon::invocation::admission::device_caller::{
+    verify_device_invocation_purpose, DeviceInvocationPurposeScope, VerifiedDeviceInvocationPurpose,
+};
 use crate::daemon::invocation::admission::federated_key_resolver::FederatedKeyResolver;
 use crate::daemon::invocation::admission::grant_matcher::{
     GrantMatchInput, PermissionEffect, PermissionGrant, PermissionGrantMatcher,
@@ -70,7 +75,8 @@ use crate::daemon::invocation::admission::hosted_agent_publication::HostedAgentP
 use crate::daemon::invocation::admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
 use crate::daemon::invocation::admission::policy_gate::{
     ability_ura_for, principal_for, AdmissionPolicyContext, AdmissionPolicyGate,
-    PrincipalProjection, TrustedCallerPath, VerifiedCallerEvidence,
+    PrincipalProjection, TrustedCallerPath, VerifiedAuthorityPeerDirectoryStream,
+    VerifiedCallerEvidence,
 };
 use crate::daemon::invocation::admission::principal_lifecycle::{
     PrincipalAdmissionState, PrincipalLifecycleReader,
@@ -183,6 +189,8 @@ impl AdmissionTransportBoundary {
 
 #[derive(Debug, Clone)]
 struct BoundAdmissionDescriptor {
+    owner_ura: String,
+    hosted_agent_device_ura: Option<String>,
     action: AccessAction,
     safe_read: bool,
 }
@@ -231,6 +239,35 @@ impl VerifiedRuntimeAuthority {
             },
             proof_type: "causal-parent-capability",
             proof_payload: capability_ura.as_bytes().to_vec(),
+        }
+    }
+
+    fn policy(policy_ura: &str, authority_id: Option<String>) -> Self {
+        Self {
+            authority_id,
+            session_id: None,
+            binding: AuthorityBinding::Policy {
+                policy_ura: policy_ura.to_string(),
+            },
+            proof_type: "system-policy-authority",
+            proof_payload: policy_ura.as_bytes().to_vec(),
+        }
+    }
+
+    fn trusted_local_system_capability() -> Self {
+        let capability_ura = crate::core::ura::resource_dot_ura(
+            "_system",
+            "agent._system.local",
+            "capability/local-system-invocation",
+        );
+        Self {
+            authority_id: None,
+            session_id: None,
+            binding: AuthorityBinding::Capability {
+                capability_ura: capability_ura.clone(),
+            },
+            proof_type: "local-system-invocation-capability",
+            proof_payload: capability_ura.into_bytes(),
         }
     }
 
@@ -362,7 +399,7 @@ impl VerifiedRuntimeAuthority {
 
     fn with_policy_decision(mut self, decision: &PolicyDecision) -> Result<Self, Status> {
         self.proof_payload = runtime_admission_policy_proof_payload(
-            &self.proof_type,
+            self.proof_type,
             &self.proof_payload,
             Some(decision),
             None,
@@ -372,7 +409,7 @@ impl VerifiedRuntimeAuthority {
 
     fn with_runtime_admission_fact(mut self, reason: &'static str) -> Result<Self, Status> {
         self.proof_payload = runtime_admission_policy_proof_payload(
-            &self.proof_type,
+            self.proof_type,
             &self.proof_payload,
             None,
             Some(reason),
@@ -912,7 +949,10 @@ impl AdmissionFacade {
             ability_catalog: None,
             federated_keys: None,
             invocation_verification_keys: None,
-            transport_boundary: AdmissionTransportBoundary::LocalOnlyIpc,
+            // Embedders and tests are strict by default. Only the daemon boot
+            // path that owns an authenticated local IPC listener may opt into
+            // local-self admission explicitly.
+            transport_boundary: AdmissionTransportBoundary::OffBoxStrict,
             quota: SharedUsageQuotaGate::disabled(),
             access_control_stores: default_access_control_stores(),
             principal_lifecycle: None,
@@ -1016,7 +1056,30 @@ impl AdmissionFacade {
             )));
         }
         let action = descriptor.admission_action().into();
+        let parsed_owner = parse_ura(selector.owner_ura()).map_err(|error| {
+            Status::failed_precondition(format!("ADMISSION_DESCRIPTOR_OWNER_INVALID: {error}"))
+        })?;
+        let hosted_agent_device_ura = if parsed_owner.kind == URAKind::Agent
+            && parsed_owner.agent_ids().is_some()
+            && parsed_owner.device_agent_ids().is_none()
+        {
+            Some(
+                catalog
+                    .exact_hosted_agent_device_authority_root(selector.owner_ura())
+                    .ok_or_else(|| {
+                        Status::permission_denied(format!(
+                            "HOSTED_AGENT_NOT_PUBLISHED: Agent owner `{}` is not an exact local hosted authority",
+                            selector.owner_ura()
+                        ))
+                    })?
+                    .to_string(),
+            )
+        } else {
+            None
+        };
         Ok(BoundAdmissionDescriptor {
+            owner_ura: selector.owner_ura().to_string(),
+            hosted_agent_device_ura,
             action,
             safe_read: action == AccessAction::Read,
         })
@@ -1120,10 +1183,10 @@ impl AdmissionFacade {
             })
     }
 
-    /// Set the transport boundary that governs local self admission. Boot
-    /// leaves the UDS-fed service on `LocalOnlyIpc` and clones the TCP/TLS-fed
-    /// service with `OffBoxStrict`, so an off-box caller that spoofs the daemon
-    /// URA cannot skip the strict trust-anchor / signature / replay pipeline.
+    /// Set the transport boundary that governs local self admission. Facades
+    /// default to `OffBoxStrict`; boot explicitly opts only the authenticated
+    /// local-IPC service clone into `LocalOnlyIpc`, so an off-box caller that
+    /// spoofs the daemon URA cannot skip trust, signature, or replay checks.
     #[must_use]
     pub fn with_transport_boundary(mut self, boundary: AdmissionTransportBoundary) -> Self {
         self.transport_boundary = boundary;
@@ -1191,6 +1254,10 @@ impl AdmissionFacade {
             daemon_call_mode(input.call_mode),
             descriptor_ref,
         )?;
+        require_local_hosted_agent_publication_ready(
+            &descriptor.owner_ura,
+            descriptor.hosted_agent_device_ura.as_deref(),
+        )?;
         let caller_ura = caller_ura_required(&input.envelope)?;
 
         let derived_authority = match &input.ingress {
@@ -1210,11 +1277,11 @@ impl AdmissionFacade {
                 .map_err(|status| {
                     self.authority_denied_status(&input.envelope, &input.ability, status)
                 })?;
+                let carries_authority_proof = input
+                    .metadata
+                    .get(AUTHORITY_PROOF_METADATA_KEY)
+                    .is_some_and(|value| !value.trim().is_empty());
                 if let Some(authority) = metadata_authority {
-                    let carries_authority_proof = input
-                        .metadata
-                        .get(AUTHORITY_PROOF_METADATA_KEY)
-                        .is_some_and(|value| !value.trim().is_empty());
                     if carries_authority_proof {
                         return Err(self.authority_denied_status(
                             &input.envelope,
@@ -1232,10 +1299,19 @@ impl AdmissionFacade {
                         RuntimeAdmissionReservation { quota: None },
                     );
                 }
+                if carries_authority_proof {
+                    return Err(self.authority_denied_status(
+                        &input.envelope,
+                        &input.ability,
+                        Status::invalid_argument(format!(
+                            "{REASON_AUTHORITY_FORMAT_INVALID}: trusted local-system ingress cannot carry an unverified `{AUTHORITY_PROOF_METADATA_KEY}`"
+                        )),
+                    ));
+                }
                 return runtime_admission_decision(
                     admitted_envelope,
-                    VerifiedRuntimeAuthority::self_authority(caller_ura)
-                        .with_runtime_admission_fact("trusted-local-system self admission")?,
+                    VerifiedRuntimeAuthority::trusted_local_system_capability()
+                        .with_runtime_admission_fact("trusted-local-system capability admission")?,
                     RuntimeAdmissionReservation { quota: None },
                 );
             }
@@ -1272,11 +1348,43 @@ impl AdmissionFacade {
         };
 
         let trust_anchor = self.trust_anchor.snapshot();
-        let trusted_path = self
-            .trusted_path_for_caller(caller_ura, trust_anchor.as_ref(), &input.ability)
-            .map_err(|status| {
-                self.signature_denied_status(&input.envelope, &input.ability, status)
-            })?;
+        let device_purpose = if parse_ura(caller_ura)
+            .map(|caller| caller.kind == URAKind::Device)
+            .unwrap_or(false)
+        {
+            Some(
+                verify_device_invocation_purpose(DeviceInvocationPurposeScope {
+                    caller_ura,
+                    callee_ura: callee_ura_required(&input.envelope)?,
+                    subject_ura: subject_ura_required(&input.envelope)?,
+                    public_ability: &input.ability,
+                    daemon_ura: self.daemon_ura.as_deref(),
+                    action: descriptor.action,
+                })
+                .map_err(|error| {
+                    self.signature_denied_status(
+                        &input.envelope,
+                        &input.ability,
+                        Status::permission_denied(format!(
+                            "DEVICE_CALLER_PURPOSE_DENIED: {error:?}"
+                        )),
+                    )
+                })?,
+            )
+        } else {
+            None
+        };
+        let trusted_path = if derived_authority.is_some() {
+            TrustedCallerPath::from_derived_child_caller(caller_ura)
+        } else {
+            self.trusted_path_for_caller(
+                caller_ura,
+                trust_anchor.as_ref(),
+                &input.ability,
+                device_purpose,
+            )
+        }
+        .map_err(|status| self.signature_denied_status(&input.envelope, &input.ability, status))?;
         reject_public_hosted_agent_delegation_metadata(Some(&input.metadata))?;
         let authority = self.enforce_runtime_admitted_policy(
             &input.envelope,
@@ -1350,12 +1458,14 @@ impl AdmissionFacade {
         caller_ura: &str,
         trust_anchor: &RealmTrustAnchor,
         public_ability: &str,
+        device_purpose: Option<VerifiedDeviceInvocationPurpose>,
     ) -> Result<TrustedCallerPath, Status> {
         if let Some(entry) = trust_anchor.lookup(caller_ura) {
             return TrustedCallerPath::from_verified_invocation_caller(
                 caller_ura,
                 VerifiedCallerEvidence::TrustAnchorRole(entry.role),
                 public_ability,
+                device_purpose,
             );
         }
         if self.trust_anchor_user_role_for_caller(caller_ura, trust_anchor) {
@@ -1366,6 +1476,7 @@ impl AdmissionFacade {
                 caller_ura,
                 VerifiedCallerEvidence::PrincipalLifecycleRole(role),
                 public_ability,
+                device_purpose,
             );
         }
         if let Some(provider) = self.invocation_verification_keys.as_ref() {
@@ -1382,14 +1493,16 @@ impl AdmissionFacade {
                     caller_ura,
                     VerifiedCallerEvidence::LocalHostedAgentKey,
                     public_ability,
+                    device_purpose,
                 );
             }
         }
-        if self.is_federated_caller(caller_ura) {
+        if self.has_hub_attested_caller(caller_ura) || self.is_federated_caller(caller_ura) {
             return TrustedCallerPath::from_verified_invocation_caller(
                 caller_ura,
                 VerifiedCallerEvidence::Federated,
                 public_ability,
+                device_purpose,
             );
         }
         Err(permission_denied_unknown_caller(caller_ura))
@@ -1479,19 +1592,77 @@ impl AdmissionFacade {
             )?
             .with_runtime_admission_fact("bootstrap-authority admission");
         }
-        let metadata_authority = verify_delegation_metadata(
-            envelope,
-            ability,
-            action,
-            metadata,
-            trust_anchor.as_ref(),
-            self.federated_keys.as_deref(),
-            current_unix_ms(),
-        )
-        .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
+        // `federation.advertise_agent` has a stronger typed authority proof:
+        // the signed Device caller, Authority callee, exact Agent subject, and
+        // durable Device->User owner binding are verified as one publication
+        // tuple. Establish that fact before the generic subject-authority gate
+        // so Device custody is not mis-modelled as delegation authority over
+        // an Agent. Any independent authority carrier remains ambiguous and is
+        // rejected below instead of being merged with this proof.
+        let hosted_agent_publication_authority_id = self
+            .verify_hosted_agent_publication_authority(
+                envelope,
+                ability,
+                args,
+                trust_anchor.as_ref(),
+            )
+            .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
+        let peer_directory_stream_authority = {
+            let caller_ura = caller_ura_required(envelope)?;
+            let callee_ura = callee_ura_required(envelope)?;
+            let subject_ura = subject_ura_required(envelope)?;
+            let ability_ura = ability_ura_for(callee_ura, ability)?;
+            VerifiedAuthorityPeerDirectoryStream::classify(
+                caller_ura,
+                callee_ura,
+                subject_ura,
+                &ability_ura,
+                self.daemon_ura.as_deref(),
+                trusted_path,
+                action,
+                trust_anchor.as_ref(),
+            )
+            .into_result()
+            .map_err(|reason| {
+                self.authority_denied_status(
+                    envelope,
+                    ability,
+                    Status::permission_denied(format!(
+                        "PEER_DIRECTORY_STREAM_AUTHORITY_DENIED: {reason}"
+                    )),
+                )
+            })?
+        };
         let carries_authority_proof = metadata
             .and_then(|values| values.get(AUTHORITY_PROOF_METADATA_KEY))
             .is_some_and(|value| !value.trim().is_empty());
+        let typed_authority_ingress = if hosted_agent_publication_authority_id.is_some() {
+            Some("hosted-agent-publication admission")
+        } else if peer_directory_stream_authority.is_some() {
+            Some("peer-directory-stream admission")
+        } else if derived_authority.is_some() {
+            Some("runtime-derived-child admission")
+        } else {
+            None
+        };
+        if let Some(ingress) = typed_authority_ingress {
+            reject_independent_authority_carriers(metadata, ingress)
+                .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
+        }
+        let metadata_authority = if typed_authority_ingress.is_some() {
+            None
+        } else {
+            verify_delegation_metadata(
+                envelope,
+                ability,
+                action,
+                metadata,
+                trust_anchor.as_ref(),
+                self.federated_keys.as_deref(),
+                current_unix_ms(),
+            )
+            .map_err(|status| self.authority_denied_status(envelope, ability, status))?
+        };
         if metadata_authority.is_some() && carries_authority_proof {
             return Err(self.authority_denied_status(
                 envelope,
@@ -1501,8 +1672,10 @@ impl AdmissionFacade {
                 )),
             ));
         }
-        let authority_proof_authority = self
-            .verify_authority_proof_metadata(AuthorityProofMetadataInput {
+        let authority_proof_authority = if typed_authority_ingress.is_some() {
+            None
+        } else {
+            self.verify_authority_proof_metadata(AuthorityProofMetadataInput {
                 envelope,
                 ability,
                 action,
@@ -1511,7 +1684,8 @@ impl AdmissionFacade {
                 trusted_path,
                 descriptor_bound,
             })
-            .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
+            .map_err(|status| self.authority_denied_status(envelope, ability, status))?
+        };
         let bootstrap_authority_id = match BootstrapAuthorityVerifier::verify(
             envelope,
             ability,
@@ -1531,14 +1705,6 @@ impl AdmissionFacade {
             }
             BootstrapAuthorityDecision::NotApplicable => None,
         };
-        let hosted_agent_publication_authority_id = self
-            .verify_hosted_agent_publication_authority(
-                envelope,
-                ability,
-                args,
-                trust_anchor.as_ref(),
-            )
-            .map_err(|status| self.authority_denied_status(envelope, ability, status))?;
         let verified_authority_id = authority_proof_authority
             .as_ref()
             .and_then(VerifiedRuntimeAuthority::authority_id)
@@ -1549,6 +1715,11 @@ impl AdmissionFacade {
             })
             .or(bootstrap_authority_id.as_deref())
             .or(hosted_agent_publication_authority_id.as_deref())
+            .or_else(|| {
+                peer_directory_stream_authority
+                    .as_ref()
+                    .map(VerifiedAuthorityPeerDirectoryStream::authority_id)
+            })
             .map(ToOwned::to_owned);
         let verified_session_id = authority_proof_authority
             .as_ref()
@@ -1592,6 +1763,20 @@ impl AdmissionFacade {
         }
         if let Some(authority) = metadata_authority {
             return authority.with_policy_decision(&policy_decision);
+        }
+        if let Some(authority) = peer_directory_stream_authority {
+            if policy_decision.policy_rule_id.as_deref()
+                != Some("system.authority.peer_directory_stream")
+            {
+                return Err(Status::internal(
+                    "peer directory authority fact was not confirmed by the exact system policy rule",
+                ));
+            }
+            return VerifiedRuntimeAuthority::policy(
+                authority.policy_ura(),
+                Some(authority.authority_id().to_string()),
+            )
+            .with_policy_decision(&policy_decision);
         }
         if let Some(authority_id) = bootstrap_authority_id.or(hosted_agent_publication_authority_id)
         {
@@ -1805,6 +1990,16 @@ impl AdmissionFacade {
         self.federated_keys
             .as_ref()
             .is_some_and(|resolver| resolver.is_configured_federated_caller(caller_ura))
+    }
+
+    /// Consume the same exact, expiring Hub attestation already used by the
+    /// canonical signature verifier. Device runtimes intentionally have no
+    /// peer federation client, so their policy path must not depend on the
+    /// Hub-only peer directory after upstream key synchronization succeeds.
+    fn has_hub_attested_caller(&self, caller_ura: &str) -> bool {
+        self.federated_keys
+            .as_ref()
+            .is_some_and(|resolver| resolver.has_hub_attested_caller(caller_ura))
     }
 
     fn signature_denied_status(
@@ -2152,7 +2347,13 @@ fn classify_runtime_admission_quota(detail: String) -> InvocationError {
 }
 
 fn classify_runtime_admission_permission_denied(detail: String) -> InvocationError {
-    let (code, stage, security_class) = if detail.contains("AUTHORITY_") {
+    let (code, stage, security_class) = if detail.contains("HOSTED_AGENT_NOT_PUBLISHED") {
+        (
+            ErrorCode::AbilityDisabled,
+            ErrorStage::AbilityPolicy,
+            SecurityClass::Authorization,
+        )
+    } else if detail.contains("AUTHORITY_") {
         (
             authority_error_code_for_detail(&detail),
             ErrorStage::AuthorityValidation,
@@ -2423,6 +2624,31 @@ fn ability_ura_for_diagnostic(envelope: &Envelope, ability: &str) -> String {
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
+fn require_local_hosted_agent_publication_ready(
+    owner_ura: &str,
+    exact_host_device_ura: Option<&str>,
+) -> Result<(), Status> {
+    let owner = parse_ura(owner_ura).map_err(|error| {
+        Status::failed_precondition(format!("HOSTED_AGENT_PUBLICATION_OWNER_INVALID: {error}"))
+    })?;
+    if owner.kind != URAKind::Agent
+        || owner.agent_ids().is_none()
+        || owner.device_agent_ids().is_some()
+    {
+        return Ok(());
+    }
+    let exact_host_device_ura = exact_host_device_ura.ok_or_else(|| {
+        Status::permission_denied(format!(
+            "HOSTED_AGENT_NOT_PUBLISHED: Agent owner `{owner_ura}` is not an exact local hosted authority"
+        ))
+    })?;
+    crate::daemon::persistence::hosted_agent_publications::require_published_for_host(
+        owner_ura,
+        exact_host_device_ura,
+    )
+    .map_err(|error| Status::permission_denied(format!("HOSTED_AGENT_NOT_PUBLISHED: {error:#}")))
+}
+
 /// Bootstrap authority abilities mutate identity or presence roots.
 /// They still require the caller to pass strict admission above; this
 /// gate only keeps trust-anchor bootstrap out of normal user-delegation
@@ -2524,6 +2750,22 @@ fn reject_unverified_runtime_authority_metadata(
     Ok(())
 }
 
+fn reject_independent_authority_carriers(
+    metadata: Option<&HashMap<String, String>>,
+    ingress: &str,
+) -> Result<(), Status> {
+    reject_unverified_runtime_authority_metadata(metadata, ingress)?;
+    let carries_authority_proof = metadata
+        .and_then(|values| values.get(AUTHORITY_PROOF_METADATA_KEY))
+        .is_some_and(|value| !value.trim().is_empty());
+    if carries_authority_proof {
+        return Err(Status::invalid_argument(format!(
+            "{REASON_AUTHORITY_FORMAT_INVALID}: {ingress} carries multiple independent authority proofs"
+        )));
+    }
+    Ok(())
+}
+
 fn verify_local_system_authority_metadata(
     envelope: &Envelope,
     ability: &str,
@@ -2531,6 +2773,25 @@ fn verify_local_system_authority_metadata(
     metadata: Option<&HashMap<String, String>>,
     now_ms: i64,
 ) -> Result<Option<VerifiedRuntimeAuthority>, Status> {
+    // `TrustedLocalSystem` is a transport-proven ingress class, not a caller
+    // URA inferred from public input. When that trusted ingress carries no
+    // delegation/session metadata, the caller's daemon-custodied signature
+    // and exact `_system.local` identity are the authority proof; the caller
+    // projects `self_authority` after this function returns. External signed
+    // requests never enter this wrapper and retain the generic fail-closed
+    // `AUTHORITY_REQUIRED` rule below.
+    let carries_authority_metadata = metadata.is_some_and(|metadata| {
+        [DELEGATION_METADATA_KEY, SESSION_AUTHORITY_METADATA_KEY]
+            .iter()
+            .any(|key| {
+                metadata
+                    .get(*key)
+                    .is_some_and(|value| !value.trim().is_empty())
+            })
+    });
+    if !carries_authority_metadata {
+        return Ok(None);
+    }
     verify_authority_metadata_with_issuer_key(
         envelope,
         ability,
@@ -2600,13 +2861,19 @@ fn verify_authority_metadata_with_issuer_key(
                 resolve_issuer_keys_b64,
             )?;
             verify_session_authority_bindings(&verified.payload, envelope, ability, action)?;
-            verify_session_issuer_authorized(&verified.payload, envelope, issuer_policy)?;
+            verify_session_issuer_authorized(
+                &verified.payload,
+                envelope,
+                ability,
+                action,
+                issuer_policy,
+            )?;
             VerifiedRuntimeAuthority::session(verified).map(Some)
         }
         (None, None) => {
-            if envelope_requires_authority(envelope) {
+            if envelope_requires_authority(envelope, ability) {
                 return Err(Status::permission_denied(format!(
-                    "{REASON_AUTHORITY_REQUIRED}: envelope subject differs from caller and is a user/session authority subject; \
+                    "{REASON_AUTHORITY_REQUIRED}: envelope subject differs from caller and is a user/session/descriptor-bound authority subject; \
                      missing `{DELEGATION_METADATA_KEY}` or `{SESSION_AUTHORITY_METADATA_KEY}` metadata"
                 )));
             }
@@ -2781,6 +3048,8 @@ fn verify_delegation_issuer_authorized(
 fn verify_session_issuer_authorized(
     payload: &SessionAuthorityPayload,
     envelope: &Envelope,
+    ability: &str,
+    action: AccessAction,
     issuer_policy: RuntimeAuthorityIssuerPolicy,
 ) -> Result<(), Status> {
     match issuer_policy {
@@ -2788,7 +3057,41 @@ fn verify_session_issuer_authorized(
             verify_local_system_metadata_issuer(&payload.issuer_ura, envelope)
         }
         RuntimeAuthorityIssuerPolicy::RealmTrustAnchor => {
-            verify_realm_scoped_authority_tuple(
+            let issuer = parse_authority_runtime_ura("issuer_ura", &payload.issuer_ura)?;
+            if issuer.kind == URAKind::Authority {
+                if RealmAuthorityAdapterProfile::from_session_id(&payload.session_id)
+                    == Some(RealmAuthorityAdapterProfile::PeerRuntimeInvocation)
+                {
+                    verify_peer_realm_authority_tuple(
+                        &payload.issuer_ura,
+                        caller_ura_required(envelope)?,
+                        &payload.callee_ura,
+                        &payload.subject_ura,
+                    )?;
+                } else {
+                    verify_realm_scoped_authority_tuple(
+                        &payload.issuer_ura,
+                        caller_ura_required(envelope)?,
+                        &payload.callee_ura,
+                        &payload.subject_ura,
+                    )?;
+                }
+                return verify_realm_authority_adapter(payload, envelope, ability, action);
+            }
+            if matches!(
+                authority_metadata::authority_subject_kind(&payload.subject_ura),
+                AuthoritySubjectKind::Agent | AuthoritySubjectKind::Resource
+            ) {
+                if user_session_authority_admits_local_device_resource(
+                    payload, envelope, ability, action,
+                )? {
+                    return Ok(());
+                }
+                return Err(Status::permission_denied(format!(
+                    "{REASON_AUTHORITY_ISSUER_DENIED}: User-issued SessionAuthority cannot authorize Agent- or non-User-owned Resource subjects"
+                )));
+            }
+            verify_user_session_authority_tuple(
                 &payload.issuer_ura,
                 caller_ura_required(envelope)?,
                 &payload.callee_ura,
@@ -2811,6 +3114,316 @@ fn verify_session_issuer_authorized(
             Ok(())
         }
     }
+}
+
+const REALM_AUTHORITY_ADAPTER_MAX_TTL_MS: i64 = 5 * 60 * 1_000;
+const REALM_PRINCIPAL_ADAPTER_SESSION_ID_PREFIX: &str = "realm-account-adapter-";
+const REALM_IDENTITY_ADAPTER_SESSION_ID_PREFIX: &str = "realm-identity-adapter-";
+const REALM_DIRECTORY_READ_ADAPTER_SESSION_ID_PREFIX: &str = "realm-directory-read-adapter-";
+const REALM_RUNTIME_INVOCATION_ADAPTER_SESSION_ID_PREFIX: &str =
+    "realm-runtime-invocation-adapter-";
+const REALM_PEER_RUNTIME_INVOCATION_ADAPTER_SESSION_ID_PREFIX: &str =
+    "realm-peer-runtime-invocation-adapter-";
+const AUTHORITY_GOVERNANCE_ADAPTER_SESSION_ID_PREFIX: &str = "authority-governance-adapter-";
+const AGENT_GOVERNANCE_ADAPTER_SESSION_ID_PREFIX: &str = "agent-governance-adapter-";
+const REALM_RECEIPT_HISTORY_ADAPTER_SESSION_ID_PREFIX: &str = "realm-receipt-history-adapter-";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RealmAuthorityAdapterProfile {
+    PrincipalLifecycle,
+    IdentityRegistration,
+    DirectoryRead,
+    RuntimeInvocation,
+    PeerRuntimeInvocation,
+    AuthorityGovernance,
+    AgentGovernance,
+    ReceiptHistory,
+    LifecycleSession,
+}
+
+impl RealmAuthorityAdapterProfile {
+    fn from_session_id(session_id: &str) -> Option<Self> {
+        if session_id.starts_with(REALM_PRINCIPAL_ADAPTER_SESSION_ID_PREFIX) {
+            Some(Self::PrincipalLifecycle)
+        } else if session_id.starts_with(REALM_IDENTITY_ADAPTER_SESSION_ID_PREFIX) {
+            Some(Self::IdentityRegistration)
+        } else if session_id.starts_with(REALM_DIRECTORY_READ_ADAPTER_SESSION_ID_PREFIX) {
+            Some(Self::DirectoryRead)
+        } else if session_id.starts_with(REALM_RUNTIME_INVOCATION_ADAPTER_SESSION_ID_PREFIX) {
+            Some(Self::RuntimeInvocation)
+        } else if session_id.starts_with(REALM_PEER_RUNTIME_INVOCATION_ADAPTER_SESSION_ID_PREFIX) {
+            Some(Self::PeerRuntimeInvocation)
+        } else if session_id.starts_with(AUTHORITY_GOVERNANCE_ADAPTER_SESSION_ID_PREFIX) {
+            Some(Self::AuthorityGovernance)
+        } else if session_id.starts_with(AGENT_GOVERNANCE_ADAPTER_SESSION_ID_PREFIX) {
+            Some(Self::AgentGovernance)
+        } else if session_id.starts_with(REALM_RECEIPT_HISTORY_ADAPTER_SESSION_ID_PREFIX) {
+            Some(Self::ReceiptHistory)
+        } else {
+            None
+        }
+    }
+
+    fn from_payload(payload: &SessionAuthorityPayload) -> Option<Self> {
+        if let Some(profile) = Self::from_session_id(&payload.session_id) {
+            return Some(profile);
+        }
+        let subject = crate::core::ura::parse_ura(&payload.subject_ura).ok()?;
+        let session_path = subject.resource_path()?.strip_prefix("session/")?;
+        (subject.kind == URAKind::Resource
+            && !session_path.is_empty()
+            && session_path == payload.session_id)
+            .then_some(Self::LifecycleSession)
+    }
+
+    fn admits_ability(self, ability: &str) -> bool {
+        match self {
+            Self::PrincipalLifecycle => is_realm_account_adapter_principal_ability(ability),
+            Self::IdentityRegistration => ability == ABILITY_IDENTITY_REGISTER_PUBKEY,
+            Self::DirectoryRead => ability == federation::NAMESPACE_RESOLVE,
+            Self::RuntimeInvocation => is_realm_runtime_invocation_adapter_ability(ability),
+            Self::PeerRuntimeInvocation => is_realm_runtime_invocation_adapter_ability(ability),
+            Self::AuthorityGovernance => is_realm_authority_governance_adapter_ability(ability),
+            Self::AgentGovernance => is_agent_governance_adapter_ability(ability),
+            Self::ReceiptHistory => is_receipt_history_adapter_ability(ability),
+            Self::LifecycleSession => is_lifecycle_session_adapter_ability(ability),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::PrincipalLifecycle => "PrincipalLifecycle",
+            Self::IdentityRegistration => "IdentityRegistration",
+            Self::DirectoryRead => "DirectoryRead",
+            Self::RuntimeInvocation => "RuntimeInvocation",
+            Self::PeerRuntimeInvocation => "PeerRuntimeInvocation",
+            Self::AuthorityGovernance => "AuthorityGovernance",
+            Self::AgentGovernance => "AgentGovernance",
+            Self::ReceiptHistory => "ReceiptHistory",
+            Self::LifecycleSession => "LifecycleSession",
+        }
+    }
+}
+
+fn verify_realm_authority_adapter(
+    payload: &SessionAuthorityPayload,
+    envelope: &Envelope,
+    ability: &str,
+    action: AccessAction,
+) -> Result<(), Status> {
+    let caller = caller_ura_required(envelope)?;
+    let callee = callee_ura_required(envelope)?;
+    if caller != payload.issuer_ura || payload.creator_principal_id != payload.issuer_ura {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter requires issuer, caller, and creator to equal the canonical realm Authority"
+        )));
+    }
+
+    let ability_view = AuthorityAbilityView::from_envelope(envelope, ability)?;
+    let public_name = ability_view.public_name.as_str();
+    let profile = RealmAuthorityAdapterProfile::from_payload(payload).ok_or_else(|| {
+        Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter session id has no recognized typed adapter discriminator"
+        ))
+    })?;
+    match profile {
+        RealmAuthorityAdapterProfile::RuntimeInvocation
+        | RealmAuthorityAdapterProfile::PeerRuntimeInvocation
+        | RealmAuthorityAdapterProfile::AgentGovernance
+        | RealmAuthorityAdapterProfile::ReceiptHistory
+        | RealmAuthorityAdapterProfile::LifecycleSession => {
+            if payload.callee_ura != callee || payload.audience != callee {
+                return Err(Status::permission_denied(format!(
+                    "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter RuntimeInvocation profile requires exact Agent or Service callee and audience"
+                )));
+            }
+            let parsed_callee = parse_authority_runtime_ura("callee_ura", callee)?;
+            if !matches!(parsed_callee.kind, URAKind::Agent | URAKind::Service) {
+                return Err(Status::permission_denied(format!(
+                    "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter RuntimeInvocation callee must be an Agent, device-sponsored SystemAgent, or Service"
+                )));
+            }
+        }
+        _ => {
+            if callee != payload.issuer_ura
+                || payload.callee_ura != payload.issuer_ura
+                || payload.audience != payload.issuer_ura
+            {
+                return Err(Status::permission_denied(format!(
+                    "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter {} profile requires callee and audience to equal the canonical realm Authority",
+                    profile.label()
+                )));
+            }
+        }
+    }
+    if !profile.admits_ability(public_name) {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter {} profile cannot authorize ability `{public_name}`",
+            profile.label()
+        )));
+    }
+    if payload.scopes.len() != 1 || payload.scopes[0].trim() != public_name {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter scope must equal exact ability `{public_name}`"
+        )));
+    }
+    if payload.allowed_followup_abilities.len() != 1
+        || payload.allowed_followup_abilities[0].trim() != public_name
+    {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter follow-up ability must equal exact ability `{public_name}`"
+        )));
+    }
+    let expected_action = match profile {
+        RealmAuthorityAdapterProfile::RuntimeInvocation
+        | RealmAuthorityAdapterProfile::PeerRuntimeInvocation
+        | RealmAuthorityAdapterProfile::AuthorityGovernance
+        | RealmAuthorityAdapterProfile::AgentGovernance
+        | RealmAuthorityAdapterProfile::ReceiptHistory
+        | RealmAuthorityAdapterProfile::LifecycleSession => action,
+        _ => admission_action_for(public_name).ok_or_else(|| {
+            Status::permission_denied(format!(
+                "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter ability `{public_name}` has no governed descriptor action"
+            ))
+        })?
+        .into(),
+    };
+    if action.as_str() != expected_action.as_str()
+        || payload.allowed_actions.len() != 1
+        || payload.allowed_actions[0].trim() != expected_action.as_str()
+    {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter action must equal exact descriptor action `{}`",
+            expected_action.as_str()
+        )));
+    }
+    let ttl_ms = payload.expires_at_ms.saturating_sub(payload.issued_at_ms);
+    if ttl_ms <= 0 || ttl_ms > REALM_AUTHORITY_ADAPTER_MAX_TTL_MS {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter TTL exceeds {}ms",
+            REALM_AUTHORITY_ADAPTER_MAX_TTL_MS
+        )));
+    }
+
+    let subject = parse_authority_runtime_ura("subject_ura", &payload.subject_ura)?;
+    let runtime_agent_subject = profile == RealmAuthorityAdapterProfile::RuntimeInvocation
+        && subject.kind == URAKind::Agent
+        && payload.subject_ura == callee;
+    if subject.kind != URAKind::Resource && !runtime_agent_subject {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter subject must be a canonical Resource or the exact local RuntimeInvocation Agent"
+        )));
+    }
+    if matches!(
+        profile,
+        RealmAuthorityAdapterProfile::RuntimeInvocation
+            | RealmAuthorityAdapterProfile::PeerRuntimeInvocation
+    ) {
+        if payload.session_owner_user_id.trim().is_empty() {
+            return Err(Status::permission_denied(format!(
+                "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter RuntimeInvocation requires an accountable session owner User"
+            )));
+        }
+    } else if profile == RealmAuthorityAdapterProfile::AuthorityGovernance
+        && subject.resource_owner_id() == Some("authority")
+    {
+        let subject_path = subject.resource_path().unwrap_or_default();
+        let exact_ability_subject = subject_path
+            .strip_prefix("invoke/")
+            .is_some_and(|value| value == public_name && !value.contains('/'));
+        if !exact_ability_subject {
+            return Err(Status::permission_denied(format!(
+                "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter AuthorityGovernance subject must exactly bind Authority ability `{public_name}`"
+            )));
+        }
+    } else {
+        let owner_user_id = subject
+            .resource_owner_id()
+            .and_then(|owner| owner.strip_prefix("user."))
+            .filter(|owner| !owner.is_empty() && !owner.contains('.'))
+            .ok_or_else(|| {
+                Status::permission_denied(format!(
+                    "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter subject must be a canonical User-owned resource"
+                ))
+            })?;
+        let subject_path = subject.resource_path().unwrap_or_default();
+        let subject_matches = match profile {
+            RealmAuthorityAdapterProfile::LifecycleSession => subject_path
+                .strip_prefix("session/")
+                .is_some_and(|session_id| {
+                    !session_id.is_empty() && session_id == payload.session_id
+                }),
+            RealmAuthorityAdapterProfile::AuthorityGovernance
+            | RealmAuthorityAdapterProfile::AgentGovernance
+            | RealmAuthorityAdapterProfile::ReceiptHistory => {
+                subject_path == "runtime-state/read"
+                    || subject_path
+                        .strip_prefix("invoke/")
+                        .is_some_and(|value| value == public_name && !value.contains('/'))
+            }
+            _ => subject_path
+                .strip_prefix("invoke/")
+                .is_some_and(|value| value == public_name && !value.contains('/')),
+        };
+        if owner_user_id != payload.session_owner_user_id || !subject_matches {
+            return Err(Status::permission_denied(format!(
+                "{REASON_AUTHORITY_ISSUER_DENIED}: RealmAuthorityAdapter subject owner and ability must match session owner `{}` and ability `{public_name}`",
+                payload.session_owner_user_id
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn is_realm_account_adapter_principal_ability(ability: &str) -> bool {
+    matches!(
+        ability,
+        governance::PRINCIPAL_CREATE
+            | governance::PRINCIPAL_BIND_FIRST_KEY
+            | governance::PRINCIPAL_ADD_KEY
+            | governance::PRINCIPAL_ROTATE_KEY
+            | governance::PRINCIPAL_REVOKE_KEY
+            | governance::PRINCIPAL_CONFIGURE_RECOVERY
+            | governance::PRINCIPAL_RECOVER
+            | governance::PRINCIPAL_SUSPEND
+            | governance::PRINCIPAL_REACTIVATE
+            | governance::PRINCIPAL_DELETE
+            | governance::PRINCIPAL_ISSUE_ENROLLMENT
+            | governance::PRINCIPAL_REVOKE_ENROLLMENT
+            | governance::PRINCIPAL_ISSUE_GRANT
+            | governance::PRINCIPAL_REVOKE_GRANT
+            | governance::PRINCIPAL_GET
+    )
+}
+
+fn is_realm_runtime_invocation_adapter_ability(ability: &str) -> bool {
+    let ability = ability.trim();
+    !ability.is_empty()
+        && !ability.starts_with("federation.")
+        && !ability.starts_with("namespace.")
+        && !ability.starts_with("identity.")
+        && !ability.starts_with("principal.")
+        && !ability.starts_with("runtime.")
+}
+
+fn is_realm_authority_governance_adapter_ability(ability: &str) -> bool {
+    admission_action_for(ability).is_some() || ability == "admin.status"
+}
+
+fn is_agent_governance_adapter_ability(ability: &str) -> bool {
+    matches!(
+        ability.trim(),
+        "meta.list_abilities" | "meta.list_resources"
+    )
+}
+
+fn is_receipt_history_adapter_ability(ability: &str) -> bool {
+    let ability = ability.trim();
+    ability.starts_with("invocation.history.") || ability.starts_with("invocation.trace.")
+}
+
+fn is_lifecycle_session_adapter_ability(ability: &str) -> bool {
+    matches!(ability.trim(), "terminal.attach" | "terminal.close")
 }
 
 fn verify_local_system_metadata_issuer(
@@ -2849,6 +3462,176 @@ fn verify_realm_scoped_authority_tuple(
                 issuer.realm
             )));
         }
+    }
+    Ok(())
+}
+
+/// Admit a User-issued SessionAuthority for this daemon's own media resources.
+///
+/// Local media handlers require the concrete resource URA as Invocation
+/// subject, e.g. `resource/device.<node>/streams/display.<id>`. That subject
+/// is not User-owned, so it cannot be admitted by the generic user-resource
+/// session rule. The missing policy edge is the pairing fact: the device
+/// daemon can prove locally that the signing User is the paired owner of this
+/// exact Device, and that the callee is the matching device-sponsored
+/// SystemAgent. No cross-device or cross-user resource authority is inferred.
+fn user_session_authority_admits_local_device_resource(
+    payload: &SessionAuthorityPayload,
+    envelope: &Envelope,
+    ability: &str,
+    action: AccessAction,
+) -> Result<bool, Status> {
+    let issuer = parse_authority_runtime_ura("issuer_ura", &payload.issuer_ura)?;
+    let caller = parse_authority_runtime_ura("caller_ura", caller_ura_required(envelope)?)?;
+    let callee = parse_authority_runtime_ura("callee_ura", callee_ura_required(envelope)?)?;
+    let subject = parse_authority_runtime_ura("subject_ura", &payload.subject_ura)?;
+
+    if issuer.kind != URAKind::User || caller.kind != URAKind::User {
+        return Ok(false);
+    }
+    let Some(issuer_user_id) = issuer.user_id() else {
+        return Ok(false);
+    };
+    if caller.user_id() != Some(issuer_user_id) || caller.realm != issuer.realm {
+        return Ok(false);
+    }
+    if subject.kind != URAKind::Resource || callee.kind != URAKind::Agent {
+        return Ok(false);
+    }
+    let Some(subject_device_id) = subject
+        .resource_owner_id()
+        .and_then(|owner| owner.strip_prefix("device."))
+    else {
+        return Ok(false);
+    };
+    if subject
+        .resource_path()
+        .is_none_or(|path| !path.starts_with("streams/"))
+    {
+        return Ok(false);
+    }
+    let Some((callee_device_id, agent_id)) = callee.device_agent_ids() else {
+        return Ok(false);
+    };
+    if callee_device_id != subject_device_id {
+        return Ok(false);
+    }
+    if agent_id != resources::MEDIA_SYSTEM_AGENT_ID
+        || !local_device_media_resource_authority_action_matches(ability, action)
+    {
+        return Ok(false);
+    }
+    let local_device_ura = match crate::daemon::identity::local_invocation::local_device_ura() {
+        Ok(value) => value,
+        Err(_) => return Ok(false),
+    };
+    let local_device = parse_authority_runtime_ura("local_device_ura", &local_device_ura)?;
+    if local_device.kind != URAKind::Device
+        || local_device.realm != issuer.realm
+        || local_device.device_id() != Some(subject_device_id)
+    {
+        return Ok(false);
+    }
+    let credentials = match crate::daemon::persistence::config::load_credentials_optional() {
+        Ok(Some(value)) => value,
+        Ok(None) | Err(_) => return Ok(false),
+    };
+    let paired_user_id = match credentials.user_id() {
+        Ok(value) => value.trim(),
+        Err(_) => return Ok(false),
+    };
+    Ok(credentials.realm.trim() == issuer.realm
+        && paired_user_id == issuer_user_id
+        && payload.session_owner_user_id.trim() == issuer_user_id)
+}
+
+fn local_device_media_resource_authority_action_matches(
+    ability: &str,
+    action: AccessAction,
+) -> bool {
+    match ability.trim() {
+        resources::MEDIA_MIC_SUBSCRIBE
+        | resources::MEDIA_CAMERA_SUBSCRIBE
+        | resources::MEDIA_CAMERA_RECORD_START
+        | resources::MEDIA_CAMERA_RECORD_STOP
+        | resources::MEDIA_SCREEN_SUBSCRIBE => action.as_str() == "stream",
+        resources::MEDIA_CAMERA_SNAPSHOT | resources::MEDIA_SCREEN_SNAPSHOT => {
+            action.as_str() == "read"
+        }
+        _ => false,
+    }
+}
+
+/// Verify the realm geometry of a User-issued SessionAuthority.
+///
+/// A User-owned Resource remains in the User's origin realm even when the
+/// exact descriptor-owning Agent is hosted in a peer realm. Signature trust
+/// for that external User is established before this function through the
+/// configured federated resolver or the destination Device's bounded
+/// Hub-attested key projection. This function only validates the signed tuple;
+/// it does not manufacture peer trust or let either Hub replace the User.
+fn verify_user_session_authority_tuple(
+    issuer_ura: &str,
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+) -> Result<(), Status> {
+    let issuer = parse_authority_runtime_ura("issuer_ura", issuer_ura)?;
+    let caller = parse_authority_runtime_ura("caller_ura", caller_ura)?;
+    let callee = parse_authority_runtime_ura("callee_ura", callee_ura)?;
+    let subject = parse_authority_runtime_ura("subject_ura", subject_ura)?;
+    if issuer.kind != URAKind::User || caller.kind != URAKind::User || caller_ura != issuer_ura {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_DENIED}: User SessionAuthority issuer and caller must be the exact canonical User"
+        )));
+    }
+    if subject.realm != issuer.realm {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_DENIED}: User SessionAuthority subject realm `{}` does not match issuer realm `{}`",
+            subject.realm, issuer.realm
+        )));
+    }
+    if callee.realm == issuer.realm {
+        return Ok(());
+    }
+    if callee.kind != URAKind::Agent {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_DENIED}: cross-realm User SessionAuthority callee must be an exact Agent"
+        )));
+    }
+    Ok(())
+}
+
+fn verify_peer_realm_authority_tuple(
+    issuer_ura: &str,
+    caller_ura: &str,
+    callee_ura: &str,
+    subject_ura: &str,
+) -> Result<(), Status> {
+    let issuer = parse_authority_runtime_ura("issuer_ura", issuer_ura)?;
+    let caller = parse_authority_runtime_ura("caller_ura", caller_ura)?;
+    let callee = parse_authority_runtime_ura("callee_ura", callee_ura)?;
+    let subject = parse_authority_runtime_ura("subject_ura", subject_ura)?;
+    if issuer.kind != URAKind::Authority || caller.kind != URAKind::Authority {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_DENIED}: peer runtime adapter issuer and caller must be the local realm Authority"
+        )));
+    }
+    if caller_ura != issuer_ura || caller.realm != issuer.realm {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_DENIED}: peer runtime adapter caller must exactly equal its issuer"
+        )));
+    }
+    if subject.realm != issuer.realm {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_DENIED}: peer runtime adapter subject must remain in issuer realm `{}`",
+            issuer.realm
+        )));
+    }
+    if callee.kind != URAKind::Agent || callee.realm == issuer.realm {
+        return Err(Status::permission_denied(format!(
+            "{REASON_AUTHORITY_ISSUER_DENIED}: peer runtime adapter callee must be an Agent in a distinct peer realm"
+        )));
     }
     Ok(())
 }
@@ -2899,6 +3682,14 @@ fn delegation_subject_owner_user_ura(subject_ura: &str) -> Result<String, Status
                 ));
             }
         }
+        URAKind::Service => subject
+            .service_ids()
+            .map(|(principal_id, _)| principal_id.to_string())
+            .ok_or_else(|| {
+                Status::permission_denied(format!(
+                    "{REASON_AUTHORITY_ISSUER_DENIED}: delegation subject `{subject_ura}` has no Service principal id"
+                ))
+            })?,
         URAKind::Ability => {
             let selector = AbilitySelector::parse(subject_ura).map_err(|error| {
                 Status::invalid_argument(format!(
@@ -3103,7 +3894,7 @@ fn parse_and_verify_delegation_proof_with_issuer_key(
     })
 }
 
-fn envelope_requires_authority(envelope: &Envelope) -> bool {
+fn envelope_requires_authority(envelope: &Envelope, ability: &str) -> bool {
     let Some(caller) = envelope.caller.as_ref().map(|c| c.ura.as_str()) else {
         return false;
     };
@@ -3113,10 +3904,60 @@ fn envelope_requires_authority(envelope: &Envelope) -> bool {
     if caller == subject {
         return false;
     }
+    if device_sponsored_system_agent_publication(envelope, ability) {
+        return false;
+    }
     matches!(
         authority_metadata::authority_subject_kind(subject),
-        AuthoritySubjectKind::User | AuthoritySubjectKind::Session
+        AuthoritySubjectKind::User
+            | AuthoritySubjectKind::Service
+            | AuthoritySubjectKind::Agent
+            | AuthoritySubjectKind::Session
+            | AuthoritySubjectKind::DescriptorBound
+            | AuthoritySubjectKind::RuntimeStateRead
+            | AuthoritySubjectKind::Resource
     )
+}
+
+/// A Device is the cryptographic sponsor and host of its declared native
+/// SystemAgents. That exact relationship authorizes only the pre-session
+/// owner-projection publication needed to establish the live catalog; it is
+/// not a general Device-as-Agent invocation exemption.
+fn device_sponsored_system_agent_publication(envelope: &Envelope, ability: &str) -> bool {
+    let Ok(ability_view) = AuthorityAbilityView::from_envelope(envelope, ability) else {
+        return false;
+    };
+    if !ability_view
+        .matches(crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES)
+    {
+        return false;
+    }
+    let Some(caller) = envelope
+        .caller
+        .as_ref()
+        .and_then(|identity| parse_ura(identity.ura.trim()).ok())
+    else {
+        return false;
+    };
+    let Some(subject) = envelope
+        .subject
+        .as_ref()
+        .and_then(|identity| parse_ura(identity.ura.trim()).ok())
+    else {
+        return false;
+    };
+    let Some(caller_device_id) = caller.device_id() else {
+        return false;
+    };
+    subject
+        .device_agent_ids()
+        .is_some_and(|(sponsor_device_id, system_agent_id)| {
+            caller.realm == subject.realm
+                && sponsor_device_id == caller_device_id
+                && crate::daemon::ability::catalog::profiles::is_declared_daemon_native_system_agent_id(
+                    system_agent_id,
+                )
+        })
 }
 
 fn verify_authority_signature_with_any_issuer_key(
@@ -3555,9 +4396,9 @@ mod tests {
             session_id: "session-1".to_string(),
             session_owner_user_id: "alice".to_string(),
             creator_principal_id: issuer.to_string(),
-            callee_ura: "easynet:///r/example/device/dev-a".to_string(),
+            callee_ura: "easynet:///r/example/agent/device.dev-a.terminal".to_string(),
             subject_ura: "easynet:///r/example/resource/user.alice/session/session-1".to_string(),
-            audience: "easynet:///r/example/device/dev-a".to_string(),
+            audience: "easynet:///r/example/agent/device.dev-a.terminal".to_string(),
             scopes: vec!["terminal.*".to_string()],
             allowed_actions: vec!["invoke".to_string()],
             allowed_followup_abilities: vec!["terminal.read".to_string()],
@@ -3596,6 +4437,24 @@ mod tests {
         )
         .expect("issue session authority")
         .into_map()
+    }
+
+    fn signed_session_metadata_unchecked(
+        request: authority_metadata::SessionAuthorityRequest,
+        signing_key: &SigningKey,
+    ) -> HashMap<String, String> {
+        let payload = SessionAuthorityPayload::from(request);
+        let canonical_payload =
+            authority_metadata::canonical_authority_payload_bytes(&payload).expect("payload");
+        let signature = signing_key.sign(&canonical_payload).to_bytes();
+        let wire = json!({
+            "payload": payload,
+            "signature": BASE64_STANDARD.encode(signature),
+        });
+        HashMap::from([(
+            SESSION_AUTHORITY_METADATA_KEY.to_string(),
+            BASE64_STANDARD.encode(crate::daemon::ability::canonical_json_bytes(&wire)),
+        )])
     }
 
     fn issuer_key_resolver<'a>(
@@ -3663,6 +4522,149 @@ mod tests {
     }
 
     #[test]
+    fn trusted_local_system_without_metadata_allows_typed_capability_projection() {
+        let envelope = authority_wire_envelope(
+            Some(crate::core::ura::LOCAL_SYSTEM_AGENT_URA),
+            Some("easynet:///r/example/agent/device.node-a.locomotion"),
+            Some("easynet:///r/example/resource/camera-1"),
+        );
+
+        let authority = verify_local_system_authority_metadata(
+            &envelope,
+            "camera.snapshot",
+            AccessAction::Invoke,
+            None,
+            current_unix_ms(),
+        )
+        .expect("trusted local-system ingress must preserve its typed authority class");
+
+        assert!(authority.is_none());
+    }
+
+    #[test]
+    fn external_user_without_metadata_still_requires_authority() {
+        let caller = "easynet:///r/example/user/alice";
+        let subject = crate::core::ura::resource_dot_ura("example", "user.alice", "invoke/fs.read");
+        let envelope = authority_wire_envelope(
+            Some(caller),
+            Some("easynet:///r/example/agent/device.node-a.locomotion"),
+            Some(&subject),
+        );
+        let resolver = |_issuer_ura: &str| -> Result<Vec<String>, Status> {
+            panic!("missing metadata must reject before resolving an issuer key")
+        };
+
+        let error = match verify_authority_metadata_with_issuer_key(
+            &envelope,
+            "fs.read",
+            AccessAction::Read,
+            None,
+            current_unix_ms(),
+            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+            &resolver,
+        ) {
+            Ok(_) => panic!("external User ingress without authority must remain fail-closed"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code(), Code::PermissionDenied);
+        assert!(
+            error.message().contains(REASON_AUTHORITY_REQUIRED),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn cross_realm_user_route_target_remains_rejected_after_key_resolution() {
+        let caller = "easynet:///r/example/user/alice";
+        let callee = "easynet:///r/peer.example/agent/device.node-a.locomotion";
+        let envelope = authority_wire_envelope(Some(caller), Some(callee), Some(callee));
+        let resolver = |_issuer_ura: &str| -> Result<Vec<String>, Status> {
+            panic!("missing authority metadata must reject independently of caller-key readiness")
+        };
+
+        let error = require_authority_metadata_error(
+            verify_authority_metadata_with_issuer_key(
+                &envelope,
+                "shell.run",
+                AccessAction::Invoke,
+                None,
+                current_unix_ms(),
+                RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+                &resolver,
+            ),
+            "direct User route-target invocation must not gain authority from key synchronization",
+        );
+
+        assert_eq!(error.code(), Code::PermissionDenied);
+        assert!(
+            error.message().contains(REASON_AUTHORITY_REQUIRED),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn external_authority_descriptor_subject_without_metadata_requires_authority() {
+        let authority = "easynet:///r/example/authority";
+        let subject = crate::core::ura::resource_dot_ura(
+            "example",
+            "authority",
+            "invoke/federation.subscribe_directory_v2",
+        );
+        let envelope = authority_wire_envelope(Some(authority), Some(authority), Some(&subject));
+        let resolver = |_issuer_ura: &str| -> Result<Vec<String>, Status> {
+            panic!("missing metadata must reject before resolving an issuer key")
+        };
+
+        let error = require_authority_metadata_error(
+            verify_authority_metadata_with_issuer_key(
+                &envelope,
+                "federation.subscribe_directory_v2",
+                AccessAction::Stream,
+                None,
+                current_unix_ms(),
+                RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+                &resolver,
+            ),
+            "Authority-owned descriptor subject without proof must fail closed",
+        );
+
+        assert_eq!(error.code(), Code::PermissionDenied);
+        assert!(
+            error.message().contains(REASON_AUTHORITY_REQUIRED),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn typed_authority_ingresses_reject_independent_authority_carriers() {
+        for ingress in [
+            "peer-directory-stream admission",
+            "runtime-derived-child admission",
+        ] {
+            for key in [
+                DELEGATION_METADATA_KEY,
+                SESSION_AUTHORITY_METADATA_KEY,
+                AUTHORITY_PROOF_METADATA_KEY,
+            ] {
+                let metadata = HashMap::from([(key.to_string(), "non-empty-proof".to_string())]);
+                let error = reject_independent_authority_carriers(Some(&metadata), ingress)
+                    .expect_err("typed authority ingress must be the only authority carrier");
+
+                assert_eq!(
+                    error.code(),
+                    Code::InvalidArgument,
+                    "{ingress} {key}: {error}"
+                );
+                assert!(
+                    error.message().contains(REASON_AUTHORITY_FORMAT_INVALID),
+                    "{ingress} {key}: {error}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn trusted_local_system_rejects_unverified_session_authority() {
         let now_ms = current_unix_ms();
         let request = local_system_terminal_authority_request(now_ms);
@@ -3696,6 +4698,43 @@ mod tests {
             error.message().contains(REASON_AUTHORITY_SIGNATURE_INVALID),
             "{error}"
         );
+    }
+
+    #[test]
+    fn sponsor_device_authorizes_only_its_declared_system_agent_projection() {
+        let caller = "easynet:///r/example/device/dev-a";
+        let hub = "easynet:///r/example/authority";
+        let own_system_agent = "easynet:///r/example/agent/device.dev-a.a2a-integration";
+        let foreign_system_agent = "easynet:///r/example/agent/device.dev-b.a2a-integration";
+        let undeclared_system_agent = "easynet:///r/example/agent/device.dev-a.not-declared";
+
+        let own = authority_wire_envelope(Some(caller), Some(hub), Some(own_system_agent));
+        assert!(!envelope_requires_authority(
+            &own,
+            crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+        ));
+        assert!(envelope_requires_authority(&own, "observe.health"));
+
+        for subject in [foreign_system_agent, undeclared_system_agent] {
+            let envelope = authority_wire_envelope(Some(caller), Some(hub), Some(subject));
+            assert!(envelope_requires_authority(
+                &envelope,
+                crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+            ));
+        }
+    }
+
+    #[test]
+    fn user_owned_service_projection_requires_delegation_authority() {
+        let device = "easynet:///r/example/device/dev-a";
+        let hub = "easynet:///r/example/authority";
+        let service = "easynet:///r/example/service/alice.pages";
+        let envelope = authority_wire_envelope(Some(device), Some(hub), Some(service));
+
+        assert!(envelope_requires_authority(
+            &envelope,
+            crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+        ));
     }
 
     #[test]
@@ -3981,6 +5020,958 @@ mod tests {
             err.message().contains(REASON_AUTHORITY_ISSUER_DENIED),
             "{err}"
         );
+    }
+
+    #[test]
+    fn realm_trust_session_allows_paired_user_for_local_device_stream_resource() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "dev-a".into(),
+                credential_token: "token".into(),
+                hub_endpoint: "https://hub.example".into(),
+                realm: "example".into(),
+                deploy_signature: String::new(),
+                hub_api_base: None,
+                username: Some("alice".into()),
+                user_id: Some("alice".into()),
+                hub_pubkey_b64: None,
+                hub_tls_ca_pem_b64: None,
+                join_receipt_hash: None,
+            },
+        )
+        .expect("save paired credentials");
+
+        let now_ms = current_unix_ms();
+        let issuer = "easynet:///r/example/user/alice";
+        let callee = &crate::core::ura::device_agent_ura("example", "dev-a", "media");
+        let subject =
+            &crate::core::ura::resource_dot_ura("example", "device.dev-a", "streams/display.01");
+        let signing_key = SigningKey::from_bytes(&[0x4d; 32]);
+        let request = authority_metadata::SessionAuthorityRequest {
+            issuer_ura: issuer.to_string(),
+            session_id: "invoke-0102030405060708090a0b0c0d0e0f10".to_string(),
+            session_owner_user_id: "alice".to_string(),
+            creator_principal_id: issuer.to_string(),
+            callee_ura: callee.to_string(),
+            subject_ura: subject.to_string(),
+            audience: callee.to_string(),
+            scopes: vec!["screen.snapshot".to_string()],
+            allowed_actions: vec!["read".to_string()],
+            allowed_followup_abilities: vec!["screen.snapshot".to_string()],
+            issued_at_ms: now_ms - 1_000,
+            expires_at_ms: now_ms + 60_000,
+        };
+        let metadata = signed_session_metadata(request, &signing_key);
+        let envelope = authority_wire_envelope(Some(issuer), Some(callee), Some(subject));
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+
+        verify_authority_metadata_with_issuer_key(
+            &envelope,
+            "screen.snapshot",
+            AccessAction::Read,
+            Some(&metadata),
+            now_ms,
+            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+            &resolver,
+        )
+        .expect("paired user may authorize this device's stream resource");
+    }
+
+    #[test]
+    fn realm_trust_session_rejects_local_device_resource_for_non_media_agent_or_ability() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "dev-a".into(),
+                credential_token: "token".into(),
+                hub_endpoint: "https://hub.example".into(),
+                realm: "example".into(),
+                deploy_signature: String::new(),
+                hub_api_base: None,
+                username: Some("alice".into()),
+                user_id: Some("alice".into()),
+                hub_pubkey_b64: None,
+                hub_tls_ca_pem_b64: None,
+                join_receipt_hash: None,
+            },
+        )
+        .expect("save paired credentials");
+
+        let now_ms = current_unix_ms();
+        let issuer = "easynet:///r/example/user/alice";
+        let subject =
+            &crate::core::ura::resource_dot_ura("example", "device.dev-a", "streams/display.01");
+        let signing_key = SigningKey::from_bytes(&[0x4e; 32]);
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+        for (callee, ability, action, label, session_suffix) in [
+            (
+                crate::core::ura::device_agent_ura("example", "dev-a", "context-management"),
+                "screen.snapshot",
+                AccessAction::Read,
+                "non-media SystemAgent",
+                "non-media-agent",
+            ),
+            (
+                crate::core::ura::device_agent_ura("example", "dev-a", "media"),
+                "fs.read",
+                AccessAction::Read,
+                "non-media ability",
+                "non-media-ability",
+            ),
+        ] {
+            let request = authority_metadata::SessionAuthorityRequest {
+                issuer_ura: issuer.to_string(),
+                session_id: format!("invoke-{session_suffix}"),
+                session_owner_user_id: "alice".to_string(),
+                creator_principal_id: issuer.to_string(),
+                callee_ura: callee.clone(),
+                subject_ura: subject.to_string(),
+                audience: callee.clone(),
+                scopes: vec![ability.to_string()],
+                allowed_actions: vec![action.as_str().to_string()],
+                allowed_followup_abilities: vec![ability.to_string()],
+                issued_at_ms: now_ms - 1_000,
+                expires_at_ms: now_ms + 60_000,
+            };
+            let metadata = signed_session_metadata(request, &signing_key);
+            let envelope = authority_wire_envelope(Some(issuer), Some(&callee), Some(subject));
+            let err = require_authority_metadata_error(
+                verify_authority_metadata_with_issuer_key(
+                    &envelope,
+                    ability,
+                    action,
+                    Some(&metadata),
+                    now_ms,
+                    RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+                    &resolver,
+                ),
+                label,
+            );
+
+            assert_eq!(err.code(), Code::PermissionDenied);
+            assert!(
+                err.message().contains(REASON_AUTHORITY_ISSUER_DENIED),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn user_session_authority_admits_exact_foreign_agent_for_rpc_and_stream() {
+        let now_ms = current_unix_ms();
+        let issuer = "easynet:///r/realm-a/user/alice";
+        let callee = "easynet:///r/realm-b/agent/device.node-b.locomotion";
+        let subject = "easynet:///r/realm-a/resource/user.alice/invoke/shell.run";
+        let signing_key = SigningKey::from_bytes(&[0x4a; 32]);
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+
+        for action in [AccessAction::Invoke, AccessAction::Stream] {
+            let request = authority_metadata::SessionAuthorityRequest {
+                issuer_ura: issuer.to_string(),
+                session_id: format!("session-cross-realm-{}", action.as_str()),
+                session_owner_user_id: "alice".to_string(),
+                creator_principal_id: issuer.to_string(),
+                callee_ura: callee.to_string(),
+                subject_ura: subject.to_string(),
+                audience: callee.to_string(),
+                scopes: vec!["shell.run".to_string()],
+                allowed_actions: vec![action.as_str().to_string()],
+                allowed_followup_abilities: vec!["shell.run".to_string()],
+                issued_at_ms: now_ms - 1_000,
+                expires_at_ms: now_ms + 60_000,
+            };
+            let metadata = signed_session_metadata(request, &signing_key);
+            let envelope = authority_wire_envelope(Some(issuer), Some(callee), Some(subject));
+
+            let authority = verify_authority_metadata_with_issuer_key(
+                &envelope,
+                "shell.run",
+                action,
+                Some(&metadata),
+                now_ms,
+                RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+                &resolver,
+            )
+            .expect("exact cross-realm User authority must verify")
+            .expect("session authority must project");
+
+            assert_eq!(authority.binding.form(), "session");
+        }
+    }
+
+    #[test]
+    fn user_session_authority_rejects_foreign_non_agent_callee() {
+        let issuer = "easynet:///r/realm-a/user/alice";
+        let foreign_authority = "easynet:///r/realm-b/authority";
+        let subject = "easynet:///r/realm-a/resource/user.alice/invoke/shell.run";
+
+        let error = verify_user_session_authority_tuple(issuer, issuer, foreign_authority, subject)
+            .expect_err("User authority must not act as cross-realm RealmAuthority authority");
+
+        assert_eq!(error.code(), Code::PermissionDenied);
+        assert!(error.message().contains(REASON_AUTHORITY_ISSUER_DENIED));
+    }
+
+    #[test]
+    fn user_session_authority_rejects_forged_cross_realm_issuer_signature() {
+        let now_ms = current_unix_ms();
+        let issuer = "easynet:///r/realm-a/user/alice";
+        let callee = "easynet:///r/realm-b/agent/device.node-b.locomotion";
+        let subject = "easynet:///r/realm-a/resource/user.alice/invoke/shell.run";
+        let trusted_key = SigningKey::from_bytes(&[0x4b; 32]);
+        let forged_key = SigningKey::from_bytes(&[0x4c; 32]);
+        let request = authority_metadata::SessionAuthorityRequest {
+            issuer_ura: issuer.to_string(),
+            session_id: "session-cross-realm-forged".to_string(),
+            session_owner_user_id: "alice".to_string(),
+            creator_principal_id: issuer.to_string(),
+            callee_ura: callee.to_string(),
+            subject_ura: subject.to_string(),
+            audience: callee.to_string(),
+            scopes: vec!["shell.run".to_string()],
+            allowed_actions: vec!["invoke".to_string()],
+            allowed_followup_abilities: vec!["shell.run".to_string()],
+            issued_at_ms: now_ms - 1_000,
+            expires_at_ms: now_ms + 60_000,
+        };
+        let metadata = signed_session_metadata(request, &forged_key);
+        let envelope = authority_wire_envelope(Some(issuer), Some(callee), Some(subject));
+        let resolver = issuer_key_resolver(issuer, &trusted_key);
+
+        let error = require_authority_metadata_error(
+            verify_authority_metadata_with_issuer_key(
+                &envelope,
+                "shell.run",
+                AccessAction::Invoke,
+                Some(&metadata),
+                now_ms,
+                RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+                &resolver,
+            ),
+            "forged cross-realm issuer signature must fail closed",
+        );
+
+        assert_eq!(error.code(), Code::PermissionDenied);
+        assert!(error.message().contains(REASON_AUTHORITY_SIGNATURE_INVALID));
+    }
+
+    fn realm_account_adapter_session_request(
+        now_ms: i64,
+        ability: &str,
+        action: AccessAction,
+    ) -> authority_metadata::SessionAuthorityRequest {
+        let issuer = "easynet:///r/example/authority";
+        authority_metadata::SessionAuthorityRequest {
+            issuer_ura: issuer.to_string(),
+            session_id: "realm-account-adapter-1".to_string(),
+            session_owner_user_id: "alice".to_string(),
+            creator_principal_id: issuer.to_string(),
+            callee_ura: issuer.to_string(),
+            subject_ura: crate::core::ura::resource_dot_ura(
+                "example",
+                "user.alice",
+                &format!("invoke/{ability}"),
+            ),
+            audience: issuer.to_string(),
+            scopes: vec![ability.to_string()],
+            allowed_actions: vec![action.as_str().to_string()],
+            allowed_followup_abilities: vec![ability.to_string()],
+            issued_at_ms: now_ms - 1_000,
+            expires_at_ms: now_ms + 60_000,
+        }
+    }
+
+    #[test]
+    fn realm_account_adapter_session_admits_exact_principal_lifecycle_operation() {
+        let now_ms = current_unix_ms();
+        let ability = governance::PRINCIPAL_GET;
+        let issuer = "easynet:///r/example/authority";
+        let signing_key = SigningKey::from_bytes(&[0x51; 32]);
+        let request = realm_account_adapter_session_request(now_ms, ability, AccessAction::Read);
+        let subject = request.subject_ura.clone();
+        let metadata = signed_session_metadata(request, &signing_key);
+        let envelope = authority_wire_envelope(Some(issuer), Some(issuer), Some(&subject));
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+
+        let authority = verify_authority_metadata_with_issuer_key(
+            &envelope,
+            ability,
+            AccessAction::Read,
+            Some(&metadata),
+            now_ms,
+            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+            &resolver,
+        )
+        .expect("exact RealmAccountAdapter PrincipalLifecycle authority must verify")
+        .expect("session authority must project");
+
+        assert_eq!(authority.binding.form(), "session");
+    }
+
+    #[test]
+    fn realm_identity_adapter_session_admits_exact_device_key_registration() {
+        let now_ms = current_unix_ms();
+        let ability = ABILITY_IDENTITY_REGISTER_PUBKEY;
+        let issuer = "easynet:///r/example/authority";
+        let signing_key = SigningKey::from_bytes(&[0x53; 32]);
+        let mut request =
+            realm_account_adapter_session_request(now_ms, ability, AccessAction::Manage);
+        request.session_id = "realm-identity-adapter-1".to_string();
+        let subject = request.subject_ura.clone();
+        let metadata = signed_session_metadata(request, &signing_key);
+        let envelope = authority_wire_envelope(Some(issuer), Some(issuer), Some(&subject));
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+
+        let authority = verify_authority_metadata_with_issuer_key(
+            &envelope,
+            ability,
+            AccessAction::Manage,
+            Some(&metadata),
+            now_ms,
+            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+            &resolver,
+        )
+        .expect("exact RealmIdentityAdapter registration authority must verify")
+        .expect("session authority must project");
+
+        assert_eq!(authority.binding.form(), "session");
+    }
+
+    #[test]
+    fn realm_directory_read_adapter_admits_exact_namespace_resolve() {
+        let now_ms = current_unix_ms();
+        let ability = federation::NAMESPACE_RESOLVE;
+        let issuer = "easynet:///r/example/authority";
+        let signing_key = SigningKey::from_bytes(&[0x55; 32]);
+        let mut request =
+            realm_account_adapter_session_request(now_ms, ability, AccessAction::Read);
+        request.session_id = "realm-directory-read-adapter-1".to_string();
+        let subject = request.subject_ura.clone();
+        let metadata = signed_session_metadata(request, &signing_key);
+        let envelope = authority_wire_envelope(Some(issuer), Some(issuer), Some(&subject));
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+
+        let authority = verify_authority_metadata_with_issuer_key(
+            &envelope,
+            ability,
+            AccessAction::Read,
+            Some(&metadata),
+            now_ms,
+            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+            &resolver,
+        )
+        .expect("exact RealmDirectoryReadAdapter authority must verify")
+        .expect("session authority must project");
+
+        assert_eq!(authority.binding.form(), "session");
+    }
+
+    #[test]
+    fn realm_runtime_invocation_adapter_admits_exact_system_agent_tuple() {
+        let now_ms = current_unix_ms();
+        let ability = "fs.read";
+        let issuer = "easynet:///r/example/authority";
+        let callee = "easynet:///r/example/agent/device.node-a.runtime";
+        let signing_key = SigningKey::from_bytes(&[0x56; 32]);
+        let mut request =
+            realm_account_adapter_session_request(now_ms, ability, AccessAction::Read);
+        request.session_id = "realm-runtime-invocation-adapter-1".to_string();
+        request.callee_ura = callee.to_string();
+        request.audience = callee.to_string();
+        let subject = request.subject_ura.clone();
+        let metadata = signed_session_metadata(request, &signing_key);
+        let envelope = authority_wire_envelope(Some(issuer), Some(callee), Some(&subject));
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+
+        let authority = verify_authority_metadata_with_issuer_key(
+            &envelope,
+            ability,
+            AccessAction::Read,
+            Some(&metadata),
+            now_ms,
+            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+            &resolver,
+        )
+        .expect("exact RealmRuntimeInvocationAdapter authority must verify")
+        .expect("session authority must project");
+
+        assert_eq!(authority.binding.form(), "session");
+    }
+
+    #[test]
+    fn realm_runtime_invocation_adapter_admits_service_callee_tuple() {
+        let now_ms = current_unix_ms();
+        let ability = "project_list";
+        let issuer = "easynet:///r/example/authority";
+        let callee = "easynet:///r/example/service/alice.pages";
+        let subject = crate::core::ura::resource_dot_ura(
+            "example",
+            "service.alice.pages",
+            "read/project_list",
+        );
+        let signing_key = SigningKey::from_bytes(&[0x58; 32]);
+        let mut request =
+            realm_account_adapter_session_request(now_ms, ability, AccessAction::Read);
+        request.session_id = "realm-runtime-invocation-adapter-pages-list".to_string();
+        request.callee_ura = callee.to_string();
+        request.audience = callee.to_string();
+        request.subject_ura = subject.clone();
+        let metadata = signed_session_metadata(request, &signing_key);
+        let envelope = authority_wire_envelope(Some(issuer), Some(callee), Some(&subject));
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+
+        let authority = verify_authority_metadata_with_issuer_key(
+            &envelope,
+            ability,
+            AccessAction::Read,
+            Some(&metadata),
+            now_ms,
+            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+            &resolver,
+        )
+        .expect("Service callee RealmRuntimeInvocationAdapter authority must verify")
+        .expect("session authority must project");
+
+        assert_eq!(authority.binding.form(), "session");
+    }
+
+    #[test]
+    fn realm_runtime_invocation_adapter_admits_publishing_agent_lifecycle_subject() {
+        let now_ms = current_unix_ms();
+        let ability = "browser.open_session";
+        let issuer = "easynet:///r/example/authority";
+        let callee = "easynet:///r/example/agent/device.node-a.browser";
+        let signing_key = SigningKey::from_bytes(&[0x5c; 32]);
+        let mut request =
+            realm_account_adapter_session_request(now_ms, ability, AccessAction::Invoke);
+        request.session_id = "realm-runtime-invocation-adapter-browser-open".to_string();
+        request.callee_ura = callee.to_string();
+        request.audience = callee.to_string();
+        request.subject_ura = callee.to_string();
+        let metadata = signed_session_metadata(request, &signing_key);
+        let envelope = authority_wire_envelope(Some(issuer), Some(callee), Some(callee));
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+
+        verify_authority_metadata_with_issuer_key(
+            &envelope,
+            ability,
+            AccessAction::Invoke,
+            Some(&metadata),
+            now_ms,
+            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+            &resolver,
+        )
+        .expect("publishing Agent lifecycle subject must verify")
+        .expect("session authority must project");
+    }
+
+    #[test]
+    fn realm_runtime_invocation_adapter_admits_device_owned_lifecycle_resource() {
+        let now_ms = current_unix_ms();
+        let ability = "browser.close_session";
+        let issuer = "easynet:///r/example/authority";
+        let callee = "easynet:///r/example/agent/device.node-a.browser";
+        let subject =
+            crate::core::ura::resource_dot_ura("example", "device.node-a", "browser/session-1");
+        let signing_key = SigningKey::from_bytes(&[0x5d; 32]);
+        let mut request =
+            realm_account_adapter_session_request(now_ms, ability, AccessAction::Manage);
+        request.session_id = "realm-runtime-invocation-adapter-browser-close".to_string();
+        request.callee_ura = callee.to_string();
+        request.audience = callee.to_string();
+        request.subject_ura = subject.clone();
+        let metadata = signed_session_metadata(request, &signing_key);
+        let envelope = authority_wire_envelope(Some(issuer), Some(callee), Some(&subject));
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+
+        verify_authority_metadata_with_issuer_key(
+            &envelope,
+            ability,
+            AccessAction::Manage,
+            Some(&metadata),
+            now_ms,
+            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+            &resolver,
+        )
+        .expect("Device-owned lifecycle Resource subject must verify")
+        .expect("session authority must project");
+    }
+
+    #[test]
+    fn realm_runtime_invocation_adapter_rejects_non_agent_callee() {
+        let now_ms = current_unix_ms();
+        let ability = "fs.read";
+        let issuer = "easynet:///r/example/authority";
+        let device = "easynet:///r/example/device/node-a";
+        let signing_key = SigningKey::from_bytes(&[0x57; 32]);
+        let mut request =
+            realm_account_adapter_session_request(now_ms, ability, AccessAction::Read);
+        request.session_id = "realm-runtime-invocation-adapter-1".to_string();
+        request.callee_ura = device.to_string();
+        request.audience = device.to_string();
+
+        let error = authority_metadata::CanonicalSessionAuthorityIssuer::issue(
+            request,
+            issuer,
+            |canonical| {
+                Ok::<_, std::convert::Infallible>(signing_key.sign(canonical).to_bytes().to_vec())
+            },
+        )
+        .expect_err("runtime adapter must never issue authority to a Device callee");
+
+        assert_eq!(error.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+        assert!(error.to_string().contains("callee_ura"), "{error}");
+    }
+
+    #[test]
+    fn realm_peer_runtime_invocation_adapter_admits_exact_foreign_agent_tuple() {
+        let now_ms = current_unix_ms();
+        let ability = "fs.read";
+        let issuer = "easynet:///r/example/authority";
+        let callee = "easynet:///r/peer.example/agent/device.node-a.runtime";
+        let signing_key = SigningKey::from_bytes(&[0x58; 32]);
+        let mut request =
+            realm_account_adapter_session_request(now_ms, ability, AccessAction::Read);
+        request.session_id = "realm-peer-runtime-invocation-adapter-1".to_string();
+        request.callee_ura = callee.to_string();
+        request.audience = callee.to_string();
+        let subject = request.subject_ura.clone();
+        let metadata = signed_session_metadata(request, &signing_key);
+        let envelope = authority_wire_envelope(Some(issuer), Some(callee), Some(&subject));
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+
+        let authority = verify_authority_metadata_with_issuer_key(
+            &envelope,
+            ability,
+            AccessAction::Read,
+            Some(&metadata),
+            now_ms,
+            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+            &resolver,
+        )
+        .expect("exact peer-runtime adapter authority must verify")
+        .expect("session authority must project");
+
+        assert_eq!(authority.binding.form(), "session");
+    }
+
+    #[test]
+    fn destination_admission_verifies_peer_runtime_authority_from_hub_attested_key() {
+        let now_ms = current_unix_ms();
+        let ability = "shell.run";
+        let issuer = "easynet:///r/example/authority";
+        let callee = "easynet:///r/peer.example/agent/device.node-a.locomotion";
+        let signing_key = SigningKey::from_bytes(&[0x6a; 32]);
+        let encoded_key = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
+        let resolver = FederatedKeyResolver::new(
+            SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default())),
+            None,
+            SharedFederatedPeers::default(),
+            Some("peer.example".to_string()),
+        );
+        resolver
+            .hub_attested_caller_keys()
+            .attest_external_caller_key(issuer, &encoded_key, std::slice::from_ref(&encoded_key))
+            .expect("authenticated upstream Hub attests the origin Authority key");
+        let mut request =
+            realm_account_adapter_session_request(now_ms, ability, AccessAction::Invoke);
+        request.session_id = "realm-peer-runtime-invocation-adapter-shell".to_string();
+        request.callee_ura = callee.to_string();
+        request.audience = callee.to_string();
+        let subject = request.subject_ura.clone();
+        let metadata = signed_session_metadata(request, &signing_key);
+        let envelope = authority_wire_envelope(Some(issuer), Some(callee), Some(&subject));
+
+        let authority = verify_authority_metadata_with_issuer_key(
+            &envelope,
+            ability,
+            AccessAction::Invoke,
+            Some(&metadata),
+            now_ms,
+            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+            &|issuer_ura| {
+                resolver
+                    .resolve_all(issuer_ura)
+                    .map(|keys| {
+                        keys.into_iter()
+                            .map(|key| BASE64_STANDARD.encode(key.to_bytes()))
+                            .collect()
+                    })
+                    .map_err(axon_error_to_status)
+            },
+        )
+        .expect("peer runtime authority must pass destination admission")
+        .expect("session authority must project");
+
+        assert_eq!(authority.binding.form(), "session");
+    }
+
+    #[test]
+    fn realm_peer_runtime_invocation_adapter_rejects_local_agent_callee() {
+        let now_ms = current_unix_ms();
+        let ability = "fs.read";
+        let issuer = "easynet:///r/example/authority";
+        let local_callee = "easynet:///r/example/agent/device.node-a.runtime";
+        let signing_key = SigningKey::from_bytes(&[0x59; 32]);
+        let mut request =
+            realm_account_adapter_session_request(now_ms, ability, AccessAction::Read);
+        request.session_id = "realm-peer-runtime-invocation-adapter-1".to_string();
+        request.callee_ura = local_callee.to_string();
+        request.audience = local_callee.to_string();
+        let subject = request.subject_ura.clone();
+        let metadata = signed_session_metadata(request, &signing_key);
+        let envelope = authority_wire_envelope(Some(issuer), Some(local_callee), Some(&subject));
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+
+        let error = require_authority_metadata_error(
+            verify_authority_metadata_with_issuer_key(
+                &envelope,
+                ability,
+                AccessAction::Read,
+                Some(&metadata),
+                now_ms,
+                RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+                &resolver,
+            ),
+            "peer runtime adapter must reject a same-realm callee",
+        );
+        assert_eq!(error.code(), Code::PermissionDenied);
+    }
+
+    #[test]
+    fn typed_governance_adapters_admit_only_their_exact_runtime_shapes() {
+        let now_ms = current_unix_ms();
+        let issuer = "easynet:///r/example/authority";
+        let agent = "easynet:///r/example/agent/device.node-a.runtime-introspection";
+        let signing_key = SigningKey::from_bytes(&[0x5a; 32]);
+        let cases = [
+            (
+                "authority",
+                "authority-governance-adapter-1",
+                "federation.revoke",
+                AccessAction::Manage,
+                issuer,
+                false,
+            ),
+            (
+                "agent",
+                "agent-governance-adapter-1",
+                "meta.list_abilities",
+                AccessAction::Read,
+                agent,
+                true,
+            ),
+            (
+                "receipt",
+                "realm-receipt-history-adapter-1",
+                "invocation.history.list",
+                AccessAction::Read,
+                agent,
+                true,
+            ),
+        ];
+
+        for (label, session_id, ability, action, callee, runtime_state_subject) in cases {
+            let mut request = realm_account_adapter_session_request(now_ms, ability, action);
+            request.session_id = session_id.to_string();
+            request.callee_ura = callee.to_string();
+            request.audience = callee.to_string();
+            if runtime_state_subject {
+                request.subject_ura = crate::core::ura::resource_dot_ura(
+                    "example",
+                    "user.alice",
+                    "runtime-state/read",
+                );
+            }
+            let subject = request.subject_ura.clone();
+            let metadata = signed_session_metadata(request, &signing_key);
+            let envelope = authority_wire_envelope(Some(issuer), Some(callee), Some(&subject));
+            let resolver = issuer_key_resolver(issuer, &signing_key);
+
+            let authority = verify_authority_metadata_with_issuer_key(
+                &envelope,
+                ability,
+                action,
+                Some(&metadata),
+                now_ms,
+                RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+                &resolver,
+            )
+            .unwrap_or_else(|error| panic!("{label} governance adapter rejected: {error}"))
+            .expect("governance session authority must project");
+            assert_eq!(authority.binding.form(), "session");
+        }
+    }
+
+    #[test]
+    fn authority_governance_adapter_binds_directory_stream_to_exact_authority_subject() {
+        let now_ms = current_unix_ms();
+        let issuer = "easynet:///r/example/authority";
+        let ability = "federation.subscribe_directory_v2";
+        let action = AccessAction::Stream;
+        let subject = crate::core::ura::resource_dot_ura(
+            "example",
+            "authority",
+            "invoke/federation.subscribe_directory_v2",
+        );
+        let signing_key = SigningKey::from_bytes(&[0x5c; 32]);
+        let mut request = realm_account_adapter_session_request(now_ms, ability, action);
+        request.session_id = "authority-governance-adapter-directory-stream".to_string();
+        request.session_owner_user_id = "backend-authority".to_string();
+        request.callee_ura = issuer.to_string();
+        request.audience = issuer.to_string();
+        request.subject_ura = subject.clone();
+        let metadata = signed_session_metadata(request.clone(), &signing_key);
+        let envelope = authority_wire_envelope(Some(issuer), Some(issuer), Some(&subject));
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+
+        let authority = verify_authority_metadata_with_issuer_key(
+            &envelope,
+            ability,
+            action,
+            Some(&metadata),
+            now_ms,
+            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+            &resolver,
+        )
+        .expect("exact Authority-owned directory subject must verify")
+        .expect("directory stream session authority must project");
+        assert_eq!(authority.binding.form(), "session");
+
+        request.subject_ura = crate::core::ura::resource_dot_ura(
+            "example",
+            "authority",
+            "invoke/federation.discover",
+        );
+        let wrong_subject_metadata = signed_session_metadata(request, &signing_key);
+        let error = require_authority_metadata_error(
+            verify_authority_metadata_with_issuer_key(
+                &authority_wire_envelope(
+                    Some(issuer),
+                    Some(issuer),
+                    Some("easynet:///r/example/resource/authority/invoke/federation.discover"),
+                ),
+                ability,
+                action,
+                Some(&wrong_subject_metadata),
+                now_ms,
+                RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+                &resolver,
+            ),
+            "AuthorityGovernance proof must not cross-authorize another descriptor subject",
+        );
+        assert_eq!(error.code(), Code::PermissionDenied);
+        assert!(
+            error
+                .message()
+                .contains("must exactly bind Authority ability"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn lifecycle_session_adapter_binds_authority_to_exact_session_resource() {
+        let now_ms = current_unix_ms();
+        let issuer = "easynet:///r/example/authority";
+        let callee = "easynet:///r/example/agent/device.node-a.runtime";
+        let subject = crate::core::ura::resource_dot_ura(
+            "example",
+            "user.alice",
+            "session/terminal-session-1",
+        );
+        let signing_key = SigningKey::from_bytes(&[0x5b; 32]);
+        let mut request =
+            realm_account_adapter_session_request(now_ms, "terminal.attach", AccessAction::Invoke);
+        request.session_id = "terminal-session-1".to_string();
+        request.callee_ura = callee.to_string();
+        request.audience = callee.to_string();
+        request.subject_ura = subject.clone();
+        let metadata = signed_session_metadata(request, &signing_key);
+        let envelope = authority_wire_envelope(Some(issuer), Some(callee), Some(&subject));
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+
+        let authority = verify_authority_metadata_with_issuer_key(
+            &envelope,
+            "terminal.attach",
+            AccessAction::Invoke,
+            Some(&metadata),
+            now_ms,
+            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+            &resolver,
+        )
+        .expect("exact lifecycle session authority must verify")
+        .expect("lifecycle session authority must project");
+        assert_eq!(authority.binding.form(), "session");
+    }
+
+    #[test]
+    fn realm_account_adapter_profiles_do_not_cross_authorize() {
+        let now_ms = current_unix_ms();
+        let issuer = "easynet:///r/example/authority";
+        let signing_key = SigningKey::from_bytes(&[0x54; 32]);
+
+        for (ability, action, wrong_session_id) in [
+            (
+                ABILITY_IDENTITY_REGISTER_PUBKEY,
+                AccessAction::Manage,
+                "realm-account-adapter-wrong-profile",
+            ),
+            (
+                governance::PRINCIPAL_GET,
+                AccessAction::Read,
+                "realm-identity-adapter-wrong-profile",
+            ),
+            (
+                federation::NAMESPACE_RESOLVE,
+                AccessAction::Read,
+                "realm-identity-adapter-wrong-profile",
+            ),
+            (
+                ABILITY_IDENTITY_REGISTER_PUBKEY,
+                AccessAction::Manage,
+                "realm-directory-read-adapter-wrong-profile",
+            ),
+            (
+                ABILITY_IDENTITY_REGISTER_PUBKEY,
+                AccessAction::Manage,
+                "realm-runtime-invocation-adapter-wrong-profile",
+            ),
+            (
+                "fs.read",
+                AccessAction::Read,
+                "realm-account-adapter-wrong-profile",
+            ),
+        ] {
+            let mut request = realm_account_adapter_session_request(now_ms, ability, action);
+            request.session_id = wrong_session_id.to_string();
+            let subject = request.subject_ura.clone();
+            let metadata = signed_session_metadata(request, &signing_key);
+            let envelope = authority_wire_envelope(Some(issuer), Some(issuer), Some(&subject));
+            let resolver = issuer_key_resolver(issuer, &signing_key);
+
+            let error = require_authority_metadata_error(
+                verify_authority_metadata_with_issuer_key(
+                    &envelope,
+                    ability,
+                    action,
+                    Some(&metadata),
+                    now_ms,
+                    RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+                    &resolver,
+                ),
+                "typed adapter profiles must not cross-authorize",
+            );
+            assert_eq!(error.code(), Code::PermissionDenied, "{error}");
+            assert!(
+                error.message().contains(REASON_AUTHORITY_ISSUER_DENIED),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn realm_account_adapter_session_rejects_non_exact_or_non_principal_shapes() {
+        let now_ms = current_unix_ms();
+        let issuer = "easynet:///r/example/authority";
+        let signing_key = SigningKey::from_bytes(&[0x52; 32]);
+
+        for case in [
+            "session_id",
+            "creator",
+            "audience",
+            "callee",
+            "caller",
+            "caller_realm",
+            "callee_realm",
+            "issuer_realm",
+            "subject_owner",
+            "ability",
+            "scope",
+            "followup",
+            "actions",
+            "descriptor_action",
+            "ttl",
+        ] {
+            let mut ability = governance::PRINCIPAL_GET.to_string();
+            let mut action = AccessAction::Read;
+            let mut request =
+                realm_account_adapter_session_request(now_ms, governance::PRINCIPAL_GET, action);
+            let mut caller = issuer.to_string();
+            match case {
+                "session_id" => request.session_id = "ordinary-session".into(),
+                "creator" => {
+                    request.creator_principal_id = "easynet:///r/example/user/alice".into()
+                }
+                "audience" => {
+                    request.audience = "easynet:///r/example/agent/backend.adapter".into()
+                }
+                "callee" => {
+                    request.callee_ura = "easynet:///r/example/agent/backend.adapter".into();
+                    request.audience = request.callee_ura.clone();
+                }
+                "caller" => {
+                    caller = "easynet:///r/example/agent/backend.adapter".into();
+                }
+                "caller_realm" => {
+                    caller = "easynet:///r/other/authority".into();
+                }
+                "callee_realm" => {
+                    request.callee_ura = "easynet:///r/other/authority".into();
+                    request.audience = request.callee_ura.clone();
+                }
+                "issuer_realm" => {
+                    request.issuer_ura = "easynet:///r/other/authority".into();
+                    request.creator_principal_id = request.issuer_ura.clone();
+                    request.callee_ura = request.issuer_ura.clone();
+                    request.audience = request.issuer_ura.clone();
+                    caller = request.issuer_ura.clone();
+                }
+                "subject_owner" => request.session_owner_user_id = "bob".into(),
+                "ability" => {
+                    ability = "namespace.resolve".into();
+                    request.subject_ura =
+                        "easynet:///r/example/resource/user.alice/invoke/namespace.resolve".into();
+                    request.scopes = vec![ability.clone()];
+                    request.allowed_followup_abilities = vec![ability.clone()];
+                }
+                "scope" => request.scopes = vec!["principal.lifecycle.*".into()],
+                "followup" => {
+                    request.allowed_followup_abilities = vec!["principal.lifecycle.*".into()]
+                }
+                "actions" => request.allowed_actions = vec!["read".into(), "manage".into()],
+                "descriptor_action" => {
+                    request.allowed_actions = vec!["manage".into()];
+                    action = AccessAction::Manage;
+                }
+                "ttl" => request.expires_at_ms = request.issued_at_ms + 5 * 60 * 1_000 + 1,
+                _ => unreachable!(),
+            }
+            let subject = request.subject_ura.clone();
+            let callee = request.callee_ura.clone();
+            let request_issuer = request.issuer_ura.clone();
+            let metadata = signed_session_metadata_unchecked(request, &signing_key);
+            let envelope = authority_wire_envelope(Some(&caller), Some(&callee), Some(&subject));
+            let resolver = issuer_key_resolver(&request_issuer, &signing_key);
+            let err = require_authority_metadata_error(
+                verify_authority_metadata_with_issuer_key(
+                    &envelope,
+                    &ability,
+                    action,
+                    Some(&metadata),
+                    now_ms,
+                    RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+                    &resolver,
+                ),
+                case,
+            );
+            let expected_code = if matches!(case, "followup" | "subject_owner") {
+                Code::InvalidArgument
+            } else {
+                Code::PermissionDenied
+            };
+            assert_eq!(err.code(), expected_code, "case={case}: {err}");
+        }
     }
 
     #[test]
@@ -4283,13 +6274,13 @@ mod tests {
     }
 
     #[test]
-    fn runtime_admission_fact_payload_is_hash_bound_without_product_policy() {
+    fn trusted_local_system_capability_receipt_is_explicit_and_hash_bound() {
         let caller_ura = "easynet:///r/policy/authority";
         let callee_ura = "easynet:///r/policy/agent/service.worker";
         let subject_ura = "easynet:///r/policy/resource/user.alice/session/session-42";
         let envelope = receipt_policy_envelope(caller_ura, callee_ura, subject_ura);
-        let authority = VerifiedRuntimeAuthority::self_authority(caller_ura)
-            .with_runtime_admission_fact("trusted-local-system self admission")
+        let authority = VerifiedRuntimeAuthority::trusted_local_system_capability()
+            .with_runtime_admission_fact("trusted-local-system capability admission")
             .expect("runtime admission fact must bind into proof payload");
         let proof = authority.authority_proof(&envelope);
         let proof_payload: serde_json::Value =
@@ -4301,8 +6292,16 @@ mod tests {
         );
         assert_eq!(
             proof_payload["bootstrap_admission"]["reason"],
-            "trusted-local-system self admission"
+            "trusted-local-system capability admission"
         );
+        assert_eq!(authority.binding.form(), "capability");
+        assert!(matches!(
+            &authority.binding,
+            AuthorityBinding::Capability { capability_ura }
+                if capability_ura
+                    == "easynet:///r/_system/resource/agent._system.local/capability/local-system-invocation"
+        ));
+        assert_ne!(authority.binding.form(), "self");
         assert!(proof_payload.get("policy_decision").is_none());
         assert_eq!(proof.proof_hash, authority_proof_expected_hash(&proof));
         proof
@@ -4534,8 +6533,38 @@ mod tests {
 
         assert_eq!(
             facade
-                .trusted_path_for_caller(user, anchor.as_ref(), "observe.health")
+                .trusted_path_for_caller(user, anchor.as_ref(), "chat", None)
                 .expect("same-realm trust-anchor User bucket should classify as User"),
+            TrustedCallerPath::User
+        );
+    }
+
+    #[test]
+    fn device_policy_classifies_exact_live_hub_attested_user_without_peer_directory() {
+        let user = "easynet:///r/origin.example/user/alice";
+        let signing_key = SigningKey::from_bytes(&[0x63; 32]);
+        let encoded_key = BASE64_STANDARD.encode(signing_key.verifying_key().to_bytes());
+        let trust = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
+        let resolver = Arc::new(FederatedKeyResolver::new(
+            trust.clone(),
+            None,
+            SharedFederatedPeers::default(),
+            Some("destination.example".to_string()),
+        ));
+        resolver
+            .hub_attested_caller_keys()
+            .attest_external_caller_key(user, &encoded_key, std::slice::from_ref(&encoded_key))
+            .expect("authenticated upstream Hub attests the exact signed User key");
+        let facade = AdmissionFacade::with_trust_anchor_cell(
+            trust,
+            Some(crate::core::ura::hub_ura("destination.example")),
+        )
+        .with_federated_key_resolver(resolver);
+
+        assert_eq!(
+            facade
+                .trusted_path_for_caller(user, &RealmTrustAnchor::default(), "shell.run", None)
+                .expect("Device policy must consume the live Hub attestation"),
             TrustedCallerPath::User
         );
     }
@@ -4561,25 +6590,26 @@ mod tests {
             Some(crate::core::ura::hub_ura("self-realm")),
         );
 
-        assert_eq!(
-            facade
-                .trusted_path_for_caller(
-                    device,
-                    anchor.as_ref(),
-                    crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
-                )
-                .expect("Device publication custody must be an explicit allowed purpose"),
-            TrustedCallerPath::DeviceCustody
-        );
-
-        let denied = facade
-            .trusted_path_for_caller(device, anchor.as_ref(), "observe.health")
-            .expect_err("ordinary public abilities must not classify Device callers");
-        assert_eq!(denied.code(), tonic::Code::PermissionDenied);
-        assert!(
-            denied.message().contains("DEVICE_CALLER_PURPOSE_DENIED"),
-            "{denied:?}"
-        );
+        let authority = "easynet:///r/self-realm/authority";
+        let ability = crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES;
+        let purpose = verify_device_invocation_purpose(DeviceInvocationPurposeScope {
+            caller_ura: device,
+            callee_ura: authority,
+            subject_ura: device,
+            public_ability: ability,
+            daemon_ura: Some(authority),
+            action: AccessAction::Manage,
+        })
+        .expect("verified purpose");
+        let path = facade
+            .trusted_path_for_caller(device, anchor.as_ref(), ability, Some(purpose))
+            .expect("verified Device custody must carry an admitted publication purpose");
+        assert!(matches!(path, TrustedCallerPath::DeviceCustody(got) if got == purpose));
+        let error = facade
+            .trusted_path_for_caller(device, anchor.as_ref(), "shell.run", None)
+            .expect_err("ordinary abilities must not classify a Device as an actor");
+        assert_eq!(error.code(), tonic::Code::PermissionDenied);
+        assert!(error.message().contains("DEVICE_CALLER_PURPOSE_UNVERIFIED"));
     }
 
     #[test]
@@ -4620,7 +6650,7 @@ mod tests {
 
         assert_eq!(
             facade
-                .trusted_path_for_caller(user, &RealmTrustAnchor::default(), "observe.health")
+                .trusted_path_for_caller(user, &RealmTrustAnchor::default(), "chat", None)
                 .expect("active lifecycle user should be trusted as User"),
             TrustedCallerPath::User
         );
@@ -4634,6 +6664,31 @@ mod tests {
                 "easynet:///r/test/device/daemon",
             )
         );
+    }
+
+    #[test]
+    fn admission_facade_defaults_to_off_box_strict() {
+        let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None);
+
+        assert_eq!(
+            facade.transport_boundary(),
+            AdmissionTransportBoundary::OffBoxStrict
+        );
+        assert!(!facade.transport_boundary().accepts_local_self_caller(
+            Some("easynet:///r/test/authority"),
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+        ));
+    }
+
+    #[test]
+    fn authenticated_local_ipc_must_opt_in_to_local_system_admission() {
+        let facade = AdmissionFacade::new(Arc::new(RealmTrustAnchor::default()), None)
+            .with_transport_boundary(AdmissionTransportBoundary::LocalOnlyIpc);
+
+        assert!(facade.transport_boundary().accepts_local_self_caller(
+            None,
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+        ));
     }
 
     #[test]
@@ -4711,7 +6766,7 @@ mod tests {
         let facade = federated_facade();
         let caller = "easynet:///r/peer-realm/agent/alice.worker";
         let path = facade
-            .trusted_path_for_caller(caller, &RealmTrustAnchor::default(), "observe.health")
+            .trusted_path_for_caller(caller, &RealmTrustAnchor::default(), "chat", None)
             .expect("peer-realm Agent caller must classify through federated trust path");
 
         assert_eq!(path, TrustedCallerPath::AgentDeviceCustody);
@@ -4738,7 +6793,7 @@ mod tests {
             }));
 
         let path = facade
-            .trusted_path_for_caller(&agent_ura, &RealmTrustAnchor::default(), "observe.health")
+            .trusted_path_for_caller(&agent_ura, &RealmTrustAnchor::default(), "chat", None)
             .expect("hosted Agent key fallback must classify Agent caller");
         assert_eq!(path, TrustedCallerPath::AgentDeviceCustody);
 
@@ -4761,7 +6816,7 @@ mod tests {
             }));
 
         let error = facade
-            .trusted_path_for_caller(&device_ura, &RealmTrustAnchor::default(), "observe.health")
+            .trusted_path_for_caller(&device_ura, &RealmTrustAnchor::default(), "chat", None)
             .expect_err("local hosted-Agent key fallback must not classify Device callers");
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
         assert!(
@@ -4854,6 +6909,54 @@ mod tests {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let device_ura = crate::core::ura::device_ura("admission-test", "device-a");
         let agent_ura = crate::core::ura::agent_ura("admission-test", "alice", "testbot");
+        let pending = crate::daemon::persistence::hosted_agent_publications::begin_registration(
+            &agent_ura,
+            &device_ura,
+            1,
+        )
+        .expect("seed hosted publication intent");
+        assert!(
+            require_local_hosted_agent_publication_ready(&agent_ura, Some(&device_ura)).is_err(),
+            "RegistrationPending must not be executable"
+        );
+        let publication_assignment =
+            crate::daemon::federation::hosted_agent_publication::HostedAgentGenerationAssignment {
+                agent_ura: agent_ura.clone(),
+                host_device_ura: device_ura.clone(),
+                incarnation_id: pending.incarnation_id().clone(),
+                generation: 1,
+            };
+        crate::daemon::persistence::hosted_agent_publications::bind_assignment(
+            &publication_assignment,
+            2,
+        )
+        .expect("bind hosted publication assignment");
+        assert!(
+            require_local_hosted_agent_publication_ready(&agent_ura, Some(&device_ura)).is_err(),
+            "Assigned must not be executable"
+        );
+        crate::daemon::persistence::hosted_agent_publications::stage_projection(
+            &publication_assignment,
+            pending.desired_catalog_epoch,
+            1,
+            "sha256:admission-ready",
+            3,
+        )
+        .expect("stage hosted publication proof");
+        assert!(
+            require_local_hosted_agent_publication_ready(&agent_ura, Some(&device_ura)).is_err(),
+            "Publishing must not be executable"
+        );
+        crate::daemon::persistence::hosted_agent_publications::mark_published(
+            &publication_assignment,
+            pending.desired_catalog_epoch,
+            1,
+            "sha256:admission-ready",
+            4,
+        )
+        .expect("publish hosted Agent for policy test");
+        require_local_hosted_agent_publication_ready(&agent_ura, Some(&device_ura))
+            .expect("Published hosted Agent is executable");
         let authority =
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
                 device_ura.clone(),
@@ -5012,5 +7115,31 @@ mod tests {
         facade
             .reserve_runtime_admission(&input, &descriptor_bound)
             .expect("explicit Agent grant admits hosted Agent");
+        crate::daemon::persistence::hosted_agent_publications::retire(
+            &agent_ura,
+            &publication_assignment.incarnation_id,
+            publication_assignment.generation,
+            5,
+        )
+        .expect("retire hosted Agent publication");
+        assert!(
+            require_local_hosted_agent_publication_ready(&agent_ura, Some(&device_ura)).is_err(),
+            "Retired must not be executable"
+        );
+
+        for internal_owner in [
+            "easynet:///r/test/authority",
+            "easynet:///r/test/device/dev-1",
+            "easynet:///r/test/agent/device.dev-1.runtime-introspection",
+        ] {
+            require_local_hosted_agent_publication_ready(internal_owner, None)
+                .expect("non-user-Agent runtime owner bypasses hosted publication readiness");
+        }
+
+        let mapped = runtime_admission_status_to_axon(Status::permission_denied(
+            "HOSTED_AGENT_NOT_PUBLISHED: assigned",
+        ));
+        assert_eq!(mapped.code, ErrorCode::AbilityDisabled);
+        assert_eq!(mapped.stage, Some(ErrorStage::AbilityPolicy));
     }
 }

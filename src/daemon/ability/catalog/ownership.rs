@@ -112,6 +112,37 @@ pub(crate) fn execution_host_ura_for_device_sponsored_system_agent(
     Ok(Some(crate::core::ura::device_ura(&owner.realm, device_id)))
 }
 
+/// Recover the execution host for any owner kind whose public descriptor is
+/// sponsored by a Device runtime.
+///
+/// SystemAgent owners carry the sponsor Device id in their own URA. Service
+/// owners are principal-scoped and deliberately do not contain placement, so an
+/// attached descriptor read must combine the Service owner with the current
+/// runtime owner. A Service owner in the same realm as an attached Device is
+/// read from that Device's committed catalog.
+pub(crate) fn execution_host_ura_for_device_sponsored_owner(
+    owner_ura: &str,
+    runtime_owner_ura: &str,
+) -> anyhow::Result<Option<String>> {
+    if let Some(host) = execution_host_ura_for_device_sponsored_system_agent(owner_ura)? {
+        return Ok(Some(host));
+    }
+    let owner = crate::core::ura::parse_ura(owner_ura)
+        .map_err(|error| anyhow::anyhow!("ability owner URA is invalid: {error}"))?;
+    if owner.kind != crate::core::ura::URAKind::Service {
+        return Ok(None);
+    }
+    let runtime_owner = crate::core::ura::parse_ura(runtime_owner_ura)
+        .map_err(|error| anyhow::anyhow!("runtime owner URA is invalid: {error}"))?;
+    if runtime_owner.kind != crate::core::ura::URAKind::Device {
+        return Ok(None);
+    }
+    if owner.realm != runtime_owner.realm {
+        return Ok(None);
+    }
+    Ok(Some(runtime_owner_ura.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,6 +226,35 @@ mod tests {
                 "easynet:///r/acme/agent/alice.assistant",
             )
             .expect("hosted Agent is canonical"),
+            None
+        );
+    }
+
+    #[test]
+    fn service_owner_projects_to_attached_device_execution_host() {
+        assert_eq!(
+            execution_host_ura_for_device_sponsored_owner(
+                "easynet:///r/acme/service/user-1.pages",
+                "easynet:///r/acme/device/dev-a",
+            )
+            .expect("same-realm Service projects to attached Device")
+            .as_deref(),
+            Some("easynet:///r/acme/device/dev-a")
+        );
+        assert_eq!(
+            execution_host_ura_for_device_sponsored_owner(
+                "easynet:///r/other/service/user-1.pages",
+                "easynet:///r/acme/device/dev-a",
+            )
+            .expect("foreign Service is not attached to local Device"),
+            None
+        );
+        assert_eq!(
+            execution_host_ura_for_device_sponsored_owner(
+                "easynet:///r/acme/service/user-1.pages",
+                "easynet:///r/acme/authority",
+            )
+            .expect("Authority runtime is not a Device sponsor"),
             None
         );
     }

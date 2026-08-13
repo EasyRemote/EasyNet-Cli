@@ -698,6 +698,7 @@ pub struct BidiSource {
 pub struct BidiOutputFrame {
     pub payload: Vec<u8>,
     pub content_type: String,
+    terminal: bool,
 }
 
 impl BidiOutputFrame {
@@ -706,6 +707,19 @@ impl BidiOutputFrame {
             payload: serde_json::to_vec(&value)
                 .expect("serde_json::Value serialization should not fail"),
             content_type: "application/json".to_string(),
+            terminal: false,
+        }
+    }
+
+    /// Complete the bidi invocation with a typed JSON result. Unlike a
+    /// progress frame, this payload is signed into the canonical terminal
+    /// receipt and must never be projected as stream data.
+    pub fn terminal_json(value: Value) -> Self {
+        Self {
+            payload: serde_json::to_vec(&value)
+                .expect("serde_json::Value serialization should not fail"),
+            content_type: "application/json".to_string(),
+            terminal: true,
         }
     }
 
@@ -713,6 +727,7 @@ impl BidiOutputFrame {
         Self {
             payload: payload.into(),
             content_type: content_type.into(),
+            terminal: false,
         }
     }
 
@@ -1220,6 +1235,9 @@ async fn run_bidi_source(
         if to_client.is_none() {
             match from_client.recv().await {
                 Some(frame) => {
+                    if frame.terminal {
+                        return Ok(frame.payload);
+                    }
                     ctx.emit_progress(frame.payload, frame.content_type).await?;
                 }
                 None => break,
@@ -1247,6 +1265,7 @@ async fn run_bidi_source(
             }
             outbound = from_client.recv() => {
                 match outbound {
+                    Some(frame) if frame.terminal => return Ok(frame.payload),
                     Some(frame) => ctx.emit_progress(frame.payload, frame.content_type).await?,
                     None => break,
                 }
@@ -1387,6 +1406,16 @@ pub enum OwnerKind {
     /// ownership fact, so a duplicated `hub.*` prefix is invalid. The
     /// control-plane projection string is `"authority"`.
     RealmAuthority,
+    /// Principal-scoped callable Service surface hosted by this daemon.
+    ///
+    /// The principal owns the public product API surface; the daemon/device only
+    /// supplies runtime execution and signing custody. This is the right owner
+    /// kind for surfaces such as Pages that are not user accounts and not
+    /// conversational Agents.
+    Service {
+        principal_id: String,
+        service_id: String,
+    },
     /// Hosted by a user-owned Agent root that this runtime explicitly hosts.
     /// The contained string is the Agent's `agent_id` (e.g. `"codex"`,
     /// `"web-builder"`). The full owner URA is
@@ -1464,6 +1493,25 @@ impl OwnerKind {
         )
     }
 
+    pub(crate) fn pages_system() -> Self {
+        Self::SystemAgent(
+            crate::daemon::ability::names::resources::PAGES_SYSTEM_AGENT_ID.to_string(),
+        )
+    }
+
+    pub(crate) fn pages_service(owner_user_id: impl Into<String>) -> Self {
+        Self::Service {
+            principal_id: owner_user_id.into(),
+            service_id: crate::daemon::ability::names::resources::PAGES_SYSTEM_AGENT_ID.to_string(),
+        }
+    }
+
+    pub(crate) fn files_system() -> Self {
+        Self::SystemAgent(
+            crate::daemon::ability::names::resources::FILES_SYSTEM_AGENT_ID.to_string(),
+        )
+    }
+
     pub(crate) fn media_system() -> Self {
         Self::SystemAgent(
             crate::daemon::ability::names::resources::MEDIA_SYSTEM_AGENT_ID.to_string(),
@@ -1473,6 +1521,13 @@ impl OwnerKind {
     pub(crate) fn plugin_management_system() -> Self {
         Self::SystemAgent(
             crate::daemon::ability::names::integrations::PLUGIN_MANAGEMENT_SYSTEM_AGENT_ID
+                .to_string(),
+        )
+    }
+
+    pub(crate) fn mcp_integration_system() -> Self {
+        Self::SystemAgent(
+            crate::daemon::ability::names::integrations::MCP_INTEGRATION_SYSTEM_AGENT_ID
                 .to_string(),
         )
     }
@@ -1582,6 +1637,16 @@ fn owner_kind_from_projection(owner_projection: &str) -> Option<OwnerKind> {
             Some(OwnerKind::SystemAgent(agent_id))
         }
         OwnerProjection::SystemAgent(_) => None,
+        OwnerProjection::Service(id) => {
+            let (principal_id, service_id) = id.split_once('.')?;
+            if principal_id.is_empty() || service_id.is_empty() || service_id.contains('.') {
+                return None;
+            }
+            Some(OwnerKind::Service {
+                principal_id: principal_id.to_string(),
+                service_id: service_id.to_string(),
+            })
+        }
         OwnerProjection::Agent(agent_id) => Some(OwnerKind::Agent(agent_id)),
         OwnerProjection::Plugin(_) => None,
     }
@@ -1592,6 +1657,10 @@ fn owner_projection_for_kind(owner: &OwnerKind) -> OwnerProjection {
         OwnerKind::DeviceProfileProjection => OwnerProjection::Device,
         OwnerKind::SystemAgent(agent_id) => OwnerProjection::SystemAgent(agent_id.clone()),
         OwnerKind::RealmAuthority => OwnerProjection::RealmAuthority,
+        OwnerKind::Service {
+            principal_id,
+            service_id,
+        } => OwnerProjection::Service(format!("{principal_id}.{service_id}")),
         OwnerKind::Agent(agent_id) => OwnerProjection::Agent(agent_id.clone()),
     }
 }
@@ -2419,12 +2488,6 @@ impl AbilityAuthorityContext {
         self.authorities.device().is_some()
     }
 
-    pub(crate) fn device_authority_realm(&self) -> Option<&str> {
-        self.authorities
-            .device()
-            .map(|(device, _)| device.realm.as_str())
-    }
-
     pub(crate) fn owns_device_product_state(&self) -> bool {
         self.authorities.device().is_some_and(|(_, source)| {
             matches!(
@@ -2463,6 +2526,7 @@ impl AbilityAuthorityContext {
                         agent_id,
                     )
             }
+            OwnerKind::Service { .. } => self.authorities.device().is_some(),
             OwnerKind::Agent(agent_id) => self.hosted_agent_authority_root(agent_id).is_some(),
         }
     }
@@ -2516,6 +2580,21 @@ impl AbilityAuthorityContext {
                 .authorities
                 .realm_authority()
                 .is_some_and(|authority| authority.ura == authority_root),
+            OwnerKind::Service {
+                principal_id,
+                service_id,
+            } => {
+                self.authorities.device().is_some()
+                    && authority_root
+                        == crate::core::ura::service_ura(
+                            self.authorities
+                                .device()
+                                .map(|(device, _)| device.realm.as_str())
+                                .unwrap_or_default(),
+                            principal_id,
+                            service_id,
+                        )
+            }
             OwnerKind::Agent(agent_id) => self
                 .hosted_agent_authority_root(agent_id)
                 .is_some_and(|hosted| hosted == authority_root),
@@ -2527,6 +2606,7 @@ impl AbilityAuthorityContext {
             OwnerKind::RealmAuthority => authority_root.to_string(),
             OwnerKind::DeviceProfileProjection
             | OwnerKind::SystemAgent(_)
+            | OwnerKind::Service { .. }
             | OwnerKind::Agent(_) => self
                 .authorities
                 .device()
@@ -2550,6 +2630,10 @@ impl AbilityAuthorityContext {
                 .ura
                 .clone(),
             OwnerKind::SystemAgent(agent_id) => self.system_agent_authority_root(agent_id),
+            OwnerKind::Service {
+                principal_id,
+                service_id,
+            } => self.service_authority_root(principal_id, service_id),
             OwnerKind::RealmAuthority => self
                 .authorities
                 .realm_authority()
@@ -2567,6 +2651,14 @@ impl AbilityAuthorityContext {
             .device()
             .expect("SystemAgent owner support requires Device authority");
         crate::core::ura::device_agent_ura(&device.realm, &device.device_id, agent_id)
+    }
+
+    fn service_authority_root(&self, principal_id: &str, service_id: &str) -> String {
+        let (device, _) = self
+            .authorities
+            .device()
+            .expect("Service owner support requires Device authority");
+        crate::core::ura::service_ura(&device.realm, principal_id, service_id)
     }
 
     fn hosted_agent_authority_root(&self, agent_id: &str) -> Option<String> {
@@ -2728,6 +2820,34 @@ pub struct AuthorityAbilityCatalogSnapshotRow {
     /// reinterpreting the Invocation subject as an execution host.
     pub execution_host_ura: String,
     pub descriptor: AbilityDescriptor,
+    /// Non-descriptor execution evidence observed from the same committed
+    /// control-plane transaction. Descriptor-only rows remain discoverable,
+    /// but never report a bound runtime.
+    pub runtime_binding: CatalogRuntimeBinding,
+}
+
+/// Runtime publication state for one exact
+/// `(authority, ability, version, call-mode)` catalogue row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogRuntimeBindingState {
+    DescriptorOnly,
+    Unbound,
+    Bound,
+}
+
+/// Advisory execution annotation emitted next to a governed descriptor.
+/// It is deliberately outside `AbilityDescriptor`: runtime transitions must
+/// not change descriptor hashes or fabricate a new descriptor identity.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct CatalogRuntimeBinding {
+    /// Sole execution-readiness authority. The remaining fields explain the
+    /// binding but are not additional gates.
+    pub state: CatalogRuntimeBindingState,
+    /// Diagnostic implementation provenance.
+    pub implementation_source: String,
+    /// Diagnostic runtime environment label.
+    pub runtime_env: String,
 }
 
 /// Failure to resolve one canonical public descriptor from the committed
@@ -2827,10 +2947,16 @@ pub struct AxonAbilityCatalog {
     /// Invariant 2: static boot registration never takes this mutex; static
     /// rows are built before the catalogue is shared through `Arc`.
     dynamic_txn: std::sync::Mutex<()>,
-    /// Post-commit hooks for consumers that derive external read models from
-    /// the committed catalog. Hooks are notifications only; they must schedule
-    /// their own async work and must not mutate the catalog inline.
-    dynamic_publication_hooks: std::sync::RwLock<Vec<Arc<dyn Fn() + Send + Sync>>>,
+    /// The one coordinator that derives external publication state from the
+    /// committed catalog. Registration is atomic: prepare and committed can
+    /// never be installed independently, and multiple fallible participants
+    /// cannot leave a partially prepared transaction.
+    dynamic_publication_coordinator: OnceLock<DynamicPublicationCoordinator>,
+}
+
+struct DynamicPublicationCoordinator {
+    prepare: Arc<dyn Fn(&[String]) -> anyhow::Result<()> + Send + Sync>,
+    committed: Arc<dyn Fn() + Send + Sync>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3085,6 +3211,23 @@ impl ExecutionIndex {
 
     fn has_mode(&self, ability: &str, call_mode: DescriptorCallMode) -> bool {
         self.unique_mode_registered(ability, call_mode)
+    }
+
+    fn has_mode_for_authority(
+        &self,
+        authority_root: &str,
+        ability: &str,
+        call_mode: DescriptorCallMode,
+    ) -> bool {
+        let key = ControlPlaneAbilityKey::new(authority_root, ability);
+        self.entries.get(&key).is_some_and(|entry| {
+            let modes = entry.handlers.modes();
+            match call_mode {
+                DescriptorCallMode::Rpc => modes.rpc,
+                DescriptorCallMode::Stream => modes.stream,
+                DescriptorCallMode::Bidi => modes.bidi,
+            }
+        })
     }
 
     fn has_any_handler(&self, ability: &str) -> bool {
@@ -3680,6 +3823,7 @@ impl DynamicRegistration {
         let predicted_control_plane_key =
             ControlPlaneAbilityKey::new(authority_scope.authority_root(), &ability)
                 .for_mode(call_mode);
+        catalog.prepare_dynamic_publication(&[authority_scope.authority_root().to_string()])?;
         let control_plane_txn = catalog.begin_control_plane_authority_mode_transaction(
             predicted_control_plane_key.authority_root(),
             predicted_control_plane_key.ability(),
@@ -3709,15 +3853,18 @@ impl DynamicRegistration {
             execution_index.install_dynamic(predicted_execution_key.clone(), self);
         }
         txn.mark_execution_index_committed()?;
-        let commit_result = txn.sync_runtime_or_rollback();
-        commit_result?;
+        txn.sync_runtime_or_rollback()?;
+        // The external readiness fence participates in this transaction. Its
+        // failure drops `txn`, restoring control-plane, execution index, and
+        // LocalRuntime before the mutation can be reported as committed.
         catalog
             .dynamic_catalog_index
             .write()
             .expect("dynamic_catalog_index RwLock poisoned")
             .insert(ability, predicted_execution_key);
+        txn.commit()?;
         drop(_dynamic_txn_guard);
-        catalog.notify_dynamic_publication_hooks();
+        catalog.notify_dynamic_publication_committed();
         Ok(())
     }
 }
@@ -3804,7 +3951,8 @@ impl Drop for ControlPlaneAuthorityModeTxn<'_> {
 enum DynamicRegistrationPhase {
     ControlPlaneAccepted,
     ExecutionIndexCommitted,
-    RuntimeSynced,
+    RuntimeSynchronized,
+    Committed,
     RolledBack,
 }
 
@@ -3812,7 +3960,7 @@ struct DynamicRegistrationTxn<'a> {
     catalog: &'a AxonAbilityCatalog,
     control_plane_key: ControlPlaneModeKey,
     prior_dynamic: Option<DynamicAbilitySnapshot>,
-    control_plane_txn: Option<ControlPlaneAuthorityModeTxn<'a>>,
+    control_plane_txns: Vec<ControlPlaneAuthorityModeTxn<'a>>,
     phase: DynamicRegistrationPhase,
 }
 
@@ -3827,7 +3975,22 @@ impl<'a> DynamicRegistrationTxn<'a> {
             catalog,
             control_plane_key,
             prior_dynamic: Some(prior_dynamic),
-            control_plane_txn: Some(control_plane_txn),
+            control_plane_txns: vec![control_plane_txn],
+            phase: DynamicRegistrationPhase::ControlPlaneAccepted,
+        }
+    }
+
+    fn after_control_plane_removal(
+        catalog: &'a AxonAbilityCatalog,
+        control_plane_key: ControlPlaneModeKey,
+        prior_dynamic: DynamicAbilitySnapshot,
+        control_plane_txns: Vec<ControlPlaneAuthorityModeTxn<'a>>,
+    ) -> Self {
+        Self {
+            catalog,
+            control_plane_key,
+            prior_dynamic: Some(prior_dynamic),
+            control_plane_txns,
             phase: DynamicRegistrationPhase::ControlPlaneAccepted,
         }
     }
@@ -3861,10 +4024,7 @@ impl<'a> DynamicRegistrationTxn<'a> {
             .sync_runtime_ability(self.control_plane_key.ability())
         {
             Ok(()) => {
-                self.phase = DynamicRegistrationPhase::RuntimeSynced;
-                if let Some(control_plane_txn) = self.control_plane_txn.take() {
-                    control_plane_txn.commit();
-                }
+                self.phase = DynamicRegistrationPhase::RuntimeSynchronized;
                 Ok(())
             }
             Err(error) => {
@@ -3874,10 +4034,42 @@ impl<'a> DynamicRegistrationTxn<'a> {
         }
     }
 
+    fn mark_runtime_synchronized_after_removal(&mut self) -> anyhow::Result<()> {
+        if self.phase != DynamicRegistrationPhase::ExecutionIndexCommitted {
+            let phase = self.phase;
+            self.rollback();
+            anyhow::bail!(
+                "dynamic ability {:?} cannot commit runtime removal from phase {:?}",
+                self.control_plane_key.ability(),
+                phase
+            );
+        }
+        self.phase = DynamicRegistrationPhase::RuntimeSynchronized;
+        Ok(())
+    }
+
+    fn commit(&mut self) -> anyhow::Result<()> {
+        if self.phase != DynamicRegistrationPhase::RuntimeSynchronized {
+            let phase = self.phase;
+            self.rollback();
+            anyhow::bail!(
+                "dynamic ability {:?} cannot commit from phase {:?}",
+                self.control_plane_key.ability(),
+                phase
+            );
+        }
+        for control_plane_txn in self.control_plane_txns.drain(..) {
+            control_plane_txn.commit();
+        }
+        self.prior_dynamic = None;
+        self.phase = DynamicRegistrationPhase::Committed;
+        Ok(())
+    }
+
     fn rollback(&mut self) {
         if matches!(
             self.phase,
-            DynamicRegistrationPhase::RuntimeSynced | DynamicRegistrationPhase::RolledBack
+            DynamicRegistrationPhase::Committed | DynamicRegistrationPhase::RolledBack
         ) {
             return;
         }
@@ -3889,10 +4081,15 @@ impl<'a> DynamicRegistrationTxn<'a> {
                 .expect("execution_index RwLock poisoned");
             execution_index.restore_dynamic(self.control_plane_key.key.clone(), snapshot);
         }
-        if let Some(mut control_plane_txn) = self.control_plane_txn.take() {
+        for mut control_plane_txn in self.control_plane_txns.drain(..) {
             control_plane_txn
                 .rollback()
                 .expect("control-plane rollback snapshot must preserve table keys");
+        }
+        if self.phase == DynamicRegistrationPhase::RuntimeSynchronized {
+            self.catalog
+                .sync_runtime_ability(self.control_plane_key.ability())
+                .expect("dynamic runtime rollback must restore its captured execution state");
         }
         self.phase = DynamicRegistrationPhase::RolledBack;
     }
@@ -3956,7 +4153,7 @@ impl AxonAbilityCatalog {
             control_plane: std::sync::RwLock::new(AbilityControlPlaneRegistry::default()),
             dynamic_catalog_index: std::sync::RwLock::new(BTreeMap::new()),
             dynamic_txn: std::sync::Mutex::new(()),
-            dynamic_publication_hooks: std::sync::RwLock::new(Vec::new()),
+            dynamic_publication_coordinator: OnceLock::new(),
         }
     }
 
@@ -4015,30 +4212,47 @@ impl AxonAbilityCatalog {
             control_plane: std::sync::RwLock::new(AbilityControlPlaneRegistry::default()),
             dynamic_catalog_index: std::sync::RwLock::new(BTreeMap::new()),
             dynamic_txn: std::sync::Mutex::new(()),
-            dynamic_publication_hooks: std::sync::RwLock::new(Vec::new()),
+            dynamic_publication_coordinator: OnceLock::new(),
         }
     }
 
-    /// Register a notification hook fired after a dynamic ability transaction
-    /// has committed to the control plane, execution index, and LocalRuntime.
-    /// The hook observes only stable catalog state. It is intentionally a
-    /// no-argument signal so product-specific publication stays in boot wiring,
-    /// not in the canonical catalog abstraction.
-    pub(crate) fn register_dynamic_publication_hook(&self, hook: Arc<dyn Fn() + Send + Sync>) {
-        self.dynamic_publication_hooks
-            .write()
-            .expect("dynamic_publication_hooks RwLock poisoned")
-            .push(hook);
+    /// Register a two-phase external publication participant. `prepare` runs
+    /// before any shared catalog/runtime mutation and must durably invalidate
+    /// prior readiness for the affected canonical owners. `committed` is an
+    /// infallible signal emitted only after the local transaction completes.
+    pub(crate) fn register_dynamic_publication_participant(
+        &self,
+        prepare: Arc<dyn Fn(&[String]) -> anyhow::Result<()> + Send + Sync>,
+        committed: Arc<dyn Fn() + Send + Sync>,
+    ) -> anyhow::Result<()> {
+        self.dynamic_publication_coordinator
+            .set(DynamicPublicationCoordinator { prepare, committed })
+            .map_err(|_| {
+                anyhow::anyhow!("dynamic catalog publication coordinator is already registered")
+            })
     }
 
-    pub(crate) fn notify_dynamic_publication_hooks(&self) {
-        let hooks = self
-            .dynamic_publication_hooks
-            .read()
-            .expect("dynamic_publication_hooks RwLock poisoned")
-            .clone();
-        for hook in hooks {
-            hook();
+    /// Whether committed dynamic catalog mutations have a live publication
+    /// owner. Lifecycle responses use this fact to distinguish a genuinely
+    /// scheduled Hub convergence pass from a local-only registration.
+    #[must_use]
+    pub(crate) fn has_dynamic_publication_hook(&self) -> bool {
+        self.dynamic_publication_coordinator.get().is_some()
+    }
+
+    pub(crate) fn prepare_dynamic_publication(
+        &self,
+        affected_owner_uras: &[String],
+    ) -> anyhow::Result<()> {
+        if let Some(coordinator) = self.dynamic_publication_coordinator.get() {
+            (coordinator.prepare)(affected_owner_uras)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn notify_dynamic_publication_committed(&self) {
+        if let Some(coordinator) = self.dynamic_publication_coordinator.get() {
+            (coordinator.committed)();
         }
     }
 
@@ -4116,6 +4330,36 @@ impl AxonAbilityCatalog {
 
     pub(crate) fn hosted_device_authority_root(&self) -> Option<&str> {
         self.authority_context.authorities.device_authority_root()
+    }
+
+    /// Return this runtime's Device host only when `owner_ura` is an exact
+    /// locally enrolled hosted User-Agent authority root.
+    pub(crate) fn exact_hosted_agent_device_authority_root(&self, owner_ura: &str) -> Option<&str> {
+        let parsed = crate::core::ura::parse_ura(owner_ura).ok()?;
+        let (_, agent_id) = parsed.agent_ids()?;
+        if parsed.device_agent_ids().is_some()
+            || self
+                .authority_context
+                .hosted_agent_authority_root(agent_id)
+                .as_deref()
+                != Some(owner_ura)
+        {
+            return None;
+        }
+        self.hosted_device_authority_root()
+    }
+
+    /// Realm Authority execution root hosted by this exact runtime, if any.
+    ///
+    /// Runtime-admin boot wiring consumes this projection instead of deriving
+    /// a Hub URA independently from daemon configuration. That keeps handler
+    /// installation on the same authority-plane decision that admitted its
+    /// control-plane descriptor into this catalog.
+    pub(crate) fn hosted_realm_authority_root(&self) -> Option<&str> {
+        self.authority_context
+            .authorities
+            .realm_authority()
+            .map(|authority| authority.ura.as_str())
     }
 
     pub(crate) fn static_authority_exclusion_snapshot(&self) -> BTreeMap<String, usize> {
@@ -4559,6 +4803,16 @@ impl AxonAbilityCatalog {
             .map_err(|error| {
                 anyhow::anyhow!("ability {ability:?} owner authority scope rejected: {error}")
             })
+    }
+
+    /// Resolve the canonical local authority root for an explicit owner kind.
+    /// Internal adapters use this when an ability name can exist under several
+    /// owners and therefore must not select a name-only control-plane row.
+    pub(crate) fn authority_root_for_owner(&self, owner: &OwnerKind) -> anyhow::Result<String> {
+        owner
+            .authority_scope(&self.authority_context)
+            .map(|scope| scope.authority_root().to_string())
+            .map_err(|error| anyhow::anyhow!("owner authority scope rejected: {error}"))
     }
 
     /// Prove that an authority-scoped execution key is backed by exact
@@ -5912,6 +6166,7 @@ impl AxonAbilityCatalog {
             }
         }
         let call_mode = DescriptorCallMode::Rpc;
+        self.prepare_dynamic_publication(&[authority_scope.authority_root().to_string()])?;
         let control_plane_txn = self.begin_control_plane_authority_mode_transaction(
             catalog_key.authority_root(),
             ability,
@@ -5931,7 +6186,7 @@ impl AxonAbilityCatalog {
             .insert(ability.to_string(), catalog_key);
         control_plane_txn.commit();
         drop(_dynamic_txn_guard);
-        self.notify_dynamic_publication_hooks();
+        self.notify_dynamic_publication_committed();
         Ok(())
     }
 
@@ -5958,18 +6213,27 @@ impl AxonAbilityCatalog {
                 "dynamic catalog lifecycle index for {ability:?} has no canonical control-plane record"
             );
         }
-        let runtime_key = control_plane_key.runtime_key()?;
-        let has_execution = self
+        self.prepare_dynamic_publication(&[control_plane_key.authority_root().to_string()])?;
+        let prior_dynamic = self
             .execution_index
             .read()
             .expect("execution_index RwLock poisoned")
-            .dynamic_snapshot(&control_plane_key)
-            .has_handlers();
-        if has_execution {
-            if let Some(runtime) = self.runtime.as_ref() {
-                self.unregister_runtime_ability_by_key(runtime, ability, &runtime_key)?;
-            }
-        }
+            .dynamic_snapshot(&control_plane_key);
+        let has_execution = prior_dynamic.has_handlers();
+        let control_plane_txns = [
+            DescriptorCallMode::Rpc,
+            DescriptorCallMode::Stream,
+            DescriptorCallMode::Bidi,
+        ]
+        .into_iter()
+        .map(|call_mode| {
+            self.begin_control_plane_authority_mode_transaction(
+                control_plane_key.authority_root(),
+                control_plane_key.ability(),
+                call_mode,
+            )
+        })
+        .collect::<Vec<_>>();
         let removed_execution = {
             let mut execution_index = self
                 .execution_index
@@ -5983,14 +6247,29 @@ impl AxonAbilityCatalog {
             control_plane_key.ability(),
         );
         debug_assert!(removed_control_plane);
+        let mut txn = DynamicRegistrationTxn::after_control_plane_removal(
+            self,
+            control_plane_key.for_mode(DescriptorCallMode::Rpc),
+            prior_dynamic,
+            control_plane_txns,
+        );
+        txn.mark_execution_index_committed()?;
+        let runtime_key = control_plane_key.runtime_key()?;
+        if has_execution {
+            if let Some(runtime) = self.runtime.as_ref() {
+                self.unregister_runtime_ability_by_key(runtime, ability, &runtime_key)?;
+            }
+        }
+        txn.mark_runtime_synchronized_after_removal()?;
         let removed_lifecycle = self
             .dynamic_catalog_index
             .write()
             .expect("dynamic_catalog_index RwLock poisoned")
             .remove(ability);
         debug_assert!(removed_lifecycle.is_some());
+        txn.commit()?;
         drop(_dynamic_txn_guard);
-        self.notify_dynamic_publication_hooks();
+        self.notify_dynamic_publication_committed();
         Ok(true)
     }
 
@@ -6051,13 +6330,38 @@ impl AxonAbilityCatalog {
     /// aggregate. No manifest DTO, static template, owner reconstruction, or
     /// mode/version collapse participates in this read path.
     pub fn authority_ability_catalog_snapshot(&self) -> Vec<AuthorityAbilityCatalogSnapshotRow> {
-        self.control_plane
+        // Dynamic registration owns descriptor, implementation, execution
+        // index, and LocalRuntime synchronization as one transaction. Taking
+        // this guard first prevents catalogue readers from observing the
+        // transient control-plane-written/execution-index-not-yet-written
+        // middle state.
+        let _dynamic_txn_guard = self.dynamic_txn.lock().expect("dynamic_txn mutex poisoned");
+        let control_plane = self
+            .control_plane
             .read()
-            .expect("control_plane RwLock poisoned")
+            .expect("control_plane RwLock poisoned");
+        let execution_index = self
+            .execution_index
+            .read()
+            .expect("execution_index RwLock poisoned");
+        control_plane
             .records()
             .into_iter()
             .map(|record| {
                 let scope = record.authority().scope();
+                let implementation = record.implementation();
+                let runtime_binding_state =
+                    if implementation.source() == &AbilityImplSource::DescriptorOnly {
+                        CatalogRuntimeBindingState::DescriptorOnly
+                    } else if execution_index.has_mode_for_authority(
+                        scope.authority_root(),
+                        record.ability(),
+                        record.descriptor().call_mode(),
+                    ) {
+                        CatalogRuntimeBindingState::Bound
+                    } else {
+                        CatalogRuntimeBindingState::Unbound
+                    };
                 let owner =
                     owner_kind_from_projection(scope.owner_projection()).unwrap_or_else(|| {
                         panic!(
@@ -6073,6 +6377,11 @@ impl AxonAbilityCatalog {
                         .execution_host_ura_for_owner(&owner, scope.authority_root()),
                     owner,
                     descriptor: record.descriptor().clone(),
+                    runtime_binding: CatalogRuntimeBinding {
+                        state: runtime_binding_state,
+                        implementation_source: implementation.source().as_str().to_string(),
+                        runtime_env: implementation.runtime_env().label().to_string(),
+                    },
                 }
             })
             .collect()
@@ -7143,7 +7452,8 @@ mod tests {
     }
 
     #[test]
-    fn static_registration_excludes_non_hosted_owner_before_control_plane_and_runtime() {
+    fn realm_authority_registration_excludes_non_hosted_system_agent_before_control_plane_and_runtime(
+    ) {
         let hub_ura = crate::core::ura::hub_ura("hub-only");
         let runtime = test_runtime();
         let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
@@ -7155,7 +7465,7 @@ mod tests {
         register_test_rpc(
             &mut catalog,
             "device.test.only",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             ok_handler(),
         );
         register_test_rpc(
@@ -7171,23 +7481,35 @@ mod tests {
         assert_eq!(rows[0].descriptor.owner_ura, hub_ura);
         assert_eq!(
             catalog.static_authority_exclusion_snapshot(),
-            BTreeMap::from([("device".to_string(), 1)])
+            BTreeMap::from([("system-agent:runtime-introspection".to_string(), 1)])
         );
 
         let hub_runtime_key = local_runtime_ability_key_for_authority(&hub_ura, "meta.hub_only")
             .expect("RealmAuthority runtime key");
         assert!(block_on_runtime_sync(runtime.ability_options(&hub_runtime_key)).is_some());
-        let synthetic_device_key = local_runtime_ability_key_for_authority(
-            &crate::core::ura::device_ura("hub-only", "local"),
+        let synthetic_system_agent_key = local_runtime_ability_key_for_authority(
+            &crate::core::ura::device_agent_ura(
+                "hub-only",
+                "local",
+                crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+            ),
             "device.test.only",
         )
-        .expect("hypothetical Device runtime key");
-        assert!(block_on_runtime_sync(runtime.ability_options(&synthetic_device_key)).is_none());
+        .expect("hypothetical SystemAgent runtime key");
+        assert!(
+            block_on_runtime_sync(runtime.ability_options(&synthetic_system_agent_key)).is_none()
+        );
     }
 
     #[test]
-    fn device_registration_excludes_realm_authority_owner_before_control_plane_and_runtime() {
+    fn device_authority_registration_excludes_realm_authority_owner_before_control_plane_and_runtime(
+    ) {
         let device_ura = crate::core::ura::device_ura("device-only", "dev-1");
+        let system_agent_ura = crate::core::ura::device_agent_ura(
+            "device-only",
+            "dev-1",
+            crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+        );
         let hub_ura = crate::core::ura::hub_ura("device-only");
         let runtime = test_runtime();
         let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
@@ -7199,7 +7521,7 @@ mod tests {
         register_test_rpc(
             &mut catalog,
             "device.test.only",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             ok_handler(),
         );
         register_test_rpc(
@@ -7211,17 +7533,19 @@ mod tests {
 
         let rows = catalog.authority_ability_catalog_snapshot();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].owner, OwnerKind::DeviceProfileProjection);
-        assert_eq!(rows[0].descriptor.owner_ura, device_ura);
+        assert_eq!(rows[0].owner, OwnerKind::runtime_introspection_system());
+        assert_eq!(rows[0].descriptor.owner_ura, system_agent_ura);
         assert_eq!(
             catalog.static_authority_exclusion_snapshot(),
             BTreeMap::from([("authority".to_string(), 1)])
         );
 
-        let device_runtime_key =
-            local_runtime_ability_key_for_authority(&device_ura, "device.test.only")
-                .expect("Device runtime key");
-        assert!(block_on_runtime_sync(runtime.ability_options(&device_runtime_key)).is_some());
+        let system_agent_runtime_key =
+            local_runtime_ability_key_for_authority(&system_agent_ura, "device.test.only")
+                .expect("SystemAgent runtime key");
+        assert!(
+            block_on_runtime_sync(runtime.ability_options(&system_agent_runtime_key)).is_some()
+        );
         let hub_runtime_key = local_runtime_ability_key_for_authority(&hub_ura, "meta.hub_only")
             .expect("hypothetical RealmAuthority runtime key");
         assert!(block_on_runtime_sync(runtime.ability_options(&hub_runtime_key)).is_none());
@@ -7316,7 +7640,7 @@ mod tests {
         register_test_rpc(
             &mut catalog,
             "device.test.constructor",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             ok_handler(),
         );
         register_test_rpc(
@@ -7329,7 +7653,7 @@ mod tests {
         let rows = catalog.authority_ability_catalog_snapshot();
         assert!(rows
             .iter()
-            .any(|row| row.owner == OwnerKind::DeviceProfileProjection));
+            .any(|row| row.owner == OwnerKind::runtime_introspection_system()));
         assert!(rows
             .iter()
             .any(|row| row.owner == OwnerKind::RealmAuthority));
@@ -7398,15 +7722,14 @@ mod tests {
 
     #[test]
     fn agent_owner_may_use_its_explicitly_hosted_agent_only() {
-        let pages_agent = crate::core::ura::agent_ura("scope-test", "user-a", "pages");
+        let docs_agent = crate::core::ura::agent_ura("scope-test", "user-a", "docs");
         let context = AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
             crate::core::ura::device_ura("scope-test", "dev-1"),
-            vec![pages_agent.clone()],
+            vec![docs_agent.clone()],
         )
         .expect("fixed hosted Agent authority context");
-        let owner = OwnerKind::Agent("pages".to_string());
-        let accepted =
-            AuthorityScope::new("agent:pages", &pages_agent).expect("hosted Pages scope");
+        let owner = OwnerKind::Agent("docs".to_string());
+        let accepted = AuthorityScope::new("agent:docs", &docs_agent).expect("hosted Docs scope");
         context
             .ensure_explicit_scope_supported(&owner, &accepted)
             .expect("Agent-owned ability may execute on its hosted Agent root");
@@ -7415,8 +7738,8 @@ mod tests {
             .ensure_explicit_scope_supported(
                 &owner,
                 &AuthorityScope::new(
-                    "agent:pages",
-                    crate::core::ura::agent_ura("scope-test", "user-b", "pages"),
+                    "agent:docs",
+                    crate::core::ura::agent_ura("scope-test", "user-b", "docs"),
                 )
                 .expect("structurally valid foreign Agent scope"),
             )
@@ -7429,16 +7752,16 @@ mod tests {
 
     #[test]
     fn declared_agent_root_cannot_override_persisted_hosted_identity() {
-        let persisted_pages = crate::core::ura::agent_ura("scope-test", "user-a", "pages");
-        let conflicting_pages = crate::core::ura::agent_ura("scope-test", "user-b", "pages");
+        let persisted_docs = crate::core::ura::agent_ura("scope-test", "user-a", "docs");
+        let conflicting_docs = crate::core::ura::agent_ura("scope-test", "user-b", "docs");
         let context = AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
             crate::core::ura::device_ura("scope-test", "dev-1"),
-            vec![persisted_pages],
+            vec![persisted_docs],
         )
         .expect("fixed hosted Agent authority context");
 
         let error = context
-            .with_declared_agent_authority_root(conflicting_pages)
+            .with_declared_agent_authority_root(conflicting_docs)
             .expect_err("static capability must not replace persisted hosted Agent identity");
         assert!(matches!(
             error,
@@ -7503,8 +7826,13 @@ mod tests {
     }
 
     #[test]
-    fn combined_authority_set_accepts_exact_explicit_device_and_authority_scopes() {
+    fn combined_authority_set_accepts_exact_explicit_system_agent_and_authority_scopes() {
         let device_ura = crate::core::ura::device_ura("scope-test", "dev-1");
+        let runtime_introspection_ura = crate::core::ura::device_agent_ura(
+            "scope-test",
+            "dev-1",
+            crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+        );
         let system_agent_ura = crate::core::ura::device_agent_ura(
             "scope-test",
             "dev-1",
@@ -7519,9 +7847,9 @@ mod tests {
 
         for (owner, projection, authority_root) in [
             (
-                OwnerKind::DeviceProfileProjection,
-                "device",
-                device_ura.as_str(),
+                OwnerKind::runtime_introspection_system(),
+                "system-agent:runtime-introspection",
+                runtime_introspection_ura.as_str(),
             ),
             (
                 OwnerKind::agent_management_system(),
@@ -7553,7 +7881,7 @@ mod tests {
         assert_eq!(rows.len(), 3);
         assert!(rows
             .iter()
-            .any(|row| row.descriptor.owner_ura == device_ura));
+            .any(|row| row.descriptor.owner_ura == runtime_introspection_ura));
         assert!(rows
             .iter()
             .any(|row| row.descriptor.owner_ura == system_agent_ura));
@@ -7576,6 +7904,11 @@ mod tests {
     #[test]
     fn authority_catalog_snapshot_preserves_combined_runtime_rows() {
         let device_ura = crate::core::ura::device_ura("realm-b", "dev-b");
+        let system_agent_ura = crate::core::ura::device_agent_ura(
+            "realm-b",
+            "dev-b",
+            crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+        );
         let hub_ura = crate::core::ura::hub_ura("realm-b");
         let context = AbilityAuthorityContext::for_combined_authority_roots(&device_ura)
             .expect("combined authority context");
@@ -7584,7 +7917,7 @@ mod tests {
         register_test_rpc(
             &mut catalog,
             "meta.describe",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_args| Ok(json!({}))),
         );
         register_test_rpc(
@@ -7597,11 +7930,12 @@ mod tests {
         let rows = catalog.authority_ability_catalog_snapshot();
         assert_eq!(rows.len(), 2, "combined authority rows must not collapse");
         assert!(rows.iter().any(|row| {
-            row.owner == OwnerKind::DeviceProfileProjection
-                && row.descriptor.owner_ura == device_ura
+            row.owner == OwnerKind::runtime_introspection_system()
+                && row.descriptor.owner_ura == system_agent_ura
                 && row.descriptor.canonical_ability_ura().as_deref()
                     == Some(
-                        crate::core::ura::device_ability_ura("realm-b", "dev-b", "meta.describe")
+                        crate::core::ura::owner_ability_ura(&system_agent_ura, "meta.describe")
+                            .expect("SystemAgent ability URA")
                             .as_str(),
                     )
         }));
@@ -7613,7 +7947,7 @@ mod tests {
         }));
 
         let runtime = catalog.runtime().expect("combined LocalRuntime");
-        for authority_root in [&device_ura, &hub_ura] {
+        for authority_root in [&system_agent_ura, &hub_ura] {
             let runtime_key =
                 local_runtime_ability_key_for_authority(authority_root, "meta.describe")
                     .expect("authority-scoped runtime key");
@@ -7655,7 +7989,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "observe.health",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|args: Value| Ok(json!({"echo": args}))),
         );
         let dispatcher = Arc::new(reg);
@@ -7676,7 +8010,7 @@ mod tests {
         register_test_rpc_env(
             &mut reg,
             "media.x.snapshot",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|env: EnvelopeContext, _args: Value| {
                 Ok(json!({
                     "saw_subject": env.subject(),
@@ -7707,13 +8041,13 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "x.dual",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_args: Value| Ok(json!({"path": "legacy"}))),
         );
         register_test_rpc_env(
             &mut reg,
             "x.dual",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_env: EnvelopeContext, _args: Value| Ok(json!({"path": "envelope"}))),
         );
     }
@@ -7728,7 +8062,7 @@ mod tests {
         register_test_rpc_env(
             &mut reg,
             "x.optional",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|env: EnvelopeContext, _args: Value| {
                 Ok(json!({
                     "subject_present": true,
@@ -7761,7 +8095,7 @@ mod tests {
         register_test_stream_env(
             &mut reg,
             "x.subscribe",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|env: EnvelopeContext, _args: Value| {
                 let frame = json!({"subject_seen": env.subject()});
                 Ok(StreamSource::Snapshot(vec![frame]))
@@ -7796,7 +8130,7 @@ mod tests {
         register_test_rpc_env(
             &mut reg,
             "x.env_only",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_env, _args| Ok(json!({}))),
         );
         let names = reg.list_abilities();
@@ -7882,19 +8216,19 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "observe.health",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| Ok(Value::Null)),
         );
         register_test_rpc(
             &mut reg,
             "test.foo",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| Ok(Value::Null)),
         );
         register_test_rpc(
             &mut reg,
             "test.bar",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| Ok(Value::Null)),
         );
         let names = reg.list_abilities();
@@ -7915,7 +8249,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "test.read",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             ok_handler(),
         );
         assert!(reg.list_abilities().contains(&"test.read".to_string()));
@@ -7942,19 +8276,19 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "doomed.rpc",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             ok_handler(),
         );
         register_test_stream(
             &mut reg,
             "doomed.stream",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| Ok(StreamSource::Snapshot(Vec::new()))),
         );
         register_test_bidi(
             &mut reg,
             "doomed.bidi",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             trivial_bidi_handler(),
         );
         assert!(reg.has_rpc("doomed.rpc"));
@@ -7980,19 +8314,19 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "runtime.rpc",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             ok_handler(),
         );
         register_test_stream(
             &mut reg,
             "runtime.stream",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| Ok(StreamSource::Snapshot(Vec::new()))),
         );
         register_test_bidi(
             &mut reg,
             "runtime.bidi",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             trivial_bidi_handler(),
         );
         let runtime = reg.runtime().expect("registry owns LocalRuntime");
@@ -8036,7 +8370,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "shared.route",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             ok_handler(),
         );
         let device_key = reg
@@ -8070,7 +8404,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "shared.missing",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             ok_handler(),
         );
         let device_key = reg
@@ -8111,7 +8445,7 @@ mod tests {
         hot_register_test_rpc(
             &reg,
             "dynamic.shared",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             ok_handler(),
         )
         .expect("dynamic device RPC registers");
@@ -8148,7 +8482,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "shared.rpc",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| Ok(serde_json::json!({"owner": "device"}))),
         );
         register_test_rpc(
@@ -8178,7 +8512,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "shared.modes",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| Ok(serde_json::json!({"mode": "rpc"}))),
         );
         register_test_stream(
@@ -8349,7 +8683,7 @@ mod tests {
         register_test_bidi(
             &mut reg,
             "terminal.attach",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             trivial_bidi_handler(),
         );
         assert!(reg.get_bidi("terminal.attach").is_some());
@@ -8368,19 +8702,19 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "observe.health",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| Ok(Value::Null)),
         );
         register_test_stream(
             &mut reg,
             "permission.subscribe",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| Ok(StreamSource::Snapshot(vec![]))),
         );
         register_test_bidi(
             &mut reg,
             "terminal.attach",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             trivial_bidi_handler(),
         );
         assert_eq!(
@@ -8416,7 +8750,7 @@ mod tests {
         register_test_bidi(
             &mut reg,
             "device.test.echo",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_args: Value| {
                 let (client_to_handler_tx, mut client_to_handler_rx) =
                     mpsc::channel::<Value>(BIDI_CHANNEL_BOUND);
@@ -8498,7 +8832,7 @@ mod tests {
         register_test_bidi(
             &mut reg,
             "device.test.bad",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| anyhow::bail!("intentional handler failure: precondition foo missing")),
         );
         let dispatcher = Arc::new(reg);
@@ -8552,7 +8886,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "test.read",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             ok_handler(),
         );
 
@@ -8565,7 +8899,10 @@ mod tests {
         assert_eq!(record.descriptor().call_mode(), DescriptorCallMode::Rpc);
         assert!(record.authority().predicate().governs_advertise());
         assert!(record.authority().predicate().governs_invoke());
-        assert_eq!(record.authority().scope().owner_projection(), "device");
+        assert_eq!(
+            record.authority().scope().owner_projection(),
+            "system-agent:runtime-introspection"
+        );
         assert_eq!(
             *record.implementation().source(),
             AbilityImplSource::NativeDaemon
@@ -8590,7 +8927,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "test.read",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             ok_handler(),
         );
         register_test_rpc(
@@ -8613,7 +8950,7 @@ mod tests {
         );
 
         for (ability, expected) in [
-            ("test.read", OwnerKind::DeviceProfileProjection),
+            ("test.read", OwnerKind::runtime_introspection_system()),
             ("federation.discover", OwnerKind::RealmAuthority),
             ("codex.weather", OwnerKind::Agent("codex".to_string())),
             ("codex.chat", OwnerKind::Agent("codex".to_string())),
@@ -8633,7 +8970,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "test.read",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             ok_handler(),
         );
 
@@ -8664,13 +9001,13 @@ mod tests {
 
     #[test]
     fn local_runtime_key_strips_agent_owner_prefix() {
-        let pages_agent = crate::core::ura::agent_ura("localhost", "dev", "pages");
-        let runtime_key = local_runtime_ability_key_for_authority(&pages_agent, "project_list")
+        let docs_agent = crate::core::ura::agent_ura("localhost", "dev", "docs");
+        let runtime_key = local_runtime_ability_key_for_authority(&docs_agent, "project_list")
             .expect("runtime key");
 
         assert_eq!(
             runtime_key,
-            "easynet:///r/localhost/ability/dev.pages.project_list"
+            "easynet:///r/localhost/ability/dev.docs.project_list"
         );
     }
 
@@ -8703,7 +9040,7 @@ mod tests {
         .unwrap();
         reg.register_rpc_with_spec(
             "test.versioned",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             manifest,
             ok_handler(),
         );
@@ -8743,7 +9080,7 @@ mod tests {
         );
         reg.register_rpc_with_spec(
             "test.read",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             manifest.clone(),
             ok_handler(),
         );
@@ -8785,7 +9122,7 @@ mod tests {
         );
         reg.register_rpc_with_spec(
             "test.read",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             manifest,
             ok_handler(),
         );
@@ -8799,7 +9136,7 @@ mod tests {
         let err = reg
             .rebind_control_plane_record(
                 "test.read",
-                &OwnerKind::DeviceProfileProjection,
+                &OwnerKind::runtime_introspection_system(),
                 None,
                 DescriptorCallMode::Rpc,
                 AbilityImplSource::NativeDaemon,
@@ -8829,7 +9166,7 @@ mod tests {
         );
         reg.register_rpc_with_spec(
             "test.read",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             manifest,
             ok_handler(),
         );
@@ -8841,7 +9178,7 @@ mod tests {
 
         reg.rebind_control_plane_record(
             "test.read",
-            &OwnerKind::DeviceProfileProjection,
+            &OwnerKind::runtime_introspection_system(),
             Some(&rebound_manifest),
             DescriptorCallMode::Rpc,
             AbilityImplSource::NativeDaemon,
@@ -8873,7 +9210,7 @@ mod tests {
         );
         reg.register_rpc_with_spec(
             "test.read",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             manifest,
             ok_handler(),
         );
@@ -8993,7 +9330,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "test.read",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             ok_handler(),
         );
 
@@ -9022,7 +9359,10 @@ mod tests {
             facts.runtime_env,
             record.implementation().runtime_env().label()
         );
-        assert_eq!(facts.authority_owner_projection, "device");
+        assert_eq!(
+            facts.authority_owner_projection,
+            "system-agent:runtime-introspection"
+        );
         assert!(facts.governs_advertise);
         assert!(facts.governs_invoke);
     }
@@ -9077,7 +9417,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "test.read",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             ok_handler(),
         );
         register_test_rpc(
@@ -9101,7 +9441,7 @@ mod tests {
 
         assert_eq!(
             reg.control_plane_owner("test.read"),
-            Some(OwnerKind::DeviceProfileProjection)
+            Some(OwnerKind::runtime_introspection_system())
         );
         assert_eq!(
             reg.control_plane_owner("federation.resolve_key"),
@@ -9162,13 +9502,13 @@ mod tests {
         register_test_bidi(
             &mut reg,
             "a.bidi",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             bidi_handler,
         );
         register_test_rpc_env(
             &mut reg,
             "a.rpc.env",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             rpc_env,
         );
         register_test_stream_env(
@@ -9194,11 +9534,11 @@ mod tests {
         );
         assert_eq!(
             reg.control_plane_owner("a.bidi"),
-            Some(OwnerKind::DeviceProfileProjection)
+            Some(OwnerKind::runtime_introspection_system())
         );
         assert_eq!(
             reg.control_plane_owner("a.rpc.env"),
-            Some(OwnerKind::DeviceProfileProjection)
+            Some(OwnerKind::runtime_introspection_system())
         );
         assert_eq!(
             reg.control_plane_owner("a.stream.env"),
@@ -9221,7 +9561,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "fs.read",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_args: Value| Ok(json!({"ok": true}))),
         );
         let dispatcher = Arc::new(reg);
@@ -9276,7 +9616,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "shell.run",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_args: Value| Ok(json!({}))),
         );
         let names = reg.list_abilities();
@@ -9294,13 +9634,13 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "device.x.foo",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| Ok(json!({"who": "first"}))),
         );
         register_test_rpc(
             &mut reg,
             "device.x.foo",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| Ok(json!({"who": "second"}))),
         );
     }
@@ -9338,37 +9678,37 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "device.x.rpc",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| Ok(json!({}))),
         );
         register_test_stream(
             &mut reg,
             "device.x.stream",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             stream_handler,
         );
         register_test_bidi(
             &mut reg,
             "device.x.bidi",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             bidi_handler,
         );
         register_test_rpc_env(
             &mut reg,
             "device.x.rpc.env",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             rpc_env,
         );
         register_test_stream_env(
             &mut reg,
             "device.x.stream.env",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             stream_env,
         );
         register_test_bidi_env(
             &mut reg,
             "device.x.bidi.env",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             bidi_env,
         );
 
@@ -9382,7 +9722,7 @@ mod tests {
         ] {
             assert_eq!(
                 reg.control_plane_owner(n),
-                Some(OwnerKind::DeviceProfileProjection),
+                Some(OwnerKind::runtime_introspection_system()),
                 "{n} should be registered with Device owner"
             );
         }
@@ -9409,13 +9749,13 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "doomed.tool",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| Ok(json!("v"))),
         );
         assert!(reg.has_rpc("doomed.tool"));
         assert_eq!(
             reg.control_plane_owner("doomed.tool"),
-            Some(OwnerKind::DeviceProfileProjection)
+            Some(OwnerKind::runtime_introspection_system())
         );
         let was_present = reg
             .unregister("doomed.tool")
@@ -9470,6 +9810,10 @@ mod tests {
             .expect("descriptor-only row is discoverable from canonical catalog");
         assert_eq!(row.owner, owner);
         assert_eq!(row.descriptor.public_name(), "declared-only");
+        assert_eq!(
+            row.runtime_binding.state,
+            CatalogRuntimeBindingState::DescriptorOnly
+        );
         let record = catalog
             .control_plane_record_for_mode("agent.declared-only", DescriptorCallMode::Rpc)
             .expect("descriptor-only lookup is unambiguous")
@@ -9501,13 +9845,13 @@ mod tests {
         register_test_stream(
             &mut reg,
             "doomed.stream",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| Ok(StreamSource::Snapshot(vec![]))),
         );
         register_test_bidi(
             &mut reg,
             "doomed.bidi",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_| {
                 Err(anyhow::anyhow!(
                     "test bidi handler not expected to actually run"
@@ -9615,7 +9959,7 @@ mod tests {
         hot_register_test_rpc(
             &reg,
             "plugin.mode_shift",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_args| Ok(serde_json::json!({"mode": "rpc"}))),
         )
         .expect("dynamic RPC registers");
@@ -9629,7 +9973,7 @@ mod tests {
         );
         reg.hot_register_stream_with_spec(
             "plugin.mode_shift",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             manifest,
             Arc::new(|_args| Ok(StreamSource::Snapshot(Vec::new()))),
         )
@@ -9664,7 +10008,7 @@ mod tests {
         hot_register_test_rpc(
             &reg,
             "plugin.owner_shift",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_args| Ok(serde_json::json!({"owner": "device"}))),
         )
         .expect("initial dynamic RPC registers");
@@ -9689,7 +10033,7 @@ mod tests {
 
         assert_eq!(
             reg.control_plane_owner("plugin.owner_shift"),
-            Some(OwnerKind::DeviceProfileProjection)
+            Some(OwnerKind::runtime_introspection_system())
         );
         let out = invoke_test_rpc(&reg, "plugin.owner_shift", serde_json::json!({}))
             .expect("old runtime binding remains invokable");
@@ -9702,7 +10046,7 @@ mod tests {
         hot_register_test_rpc(
             &reg,
             "plugin.reload",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_args| Ok(serde_json::json!({"version": "old"}))),
         )
         .expect("initial dynamic RPC registers");
@@ -9710,7 +10054,7 @@ mod tests {
         hot_register_test_rpc(
             &reg,
             "plugin.reload",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_args| Ok(serde_json::json!({"version": "new"}))),
         )
         .expect("same dynamic handler family can be replaced");
@@ -9718,6 +10062,16 @@ mod tests {
         let out = invoke_test_rpc(&reg, "plugin.reload", serde_json::json!({}))
             .expect("reloaded runtime binding remains invokable");
         assert_eq!(out, serde_json::json!({"version": "new"}));
+        let rebound = reg
+            .authority_ability_catalog_snapshot()
+            .into_iter()
+            .find(|row| row.name == "plugin.reload")
+            .expect("rebound descriptor remains published");
+        assert_eq!(
+            rebound.runtime_binding.state,
+            CatalogRuntimeBindingState::Bound,
+            "successful handler replacement must publish one bound snapshot"
+        );
         assert!(
             reg.resolve_rpc_with_env("plugin.reload").is_none(),
             "same-family replacement must not create an envelope handler"
@@ -9730,7 +10084,7 @@ mod tests {
         hot_register_test_rpc(
             &reg,
             "plugin.family_shift",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_args| Ok(serde_json::json!({"family": "rpc"}))),
         )
         .expect("initial dynamic RPC registers");
@@ -9738,7 +10092,7 @@ mod tests {
         let err = reg
             .hot_register_rpc_with_envelope_and_spec(
                 "plugin.family_shift",
-                OwnerKind::DeviceProfileProjection,
+                OwnerKind::runtime_introspection_system(),
                 test_manifest(
                     "plugin.family_shift",
                     "Rejected handler-family switch test ability.",
@@ -9767,7 +10121,10 @@ mod tests {
             serde_json::json!({"type": "object", "properties": {"old": {"type": "boolean"}}}),
         );
         let authority_scope = catalog
-            .resolve_authority_scope_for_owner("plugin.txn", &OwnerKind::DeviceProfileProjection)
+            .resolve_authority_scope_for_owner(
+                "plugin.txn",
+                &OwnerKind::runtime_introspection_system(),
+            )
             .expect("device owner resolves authority scope");
         let control_plane_key =
             ControlPlaneAbilityKey::new(authority_scope.authority_root(), "plugin.txn")
@@ -9845,7 +10202,7 @@ mod tests {
         catalog
             .hot_register_rpc_with_spec(
                 "plugin.rollback",
-                OwnerKind::DeviceProfileProjection,
+                OwnerKind::runtime_introspection_system(),
                 old_manifest,
                 Arc::new(|_args| Ok(serde_json::json!({"version": "old"}))),
             )
@@ -9881,7 +10238,7 @@ mod tests {
         let new_authority_scope = catalog
             .resolve_authority_scope_for_owner(
                 "plugin.rollback",
-                &OwnerKind::DeviceProfileProjection,
+                &OwnerKind::runtime_introspection_system(),
             )
             .expect("device owner resolves authority scope");
         let written_key = catalog
@@ -9909,7 +10266,7 @@ mod tests {
                 control_plane_key.key.clone(),
                 DynamicRegistration::rpc_with_spec(
                     "plugin.rollback",
-                    OwnerKind::DeviceProfileProjection,
+                    OwnerKind::runtime_introspection_system(),
                     new_manifest,
                     Arc::new(|_args| Ok(serde_json::json!({"version": "new"}))),
                 ),
@@ -9951,6 +10308,16 @@ mod tests {
             props.contains_key("old") && !props.contains_key("new"),
             "rollback must restore the old descriptor schema; got {:?}",
             restored_record.descriptor().input_schema()
+        );
+        let restored_snapshot = catalog
+            .authority_ability_catalog_snapshot()
+            .into_iter()
+            .find(|row| row.name == "plugin.rollback")
+            .expect("rollback restores the published row");
+        assert_eq!(
+            restored_snapshot.runtime_binding.state,
+            CatalogRuntimeBindingState::Bound,
+            "rollback must restore the prior descriptor and its prior handler as one bound snapshot"
         );
     }
 
@@ -10045,7 +10412,7 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "fs.read",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_args| Ok(serde_json::Value::Null)),
         );
         let reg = Arc::new(reg);
@@ -10071,14 +10438,14 @@ mod tests {
         register_test_rpc(
             &mut reg,
             "fs.read",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_args| Ok(serde_json::Value::Null)),
         );
         let reg = Arc::new(reg);
         hot_register_test_rpc(
             &reg,
             "plugin.echo",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::runtime_introspection_system(),
             Arc::new(|_args| Ok(serde_json::Value::Null)),
         )
         .expect("dynamic RPC registers");

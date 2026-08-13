@@ -23,7 +23,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::daemon::ability::canonical_json_bytes;
 
-pub(crate) const DELEGATION_METADATA_KEY: &str = "x-runtime-delegation";
+pub(crate) const DELEGATION_METADATA_KEY: &str =
+    crate::daemon::ability::RUNTIME_DELEGATION_METADATA_KEY;
 pub(crate) const SESSION_AUTHORITY_METADATA_KEY: &str = "x-runtime-session-authority";
 pub(crate) const REASON_AUTHORITY_FORMAT_INVALID: &str = "AUTHORITY_FORMAT_INVALID";
 pub(crate) const REASON_AUTHORITY_EXPIRED: &str = "AUTHORITY_EXPIRED";
@@ -61,17 +62,7 @@ impl std::fmt::Display for AuthorityMetadataError {
 
 impl std::error::Error for AuthorityMetadataError {}
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct DelegationPayload {
-    pub(crate) issuer_ura: String,
-    pub(crate) subject_ura: String,
-    pub(crate) caller_ura: String,
-    pub(crate) audience: String,
-    pub(crate) scopes: Vec<String>,
-    pub(crate) issued_at_ms: i64,
-    pub(crate) expires_at_ms: i64,
-}
+pub(crate) type DelegationPayload = crate::daemon::ability::DelegationAuthorityClaims;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -445,6 +436,7 @@ pub(crate) fn validate_delegation_payload_shape(
             ("audience", &payload.audience),
         ],
     )?;
+    validate_callable_authority_target("authority audience", &payload.audience)?;
     validate_expiry(
         "authority",
         payload.issued_at_ms,
@@ -499,15 +491,22 @@ pub(crate) fn validate_session_authority_payload_shape(
             "session authority session_id is not canonical",
         ));
     }
+    validate_callable_authority_target("session authority callee_ura", &payload.callee_ura)?;
+    validate_callable_authority_target("session authority audience", &payload.audience)?;
     let subject_kind = authority_subject_kind(&payload.subject_ura);
     if !matches!(
         subject_kind,
-        AuthoritySubjectKind::User | AuthoritySubjectKind::Session
+        AuthoritySubjectKind::User
+            | AuthoritySubjectKind::Agent
+            | AuthoritySubjectKind::Session
+            | AuthoritySubjectKind::DescriptorBound
+            | AuthoritySubjectKind::RuntimeStateRead
+            | AuthoritySubjectKind::Resource
     ) {
         return Err(AuthorityMetadataError::new(
             REASON_AUTHORITY_FORMAT_INVALID,
             format!(
-                "session authority subject_ura `{}` must be a canonical user or session subject",
+                "session authority subject_ura `{}` must be a canonical User, Agent, or Resource authority subject",
                 payload.subject_ura
             ),
         ));
@@ -551,6 +550,61 @@ pub(crate) fn validate_session_authority_payload_shape(
                 ),
             ));
         }
+    } else if subject_kind == AuthoritySubjectKind::DescriptorBound {
+        let parsed = crate::core::ura::parse_ura(payload.subject_ura.trim()).map_err(|err| {
+            AuthorityMetadataError::new(
+                REASON_AUTHORITY_FORMAT_INVALID,
+                format!("session authority subject_ura parse failed: {err}"),
+            )
+        })?;
+        let (owner_user_id, _operation, ability) =
+            canonical_descriptor_bound_resource_parts(&parsed).ok_or_else(|| {
+                AuthorityMetadataError::new(
+                    REASON_AUTHORITY_FORMAT_INVALID,
+                    "session authority subject_ura must name one canonical descriptor-bound user or service resource",
+                )
+            })?;
+        if owner_user_id != payload.session_owner_user_id {
+            return Err(AuthorityMetadataError::new(
+                REASON_AUTHORITY_FORMAT_INVALID,
+                format!(
+                    "session authority descriptor-bound subject owner must match session_owner_user_id `{}`",
+                    payload.session_owner_user_id
+                ),
+            ));
+        }
+        if !payload
+            .allowed_followup_abilities
+            .iter()
+            .any(|allowed| allowed.trim() == ability)
+        {
+            return Err(AuthorityMetadataError::new(
+                REASON_AUTHORITY_FORMAT_INVALID,
+                "session authority descriptor-bound subject ability must be an exact allowed follow-up ability",
+            ));
+        }
+    } else if subject_kind == AuthoritySubjectKind::RuntimeStateRead {
+        let parsed = crate::core::ura::parse_ura(payload.subject_ura.trim()).map_err(|err| {
+            AuthorityMetadataError::new(
+                REASON_AUTHORITY_FORMAT_INVALID,
+                format!("session authority subject_ura parse failed: {err}"),
+            )
+        })?;
+        let owner_user_id = canonical_runtime_state_read_resource_owner(&parsed).ok_or_else(|| {
+            AuthorityMetadataError::new(
+                REASON_AUTHORITY_FORMAT_INVALID,
+                "session authority subject_ura must name one canonical user runtime-state read resource",
+            )
+        })?;
+        if owner_user_id != payload.session_owner_user_id {
+            return Err(AuthorityMetadataError::new(
+                REASON_AUTHORITY_FORMAT_INVALID,
+                format!(
+                    "session authority runtime-state read subject owner must match session_owner_user_id `{}`",
+                    payload.session_owner_user_id
+                ),
+            ));
+        }
     }
     validate_expiry(
         "session authority",
@@ -558,6 +612,34 @@ pub(crate) fn validate_session_authority_payload_shape(
         payload.expires_at_ms,
         now_ms,
     )
+}
+
+/// Authority metadata may target only principals that own callable ability
+/// surfaces. A Device is transport/key custody, not an invocation callee; a
+/// wildcard or resource-prefix audience would erase that ontology at the wire
+/// boundary and is therefore rejected before signature or policy evaluation.
+fn validate_callable_authority_target(
+    label: &str,
+    target_ura: &str,
+) -> Result<(), AuthorityMetadataError> {
+    let parsed = crate::core::ura::parse_ura(target_ura.trim()).map_err(|err| {
+        AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("{label} must be a canonical Agent, Service, or Authority URA: {err}"),
+        )
+    })?;
+    if !matches!(
+        parsed.kind,
+        crate::core::ura::URAKind::Agent
+            | crate::core::ura::URAKind::Service
+            | crate::core::ura::URAKind::Authority
+    ) {
+        return Err(AuthorityMetadataError::new(
+            REASON_AUTHORITY_FORMAT_INVALID,
+            format!("{label} must identify a callable Agent, Service, or Authority principal"),
+        ));
+    }
+    Ok(())
 }
 
 fn reject_all_zero_authority_fields(
@@ -581,13 +663,66 @@ pub(crate) fn authority_subject_kind(subject_ura: &str) -> AuthoritySubjectKind 
     };
     match parsed.kind {
         crate::core::ura::URAKind::User => AuthoritySubjectKind::User,
+        crate::core::ura::URAKind::Service => AuthoritySubjectKind::Service,
+        crate::core::ura::URAKind::Agent => AuthoritySubjectKind::Agent,
         crate::core::ura::URAKind::Resource
             if canonical_session_resource_parts(&parsed).is_some() =>
         {
             AuthoritySubjectKind::Session
         }
+        crate::core::ura::URAKind::Resource
+            if canonical_descriptor_bound_resource_parts(&parsed).is_some() =>
+        {
+            AuthoritySubjectKind::DescriptorBound
+        }
+        crate::core::ura::URAKind::Resource
+            if canonical_runtime_state_read_resource_owner(&parsed).is_some() =>
+        {
+            AuthoritySubjectKind::RuntimeStateRead
+        }
+        crate::core::ura::URAKind::Resource
+            if parsed
+                .resource_owner_id()
+                .is_some_and(|owner| !owner.starts_with("user.")) =>
+        {
+            AuthoritySubjectKind::Resource
+        }
         _ => AuthoritySubjectKind::Other,
     }
+}
+
+fn canonical_descriptor_bound_resource_parts(
+    parsed: &crate::core::ura::ParsedURA,
+) -> Option<(&str, &str, &str)> {
+    let owner_user_id = descriptor_bound_resource_accountable_user_id(parsed)?;
+    let (operation, ability) = parsed.resource_path()?.split_once('/')?;
+    if !matches!(operation, "read" | "invoke" | "stream" | "manage" | "grant") {
+        return None;
+    }
+    if ability.is_empty() || ability.contains('/') {
+        return None;
+    }
+    Some((owner_user_id, operation, ability))
+}
+
+fn descriptor_bound_resource_accountable_user_id(
+    parsed: &crate::core::ura::ParsedURA,
+) -> Option<&str> {
+    let owner = parsed.resource_owner_id()?;
+    if let Some(owner_user_id) = owner.strip_prefix("user.") {
+        return (!owner_user_id.is_empty() && !owner_user_id.contains('.'))
+            .then_some(owner_user_id);
+    }
+    let service_owner = owner.strip_prefix("service.")?;
+    let (principal_id, service_id) = service_owner.split_once('.')?;
+    if principal_id.is_empty()
+        || principal_id.contains('.')
+        || service_id.is_empty()
+        || service_id.contains('.')
+    {
+        return None;
+    }
+    Some(principal_id)
 }
 
 fn canonical_session_resource_parts(parsed: &crate::core::ura::ParsedURA) -> Option<(&str, &str)> {
@@ -605,6 +740,32 @@ fn canonical_session_resource_parts(parsed: &crate::core::ura::ParsedURA) -> Opt
             crate::core::identity::is_canonical_session_authority_id(session_id)
         })?;
     Some((owner_user_id, session_id))
+}
+
+/// Project the identity carried by one canonical User-owned session subject.
+///
+/// Authority issuers use this instead of re-parsing `resource/user.<id>/session/<id>`
+/// outside the admission model. Returning owned values keeps the parser's
+/// internal representation private while preserving one source of truth for
+/// the owner/session binding rule.
+pub(crate) fn canonical_user_session_subject_identity(
+    subject_ura: &str,
+) -> Option<(String, String)> {
+    let parsed = crate::core::ura::parse_ura(subject_ura.trim()).ok()?;
+    let (owner_user_id, session_id) = canonical_session_resource_parts(&parsed)?;
+    Some((owner_user_id.to_string(), session_id.to_string()))
+}
+
+fn canonical_runtime_state_read_resource_owner(
+    parsed: &crate::core::ura::ParsedURA,
+) -> Option<&str> {
+    let owner_user_id = parsed
+        .resource_owner_id()
+        .and_then(|owner| owner.strip_prefix("user."))?;
+    if owner_user_id.is_empty() || owner_user_id.contains('.') {
+        return None;
+    }
+    (parsed.resource_path() == Some("runtime-state/read")).then_some(owner_user_id)
 }
 
 pub(crate) fn session_authority_admits_subject(
@@ -626,7 +787,12 @@ pub(crate) fn authority_audience_admits(audience: &str, callee: &str) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AuthoritySubjectKind {
     User,
+    Service,
+    Agent,
     Session,
+    DescriptorBound,
+    RuntimeStateRead,
+    Resource,
     Other,
 }
 
@@ -683,13 +849,13 @@ mod tests {
             .unwrap()
             .as_millis() as i64;
         SessionAuthorityPayload {
-            issuer_ura: "easynet:///r/example/agent/backend".into(),
+            issuer_ura: "easynet:///r/example/agent/alice.backend".into(),
             session_id: "session-1".into(),
             session_owner_user_id: "alice".into(),
-            creator_principal_id: "easynet:///r/example/agent/backend".into(),
-            callee_ura: "easynet:///r/example/device/dev-a".into(),
+            creator_principal_id: "easynet:///r/example/agent/alice.backend".into(),
+            callee_ura: "easynet:///r/example/agent/alice.backend".into(),
             subject_ura: "easynet:///r/example/resource/user.alice/session/session-1".into(),
-            audience: "easynet:///r/example/device/dev-a".into(),
+            audience: "easynet:///r/example/agent/alice.backend".into(),
             scopes: vec!["device.observe.*".into()],
             allowed_actions: vec!["read".into()],
             allowed_followup_abilities: vec!["device.observe.health".into()],
@@ -702,8 +868,8 @@ mod tests {
         DelegationPayload {
             issuer_ura: "easynet:///r/example/user/alice".into(),
             subject_ura: "easynet:///r/example/user/alice".into(),
-            caller_ura: "easynet:///r/example/agent/backend".into(),
-            audience: "easynet:///r/example/device/dev-a".into(),
+            caller_ura: "easynet:///r/example/agent/alice.backend".into(),
+            audience: "easynet:///r/example/agent/alice.backend".into(),
             scopes: vec!["device.observe.*".into()],
             issued_at_ms: 1000,
             expires_at_ms: 4_102_444_800_000,
@@ -772,7 +938,7 @@ mod tests {
                 issued_at_ms: payload.issued_at_ms,
                 expires_at_ms: payload.expires_at_ms,
             },
-            "easynet:///r/example/agent/other",
+            "easynet:///r/example/agent/alice.other",
             |_| Ok::<_, std::convert::Infallible>(vec![0x5a; 64]),
         )
         .expect_err("issuer and signer owner must be identical");
@@ -789,8 +955,32 @@ mod tests {
         let canonical = canonical_authority_payload_bytes(&payload).unwrap();
         assert_eq!(
             String::from_utf8(canonical).unwrap(),
-            r#"{"audience":"easynet:///r/example/device/dev-a","caller_ura":"easynet:///r/example/agent/backend","expires_at_ms":2000,"issued_at_ms":1000,"issuer_ura":"easynet:///r/example/user/alice","scopes":["device.observe.*"],"subject_ura":"easynet:///r/example/user/alice"}"#
+            r#"{"audience":"easynet:///r/example/agent/alice.backend","caller_ura":"easynet:///r/example/agent/alice.backend","expires_at_ms":2000,"issued_at_ms":1000,"issuer_ura":"easynet:///r/example/user/alice","scopes":["device.observe.*"],"subject_ura":"easynet:///r/example/user/alice"}"#
         );
+    }
+
+    #[test]
+    fn delegation_authority_rejects_device_audience() {
+        let mut payload = delegation_payload();
+        payload.audience = "easynet:///r/example/device/dev-a".into();
+
+        let err = validate_delegation_payload_shape(&payload, None)
+            .expect_err("Device is key custody, not a callable authority audience");
+        assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+        assert!(
+            err.to_string()
+                .contains("callable Agent, Service, or Authority"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn delegation_authority_accepts_service_audience() {
+        let mut payload = delegation_payload();
+        payload.audience = "easynet:///r/example/service/alice.pages".into();
+
+        validate_delegation_payload_shape(&payload, None)
+            .expect("Service is a callable authority audience");
     }
 
     #[test]
@@ -798,8 +988,8 @@ mod tests {
         let payload = DelegationPayload {
             issuer_ura: "easynet:///r/example/user/alice".into(),
             subject_ura: "easynet:///r/example/user/00000000-0000-0000-0000-000000000000".into(),
-            caller_ura: "easynet:///r/example/agent/backend".into(),
-            audience: "easynet:///r/example/device/dev-a".into(),
+            caller_ura: "easynet:///r/example/agent/alice.backend".into(),
+            audience: "easynet:///r/example/agent/alice.backend".into(),
             scopes: vec!["device.observe.*".into()],
             issued_at_ms: 1000,
             expires_at_ms: 2000,
@@ -961,6 +1151,62 @@ mod tests {
         matching_user_subject.subject_ura = "easynet:///r/example/user/alice".into();
         validate_session_authority_payload_shape(&matching_user_subject, None)
             .expect("the declared session owner remains a canonical user subject");
+
+        let mut descriptor_bound = session_payload();
+        descriptor_bound.subject_ura =
+            "easynet:///r/example/resource/user.alice/invoke/principal.lifecycle.get".into();
+        descriptor_bound.allowed_followup_abilities = vec!["principal.lifecycle.get".into()];
+        validate_session_authority_payload_shape(&descriptor_bound, None)
+            .expect("exact descriptor-bound user resource must be admitted");
+
+        let mut runtime_state_read = session_payload();
+        runtime_state_read.subject_ura =
+            "easynet:///r/example/resource/user.alice/runtime-state/read".into();
+        validate_session_authority_payload_shape(&runtime_state_read, None)
+            .expect("exact user-owned runtime-state read resource must be admitted");
+        runtime_state_read.subject_ura =
+            "easynet:///r/example/resource/user.bob/runtime-state/read".into();
+        validate_session_authority_payload_shape(&runtime_state_read, None)
+            .expect_err("runtime-state read resource owner mismatch must fail closed");
+
+        descriptor_bound.allowed_followup_abilities = vec!["principal.lifecycle.create".into()];
+        let err = validate_session_authority_payload_shape(&descriptor_bound, None)
+            .expect_err("descriptor-bound ability mismatch must fail closed");
+        assert!(
+            err.to_string().contains("exact allowed follow-up ability"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn session_authority_rejects_device_callee_and_audience() {
+        let mut device_callee = session_payload();
+        device_callee.callee_ura = "easynet:///r/example/device/dev-a".into();
+        let err = validate_session_authority_payload_shape(&device_callee, None)
+            .expect_err("Device must not enter SessionAuthority as a callee");
+        assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+        assert!(err.to_string().contains("callee_ura"), "{err}");
+
+        let mut device_audience = session_payload();
+        device_audience.audience = "easynet:///r/example/device/dev-a".into();
+        let err = validate_session_authority_payload_shape(&device_audience, None)
+            .expect_err("Device must not enter SessionAuthority as an audience");
+        assert_eq!(err.reason(), REASON_AUTHORITY_FORMAT_INVALID);
+        assert!(err.to_string().contains("audience"), "{err}");
+    }
+
+    #[test]
+    fn session_authority_accepts_service_callee_and_descriptor_bound_subject() {
+        let mut payload = session_payload();
+        payload.callee_ura = "easynet:///r/example/service/alice.pages".into();
+        payload.audience = payload.callee_ura.clone();
+        payload.subject_ura =
+            "easynet:///r/example/resource/service.alice.pages/read/project_list".into();
+        payload.allowed_actions = vec!["read".into()];
+        payload.allowed_followup_abilities = vec!["project_list".into()];
+
+        validate_session_authority_payload_shape(&payload, None)
+            .expect("Service-owned descriptor-bound authority must be canonical");
     }
 
     #[test]
@@ -1059,14 +1305,48 @@ mod tests {
     }
 
     #[test]
-    fn authority_subject_kind_accepts_only_canonical_user_or_session_resources() {
+    fn authority_subject_kind_accepts_canonical_user_session_and_descriptor_resources() {
         assert_eq!(
             authority_subject_kind("easynet:///r/example/user/alice"),
             AuthoritySubjectKind::User
         );
         assert_eq!(
+            authority_subject_kind("easynet:///r/example/agent/device.node-a.browser"),
+            AuthoritySubjectKind::Agent
+        );
+        assert_eq!(
+            authority_subject_kind("easynet:///r/example/service/alice.pages"),
+            AuthoritySubjectKind::Service
+        );
+        assert_eq!(
             authority_subject_kind("easynet:///r/example/resource/user.alice/session/session-1"),
             AuthoritySubjectKind::Session
+        );
+        assert_eq!(
+            authority_subject_kind(
+                "easynet:///r/example/resource/service.alice.pages/read/project_list"
+            ),
+            AuthoritySubjectKind::DescriptorBound
+        );
+        assert_eq!(
+            canonical_user_session_subject_identity(
+                "easynet:///r/example/resource/user.alice/session/session-1"
+            ),
+            Some(("alice".to_string(), "session-1".to_string()))
+        );
+        assert_eq!(
+            authority_subject_kind(
+                "easynet:///r/example/resource/user.alice/invoke/principal.lifecycle.get"
+            ),
+            AuthoritySubjectKind::DescriptorBound
+        );
+        assert_eq!(
+            authority_subject_kind("easynet:///r/example/resource/user.alice/runtime-state/read"),
+            AuthoritySubjectKind::RuntimeStateRead
+        );
+        assert_eq!(
+            authority_subject_kind("easynet:///r/example/resource/device.node-a/browser/session-1"),
+            AuthoritySubjectKind::Resource
         );
         assert_eq!(
             authority_subject_kind(
@@ -1089,8 +1369,8 @@ mod tests {
         );
         assert_eq!(
             authority_subject_kind("easynet:///r/example/resource/device.dev-a/session/session-1"),
-            AuthoritySubjectKind::Other,
-            "session resources are owned by the session user"
+            AuthoritySubjectKind::Resource,
+            "a Device resource is canonical but is not a User session resource"
         );
         assert_eq!(
             authority_subject_kind(

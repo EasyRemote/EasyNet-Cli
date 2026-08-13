@@ -242,6 +242,7 @@ fn list_abilities_handler(
     // governed descriptor, so discovery only filters and serializes those
     // aggregates.
     let mut catalog: BTreeMap<CatalogDescriptorKey, AbilityDescriptor> = BTreeMap::new();
+    let mut runtime_bindings = BTreeMap::new();
     if let Some(registry) = live_registry {
         for row in registry.authority_ability_catalog_snapshot() {
             if row.execution_host_ura != catalog_execution_host_ura {
@@ -254,8 +255,11 @@ fn list_abilities_handler(
             if !scope.matches_descriptor(&descriptor) {
                 continue;
             }
+            let key =
+                CatalogDescriptorKey::from_descriptor(&descriptor).map_err(anyhow::Error::msg)?;
             insert_catalog_descriptor(&mut catalog, descriptor, "local committed catalog")
                 .map_err(anyhow::Error::msg)?;
+            runtime_bindings.insert(key, row.runtime_binding);
         }
     } else {
         #[cfg(not(test))]
@@ -296,30 +300,39 @@ fn list_abilities_handler(
 
     let catalog_revision = catalog_snapshot_revision(&catalog)?;
 
-    // Advisory health is a row annotation, not governed descriptor metadata.
-    // Mutating AbilityDescriptor.metadata here would change the descriptor hash
-    // and fabricate a new descriptor_ref on every health transition.
+    // Runtime binding and advisory health are row annotations, not governed
+    // descriptor metadata. Mutating AbilityDescriptor.metadata here would
+    // change the descriptor hash and fabricate a new descriptor_ref when
+    // execution or health state changes.
     let mut merged: Vec<Value> = catalog
-        .into_values()
-        .map(|descriptor| {
+        .into_iter()
+        .map(|(key, descriptor)| {
             let health = descriptor
                 .canonical_ability_ura()
                 .and_then(|ura| crate::daemon::ability::health::snapshot(&ura));
             let mut row = public_catalog_descriptor_row(&descriptor)?;
-            if let (Some(health), Value::Object(object)) = (health, &mut row) {
-                let mut annotation = serde_json::Map::new();
-                annotation.insert(
-                    "status".to_string(),
-                    Value::String(health.status.as_wire_str().to_string()),
-                );
-                annotation.insert(
-                    "checked_unix_ms".to_string(),
-                    Value::Number(health.checked_unix_ms.into()),
-                );
-                if !health.detail.is_empty() {
-                    annotation.insert("detail".to_string(), Value::String(health.detail));
+            if let Value::Object(object) = &mut row {
+                if let Some(runtime_binding) = runtime_bindings.remove(&key) {
+                    object.insert(
+                        "runtime_binding".to_string(),
+                        serde_json::to_value(runtime_binding)?,
+                    );
                 }
-                object.insert("health".to_string(), Value::Object(annotation));
+                if let Some(health) = health {
+                    let mut annotation = serde_json::Map::new();
+                    annotation.insert(
+                        "status".to_string(),
+                        Value::String(health.status.as_wire_str().to_string()),
+                    );
+                    annotation.insert(
+                        "checked_unix_ms".to_string(),
+                        Value::Number(health.checked_unix_ms.into()),
+                    );
+                    if !health.detail.is_empty() {
+                        annotation.insert("detail".to_string(), Value::String(health.detail));
+                    }
+                    object.insert("health".to_string(), Value::Object(annotation));
+                }
             }
             Ok::<_, anyhow::Error>(row)
         })
@@ -508,6 +521,7 @@ fn parse_owner_scope(field: &str, ura: &str) -> anyhow::Result<()> {
         crate::core::ura::URAKind::Agent
         | crate::core::ura::URAKind::Device
         | crate::core::ura::URAKind::Authority
+        | crate::core::ura::URAKind::Service
         | crate::core::ura::URAKind::User => Ok(()),
         other => anyhow::bail!(
             "meta.list_abilities: {field} must be an owner URA, got {:?}",
@@ -601,7 +615,7 @@ mod tests {
     fn d(name: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(
             name,
-            "easynet:///r/test/device/01DEV",
+            "easynet:///r/test/agent/device.01DEV.runtime-introspection",
             Visibility::Public,
             AdmissionAction::Invoke,
         )
@@ -793,7 +807,8 @@ mod tests {
     }
 
     fn canonical_meta_fixtures() -> Vec<AbilityDescriptor> {
-        const FIXTURE_OWNER: &str = "easynet:///r/test/device/meta-fixture";
+        const FIXTURE_OWNER: &str =
+            "easynet:///r/test/agent/device.meta-fixture.runtime-introspection";
         [ABILITY_DESCRIBE, ABILITY_LIST_ABILITIES]
             .into_iter()
             .map(|name| {
@@ -1094,6 +1109,62 @@ mod tests {
                 .is_some_and(|descriptor_ref| descriptor_ref
                     .starts_with(a["ability_ura"].as_str().unwrap_or_default()))),
             "every public row must carry canonical descriptor_ref: {abilities:?}"
+        );
+    }
+
+    #[test]
+    fn list_abilities_accepts_service_owner_scope_from_committed_catalog() {
+        use std::sync::OnceLock;
+
+        let device_ura = crate::core::ura::device_ura("pages-scope", "dev-1");
+        let owner_user_id = "user-alice";
+        let pages_service_ura =
+            crate::core::ura::service_ura("pages-scope", owner_user_id, "pages");
+        let live_registry = metadata_test_catalog_for_device(&device_ura);
+        live_registry
+            .hot_register_rpc_with_spec(
+                "project_list",
+                OwnerKind::pages_service(owner_user_id),
+                crate::daemon::ability::manifest::AbilityManifest::new(
+                    "project_list",
+                    "List published Pages projects.",
+                    json!({
+                        "type": "object",
+                        "additionalProperties": false
+                    }),
+                )
+                .and_then(|manifest| manifest.with_admission_action("read"))
+                .expect("valid Pages project_list manifest"),
+                Arc::new(|_args| Ok(json!({ "projects": [] }))),
+            )
+            .expect("register Service-owned Pages project_list");
+        let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
+        handle
+            .set(Arc::new(live_registry))
+            .expect("publish live registry");
+
+        let mut reg = metadata_test_catalog_for_device(&device_ura);
+        register(&mut reg, Vec::new, handle);
+        let resp = invoke_list(
+            &reg,
+            &device_ura,
+            json!({
+                "owner_ura": pages_service_ura
+            }),
+        )
+        .expect("Service owner_ura must be a valid meta.list_abilities scope");
+        let abilities = resp["abilities"].as_array().expect("ability rows");
+        assert_eq!(
+            abilities.len(),
+            1,
+            "Service owner scope must return only Pages Service rows: {resp}"
+        );
+        assert_eq!(abilities[0]["owner_ura"], pages_service_ura);
+        assert_eq!(abilities[0]["name"], "project_list");
+        assert_eq!(
+            abilities[0]["ability_ura"],
+            crate::core::ura::owner_ability_ura(&pages_service_ura, "project_list")
+                .expect("canonical Pages Service project_list ability URA")
         );
     }
 
@@ -1539,12 +1610,12 @@ mod tests {
                 .expect("fixed Device authority context"),
         );
         live_reg.register_rpc_with_owner_and_action(
-            "device.unowned.test",
-            OwnerKind::DeviceProfileProjection,
+            "unowned.test",
+            OwnerKind::runtime_introspection_system(),
             crate::daemon::ability::descriptors::AdmissionAction::Invoke,
             Arc::new(|_args| Ok(json!({}))),
         );
-        live_reg.clear_owner_for_test("device.unowned.test");
+        live_reg.clear_owner_for_test("unowned.test");
 
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         handle.set(Arc::new(live_reg)).expect("set live registry");
@@ -1599,8 +1670,8 @@ mod tests {
         .expect("valid manifest");
         live_reg
             .hot_register_rpc_with_spec(
-                "device.hot.echo",
-                OwnerKind::DeviceProfileProjection,
+                "hot.echo",
+                OwnerKind::plugin_management_system(),
                 manifest,
                 Arc::new(|_args| Ok(json!({}))),
             )
@@ -1623,7 +1694,7 @@ mod tests {
 
         assert_eq!(
             ability["ability_ura"],
-            "easynet:///r/test-realm/ability/device.dev-1.hot.echo"
+            "easynet:///r/test-realm/ability/system-agent.dev-1.plugin-management.hot.echo"
         );
         assert_eq!(ability["description"], "Echo a hot-reloaded MCP payload.");
         assert_eq!(
@@ -1777,6 +1848,15 @@ mod tests {
         assert_eq!(
             chat["description"],
             crate::daemon::ability::manifest::default_chat_manifest().description()
+        );
+        assert_eq!(
+            chat["runtime_binding"]["state"],
+            json!("bound"),
+            "meta.list_abilities must carry observed execution binding outside the governed descriptor: {chat}"
+        );
+        assert_eq!(
+            chat["runtime_binding"]["implementation_source"],
+            json!("native_daemon")
         );
         assert!(
             chat["schema_summary"]["input"]["properties"]["prompt"].is_object(),
