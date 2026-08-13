@@ -29,6 +29,8 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::media::{
         REMOTE_DESKTOP_MEDIA_SDK_ID, XCAP_MACOS_RECORDER_MAX_FPS,
     };
+    use crate::daemon::plugins::remote_desktop::target::TargetGeometry;
+    use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
     use crate::daemon::plugins::remote_desktop::test_support::{
         env_for, reset_store, seed_display, test_lock, test_plugin,
     };
@@ -149,5 +151,82 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ended_again["already_ended"], json!(true));
+    }
+
+    #[test]
+    fn watch_events_replays_target_lifecycle_events() {
+        let _lock = test_lock();
+        let plugin = test_plugin();
+        reset_store(&plugin);
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = ResourcesFile::default();
+        let ura = seed_display(&mut file, "remote-desktop-target-events");
+        resources::save(&file).unwrap();
+
+        let created = crate::daemon::plugins::remote_desktop::test_support::create_test_session(
+            Arc::clone(&plugin),
+            env_for(&ura),
+            json!({
+                "session_id": "rd-target-events",
+                "mode": "view_only",
+                "lease_ttl_ms": 5000,
+            }),
+        )
+        .unwrap();
+        let token = created["session_token"]
+            .as_str()
+            .expect("create_session returns session_token")
+            .to_string();
+        let inputs = plugin
+            .session_store()
+            .target_observation_inputs_for_session("rd-target-events")
+            .expect("created session exposes target observation inputs");
+        plugin
+            .session_store()
+            .record_target_observation_for_session(
+                "rd-target-events",
+                &inputs.binding_id,
+                inputs.binding_epoch,
+                TargetObservation::GeometryChanged {
+                    geometry: TargetGeometry {
+                        x: Some(12.0),
+                        y: Some(34.0),
+                        width: Some(640.0),
+                        height: Some(480.0),
+                    },
+                    target_geometry_revision: inputs.snapshot.target_geometry_revision() + 1,
+                    observed_at_ms: 123,
+                },
+            );
+
+        let frames = watch_events::handle(
+            Arc::clone(&plugin),
+            env_for(&ura),
+            json!({
+                "session_id": "rd-target-events",
+                "session_token": token
+            }),
+        )
+        .unwrap()
+        .into_snapshot();
+
+        let target_event = frames
+            .iter()
+            .find(|event| event["event_type"] == json!("TARGET_RESIZED"))
+            .unwrap_or_else(|| {
+                panic!("watch_events must replay target lifecycle events: {frames:?}")
+            });
+        assert_eq!(
+            target_event["event_type_proto"],
+            json!("REMOTE_DESKTOP_EVENT_TARGET_CHANGED")
+        );
+        assert_eq!(
+            target_event["payload"]["target_geometry_revision"],
+            json!(2)
+        );
+        assert_eq!(
+            target_event["payload"]["binding_id"],
+            json!(inputs.binding_id)
+        );
     }
 }
