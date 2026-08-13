@@ -50,6 +50,63 @@ pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcSession {
     pub(in crate::daemon::plugins::remote_desktop) config: BuiltinH264Config,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectWebRtcMediaSourcePlan {
+    NativeProduction,
+    DisplayBaseline,
+    Unsupported { reason: &'static str },
+}
+
+impl DirectWebRtcMediaSourcePlan {
+    fn for_binding(config: &BuiltinH264Config, binding: &RemoteAppTargetBinding) -> Self {
+        Self::from_backend_state(config.backend.production_ready(), binding.target_kind())
+    }
+
+    fn from_backend_state(production_ready: bool, target_kind: RemoteDesktopTargetKind) -> Self {
+        if production_ready {
+            #[cfg(target_os = "macos")]
+            {
+                return Self::NativeProduction;
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                return Self::Unsupported {
+                    reason: "native_media_unavailable",
+                };
+            }
+        }
+        if target_kind == RemoteDesktopTargetKind::Display {
+            Self::DisplayBaseline
+        } else {
+            Self::Unsupported {
+                reason: "display_fallback_forbidden",
+            }
+        }
+    }
+
+    fn unsupported_message(self, binding: &RemoteAppTargetBinding) -> String {
+        match self {
+            Self::Unsupported {
+                reason: "display_fallback_forbidden",
+            } => format!(
+                "direct WebRTC baseline capture is display-only and cannot satisfy a {} target binding",
+                binding.target_kind().as_str()
+            ),
+            Self::Unsupported {
+                reason: "native_media_unavailable",
+            } => format!(
+                "direct WebRTC native media is required for a production-ready {} target binding on this platform",
+                binding.target_kind().as_str()
+            ),
+            Self::Unsupported { reason } => format!(
+                "direct WebRTC media source is unavailable for {} target binding; reason={reason}",
+                binding.target_kind().as_str()
+            ),
+            Self::NativeProduction | Self::DisplayBaseline => String::new(),
+        }
+    }
+}
+
 pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_loop(
     sessions: Arc<RemoteDesktopSessionStore>,
     session: DirectWebRtcSession,
@@ -86,56 +143,70 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
         let _ = peer_connection.close().await;
         return;
     };
-    #[cfg(target_os = "macos")]
-    if config.backend.production_ready() {
-        let native_inputs = NativeMediaInputs::new(&track, ssrc, payload_type, &options, &config);
-        match run_direct_webrtc_native_stream(
-            &sessions,
-            &peer_connection,
-            &native_inputs,
-            &session_id,
-            epoch,
-            &target_binding,
-            &mut done_rx,
-            &mut stop_rx,
-        )
-        .await
-        {
-            Ok(()) => {
-                let _ = peer_connection.close().await;
-                return;
+    match DirectWebRtcMediaSourcePlan::for_binding(&config, &target_binding) {
+        DirectWebRtcMediaSourcePlan::NativeProduction => {
+            #[cfg(target_os = "macos")]
+            {
+                let native_inputs =
+                    NativeMediaInputs::new(&track, ssrc, payload_type, &options, &config);
+                match run_direct_webrtc_native_stream(
+                    &sessions,
+                    &peer_connection,
+                    &native_inputs,
+                    &session_id,
+                    epoch,
+                    &target_binding,
+                    &mut done_rx,
+                    &mut stop_rx,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        let _ = peer_connection.close().await;
+                        return;
+                    }
+                    Err(err) => {
+                        let message = err.to_string();
+                        crate::op_event!(
+                            component = remote_desktop,
+                            kind = direct_webrtc_native_unavailable,
+                            reason = message.clone(),
+                        );
+                        sessions.mark_direct_webrtc_failed(
+                            &session_id,
+                            epoch,
+                            "native_media_pipeline_failed",
+                            message,
+                        );
+                        let _ = peer_connection.close().await;
+                        return;
+                    }
+                }
             }
-            Err(err) => {
-                let message = err.to_string();
-                crate::op_event!(
-                    component = remote_desktop,
-                    kind = direct_webrtc_native_unavailable,
-                    reason = message.clone(),
-                );
+            #[cfg(not(target_os = "macos"))]
+            {
                 sessions.mark_direct_webrtc_failed(
                     &session_id,
                     epoch,
-                    "native_media_pipeline_failed",
-                    message,
+                    "native_media_unavailable",
+                    "direct WebRTC native media is not available on this platform".to_string(),
                 );
                 let _ = peer_connection.close().await;
                 return;
             }
         }
-    }
-
-    if target_binding.target_kind() != RemoteDesktopTargetKind::Display {
-        sessions.mark_direct_webrtc_failed(
-            &session_id,
-            epoch,
-            "display_fallback_forbidden",
-            format!(
-                "direct WebRTC baseline capture is display-only and cannot satisfy a {} target binding",
-                target_binding.target_kind().as_str()
-            ),
-        );
-        let _ = peer_connection.close().await;
-        return;
+        DirectWebRtcMediaSourcePlan::Unsupported { reason } => {
+            let plan = DirectWebRtcMediaSourcePlan::Unsupported { reason };
+            sessions.mark_direct_webrtc_failed(
+                &session_id,
+                epoch,
+                reason,
+                plan.unsupported_message(&target_binding),
+            );
+            let _ = peer_connection.close().await;
+            return;
+        }
+        DirectWebRtcMediaSourcePlan::DisplayBaseline => {}
     }
 
     let baseline_inputs = BaselineMediaInputs {
@@ -199,4 +270,35 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
         );
     }
     let _ = peer_connection.close().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_native_window_and_application_sources_fail_closed_before_display_baseline() {
+        for target_kind in [
+            RemoteDesktopTargetKind::Window,
+            RemoteDesktopTargetKind::Application,
+        ] {
+            assert_eq!(
+                DirectWebRtcMediaSourcePlan::from_backend_state(false, target_kind),
+                DirectWebRtcMediaSourcePlan::Unsupported {
+                    reason: "display_fallback_forbidden"
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn display_source_may_use_baseline_when_native_backend_is_not_selected() {
+        assert_eq!(
+            DirectWebRtcMediaSourcePlan::from_backend_state(
+                false,
+                RemoteDesktopTargetKind::Display
+            ),
+            DirectWebRtcMediaSourcePlan::DisplayBaseline
+        );
+    }
 }

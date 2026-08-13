@@ -40,10 +40,20 @@ fn media(binding: Binding) {
 RS
 
 cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_media.rs" <<'RS'
-fn media(target_binding: Binding) {
-    if target_binding.target_kind() != RemoteDesktopTargetKind::Display {
-        mark_failed("display_fallback_forbidden");
-        return;
+enum DirectWebRtcMediaSourcePlan {
+    DisplayBaseline,
+    Unsupported { reason: &'static str },
+}
+
+impl DirectWebRtcMediaSourcePlan {
+    fn from_backend_state(target_kind: RemoteDesktopTargetKind) -> Self {
+        if target_kind == RemoteDesktopTargetKind::Display {
+            DirectWebRtcMediaSourcePlan::DisplayBaseline
+        } else {
+            DirectWebRtcMediaSourcePlan::Unsupported {
+                reason: "display_fallback_forbidden",
+            }
+        }
     }
 }
 RS
@@ -77,7 +87,7 @@ fi
 perl -0pi -e 's/\nfn bad_resolver\(\) \{\n    ResourceEntryTargetResolver\.resolve_for_session\(\);\n\}\n//' \
   "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_negotiation.rs"
 
-perl -0pi -e 's/target_binding\.target_kind\(\) != RemoteDesktopTargetKind::Display/true/' \
+perl -0pi -e 's/target_kind == RemoteDesktopTargetKind::Display/true/' \
   "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_media.rs"
 
 if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
