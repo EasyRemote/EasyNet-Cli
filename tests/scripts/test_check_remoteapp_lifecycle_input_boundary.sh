@@ -254,7 +254,7 @@ fn handle_bidi_input_frame_for_session() {
         InputTransportGuard::DiagnosticPreview,
         input_policy,
     );
-    handle_bidi_input_frame(&effective_input_policy, frame);
+    handle_parsed_bidi_input_frame(&effective_input_policy, &frame);
 }
 
 fn handle_bidi_input_frame() {

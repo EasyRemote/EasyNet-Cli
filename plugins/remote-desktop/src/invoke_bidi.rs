@@ -19,7 +19,8 @@ use crate::daemon::plugins::remote_desktop::constants::{
     REASON_RESOURCE_UNAVAILABLE, TRANSPORT_INVOKE_BIDI,
 };
 use crate::daemon::plugins::remote_desktop::input::{
-    apply_input_frame_with_policy, input_policy_for_binding, input_policy_reject_reason,
+    InputTransportGuard, RemoteDesktopInputFrame, apply_input_frame_with_policy,
+    current_session_input_policy, input_policy_for_binding, input_policy_reject_reason,
     parse_input_frame, unsupported_input_channel_reason,
 };
 use crate::daemon::plugins::remote_desktop::media::encode::{
@@ -55,6 +56,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn spawn_bidi_capture_worker(
     let capture_subject = config.target_binding.diagnostic_capture_subject().clone();
     let target_binding = config.target_binding;
     spawn_bidi_control_loop(
+        Arc::clone(&config.session_store),
+        config.session_id.clone(),
         config.from_client,
         config.to_client.clone(),
         input_policy,
@@ -80,30 +83,40 @@ pub(in crate::daemon::plugins::remote_desktop) fn spawn_bidi_capture_worker(
     });
 }
 
+#[cfg(test)]
 pub(in crate::daemon::plugins::remote_desktop) fn handle_bidi_input_frame(
     input_policy: &Value,
     frame: Value,
 ) -> Value {
+    let frame = match parse_bidi_input_frame(frame) {
+        Ok(frame) => frame,
+        Err(err) => return err,
+    };
+    handle_parsed_bidi_input_frame(input_policy, &frame)
+}
+
+fn parse_bidi_input_frame(frame: Value) -> Result<RemoteDesktopInputFrame, Value> {
     let text = match serde_json::to_string(&frame) {
         Ok(text) => text,
         Err(err) => {
-            return json!({
+            return Err(json!({
                 "type": "warn",
                 "code": "invalid_input_frame",
                 "message": err.to_string(),
-            });
+            }));
         }
     };
-    let frame = match parse_input_frame(&text) {
-        Ok(frame) => frame,
-        Err(err) => {
-            return json!({
-                "type": "warn",
-                "code": "invalid_input_frame",
-                "message": err.to_string(),
-            });
-        }
-    };
+    match parse_input_frame(&text) {
+        Ok(frame) => Ok(frame),
+        Err(err) => Err(json!({
+            "type": "warn",
+            "code": "invalid_input_frame",
+            "message": err.to_string(),
+        })),
+    }
+}
+
+fn handle_parsed_bidi_input_frame(input_policy: &Value, frame: &RemoteDesktopInputFrame) -> Value {
     let kind = frame.kind().as_policy_key();
     if let Some(reason) = unsupported_input_channel_reason(kind) {
         return json!({
@@ -128,7 +141,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle_bidi_input_frame(
             "message": "interactive input is disabled by this remote desktop session policy",
         });
     }
-    let outcome = apply_input_frame_with_policy(input_policy, &frame);
+    let outcome = apply_input_frame_with_policy(input_policy, frame);
     if outcome.applied {
         json!({
             "type": "input_applied",
@@ -143,6 +156,34 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle_bidi_input_frame(
             "action": frame.action(),
         })
     }
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn handle_bidi_input_frame_for_session(
+    session_store: &RemoteDesktopSessionStore,
+    session_id: &str,
+    input_policy: &Value,
+    frame: Value,
+) -> Value {
+    let frame = match parse_bidi_input_frame(frame) {
+        Ok(frame) => frame,
+        Err(err) => return err,
+    };
+    let kind = frame.kind().as_policy_key();
+    let Some(effective_input_policy) = current_session_input_policy(
+        session_store,
+        session_id,
+        InputTransportGuard::DiagnosticPreview,
+        input_policy,
+    ) else {
+        return json!({
+            "type": "warn",
+            "code": "target_input_not_ready",
+            "input_type": kind,
+            "action": frame.action(),
+            "message": "interactive input is disabled because the target is not ready for this diagnostic preview session",
+        });
+    };
+    handle_parsed_bidi_input_frame(&effective_input_policy, &frame)
 }
 
 async fn capture_bidi_frame(
@@ -177,6 +218,8 @@ fn build_bidi_frames(seq: u64, hardware_id: &str, frame: EncodedFrame) -> Vec<Bi
 }
 
 fn spawn_bidi_control_loop(
+    session_store: Arc<RemoteDesktopSessionStore>,
+    session_id: String,
     mut from_client: mpsc::Receiver<Value>,
     to_client: mpsc::Sender<BidiOutputFrame>,
     input_policy: Value,
@@ -206,7 +249,9 @@ fn spawn_bidi_control_loop(
                 }
                 "key" | "pointer" | "clipboard" | "file_drop" => {
                     let _ = to_client
-                        .send(BidiOutputFrame::json(handle_bidi_input_frame(
+                        .send(BidiOutputFrame::json(handle_bidi_input_frame_for_session(
+                            &session_store,
+                            &session_id,
                             &input_policy,
                             frame,
                         )))
@@ -381,15 +426,15 @@ fn install_h264_preview_session_for_test(
     session_id: &str,
 ) {
     let (stop_tx, _stop_rx) = watch::channel(false);
+    let init = crate::daemon::plugins::remote_desktop::test_support::test_session_init(
+        session_id,
+        "easynet:///r/acme/resource/display.01",
+        vec![TRANSPORT_INVOKE_BIDI.to_string()],
+    );
+    let mut session =
+        crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession::new(init);
+    session.attach_preview_transport(stop_tx);
     session_store.with_sessions(|sessions| {
-        let init = crate::daemon::plugins::remote_desktop::test_support::test_session_init(
-            session_id,
-            "easynet:///r/acme/resource/display.01",
-            vec![TRANSPORT_INVOKE_BIDI.to_string()],
-        );
-        let mut session =
-            crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession::new(init);
-        session.attach_preview_transport(stop_tx);
         sessions.insert(session_id.to_string(), session);
     });
 }
@@ -508,6 +553,67 @@ mod tests {
 
         assert_eq!(response["type"], json!("warn"));
         assert_eq!(response["code"], json!("input_scope_unsupported"));
+        assert_eq!(response["input_type"], json!("pointer"));
+    }
+
+    #[test]
+    fn diagnostic_bidi_input_rechecks_session_target_snapshot() {
+        let session_store = Arc::new(RemoteDesktopSessionStore::new());
+        install_h264_preview_session_for_test(&session_store, "rd-bidi-target-lost");
+        session_store.with_sessions(|sessions| {
+            let session = sessions.get_mut("rd-bidi-target-lost").unwrap();
+            assert!(session
+                .record_target_observation(
+                    crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation::Lost {
+                        reason: crate::daemon::plugins::remote_desktop::target::TargetResolutionError::TargetNotFound,
+                        detail: "first lost probe".into(),
+                        observed_at_ms: 1,
+                    },
+                )
+                .is_none());
+            assert!(session
+                .record_target_observation(
+                    crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation::Lost {
+                        reason: crate::daemon::plugins::remote_desktop::target::TargetResolutionError::TargetNotFound,
+                        detail: "debounced lost probe".into(),
+                        observed_at_ms: 1_001,
+                    },
+                )
+                .is_none());
+            assert!(
+                session
+                    .record_target_observation(
+                        crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation::Lost {
+                            reason: crate::daemon::plugins::remote_desktop::target::TargetResolutionError::TargetNotFound,
+                            detail: "committed lost probe".into(),
+                            observed_at_ms: 1_002,
+                        },
+                    )
+                    .is_none(),
+                "diagnostic preview has no production media epoch to stop"
+            );
+            assert_eq!(
+                session.state(),
+                crate::daemon::plugins::remote_desktop::session::RemoteDesktopState::Suspended
+            );
+            assert_eq!(
+                session.target_tracking_state()["input_enabled"],
+                json!(false)
+            );
+        });
+
+        let response = handle_bidi_input_frame_for_session(
+            &session_store,
+            "rd-bidi-target-lost",
+            &json!({
+                "input_scope": "display_global",
+                "pointer_enabled": true,
+            }),
+            json!({"type": "pointer", "action": "move", "x": 10, "y": 20}),
+        );
+
+        assert_eq!(response["type"], json!("warn"));
+        assert_eq!(response["code"], json!("target_input_not_ready"));
         assert_eq!(response["input_type"], json!("pointer"));
     }
 

@@ -18,7 +18,7 @@
 // Architectural Position:
 // - Remote-desktop session aggregate component.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::watch;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -140,11 +140,46 @@ impl RemoteDesktopTransportState {
         let Some(primary) = self.primary.as_mut() else {
             return false;
         };
-        if primary.epoch != epoch || primary.phase == phase {
+        if primary.epoch != epoch
+            || primary.phase == phase
+            || !Self::can_transition_primary(primary.phase, phase)
+        {
             return false;
         }
         primary.phase = phase;
         true
+    }
+
+    fn can_transition_primary(from: PrimaryMediaPhase, to: PrimaryMediaPhase) -> bool {
+        match from {
+            PrimaryMediaPhase::Negotiating => {
+                matches!(
+                    to,
+                    PrimaryMediaPhase::DeviceSending | PrimaryMediaPhase::Failed
+                )
+            }
+            PrimaryMediaPhase::DeviceSending => matches!(
+                to,
+                PrimaryMediaPhase::ClientPresenting
+                    | PrimaryMediaPhase::Degraded
+                    | PrimaryMediaPhase::MediaSourceLost
+                    | PrimaryMediaPhase::Failed
+            ),
+            PrimaryMediaPhase::ClientPresenting => matches!(
+                to,
+                PrimaryMediaPhase::Degraded
+                    | PrimaryMediaPhase::MediaSourceLost
+                    | PrimaryMediaPhase::Failed
+            ),
+            PrimaryMediaPhase::Degraded => matches!(
+                to,
+                PrimaryMediaPhase::ClientPresenting
+                    | PrimaryMediaPhase::MediaSourceLost
+                    | PrimaryMediaPhase::Failed
+            ),
+            PrimaryMediaPhase::MediaSourceLost => matches!(to, PrimaryMediaPhase::Failed),
+            PrimaryMediaPhase::Failed => false,
+        }
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn mark_device_sending(
@@ -335,5 +370,35 @@ mod tests {
         assert!(!transport.mark_media_source_lost(epoch));
 
         assert_eq!(transport.primary_phase(), Some(PrimaryMediaPhase::Failed));
+    }
+
+    #[test]
+    fn media_source_lost_is_absorbing_until_new_epoch_or_failure() {
+        let mut transport = RemoteDesktopTransportState::new();
+        let epoch = TransportEpoch::new(3);
+        transport.begin_primary(epoch);
+        assert!(transport.mark_device_sending(epoch));
+        assert!(transport.mark_media_source_lost(epoch));
+
+        assert!(!transport.mark_client_stalled(epoch));
+        assert!(!transport.mark_device_sending(epoch));
+        assert!(!transport.mark_client_presenting(epoch));
+        assert_eq!(
+            transport.primary_phase(),
+            Some(PrimaryMediaPhase::MediaSourceLost)
+        );
+        assert!(!transport.media_transport_ready());
+        assert_eq!(transport.projection()["device_sending"], json!(false));
+
+        assert!(transport.mark_failed(epoch));
+        assert_eq!(transport.primary_phase(), Some(PrimaryMediaPhase::Failed));
+
+        let next_epoch = TransportEpoch::new(4);
+        transport.begin_primary(next_epoch);
+        assert_eq!(
+            transport.primary_phase(),
+            Some(PrimaryMediaPhase::Negotiating)
+        );
+        assert!(transport.mark_device_sending(next_epoch));
     }
 }

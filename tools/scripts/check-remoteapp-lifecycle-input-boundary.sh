@@ -233,8 +233,8 @@ require 'current_session_input_policy\(' "$INVOKE_BIDI" \
   'diagnostic bidi input path must re-read session readiness for each input frame'
 require 'InputTransportGuard::DiagnosticPreview' "$INVOKE_BIDI" \
   'diagnostic bidi input path must guard frames by preview attachment state'
-require 'handle_bidi_input_frame\(&effective_input_policy' "$INVOKE_BIDI" \
-  'diagnostic bidi input path must apply frame parsing/injection against refreshed policy'
+require 'handle_parsed_bidi_input_frame\(&effective_input_policy' "$INVOKE_BIDI" \
+  'diagnostic bidi input path must apply parsed input frames against refreshed policy'
 require 'input_policy_reject_reason\(input_policy, kind\)' "$INVOKE_BIDI" \
   'diagnostic bidi input path must use the same reject reason contract'
 require 'diagnostic_bidi_view_only_input_reports_scope_unsupported' "$INVOKE_BIDI" \

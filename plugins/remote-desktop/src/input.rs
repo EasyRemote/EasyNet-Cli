@@ -204,6 +204,12 @@ pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_target_snapsh
     input_policy
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(in crate::daemon::plugins::remote_desktop) enum InputTransportGuard {
+    DirectWebRtc(TransportEpoch),
+    DiagnosticPreview,
+}
+
 fn input_policy_for_scope(mut input_policy: Value, input_scope: InputScope) -> Value {
     let Some(map) = input_policy.as_object_mut() else {
         return input_policy;
@@ -334,9 +340,12 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     }
                 };
                 let kind = frame.kind().as_policy_key();
-                let Some(effective_input_policy) =
-                    current_input_policy(&sessions, &session_id, epoch, &input_policy)
-                else {
+                let Some(effective_input_policy) = current_session_input_policy(
+                    &sessions,
+                    &session_id,
+                    InputTransportGuard::DirectWebRtc(epoch),
+                    &input_policy,
+                ) else {
                     rejected_count = rejected_count.saturating_add(1);
                     record_input_rejection(
                         &mut reject_diagnostics,
@@ -639,16 +648,28 @@ pub(in crate::daemon::plugins::remote_desktop) fn record_input_channel_event(
     session.record_input_channel_event(event_type, payload);
 }
 
-fn current_input_policy(
+pub(in crate::daemon::plugins::remote_desktop) fn current_session_input_policy(
     sessions: &RemoteDesktopSessionStore,
     session_id: &str,
-    epoch: TransportEpoch,
+    transport_guard: InputTransportGuard,
     base_policy: &Value,
 ) -> Option<Value> {
     let mut s = sessions.lock();
     let session = s.get_mut(session_id)?;
-    if session.is_terminal() || session.transport_epoch() != Some(epoch.value()) {
+    if session.is_terminal() {
         return None;
+    }
+    match transport_guard {
+        InputTransportGuard::DirectWebRtc(epoch) => {
+            if session.transport_epoch() != Some(epoch.value()) {
+                return None;
+            }
+        }
+        InputTransportGuard::DiagnosticPreview => {
+            if !session.preview_attached() {
+                return None;
+            }
+        }
     }
     let snapshot = session.target_snapshot();
     if !snapshot.input_enabled() {
