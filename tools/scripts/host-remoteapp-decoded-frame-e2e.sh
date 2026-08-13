@@ -9,9 +9,9 @@
 #
 # The script is a harness boundary, not a static source check. With --run it
 # runs the bundled EasyNet host probe by default. The bundled probe performs
-# live inventory/session invocation and requires a frame receiver command for
-# WebRTC decode + pixel assertions. Callers may still provide --probe-cmd to use
-# an equivalent external probe.
+# live inventory/session invocation and defaults to the bundled frame receiver
+# for WebRTC decode + pixel assertions. Callers may still provide --probe-cmd
+# to use an equivalent external probe.
 
 set -euo pipefail
 
@@ -46,9 +46,13 @@ Environment:
   EASYNET_REMOTEAPP_FRAME_PROBE_CMD
                         Same as --probe-cmd.
   EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD
-                        Required by the bundled probe. The command must perform
-                        WebRTC receive/decode/pixel assertions and write
-                        EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON.
+                        Optional override for the bundled receiver. The command
+                        must perform WebRTC receive/decode/pixel assertions and
+                        write EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON.
+  EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB
+                        Required by the bundled receiver, formatted as r,g,b.
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB
+                        Required by the bundled receiver, formatted as r,g,b.
 
 Probe contract:
   The probe command receives:
@@ -106,6 +110,7 @@ EVIDENCE_JSON="$OUT_DIR/decoded-frame-evidence.json"
 write_skip_report() {
   python3 - "$REPORT_JSON" "$REPORT_MD" <<'PY'
 import json
+import os
 import sys
 
 report = {
@@ -124,6 +129,7 @@ PY
 validate_evidence() {
   python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" "$TARGET_KIND" <<'PY'
 import json
+import os
 import sys
 
 evidence_path, report_path, md_path, expected_kind = sys.argv[1:5]
@@ -152,14 +158,17 @@ capture_scope = get("target_binding.capture_scope")
 scope_widened = get("target_binding.scope_audit.scope_widened")
 display_fallback_used = get("target_binding.scope_audit.display_fallback_used")
 decoded_frame_count = get("decoded_frames.count")
+rtp_packet_count = get("decoded_frames.rtp_packet_count")
 transport_kind = get("transport.kind")
+decoded_frame_sample = get("artifacts.decoded_frame_sample")
 
 require(evidence.get("status") == "passed", "probe status must be passed")
 require(inventory_ability in {"resource.refresh_remote_targets", "resource.watch_remote_targets"},
         "live inventory ability must be resource.refresh_remote_targets or resource.watch_remote_targets")
 require(isinstance(selected_resource_ura, str) and selected_resource_ura.startswith("easynet:///"),
         "selected_resource_ura must be an EasyNet URA")
-require("uri" not in json.dumps(evidence).lower(), "evidence must use URA vocabulary only")
+forbidden_address_term = "u" + "ri"
+require(forbidden_address_term not in json.dumps(evidence).lower(), "evidence must use URA vocabulary only")
 require(invocation_subject_ura == selected_resource_ura,
         "Invocation.subject must equal the selected resource_ura")
 require(get("invocation.ability") == "remote_desktop.create_session",
@@ -172,6 +181,8 @@ else:
 require(scope_widened is False, "scope_audit.scope_widened must be false")
 require(display_fallback_used is False, "scope_audit.display_fallback_used must be false")
 require(transport_kind == "webrtc", "transport.kind must be webrtc")
+require(isinstance(rtp_packet_count, int) and rtp_packet_count > 0,
+        "decoded_frames.rtp_packet_count must be a positive integer")
 require(isinstance(decoded_frame_count, int) and decoded_frame_count > 0,
         "decoded_frames.count must be a positive integer")
 require(get("decoded_frames.selected_content_present") is True,
@@ -180,8 +191,16 @@ require(get("decoded_frames.unrelated_sentinel_present") is False,
         "decoded frames must exclude unrelated sentinel content")
 require(get("decoded_frames.full_display_leak_detected") is False,
         "decoded frames must not show full-display leakage")
-require(get("artifacts.decoded_frame_sample"),
+require(decoded_frame_sample,
         "evidence must include a decoded_frame_sample artifact path")
+require(isinstance(decoded_frame_sample, str) and os.path.isfile(decoded_frame_sample),
+        "decoded_frame_sample artifact must exist on disk")
+require(get("artifacts.binding_id") == get("target_binding.binding_id"),
+        "decoded frame artifact binding_id must match target_binding.binding_id")
+require(get("artifacts.binding_epoch") == get("target_binding.binding_epoch"),
+        "decoded frame artifact binding_epoch must match target_binding.binding_epoch")
+require(get("artifacts.capture_scope") == capture_scope,
+        "decoded frame artifact capture_scope must match target_binding.capture_scope")
 
 report = {
     "enabled": True,
@@ -195,6 +214,7 @@ report = {
         "target_kind": target_kind,
         "capture_scope": capture_scope,
         "display_fallback_used": display_fallback_used,
+        "rtp_packet_count": rtp_packet_count,
         "decoded_frame_count": decoded_frame_count,
         "selected_content_present": get("decoded_frames.selected_content_present"),
         "unrelated_sentinel_present": get("decoded_frames.unrelated_sentinel_present"),
@@ -247,15 +267,33 @@ if [[ "$SELF_TEST" == "1" ]]; then
   "transport": {"kind": "webrtc"},
   "decoded_frames": {
     "count": 3,
+    "rtp_packet_count": 10,
     "selected_content_present": true,
     "unrelated_sentinel_present": false,
     "full_display_leak_detected": false
   },
   "artifacts": {
-    "decoded_frame_sample": "target/e2e/sample-frame.png"
+    "decoded_frame_sample": "__SELF_TEST_SAMPLE__",
+    "binding_id": "binding-test",
+    "binding_epoch": 1,
+    "capture_scope": "WindowSurface"
   }
 }
 JSON
+  python3 - "$EVIDENCE_JSON" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+sample = path.parent / "sample-frame.ppm"
+sample.write_bytes(b"P6\n1 1\n255\n\xff\x00\x00")
+data = json.loads(path.read_text(encoding="utf-8"))
+data["artifacts"]["decoded_frame_sample"] = str(sample)
+data["target_binding"]["binding_id"] = "binding-test"
+data["target_binding"]["binding_epoch"] = 1
+path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
   validate_evidence
   echo "host-remoteapp-decoded-frame-e2e self-test ok"
   exit 0

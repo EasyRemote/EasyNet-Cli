@@ -25,8 +25,12 @@ PROBE="$SANDBOX/fake_probe.py"
 cat >"$PROBE" <<'PY'
 import json
 import os
+import pathlib
 
 subject = "easynet:///r/localhost/resource/device.dev/streams/window.test"
+out = pathlib.Path(os.environ["EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON"]).parent
+sample = out / "sample-frame.ppm"
+sample.write_bytes(b"P6\n1 1\n255\n\xff\x00\x00")
 evidence = {
     "status": "passed",
     "live_inventory": {"ability": "resource.refresh_remote_targets"},
@@ -38,6 +42,8 @@ evidence = {
     "target_binding": {
         "target_kind": "window",
         "capture_scope": "WindowSurface",
+        "binding_id": "tb_test",
+        "binding_epoch": 1,
         "scope_audit": {
             "scope_widened": False,
             "display_fallback_used": False,
@@ -46,12 +52,16 @@ evidence = {
     "transport": {"kind": "webrtc"},
     "decoded_frames": {
         "count": 2,
+        "rtp_packet_count": 10,
         "selected_content_present": True,
         "unrelated_sentinel_present": False,
         "full_display_leak_detected": False,
     },
     "artifacts": {
-        "decoded_frame_sample": "target/e2e/sample-frame.png",
+        "decoded_frame_sample": str(sample),
+        "binding_id": "tb_test",
+        "binding_epoch": 1,
+        "capture_scope": "WindowSurface",
     },
 }
 with open(os.environ["EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON"], "w", encoding="utf-8") as f:
@@ -136,7 +146,10 @@ FRAME_RECEIVER="$SANDBOX/fake_frame_receiver.py"
 cat >"$FRAME_RECEIVER" <<'PY'
 import json
 import os
+import pathlib
 
+sample = pathlib.Path(os.environ["EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON"]).parent / "sample-frame.ppm"
+sample.write_bytes(b"P6\n1 1\n255\n\xff\x00\x00")
 with open(os.environ["EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON"], "w", encoding="utf-8") as f:
     json.dump(
         {
@@ -144,11 +157,17 @@ with open(os.environ["EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON"], "w", encoding="ut
             "transport": {"kind": "webrtc"},
             "decoded_frames": {
                 "count": 2,
+                "rtp_packet_count": 10,
                 "selected_content_present": True,
                 "unrelated_sentinel_present": False,
                 "full_display_leak_detected": False,
             },
-            "artifacts": {"decoded_frame_sample": "target/e2e/sample-frame.png"},
+            "artifacts": {
+                "decoded_frame_sample": str(sample),
+                "binding_id": "tb_test",
+                "binding_epoch": 1,
+                "capture_scope": "WindowSurface",
+            },
         },
         f,
     )
@@ -156,6 +175,8 @@ PY
 
 EASYNET_REMOTEAPP_EASYNET_BIN="$FAKE_EASYNET" \
 EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD="python3 '$FRAME_RECEIVER'" \
+EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
+EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
 "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   --run \
   --out-dir "$SANDBOX/bundled-probe-out" >/dev/null

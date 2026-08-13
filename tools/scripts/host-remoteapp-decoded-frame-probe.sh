@@ -4,9 +4,11 @@
 # Boundary:
 # - This script owns the EasyNet control-plane part of the host E2E:
 #   live target inventory -> selected Resource URA -> create_session.
-# - A caller-supplied frame receiver owns browser/WebRTC/H.264 decode and pixel
-#   assertions. It must write frame-analysis JSON; this script folds that into
-#   the canonical evidence consumed by host-remoteapp-decoded-frame-e2e.sh.
+# - The bundled frame receiver owns WebRTC/H.264 decode and pixel assertions.
+#   Callers may override it with EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD for
+#   equivalent host rigs. The receiver must write frame-analysis JSON; this
+#   script folds that into the canonical evidence consumed by
+#   host-remoteapp-decoded-frame-e2e.sh.
 # - The script fails closed when the selected target is ambiguous, when the
 #   receiver is missing, or when the receiver omits decoded-frame assertions.
 
@@ -37,7 +39,11 @@ FRAME_ANALYSIS_JSON="$OUT_DIR/frame-analysis.json"
 
 TARGET_HINT="${EASYNET_REMOTEAPP_TARGET_HINT:-}"
 TARGET_RESOURCE_URA="${EASYNET_REMOTEAPP_TARGET_RESOURCE_URA:-}"
-FRAME_RECEIVER_CMD="${EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD:-}"
+DEFAULT_FRAME_RECEIVER_CMD="cargo run --quiet --example easynet-remoteapp-frame-receiver --features remote-desktop --"
+if [[ -x "$REPO_ROOT/target/debug/examples/easynet-remoteapp-frame-receiver" ]]; then
+  DEFAULT_FRAME_RECEIVER_CMD="$REPO_ROOT/target/debug/examples/easynet-remoteapp-frame-receiver"
+fi
+FRAME_RECEIVER_CMD="${EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD:-$DEFAULT_FRAME_RECEIVER_CMD}"
 
 die() {
   echo "[FAIL] $*" >&2
@@ -61,8 +67,14 @@ run_easynet() {
 
 need_cmd python3
 
-[[ -n "$FRAME_RECEIVER_CMD" ]] || die \
-  "EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD is required; it must perform real WebRTC receive/decode/pixel assertions"
+[[ -n "${EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB:-}" ]] || die \
+  "EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB is required; bundled receiver needs selected target RGB sentinel as r,g,b"
+[[ -n "${EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB:-}" ]] || die \
+  "EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB is required; bundled receiver needs unrelated display RGB sentinel as r,g,b"
+
+if [[ -z "${EASYNET_REMOTEAPP_EASYNET_BIN:-}" && -x "$REPO_ROOT/target/debug/easynet" ]]; then
+  export EASYNET_REMOTEAPP_EASYNET_BIN="$REPO_ROOT/target/debug/easynet"
+fi
 
 run_easynet ability refresh-remote-targets \
   --type "$TARGET_KIND" \

@@ -45,6 +45,8 @@ require 'transport\.kind.*webrtc|transport_kind.*webrtc|"webrtc"' "$SCRIPT" \
   'host decoded-frame E2E must validate WebRTC transport evidence'
 require 'decoded_frames\.count' "$SCRIPT" \
   'host decoded-frame E2E must validate positive decoded frame count'
+require 'rtp_packet_count' "$SCRIPT" \
+  'host decoded-frame E2E must validate positive RTP packet count'
 require 'selected_content_present' "$SCRIPT" \
   'host decoded-frame E2E must validate selected target content is present'
 require 'unrelated_sentinel_present' "$SCRIPT" \
@@ -59,13 +61,23 @@ require '--probe-cmd|EASYNET_REMOTEAPP_FRAME_PROBE_CMD' "$SCRIPT" \
   'host decoded-frame E2E must allow explicit host probe injection'
 require 'host-remoteapp-decoded-frame-probe\.sh|BUNDLED_PROBE' "$SCRIPT" \
   'host decoded-frame E2E must default to the bundled EasyNet host probe'
+require 'os\.path\.isfile|decoded_frame_sample.*exist' "$SCRIPT" \
+  'host decoded-frame E2E must validate decoded frame artifact exists'
+require 'artifacts\.binding_id|artifact binding_id' "$SCRIPT" \
+  'host decoded-frame E2E must bind decoded frame artifact to target binding'
 
 require 'ability refresh-remote-targets' "$PROBE" \
   'bundled host probe must invoke live target inventory through the EasyNet CLI'
 require 'ability create-remote-desktop-session' "$PROBE" \
   'bundled host probe must invoke selected-resource remote_desktop.create_session through the EasyNet CLI'
+require 'easynet-remoteapp-frame-receiver' "$PROBE" \
+  'bundled host probe must default to the bundled WebRTC frame receiver'
 require 'EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD' "$PROBE" \
-  'bundled host probe must require a real WebRTC frame receiver command'
+  'bundled host probe must allow a real WebRTC frame receiver override'
+require 'EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB' "$PROBE" \
+  'bundled host probe must require selected-target RGB sentinel configuration'
+require 'EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB' "$PROBE" \
+  'bundled host probe must require unrelated RGB sentinel configuration'
 require 'EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON' "$PROBE" \
   'bundled host probe must consume decoded-frame analysis from the receiver'
 require 'verified Invocation\.subject|invocation\.get\("subject_ura"\)' "$PROBE" \
