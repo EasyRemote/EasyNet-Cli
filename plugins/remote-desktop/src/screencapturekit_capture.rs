@@ -355,10 +355,8 @@ fn select_application_window_set_for_binding(
     })?;
     let mut selected_windows = Vec::new();
     let mut window_ids = Vec::new();
+    let mut off_display_window_ids = Vec::new();
     for window in windows.iter() {
-        if !sck_window_overlaps_display(&window, display) {
-            continue;
-        }
         let Some(app) = (unsafe { window.owningApplication() }) else {
             continue;
         };
@@ -368,9 +366,27 @@ fn select_application_window_set_for_binding(
             locator.app_identity(),
             &app,
         ) {
-            window_ids.push(unsafe { window.windowID() as u64 });
-            selected_windows.push(window);
+            let window_id = unsafe { window.windowID() as u64 };
+            if sck_window_overlaps_display(&window, display) {
+                window_ids.push(window_id);
+                selected_windows.push(window);
+            } else {
+                off_display_window_ids.push(window_id);
+            }
         }
+    }
+    if !off_display_window_ids.is_empty() {
+        off_display_window_ids.sort_unstable();
+        off_display_window_ids.dedup();
+        return Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::UnsupportedCaptureScope,
+            format!(
+                "application target spans windows outside display {display_id}; \
+                 multi-display application capture requires MultiAppSurface support; \
+                 off_display_window_ids={off_display_window_ids:?}"
+            ),
+        ));
     }
     if window_ids.is_empty() {
         return Err(RemoteAppTargetError::new(

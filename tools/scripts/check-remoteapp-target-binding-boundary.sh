@@ -155,6 +155,15 @@ require 'input_policy_for_binding\(' \
 require 'target_binding\(\)' \
   "$REMOTE_ROOT/handlers/attach.rs" \
   'diagnostic attach must consume the session-owned target binding'
+require 'off_display_window_ids' \
+  "$REMOTE_ROOT/screencapturekit_capture.rs" \
+  'ScreenCaptureKit application binding must detect app windows outside the selected display'
+require 'TargetResolutionError::UnsupportedCaptureScope' \
+  "$REMOTE_ROOT/screencapturekit_capture.rs" \
+  'ScreenCaptureKit application binding must fail closed when single-stream AppSurface would hide other app windows'
+require 'MultiAppSurface support' \
+  "$REMOTE_ROOT/screencapturekit_capture.rs" \
+  'ScreenCaptureKit application binding must explain that multi-display applications require MultiAppSurface support'
 
 while IFS=: read -r file line _match; do
   case "${file#"$ROOT/"}" in

@@ -143,6 +143,20 @@ mod tests {
 }
 RS
 
+cat >"$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs" <<'RS'
+fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
+    let off_display_window_ids = vec![10];
+    if !off_display_window_ids.is_empty() {
+        return Err(RemoteAppTargetError::new(
+            "remote_desktop.create_session",
+            TargetResolutionError::UnsupportedCaptureScope,
+            "application target requires MultiAppSurface support",
+        ));
+    }
+    Ok(())
+}
+RS
+
 cat >"$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs" <<'RS'
 trait RemoteAppMediaSourceFactory {
     fn start_from_binding();
@@ -221,6 +235,33 @@ fi
 
 perl -0pi -e 's/(\n        metadata_freshness_u64\(\);)/\n        validate_resource_inventory_state();$1/' \
   "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+cat >"$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs" <<'RS'
+fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
+    Ok(())
+}
+RS
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted missing off-display application guard" >&2
+  exit 1
+fi
+
+cat >"$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs" <<'RS'
+fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
+    let off_display_window_ids = vec![10];
+    if !off_display_window_ids.is_empty() {
+        return Err(RemoteAppTargetError::new(
+            "remote_desktop.create_session",
+            TargetResolutionError::UnsupportedCaptureScope,
+            "application target requires MultiAppSurface support",
+        ));
+    }
+    Ok(())
+}
+RS
 
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 
