@@ -17,6 +17,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use axon_sdk::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, SecurityClass};
 use serde_json::{json, Value};
 
 use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
@@ -217,6 +218,52 @@ impl TargetResolutionError {
             Self::TargetHidden | Self::TargetMinimized => FrontendAction::RetrySession,
         }
     }
+
+    fn axon_projection(self) -> (AxonErrorKind, ErrorCode, ErrorStage, SecurityClass) {
+        match self {
+            Self::TargetPermissionMissing => (
+                AxonErrorKind::PermissionDenied,
+                ErrorCode::AuthorityRequired,
+                ErrorStage::AuthorityValidation,
+                SecurityClass::Authority,
+            ),
+            Self::TargetNotFound
+            | Self::TargetStale
+            | Self::TargetHidden
+            | Self::TargetMinimized
+            | Self::TargetDisplayUnavailable => (
+                AxonErrorKind::InvalidArgument,
+                ErrorCode::NotFound,
+                ErrorStage::Execution,
+                SecurityClass::Resource,
+            ),
+            Self::TargetMetadataIncomplete
+            | Self::TargetIdentityAmbiguous
+            | Self::TargetIdentityChanged
+            | Self::TargetIdentityMismatch
+            | Self::UnsupportedCaptureScope
+            | Self::TargetMultiDisplayUnsupported
+            | Self::DisplayIdentityMissing
+            | Self::DisplayIdentityMismatch
+            | Self::DisplayFallbackForbidden
+            | Self::InputScopeUnsupported => (
+                AxonErrorKind::InvalidArgument,
+                ErrorCode::RequestMetadataInvalid,
+                ErrorStage::RequestValidation,
+                SecurityClass::Resource,
+            ),
+            Self::CaptureBackendUnavailable
+            | Self::TransportRouteUnavailable
+            | Self::ScreenCaptureKitEnumerationFailed
+            | Self::ScreenCaptureKitFilterFailed
+            | Self::ScreenCaptureKitStreamStartFailed => (
+                AxonErrorKind::Unavailable,
+                ErrorCode::ExecutionFailed,
+                ErrorStage::Execution,
+                SecurityClass::Resource,
+            ),
+        }
+    }
 }
 
 const ALL_TARGET_RESOLUTION_ERRORS: &[TargetResolutionError] = &[
@@ -265,6 +312,22 @@ impl RemoteAppTargetError {
 
     pub(in crate::daemon::plugins::remote_desktop) fn reason(&self) -> TargetResolutionError {
         self.reason
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn to_axon(&self) -> AxonError {
+        let (kind, code, stage, security_class) = self.reason.axon_projection();
+        let mut error = AxonError::new(kind)
+            .with_code(code)
+            .with_reason(self.reason.as_str())
+            .with_stage(stage)
+            .with_security_class(security_class)
+            .with_context("target_reason", self.reason.as_str())
+            .with_context("frontend_action", self.reason.frontend_action().as_str())
+            .with_message(self.to_string());
+        if !self.ability.is_empty() {
+            error = error.with_context("ability", self.ability);
+        }
+        error
     }
 }
 

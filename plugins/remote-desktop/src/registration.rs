@@ -46,6 +46,7 @@ use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::handlers;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::schema;
+use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetError;
 use crate::daemon::plugins::{
     PluginAbilityLayer, PluginBidiWireKind, PluginContributionBuilder, PluginRuntimeLimits, Result,
 };
@@ -144,6 +145,8 @@ fn classify_handler_result<T>(result: anyhow::Result<T>) -> anyhow::Result<T> {
             error.to_axon()
         } else if let Some(error) = error.downcast_ref::<ConsentTicketError>() {
             consent_ticket_error_to_axon(error)
+        } else if let Some(error) = error.downcast_ref::<RemoteAppTargetError>() {
+            error.to_axon()
         } else {
             AxonError::new(AxonErrorKind::Internal)
                 .with_code(ErrorCode::ExecutionFailed)
@@ -449,6 +452,7 @@ mod tests {
     use crate::daemon::ability::descriptors::ScopeRule;
     use crate::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
     use crate::daemon::ability::CallMode as DescriptorCallMode;
+    use crate::daemon::plugins::remote_desktop::target::TargetResolutionError;
     use crate::daemon::plugins::{
         DaemonPluginBinder, PluginContributionSet, PluginKind, PluginRequirementSet,
     };
@@ -493,6 +497,41 @@ mod tests {
         assert!(
             !axon_error.message.is_empty(),
             "public ability errors must not collapse to an empty body"
+        );
+    }
+
+    #[test]
+    fn target_resolution_failures_are_machine_readable() {
+        let err = classify_handler_result::<()>(Err(RemoteAppTargetError::new(
+            ABILITY_CREATE_SESSION,
+            TargetResolutionError::TargetMetadataIncomplete,
+            "window targets require window_id",
+        )
+        .into()))
+        .unwrap_err();
+        let failure = err
+            .downcast_ref::<AbilityHandlerFailure>()
+            .expect("registration must preserve structured target failure");
+        let axon_error = failure.axon_error();
+
+        assert_eq!(axon_error.kind, AxonErrorKind::InvalidArgument);
+        assert_eq!(axon_error.code, ErrorCode::RequestMetadataInvalid);
+        assert_eq!(axon_error.reason, "target_metadata_incomplete");
+        assert_eq!(axon_error.stage, Some(ErrorStage::RequestValidation));
+        assert_eq!(axon_error.security_class, Some(SecurityClass::Resource));
+        assert_eq!(
+            axon_error
+                .context
+                .get("frontend_action")
+                .map(String::as_str),
+            Some("show_unsupported")
+        );
+        assert!(
+            axon_error
+                .message
+                .contains("reason=target_metadata_incomplete"),
+            "target failure must keep canonical reason in message: {}",
+            axon_error.message
         );
     }
 
