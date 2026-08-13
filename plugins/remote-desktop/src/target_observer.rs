@@ -239,7 +239,7 @@ fn observe_application(
         .iter()
         .filter_map(|window| window.display_id)
         .collect();
-    if displays.len() > 1 && !displays.contains(&expected_display) {
+    if displays.len() > 1 {
         return Some(lost(
             TargetResolutionError::TargetMultiDisplayUnsupported,
             "bound application spans multiple displays but session is display-scoped",
@@ -932,6 +932,74 @@ mod tests {
                         },
                         visible: true,
                     },
+                ],
+            },
+        )
+        .expect("application observation");
+
+        match observation {
+            TargetObservation::GeometryChanged { geometry, .. } => {
+                assert_eq!(geometry.x, Some(10.0));
+                assert_eq!(geometry.y, Some(20.0));
+                assert_eq!(geometry.width, Some(190.0));
+                assert_eq!(geometry.height, Some(80.0));
+            }
+            other => panic!("expected app window-set union geometry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn application_observation_rejects_multi_display_window_set() {
+        let binding = ResourceEntryTargetResolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &ResourceEntry {
+                    resource_ura: "easynet:///r/acme/resource/application.editor.multi".to_string(),
+                    owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
+                    kind: ResourceType::Application,
+                    binding: ResourceBinding::LocalDevice,
+                    hardware_id: "application:macos:cgwindow:42:bundle:com.example.Editor"
+                        .to_string(),
+                    display_name: "Editor on display 42".to_string(),
+                    metadata: json!({
+                        "platform": "macos",
+                        "backend": "macos_core_graphics",
+                        "display_id": 42,
+                        "bundle_id": "com.example.Editor",
+                        "app_identity": "com.example.Editor",
+                        "primary_pid": 9001,
+                        "resolved_window_ids": [10, 11],
+                        "window_set_epoch": 123,
+                        "primary_x": 10,
+                        "primary_y": 20,
+                        "primary_width": 100,
+                        "primary_height": 80,
+                    }),
+                    first_seen_at: "2026-06-01T00:00:00Z".to_string(),
+                },
+                "view_only",
+                1,
+            )
+            .expect("application target binding resolves");
+        let snapshot = TargetTrackerSnapshot::from_binding(&binding);
+        let observation = observe_binding_against_host_snapshot(
+            &binding,
+            &snapshot,
+            &HostTargetSnapshot {
+                windows: vec![
+                    ObservedWindow {
+                        window_id: 10,
+                        pid: Some(9001),
+                        bundle_id: Some("com.example.Editor".to_string()),
+                        display_id: Some(42),
+                        geometry: TargetGeometry {
+                            x: Some(10.0),
+                            y: Some(20.0),
+                            width: Some(100.0),
+                            height: Some(80.0),
+                        },
+                        visible: true,
+                    },
                     ObservedWindow {
                         window_id: 12,
                         pid: Some(9001),
@@ -951,13 +1019,10 @@ mod tests {
         .expect("application observation");
 
         match observation {
-            TargetObservation::GeometryChanged { geometry, .. } => {
-                assert_eq!(geometry.x, Some(10.0));
-                assert_eq!(geometry.y, Some(20.0));
-                assert_eq!(geometry.width, Some(190.0));
-                assert_eq!(geometry.height, Some(80.0));
+            TargetObservation::Lost { reason, .. } => {
+                assert_eq!(reason.as_str(), "target_multi_display_unsupported");
             }
-            other => panic!("expected app window-set union geometry, got {other:?}"),
+            other => panic!("expected multi-display application target loss, got {other:?}"),
         }
     }
 }
