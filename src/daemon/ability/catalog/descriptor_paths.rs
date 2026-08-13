@@ -129,6 +129,7 @@ impl SystemAbilityDescriptorGroup {
             | resources::MEDIA_SPEAKER_PUBLISH
             | resources::META_LIST_RESOURCES
             | resources::RESOURCE_REFRESH_REMOTE_TARGETS
+            | resources::RESOURCE_WATCH_REMOTE_TARGETS
             | resources::SKILL_INSTALL
             | resources::SKILL_REMOVE
             | resources::SKILL_UPGRADE

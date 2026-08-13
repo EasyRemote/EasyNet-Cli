@@ -84,24 +84,52 @@ pub fn register(reg: &mut AxonAbilityCatalog, context: RemoteTargetInventoryCont
 }
 
 fn handler(args: Value, context: &RemoteTargetInventoryContext) -> anyhow::Result<Value> {
+    Ok(serde_json::to_value(refresh_response(args, context)?)?)
+}
+
+pub(in crate::daemon::ability::builtins::resources) fn refresh_response(
+    args: Value,
+    context: &RemoteTargetInventoryContext,
+) -> anyhow::Result<RemoteTargetRefreshResponse> {
+    remote_target_response(args, context, resource_bootstrap::refresh_remote_targets)
+}
+
+pub(in crate::daemon::ability::builtins::resources) fn watch_response(
+    args: Value,
+    context: &RemoteTargetInventoryContext,
+) -> anyhow::Result<RemoteTargetRefreshResponse> {
+    remote_target_response(
+        args,
+        context,
+        resource_bootstrap::watch_remote_target_inventory,
+    )
+}
+
+fn remote_target_response(
+    args: Value,
+    context: &RemoteTargetInventoryContext,
+    refresh: impl FnOnce(&str, &str) -> anyhow::Result<resource_bootstrap::RemoteTargetInventoryRefresh>,
+) -> anyhow::Result<RemoteTargetRefreshResponse> {
     let kinds = parse_target_kinds(args.get("types"))?;
-    let refresh = resource_bootstrap::refresh_remote_targets(&context.realm, &context.owner_agent)?;
+    let refresh = refresh(&context.realm, &context.owner_agent)?;
     let resources = refresh
         .resources
         .iter()
         .filter(|entry| kinds.is_empty() || kinds.contains(&entry.kind))
         .map(RemoteTargetListEntry::from_resource_entry)
         .collect::<anyhow::Result<Vec<_>>>()?;
-    Ok(serde_json::to_value(RemoteTargetRefreshResponse {
+    Ok(RemoteTargetRefreshResponse {
         observed_at_ms: refresh.observed_at_ms,
         freshness_ttl_ms: refresh.freshness_ttl_ms,
         retired_count: refresh.retired_count,
         screen_target_discovery_available: refresh.screen_target_discovery_available,
         resources,
-    })?)
+    })
 }
 
-fn parse_target_kinds(raw: Option<&Value>) -> anyhow::Result<Vec<ResourceType>> {
+pub(in crate::daemon::ability::builtins::resources) fn parse_target_kinds(
+    raw: Option<&Value>,
+) -> anyhow::Result<Vec<ResourceType>> {
     let Some(value) = raw else {
         return Ok(Vec::new());
     };

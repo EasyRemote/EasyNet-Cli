@@ -9,7 +9,7 @@
 
 #[cfg(not(target_os = "macos"))]
 use std::collections::BTreeMap;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use serde_json::{json, Value};
 
@@ -91,6 +91,39 @@ pub fn refresh_remote_targets(
     realm: &str,
     owner_agent: &str,
 ) -> anyhow::Result<RemoteTargetInventoryRefresh> {
+    refresh_remote_targets_with_save_policy(realm, owner_agent, RemoteTargetSavePolicy::Always)
+}
+
+/// Observe the same host-local target inventory for
+/// `resource.watch_remote_targets`.
+///
+/// The returned projection always carries fresh observation timestamps, but the
+/// persistent resource cache is written only when the stable inventory changes
+/// (added/removed targets or target identity/geometry metadata changes). This
+/// keeps long-lived watches from rewriting `resources.json` on every polling
+/// tick solely because freshness fields changed.
+pub fn watch_remote_target_inventory(
+    realm: &str,
+    owner_agent: &str,
+) -> anyhow::Result<RemoteTargetInventoryRefresh> {
+    refresh_remote_targets_with_save_policy(
+        realm,
+        owner_agent,
+        RemoteTargetSavePolicy::IfStableInventoryChanged,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteTargetSavePolicy {
+    Always,
+    IfStableInventoryChanged,
+}
+
+fn refresh_remote_targets_with_save_policy(
+    realm: &str,
+    owner_agent: &str,
+    save_policy: RemoteTargetSavePolicy,
+) -> anyhow::Result<RemoteTargetInventoryRefresh> {
     let realm = realm.trim();
     if realm.is_empty() {
         return Ok(RemoteTargetInventoryRefresh {
@@ -103,11 +136,49 @@ pub fn refresh_remote_targets(
     }
     let observed_at_ms = unix_ms_now();
     let mut file = resources::load()?;
+    let before_signature = stable_remote_target_cache_signature(&file, realm, owner_agent);
     let discovered = discover_remote_target_resources();
     let refresh =
         apply_remote_target_refresh(&mut file, realm, owner_agent, discovered, observed_at_ms)?;
-    resources::save(&file)?;
+    let after_signature = stable_remote_target_cache_signature(&file, realm, owner_agent);
+    if save_policy == RemoteTargetSavePolicy::Always || before_signature != after_signature {
+        resources::save(&file)?;
+    }
     Ok(refresh)
+}
+
+fn stable_remote_target_cache_signature(
+    file: &ResourcesFile,
+    realm: &str,
+    owner_agent: &str,
+) -> BTreeSet<String> {
+    file.resources
+        .iter()
+        .filter(|resource| {
+            resource.owner_agent == owner_agent
+                && resource_ura_belongs_to_realm(resource, realm)
+                && is_remote_target_kind(resource.kind)
+        })
+        .map(stable_remote_target_entry_signature)
+        .collect()
+}
+
+fn stable_remote_target_entry_signature(resource: &ResourceEntry) -> String {
+    let mut metadata = resource.metadata.clone();
+    if let Value::Object(map) = &mut metadata {
+        map.remove("observed_at_ms");
+        map.remove("freshness_ttl_ms");
+    }
+    serde_json::to_string(&json!({
+        "resource_ura": resource.resource_ura,
+        "owner_agent": resource.owner_agent,
+        "type": resource.kind.as_str(),
+        "binding": resource.binding.as_str(),
+        "hardware_id": resource.hardware_id,
+        "display_name": resource.display_name,
+        "metadata": metadata,
+    }))
+    .expect("stable remote target cache signature serializes")
 }
 
 fn prune_retired_local_device_owner_rows(file: &mut ResourcesFile, owner_agent: &str) {
@@ -1465,6 +1536,54 @@ mod tests {
 
         assert_eq!(file.resources.len(), 1);
         assert_eq!(file.resources[0].hardware_id, "window:xcap:10:100");
+    }
+
+    #[test]
+    fn stable_remote_target_cache_signature_ignores_freshness_metadata() {
+        let owner_agent = "easynet:///r/acme/agent/device.node-1.media";
+        let mut first = ResourcesFile::default();
+        apply_discovered_resource(
+            &mut first,
+            "acme",
+            owner_agent,
+            DiscoveredResource {
+                kind: ResourceType::Window,
+                hardware_id: "window:xcap:10:100".into(),
+                display_name: "Window".into(),
+                metadata: json!({
+                    "backend": "xcap",
+                    "observed_at_ms": 10,
+                    "freshness_ttl_ms": 5_000,
+                    "bounds": {"x": 1, "y": 2, "width": 300, "height": 200}
+                }),
+            },
+        )
+        .expect("seed first window");
+
+        let mut second = first.clone();
+        second.resources[0]
+            .metadata
+            .as_object_mut()
+            .expect("metadata object")
+            .insert("observed_at_ms".to_string(), json!(20));
+        second.resources[0]
+            .metadata
+            .as_object_mut()
+            .expect("metadata object")
+            .insert("freshness_ttl_ms".to_string(), json!(10_000));
+
+        assert_eq!(
+            stable_remote_target_cache_signature(&first, "acme", owner_agent),
+            stable_remote_target_cache_signature(&second, "acme", owner_agent),
+            "watch polling must not rewrite the cache solely for freshness metadata"
+        );
+
+        second.resources[0].display_name = "Window moved".to_string();
+        assert_ne!(
+            stable_remote_target_cache_signature(&first, "acme", owner_agent),
+            stable_remote_target_cache_signature(&second, "acme", owner_agent),
+            "stable inventory changes must still trigger cache persistence"
+        );
     }
 
     #[test]

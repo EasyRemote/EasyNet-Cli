@@ -1,0 +1,40 @@
+schema_version = "3"
+name = "resource.watch_remote_targets"
+descriptor_version = "1.0.0"
+description = "Watch the daemon-local display, application, and window resource inventory. The first stream frame is a fresh inventory snapshot; subsequent frames are emitted only when the stable inventory signature changes. Discovery and cache ownership stay in the daemon resource inventory layer instead of the remote desktop plugin."
+exposure = "operator"
+dedicated_surface = "none"
+subject_contract_kind = "route-target"
+call_mode = "stream"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":true,\"bidi_only\":false,\"refreshes_resource_cache\":true}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.types]
+type = "array"
+items = { enum = ["display", "application", "window"], type = "string" }
+description = "Optional filter for watched remote targets. Absent or empty returns display, application, and window rows."
+
+[input_schema.properties.poll_interval_ms]
+type = "integer"
+minimum = 250
+maximum = 10000
+default = 1000
+description = "Bounded host-local polling interval for inventory diffs. Values outside the supported range are clamped."
+
+[input_schema.properties.max_events]
+type = "integer"
+minimum = 1
+description = "Optional bounded event count for diagnostics and tests. Omit for an open-ended watch."

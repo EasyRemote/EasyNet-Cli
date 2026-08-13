@@ -48,7 +48,7 @@ use crate::daemon::ability::builtins::{
         pages::{self, PagesIdentity},
         refresh_remote_targets as refresh_remote_targets_ability,
         skills::{install as skill_install_ability, publish as skill_publish_ability},
-        voice as voice_call_ability,
+        voice as voice_call_ability, watch_remote_targets as watch_remote_targets_ability,
     },
 };
 use crate::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
@@ -738,6 +738,13 @@ fn build_registry_with_services_result_inner(
                 &device_ura,
             )
             .context("construct remote target inventory refresh context")?,
+        );
+        watch_remote_targets_ability::register(
+            &mut reg,
+            refresh_remote_targets_ability::RemoteTargetInventoryContext::from_device_ura(
+                &device_ura,
+            )
+            .context("construct remote target inventory watch context")?,
         );
     }
     // agent.start / agent.stop / agent.refresh —
