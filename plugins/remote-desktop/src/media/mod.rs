@@ -482,12 +482,23 @@ fn native_supported_screen_entry(entry: &ResourceEntry) -> bool {
 fn screen_target_metadata_resolvable(entry: &ResourceEntry) -> bool {
     match entry.kind {
         ResourceType::Application => {
-            non_empty_metadata_str(entry, "app_name")
+            (entry
+                .metadata
+                .get("display_id")
+                .and_then(Value::as_u64)
+                .is_some()
                 || entry
                     .metadata
-                    .get("primary_pid")
-                    .and_then(Value::as_i64)
-                    .is_some()
+                    .get("monitor_id")
+                    .and_then(Value::as_u64)
+                    .is_some())
+                && (non_empty_metadata_str(entry, "bundle_id")
+                    || non_empty_metadata_str(entry, "app_identity")
+                    || entry
+                        .metadata
+                        .get("primary_pid")
+                        .and_then(Value::as_i64)
+                        .is_some())
         }
         ResourceType::Window => {
             entry
@@ -495,9 +506,9 @@ fn screen_target_metadata_resolvable(entry: &ResourceEntry) -> bool {
                 .get("window_id")
                 .and_then(Value::as_u64)
                 .is_some()
-                || (entry.metadata.get("pid").and_then(Value::as_i64).is_some()
-                    && non_empty_metadata_str(entry, "app_name")
-                    && non_empty_metadata_str(entry, "title"))
+                && (entry.metadata.get("pid").and_then(Value::as_i64).is_some()
+                    || non_empty_metadata_str(entry, "bundle_id")
+                    || non_empty_metadata_str(entry, "app_identity"))
         }
         _ => false,
     }
@@ -586,6 +597,44 @@ mod tests {
 
         assert!(select_builtin_h264_backend(&entry).is_none());
         assert!(webrtc_transport_backend_for_entry(&entry).is_none());
+    }
+
+    #[test]
+    fn target_metadata_rules_match_session_binding_requirements() {
+        let mut window = discovered_window_entry("xcap");
+        window.metadata = json!({
+            "backend": "xcap",
+            "capture_target": "window",
+            "window_id": 456,
+            "app_name": "Cursor",
+            "title": "main.rs",
+        });
+        assert!(!screen_target_metadata_resolvable(&window));
+        window.metadata["pid"] = json!(123);
+        assert!(screen_target_metadata_resolvable(&window));
+
+        let mut application = ResourceEntry {
+            resource_ura: "easynet:///r/acme/resource/application.test".into(),
+            owner_agent: "easynet:///r/acme/device/01DEV".into(),
+            kind: ResourceType::Application,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "application:macos_core_graphics:safari".into(),
+            display_name: "Safari".into(),
+            metadata: json!({
+                "display_id": 1,
+                "app_name": "Safari",
+            }),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        assert!(!screen_target_metadata_resolvable(&application));
+        application.metadata["bundle_id"] = json!("com.apple.Safari");
+        assert!(screen_target_metadata_resolvable(&application));
+        application
+            .metadata
+            .as_object_mut()
+            .unwrap()
+            .remove("display_id");
+        assert!(!screen_target_metadata_resolvable(&application));
     }
 
     #[test]
