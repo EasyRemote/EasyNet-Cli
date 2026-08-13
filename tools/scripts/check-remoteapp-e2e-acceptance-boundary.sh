@@ -41,6 +41,14 @@ require 'WindowSurface' "$SCRIPT" \
   'host decoded-frame E2E must distinguish exact window capture'
 require 'AppSurface' "$SCRIPT" \
   'host decoded-frame E2E must distinguish exact application capture'
+require 'app_window_set = get\("target_binding\.app_window_set"\)' "$SCRIPT" \
+  'host decoded-frame E2E must require application window-set evidence'
+require 'resolved_window_ids' "$SCRIPT" \
+  'host decoded-frame E2E must require application resolved window ids'
+require 'window_set_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must require application window-set epoch'
+require 'resolved_identity' "$SCRIPT" \
+  'host decoded-frame E2E must require application resolved identity evidence'
 require 'transport\.kind.*webrtc|transport_kind.*webrtc|"webrtc"' "$SCRIPT" \
   'host decoded-frame E2E must validate WebRTC transport evidence'
 require 'decoded_frames\.count' "$SCRIPT" \
@@ -100,6 +108,8 @@ require 'EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON' "$PROBE" \
   'bundled host probe must consume decoded-frame analysis from the receiver'
 require 'verified Invocation\.subject|invocation\.get\("subject_ura"\)' "$PROBE" \
   'bundled host probe must validate verified Invocation.subject against the selected Resource URA'
+require 'resolved_identity' "$PROBE" \
+  'bundled host probe must preserve target resolved identity evidence'
 require 'ambiguous target selection|TARGET_HINT|TARGET_RESOURCE_URA' "$PROBE" \
   'bundled host probe must fail closed on ambiguous picker target selection'
 

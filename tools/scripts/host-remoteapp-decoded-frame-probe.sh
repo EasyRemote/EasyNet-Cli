@@ -250,6 +250,7 @@ evidence = {
         "binding_epoch": target_binding.get("binding_epoch"),
         "target_identity_epoch": target_binding.get("target_identity_epoch"),
         "target_geometry_revision": target_binding.get("target_geometry_revision"),
+        "resolved_identity": target_binding.get("resolved_identity"),
         "scope_audit": {
             "scope_widened": scope_audit.get("scope_widened"),
             "display_fallback_used": scope_audit.get("display_fallback_used"),

@@ -157,6 +157,8 @@ target_kind = get("target_binding.target_kind")
 capture_scope = get("target_binding.capture_scope")
 binding_id = get("target_binding.binding_id")
 binding_epoch = get("target_binding.binding_epoch")
+resolved_identity = get("target_binding.resolved_identity")
+app_window_set = get("target_binding.app_window_set")
 scope_widened = get("target_binding.scope_audit.scope_widened")
 display_fallback_used = get("target_binding.scope_audit.display_fallback_used")
 decoded_frame_count = get("decoded_frames.count")
@@ -267,6 +269,26 @@ if expected_kind == "window":
     require(capture_scope == "WindowSurface", "window target must use WindowSurface")
 else:
     require(capture_scope == "AppSurface", "application target must use AppSurface")
+    require(isinstance(app_window_set, dict),
+            "application target must include target_binding.app_window_set")
+    if isinstance(app_window_set, dict):
+        app_display_id = app_window_set.get("display_id")
+        app_window_set_epoch = app_window_set.get("window_set_epoch")
+        app_resolved_window_ids = app_window_set.get("resolved_window_ids")
+        require(isinstance(app_display_id, int) and app_display_id > 0,
+                "application app_window_set.display_id must be a positive integer")
+        require(isinstance(app_window_set_epoch, int) and app_window_set_epoch > 0,
+                "application app_window_set.window_set_epoch must be a positive integer")
+        require(isinstance(app_resolved_window_ids, list)
+                and len(app_resolved_window_ids) > 0
+                and all(isinstance(window_id, int) and window_id > 0 for window_id in app_resolved_window_ids),
+                "application app_window_set.resolved_window_ids must be a non-empty positive integer list")
+    require(isinstance(resolved_identity, dict),
+            "application target must include target_binding.resolved_identity")
+    if isinstance(resolved_identity, dict):
+        app_identity = resolved_identity.get("app_identity") or resolved_identity.get("bundle_id")
+        require(isinstance(app_identity, str) and app_identity.strip(),
+                "application resolved_identity must include app_identity or bundle_id")
 require(scope_widened is False, "scope_audit.scope_widened must be false")
 require(display_fallback_used is False, "scope_audit.display_fallback_used must be false")
 require(transport_kind == "webrtc", "transport.kind must be webrtc")
@@ -324,6 +346,7 @@ report = {
         "capture_scope": capture_scope,
         "binding_id": binding_id,
         "binding_epoch": binding_epoch,
+        "app_window_set": app_window_set,
         "display_fallback_used": display_fallback_used,
         "rtp_packet_count": rtp_packet_count,
         "decoded_frame_count": decoded_frame_count,
@@ -373,6 +396,9 @@ if [[ "$SELF_TEST" == "1" ]]; then
   "target_binding": {
     "target_kind": "window",
     "capture_scope": "WindowSurface",
+    "resolved_identity": {
+      "window_id": 7
+    },
     "scope_audit": {
       "scope_widened": false,
       "display_fallback_used": false

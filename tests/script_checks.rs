@@ -206,6 +206,38 @@ fn remote_desktop_contract_boundary_script_holds() {
 }
 
 #[test]
+fn remoteapp_session_subject_boundary_script_holds() {
+    // Pins remoteapp session abilities to explicit selected-resource subjects.
+    // Session control must not teach callers to place subject or token fields
+    // inside ability args.
+    run_bash_script("tests/scripts/test_check_remoteapp_session_subject_boundary.sh");
+}
+
+#[test]
+fn remoteapp_picker_subject_boundary_script_holds() {
+    // Pins the remoteapp picker to live target inventory and selected
+    // Resource URA subjects instead of cached meta.list_resources rows or
+    // args.subject compatibility shapes.
+    run_bash_script("tests/scripts/test_check_remoteapp_picker_subject_boundary.sh");
+}
+
+#[test]
+fn remoteapp_target_binding_boundary_script_holds() {
+    // Pins application/window sessions to binding-owned capture/input/media
+    // boundaries. Production app/window media must not silently re-resolve
+    // ResourceEntry rows or fall back to display capture.
+    run_bash_script("tests/scripts/test_check_remoteapp_target_binding_boundary.sh");
+}
+
+#[test]
+fn remoteapp_e2e_acceptance_boundary_script_holds() {
+    // Pins host decoded-frame acceptance to live inventory, exact target
+    // binding, WebRTC/H.264 evidence, and independently scanned artifact
+    // pixels for window/application sessions.
+    run_bash_script("tests/scripts/test_check_remoteapp_e2e_acceptance_boundary.sh");
+}
+
+#[test]
 fn browser_cdp_axon_boundary_script_holds() {
     // Pins the browser executor to a package-owned provider, current headed
     // Chrome with isolated debugging profiles, and CDP application frames

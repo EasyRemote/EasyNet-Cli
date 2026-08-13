@@ -80,6 +80,77 @@ EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
   --probe-cmd "python3 '$PROBE'" \
   --out-dir "$SANDBOX/e2e-out" >/dev/null
 
+PROBE_APP="$SANDBOX/fake_probe_application.py"
+cat >"$PROBE_APP" <<'PY'
+import json
+import os
+import pathlib
+
+subject = "easynet:///r/localhost/resource/device.dev/streams/application.test"
+out = pathlib.Path(os.environ["EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON"]).parent
+sample = out / "sample-frame.ppm"
+sample.write_bytes(b"P6\n3 3\n255\n" + b"\xff\x00\x00" * 9)
+evidence = {
+    "status": "passed",
+    "live_inventory": {"ability": "resource.refresh_remote_targets"},
+    "session_id": "rd-e2e-app-test",
+    "selected_resource_ura": subject,
+    "invocation": {
+        "ability": "remote_desktop.create_session",
+        "subject_ura": subject,
+    },
+    "target_binding": {
+        "target_kind": "application",
+        "capture_scope": "AppSurface",
+        "binding_id": "tb_app_test",
+        "binding_epoch": 1,
+        "resolved_identity": {
+            "app_identity": "com.example.SelectedApp",
+            "bundle_id": "com.example.SelectedApp",
+        },
+        "app_window_set": {
+            "display_id": 1,
+            "bundle_id": "com.example.SelectedApp",
+            "primary_pid": 4242,
+            "resolved_window_ids": [70, 71],
+            "window_set_epoch": 99,
+        },
+        "scope_audit": {
+            "scope_widened": False,
+            "display_fallback_used": False,
+        },
+    },
+    "transport": {"kind": "webrtc"},
+    "decoded_frames": {
+        "count": 2,
+        "rtp_packet_count": 10,
+        "width": 3,
+        "height": 3,
+        "selected_content_present": True,
+        "unrelated_sentinel_present": False,
+        "full_display_leak_detected": False,
+        "selected_pixel_count": 9,
+        "unrelated_pixel_count": 0,
+    },
+    "artifacts": {
+        "decoded_frame_sample": str(sample),
+        "session_id": "rd-e2e-app-test",
+        "binding_id": "tb_app_test",
+        "binding_epoch": 1,
+        "capture_scope": "AppSurface",
+    },
+}
+with open(os.environ["EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON"], "w", encoding="utf-8") as f:
+    json.dump(evidence, f)
+PY
+EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
+EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
+"$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  --run \
+  --target-kind application \
+  --probe-cmd "python3 '$PROBE_APP'" \
+  --out-dir "$SANDBOX/e2e-app-out" >/dev/null
+
 if EASYNET_HOST_REMOTEAPP_DECODED_FRAME_E2E=1 \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
     --run \
@@ -126,7 +197,10 @@ JSON
       "binding_id": "tb_test",
       "binding_epoch": 1,
       "target_identity_epoch": 1,
-      "target_geometry_revision": 1
+      "target_geometry_revision": 1,
+      "resolved_identity": {
+        "window_id": 7
+      }
     },
     "scope_audit": {
       "scope_widened": false,
@@ -200,6 +274,17 @@ perl -0pi -e 's/unrelated_sentinel_present/unrelated_sentinel_omitted/g' \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp e2e acceptance checker accepted missing sentinel exclusion assertion" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
+perl -0pi -e 's/app_window_set/app_window_set_omitted/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted missing application window-set assertion" >&2
   exit 1
 fi
 mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
