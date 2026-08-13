@@ -65,6 +65,12 @@ use crate::daemon::plugins::remote_desktop::transport::{
 
 const DIRECT_WEBRTC_ICE_GATHER_TIMEOUT_MS: u64 = 2_500;
 
+fn assert_direct_webrtc_endpoint_start_unlocked() {
+    RemoteDesktopSessionStore::assert_current_thread_unlocked(
+        "remote_desktop.webrtc.start_direct_webrtc_endpoint",
+    );
+}
+
 pub(in crate::daemon::plugins::remote_desktop) struct StartDirectWebRtcEndpointRequest {
     pub(in crate::daemon::plugins::remote_desktop) sessions: Arc<RemoteDesktopSessionStore>,
     pub(in crate::daemon::plugins::remote_desktop) transports: Arc<RemoteDesktopTransportManager>,
@@ -81,6 +87,8 @@ pub(in crate::daemon::plugins::remote_desktop) struct StartDirectWebRtcEndpointR
 pub(in crate::daemon::plugins::remote_desktop) fn start_direct_webrtc_endpoint(
     request: StartDirectWebRtcEndpointRequest,
 ) -> anyhow::Result<Value> {
+    assert_direct_webrtc_endpoint_start_unlocked();
+
     let StartDirectWebRtcEndpointRequest {
         sessions,
         transports,
@@ -311,4 +319,18 @@ async fn create_direct_webrtc_endpoint(
         .map_err(|err| anyhow::anyhow!("spawn direct WebRTC media loop: {err}"))?;
 
     Ok((answer_value, peer_connection_for_endpoint, completion))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "remote_desktop.webrtc.start_direct_webrtc_endpoint")]
+    fn endpoint_start_boundary_refuses_to_run_while_session_store_lock_is_held() {
+        let store = RemoteDesktopSessionStore::new();
+        let _guard = store.lock();
+
+        assert_direct_webrtc_endpoint_start_unlocked();
+    }
 }

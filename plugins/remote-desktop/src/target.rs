@@ -1072,6 +1072,9 @@ pub(in crate::daemon::plugins::remote_desktop) fn verify_target_binding_for_sess
     ability: &'static str,
     binding: &RemoteAppTargetBinding,
 ) -> Result<ResolvedCaptureTargetProof, RemoteAppTargetError> {
+    crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore::assert_current_thread_unlocked(
+        "remote_desktop.target.verify_target_binding_for_session",
+    );
     platform_live_resolution::verify_target_binding_for_session(ability, binding)
 }
 
@@ -1137,6 +1140,9 @@ impl RemoteAppTargetResolver for ResourceEntryTargetResolver {
         requested_mode: &str,
         consent_epoch: u64,
     ) -> Result<RemoteAppTargetBinding, RemoteAppTargetError> {
+        crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore::assert_current_thread_unlocked(
+            "remote_desktop.target.resolve_for_session",
+        );
         if entry.binding != ResourceBinding::LocalDevice {
             return Err(RemoteAppTargetError::new(
                 ability,
@@ -1455,6 +1461,8 @@ fn unix_epoch_ms() -> u64 {
 mod tests {
     use super::*;
 
+    use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
+
     fn entry(kind: ResourceType, metadata: Value) -> ResourceEntry {
         ResourceEntry {
             resource_ura: "easynet:///r/acme/resource/device.01DEV/streams/display.test"
@@ -1467,6 +1475,39 @@ mod tests {
             metadata,
             first_seen_at: "2026-01-01T00:00:00Z".to_string(),
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "remote_desktop.target.resolve_for_session")]
+    fn resolver_refuses_to_run_while_session_store_lock_is_held() {
+        let store = RemoteDesktopSessionStore::new();
+        let _guard = store.lock();
+        let resolver = ResourceEntryTargetResolver;
+
+        let _ = resolver.resolve_for_session(
+            "remote_desktop.create_session",
+            &entry(ResourceType::Display, json!({"display_id": 7})),
+            "view_only",
+            1,
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "remote_desktop.target.verify_target_binding_for_session")]
+    fn live_target_proof_refuses_to_run_while_session_store_lock_is_held() {
+        let resolver = ResourceEntryTargetResolver;
+        let binding = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(ResourceType::Display, json!({"display_id": 7})),
+                "view_only",
+                1,
+            )
+            .expect("display target resolves");
+        let store = RemoteDesktopSessionStore::new();
+        let _guard = store.lock();
+
+        let _ = verify_target_binding_for_session("remote_desktop.create_session", &binding);
     }
 
     #[test]

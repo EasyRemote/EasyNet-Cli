@@ -4,7 +4,9 @@
 // File: plugins/remote-desktop/src/session_store.rs
 // Description: Synchronized session map and store-level transport projections.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 use std::sync::{Mutex, MutexGuard};
 
 use serde_json::Value;
@@ -27,6 +29,46 @@ pub(in crate::daemon::plugins::remote_desktop) struct TargetObservationInputs {
     pub(in crate::daemon::plugins::remote_desktop) binding_epoch: u64,
 }
 
+thread_local! {
+    static SESSION_STORE_LOCK_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Mutex guard for the remote desktop session map.
+///
+/// The wrapper keeps a current-thread lock depth so expensive target/media
+/// boundaries can assert they are not running while the session aggregate is
+/// locked.
+pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSessionStoreGuard<'a> {
+    guard: MutexGuard<'a, HashMap<String, RemoteDesktopSession>>,
+}
+
+impl<'a> RemoteDesktopSessionStoreGuard<'a> {
+    fn new(guard: MutexGuard<'a, HashMap<String, RemoteDesktopSession>>) -> Self {
+        SESSION_STORE_LOCK_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
+        Self { guard }
+    }
+}
+
+impl Deref for RemoteDesktopSessionStoreGuard<'_> {
+    type Target = HashMap<String, RemoteDesktopSession>;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.guard
+    }
+}
+
+impl DerefMut for RemoteDesktopSessionStoreGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.guard
+    }
+}
+
+impl Drop for RemoteDesktopSessionStoreGuard<'_> {
+    fn drop(&mut self) {
+        SESSION_STORE_LOCK_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
 /// Runtime-owned synchronized map of remote desktop sessions.
 ///
 /// Invariant 1: callers mutate session rows only while holding the store lock.
@@ -46,11 +88,24 @@ impl RemoteDesktopSessionStore {
 
     pub(in crate::daemon::plugins::remote_desktop) fn lock(
         &self,
-    ) -> MutexGuard<'_, HashMap<String, RemoteDesktopSession>> {
-        match self.inner.lock() {
+    ) -> RemoteDesktopSessionStoreGuard<'_> {
+        let guard = match self.inner.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
-        }
+        };
+        RemoteDesktopSessionStoreGuard::new(guard)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn current_thread_lock_depth() -> usize {
+        SESSION_STORE_LOCK_DEPTH.with(Cell::get)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn assert_current_thread_unlocked(stage: &str) {
+        assert_eq!(
+            Self::current_thread_lock_depth(),
+            0,
+            "{stage} must not run while RemoteDesktopSessionStore is locked"
+        );
     }
 
     /// Execute one bounded mutation/read section over the session map without
@@ -60,7 +115,7 @@ impl RemoteDesktopSessionStore {
         f: impl FnOnce(&mut HashMap<String, RemoteDesktopSession>) -> R,
     ) -> R {
         let mut sessions = self.lock();
-        f(&mut sessions)
+        f(&mut *sessions)
     }
 
     /// Mark a direct WebRTC media plane ready for one non-terminal session.
@@ -263,14 +318,40 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
     use crate::daemon::plugins::remote_desktop::view::serialize_session;
 
+    #[test]
+    fn lock_depth_tracks_session_store_guard_scope_on_current_thread() {
+        let store = RemoteDesktopSessionStore::new();
+        assert_eq!(RemoteDesktopSessionStore::current_thread_lock_depth(), 0);
+
+        {
+            let _guard = store.lock();
+            assert_eq!(RemoteDesktopSessionStore::current_thread_lock_depth(), 1);
+        }
+
+        assert_eq!(RemoteDesktopSessionStore::current_thread_lock_depth(), 0);
+        RemoteDesktopSessionStore::assert_current_thread_unlocked("remote_desktop.test.unlocked");
+    }
+
+    #[test]
+    #[should_panic(expected = "remote_desktop.test.locked_boundary")]
+    fn unlocked_boundary_assertion_fails_while_session_store_guard_is_held() {
+        let store = RemoteDesktopSessionStore::new();
+        let _guard = store.lock();
+
+        RemoteDesktopSessionStore::assert_current_thread_unlocked(
+            "remote_desktop.test.locked_boundary",
+        );
+    }
+
     fn insert_test_session(store: &RemoteDesktopSessionStore, session_id: &str) {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            session_id,
+            "easynet:///r/acme/resource/display.01",
+            vec![TRANSPORT_WEBRTC.to_string()],
+        ));
+        session.begin_webrtc_negotiation(TransportEpoch::new(1));
+
         store.with_sessions(|sessions| {
-            let mut session = RemoteDesktopSession::new(test_session_init(
-                session_id,
-                "easynet:///r/acme/resource/display.01",
-                vec![TRANSPORT_WEBRTC.to_string()],
-            ));
-            session.begin_webrtc_negotiation(TransportEpoch::new(1));
             sessions.insert(session_id.to_string(), session);
         });
     }
