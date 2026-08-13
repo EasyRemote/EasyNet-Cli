@@ -744,6 +744,18 @@ mod tests {
             observed_at_ms: 200,
         });
 
+        assert_eq!(session.target_tracking_state()["status"], json!("resolved"));
+        assert!(!session
+            .events()
+            .iter()
+            .any(|event| event["event_type"] == json!("TARGET_LOST")));
+
+        session.record_target_observation(TargetObservation::Lost {
+            reason: TargetResolutionError::TargetNotFound,
+            detail: "target still disappeared".into(),
+            observed_at_ms: 300,
+        });
+
         assert_eq!(session.target_tracking_state()["status"], json!("lost"));
         assert!(session
             .events()

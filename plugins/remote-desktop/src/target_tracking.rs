@@ -90,6 +90,9 @@ const ALL_TARGET_VISIBILITY_STATES: &[TargetVisibilityState] = &[
     TargetVisibilityState::Lost,
 ];
 
+const LOST_DEBOUNCE_REQUIRED_MISSES: u32 = 2;
+const LOST_DEBOUNCE_MS: u64 = 1_000;
+
 #[derive(Debug, Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct TargetTrackerSnapshot {
     binding_id: String,
@@ -214,6 +217,16 @@ impl TargetTrackingEvent {
 #[derive(Debug, Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct TargetTrackerState {
     snapshot: TargetTrackerSnapshot,
+    pending_lost: Option<PendingLostObservation>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingLostObservation {
+    reason: TargetResolutionError,
+    detail: String,
+    first_observed_at_ms: u64,
+    latest_observed_at_ms: u64,
+    consecutive_misses: u32,
 }
 
 impl TargetTrackerState {
@@ -222,6 +235,7 @@ impl TargetTrackerState {
     ) -> Self {
         Self {
             snapshot: TargetTrackerSnapshot::from_binding(binding),
+            pending_lost: None,
         }
     }
 
@@ -248,7 +262,7 @@ impl TargetTrackerState {
                 reason,
                 detail,
                 observed_at_ms,
-            } => Some(self.commit_lost(reason, detail, observed_at_ms)),
+            } => self.commit_lost(reason, detail, observed_at_ms),
         }
     }
 
@@ -261,6 +275,7 @@ impl TargetTrackerState {
         if self.snapshot.status == TargetTrackingStatus::Lost {
             return None;
         }
+        self.clear_pending_lost();
         let previous = self.snapshot.target_geometry_revision;
         if target_geometry_revision <= previous && geometry == self.snapshot.geometry {
             return None;
@@ -291,6 +306,14 @@ impl TargetTrackerState {
         if self.snapshot.status == TargetTrackingStatus::Lost {
             return None;
         }
+        if visibility_state == TargetVisibilityState::Lost {
+            return self.commit_lost(
+                TargetResolutionError::TargetNotFound,
+                "target visibility reported lost".to_string(),
+                observed_at_ms,
+            );
+        }
+        self.clear_pending_lost();
         if self.snapshot.visibility_state == visibility_state
             && self.snapshot.target_geometry_revision >= target_geometry_revision
         {
@@ -334,27 +357,92 @@ impl TargetTrackerState {
         reason: TargetResolutionError,
         detail: String,
         observed_at_ms: u64,
-    ) -> TargetTrackingEvent {
+    ) -> Option<TargetTrackingEvent> {
+        if self.snapshot.status == TargetTrackingStatus::Lost {
+            return None;
+        }
+        let pending_snapshot = {
+            let pending = self
+                .pending_lost
+                .get_or_insert_with(|| PendingLostObservation {
+                    reason,
+                    detail: detail.clone(),
+                    first_observed_at_ms: observed_at_ms,
+                    latest_observed_at_ms: observed_at_ms,
+                    consecutive_misses: 0,
+                });
+            pending.reason = reason;
+            pending.detail = detail;
+            pending.latest_observed_at_ms = observed_at_ms;
+            pending.consecutive_misses = pending.consecutive_misses.saturating_add(1);
+            pending.clone()
+        };
+
+        if pending_snapshot.consecutive_misses < LOST_DEBOUNCE_REQUIRED_MISSES
+            && observed_at_ms.saturating_sub(pending_snapshot.first_observed_at_ms)
+                < LOST_DEBOUNCE_MS
+        {
+            self.snapshot.diagnostic = self.pending_lost_diagnostic(&pending_snapshot);
+            return None;
+        }
+
+        let pending = self
+            .pending_lost
+            .take()
+            .expect("pending lost exists after debounce gate");
         let previous = self.snapshot.target_geometry_revision;
         self.snapshot.status = TargetTrackingStatus::Lost;
         self.snapshot.visibility_state = TargetVisibilityState::Lost;
         self.snapshot.diagnostic = json!({
             "status": TargetTrackingStatus::Lost.as_str(),
-            "reason": reason.as_str(),
-            "detail": detail,
+            "reason": pending.reason.as_str(),
+            "detail": pending.detail,
             "binding_id": self.snapshot.binding_id,
             "binding_epoch": self.snapshot.binding_epoch,
             "target_identity_epoch": self.snapshot.target_identity_epoch,
             "target_geometry_revision": self.snapshot.target_geometry_revision,
             "visibility_state": self.snapshot.visibility_state.as_str(),
             "recoverability": TargetTrackingStatus::Lost.recoverability(),
-            "frontend_action": reason.frontend_action().as_str(),
+            "frontend_action": pending.reason.frontend_action().as_str(),
+            "lost_debounce": {
+                "first_observed_at_ms": pending.first_observed_at_ms,
+                "latest_observed_at_ms": pending.latest_observed_at_ms,
+                "consecutive_misses": pending.consecutive_misses,
+            },
             "observed_at_ms": observed_at_ms,
         });
-        TargetTrackingEvent {
+        Some(TargetTrackingEvent {
             event_type: "TARGET_LOST",
-            payload: self.event_payload(reason.as_str(), observed_at_ms, Some(previous)),
-        }
+            payload: self.event_payload(pending.reason.as_str(), observed_at_ms, Some(previous)),
+        })
+    }
+
+    fn clear_pending_lost(&mut self) {
+        self.pending_lost = None;
+    }
+
+    fn pending_lost_diagnostic(&self, pending: &PendingLostObservation) -> Value {
+        json!({
+            "status": self.snapshot.status.as_str(),
+            "reason": pending.reason.as_str(),
+            "detail": pending.detail,
+            "binding_id": self.snapshot.binding_id,
+            "binding_epoch": self.snapshot.binding_epoch,
+            "target_identity_epoch": self.snapshot.target_identity_epoch,
+            "target_geometry_revision": self.snapshot.target_geometry_revision,
+            "visibility_state": self.snapshot.visibility_state.as_str(),
+            "recoverability": self.snapshot.status.recoverability(),
+            "frontend_action": pending.reason.frontend_action().as_str(),
+            "lost_debounce": {
+                "state": "pending",
+                "required_misses": LOST_DEBOUNCE_REQUIRED_MISSES,
+                "required_elapsed_ms": LOST_DEBOUNCE_MS,
+                "first_observed_at_ms": pending.first_observed_at_ms,
+                "latest_observed_at_ms": pending.latest_observed_at_ms,
+                "consecutive_misses": pending.consecutive_misses,
+            },
+            "observed_at_ms": pending.latest_observed_at_ms,
+        })
     }
 
     fn diagnostic_projection(
@@ -498,16 +586,94 @@ mod tests {
             .expect("resize commits");
         assert_eq!(resized.event_type(), "TARGET_RESIZED");
 
-        let lost = tracker
+        assert!(tracker
             .commit_observation(TargetObservation::Lost {
                 reason: TargetResolutionError::TargetNotFound,
                 detail: "window disappeared".into(),
                 observed_at_ms: 30,
             })
+            .is_none());
+        assert_eq!(tracker.snapshot().to_value()["status"], json!("resolved"));
+
+        let lost = tracker
+            .commit_observation(TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "window disappeared".into(),
+                observed_at_ms: 40,
+            })
             .expect("lost commits");
         assert_eq!(lost.event_type(), "TARGET_LOST");
         assert_eq!(tracker.snapshot().to_value()["status"], json!("lost"));
         assert!(tracker.snapshot().pointer_target_value().is_none());
+    }
+
+    #[test]
+    fn tracker_debounces_single_transient_lost_observation() {
+        let binding = window_binding();
+        let mut tracker = TargetTrackerState::from_binding(&binding);
+
+        assert!(tracker
+            .commit_observation(TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "transient snapshot miss".into(),
+                observed_at_ms: 10,
+            })
+            .is_none());
+        assert_eq!(tracker.snapshot().to_value()["status"], json!("resolved"));
+        assert_eq!(
+            tracker.snapshot().latest_diagnostic()["lost_debounce"]["state"],
+            json!("pending")
+        );
+
+        tracker
+            .commit_observation(TargetObservation::GeometryChanged {
+                geometry: TargetGeometry {
+                    x: Some(140.0),
+                    y: Some(220.0),
+                    width: Some(800.0),
+                    height: Some(600.0),
+                },
+                target_geometry_revision: 4,
+                observed_at_ms: 20,
+            })
+            .expect("recovered geometry commits");
+
+        assert!(tracker
+            .commit_observation(TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "second transient snapshot miss".into(),
+                observed_at_ms: 30,
+            })
+            .is_none());
+        assert_eq!(tracker.snapshot().to_value()["status"], json!("resolved"));
+    }
+
+    #[test]
+    fn tracker_commits_lost_after_debounce_elapsed() {
+        let binding = window_binding();
+        let mut tracker = TargetTrackerState::from_binding(&binding);
+
+        assert!(tracker
+            .commit_observation(TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "window disappeared".into(),
+                observed_at_ms: 10,
+            })
+            .is_none());
+
+        let lost = tracker
+            .commit_observation(TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "window still missing".into(),
+                observed_at_ms: 1_010,
+            })
+            .expect("elapsed debounce commits lost");
+
+        assert_eq!(lost.event_type(), "TARGET_LOST");
+        assert_eq!(
+            tracker.snapshot().latest_diagnostic()["lost_debounce"]["latest_observed_at_ms"],
+            json!(1_010)
+        );
     }
 
     #[test]
