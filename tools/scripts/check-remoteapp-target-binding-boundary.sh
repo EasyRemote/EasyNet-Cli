@@ -104,6 +104,12 @@ require_count_at_least '"target_model": self\.target_kind\.target_model\(\)' \
   "$REMOTE_ROOT/target.rs" \
   2 \
   'target binding projection and target-bound event must expose the concrete capture target model'
+require 'validate_resource_inventory_state\(' \
+  "$REMOTE_ROOT/target.rs" \
+  'target resolver must fail closed on unavailable or stale live inventory rows'
+require 'metadata_freshness_u64\(' \
+  "$REMOTE_ROOT/target.rs" \
+  'target resolver must consume inventory freshness when present'
 require '"target_model": self\.effective_target_kind\.target_model\(\)' \
   "$REMOTE_ROOT/target.rs" \
   'scope audit projection must expose the effective capture target model'

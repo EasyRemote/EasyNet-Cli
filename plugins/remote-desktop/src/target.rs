@@ -1168,6 +1168,7 @@ impl RemoteAppTargetResolver for ResourceEntryTargetResolver {
         let target_kind = RemoteDesktopTargetKind::try_from(entry.kind).map_err(|error| {
             RemoteAppTargetError::new(ability, error.reason(), error.to_string())
         })?;
+        validate_resource_inventory_state(ability, entry)?;
         let capture_scope = capture_scope_for_kind(target_kind);
         let input_scope = input_scope_for_request(target_kind, requested_mode);
         let display_id = display_id(entry);
@@ -1252,6 +1253,53 @@ impl RemoteAppTargetResolver for ResourceEntryTargetResolver {
             capture_proof: None,
         })
     }
+}
+
+fn validate_resource_inventory_state(
+    ability: &'static str,
+    entry: &ResourceEntry,
+) -> Result<(), RemoteAppTargetError> {
+    if let Some(availability) = metadata_string(entry, "availability") {
+        if availability != "available" {
+            let stale_reason = metadata_string(entry, "stale_reason");
+            let reason = stale_reason
+                .as_deref()
+                .and_then(target_resolution_reason_from_str)
+                .unwrap_or(TargetResolutionError::TargetStale);
+            return Err(RemoteAppTargetError::new(
+                ability,
+                reason,
+                format!(
+                    "remote desktop target {} is not available in the live inventory; availability={availability}; stale_reason={}",
+                    entry.resource_ura,
+                    stale_reason.as_deref().unwrap_or("unknown")
+                ),
+            ));
+        }
+    }
+
+    if let Some(stale_after_ms) = metadata_freshness_u64(entry, "stale_after_ms") {
+        let now_ms = unix_epoch_ms();
+        if stale_after_ms <= now_ms {
+            return Err(RemoteAppTargetError::new(
+                ability,
+                TargetResolutionError::TargetStale,
+                format!(
+                    "remote desktop target {} live inventory row expired at {stale_after_ms}; refresh targets before creating a session",
+                    entry.resource_ura
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn target_resolution_reason_from_str(value: &str) -> Option<TargetResolutionError> {
+    ALL_TARGET_RESOLUTION_ERRORS
+        .iter()
+        .copied()
+        .find(|reason| reason.as_str() == value)
 }
 
 fn validate_required_identity(
@@ -1420,6 +1468,15 @@ fn metadata_string(entry: &ResourceEntry, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn metadata_freshness_u64(entry: &ResourceEntry, key: &str) -> Option<u64> {
+    entry
+        .metadata
+        .get("freshness")
+        .and_then(Value::as_object)
+        .and_then(|freshness| freshness.get(key))
+        .and_then(Value::as_u64)
 }
 
 fn metadata_u64_array(entry: &ResourceEntry, key: &str) -> Vec<u64> {
@@ -1601,6 +1658,58 @@ mod tests {
         assert_eq!(
             projection["native_locator"]["title"],
             json!("same-looking shell")
+        );
+    }
+
+    #[test]
+    fn resolver_rejects_unavailable_or_expired_inventory_rows_before_binding() {
+        let resolver = ResourceEntryTargetResolver;
+        let err = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Window,
+                    json!({
+                        "availability": "unavailable",
+                        "stale_reason": "target_not_found",
+                        "window_id": 7,
+                        "pid": 4242,
+                    }),
+                ),
+                "view_only",
+                1,
+            )
+            .expect_err("unavailable live inventory rows must fail closed");
+        assert_eq!(err.reason(), TargetResolutionError::TargetNotFound);
+        assert!(
+            err.to_string().contains("frontend_action=refresh_targets"),
+            "unexpected error: {err}"
+        );
+
+        let err = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Window,
+                    json!({
+                        "availability": "available",
+                        "freshness": {
+                            "observed_at_ms": 1,
+                            "stale_after_ms": 1,
+                            "source": "live_refresh",
+                        },
+                        "window_id": 7,
+                        "pid": 4242,
+                    }),
+                ),
+                "view_only",
+                1,
+            )
+            .expect_err("expired live inventory rows must fail closed");
+        assert_eq!(err.reason(), TargetResolutionError::TargetStale);
+        assert!(
+            err.to_string().contains("frontend_action=refresh_targets"),
+            "unexpected error: {err}"
         );
     }
 

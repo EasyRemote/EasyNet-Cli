@@ -44,6 +44,8 @@ impl ScopeAudit {
 
 impl ResourceEntryTargetResolver {
     fn resolve_for_session(&self, target_kind: RemoteDesktopTargetKind) {
+        validate_resource_inventory_state();
+        metadata_freshness_u64();
         json!({
             "target_model": target_kind.target_model(),
         });
@@ -154,6 +156,19 @@ fi
 
 perl -0pi -e 's/if true/if binding.target_kind\(\) == RemoteDesktopTargetKind::Display/' \
   "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+perl -0pi -e 's/\n        validate_resource_inventory_state\(\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted missing inventory-state validation" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/(\n        metadata_freshness_u64\(\);)/\n        validate_resource_inventory_state();$1/' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
 
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 
