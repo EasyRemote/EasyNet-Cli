@@ -444,7 +444,8 @@ pub fn select_builtin_h264_backend(
 pub(in crate::daemon::plugins::remote_desktop) fn select_builtin_h264_backend_for_binding(
     binding: &RemoteAppTargetBinding,
 ) -> Option<RemoteDesktopMediaBackendDescriptor> {
-    if binding.supports_xcap_adapter() {
+    if binding.target_kind() == RemoteDesktopTargetKind::Display && binding.supports_xcap_adapter()
+    {
         return Some(XCAP_OPENH264_BACKEND);
     }
     None

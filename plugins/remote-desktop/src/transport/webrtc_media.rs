@@ -19,7 +19,9 @@ use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenC
 use crate::daemon::plugins::remote_desktop::media::encode::BuiltinH264Config;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
-use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
+use crate::daemon::plugins::remote_desktop::target::{
+    RemoteAppTargetBinding, RemoteDesktopTargetKind,
+};
 #[cfg(feature = "native-media")]
 use crate::daemon::plugins::remote_desktop::transport::webrtc_baseline_media::run_direct_webrtc_recorder_stream;
 use crate::daemon::plugins::remote_desktop::transport::webrtc_baseline_media::{
@@ -120,6 +122,20 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
                 return;
             }
         }
+    }
+
+    if target_binding.target_kind() != RemoteDesktopTargetKind::Display {
+        sessions.mark_direct_webrtc_failed(
+            &session_id,
+            epoch,
+            "display_fallback_forbidden",
+            format!(
+                "direct WebRTC baseline capture is display-only and cannot satisfy a {} target binding",
+                target_binding.target_kind().as_str()
+            ),
+        );
+        let _ = peer_connection.close().await;
+        return;
     }
 
     let baseline_inputs = BaselineMediaInputs {

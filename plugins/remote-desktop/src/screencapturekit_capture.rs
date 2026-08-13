@@ -19,9 +19,9 @@
 //   forwards each screen sample's CVImageBuffer to a user callback.
 //
 // Capture requires the Screen Recording TCC permission; target resolution
-// preflights and requests that native permission before enumerating
-// SCShareableContent so callers get a deterministic permission error instead
-// of an opaque stalled stream.
+// preflights that native permission before enumerating SCShareableContent so
+// callers get a deterministic permission error instead of an opaque stalled
+// stream. The OS prompt is only triggered by `remote_desktop.request_permission`.
 //
 // Architectural Position:
 // - EasyNet-Cli device adapter, native media plugin (macOS only).
@@ -209,7 +209,7 @@ pub fn request_screen_capture_permission() -> bool {
 }
 
 fn ensure_screen_capture_permission(ability: &'static str) -> Result<(), RemoteAppTargetError> {
-    if screen_capture_permission_granted() || request_screen_capture_permission() {
+    if screen_capture_permission_granted() {
         return Ok(());
     }
     Err(RemoteAppTargetError::new(

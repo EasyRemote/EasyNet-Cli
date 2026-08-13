@@ -64,6 +64,12 @@ require 'session\.target_binding\(\)\.clone\(\)' \
 require 'target_for_binding\(' \
   "$REMOTE_ROOT/transport/webrtc_native_media.rs" \
   'native media must start from RemoteAppTargetBinding'
+require 'target_binding\.target_kind\(\) != RemoteDesktopTargetKind::Display' \
+  "$REMOTE_ROOT/transport/webrtc_media.rs" \
+  'direct WebRTC baseline fallback must be guarded as display-only'
+require 'display_fallback_forbidden' \
+  "$REMOTE_ROOT/transport/webrtc_media.rs" \
+  'direct WebRTC baseline guard must fail app/window sessions with typed display_fallback_forbidden reason'
 require 'input_policy_for_binding\(' \
   "$REMOTE_ROOT/transport/webrtc_negotiation.rs" \
   'WebRTC input policy must consume RemoteAppTargetBinding'

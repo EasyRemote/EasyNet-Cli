@@ -31,10 +31,12 @@ use crate::daemon::ability::builtins::resources::media::screen_snapshot::Synthet
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::XcapBackend;
 use crate::daemon::ability::descriptors::AdmissionAction;
 use crate::daemon::ability::dispatch::{
-    AbilityHandlerFailure, BidiSource, EnvelopeContext, StreamSource,
+    AbilityHandlerFailure, BidiSource, EnvelopeContext, OwnerKind, StreamSource,
 };
 use crate::daemon::ability::{AbilityImplSource, CallMode};
-use crate::daemon::plugins::package::{BuiltinPluginAbilityHints, BuiltinPluginAbilitySpec};
+use crate::daemon::plugins::package::{
+    BuiltinPluginAbilityHints, BuiltinPluginAbilitySpec, BuiltinPluginFrontendContract,
+};
 use crate::daemon::plugins::remote_desktop::consent_registry::ConsentTicketError;
 use crate::daemon::plugins::remote_desktop::constants::{
     ABILITY_ADD_ICE_CANDIDATE, ABILITY_ATTACH_SESSION, ABILITY_CREATE_SESSION, ABILITY_END_SESSION,
@@ -61,7 +63,7 @@ type PluginBidiHandler =
     fn(Arc<RemoteDesktopPlugin>, EnvelopeContext, Value) -> anyhow::Result<BidiSource>;
 
 const RESOURCE_SUBJECT_KINDS: &[&str] = &["resource"];
-const PERMISSION_PROBE_SUBJECT_KINDS: &[&str] = &["agent", "resource"];
+const PERMISSION_PROBE_SUBJECT_KINDS: &[&str] = &["agent", "user"];
 
 #[derive(Clone, Copy)]
 enum RemoteDesktopAbilityBinding {
@@ -210,6 +212,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 bidi_wire_kind: None,
                 subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::grant_consent_description,
                 input_schema: schema::grant_consent_input_schema,
             },
@@ -226,6 +229,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 bidi_wire_kind: None,
                 subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::create_session_description,
                 input_schema: schema::create_session_input_schema,
             },
@@ -242,6 +246,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 bidi_wire_kind: None,
                 subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::show_session_description,
                 input_schema: schema::show_session_input_schema,
             },
@@ -258,6 +263,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 bidi_wire_kind: None,
                 subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::set_description_description,
                 input_schema: schema::set_description_input_schema,
             },
@@ -274,6 +280,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 bidi_wire_kind: None,
                 subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::add_ice_candidate_description,
                 input_schema: schema::add_ice_candidate_input_schema,
             },
@@ -290,6 +297,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 bidi_wire_kind: None,
                 subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::report_client_state_description,
                 input_schema: schema::report_client_state_input_schema,
             },
@@ -306,6 +314,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 bidi_wire_kind: None,
                 subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::watch_events_description,
                 input_schema: schema::watch_events_input_schema,
             },
@@ -322,6 +331,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 bidi_wire_kind: None,
                 subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::refresh_lease_description,
                 input_schema: schema::refresh_lease_input_schema,
             },
@@ -338,6 +348,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 bidi_wire_kind: None,
                 subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::end_session_description,
                 input_schema: schema::end_session_input_schema,
             },
@@ -354,6 +365,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 bidi_wire_kind: Some(PluginBidiWireKind::JsonFrames),
                 subject_ura_kinds: RESOURCE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::attach_description,
                 input_schema: schema::attach_input_schema,
             },
@@ -370,6 +382,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 bidi_wire_kind: None,
                 subject_ura_kinds: PERMISSION_PROBE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::permission_status_description,
                 input_schema: schema::permission_status_input_schema,
             },
@@ -386,6 +399,7 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 bidi_wire_kind: None,
                 subject_ura_kinds: PERMISSION_PROBE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
                 description: schema::request_permission_description,
                 input_schema: schema::request_permission_input_schema,
             },
@@ -411,19 +425,19 @@ pub fn contribute(
 ) -> Result<()> {
     #[cfg(feature = "native-media")]
     {
-        return contribute_with_screen_backend(builder, Arc::new(XcapBackend), limits);
+        contribute_with_screen_backend(builder, Arc::new(XcapBackend), limits)
     }
     #[cfg(all(not(feature = "native-media"), feature = "headless-media"))]
     {
-        return contribute_with_screen_backend(builder, Arc::new(SyntheticScreenBackend), limits);
+        contribute_with_screen_backend(builder, Arc::new(SyntheticScreenBackend), limits)
     }
     #[cfg(not(any(feature = "native-media", feature = "headless-media")))]
     {
         let _ = builder;
         let _ = limits;
-        return anyhow::bail!(
+        anyhow::bail!(
             "remote-desktop requires either native-media or headless-media provider support"
-        );
+        )
     }
 }
 
@@ -436,6 +450,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn contribute_with_screen_backend
     backend: Arc<dyn ScreenSnapshotBackend>,
     limits: PluginRuntimeLimits,
 ) -> Result<()> {
+    builder.set_public_owner(OwnerKind::remote_desktop_system());
     let plugin = RemoteDesktopPlugin::new(backend, limits.into());
     for binding in compiled_ability_bindings() {
         binding
@@ -465,6 +480,11 @@ mod tests {
             assert_eq!(
                 spec.name, binding.spec.name,
                 "ability_specs must be a pure projection of the compiled binding table"
+            );
+            assert_eq!(
+                spec.frontend_contract,
+                BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
+                "remote desktop product lifecycle must be descriptor-owned"
             );
         }
     }
@@ -582,6 +602,11 @@ mod tests {
             .iter()
             .find(|row| row.name == ABILITY_CREATE_SESSION)
             .expect("remote_desktop.create_session must be catalogued");
+        assert_eq!(
+            create_session.owner,
+            OwnerKind::remote_desktop_system(),
+            "remote_desktop.* descriptors must be owned by the remote-desktop SystemAgent; plugin-management owns plugin lifecycle only"
+        );
         let descriptor = &create_session.descriptor;
 
         assert_eq!(descriptor.description, schema::create_session_description());
@@ -600,8 +625,8 @@ mod tests {
             .expect("remote_desktop.permission_status must be catalogued");
         assert_eq!(
             permission_status.descriptor.scope_subjects,
-            ScopeRule::OnlyUraKinds(vec!["agent".to_string(), "resource".to_string()]),
-            "host-local permission probes must admit only descriptor-bound User invoke resources or local-system Agent subjects"
+            ScopeRule::OnlyUraKinds(vec!["agent".to_string(), "user".to_string()]),
+            "host-local permission probes must advertise only local-system Agent or authenticated User subjects; target resources are rejected by the handler"
         );
         let record = reg
             .control_plane_record_for_mode(ABILITY_CREATE_SESSION, DescriptorCallMode::Rpc)

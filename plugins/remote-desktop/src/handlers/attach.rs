@@ -40,6 +40,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                 })?;
                 ensure_session_access(&plugin, ABILITY_ATTACH_SESSION, &env, &args, session)?;
                 let target_binding = session.target_binding().clone();
+                target_binding.require_diagnostic_preview_supported(ABILITY_ATTACH_SESSION)?;
                 let options = parse_attach_capture_options(&args, session)?;
                 let encoding = parse_attach_encoding(&args)?;
                 let input_policy = session.input_policy().to_value();
@@ -94,13 +95,24 @@ mod tests {
     };
     use crate::daemon::ability::dispatch::AxonAbilityCatalog;
     use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
-    use crate::daemon::persistence::resources::{self, ResourceEntry, ResourcesFile};
+    use crate::daemon::persistence::resources::{
+        self, ResourceBinding, ResourceEntry, ResourceType, ResourcesFile,
+    };
     use crate::daemon::plugins::remote_desktop::constants::{
         ABILITY_ATTACH_SESSION, ABILITY_CREATE_SESSION, ABILITY_GRANT_CONSENT,
         REASON_PREVIEW_CAPTURE_FAILED, REASON_PREVIEW_CLIENT_CLOSED, TRANSPORT_INVOKE_BIDI,
     };
+    use crate::daemon::plugins::remote_desktop::request::{
+        RemoteDesktopInputPolicy, RemoteDesktopVideoConstraints,
+    };
     use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
-    use crate::daemon::plugins::remote_desktop::session::RemoteDesktopState;
+    use crate::daemon::plugins::remote_desktop::session::{
+        RemoteDesktopSession, RemoteDesktopSessionInit, RemoteDesktopState,
+    };
+    use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
+    use crate::daemon::plugins::remote_desktop::target::{
+        RemoteAppTargetResolver, ResourceEntryTargetResolver,
+    };
     use crate::daemon::plugins::remote_desktop::test_support::{
         env_for, seed_display, test_consent_causal_context, test_lock, test_runtime_limits,
     };
@@ -347,6 +359,77 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn insert_window_session(plugin: &RemoteDesktopPlugin, session_id: &str, subject_ura: &str) {
+        let env = env_for(subject_ura);
+        let entry = ResourceEntry {
+            resource_ura: subject_ura.to_string(),
+            owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
+            kind: ResourceType::Window,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "window:macos:cgwindow:10:42".to_string(),
+            display_name: "Test Window".to_string(),
+            metadata: json!({
+                "window_id": 42,
+                "pid": 10,
+                "x": 0,
+                "y": 0,
+                "width": 800,
+                "height": 600,
+            }),
+            first_seen_at: "2026-06-01T00:00:00Z".to_string(),
+        };
+        let target_binding = ResourceEntryTargetResolver
+            .resolve_for_session(ABILITY_CREATE_SESSION, &entry, "view_only", 1)
+            .expect("window target binding resolves for attach test");
+        let session = RemoteDesktopSession::new(RemoteDesktopSessionInit {
+            session_id: session_id.to_string(),
+            session_token: "token".to_string(),
+            creator_caller_ura: env.caller().to_string(),
+            consent: RemoteDesktopConsentGrant::from_envelope_for_test(&env),
+            target_binding,
+            mode: "view_only".to_string(),
+            lease_ttl_ms: 5_000,
+            transport_preferences: vec![TRANSPORT_INVOKE_BIDI.to_string()],
+            video: RemoteDesktopVideoConstraints::default(),
+            input_policy: RemoteDesktopInputPolicy::default(),
+        });
+        plugin.session_store().with_sessions(|sessions| {
+            sessions.insert(session_id.to_string(), session);
+        });
+    }
+
+    #[test]
+    fn attach_bidi_rejects_window_preview_before_resource_entry_capture_bypass() {
+        let _lock = test_lock();
+        let plugin = RemoteDesktopPlugin::new(
+            Arc::new(SyntheticScreenBackend),
+            test_runtime_limits().into(),
+        );
+        let subject_ura = "easynet:///r/acme/resource/device.01DEV/streams/window.test";
+        insert_window_session(&plugin, "rd-window-preview-rejected", subject_ura);
+
+        let err = handle(
+            Arc::clone(&plugin),
+            env_for(subject_ura),
+            json!({
+                "session_id": "rd-window-preview-rejected",
+                "session_token": "token",
+            }),
+        )
+        .expect_err("diagnostic InvokeBidi preview must not capture window via ResourceEntry");
+
+        assert!(err
+            .to_string()
+            .contains("diagnostic InvokeBidi preview is display-only"));
+        plugin.session_store().with_sessions(|sessions| {
+            let session = sessions.get("rd-window-preview-rejected").unwrap();
+            assert!(
+                !session.preview_attached(),
+                "unsupported diagnostic preview must fail before installing preview transport"
+            );
+        });
     }
 
     #[test]

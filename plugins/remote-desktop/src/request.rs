@@ -19,6 +19,7 @@ use crate::daemon::plugins::remote_desktop::constants::{
     REASON_INVALID_ARGUMENT, TRANSPORT_INVOKE_BIDI, TRANSPORT_PREVIEW_STREAM, TRANSPORT_WEBRTC,
 };
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+use crate::daemon::plugins::remote_desktop::target::{InputScope, RemoteAppTargetBinding};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RemoteDesktopVideoConstraints {
@@ -101,6 +102,30 @@ pub(crate) struct RemoteDesktopInputPolicy {
 }
 
 impl RemoteDesktopInputPolicy {
+    pub(in crate::daemon::plugins::remote_desktop) fn constrained_for_binding(
+        mut self,
+        binding: &RemoteAppTargetBinding,
+    ) -> Self {
+        match binding.input_scope() {
+            InputScope::ViewOnly => {
+                self.keyboard_enabled = false;
+                self.pointer_enabled = false;
+                self.clipboard_enabled = false;
+                self.file_drop_enabled = false;
+            }
+            InputScope::TargetLocal => {
+                // Target-local pointer input may become safe once platform focus
+                // and hit-test validation are implemented. Keyboard, clipboard,
+                // and file-drop are never target-local on macOS today.
+                self.keyboard_enabled = false;
+                self.clipboard_enabled = false;
+                self.file_drop_enabled = false;
+            }
+            InputScope::DisplayGlobal => {}
+        }
+        self
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
         json!({
             "keyboard_enabled": self.keyboard_enabled,

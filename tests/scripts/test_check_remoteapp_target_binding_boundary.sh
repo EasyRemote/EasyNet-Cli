@@ -39,6 +39,15 @@ fn media(binding: Binding) {
 }
 RS
 
+cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_media.rs" <<'RS'
+fn media(target_binding: Binding) {
+    if target_binding.target_kind() != RemoteDesktopTargetKind::Display {
+        mark_failed("display_fallback_forbidden");
+        return;
+    }
+}
+RS
+
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 
 cat >>"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_native_media.rs" <<'RS'
@@ -62,6 +71,17 @@ RS
 
 if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp target binding checker accepted resolver use after session creation" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/\nfn bad_resolver\(\) \{\n    ResourceEntryTargetResolver\.resolve_for_session\(\);\n\}\n//' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_negotiation.rs"
+
+perl -0pi -e 's/target_binding\.target_kind\(\) != RemoteDesktopTargetKind::Display/true/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_media.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted unguarded baseline fallback" >&2
   exit 1
 fi
 

@@ -60,6 +60,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
     )?;
     let capture_proof = verify_target_binding_for_session(ABILITY_CREATE_SESSION, &target_binding)?;
     target_binding.commit_capture_proof(ABILITY_CREATE_SESSION, capture_proof)?;
+    let input_policy = input_policy.constrained_for_binding(&target_binding);
     let session = RemoteDesktopSession::new(RemoteDesktopSessionInit {
         session_id: session_id.clone(),
         session_token,

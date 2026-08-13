@@ -622,15 +622,19 @@ Candidate matching rules:
 >1 candidate -> target_identity_ambiguous
 ```
 
-This applies to all fallback matches:
+Production candidates are built from stable native identity, not labels:
 
 ```text
-window:      window_id OR pid + app_name + title
-application: primary_pid OR app_name
-display:     monitor_id/display_id
+window:      window_id plus owner pid/app_identity/bundle_id consistency
+application: display_id plus app_identity/bundle_id/primary_pid plus resolved_window_ids/window_set_epoch
+display:     monitor_id/display_id or an explicit primary_display subject
 ```
 
-The resolver must not return the first matching application, window, or display when the selector is ambiguous.
+`app_name`, `title`, and bounds may be used only as diagnostics or
+ambiguity-breaking evidence after a stable native identity candidate is already
+present. They must not create a production candidate by themselves. The resolver
+must not return the first matching application, window, or display when the
+selector is ambiguous.
 
 macOS v1 production matching rules:
 

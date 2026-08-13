@@ -18,7 +18,7 @@ use webrtc::data_channel::{DataChannel, DataChannelEvent};
 
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
-use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
+use crate::daemon::plugins::remote_desktop::target::{InputScope, RemoteAppTargetBinding};
 use crate::daemon::plugins::remote_desktop::target_tracking::TargetTrackerSnapshot;
 
 pub const INPUT_DATA_CHANNEL_LABEL: &str = "easynet.remote_desktop.input.v1";
@@ -185,7 +185,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_binding(
     binding: &RemoteAppTargetBinding,
 ) -> Value {
     let snapshot = TargetTrackerSnapshot::from_binding(binding);
-    input_policy_for_target_snapshot(input_policy, &snapshot)
+    let input_policy = input_policy_for_target_snapshot(input_policy, &snapshot);
+    input_policy_for_scope(input_policy, binding.input_scope())
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_target_snapshot(
@@ -200,6 +201,32 @@ pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_target_snapsh
     };
     map.insert("pointer_target".to_string(), pointer_target);
     input_policy
+}
+
+fn input_policy_for_scope(mut input_policy: Value, input_scope: InputScope) -> Value {
+    let Some(map) = input_policy.as_object_mut() else {
+        return input_policy;
+    };
+    map.insert("input_scope".to_string(), json!(input_scope.as_str()));
+    match input_scope {
+        InputScope::ViewOnly => {
+            disable_input_policy_key(map, "keyboard_enabled");
+            disable_input_policy_key(map, "pointer_enabled");
+            disable_input_policy_key(map, "clipboard_enabled");
+            disable_input_policy_key(map, "file_drop_enabled");
+        }
+        InputScope::TargetLocal => {
+            disable_input_policy_key(map, "keyboard_enabled");
+            disable_input_policy_key(map, "clipboard_enabled");
+            disable_input_policy_key(map, "file_drop_enabled");
+        }
+        InputScope::DisplayGlobal => {}
+    }
+    input_policy
+}
+
+fn disable_input_policy_key(map: &mut serde_json::Map<String, Value>, key: &'static str) {
+    map.insert(key.to_string(), json!(false));
 }
 
 pub fn input_injection_available() -> bool {
@@ -883,12 +910,19 @@ mod tests {
         TargetObservation, TargetTrackerState,
     };
 
+    fn binding_for_mode(
+        entry: &ResourceEntry,
+        mode: &str,
+    ) -> crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding {
+        ResourceEntryTargetResolver
+            .resolve_for_session("remote_desktop.create_session", entry, mode, 1)
+            .expect("test target binding resolves")
+    }
+
     fn binding_for(
         entry: &ResourceEntry,
     ) -> crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding {
-        ResourceEntryTargetResolver
-            .resolve_for_session("remote_desktop.create_session", entry, "view_only", 1)
-            .expect("test target binding resolves")
+        binding_for_mode(entry, "view_only")
     }
 
     #[test]
@@ -979,6 +1013,47 @@ mod tests {
         let point = map_pointer_point(&frame, pointer_target_from_policy(&policy));
 
         assert_eq!(point, MappedPointerPoint { x: 500.0, y: 350.0 });
+        assert_eq!(policy["input_scope"], json!("view_only"));
+        assert!(
+            !input_policy_allows(&policy, "pointer"),
+            "view-only window binding must not leave global pointer injection enabled"
+        );
+    }
+
+    #[test]
+    fn display_global_input_scope_preserves_interactive_policy() {
+        let entry = ResourceEntry {
+            resource_ura: "easynet:///r/acme/resource/display.test".into(),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
+            kind: ResourceType::Display,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "display:macos:cgdisplay:1".into(),
+            display_name: "Main".into(),
+            metadata: json!({
+                "display_id": 1,
+                "x": 0,
+                "y": 0,
+                "width": 1920,
+                "height": 1080,
+            }),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        let binding = binding_for_mode(&entry, "interactive");
+        let policy = input_policy_for_binding(
+            json!({
+                "keyboard_enabled": true,
+                "pointer_enabled": true,
+                "clipboard_enabled": true,
+                "file_drop_enabled": true,
+            }),
+            &binding,
+        );
+
+        assert_eq!(policy["input_scope"], json!("display_global"));
+        assert!(input_policy_allows(&policy, "key"));
+        assert!(input_policy_allows(&policy, "pointer"));
+        assert!(input_policy_allows(&policy, "clipboard"));
+        assert!(input_policy_allows(&policy, "file_drop"));
     }
 
     #[test]
@@ -1071,5 +1146,10 @@ mod tests {
         let point = map_pointer_point(&frame, pointer_target_from_policy(&policy));
 
         assert_eq!(point, MappedPointerPoint { x: 800.0, y: 600.0 });
+        assert_eq!(policy["input_scope"], json!("view_only"));
+        assert!(
+            !input_policy_allows(&policy, "pointer"),
+            "view-only application binding must not leave global pointer injection enabled"
+        );
     }
 }
