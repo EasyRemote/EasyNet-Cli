@@ -247,9 +247,7 @@ fn apply_remote_target_refresh(
         prune_stale_auto_screen_targets(file, realm, owner_agent, &live_targets);
     }
     let retired_count = before_prune_count.saturating_sub(file.resources.len());
-    for resource in live_targets {
-        apply_discovered_resource(file, realm, owner_agent, resource)?;
-    }
+    apply_discovered_resources_indexed(file, realm, owner_agent, live_targets)?;
     let resources = file
         .resources
         .iter()
@@ -373,6 +371,38 @@ fn apply_discovered_resource(
             metadata: resource.metadata,
         },
     )?;
+    Ok(())
+}
+
+fn apply_discovered_resources_indexed(
+    file: &mut ResourcesFile,
+    realm: &str,
+    owner_agent: &str,
+    resources: Vec<DiscoveredResource>,
+) -> anyhow::Result<()> {
+    let mut upsert_inputs = Vec::with_capacity(resources.len());
+    for mut resource in resources {
+        annotate_host_device_ura(owner_agent, &mut resource.metadata)?;
+        upsert_inputs.push((
+            resource.kind,
+            resource.hardware_id,
+            resource.display_name,
+            resource.metadata,
+        ));
+    }
+    let specs =
+        upsert_inputs.iter().map(
+            |(kind, hardware_id, display_name, metadata)| ResourceUpsert {
+                realm,
+                owner_agent,
+                kind: *kind,
+                binding: ResourceBinding::LocalDevice,
+                hardware_id,
+                display_name,
+                metadata: metadata.clone(),
+            },
+        );
+    resources::upsert_resources_indexed(file, specs)?;
     Ok(())
 }
 

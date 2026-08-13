@@ -10,6 +10,7 @@ mkdir -p \
   "$SANDBOX/src/cli/commands/groups" \
   "$SANDBOX/src/daemon/ability/builtins/resources/media" \
   "$SANDBOX/src/daemon/ability/builtins/resources" \
+  "$SANDBOX/src/daemon/persistence" \
   "$SANDBOX/src/daemon/resources" \
   "$SANDBOX/src/support/platform" \
   "$SANDBOX/plugins/remote-desktop/src/handlers" \
@@ -91,6 +92,10 @@ fn resource_entry() -> ResourceEntry {
 RS
 
 cat >"$SANDBOX/src/daemon/ability/builtins/resources/media/resource_bootstrap.rs" <<'RS'
+fn apply_remote_target_refresh(resources: Vec<DiscoveredResource>) {
+    upsert_resources_indexed(resources);
+}
+
 fn annotate_live_remote_target(metadata: &mut Map) {
     metadata.insert("freshness", json!({
         "observed_at_ms": 10,
@@ -101,6 +106,12 @@ fn annotate_live_remote_target(metadata: &mut Map) {
 
 fn stable_remote_target_entry_signature(map: &mut Map) {
     map.remove("freshness");
+}
+RS
+
+cat >"$SANDBOX/src/daemon/persistence/resources.rs" <<'RS'
+fn upsert_resources_indexed(resources: Vec<ResourceUpsert>) {
+    let mut index = HashMap::new();
 }
 RS
 
@@ -195,6 +206,48 @@ if CHECK_REMOTEAPP_PICKER_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1
   echo "remoteapp picker subject checker accepted missing freshness projection contract" >&2
   exit 1
 fi
+
+cat >"$SANDBOX/src/daemon/ability/builtins/resources/media/resource_bootstrap.rs" <<'RS'
+fn apply_remote_target_refresh(resources: Vec<DiscoveredResource>) {
+    for resource in live_targets {
+        apply_discovered_resource(resource);
+    }
+}
+
+fn annotate_live_remote_target(metadata: &mut Map) {
+    metadata.insert("freshness", json!({
+        "observed_at_ms": 10,
+        "stale_after_ms": 5010,
+        "source": "live_refresh",
+    }));
+}
+
+fn stable_remote_target_entry_signature(map: &mut Map) {
+    map.remove("freshness");
+}
+RS
+if CHECK_REMOTEAPP_PICKER_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp picker subject checker accepted per-target linear refresh upsert" >&2
+  exit 1
+fi
+
+cat >"$SANDBOX/src/daemon/ability/builtins/resources/media/resource_bootstrap.rs" <<'RS'
+fn apply_remote_target_refresh(resources: Vec<DiscoveredResource>) {
+    upsert_resources_indexed(resources);
+}
+
+fn annotate_live_remote_target(metadata: &mut Map) {
+    metadata.insert("freshness", json!({
+        "observed_at_ms": 10,
+        "stale_after_ms": 5010,
+        "source": "live_refresh",
+    }));
+}
+
+fn stable_remote_target_entry_signature(map: &mut Map) {
+    map.remove("freshness");
+}
+RS
 
 cat >"$SANDBOX/src/daemon/resources/projection.rs" <<'RS'
 fn validate_remote_target_freshness(entry: ResourceEntry) {

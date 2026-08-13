@@ -31,10 +31,11 @@ SESSION_CREATION="$ROOT/plugins/remote-desktop/src/session_creation.rs"
 SCHEMA="$ROOT/plugins/remote-desktop/src/schema.rs"
 RESOURCE_SUBJECT="$ROOT/plugins/remote-desktop/src/resource.rs"
 RESOURCE_PROJECTION="$ROOT/src/daemon/resources/projection.rs"
+RESOURCE_STORE="$ROOT/src/daemon/persistence/resources.rs"
 RESOURCE_BOOTSTRAP="$ROOT/src/daemon/ability/builtins/resources/media/resource_bootstrap.rs"
 WATCH_TARGETS="$ROOT/src/daemon/ability/builtins/resources/watch_remote_targets.rs"
 
-for file in "$CLI_ABILITY" "$LOCAL_INVOKE" "$CREATE_SESSION" "$SESSION_CREATION" "$SCHEMA" "$RESOURCE_SUBJECT" "$RESOURCE_PROJECTION" "$RESOURCE_BOOTSTRAP" "$WATCH_TARGETS"; do
+for file in "$CLI_ABILITY" "$LOCAL_INVOKE" "$CREATE_SESSION" "$SESSION_CREATION" "$SCHEMA" "$RESOURCE_SUBJECT" "$RESOURCE_PROJECTION" "$RESOURCE_STORE" "$RESOURCE_BOOTSTRAP" "$WATCH_TARGETS"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -90,6 +91,12 @@ require 'map\.remove\("freshness"\)' "$RESOURCE_BOOTSTRAP" \
   'remote target cache signature must ignore freshness-only metadata'
 require 'map\.remove\("freshness"\)' "$WATCH_TARGETS" \
   'remote target watch signatures must ignore freshness-only metadata'
+require 'upsert_resources_indexed' "$RESOURCE_STORE" \
+  'resource persistence must expose indexed batch upsert for live target refresh'
+require 'upsert_resources_indexed' "$RESOURCE_BOOTSTRAP" \
+  'live remote target refresh must use indexed batch upsert, not per-target linear upsert'
+reject 'for resource in live_targets' "$RESOURCE_BOOTSTRAP" \
+  'live remote target refresh must not call linear upsert once per discovered target'
 
 require 'RemoteDesktopSessionCreationWorkflow::start' "$CREATE_SESSION" \
   'create_session handler must delegate subject validation to RemoteDesktopSessionCreationWorkflow'
