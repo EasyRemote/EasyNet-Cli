@@ -222,6 +222,15 @@ fn remoteapp_picker_subject_boundary_script_holds() {
 }
 
 #[test]
+fn remoteapp_frontend_invocation_boundary_script_holds() {
+    // Pins the real EasyNet frontend execution surface to selected target
+    // subjects. Browser calls must put the picker-selected target in the
+    // Invocation envelope, never in create_session args or first-target
+    // fallback paths.
+    run_bash_script("tests/scripts/test_check_remoteapp_frontend_invocation_boundary.sh");
+}
+
+#[test]
 fn remoteapp_target_binding_boundary_script_holds() {
     // Pins application/window sessions to binding-owned capture/input/media
     // boundaries. Production app/window media must not silently re-resolve
