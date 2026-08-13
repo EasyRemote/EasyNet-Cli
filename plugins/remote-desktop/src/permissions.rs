@@ -6,9 +6,7 @@
 
 use serde_json::{json, Value};
 
-use crate::daemon::ability::builtins::resources::media::resource_subject::{
-    is_resource_ura_subject, reject_subject_in_args,
-};
+use crate::daemon::ability::builtins::resources::media::resource_subject::reject_subject_in_args;
 use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::daemon::plugins::remote_desktop::constants::REASON_INVALID_ARGUMENT;
 use crate::daemon::plugins::remote_desktop::input::{
@@ -27,6 +25,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn ensure_permission_probe_access
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum HostLocalPermissionProbeSubject {
     UserSelf { user_ura: String },
+    UserInvokeResource { resource_ura: String },
     LocalSystemLoopback,
 }
 
@@ -43,12 +42,6 @@ impl HostLocalPermissionProbeSubject {
                     "local-system permission probes must use the local-system subject",
                 ))
             };
-        }
-        if is_resource_ura_subject(subject) {
-            return Err(host_local_subject_error(
-                ability,
-                "screen-capture permission probes are host-local and MUST NOT be scoped to a remote desktop resource subject",
-            ));
         }
         let parsed_caller = crate::core::ura::parse_ura(caller).map_err(|error| {
             host_local_subject_error(
@@ -68,10 +61,28 @@ impl HostLocalPermissionProbeSubject {
                 "host-local permission probes require a User caller or local-system loopback",
             ));
         }
+        if parsed_subject.kind == crate::core::ura::URAKind::Resource {
+            return if user_descriptor_bound_permission_probe_subject(
+                &parsed_caller,
+                &parsed_subject,
+                ability,
+            ) {
+                Ok(Self::UserInvokeResource {
+                    resource_ura: subject.to_string(),
+                })
+            } else {
+                let detail = if remote_desktop_resource_probe_subject(&parsed_subject) {
+                    "screen-capture permission probes are host-local and MUST NOT be scoped to a remote desktop resource subject"
+                } else {
+                    "host-local permission probes require a caller-owned descriptor-bound invoke resource subject"
+                };
+                Err(host_local_subject_error(ability, detail))
+            };
+        }
         if parsed_subject.kind != crate::core::ura::URAKind::User {
             return Err(host_local_subject_error(
                 ability,
-                "host-local permission probes require a caller-owned User subject",
+                "host-local permission probes require a caller-owned User or descriptor-bound invoke resource subject",
             ));
         }
         if caller != subject {
@@ -84,6 +95,34 @@ impl HostLocalPermissionProbeSubject {
             user_ura: subject.to_string(),
         })
     }
+}
+
+fn remote_desktop_resource_probe_subject(subject: &crate::core::ura::ParsedURA) -> bool {
+    subject
+        .resource_owner_id()
+        .is_some_and(|owner| owner.starts_with("device."))
+        || subject
+            .resource_path()
+            .is_some_and(|path| path.starts_with("streams/"))
+}
+
+fn user_descriptor_bound_permission_probe_subject(
+    caller: &crate::core::ura::ParsedURA,
+    subject: &crate::core::ura::ParsedURA,
+    ability: &str,
+) -> bool {
+    let Some(caller_user_id) = caller.user_id() else {
+        return false;
+    };
+    let Some(owner_user_id) = subject
+        .resource_owner_id()
+        .and_then(|owner| owner.strip_prefix("user.").or(Some(owner)))
+    else {
+        return false;
+    };
+    subject.realm == caller.realm
+        && owner_user_id == caller_user_id
+        && subject.resource_path() == Some(format!("invoke/{}", ability.trim()).as_str())
 }
 
 fn host_local_subject_error(ability: &str, detail: &str) -> anyhow::Error {

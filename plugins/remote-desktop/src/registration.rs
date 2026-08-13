@@ -61,7 +61,7 @@ type PluginBidiHandler =
     fn(Arc<RemoteDesktopPlugin>, EnvelopeContext, Value) -> anyhow::Result<BidiSource>;
 
 const RESOURCE_SUBJECT_KINDS: &[&str] = &["resource"];
-const PERMISSION_PROBE_SUBJECT_KINDS: &[&str] = &["agent", "user"];
+const PERMISSION_PROBE_SUBJECT_KINDS: &[&str] = &["agent", "resource"];
 
 #[derive(Clone, Copy)]
 enum RemoteDesktopAbilityBinding {
@@ -600,8 +600,8 @@ mod tests {
             .expect("remote_desktop.permission_status must be catalogued");
         assert_eq!(
             permission_status.descriptor.scope_subjects,
-            ScopeRule::OnlyUraKinds(vec!["agent".to_string(), "user".to_string()]),
-            "host-local permission probes must admit only User-self or local-system Agent subjects"
+            ScopeRule::OnlyUraKinds(vec!["agent".to_string(), "resource".to_string()]),
+            "host-local permission probes must admit only descriptor-bound User invoke resources or local-system Agent subjects"
         );
         let record = reg
             .control_plane_record_for_mode(ABILITY_CREATE_SESSION, DescriptorCallMode::Rpc)
