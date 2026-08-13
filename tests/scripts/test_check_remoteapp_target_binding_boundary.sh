@@ -15,6 +15,12 @@ RS
 
 cat >"$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs" <<'RS'
 fn create_session() {
+    RemoteDesktopSessionCreationWorkflow::start();
+}
+RS
+
+cat >"$SANDBOX/plugins/remote-desktop/src/session_creation.rs" <<'RS'
+fn creation_workflow() {
     ResourceEntryTargetResolver.resolve_for_session();
     verify_target_binding_for_session();
 }

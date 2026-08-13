@@ -35,6 +35,7 @@ pub(crate) mod sdp;
 pub(crate) mod session;
 pub(crate) mod session_access;
 pub(crate) mod session_consent;
+pub(crate) mod session_creation;
 pub(crate) mod session_events;
 pub(crate) mod session_identity;
 pub(crate) mod session_lease;

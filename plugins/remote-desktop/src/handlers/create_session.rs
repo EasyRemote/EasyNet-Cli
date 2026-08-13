@@ -6,23 +6,12 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::daemon::ability::dispatch::EnvelopeContext;
-use crate::daemon::plugins::remote_desktop::consent_registry::CONSENT_INTENT;
 use crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION;
 use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
-use crate::daemon::plugins::remote_desktop::request::{
-    mint_session_id, mint_session_token, parse_input_policy, parse_lease_ttl_ms, parse_mode,
-    parse_optional_session_id, parse_transport_preferences, parse_video_constraints, require_str,
-};
-use crate::daemon::plugins::remote_desktop::resource::resolve_screen_resource_from_envelope;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
-use crate::daemon::plugins::remote_desktop::session::{
-    now_ms, RemoteDesktopSession, RemoteDesktopSessionInit,
-};
-use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
+use crate::daemon::plugins::remote_desktop::session::{now_ms, RemoteDesktopSession};
+use crate::daemon::plugins::remote_desktop::session_creation::RemoteDesktopSessionCreationWorkflow;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::prune_inactive_sessions;
-use crate::daemon::plugins::remote_desktop::target::{
-    verify_target_binding_for_session, RemoteAppTargetResolver, ResourceEntryTargetResolver,
-};
 use crate::daemon::plugins::remote_desktop::view::serialize_session_with_token;
 
 /// Handle `remote_desktop.create_session`.
@@ -31,48 +20,11 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
     env: EnvelopeContext,
     args: Value,
 ) -> anyhow::Result<Value> {
-    let entry = resolve_screen_resource_from_envelope(ABILITY_CREATE_SESSION, &env, &args)?;
-    let mode = parse_mode(&args)?;
-    let lease_ttl_ms = parse_lease_ttl_ms(&args)?;
-    let transport_preferences = parse_transport_preferences(&args)?;
-    let video = parse_video_constraints(&args)?;
-    let input_policy = parse_input_policy(&args, &mode)?;
-    let session_id = parse_optional_session_id(&args)?.unwrap_or_else(mint_session_id);
-    let session_token = mint_session_token();
-    let consent_ticket = require_str(&args, "consent_ticket", ABILITY_CREATE_SESSION)?;
-    let authorization = plugin.consent_registry().consume(
-        consent_ticket,
-        env.caller(),
-        &entry.resource_ura,
-        CONSENT_INTENT,
-    )?;
-    let consent = RemoteDesktopConsentGrant::required_from_envelope(
-        ABILITY_CREATE_SESSION,
-        &session_id,
-        &env,
-        authorization,
-    )?;
-    let mut target_binding = ResourceEntryTargetResolver.resolve_for_session(
-        ABILITY_CREATE_SESSION,
-        &entry,
-        &mode,
-        1,
-    )?;
-    let capture_proof = verify_target_binding_for_session(ABILITY_CREATE_SESSION, &target_binding)?;
-    target_binding.commit_capture_proof(ABILITY_CREATE_SESSION, capture_proof)?;
-    let input_policy = input_policy.constrained_for_binding(&target_binding);
-    let session = RemoteDesktopSession::new(RemoteDesktopSessionInit {
-        session_id: session_id.clone(),
-        session_token,
-        creator_caller_ura: env.caller().to_string(),
-        consent,
-        target_binding,
-        mode,
-        lease_ttl_ms,
-        transport_preferences,
-        video,
-        input_policy,
-    });
+    let workflow = RemoteDesktopSessionCreationWorkflow::start(&env, &args)?
+        .consume_consent(&plugin.consent_registry(), &env)?
+        .resolve_target()?;
+    let session_id = workflow.session_id().to_string();
+    let session = RemoteDesktopSession::new(workflow.into_session_init());
     let now = now_ms();
     let (watchdog_session_id, tracker_session_id, lease_expires_at_ms, view) = plugin
         .session_store()

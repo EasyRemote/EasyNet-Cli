@@ -53,11 +53,14 @@ reject 'pointer_target_for_entry\s*\(' "$REMOTE_ROOT" \
   'production pointer targeting must consume RemoteAppTargetBinding plus tracker snapshot'
 
 require 'ResourceEntryTargetResolver\.resolve_for_session\(' \
-  "$REMOTE_ROOT/handlers/create_session.rs" \
-  'create_session must be the ResourceEntry-to-target_binding boundary'
+  "$REMOTE_ROOT/session_creation.rs" \
+  'session creation workflow must be the ResourceEntry-to-target_binding boundary'
 require 'verify_target_binding_for_session\(' \
+  "$REMOTE_ROOT/session_creation.rs" \
+  'session creation workflow must verify the resolved target binding before session insertion'
+require 'RemoteDesktopSessionCreationWorkflow::start' \
   "$REMOTE_ROOT/handlers/create_session.rs" \
-  'create_session must verify the resolved target binding before session insertion'
+  'create_session handler must delegate pre-row lifecycle to RemoteDesktopSessionCreationWorkflow'
 require 'session\.target_binding\(\)\.clone\(\)' \
   "$REMOTE_ROOT/transport/webrtc_negotiation.rs" \
   'WebRTC negotiation must consume the session-owned target binding'
@@ -90,6 +93,7 @@ while IFS=: read -r file line _match; do
   case "${file#"$ROOT/"}" in
     plugins/remote-desktop/src/target.rs|\
     plugins/remote-desktop/src/handlers/create_session.rs|\
+    plugins/remote-desktop/src/session_creation.rs|\
     plugins/remote-desktop/src/test_support.rs)
       continue
       ;;
