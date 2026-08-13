@@ -116,9 +116,9 @@ impl ReceiverConfig {
 #[derive(Clone, Serialize)]
 struct SessionArtifactBinding {
     session_id: String,
-    binding_id: Option<String>,
-    binding_epoch: Option<u64>,
-    capture_scope: Option<String>,
+    binding_id: String,
+    binding_epoch: u64,
+    capture_scope: String,
 }
 
 impl SessionArtifactBinding {
@@ -135,19 +135,30 @@ impl SessionArtifactBinding {
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| anyhow!("session JSON missing session.session_id"))?
             .to_string();
+        let target_binding =
+            target_binding.ok_or_else(|| anyhow!("session JSON missing session.target_binding"))?;
+        let binding_id = target_binding
+            .get("binding_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("session target_binding missing binding_id"))?
+            .to_string();
+        let binding_epoch = target_binding
+            .get("binding_epoch")
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0)
+            .ok_or_else(|| anyhow!("session target_binding missing positive binding_epoch"))?;
+        let capture_scope = target_binding
+            .get("capture_scope")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("session target_binding missing capture_scope"))?
+            .to_string();
         Ok(Self {
             session_id,
-            binding_id: target_binding
-                .and_then(|binding| binding.get("binding_id"))
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            binding_epoch: target_binding
-                .and_then(|binding| binding.get("binding_epoch"))
-                .and_then(Value::as_u64),
-            capture_scope: target_binding
-                .and_then(|binding| binding.get("capture_scope"))
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            binding_id,
+            binding_epoch,
+            capture_scope,
         })
     }
 }

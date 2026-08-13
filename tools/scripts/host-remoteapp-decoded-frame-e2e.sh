@@ -155,6 +155,8 @@ invocation_subject_ura = get("invocation.subject_ura")
 inventory_ability = get("live_inventory.ability")
 target_kind = get("target_binding.target_kind")
 capture_scope = get("target_binding.capture_scope")
+binding_id = get("target_binding.binding_id")
+binding_epoch = get("target_binding.binding_epoch")
 scope_widened = get("target_binding.scope_audit.scope_widened")
 display_fallback_used = get("target_binding.scope_audit.display_fallback_used")
 decoded_frame_count = get("decoded_frames.count")
@@ -174,6 +176,10 @@ require(invocation_subject_ura == selected_resource_ura,
 require(get("invocation.ability") == "remote_desktop.create_session",
         "invocation ability must be remote_desktop.create_session")
 require(target_kind == expected_kind, f"target_binding.target_kind must be {expected_kind}")
+require(isinstance(binding_id, str) and binding_id.strip(),
+        "target_binding.binding_id must be a non-empty string")
+require(isinstance(binding_epoch, int) and binding_epoch > 0,
+        "target_binding.binding_epoch must be a positive integer")
 if expected_kind == "window":
     require(capture_scope == "WindowSurface", "window target must use WindowSurface")
 else:
@@ -195,9 +201,11 @@ require(decoded_frame_sample,
         "evidence must include a decoded_frame_sample artifact path")
 require(isinstance(decoded_frame_sample, str) and os.path.isfile(decoded_frame_sample),
         "decoded_frame_sample artifact must exist on disk")
-require(get("artifacts.binding_id") == get("target_binding.binding_id"),
+require(get("artifacts.session_id") == get("session_id"),
+        "decoded frame artifact session_id must match evidence session_id")
+require(get("artifacts.binding_id") == binding_id,
         "decoded frame artifact binding_id must match target_binding.binding_id")
-require(get("artifacts.binding_epoch") == get("target_binding.binding_epoch"),
+require(get("artifacts.binding_epoch") == binding_epoch,
         "decoded frame artifact binding_epoch must match target_binding.binding_epoch")
 require(get("artifacts.capture_scope") == capture_scope,
         "decoded frame artifact capture_scope must match target_binding.capture_scope")
@@ -213,6 +221,8 @@ report = {
         "selected_subject": invocation_subject_ura,
         "target_kind": target_kind,
         "capture_scope": capture_scope,
+        "binding_id": binding_id,
+        "binding_epoch": binding_epoch,
         "display_fallback_used": display_fallback_used,
         "rtp_packet_count": rtp_packet_count,
         "decoded_frame_count": decoded_frame_count,
@@ -251,6 +261,7 @@ if [[ "$SELF_TEST" == "1" ]]; then
 {
   "status": "passed",
   "live_inventory": {"ability": "resource.refresh_remote_targets"},
+  "session_id": "rd-self-test",
   "selected_resource_ura": "easynet:///r/localhost/resource/device.dev/streams/window.test",
   "invocation": {
     "ability": "remote_desktop.create_session",
@@ -276,6 +287,7 @@ if [[ "$SELF_TEST" == "1" ]]; then
     "decoded_frame_sample": "__SELF_TEST_SAMPLE__",
     "binding_id": "binding-test",
     "binding_epoch": 1,
+    "session_id": "rd-self-test",
     "capture_scope": "WindowSurface"
   }
 }

@@ -34,6 +34,7 @@ sample.write_bytes(b"P6\n1 1\n255\n\xff\x00\x00")
 evidence = {
     "status": "passed",
     "live_inventory": {"ability": "resource.refresh_remote_targets"},
+    "session_id": "rd-e2e-test",
     "selected_resource_ura": subject,
     "invocation": {
         "ability": "remote_desktop.create_session",
@@ -59,6 +60,7 @@ evidence = {
     },
     "artifacts": {
         "decoded_frame_sample": str(sample),
+        "session_id": "rd-e2e-test",
         "binding_id": "tb_test",
         "binding_epoch": 1,
         "capture_scope": "WindowSurface",
@@ -164,6 +166,7 @@ with open(os.environ["EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON"], "w", encoding="ut
             },
             "artifacts": {
                 "decoded_frame_sample": str(sample),
+                "session_id": "rd-e2e-probe",
                 "binding_id": "tb_test",
                 "binding_epoch": 1,
                 "capture_scope": "WindowSurface",

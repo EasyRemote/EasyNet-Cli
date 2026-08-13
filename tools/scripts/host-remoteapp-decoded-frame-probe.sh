@@ -235,6 +235,7 @@ evidence = {
         "returned_resource_count": len(inventory.get("resources", [])),
     },
     "selected_resource_ura": selected_resource_ura,
+    "session_id": session.get("session_id"),
     "invocation": {
         "ability": invocation.get("ability"),
         "subject_ura": invocation.get("subject_ura"),

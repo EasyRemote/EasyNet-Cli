@@ -65,6 +65,12 @@ require 'os\.path\.isfile|decoded_frame_sample.*exist' "$SCRIPT" \
   'host decoded-frame E2E must validate decoded frame artifact exists'
 require 'artifacts\.binding_id|artifact binding_id' "$SCRIPT" \
   'host decoded-frame E2E must bind decoded frame artifact to target binding'
+require 'target_binding\.binding_id' "$SCRIPT" \
+  'host decoded-frame E2E must require a non-empty target binding id'
+require 'target_binding\.binding_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must require a positive target binding epoch'
+require 'artifacts\.session_id|artifact session_id' "$SCRIPT" \
+  'host decoded-frame E2E must bind decoded frame artifact to session id'
 
 require 'ability refresh-remote-targets' "$PROBE" \
   'bundled host probe must invoke live target inventory through the EasyNet CLI'
