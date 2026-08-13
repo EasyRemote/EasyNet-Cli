@@ -47,7 +47,12 @@ The current tree already contains these implementation foundations:
 Remaining implementation gaps for the product effect:
 
 - `meta.list_resources` reads the persisted resource table; it does not guarantee live refresh at the time the frontend asks for current windows/applications.
-- The repository still needs frontend or backend-surface E2E evidence proving the picker calls `resource.refresh_remote_targets` or `resource.watch_remote_targets` and then uses the selected `resource_ura` as `Invocation.subject`.
+- Static frontend boundary evidence is pinned by
+  `tools/scripts/check-remoteapp-frontend-invocation-boundary.sh`: the picker
+  must use `resource.refresh_remote_targets` / `resource.watch_remote_targets`
+  and place the selected `resource_ura` in `Invocation.subject`, never in
+  `create_session` args. The repository still needs runtime browser/backend
+  E2E evidence that this path succeeds against a live daemon.
 - Decoded-frame E2E evidence is still required to prove that window/application sessions never leak full-display content or unrelated application content.
 - Full rebind and multi-display application sessions are not complete.
 - Interactive app/window input must remain view-only until focus validation, coordinate mapping, and target epoch checks are proven on the execution path.
