@@ -63,6 +63,14 @@ require 'selected_content_present' "$SCRIPT" \
   'host decoded-frame E2E must validate selected target content is present'
 require 'unrelated_sentinel_present' "$SCRIPT" \
   'host decoded-frame E2E must validate unrelated sentinel exclusion'
+require '\bsentinel_fixture\b' "$SCRIPT" \
+  'host decoded-frame E2E must require a dual-target sentinel fixture'
+require 'dual_target_non_leak' "$SCRIPT" \
+  'host decoded-frame E2E must bind evidence to a dual-target non-leak proof'
+require 'sentinel_fixture\.selected\.resource_ura|selected_fixture\.get\("resource_ura"\)' "$SCRIPT" \
+  'host decoded-frame E2E must bind selected sentinel witness to the selected Resource URA'
+require 'sentinel_fixture\.unrelated\.placement|unrelated_fixture\.get\("placement"\)' "$SCRIPT" \
+  'host decoded-frame E2E must require unrelated sentinel witness placement'
 require 'full_display_leak_detected' "$SCRIPT" \
   'host decoded-frame E2E must validate no full-display leak'
 require 'display_fallback_used' "$SCRIPT" \
@@ -104,6 +112,12 @@ require 'EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB' "$PROBE" \
   'bundled host probe must require selected-target RGB sentinel configuration'
 require 'EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB' "$PROBE" \
   'bundled host probe must require unrelated RGB sentinel configuration'
+require 'EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL' "$PROBE" \
+  'bundled host probe must require selected witness label configuration'
+require 'EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL' "$PROBE" \
+  'bundled host probe must require unrelated witness label configuration'
+require '\bsentinel_fixture\b' "$PROBE" \
+  'bundled host probe must publish canonical dual-target sentinel fixture evidence'
 require 'EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON' "$PROBE" \
   'bundled host probe must consume decoded-frame analysis from the receiver'
 require 'verified Invocation\.subject|invocation\.get\("subject_ura"\)' "$PROBE" \

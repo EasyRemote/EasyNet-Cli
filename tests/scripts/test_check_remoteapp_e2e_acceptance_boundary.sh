@@ -50,6 +50,20 @@ evidence = {
             "display_fallback_used": False,
         },
     },
+    "sentinel_fixture": {
+        "proof": "dual_target_non_leak",
+        "selected": {
+            "label": "selected-window-red",
+            "resource_ura": subject,
+            "rgb": [255, 0, 0],
+            "target_kind": "window",
+        },
+        "unrelated": {
+            "label": "unrelated-window-green",
+            "placement": "other_window",
+            "rgb": [0, 255, 0],
+        },
+    },
     "transport": {"kind": "webrtc"},
     "decoded_frames": {
         "count": 2,
@@ -75,6 +89,8 @@ with open(os.environ["EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON"], "w", encoding="ut
 PY
 EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
 EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
+EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-window-red" \
+EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
 "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   --run \
   --probe-cmd "python3 '$PROBE'" \
@@ -120,6 +136,20 @@ evidence = {
             "display_fallback_used": False,
         },
     },
+    "sentinel_fixture": {
+        "proof": "dual_target_non_leak",
+        "selected": {
+            "label": "selected-app-red",
+            "resource_ura": subject,
+            "rgb": [255, 0, 0],
+            "target_kind": "application",
+        },
+        "unrelated": {
+            "label": "unrelated-app-green",
+            "placement": "other_application",
+            "rgb": [0, 255, 0],
+        },
+    },
     "transport": {"kind": "webrtc"},
     "decoded_frames": {
         "count": 2,
@@ -145,6 +175,8 @@ with open(os.environ["EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON"], "w", encoding="ut
 PY
 EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
 EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
+EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-app-red" \
+EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-app-green" \
 "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   --run \
   --target-kind application \
@@ -264,6 +296,8 @@ EASYNET_REMOTEAPP_EASYNET_BIN="$FAKE_EASYNET" \
 EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD="python3 '$FRAME_RECEIVER'" \
 EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
 EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
+EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-window-red" \
+EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
 "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   --run \
   --out-dir "$SANDBOX/bundled-probe-out" >/dev/null
@@ -301,6 +335,18 @@ fi
 
 mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
+perl -0pi -e 's/sentinel_fixture/sentinel_fixture_omitted/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted missing dual-target sentinel fixture assertion" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+
 cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh.good"
 perl -0pi -e 's/EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD/EASYNET_REMOTEAPP_FAKE_RECEIVER_CMD/g' \

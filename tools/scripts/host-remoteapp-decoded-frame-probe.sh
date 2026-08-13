@@ -71,6 +71,10 @@ need_cmd python3
   "EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB is required; bundled receiver needs selected target RGB sentinel as r,g,b"
 [[ -n "${EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB:-}" ]] || die \
   "EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB is required; bundled receiver needs unrelated display RGB sentinel as r,g,b"
+[[ -n "${EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL:-}" ]] || die \
+  "EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL is required; host rig must label the selected target witness"
+[[ -n "${EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL:-}" ]] || die \
+  "EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL is required; host rig must label the unrelated non-target witness"
 
 if [[ -z "${EASYNET_REMOTEAPP_EASYNET_BIN:-}" && -x "$REPO_ROOT/target/debug/easynet" ]]; then
   export EASYNET_REMOTEAPP_EASYNET_BIN="$REPO_ROOT/target/debug/easynet"
@@ -177,6 +181,7 @@ bash -lc "$FRAME_RECEIVER_CMD"
 
 python3 - "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" "$SESSION_JSON" "$FRAME_ANALYSIS_JSON" "$EVIDENCE_JSON" "$TARGET_KIND" <<'PY'
 import json
+import os
 import sys
 
 inventory_path, selected_path, session_path, frame_path, evidence_path, expected_kind = sys.argv[1:7]
@@ -226,6 +231,39 @@ if transport is None:
 if not isinstance(transport, dict):
     raise SystemExit("frame analysis transport must be an object")
 
+def parse_rgb_env(name):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        raise SystemExit(f"{name} is required")
+    try:
+        values = [int(part.strip()) for part in raw.split(",")]
+    except ValueError as exc:
+        raise SystemExit(f"{name} must be formatted as r,g,b") from exc
+    if len(values) != 3 or any(value < 0 or value > 255 for value in values):
+        raise SystemExit(f"{name} must contain exactly three RGB bytes")
+    return values
+
+selected_label = os.environ.get("EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL", "").strip()
+unrelated_label = os.environ.get("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL", "").strip()
+if not selected_label:
+    raise SystemExit("EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL is required")
+if not unrelated_label:
+    raise SystemExit("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL is required")
+if selected_label == unrelated_label:
+    raise SystemExit("selected and unrelated sentinel labels must be distinct")
+
+unrelated_fixture = {
+    "label": unrelated_label,
+    "placement": os.environ.get(
+        "EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PLACEMENT",
+        "other_application" if expected_kind == "application" else "other_window",
+    ),
+    "rgb": parse_rgb_env("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB"),
+}
+unrelated_resource_ura = os.environ.get("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RESOURCE_URA", "").strip()
+if unrelated_resource_ura:
+    unrelated_fixture["resource_ura"] = unrelated_resource_ura
+
 evidence = {
     "status": "passed" if frame.get("status") == "passed" else "failed",
     "live_inventory": {
@@ -255,6 +293,16 @@ evidence = {
             "scope_widened": scope_audit.get("scope_widened"),
             "display_fallback_used": scope_audit.get("display_fallback_used"),
         },
+    },
+    "sentinel_fixture": {
+        "proof": "dual_target_non_leak",
+        "selected": {
+            "label": selected_label,
+            "resource_ura": selected_resource_ura,
+            "rgb": parse_rgb_env("EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB"),
+            "target_kind": expected_kind,
+        },
+        "unrelated": unrelated_fixture,
     },
     "transport": transport,
     "decoded_frames": decoded_frames,

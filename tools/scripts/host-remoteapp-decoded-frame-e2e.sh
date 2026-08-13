@@ -53,6 +53,10 @@ Environment:
                         Required by the bundled receiver, formatted as r,g,b.
   EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB
                         Required by the bundled receiver, formatted as r,g,b.
+  EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL
+                        Required label for the selected target witness.
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL
+                        Required label for the unrelated non-target witness.
 
 Probe contract:
   The probe command receives:
@@ -167,6 +171,9 @@ transport_kind = get("transport.kind")
 decoded_frame_sample = get("artifacts.decoded_frame_sample")
 decoded_width = get("decoded_frames.width")
 decoded_height = get("decoded_frames.height")
+sentinel_fixture = get("sentinel_fixture")
+selected_fixture = get("sentinel_fixture.selected")
+unrelated_fixture = get("sentinel_fixture.unrelated")
 
 def parse_rgb_env(name):
     raw = os.environ.get(name, "").strip()
@@ -248,6 +255,41 @@ selected_rgb = parse_rgb_env("EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB")
 unrelated_rgb = parse_rgb_env("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB")
 sentinel_tolerance = env_int("EASYNET_REMOTEAPP_SENTINEL_TOLERANCE", 32)
 selected_min_pixels = env_int("EASYNET_REMOTEAPP_SELECTED_SENTINEL_MIN_PIXELS", 8)
+
+require(isinstance(sentinel_fixture, dict),
+        "sentinel_fixture must describe the selected and unrelated visual witnesses")
+require(isinstance(selected_fixture, dict),
+        "sentinel_fixture.selected must describe the selected target witness")
+require(isinstance(unrelated_fixture, dict),
+        "sentinel_fixture.unrelated must describe the unrelated non-target witness")
+if isinstance(sentinel_fixture, dict):
+    require(sentinel_fixture.get("proof") == "dual_target_non_leak",
+            "sentinel_fixture.proof must be dual_target_non_leak")
+if isinstance(selected_fixture, dict):
+    selected_label = selected_fixture.get("label")
+    require(isinstance(selected_label, str) and selected_label.strip(),
+            "sentinel_fixture.selected.label must be a non-empty string")
+    require(selected_fixture.get("resource_ura") == selected_resource_ura,
+            "sentinel_fixture.selected.resource_ura must match selected_resource_ura")
+    require(selected_fixture.get("target_kind") == expected_kind,
+            f"sentinel_fixture.selected.target_kind must be {expected_kind}")
+    require(selected_fixture.get("rgb") == selected_rgb,
+            "sentinel_fixture.selected.rgb must match EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB")
+if isinstance(unrelated_fixture, dict):
+    unrelated_label = unrelated_fixture.get("label")
+    placement = unrelated_fixture.get("placement")
+    require(isinstance(unrelated_label, str) and unrelated_label.strip(),
+            "sentinel_fixture.unrelated.label must be a non-empty string")
+    require(unrelated_fixture.get("rgb") == unrelated_rgb,
+            "sentinel_fixture.unrelated.rgb must match EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB")
+    require(placement in {"outside_selected_target", "other_window", "other_application", "desktop_background"},
+            "sentinel_fixture.unrelated.placement must describe a non-target surface")
+    unrelated_resource_ura = unrelated_fixture.get("resource_ura")
+    require(not unrelated_resource_ura or unrelated_resource_ura != selected_resource_ura,
+            "sentinel_fixture.unrelated.resource_ura must not match selected_resource_ura")
+if isinstance(selected_fixture, dict) and isinstance(unrelated_fixture, dict):
+    require(selected_fixture.get("label") != unrelated_fixture.get("label"),
+            "selected and unrelated sentinel labels must be distinct")
 
 require(evidence.get("status") == "passed", "probe status must be passed")
 require(inventory_ability in {"resource.refresh_remote_targets", "resource.watch_remote_targets"},
@@ -355,6 +397,7 @@ report = {
         "selected_content_present": get("decoded_frames.selected_content_present"),
         "unrelated_sentinel_present": get("decoded_frames.unrelated_sentinel_present"),
         "full_display_leak_detected": get("decoded_frames.full_display_leak_detected"),
+        "sentinel_fixture": sentinel_fixture,
     },
 }
 open(report_path, "w", encoding="utf-8").write(json.dumps(report, indent=2, sort_keys=True) + "\n")
@@ -402,6 +445,20 @@ if [[ "$SELF_TEST" == "1" ]]; then
     "scope_audit": {
       "scope_widened": false,
       "display_fallback_used": false
+    }
+  },
+  "sentinel_fixture": {
+    "proof": "dual_target_non_leak",
+    "selected": {
+      "label": "selected-window-red",
+      "resource_ura": "easynet:///r/localhost/resource/device.dev/streams/window.test",
+      "rgb": [255, 0, 0],
+      "target_kind": "window"
+    },
+    "unrelated": {
+      "label": "unrelated-window-green",
+      "placement": "other_window",
+      "rgb": [0, 255, 0]
     }
   },
   "transport": {"kind": "webrtc"},
