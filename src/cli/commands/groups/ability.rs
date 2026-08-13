@@ -62,7 +62,9 @@ use crate::cli::commands::{
     exec, invoke, teach,
 };
 use crate::cli::daemon_client::ability_catalog::{AbilityCatalogueClient, AbilityCatalogueQuery};
-use crate::support::platform::local_invoke::{LocalRemoteTargetInventoryIssuer, LocalStreamFrame};
+use crate::support::platform::local_invoke::{
+    LocalRemoteDesktopSessionIssuer, LocalRemoteTargetInventoryIssuer, LocalStreamFrame,
+};
 use crate::support::platform::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
@@ -105,6 +107,9 @@ pub enum AbilityAction {
     /// Watch display/window/application target inventory for dedicated remote desktop surfaces.
     #[command(name = "watch-remote-targets", hide = true)]
     WatchRemoteTargets(WatchRemoteTargetsArgs),
+    /// Create a remote desktop session from one selected display/window/application resource.
+    #[command(name = "create-remote-desktop-session", hide = true)]
+    CreateRemoteDesktopSession(CreateRemoteDesktopSessionArgs),
     /// Run a one-shot ad-hoc command on a device (ephemeral ability).
     Exec(exec::ExecArgs),
     /// Grant one agent permission to import a declaration-only descriptor.
@@ -182,6 +187,25 @@ pub struct WatchRemoteTargetsArgs {
     pub format: OutputFormat,
 }
 
+#[derive(Debug, Args)]
+pub struct CreateRemoteDesktopSessionArgs {
+    /// Selected display/window/application Resource URA from refresh/watch remote targets.
+    #[arg(long, value_name = "RESOURCE_URA")]
+    pub subject: String,
+    /// Remote desktop session mode.
+    #[arg(long, value_parser = ["view_only", "interactive"])]
+    pub mode: Option<String>,
+    /// Preferred transport, in priority order.
+    #[arg(long = "transport", value_name = "TRANSPORT")]
+    pub transport_preferences: Vec<String>,
+    /// Requested lease TTL in milliseconds.
+    #[arg(long, value_name = "MS")]
+    pub lease_ttl_ms: Option<u64>,
+    /// Output format. JSON preserves receipt metadata for frontend tests.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub format: OutputFormat,
+}
+
 pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
     match args.action {
         AbilityAction::New(a) => ability_scaffold::run_new(a),
@@ -197,6 +221,7 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
         AbilityAction::Record(a) => ability_record::run(a),
         AbilityAction::RefreshRemoteTargets(a) => run_refresh_remote_targets(a),
         AbilityAction::WatchRemoteTargets(a) => run_watch_remote_targets(a),
+        AbilityAction::CreateRemoteDesktopSession(a) => run_create_remote_desktop_session(a),
         AbilityAction::Exec(a) => exec::run(a),
         AbilityAction::Teach(a) => teach::run_teach(a),
         AbilityAction::Learn(a) => teach::run_learn(a),
@@ -416,6 +441,49 @@ fn stream_frames_to_json(frames: &[LocalStreamFrame]) -> Value {
     )
 }
 
+fn run_create_remote_desktop_session(args: CreateRemoteDesktopSessionArgs) -> anyhow::Result<()> {
+    let request = create_remote_desktop_session_request(&args);
+    let (session, invocation) =
+        LocalRemoteDesktopSessionIssuer::create_session(&args.subject, request)
+            .context("invoke remote_desktop.grant_consent -> remote_desktop.create_session")?;
+    let response = serde_json::json!({
+        "session": session,
+        "invocation": invocation.as_value(),
+    });
+    if args.format == OutputFormat::Json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+
+    output::success("created remote desktop session");
+    if let Some(session_id) = response
+        .get("session")
+        .and_then(|session| session.get("session_id"))
+        .and_then(Value::as_str)
+    {
+        output::detail("session_id", session_id);
+    }
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+fn create_remote_desktop_session_request(args: &CreateRemoteDesktopSessionArgs) -> Value {
+    let mut object = serde_json::Map::new();
+    if let Some(mode) = args.mode.as_ref() {
+        object.insert("mode".to_string(), serde_json::json!(mode));
+    }
+    if !args.transport_preferences.is_empty() {
+        object.insert(
+            "transport_preferences".to_string(),
+            serde_json::json!(args.transport_preferences),
+        );
+    }
+    if let Some(lease_ttl_ms) = args.lease_ttl_ms {
+        object.insert("lease_ttl_ms".to_string(), serde_json::json!(lease_ttl_ms));
+    }
+    Value::Object(object)
+}
+
 fn run_uninstall(args: UninstallArgs) -> anyhow::Result<()> {
     ensure_ability_ura(&args.ability_ura)?;
     if !args.yes {
@@ -559,5 +627,27 @@ mod tests {
                 },
             }])
         );
+    }
+
+    #[test]
+    fn create_remote_desktop_session_request_keeps_selected_subject_out_of_args() {
+        let request = create_remote_desktop_session_request(&CreateRemoteDesktopSessionArgs {
+            subject: "easynet:///r/test/resource/device.dev/streams/window.7".to_string(),
+            mode: Some("view_only".to_string()),
+            transport_preferences: vec!["webrtc".to_string()],
+            lease_ttl_ms: Some(30_000),
+            format: OutputFormat::Json,
+        });
+
+        assert_eq!(
+            request,
+            serde_json::json!({
+                "mode": "view_only",
+                "transport_preferences": ["webrtc"],
+                "lease_ttl_ms": 30000,
+            })
+        );
+        assert!(request.get("subject").is_none());
+        assert!(request.get("resource_ura").is_none());
     }
 }

@@ -13,10 +13,10 @@
 //
 // Implementation Approach
 // -----------------------
-// Ability ownership comes only from `system_ability_owner`, whose source is the
-// deterministic registry/control-plane record. SystemAgent declaration comes
-// only from the profile registry. No ability-name prefix or routing-local table
-// participates in the decision.
+// Ability ownership comes only from deterministic descriptor contribution
+// sources: the daemon static registry and compiled builtin plugin ability
+// tables. SystemAgent declaration comes only from the profile registry. No
+// ability-name prefix or routing-local table participates in the decision.
 //
 // Usage Contract
 // --------------
@@ -50,7 +50,7 @@ pub(crate) fn device_sponsored_system_agent_owner_for_public_ability(
         return None;
     }
     let OwnerKind::SystemAgent(system_agent_id) =
-        super::catalog_metadata::unique_system_agent_owner_for_public_ability(public_ability)?
+        catalog_system_agent_owner_for_public_ability(public_ability)?
     else {
         return None;
     };
@@ -58,6 +58,50 @@ pub(crate) fn device_sponsored_system_agent_owner_for_public_ability(
         return None;
     }
     Some(DeviceSponsoredSystemAgentOwner { system_agent_id })
+}
+
+fn catalog_system_agent_owner_for_public_ability(public_ability: &str) -> Option<OwnerKind> {
+    unique_owner(
+        super::catalog_metadata::unique_system_agent_owner_for_public_ability(public_ability)
+            .into_iter()
+            .chain(plugin_system_agent_owners_for_public_ability(
+                public_ability,
+            )),
+    )
+}
+
+fn unique_owner(owners: impl IntoIterator<Item = OwnerKind>) -> Option<OwnerKind> {
+    let mut unique_owner: Option<OwnerKind> = None;
+    for owner in owners {
+        if unique_owner
+            .as_ref()
+            .is_some_and(|existing| existing != &owner)
+        {
+            return None;
+        }
+        unique_owner.get_or_insert(owner);
+    }
+    unique_owner
+}
+
+fn plugin_system_agent_owners_for_public_ability(public_ability: &str) -> Vec<OwnerKind> {
+    let mut owners = Vec::new();
+    collect_builtin_plugin_system_agent_owners(public_ability, &mut owners);
+    owners
+}
+
+fn collect_builtin_plugin_system_agent_owners(public_ability: &str, owners: &mut Vec<OwnerKind>) {
+    #[cfg(feature = "remote-desktop")]
+    {
+        if crate::daemon::plugins::remote_desktop::ability_specs()
+            .into_iter()
+            .any(|spec| spec.name == public_ability)
+        {
+            owners.push(OwnerKind::remote_desktop_system());
+        }
+    }
+    #[cfg(not(feature = "remote-desktop"))]
+    let _ = (public_ability, owners);
 }
 
 pub(crate) fn execution_target_owner_ura_for_public_ability(
@@ -175,6 +219,20 @@ mod tests {
                 .unwrap_or_else(|| panic!("{ability} must have a registry-owned SystemAgent"));
             assert_eq!(owner.system_agent_id(), expected_system_agent, "{ability}");
         }
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn registry_owner_projects_remote_desktop_plugin_system_agent_family() {
+        let owner = device_sponsored_system_agent_owner_for_public_ability(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION,
+        )
+        .expect("remote-desktop plugin ability must have a registry-owned SystemAgent");
+
+        assert_eq!(
+            owner.system_agent_id(),
+            crate::daemon::ability::names::integrations::REMOTE_DESKTOP_SYSTEM_AGENT_ID
+        );
     }
 
     #[test]

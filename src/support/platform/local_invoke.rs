@@ -1223,6 +1223,119 @@ impl LocalRemoteTargetInventoryIssuer {
     }
 }
 
+/// Named local surface for starting a remote desktop session from a selected
+/// live target resource.
+///
+/// Callers supply the selected `resource_ura`; this adapter binds that URA as
+/// the envelope subject for both consent and session creation. The
+/// `grant_consent` terminal receipt is carried into `create_session` through
+/// verified causal metadata, so product UI code does not construct Axon causal
+/// context itself.
+pub struct LocalRemoteDesktopSessionIssuer;
+
+impl LocalRemoteDesktopSessionIssuer {
+    pub fn create_session(
+        selected_resource_ura: &str,
+        create_session_args: Value,
+    ) -> anyhow::Result<(Value, VerifiedLocalInvocationMeta)> {
+        Self::create_session_timeout(
+            selected_resource_ura,
+            create_session_args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+            None,
+        )
+    }
+
+    pub fn create_session_timeout(
+        selected_resource_ura: &str,
+        create_session_args: Value,
+        timeout: std::time::Duration,
+        trace_id: Option<&str>,
+    ) -> anyhow::Result<(Value, VerifiedLocalInvocationMeta)> {
+        let selected_resource_ura =
+            canonical_selected_remote_target_resource_ura(selected_resource_ura)?;
+        let grant_target = local_remote_desktop_ability_target(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_GRANT_CONSENT,
+        )?;
+        let grant_context = LocalSystemInvocationIssuer::root_context(
+            selected_resource_ura.as_str(),
+            &[],
+            timeout,
+            trace_id,
+        )?;
+        let (grant, grant_meta) = invoke_local_target_with_invocation_meta(
+            &grant_target,
+            serde_json::json!({ "intent": "remote_desktop_session" }),
+            grant_context,
+        )?;
+        let consent_ticket = grant
+            .get("consent_ticket")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("remote_desktop.grant_consent did not return consent_ticket")
+            })?
+            .to_string();
+        let parent = grant_meta.causal_parent()?;
+        let create_args =
+            create_session_args_with_consent_ticket(create_session_args, &consent_ticket)?;
+        let causal_parents = vec![parent];
+        let create_target = local_remote_desktop_ability_target(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION,
+        )?;
+        let create_context = LocalSystemInvocationIssuer::root_context(
+            selected_resource_ura,
+            &causal_parents,
+            timeout,
+            trace_id,
+        )?;
+        invoke_local_target_with_invocation_meta(&create_target, create_args, create_context)
+    }
+}
+
+fn local_remote_desktop_ability_target(ability: &str) -> anyhow::Result<LocalAbilityTarget> {
+    let execution_host_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
+    local_daemon_system_ability_target(ability, &execution_host_ura)
+}
+
+fn canonical_selected_remote_target_resource_ura(value: &str) -> anyhow::Result<String> {
+    let parsed = crate::core::identity::RuntimeIdentityUra::parse(value.trim().to_string())
+        .map_err(|error| anyhow::anyhow!("selected remote desktop target resource_ura {error}"))?;
+    if parsed.kind() != crate::core::ura::URAKind::Resource {
+        anyhow::bail!("selected remote desktop target must be a Resource URA");
+    }
+    Ok(parsed.into_string())
+}
+
+fn create_session_args_with_consent_ticket(
+    args: Value,
+    consent_ticket: &str,
+) -> anyhow::Result<Value> {
+    let mut object = match args {
+        Value::Object(object) => object,
+        _ => anyhow::bail!("remote_desktop.create_session args must be a JSON object"),
+    };
+    for forbidden in ["subject", "resource_ura"] {
+        if object.contains_key(forbidden) {
+            anyhow::bail!(
+                "remote_desktop.create_session {forbidden} MUST come from selected_resource_ura/envelope subject, not args"
+            );
+        }
+    }
+    if object.contains_key("consent_ticket") {
+        anyhow::bail!(
+            "remote_desktop.create_session consent_ticket is issued by grant_consent and must not be supplied by caller args"
+        );
+    }
+    object.insert(
+        "consent_ticket".to_string(),
+        Value::String(consent_ticket.to_string()),
+    );
+    Ok(Value::Object(object))
+}
+
 /// Stream a canonical local Ability URA target with public-ingress tuple facts.
 pub fn invoke_local_target_stream_explicit_causal(
     target: &LocalAbilityTarget,
@@ -1288,6 +1401,49 @@ pub struct VerifiedLocalInvocationMeta(Value);
 impl VerifiedLocalInvocationMeta {
     pub fn as_value(&self) -> &Value {
         &self.0
+    }
+
+    /// Project the verified terminal receipt into the minimal causal-parent
+    /// shape accepted by [`LocalSystemInvocationIssuer`].
+    ///
+    /// This derives from Axon-verified invocation metadata, not ability
+    /// payloads, so product adapters can chain local invocations without
+    /// fabricating causal context.
+    pub fn causal_parent(&self) -> anyhow::Result<Value> {
+        let anchor = self
+            .0
+            .get("receipt")
+            .and_then(|receipt| receipt.get("anchor"))
+            .ok_or_else(|| {
+                anyhow::anyhow!("verified invocation metadata is missing receipt anchor")
+            })?;
+        let receipt_ura = anchor
+            .get("receipt_ura")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("verified invocation metadata anchor is missing receipt_ura")
+            })?;
+        let receipt_hash = anchor
+            .get("receipt_hash")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("verified invocation metadata anchor is missing receipt_hash")
+            })?;
+        if hex::decode(receipt_hash)
+            .ok()
+            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+            .is_none()
+        {
+            anyhow::bail!("verified invocation metadata anchor receipt_hash must be 32-byte hex");
+        }
+        Ok(serde_json::json!({
+            "receipt_ura": receipt_ura,
+            "receipt_hash": receipt_hash,
+        }))
     }
 }
 
@@ -1563,6 +1719,180 @@ mod tests {
             target.dispatch_name(),
             crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
         );
+    }
+
+    #[test]
+    fn local_catalogue_target_is_runtime_introspection_system_agent() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device-sponsored runtime-introspection target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.runtime-introspection"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.runtime-introspection.meta.list_abilities"
+        );
+        assert_eq!(
+            target.dispatch_name(),
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES
+        );
+    }
+
+    #[test]
+    fn local_remote_target_inventory_target_is_media_system_agent() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::ability::names::resources::RESOURCE_REFRESH_REMOTE_TARGETS,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device-sponsored media target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.media"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.media.resource.refresh_remote_targets"
+        );
+        assert_eq!(
+            target.dispatch_name(),
+            crate::daemon::ability::names::resources::RESOURCE_REFRESH_REMOTE_TARGETS
+        );
+    }
+
+    #[test]
+    fn local_remote_target_inventory_watch_target_is_media_system_agent() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device-sponsored media stream target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.media"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.media.resource.watch_remote_targets"
+        );
+        assert_eq!(
+            target.dispatch_name(),
+            crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS
+        );
+    }
+
+    #[test]
+    fn local_remote_desktop_session_target_is_remote_desktop_system_agent() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device-sponsored remote desktop target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.remote-desktop"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.remote-desktop.remote_desktop.create_session"
+        );
+        assert_eq!(
+            target.dispatch_name(),
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION
+        );
+    }
+
+    #[test]
+    fn verified_invocation_meta_projects_causal_parent_from_receipt_anchor() {
+        let metadata = VerifiedLocalInvocationMeta(serde_json::json!({
+            "receipt": {
+                "anchor": {
+                    "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/i1/receipt/1",
+                    "receipt_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+                    "state": "completed",
+                }
+            }
+        }));
+
+        assert_eq!(
+            metadata.causal_parent().expect("causal parent"),
+            serde_json::json!({
+                "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/i1/receipt/1",
+                "receipt_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+            })
+        );
+    }
+
+    #[test]
+    fn verified_invocation_meta_rejects_malformed_causal_parent_hash() {
+        let metadata = VerifiedLocalInvocationMeta(serde_json::json!({
+            "receipt": {
+                "anchor": {
+                    "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/i1/receipt/1",
+                    "receipt_hash": "abc",
+                }
+            }
+        }));
+
+        let err = metadata
+            .causal_parent()
+            .expect_err("causal parent hash must be structurally verified");
+        assert!(err.to_string().contains("32-byte hex"));
+    }
+
+    #[test]
+    fn selected_remote_desktop_target_must_be_resource_ura() {
+        assert_eq!(
+            canonical_selected_remote_target_resource_ura(
+                "easynet:///r/acme/resource/device.dev/streams/application.com.example"
+            )
+            .expect("resource target"),
+            "easynet:///r/acme/resource/device.dev/streams/application.com.example"
+        );
+        let err = canonical_selected_remote_target_resource_ura("easynet:///r/acme/device/dev")
+            .expect_err("Device URA must not be accepted as selected target");
+        assert!(err.to_string().contains("must be a Resource URA"));
+    }
+
+    #[test]
+    fn create_session_args_injects_consent_ticket_without_subject_args() {
+        let args = create_session_args_with_consent_ticket(
+            serde_json::json!({
+                "mode": "view_only",
+                "transport_preferences": ["webrtc"],
+            }),
+            "ticket-1",
+        )
+        .expect("create args");
+
+        assert_eq!(args["consent_ticket"], serde_json::json!("ticket-1"));
+        assert!(args.get("subject").is_none());
+        assert!(args.get("resource_ura").is_none());
+    }
+
+    #[test]
+    fn create_session_args_rejects_subject_and_external_consent_ticket() {
+        for args in [
+            serde_json::json!({"subject": "easynet:///r/acme/resource/device.dev/streams/window.7"}),
+            serde_json::json!({"resource_ura": "easynet:///r/acme/resource/device.dev/streams/window.7"}),
+            serde_json::json!({"consent_ticket": "caller-supplied"}),
+        ] {
+            let err = create_session_args_with_consent_ticket(args, "ticket-1")
+                .expect_err("caller must not supply tuple or consent fields");
+            let message = err.to_string();
+            assert!(
+                message.contains("MUST come from selected_resource_ura")
+                    || message.contains("consent_ticket is issued by grant_consent"),
+                "{message}"
+            );
+        }
     }
 
     #[test]

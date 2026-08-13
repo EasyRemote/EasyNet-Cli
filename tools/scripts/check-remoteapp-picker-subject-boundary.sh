@@ -48,6 +48,16 @@ require 'watch_remote_targets' "$LOCAL_INVOKE" \
   'live remote target inventory issuer must expose a watch_remote_targets stream facade'
 require 'Target pickers that need live display/window/application rows must invoke' "$LOCAL_INVOKE" \
   'live picker contract must be documented at the issuer boundary'
+require 'LocalRemoteDesktopSessionIssuer' "$LOCAL_INVOKE" \
+  'remote desktop session creation must have a named selected-resource session issuer'
+require 'remote_desktop\.grant_consent' "$LOCAL_INVOKE" \
+  'selected-resource session issuer must grant consent before creating a session'
+require 'remote_desktop\.create_session' "$LOCAL_INVOKE" \
+  'selected-resource session issuer must create the session after consent'
+require 'causal_parent' "$LOCAL_INVOKE" \
+  'selected-resource session issuer must chain create_session to a verified consent receipt'
+require 'create_session_args_with_consent_ticket' "$LOCAL_INVOKE" \
+  'selected-resource session issuer must inject daemon-issued consent ticket instead of accepting caller-supplied subject args'
 
 require 'AbilityAction::RefreshRemoteTargets' "$CLI_ABILITY" \
   'CLI must expose a live remote target refresh action for picker/debug flows'
@@ -57,6 +67,12 @@ require 'AbilityAction::WatchRemoteTargets' "$CLI_ABILITY" \
   'CLI must expose a live remote target watch action for picker/debug flows'
 require 'LocalRemoteTargetInventoryIssuer::watch_remote_targets' "$CLI_ABILITY" \
   'CLI watch action must use the live inventory issuer, not meta.list_resources'
+require 'AbilityAction::CreateRemoteDesktopSession' "$CLI_ABILITY" \
+  'CLI/frontend adapter must expose selected-resource remote desktop session creation'
+require 'LocalRemoteDesktopSessionIssuer::create_session' "$CLI_ABILITY" \
+  'CLI/frontend adapter must use the selected-resource session issuer'
+require 'create_remote_desktop_session_request' "$CLI_ABILITY" \
+  'CLI/frontend adapter must build create_session args without copying selected subject into args'
 require 'resource_ura' "$CLI_ABILITY" \
   'CLI refresh output must surface selectable resource_ura subjects'
 

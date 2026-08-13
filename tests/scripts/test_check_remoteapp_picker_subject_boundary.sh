@@ -34,6 +34,23 @@ impl LocalRemoteTargetInventoryIssuer {
 /// Target pickers that need live display/window/application rows must invoke
 /// resource.refresh_remote_targets or resource.watch_remote_targets through
 /// this issuer before presenting rows.
+pub struct LocalRemoteDesktopSessionIssuer;
+impl LocalRemoteDesktopSessionIssuer {
+    pub fn create_session(resource_ura: &str, args: Value) -> anyhow::Result<(Value, VerifiedLocalInvocationMeta)> {
+        let grant = LocalDaemonSystemAbilityIssuer::invoke("remote_desktop.grant_consent", json!({ "intent": "remote_desktop_session" }))?;
+        let parent = VerifiedLocalInvocationMeta(grant).causal_parent()?;
+        let args = create_session_args_with_consent_ticket(args, "ticket")?;
+        LocalDaemonSystemAbilityIssuer::invoke_with_parent("remote_desktop.create_session", resource_ura, args, parent)
+    }
+}
+impl VerifiedLocalInvocationMeta {
+    pub fn causal_parent(&self) -> anyhow::Result<Value> {
+        Ok(json!({ "receipt_ura": "r", "receipt_hash": "h" }))
+    }
+}
+fn create_session_args_with_consent_ticket(args: Value, ticket: &str) -> anyhow::Result<Value> {
+    Ok(args)
+}
 RS
 
 cat >"$SANDBOX/src/cli/commands/groups/ability.rs" <<'RS'
@@ -47,7 +64,15 @@ fn run(action: AbilityAction) {
             let frames = LocalRemoteTargetInventoryIssuer::watch_remote_targets(args).unwrap();
             println!("{}", frames.len());
         }
+        AbilityAction::CreateRemoteDesktopSession(args) => {
+            let request = create_remote_desktop_session_request(&args);
+            let response = LocalRemoteDesktopSessionIssuer::create_session(&args.subject, request).unwrap();
+            println!("{}", response.0);
+        }
     }
+}
+fn create_remote_desktop_session_request(args: &CreateRemoteDesktopSessionArgs) -> Value {
+    json!({ "mode": args.mode })
 }
 RS
 
