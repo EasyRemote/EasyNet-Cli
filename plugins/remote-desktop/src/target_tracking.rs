@@ -163,6 +163,10 @@ impl TargetTrackerSnapshot {
     pub(in crate::daemon::plugins::remote_desktop) fn target_geometry_revision(&self) -> u64 {
         self.target_geometry_revision
     }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn geometry(&self) -> &TargetGeometry {
+        &self.geometry
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -423,7 +427,7 @@ mod tests {
                 "test.ability",
                 &ResourceEntry {
                     resource_ura: "easynet:///r/acme/resource/window.test".into(),
-                    owner_agent: "easynet:///r/acme/device/dev-1".into(),
+                    owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
                     kind: ResourceType::Window,
                     binding: ResourceBinding::LocalDevice,
                     hardware_id: "window:macos:cgwindow:10:42".into(),

@@ -13,6 +13,10 @@ use crate::daemon::plugins::remote_desktop::constants::DIRECT_WEBRTC_ENDPOINT_PR
 use crate::daemon::plugins::remote_desktop::sdp::ice_candidate_text;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
+use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
+use crate::daemon::plugins::remote_desktop::target_tracking::{
+    TargetObservation, TargetTrackerSnapshot,
+};
 
 /// Runtime-owned synchronized map of remote desktop sessions.
 ///
@@ -68,6 +72,38 @@ impl RemoteDesktopSessionStore {
             epoch,
             format!("{DIRECT_WEBRTC_ENDPOINT_PREFIX}{session_id}"),
         );
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_observation_inputs(
+        &self,
+        session_id: &str,
+        epoch: TransportEpoch,
+    ) -> Option<(RemoteAppTargetBinding, TargetTrackerSnapshot)> {
+        let sessions = self.lock();
+        let session = sessions.get(session_id)?;
+        if session.is_terminal() || session.transport_epoch() != Some(epoch.value()) {
+            return None;
+        }
+        Some((
+            session.target_binding().clone(),
+            session.target_snapshot().clone(),
+        ))
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn record_target_observation(
+        &self,
+        session_id: &str,
+        epoch: TransportEpoch,
+        observation: TargetObservation,
+    ) {
+        let mut sessions = self.lock();
+        let Some(session) = sessions.get_mut(session_id) else {
+            return;
+        };
+        if session.transport_epoch() != Some(epoch.value()) {
+            return;
+        }
+        session.record_target_observation(observation);
     }
 
     /// Mark a direct WebRTC endpoint failed for one non-terminal session.
