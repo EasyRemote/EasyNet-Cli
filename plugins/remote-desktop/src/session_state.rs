@@ -72,6 +72,14 @@ impl RemoteDesktopSessionStateMachine {
         self.set_non_terminal_state(RemoteDesktopState::Degraded)
     }
 
+    /// Suspend the session because the selected target is no longer capturable.
+    ///
+    /// This is distinct from transport degradation: the transport may still be
+    /// alive, but capture and input must stop for the bound target.
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_suspended(&mut self) -> bool {
+        self.set_non_terminal_state(RemoteDesktopState::Suspended)
+    }
+
     /// Enter the caller-requested closing phase before final close.
     pub(in crate::daemon::plugins::remote_desktop) fn mark_closing(&mut self) -> bool {
         self.set_non_terminal_state(RemoteDesktopState::Closing)
@@ -114,6 +122,7 @@ impl RemoteDesktopSessionStateMachine {
                 state,
                 RemoteDesktopState::Connected
                     | RemoteDesktopState::ConnectedPreview
+                    | RemoteDesktopState::Suspended
                     | RemoteDesktopState::Degraded
                     | RemoteDesktopState::Closing
             ),
@@ -121,12 +130,14 @@ impl RemoteDesktopSessionStateMachine {
                 state,
                 RemoteDesktopState::Negotiating
                     | RemoteDesktopState::Connected
+                    | RemoteDesktopState::Suspended
                     | RemoteDesktopState::Degraded
                     | RemoteDesktopState::Closing
             ),
             RemoteDesktopState::Connected => matches!(
                 state,
                 RemoteDesktopState::Negotiating
+                    | RemoteDesktopState::Suspended
                     | RemoteDesktopState::Degraded
                     | RemoteDesktopState::Closing
             ),
@@ -135,8 +146,10 @@ impl RemoteDesktopSessionStateMachine {
                 RemoteDesktopState::Negotiating
                     | RemoteDesktopState::Connected
                     | RemoteDesktopState::ConnectedPreview
+                    | RemoteDesktopState::Suspended
                     | RemoteDesktopState::Closing
             ),
+            RemoteDesktopState::Suspended => matches!(state, RemoteDesktopState::Closing),
             RemoteDesktopState::Closing => matches!(state, RemoteDesktopState::Closed),
             RemoteDesktopState::Closed | RemoteDesktopState::Failed => false,
             RemoteDesktopState::Pending | RemoteDesktopState::Unspecified => {
@@ -179,5 +192,20 @@ mod tests {
 
         assert_eq!(state.state(), RemoteDesktopState::Closed);
         assert_eq!(state.end_reason(), Some("caller_ended"));
+    }
+
+    #[test]
+    fn remote_desktop_session_state_suspends_target_loss_until_close() {
+        let mut state = RemoteDesktopSessionStateMachine::new();
+
+        assert!(state.mark_connected());
+        assert!(state.mark_suspended());
+        assert_eq!(state.state(), RemoteDesktopState::Suspended);
+        assert!(!state.mark_negotiating());
+        assert!(!state.mark_connected());
+        assert!(state.mark_closing());
+        state.mark_closed("caller_ended");
+
+        assert_eq!(state.state(), RemoteDesktopState::Closed);
     }
 }

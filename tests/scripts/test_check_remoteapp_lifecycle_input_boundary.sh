@@ -48,7 +48,7 @@ RS
   cat >"$SANDBOX/plugins/remote-desktop/src/session.rs" <<'RS'
 fn record_target_observation() {
     if event.event_type() == "TARGET_LOST" {
-        self.lifecycle.mark_degraded();
+        self.lifecycle.mark_suspended();
         self.transport.mark_media_source_lost(epoch);
         session_events::media_source_lost();
     }
@@ -59,8 +59,57 @@ mod tests {
     #[test]
     fn target_lost_stops_active_media_source_without_transport_failure() {
         assert!(target_lost_index < media_source_lost_index);
+        assert_eq!(session.state(), RemoteDesktopState::Suspended);
+        assert_eq!(events[target_lost_index]["state_proto"], json!("REMOTE_DESKTOP_SESSION_STATE_SUSPENDED"));
         assert_eq!(session.target_tracking_state()["input_enabled"], json!(false));
     }
+
+    #[test]
+    fn target_loss_rejects_late_client_media_state_without_degrading_session() {
+        assert!(!session.report_client_media_state(epoch, "stalled"));
+        assert_eq!(session.state(), RemoteDesktopState::Suspended);
+        assert_eq!(session.transport_state()["primary"], json!("media_source_lost"));
+        assert_eq!(session.transport_state()["device_sending"], json!(false));
+    }
+}
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/contract.rs" <<'RS'
+enum RemoteDesktopSessionState {
+    Suspended,
+}
+
+impl RemoteDesktopSessionState {
+    fn wire_name(self) -> &'static str {
+        match self {
+            Self::Suspended => "REMOTE_DESKTOP_SESSION_STATE_SUSPENDED",
+        }
+    }
+}
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/session_state.rs" <<'RS'
+fn mark_suspended() {
+    self.set_non_terminal_state(RemoteDesktopState::Suspended);
+}
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/session_transport_state.rs" <<'RS'
+enum PrimaryMediaPhase {
+    MediaSourceLost,
+    Failed,
+}
+
+fn can_transition_primary() {
+    match from {
+        PrimaryMediaPhase::MediaSourceLost => matches!(to, PrimaryMediaPhase::Failed),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn media_source_lost_is_absorbing_until_new_epoch_or_failure() {}
 }
 RS
 
@@ -79,7 +128,13 @@ fn input_policy_for_target_snapshot() {
     let _ = policy["pointer_target"]["target_geometry_revision"];
 }
 
-fn current_input_policy() {
+enum InputTransportGuard {
+    DirectWebRtc(TransportEpoch),
+    DiagnosticPreview,
+}
+
+fn current_session_input_policy() {
+    InputTransportGuard::DirectWebRtc(epoch);
     let snapshot = session.target_snapshot();
     if !snapshot.input_enabled() {
         return None;
@@ -192,6 +247,16 @@ const READY_TO_INSERT: RemoteDesktopSessionCreationState =
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/invoke_bidi.rs" <<'RS'
+fn handle_bidi_input_frame_for_session() {
+    current_session_input_policy(
+        session_store,
+        session_id,
+        InputTransportGuard::DiagnosticPreview,
+        input_policy,
+    );
+    handle_bidi_input_frame(&effective_input_policy, frame);
+}
+
 fn handle_bidi_input_frame() {
     input_policy_reject_reason(input_policy, kind);
 }
@@ -200,6 +265,9 @@ fn handle_bidi_input_frame() {
 mod tests {
     #[test]
     fn diagnostic_bidi_view_only_input_reports_scope_unsupported() {}
+
+    #[test]
+    fn diagnostic_bidi_input_rechecks_session_target_snapshot() {}
 }
 RS
 
@@ -272,9 +340,24 @@ perl -0pi -e 's/target_lost_index < media_source_lost_index/media_source_lost_in
 run_fail 'E2E-09 must prove TARGET_LOST is ordered before MEDIA_SOURCE_LOST'
 
 write_fixture
+perl -0pi -e 's/mark_suspended/mark_degraded/g' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'target loss must suspend the session lifecycle'
+
+write_fixture
+perl -0pi -e 's/PrimaryMediaPhase::MediaSourceLost => [^\n]+/PrimaryMediaPhase::MediaSourceLost => false/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_transport_state.rs"
+run_fail 'media source loss must be absorbing until failure or a new epoch'
+
+write_fixture
 perl -0pi -e 's/let snapshot = session\.target_snapshot\(\);/let snapshot = cached_snapshot;/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
 run_fail 'production input path must read the latest session target snapshot'
+
+write_fixture
+perl -0pi -e 's/current_session_input_policy/static_input_policy/' \
+  "$SANDBOX/plugins/remote-desktop/src/invoke_bidi.rs"
+run_fail 'diagnostic bidi input path must re-read session readiness for each input frame'
 
 write_fixture
 perl -0pi -e 's/json!\(false\)/json!(true)/' \

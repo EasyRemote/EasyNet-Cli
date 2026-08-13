@@ -33,12 +33,24 @@ reject() {
   fi
 }
 
+reject_multiline() {
+  local pattern="$1"
+  local path="$2"
+  local message="$3"
+  if perl -0ne "exit(($pattern) ? 0 : 1)" "$path"; then
+    fail "$message"
+  fi
+}
+
 [[ -d "$REMOTE_ROOT" ]] || fail "missing remote desktop source root"
 [[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
 
 TARGET_TRACKING="$REMOTE_ROOT/target_tracking.rs"
 TARGET_OBSERVER="$REMOTE_ROOT/target_observer.rs"
 SESSION="$REMOTE_ROOT/session.rs"
+CONTRACT="$REMOTE_ROOT/contract.rs"
+SESSION_STATE="$REMOTE_ROOT/session_state.rs"
+SESSION_TRANSPORT_STATE="$REMOTE_ROOT/session_transport_state.rs"
 SESSION_EVENTS="$REMOTE_ROOT/session_events.rs"
 INPUT="$REMOTE_ROOT/input.rs"
 TARGET="$REMOTE_ROOT/target.rs"
@@ -48,7 +60,7 @@ CREATE_SESSION="$REMOTE_ROOT/handlers/create_session.rs"
 SESSION_CREATION="$REMOTE_ROOT/session_creation.rs"
 INVOKE_BIDI="$REMOTE_ROOT/invoke_bidi.rs"
 
-for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$SESSION" "$SESSION_EVENTS" "$INPUT" "$TARGET" "$SCK" "$REQUEST" "$CREATE_SESSION" "$SESSION_CREATION" "$INVOKE_BIDI"; do
+for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$SESSION" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$INPUT" "$TARGET" "$SCK" "$REQUEST" "$CREATE_SESSION" "$SESSION_CREATION" "$INVOKE_BIDI"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -81,7 +93,7 @@ require 'pointer_policy_consumes_latest_target_tracker_snapshot' "$INPUT" \
   'E2E-08 input transform must test latest target tracker snapshot consumption'
 require 'input_policy_for_target_snapshot\(' "$INPUT" \
   'input policy must be derivable from the latest target tracker snapshot'
-require 'fn current_input_policy\(' "$INPUT" \
+require 'fn current_session_input_policy\(' "$INPUT" \
   'production input path must resolve current policy per frame'
 require 'let snapshot = session\.target_snapshot\(\);' "$INPUT" \
   'production input path must read the latest session target snapshot'
@@ -105,8 +117,22 @@ require 'fn record_target_observation\(' "$SESSION" \
   'session aggregate must be the committed target observation writer'
 require 'event\.event_type\(\) == "TARGET_LOST"' "$SESSION" \
   'session must branch target loss separately from transport failure'
-require 'self\.lifecycle\.mark_degraded\(\)' "$SESSION" \
-  'target loss must degrade the session lifecycle'
+require 'Suspended,' "$CONTRACT" \
+  'remote desktop lifecycle must expose an explicit Suspended state'
+require 'REMOTE_DESKTOP_SESSION_STATE_SUSPENDED' "$CONTRACT" \
+  'remote desktop lifecycle must expose a canonical Suspended wire state'
+require 'fn mark_suspended\(' "$SESSION_STATE" \
+  'session state machine must centralize target-loss suspension'
+require 'self\.lifecycle\.mark_suspended\(\)' "$SESSION" \
+  'target loss must suspend the session lifecycle'
+reject_multiline 'm/event\.event_type\(\) == "TARGET_LOST".{0,240}?mark_degraded\(\)/s' "$SESSION" \
+  'target loss must not reuse transport degraded lifecycle semantics'
+require 'fn can_transition_primary\(' "$SESSION_TRANSPORT_STATE" \
+  'transport phase transitions must be centralized'
+require 'PrimaryMediaPhase::MediaSourceLost => matches!\(to, PrimaryMediaPhase::Failed\)' "$SESSION_TRANSPORT_STATE" \
+  'media source loss must be absorbing until failure or a new epoch'
+require 'media_source_lost_is_absorbing_until_new_epoch_or_failure' "$SESSION_TRANSPORT_STATE" \
+  'transport tests must prove media source loss cannot reopen readiness in the same epoch'
 require 'self\.transport\.mark_media_source_lost\(epoch\)' "$SESSION" \
   'target loss must stop the active media source'
 require 'session_events::media_source_lost' "$SESSION" \
@@ -115,8 +141,16 @@ require 'target_lost_stops_active_media_source_without_transport_failure' "$SESS
   'E2E-09 must test target loss versus transport failure'
 require 'target_lost_index < media_source_lost_index' "$SESSION" \
   'E2E-09 must prove TARGET_LOST is ordered before MEDIA_SOURCE_LOST'
+require 'RemoteDesktopState::Suspended' "$SESSION" \
+  'E2E-09 must assert target loss moves the session to suspended'
+require 'REMOTE_DESKTOP_SESSION_STATE_SUSPENDED' "$SESSION" \
+  'E2E-09 must assert suspended state is projected to events'
 require_multiline 'm/session\.target_tracking_state\(\)\["input_enabled"\]\s*,\s*json!\(false\)/s' "$SESSION" \
   'E2E-09 must assert target loss disables input'
+require 'target_loss_rejects_late_client_media_state_without_degrading_session' "$SESSION" \
+  'E2E-09 must test late client media state cannot degrade a suspended target-loss session'
+require 'report_client_media_state\(epoch, "stalled"\)' "$SESSION" \
+  'E2E-09 must exercise the late client media-state path after target loss'
 require 'lost_observation_returns_media_source_stop_effect_after_debounce' "$TARGET_OBSERVER" \
   'E2E-09 must test observer-debounced target loss returns media stop effect'
 require 'MEDIA_SOURCE_LOST' "$SESSION_EVENTS" \
@@ -191,10 +225,22 @@ require 'Some\("input_scope_unsupported"\)' "$INPUT" \
   'view-only key/pointer rejection must report input_scope_unsupported'
 require 'InputRejectSample::new\(reason, rejected_count\)' "$INPUT" \
   'WebRTC input rejection diagnostics must use the centralized reject reason'
+require 'fn current_session_input_policy\(' "$INPUT" \
+  'input readiness must be centralized at the session aggregate boundary'
+require 'InputTransportGuard::DirectWebRtc\(epoch\)' "$INPUT" \
+  'production input path must guard frames by the current WebRTC transport epoch'
+require 'current_session_input_policy\(' "$INVOKE_BIDI" \
+  'diagnostic bidi input path must re-read session readiness for each input frame'
+require 'InputTransportGuard::DiagnosticPreview' "$INVOKE_BIDI" \
+  'diagnostic bidi input path must guard frames by preview attachment state'
+require 'handle_bidi_input_frame\(&effective_input_policy' "$INVOKE_BIDI" \
+  'diagnostic bidi input path must apply frame parsing/injection against refreshed policy'
 require 'input_policy_reject_reason\(input_policy, kind\)' "$INVOKE_BIDI" \
   'diagnostic bidi input path must use the same reject reason contract'
 require 'diagnostic_bidi_view_only_input_reports_scope_unsupported' "$INVOKE_BIDI" \
   'E2E-11 must test bidi view-only input_scope_unsupported reporting'
+require 'diagnostic_bidi_input_rechecks_session_target_snapshot' "$INVOKE_BIDI" \
+  'diagnostic bidi path must fail closed after session target loss'
 require 'maps_window_relative_pointer_to_global_screen_point' "$INPUT" \
   'E2E-11 must test window pointer mapping remains view-only'
 require 'maps_application_pointer_through_primary_window_bounds' "$INPUT" \

@@ -327,7 +327,7 @@ impl RemoteDesktopSession {
         };
         let mut media_loss = None;
         if event.event_type() == "TARGET_LOST" {
-            self.lifecycle.mark_degraded();
+            self.lifecycle.mark_suspended();
             if let (Some(reason), Some(epoch)) = (target_loss_reason, self.transport.active_epoch())
             {
                 if self.transport.mark_media_source_lost(epoch) {
@@ -781,7 +781,9 @@ pub(in crate::daemon::plugins::remote_desktop) fn now_ms() -> u64 {
 mod tests {
     use serde_json::json;
 
-    use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+    use crate::daemon::plugins::remote_desktop::session::{
+        RemoteDesktopSession, RemoteDesktopState,
+    };
     use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::target::{TargetGeometry, TargetResolutionError};
     use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
@@ -894,6 +896,7 @@ mod tests {
             session.transport_state()["primary"],
             json!("media_source_lost")
         );
+        assert_eq!(session.state(), RemoteDesktopState::Suspended);
         assert_eq!(session.transport_state()["device_sending"], json!(false));
         assert_eq!(
             session.target_tracking_state()["input_enabled"],
@@ -913,9 +916,58 @@ mod tests {
             target_lost_index < media_source_lost_index,
             "target lifecycle event must precede media source stop projection"
         );
+        assert_eq!(events[target_lost_index]["state"], json!("suspended"));
+        assert_eq!(
+            events[target_lost_index]["state_proto"],
+            json!("REMOTE_DESKTOP_SESSION_STATE_SUSPENDED")
+        );
+        assert_eq!(events[media_source_lost_index]["state"], json!("suspended"));
         assert_eq!(
             events[media_source_lost_index]["payload"]["frontend_action"],
             json!("refresh_targets")
         );
+    }
+
+    #[test]
+    fn target_loss_rejects_late_client_media_state_without_degrading_session() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-target-loss-late-client-state",
+            "easynet:///r/acme/resource/display.test",
+            vec!["webrtc".into()],
+        ));
+        let epoch = TransportEpoch::new(9);
+        session.begin_webrtc_negotiation(epoch);
+        session.mark_webrtc_media_sending(
+            epoch,
+            "easynet-rd://rd-target-loss-late-client-state".to_string(),
+        );
+
+        session.record_target_observation(TargetObservation::Lost {
+            reason: TargetResolutionError::TargetNotFound,
+            detail: "target disappeared".into(),
+            observed_at_ms: 200,
+        });
+        session
+            .record_target_observation(TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "target still disappeared".into(),
+                observed_at_ms: 300,
+            })
+            .expect("debounced target loss must stop the active media source");
+
+        assert_eq!(session.state(), RemoteDesktopState::Suspended);
+        assert_eq!(
+            session.transport_state()["primary"],
+            json!("media_source_lost")
+        );
+        assert_eq!(session.transport_state()["device_sending"], json!(false));
+
+        assert!(!session.report_client_media_state(epoch, "stalled"));
+        assert_eq!(session.state(), RemoteDesktopState::Suspended);
+        assert_eq!(
+            session.transport_state()["primary"],
+            json!("media_source_lost")
+        );
+        assert_eq!(session.transport_state()["device_sending"], json!(false));
     }
 }
