@@ -1510,6 +1510,116 @@ mod tests {
     }
 
     #[test]
+    fn current_session_input_policy_uses_same_geometry_revision_as_target_event() {
+        let entry = ResourceEntry {
+            resource_ura: "easynet:///r/acme/resource/window.geometry-coupled".into(),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
+            kind: ResourceType::Window,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "window:macos:cgwindow:10:42".into(),
+            display_name: "Cursor".into(),
+            metadata: live_remote_target_metadata(json!({
+                "window_id": 42,
+                "pid": 10,
+                "app_name": "Cursor",
+                "x": 100,
+                "y": 200,
+                "width": 800,
+                "height": 600,
+                "geometry_revision": 1,
+            })),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        let mut init = test_session_init(
+            "rd-input-geometry-coupled",
+            "easynet:///r/acme/resource/window.geometry-coupled",
+            vec!["webrtc".into()],
+        );
+        init.mode = "interactive".to_string();
+        init.target_binding = binding_for_mode(&entry, "interactive");
+        let epoch = TransportEpoch::new(11);
+        let mut session = RemoteDesktopSession::new(init);
+        session.begin_webrtc_negotiation(epoch);
+
+        let store = RemoteDesktopSessionStore::new();
+        store.with_sessions(|sessions| {
+            sessions.insert("rd-input-geometry-coupled".to_string(), session);
+            let session = sessions
+                .get_mut("rd-input-geometry-coupled")
+                .expect("inserted session");
+            assert!(
+                session
+                    .record_target_observation(TargetObservation::GeometryChanged {
+                        geometry: TargetGeometry {
+                            x: Some(240.0),
+                            y: Some(320.0),
+                            width: Some(1024.0),
+                            height: Some(768.0),
+                        },
+                        target_geometry_revision: 2,
+                        observed_at_ms: 100,
+                    })
+                    .is_none(),
+                "geometry observation must not stop the active media source"
+            );
+            assert!(
+                session
+                    .events()
+                    .iter()
+                    .any(|event| event["event_type"] == json!("TARGET_RESIZED")),
+                "geometry observation commits TARGET_RESIZED"
+            );
+        });
+
+        let target_event_revision = store.with_sessions(|sessions| {
+            let session = sessions
+                .get("rd-input-geometry-coupled")
+                .expect("inserted session");
+            let target_event = session
+                .events()
+                .into_iter()
+                .find(|event| event["event_type"] == json!("TARGET_RESIZED"))
+                .expect("TARGET_RESIZED event");
+            assert_eq!(
+                target_event["payload"]["target_geometry_revision"],
+                target_event["target_geometry_revision"],
+                "event projection must not split payload/top-level geometry revision"
+            );
+            target_event["target_geometry_revision"]
+                .as_u64()
+                .expect("event target geometry revision")
+        });
+
+        let policy = current_session_input_policy(
+            &store,
+            "rd-input-geometry-coupled",
+            InputTransportGuard::DirectWebRtc(epoch),
+            &json!({
+                "keyboard_enabled": true,
+                "pointer_enabled": true,
+                "clipboard_enabled": true,
+                "file_drop_enabled": true,
+            }),
+        )
+        .expect("current input policy");
+
+        assert_eq!(
+            policy["pointer_target"]["target_geometry_revision"],
+            json!(target_event_revision),
+            "input mapping must consume the same committed geometry revision as the visible target event"
+        );
+        assert_eq!(policy["pointer_target"]["origin_x"], json!(240.0));
+        assert_eq!(policy["pointer_target"]["origin_y"], json!(320.0));
+        assert_eq!(policy["pointer_target"]["width"], json!(1024.0));
+        assert_eq!(policy["pointer_target"]["height"], json!(768.0));
+        assert_eq!(
+            input_policy_reject_reason(&policy, "pointer"),
+            Some("input_scope_unsupported"),
+            "window input remains view-only while still projecting the current target-local transform"
+        );
+    }
+
+    #[test]
     fn apply_input_frame_with_policy_is_the_policy_enforcement_boundary() {
         let pointer =
             parse_input_frame(r#"{"type":"pointer","action":"move","x":10,"y":20}"#).unwrap();

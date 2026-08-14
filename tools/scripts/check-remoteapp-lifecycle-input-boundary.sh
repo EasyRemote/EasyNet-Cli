@@ -101,6 +101,8 @@ require 'pointer_policy_consumes_latest_target_tracker_snapshot' "$INPUT" \
   'E2E-08 input transform must test latest target tracker snapshot consumption'
 require 'current_session_input_policy_reapplies_session_input_scope_to_latest_snapshot' "$INPUT" \
   'production input path must test reapplying session-owned input scope to the latest target snapshot'
+require 'current_session_input_policy_uses_same_geometry_revision_as_target_event' "$INPUT" \
+  'E2E-08 must prove target event and input mapping consume the same committed geometry revision'
 require 'input_policy_for_target_snapshot\(' "$INPUT" \
   'input policy must be derivable from the latest target tracker snapshot'
 require 'fn current_session_input_policy\(' "$INPUT" \

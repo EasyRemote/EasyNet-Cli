@@ -387,6 +387,9 @@ mod tests {
     }
 
     #[test]
+    fn current_session_input_policy_uses_same_geometry_revision_as_target_event() {}
+
+    #[test]
     fn apply_input_frame_with_policy_is_the_policy_enforcement_boundary() {
         assert_eq!(outcome.reason, Some("input_policy_denied"));
         assert_eq!(view_only_pointer.reason, Some("input_scope_unsupported"));
@@ -793,6 +796,11 @@ write_fixture
 perl -0pi -e 's/input_policy_for_scope\(input_policy, input_scope\);/input_policy;/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
 run_fail 'production input path must reapply input scope after deriving latest pointer target geometry'
+
+write_fixture
+perl -0pi -e 's/current_session_input_policy_uses_same_geometry_revision_as_target_event/current_session_input_policy_allows_stale_geometry_revision/' \
+  "$SANDBOX/plugins/remote-desktop/src/input.rs"
+run_fail 'E2E-08 must prove target event and input mapping consume the same committed geometry revision'
 
 write_fixture
 perl -0pi -e 's/if let Some\(reason\) = input_policy_reject_reason\(input_policy, frame\.kind\(\)\.as_policy_key\(\)\) \{\n        return InputApplyOutcome::rejected\(reason\);\n    \}//' \
