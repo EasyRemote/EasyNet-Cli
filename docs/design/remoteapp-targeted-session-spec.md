@@ -1114,6 +1114,8 @@ easynet_relay
 failed
 ```
 
+`turn_relay` means a standard TURN route. `easynet_relay` is a distinct EasyNet relay route; consumers that only need to know whether any relay exists must use `relay_ready`, not infer it from `turn_relay`.
+
 No UI may report production online unless a production media path is actually ready.
 
 ## 14. Clipboard and file transfer

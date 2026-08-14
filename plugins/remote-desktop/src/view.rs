@@ -4,10 +4,10 @@
 // File: plugins/remote-desktop/src/view.rs
 // Description: JSON response projection for remote desktop sessions.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::input::{
-    INPUT_DATA_CHANNEL_LABEL, input_injection_available,
+    input_injection_available, INPUT_DATA_CHANNEL_LABEL,
 };
 use crate::daemon::plugins::remote_desktop::media::{
     backend_catalog_view, production_gate_view, sdk_contract_view,
@@ -33,12 +33,25 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
     let local_ice_candidates = session.local_ice_candidates();
     let media_stats = session.media_stats();
     let production_media_ready = session.production_media_ready();
+    let transport_route_state = transport_view.route_state();
+    let signaling = json!({
+        "local_description": session.local_description(),
+        "remote_description": session.remote_description(),
+        "ice_candidate_count": remote_ice_candidates.len(),
+        "local_ice_candidate_count": local_ice_candidates.len(),
+        "local_ice_candidates": local_ice_candidates,
+        "webrtc_ice_state": session.webrtc_ice_state(),
+        "webrtc_peer_state": session.webrtc_peer_state(),
+        "webrtc_error": session.webrtc_error(),
+        "route_state": transport_route_state.clone(),
+    });
     let production_readiness = json!({
         "ready": production_media_ready,
         "requires_production_codec": true,
         "production_codec_negotiated": session.production_codec_negotiated(),
         "media_transport_ready": session.media_transport_ready(),
         "client_media_ready": session.client_media_ready(),
+        "route_state": transport_route_state.clone(),
     });
     let mut view = json!({
         "session_id": session.session_id(),
@@ -78,16 +91,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
         "negotiated_codec": session.negotiated_codec(),
         "transport": transport_view.summary(session),
         "transports": transport_view.transport_list(session),
-        "signaling": {
-            "local_description": session.local_description(),
-            "remote_description": session.remote_description(),
-            "ice_candidate_count": remote_ice_candidates.len(),
-            "local_ice_candidate_count": local_ice_candidates.len(),
-            "local_ice_candidates": local_ice_candidates,
-            "webrtc_ice_state": session.webrtc_ice_state(),
-            "webrtc_peer_state": session.webrtc_peer_state(),
-            "webrtc_error": session.webrtc_error(),
-        },
+        "signaling": signaling,
         "events": session.events(),
     });
     if let Some(map) = view.as_object_mut() {

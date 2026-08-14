@@ -19,6 +19,7 @@ write_fixture() {
 | E2E-09 target loss vs transport failure | selected target loss emits target/media loss without transport failure |
 | E2E-10 weak identity ambiguity | ambiguous weak native identity fails closed before stream start |
 | E2E-11 view-only input safety | app/window sessions remain view-only without a focus-safe input validator |
+relay_ready
 MD
 
   cat >"$SANDBOX/plugins/remote-desktop/src/target_tracking.rs" <<'RS'
@@ -145,6 +146,43 @@ fn event_type_proto_name(event_type: &str) -> &'static str {
         "TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_TARGET_CHANGED",
         _ => "REMOTE_DESKTOP_EVENT_STATE_CHANGED",
     }
+}
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/view_transport.rs" <<'RS'
+fn transport_route_state() {
+    json!({
+        "host_candidate": true,
+        "stun_srflx": false,
+        "turn_relay": false,
+        "easynet_relay": false,
+        "failed": false,
+    });
+    "host_only_no_nat_or_relay";
+    "relay_unavailable";
+}
+
+#[test]
+fn host_only_candidates_are_not_reported_as_nat_or_relay_ready() {}
+
+#[test]
+fn easynet_relay_does_not_imply_turn_relay() {}
+
+#[test]
+fn srflx_without_relay_reports_typed_relay_unavailable_reason() {}
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/view.rs" <<'RS'
+fn serialize_session() {
+    let transport_route_state = transport_view.route_state();
+    json!({
+        "signaling": {
+            "route_state": transport_route_state.clone(),
+        },
+        "production_readiness": {
+            "route_state": transport_route_state.clone(),
+        },
+    });
 }
 RS
 
@@ -373,6 +411,26 @@ write_fixture
 perl -0pi -e 's/"TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_TARGET_CHANGED"/"TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_STATE_CHANGED"/' \
   "$SANDBOX/plugins/remote-desktop/src/event_log.rs"
 run_fail 'event log must project TARGET_REBIND_FAILED as a canonical target change'
+
+write_fixture
+perl -0pi -e 's/fn transport_route_state/fn transport_summary_without_routes/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'transport view must expose host/STUN/TURN/EasyNet relay route state'
+
+write_fixture
+perl -0pi -e 's/"host_only_no_nat_or_relay"/"webrtc_ice_connecting"/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'host-only transport degradation must have a typed unavailable reason'
+
+write_fixture
+perl -0pi -e 's/"relay_unavailable"/"webrtc_ice_connecting"/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'relay-unavailable transport degradation must have a typed unavailable reason'
+
+write_fixture
+perl -0pi -e 's/route_state/route_summary/g' \
+  "$SANDBOX/plugins/remote-desktop/src/view.rs"
+run_fail 'public session view must project route state'
 
 write_fixture
 perl -0pi -e 's/mark_suspended/mark_degraded/g' \

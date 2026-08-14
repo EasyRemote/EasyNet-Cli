@@ -53,6 +53,8 @@ SESSION_STATE="$REMOTE_ROOT/session_state.rs"
 SESSION_TRANSPORT_STATE="$REMOTE_ROOT/session_transport_state.rs"
 SESSION_EVENTS="$REMOTE_ROOT/session_events.rs"
 EVENT_LOG="$REMOTE_ROOT/event_log.rs"
+VIEW_TRANSPORT="$REMOTE_ROOT/view_transport.rs"
+VIEW="$REMOTE_ROOT/view.rs"
 INPUT="$REMOTE_ROOT/input.rs"
 TARGET="$REMOTE_ROOT/target.rs"
 SCK="$REMOTE_ROOT/screencapturekit_capture.rs"
@@ -61,7 +63,7 @@ CREATE_SESSION="$REMOTE_ROOT/handlers/create_session.rs"
 SESSION_CREATION="$REMOTE_ROOT/session_creation.rs"
 INVOKE_BIDI="$REMOTE_ROOT/invoke_bidi.rs"
 
-for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$SESSION" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$INPUT" "$TARGET" "$SCK" "$REQUEST" "$CREATE_SESSION" "$SESSION_CREATION" "$INVOKE_BIDI"; do
+for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$SESSION" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$INPUT" "$TARGET" "$SCK" "$REQUEST" "$CREATE_SESSION" "$SESSION_CREATION" "$INVOKE_BIDI"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -176,6 +178,34 @@ require 'target_reappearance_after_loss_emits_explicit_rebind_failure' "$SESSION
   'session aggregate must test post-loss target reappearance as TARGET_REBIND_FAILED'
 require_multiline '/"TARGET_REBIND_FAILED"\s*=>\s*"REMOTE_DESKTOP_EVENT_TARGET_CHANGED"/s' "$EVENT_LOG" \
   'event log must project TARGET_REBIND_FAILED as a canonical target change'
+require 'transport_route_state' "$VIEW_TRANSPORT" \
+  'transport view must expose host/STUN/TURN/EasyNet relay route state'
+require '"host_candidate"' "$VIEW_TRANSPORT" \
+  'transport route state must expose host candidates explicitly'
+require '"stun_srflx"' "$VIEW_TRANSPORT" \
+  'transport route state must expose STUN server-reflexive candidates explicitly'
+require '"turn_relay"' "$VIEW_TRANSPORT" \
+  'transport route state must expose TURN relay candidates explicitly'
+require '"easynet_relay"' "$VIEW_TRANSPORT" \
+  'transport route state must expose EasyNet relay readiness explicitly'
+require '"failed"' "$VIEW_TRANSPORT" \
+  'transport route state must expose failed route state explicitly'
+require 'route_state' "$VIEW" \
+  'public session view must project route state'
+require 'transport_route_state\.clone\(\)' "$VIEW" \
+  'public session view must reuse one route-state projection across signaling/readiness'
+require '"host_only_no_nat_or_relay"' "$VIEW_TRANSPORT" \
+  'host-only transport degradation must have a typed unavailable reason'
+require '"relay_unavailable"' "$VIEW_TRANSPORT" \
+  'relay-unavailable transport degradation must have a typed unavailable reason'
+require 'host_only_candidates_are_not_reported_as_nat_or_relay_ready' "$VIEW_TRANSPORT" \
+  'transport tests must prove host-only candidates are not NAT/relay readiness'
+require 'easynet_relay_does_not_imply_turn_relay' "$VIEW_TRANSPORT" \
+  'transport tests must prove EasyNet relay readiness is distinct from TURN relay readiness'
+require 'srflx_without_relay_reports_typed_relay_unavailable_reason' "$VIEW_TRANSPORT" \
+  'transport tests must prove STUN-only candidates expose relay-unavailable degradation'
+require 'relay_ready' "$SPEC" \
+  'SPEC must name relay_ready as the aggregate any-relay state instead of overloading TURN relay'
 
 # E2E-10: weak identity must fail closed as ambiguity or metadata-incomplete
 # before any stream starts. Native ScreenCaptureKit selection must also return
