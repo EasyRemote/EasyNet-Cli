@@ -47,6 +47,8 @@ require 'E2E-05 stale window fail-closed' "$SPEC" \
   'SPEC must retain stale window fail-closed acceptance'
 require 'E2E-06 no media re-resolution' "$SPEC" \
   'SPEC must retain no media re-resolution acceptance'
+require 'E2E-10 weak identity ambiguity' "$SPEC" \
+  'SPEC must retain weak identity ambiguity acceptance'
 
 is_test_context() {
   local file="$1"
@@ -94,6 +96,15 @@ require 'frontend_action=refresh_targets' \
 require '!sessions\.contains_key\("rd-stale-window"\)' \
   "$REMOTE_ROOT/handlers/create_session.rs" \
   'E2E-05 stale target failure must prove no active session row is inserted'
+require 'create_session_rejects_weak_window_identity_before_session_insert' \
+  "$REMOTE_ROOT/handlers/create_session.rs" \
+  'E2E-10 must have a weak window identity create_session fail-closed test'
+require 'target_identity_ambiguous' \
+  "$REMOTE_ROOT/handlers/create_session.rs" \
+  'E2E-10 weak identity failure must expose target_identity_ambiguous'
+require '!sessions\.contains_key\("rd-weak-window"\)' \
+  "$REMOTE_ROOT/handlers/create_session.rs" \
+  'E2E-10 weak target identity failure must prove no active session row is inserted'
 require 'session\.target_binding\(\)\.clone\(\)' \
   "$REMOTE_ROOT/transport/webrtc_negotiation.rs" \
   'WebRTC negotiation must consume the session-owned target binding'
@@ -166,6 +177,21 @@ require '"target_model": target_kind\.target_model\(\)' \
 require 'display_scoped_application_window_set' \
   "$REMOTE_ROOT/target.rs" \
   'application projection must identify the display-scoped application window-set model'
+require 'window_requires_stable_owner_identity_not_app_name_only' \
+  "$REMOTE_ROOT/target.rs" \
+  'E2E-10 must prove window app_name/title hints are not accepted as stable routing identity'
+require 'application_requires_display_scoped_stable_identity' \
+  "$REMOTE_ROOT/target.rs" \
+  'E2E-10 must prove application app_name-only identity is ambiguous'
+require 'TargetResolutionError::TargetIdentityAmbiguous' \
+  "$REMOTE_ROOT/target.rs" \
+  'E2E-10 target resolver must use the canonical target_identity_ambiguous reason'
+require 'app_name/title are diagnostic hints, not production routing identity' \
+  "$REMOTE_ROOT/target.rs" \
+  'E2E-10 window resolver must document that app_name/title are diagnostic only'
+require 'app_name alone is not production routing identity' \
+  "$REMOTE_ROOT/target.rs" \
+  'E2E-10 application resolver must document that app_name alone is diagnostic only'
 require 'fn frontend_action\(self\) -> FrontendAction' \
   "$REMOTE_ROOT/target.rs" \
   'canonical target failures must map to frontend recovery actions in the target domain'

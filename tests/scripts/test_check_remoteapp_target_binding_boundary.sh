@@ -14,6 +14,7 @@ mkdir -p "$SANDBOX/docs/design"
 cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
 | E2E-05 stale window fail-closed | stale window/application targets must fail closed before active session insertion |
 | E2E-06 no media re-resolution | native media startup must consume the committed target binding instead of re-resolving a ResourceEntry |
+| E2E-10 weak identity ambiguity | weak app/window identity must fail closed before stream startup |
 MD
 
 cat >"$SANDBOX/plugins/remote-desktop/src/target.rs" <<'RS'
@@ -71,6 +72,9 @@ impl ResourceEntryTargetResolver {
     fn resolve_for_session(&self, target_kind: RemoteDesktopTargetKind) {
         validate_resource_inventory_state();
         metadata_freshness_u64();
+        let _ = TargetResolutionError::TargetIdentityAmbiguous;
+        let _ = "app_name/title are diagnostic hints, not production routing identity";
+        let _ = "app_name alone is not production routing identity";
         json!({
             "target_model": target_kind.target_model(),
         });
@@ -85,6 +89,12 @@ mod tests {
             assert!(ALL_FRONTEND_ACTIONS.contains(&reason.frontend_action()));
         }
     }
+
+    #[test]
+    fn window_requires_stable_owner_identity_not_app_name_only() {}
+
+    #[test]
+    fn application_requires_display_scoped_stable_identity() {}
 }
 RS
 
@@ -100,6 +110,12 @@ mod tests {
         assert!(err.to_string().contains("target_not_found"));
         assert!(err.to_string().contains("frontend_action=refresh_targets"));
         assert!(!sessions.contains_key("rd-stale-window"));
+    }
+
+    #[test]
+    fn create_session_rejects_weak_window_identity_before_session_insert() {
+        assert!(err.to_string().contains("target_identity_ambiguous"));
+        assert!(!sessions.contains_key("rd-weak-window"));
     }
 }
 RS
@@ -273,6 +289,38 @@ fi
 
 perl -0pi -e 's/assert!\(sessions\.contains_key\("rd-stale-window"\)\);/assert!(!sessions.contains_key("rd-stale-window"));/' \
   "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
+
+perl -0pi -e 's/create_session_rejects_weak_window_identity_before_session_insert/create_session_accepts_weak_window_identity/' \
+  "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted missing weak-identity fail-closed test" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/create_session_accepts_weak_window_identity/create_session_rejects_weak_window_identity_before_session_insert/' \
+  "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
+perl -0pi -e 's/assert!\(!sessions\.contains_key\("rd-weak-window"\)\);/assert!(sessions.contains_key("rd-weak-window"));/' \
+  "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted weak target session insertion" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/assert!\(sessions\.contains_key\("rd-weak-window"\)\);/assert!(!sessions.contains_key("rd-weak-window"));/' \
+  "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
+
+perl -0pi -e 's@app_name/title are diagnostic hints, not production routing identity@app_name title can route production target@' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted app_name/title as production identity" >&2
+  exit 1
+fi
+
+perl -0pi -e 's@app_name title can route production target@app_name/title are diagnostic hints, not production routing identity@' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
 
 perl -0pi -e 's/fake_factory_receives_session_owned_binding_without_resource_re_resolution/fake_factory_re_resolves_resource_entry/' \
   "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
