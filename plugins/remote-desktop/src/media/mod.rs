@@ -227,7 +227,7 @@ pub const XCAP_OPENH264_BACKEND: RemoteDesktopMediaBackendDescriptor =
         external_binary_required: false,
         transport_ready: true,
         production_ready: false,
-        supported_subjects: &["display", "window", "application"],
+        supported_subjects: &["display"],
         unavailable_reason: None,
     };
 
@@ -247,7 +247,7 @@ pub const XCAP_OPENH264_WEBRTC_BACKEND: RemoteDesktopMediaBackendDescriptor =
         external_binary_required: false,
         transport_ready: true,
         production_ready: false,
-        supported_subjects: &["display", "window", "application"],
+        supported_subjects: &["display"],
         unavailable_reason: Some("native_media_plugin_required_for_flagship_quality"),
     };
 
@@ -454,21 +454,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn select_builtin_h264_backend_fo
 #[cfg(test)]
 fn xcap_supported_screen_entry(entry: &ResourceEntry) -> bool {
     let backend = entry.metadata.get("backend").and_then(Value::as_str);
-    match entry.kind {
-        ResourceType::Display => backend == Some("xcap"),
-        ResourceType::Window | ResourceType::Application => {
-            let capture_target = entry.metadata.get("capture_target").and_then(Value::as_str);
-            let expected_target = match entry.kind {
-                ResourceType::Window => "window",
-                ResourceType::Application => "application",
-                _ => unreachable!("checked above"),
-            };
-            capture_target == Some(expected_target)
-                && matches!(backend, Some("xcap" | "macos_core_graphics"))
-                && screen_target_metadata_resolvable(entry)
-        }
-        _ => false,
-    }
+    entry.kind == ResourceType::Display && backend == Some("xcap")
 }
 
 #[cfg(test)]
@@ -620,11 +606,17 @@ mod tests {
     }
 
     #[test]
-    fn selects_xcap_baseline_for_discovered_window_targets() {
-        let backend = select_builtin_h264_backend(&discovered_window_entry("xcap")).unwrap();
+    fn xcap_baseline_catalog_is_display_only_for_remoteapp_targets() {
+        let backend = select_builtin_h264_backend(&discovered_window_entry("xcap"));
 
-        assert_eq!(backend.backend_id(), XCAP_OPENH264_BACKEND_ID);
-        assert!(backend.supports_entry(&discovered_window_entry("xcap")));
+        assert!(
+            backend.is_none(),
+            "diagnostic xcap baseline must not advertise app/window capture; \
+             exact remoteapp capture requires native target binding"
+        );
+        assert!(!XCAP_OPENH264_BACKEND.supports_entry(&discovered_window_entry("xcap")));
+        assert!(!XCAP_OPENH264_WEBRTC_BACKEND
+            .supports_entry(&discovered_application_entry("macos_core_graphics")));
     }
 
     #[test]

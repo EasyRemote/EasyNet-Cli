@@ -233,13 +233,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::{Mutex, MutexGuard};
 
     use crate::daemon::plugins::remote_desktop::session::TargetMediaSourceLost;
     use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::target::TargetResolutionError;
     use crate::daemon::plugins::remote_desktop::target_monitor::{
-        stop_lost_media_source, TargetMediaSourceStopper,
+        apply_command, stop_lost_media_source, TargetMediaSourceStopper, TargetMonitorCommand,
     };
 
     #[derive(Default)]
@@ -292,5 +293,58 @@ mod tests {
 
         assert!(!stop_lost_media_source(&stopper, "rd-healthy", None));
         assert!(stopper.calls().is_empty());
+    }
+
+    #[test]
+    fn target_monitor_command_state_machine_tracks_cancels_and_shuts_down() {
+        let mut tracked = HashSet::<String>::new();
+
+        assert!(apply_command(
+            TargetMonitorCommand::Track {
+                session_id: String::new(),
+            },
+            &mut tracked,
+        ));
+        assert!(
+            tracked.is_empty(),
+            "empty session ids must not enter target tracking"
+        );
+
+        assert!(apply_command(
+            TargetMonitorCommand::Track {
+                session_id: "rd-target-a".into(),
+            },
+            &mut tracked,
+        ));
+        assert!(apply_command(
+            TargetMonitorCommand::Track {
+                session_id: "rd-target-a".into(),
+            },
+            &mut tracked,
+        ));
+        assert_eq!(
+            tracked.iter().cloned().collect::<Vec<_>>(),
+            vec!["rd-target-a".to_string()],
+            "target monitor tracking must be idempotent per session id"
+        );
+
+        assert!(apply_command(
+            TargetMonitorCommand::Track {
+                session_id: "rd-target-b".into(),
+            },
+            &mut tracked,
+        ));
+        assert_eq!(tracked.len(), 2);
+
+        assert!(apply_command(
+            TargetMonitorCommand::Cancel {
+                session_id: "rd-target-a".into(),
+            },
+            &mut tracked,
+        ));
+        assert!(!tracked.contains("rd-target-a"));
+        assert!(tracked.contains("rd-target-b"));
+
+        assert!(!apply_command(TargetMonitorCommand::Shutdown, &mut tracked));
     }
 }

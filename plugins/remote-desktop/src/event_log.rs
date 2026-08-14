@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 
 use super::contract::RemoteDesktopSessionState;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::sync::broadcast;
 
 use crate::daemon::plugins::remote_desktop::session::now_ms;
@@ -85,12 +85,33 @@ impl RemoteDesktopEventLog {
     ) {
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.saturating_add(1);
+        let target_field = |name: &str| payload.get(name).cloned().unwrap_or(Value::Null);
+        let subject_ura = target_field("subject_ura");
+        let binding_id = target_field("binding_id");
+        let binding_epoch = target_field("binding_epoch");
+        let previous_target_identity_epoch = target_field("previous_target_identity_epoch");
+        let target_identity_epoch = target_field("target_identity_epoch");
+        let target_geometry_revision = target_field("target_geometry_revision");
+        let media_source_epoch = target_field("media_source_epoch");
+        let transport_epoch = target_field("transport_epoch");
+        let reason_code = target_field("reason_code");
+        let recoverability = target_field("recoverability");
         let event = json!({
             "event_id": format!("{session_id}:{sequence}"),
             "session_id": session_id,
             "sequence": sequence,
+            "subject_ura": subject_ura,
+            "binding_id": binding_id,
+            "binding_epoch": binding_epoch,
+            "previous_target_identity_epoch": previous_target_identity_epoch,
+            "target_identity_epoch": target_identity_epoch,
+            "target_geometry_revision": target_geometry_revision,
+            "media_source_epoch": media_source_epoch,
+            "transport_epoch": transport_epoch,
             "event_type": event_type,
             "event_type_proto": event_type_proto_name(event_type),
+            "reason_code": reason_code,
+            "recoverability": recoverability,
             "state": state.json_name(),
             "state_proto": state.wire_name(),
             "terminal": state.is_terminal(),
@@ -115,12 +136,26 @@ pub(in crate::daemon::plugins::remote_desktop) fn event_type_proto_name(
         "SESSION_CREATED" => "REMOTE_DESKTOP_EVENT_SESSION_CREATED",
         "CAPTURE_TARGET_RESOLVED" => "REMOTE_DESKTOP_EVENT_CAPTURE_TARGET_RESOLVED",
         "TARGET_BOUND" => "REMOTE_DESKTOP_EVENT_TARGET_BOUND",
-        "TARGET_MOVED"
+        "CAPTURE_TARGET_STALE"
+        | "CAPTURE_TARGET_IDENTITY_MISMATCH"
+        | "CAPTURE_TARGET_AMBIGUOUS"
+        | "DISPLAY_FALLBACK_FORBIDDEN"
+        | "SCREEN_CAPTURE_PERMISSION_DENIED"
+        | "TARGET_MOVED"
         | "TARGET_RESIZED"
+        | "TARGET_TITLE_CHANGED"
+        | "TARGET_FOCUSED"
+        | "TARGET_BLURRED"
         | "TARGET_VISIBLE"
         | "TARGET_HIDDEN"
         | "TARGET_MINIMIZED"
+        | "TARGET_RESTORED"
         | "TARGET_LOST"
+        | "TARGET_REBIND_ATTEMPTED"
+        | "TARGET_REBOUND"
+        | "TARGET_BINDING_CHANGED"
+        | "TARGET_PERMISSION_REVOKED"
+        | "DISPLAY_TOPOLOGY_CHANGED"
         | "TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_TARGET_CHANGED",
         "DESCRIPTION_SET" => "REMOTE_DESKTOP_EVENT_DESCRIPTION_SET",
         "ICE_CANDIDATE_ADDED" => "REMOTE_DESKTOP_EVENT_CANDIDATE_ADDED",
@@ -130,6 +165,9 @@ pub(in crate::daemon::plugins::remote_desktop) fn event_type_proto_name(
         "MEDIA_PIPELINE_STATS" => "REMOTE_DESKTOP_EVENT_MEDIA_PIPELINE_STATS",
         "MEDIA_PIPELINE_DOWNGRADED" => "REMOTE_DESKTOP_EVENT_QUALITY_CHANGED",
         "TRANSPORT_CONNECTED" => "REMOTE_DESKTOP_EVENT_TRANSPORT_CONNECTED",
+        "MEDIA_SOURCE_LOST" | "TRANSPORT_FAILED" | "SESSION_DEGRADED" => {
+            "REMOTE_DESKTOP_EVENT_STATE_CHANGED"
+        }
         "TRANSPORT_BLOCKED" => "REMOTE_DESKTOP_EVENT_TRANSPORT_BLOCKED",
         "INPUT_CHANNEL_OPENING"
         | "INPUT_CHANNEL_OPENED"
@@ -150,7 +188,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn event_type_proto_name(
 mod tests {
     use serde_json::json;
 
-    use super::{MAX_EVENTS_PER_SESSION, RemoteDesktopEventLog, event_type_proto_name};
+    use super::{event_type_proto_name, RemoteDesktopEventLog, MAX_EVENTS_PER_SESSION};
     use crate::daemon::plugins::remote_desktop::contract::RemoteDesktopSessionState;
 
     #[test]

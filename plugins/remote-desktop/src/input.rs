@@ -167,6 +167,9 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_input_frame_with_policy(
     input_policy: &Value,
     frame: &RemoteDesktopInputFrame,
 ) -> InputApplyOutcome {
+    if let Some(reason) = input_policy_reject_reason(input_policy, frame.kind().as_policy_key()) {
+        return InputApplyOutcome::rejected(reason);
+    }
     match frame {
         RemoteDesktopInputFrame::Pointer(frame) => {
             apply_pointer_frame(frame, pointer_target_from_policy(input_policy))
@@ -267,16 +270,22 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
     let mut reject_diagnostics = InputRejectCoalescer::default();
     while let Some(event) = data_channel.poll().await {
         match event {
-            DataChannelEvent::OnOpen => record_input_channel_event(
-                &sessions,
-                &session_id,
-                epoch,
-                "INPUT_CHANNEL_OPENED",
-                json!({
-                    "label": INPUT_DATA_CHANNEL_LABEL,
-                    "input_injection_available": input_injection_available(),
-                }),
-            ),
+            DataChannelEvent::OnOpen => {
+                let activation =
+                    input_activation_status(&sessions, &session_id, epoch, &input_policy);
+                record_input_channel_event(
+                    &sessions,
+                    &session_id,
+                    epoch,
+                    "INPUT_CHANNEL_OPENED",
+                    json!({
+                        "label": INPUT_DATA_CHANNEL_LABEL,
+                        "input_injection_available": input_injection_available(),
+                        "input_activation": activation.status,
+                        "input_activation_reason": activation.reason,
+                    }),
+                );
+            }
             DataChannelEvent::OnClose | DataChannelEvent::OnClosing => {
                 flush_input_rejections(&mut reject_diagnostics, &sessions, &session_id, epoch);
                 record_input_channel_event(
@@ -358,19 +367,6 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     );
                     continue;
                 };
-                if let Some(reason) = input_policy_reject_reason(&effective_input_policy, kind) {
-                    rejected_count = rejected_count.saturating_add(1);
-                    record_input_rejection(
-                        &mut reject_diagnostics,
-                        &sessions,
-                        &session_id,
-                        epoch,
-                        InputRejectSample::new(reason, rejected_count)
-                            .kind(kind)
-                            .action(frame.action()),
-                    );
-                    continue;
-                }
                 let outcome = apply_input_frame_with_policy(&effective_input_policy, &frame);
                 if outcome.applied {
                     accepted_count = accepted_count.saturating_add(1);
@@ -414,6 +410,63 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
         }
     }
     flush_input_rejections(&mut reject_diagnostics, &sessions, &session_id, epoch);
+}
+
+#[derive(Debug, Clone, Copy)]
+struct InputActivationStatus {
+    status: &'static str,
+    reason: Option<&'static str>,
+}
+
+fn input_activation_status(
+    sessions: &RemoteDesktopSessionStore,
+    session_id: &str,
+    epoch: TransportEpoch,
+    base_policy: &Value,
+) -> InputActivationStatus {
+    let Some(effective_policy) = current_session_input_policy(
+        sessions,
+        session_id,
+        InputTransportGuard::DirectWebRtc(epoch),
+        base_policy,
+    ) else {
+        return InputActivationStatus {
+            status: "blocked",
+            reason: Some("target_input_not_ready"),
+        };
+    };
+    if let Some(reason) = input_activation_reject_reason(&effective_policy) {
+        return InputActivationStatus {
+            status: "blocked",
+            reason: Some(reason),
+        };
+    }
+    if sessions.mark_input_channel_ready(session_id, epoch) {
+        InputActivationStatus {
+            status: "enabled",
+            reason: None,
+        }
+    } else {
+        InputActivationStatus {
+            status: "blocked",
+            reason: Some("media_not_active"),
+        }
+    }
+}
+
+fn input_activation_reject_reason(policy: &Value) -> Option<&'static str> {
+    if !input_injection_available() {
+        return Some("input_injection_unavailable");
+    }
+    let key_reason = input_policy_reject_reason(policy, "key");
+    let pointer_reason = input_policy_reject_reason(policy, "pointer");
+    if key_reason.is_none() || pointer_reason.is_none() {
+        None
+    } else {
+        pointer_reason
+            .or(key_reason)
+            .or(Some("input_policy_denied"))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -672,13 +725,12 @@ pub(in crate::daemon::plugins::remote_desktop) fn current_session_input_policy(
         }
     }
     let snapshot = session.target_snapshot();
+    let input_scope = session.target_binding().input_scope();
     if !snapshot.input_enabled() {
         return None;
     }
-    Some(input_policy_for_target_snapshot(
-        base_policy.clone(),
-        snapshot,
-    ))
+    let input_policy = input_policy_for_target_snapshot(base_policy.clone(), snapshot);
+    Some(input_policy_for_scope(input_policy, input_scope))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1120,13 +1172,18 @@ mod platform {
 mod tests {
     use super::*;
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
+    use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+    use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
+    use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::target::{
         RemoteAppTargetResolver, ResourceEntryTargetResolver, TargetGeometry,
     };
     use crate::daemon::plugins::remote_desktop::target_tracking::{
-        TargetObservation, TargetTrackerState,
+        RemoteAppTargetBindingStateMachine, TargetObservation,
     };
-    use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
+    use crate::daemon::plugins::remote_desktop::test_support::{
+        live_remote_target_metadata, test_session_init,
+    };
 
     fn binding_for_mode(
         entry: &ResourceEntry,
@@ -1372,6 +1429,133 @@ mod tests {
     }
 
     #[test]
+    fn current_session_input_policy_reapplies_session_input_scope_to_latest_snapshot() {
+        let entry = ResourceEntry {
+            resource_ura: "easynet:///r/acme/resource/window.scope".into(),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
+            kind: ResourceType::Window,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "window:macos:cgwindow:10:42".into(),
+            display_name: "Cursor".into(),
+            metadata: live_remote_target_metadata(json!({
+                "window_id": 42,
+                "pid": 10,
+                "app_name": "Cursor",
+                "x": 100,
+                "y": 200,
+                "width": 800,
+                "height": 600,
+                "geometry_revision": 1,
+            })),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        let mut init = test_session_init(
+            "rd-input-scope-reapply",
+            "easynet:///r/acme/resource/window.scope",
+            vec!["webrtc".into()],
+        );
+        init.mode = "interactive".to_string();
+        init.target_binding = binding_for_mode(&entry, "interactive");
+        let epoch = TransportEpoch::new(7);
+        let mut session = RemoteDesktopSession::new(init);
+        session.begin_webrtc_negotiation(epoch);
+
+        let store = RemoteDesktopSessionStore::new();
+        store.with_sessions(|sessions| {
+            sessions.insert("rd-input-scope-reapply".to_string(), session);
+        });
+
+        let policy = current_session_input_policy(
+            &store,
+            "rd-input-scope-reapply",
+            InputTransportGuard::DirectWebRtc(epoch),
+            &json!({
+                "keyboard_enabled": true,
+                "pointer_enabled": true,
+                "clipboard_enabled": true,
+                "file_drop_enabled": true,
+            }),
+        )
+        .expect("current input policy");
+
+        assert_eq!(policy["input_scope"], json!("view_only"));
+        assert_eq!(
+            policy["pointer_target"]["target_geometry_revision"],
+            json!(1)
+        );
+        assert_eq!(
+            input_policy_reject_reason(&policy, "pointer"),
+            Some("input_scope_unsupported")
+        );
+        assert_eq!(
+            input_policy_reject_reason(&policy, "key"),
+            Some("input_scope_unsupported")
+        );
+        assert!(
+            !input_policy_allows(&policy, "pointer"),
+            "current session policy must not let a loose base policy reopen view-only pointer input"
+        );
+        assert!(
+            !input_policy_allows(&policy, "key"),
+            "current session policy must not let a loose base policy reopen view-only keyboard input"
+        );
+        assert!(
+            !input_policy_allows(&policy, "clipboard"),
+            "clipboard must remain unsupported on the input data channel"
+        );
+        assert!(
+            !input_policy_allows(&policy, "file_drop"),
+            "file drop must remain unsupported on the input data channel"
+        );
+    }
+
+    #[test]
+    fn apply_input_frame_with_policy_is_the_policy_enforcement_boundary() {
+        let pointer =
+            parse_input_frame(r#"{"type":"pointer","action":"move","x":10,"y":20}"#).unwrap();
+        let key = parse_input_frame(r#"{"type":"key","action":"down","code":"KeyA"}"#).unwrap();
+        let clipboard = parse_input_frame(r#"{"type":"clipboard","text":"hello"}"#).unwrap();
+
+        let pointer_denied = apply_input_frame_with_policy(
+            &json!({
+                "input_scope": "display_global",
+                "pointer_enabled": false,
+            }),
+            &pointer,
+        );
+        assert!(!pointer_denied.applied);
+        assert_eq!(pointer_denied.reason, Some("input_policy_denied"));
+
+        let view_only_pointer = apply_input_frame_with_policy(
+            &json!({
+                "input_scope": "view_only",
+                "pointer_enabled": true,
+            }),
+            &pointer,
+        );
+        assert!(!view_only_pointer.applied);
+        assert_eq!(view_only_pointer.reason, Some("input_scope_unsupported"));
+
+        let view_only_key = apply_input_frame_with_policy(
+            &json!({
+                "input_scope": "view_only",
+                "keyboard_enabled": true,
+            }),
+            &key,
+        );
+        assert!(!view_only_key.applied);
+        assert_eq!(view_only_key.reason, Some("input_scope_unsupported"));
+
+        let clipboard_outcome =
+            apply_input_frame_with_policy(&json!({"clipboard_enabled": true}), &clipboard);
+        assert!(!clipboard_outcome.applied);
+        assert_eq!(
+            clipboard_outcome.reason,
+            Some("clipboard_input_unsupported")
+        );
+    }
+
+    #[test]
     fn clipboard_and_file_drop_frames_are_explicitly_unsupported_on_input_channel() {
         let clipboard = parse_input_frame(r#"{"type":"clipboard","text":"hello"}"#).unwrap();
         let file_drop = parse_input_frame(r#"{"type":"file_drop","files":["/tmp/a"]}"#).unwrap();
@@ -1422,7 +1606,7 @@ mod tests {
             first_seen_at: "2026-06-01T00:00:00Z".into(),
         };
         let binding = binding_for(&entry);
-        let mut tracker = TargetTrackerState::from_binding(&binding);
+        let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding);
         tracker
             .commit_observation(TargetObservation::GeometryChanged {
                 geometry: TargetGeometry {

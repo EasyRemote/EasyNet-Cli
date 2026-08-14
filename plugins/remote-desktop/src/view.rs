@@ -47,6 +47,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
     });
     let production_readiness = json!({
         "ready": production_media_ready,
+        "target_scope_ready": session.target_scope_ready(),
         "requires_production_codec": true,
         "production_codec_negotiated": session.production_codec_negotiated(),
         "media_transport_ready": session.media_transport_ready(),
@@ -57,6 +58,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
         "session_id": session.session_id(),
         "state": session.state().json_name(),
         "state_proto": session.state().wire_name(),
+        "lifecycle_phase": session.lifecycle_phase().as_str(),
+        "consent_phase": session.consent_phase().as_str(),
         "subject_ura": session.subject_ura(),
         "subject_type": session.subject_type().as_str(),
         "subject_display_name": session.subject_display_name(),
@@ -70,7 +73,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
         "end_reason": session.end_reason(),
         "video": video.clone(),
         "input_policy": input_policy.clone(),
-        "consent": session.consent().to_value(),
+        "consent": session.consent_state().to_value(),
         "media_transport_ready": session.media_transport_ready(),
         "client_media_ready": session.client_media_ready(),
         "transport_epoch": session.transport_epoch(),

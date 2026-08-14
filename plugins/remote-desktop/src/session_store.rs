@@ -138,6 +138,20 @@ impl RemoteDesktopSessionStore {
         );
     }
 
+    /// Mark the input plane active for a direct WebRTC epoch after policy and
+    /// platform input gates have already passed.
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_input_channel_ready(
+        &self,
+        session_id: &str,
+        epoch: TransportEpoch,
+    ) -> bool {
+        let mut sessions = self.lock();
+        let Some(session) = sessions.get_mut(session_id) else {
+            return false;
+        };
+        session.activate_input_for_transport_epoch(epoch)
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn target_observation_inputs_for_session(
         &self,
         session_id: &str,
@@ -557,12 +571,10 @@ mod tests {
         store.with_sessions(|sessions| {
             let session = sessions.get("rd-peer-connected-only").unwrap();
             assert!(!session.media_transport_ready());
-            assert!(
-                session
-                    .events()
-                    .iter()
-                    .any(|event| event["event_type"] == json!("PEER_CONNECTION_STATE_CHANGED"))
-            );
+            assert!(session
+                .events()
+                .iter()
+                .any(|event| event["event_type"] == json!("PEER_CONNECTION_STATE_CHANGED")));
         });
     }
 

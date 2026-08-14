@@ -4,7 +4,7 @@
 // File: plugins/remote-desktop/src/session_signaling.rs
 // Description: SDP, ICE, and WebRTC diagnostic state for one remote desktop session.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::constants::{
     MAX_LOCAL_ICE_CANDIDATES, MAX_REMOTE_ICE_CANDIDATES, TRANSPORT_WEBRTC,

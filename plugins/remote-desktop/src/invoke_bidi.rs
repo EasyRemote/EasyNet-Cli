@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch};
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
@@ -19,12 +19,12 @@ use crate::daemon::plugins::remote_desktop::constants::{
     REASON_RESOURCE_UNAVAILABLE, TRANSPORT_INVOKE_BIDI,
 };
 use crate::daemon::plugins::remote_desktop::input::{
-    InputTransportGuard, RemoteDesktopInputFrame, apply_input_frame_with_policy,
-    current_session_input_policy, input_policy_for_binding, input_policy_reject_reason,
-    parse_input_frame, unsupported_input_channel_reason,
+    apply_input_frame_with_policy, current_session_input_policy, input_policy_for_binding,
+    parse_input_frame, unsupported_input_channel_reason, InputTransportGuard,
+    RemoteDesktopInputFrame,
 };
 use crate::daemon::plugins::remote_desktop::media::encode::{
-    BuiltinH264StreamTerminal, BuiltinH264TerminalCallback, spawn_builtin_h264_stream,
+    spawn_builtin_h264_stream, BuiltinH264StreamTerminal, BuiltinH264TerminalCallback,
 };
 use crate::daemon::plugins::remote_desktop::request::AttachEncoding;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
@@ -118,29 +118,6 @@ fn parse_bidi_input_frame(frame: Value) -> Result<RemoteDesktopInputFrame, Value
 
 fn handle_parsed_bidi_input_frame(input_policy: &Value, frame: &RemoteDesktopInputFrame) -> Value {
     let kind = frame.kind().as_policy_key();
-    if let Some(reason) = unsupported_input_channel_reason(kind) {
-        return json!({
-            "type": "warn",
-            "code": reason,
-            "input_type": kind,
-            "action": frame.action(),
-            "message": "clipboard and file-drop frames require dedicated remote desktop abilities",
-        });
-    }
-    if let Some(reason) = input_policy_reject_reason(input_policy, kind) {
-        let code = if reason == "input_policy_denied" {
-            "input_disabled"
-        } else {
-            reason
-        };
-        return json!({
-            "type": "warn",
-            "code": code,
-            "input_type": kind,
-            "action": frame.action(),
-            "message": "interactive input is disabled by this remote desktop session policy",
-        });
-    }
     let outcome = apply_input_frame_with_policy(input_policy, frame);
     if outcome.applied {
         json!({
@@ -149,11 +126,23 @@ fn handle_parsed_bidi_input_frame(input_policy: &Value, frame: &RemoteDesktopInp
             "action": frame.action(),
         })
     } else {
+        let reason = outcome.reason.unwrap_or("input_injection_failed");
+        let code = if reason == "input_policy_denied" {
+            "input_disabled"
+        } else {
+            reason
+        };
+        let message = if unsupported_input_channel_reason(kind) == Some(reason) {
+            "clipboard and file-drop frames require dedicated remote desktop abilities"
+        } else {
+            "interactive input is disabled by this remote desktop session policy"
+        };
         json!({
             "type": "warn",
-            "code": outcome.reason.unwrap_or("input_injection_failed"),
+            "code": code,
             "input_type": kind,
             "action": frame.action(),
+            "message": message,
         })
     }
 }

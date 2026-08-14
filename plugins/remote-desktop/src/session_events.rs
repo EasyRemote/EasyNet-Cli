@@ -305,13 +305,23 @@ pub(in crate::daemon::plugins::remote_desktop) fn client_media_state_changed(
 
 /// Build a target-scoped media source loss event.
 pub(in crate::daemon::plugins::remote_desktop) fn media_source_lost(
+    binding: &RemoteAppTargetBinding,
     reason: TargetResolutionError,
     transport_epoch: u64,
 ) -> RemoteDesktopEventProjection {
     (
         "MEDIA_SOURCE_LOST",
         json!({
+            "subject_ura": binding.subject_ura(),
+            "binding_id": binding.binding_id(),
+            "binding_epoch": binding.binding_epoch(),
+            "previous_target_identity_epoch": binding.target_identity_epoch(),
+            "target_identity_epoch": binding.target_identity_epoch(),
+            "target_geometry_revision": binding.target_geometry_revision(),
+            "media_source_epoch": binding.media_source_epoch(),
             "reason": reason.as_str(),
+            "reason_code": reason.as_str(),
+            "recoverability": "requires_target_refresh",
             "failure_domain": "target",
             "frontend_action": reason.frontend_action().as_str(),
             "transport_kind": TRANSPORT_WEBRTC,
@@ -348,6 +358,7 @@ mod tests {
     use serde_json::json;
 
     use crate::daemon::plugins::remote_desktop::target::TargetResolutionError;
+    use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
 
     use super::{
         media_source_lost, preview_transport_connected, webrtc_failed_with_context,
@@ -388,11 +399,45 @@ mod tests {
 
     #[test]
     fn media_source_loss_projects_typed_frontend_action() {
-        let (event_type, payload) =
-            media_source_lost(TargetResolutionError::TargetPermissionMissing, 9);
+        let init = test_session_init(
+            "rd-media-source-lost",
+            "easynet:///r/acme/resource/display.test",
+            vec!["webrtc".into()],
+        );
+        let (event_type, payload) = media_source_lost(
+            &init.target_binding,
+            TargetResolutionError::TargetPermissionMissing,
+            9,
+        );
 
         assert_eq!(event_type, "MEDIA_SOURCE_LOST");
+        assert_eq!(
+            payload["subject_ura"],
+            json!("easynet:///r/acme/resource/display.test")
+        );
+        assert_eq!(
+            payload["binding_id"],
+            json!(init.target_binding.binding_id())
+        );
+        assert_eq!(
+            payload["binding_epoch"],
+            json!(init.target_binding.binding_epoch())
+        );
+        assert_eq!(
+            payload["target_identity_epoch"],
+            json!(init.target_binding.target_identity_epoch())
+        );
+        assert_eq!(
+            payload["target_geometry_revision"],
+            json!(init.target_binding.target_geometry_revision())
+        );
+        assert_eq!(
+            payload["media_source_epoch"],
+            json!(init.target_binding.media_source_epoch())
+        );
         assert_eq!(payload["reason"], json!("target_permission_missing"));
+        assert_eq!(payload["reason_code"], json!("target_permission_missing"));
+        assert_eq!(payload["recoverability"], json!("requires_target_refresh"));
         assert_eq!(payload["failure_domain"], json!("target"));
         assert_eq!(payload["frontend_action"], json!("request_permission"));
         assert_eq!(payload["transport_kind"], json!("webrtc"));

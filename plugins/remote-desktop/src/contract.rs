@@ -5,7 +5,7 @@
 //! and backend rules have no meaning in the shared runtime model.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,7 +254,9 @@ pub(super) enum RemoteDesktopContractError {
         backend_id: String,
         status: &'static str,
     },
-    #[error("production remote desktop backend {backend_id} uses diagnostic transport {transport}")]
+    #[error(
+        "production remote desktop backend {backend_id} uses diagnostic transport {transport}"
+    )]
     ProductionBackendUsesDiagnosticTransport {
         backend_id: String,
         transport: &'static str,

@@ -18,7 +18,7 @@
 // Architectural Position:
 // - Remote-desktop session aggregate component.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::sync::watch;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

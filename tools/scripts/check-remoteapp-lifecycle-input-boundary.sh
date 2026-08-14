@@ -47,7 +47,11 @@ reject_multiline() {
 
 TARGET_TRACKING="$REMOTE_ROOT/target_tracking.rs"
 TARGET_OBSERVER="$REMOTE_ROOT/target_observer.rs"
+TARGET_MONITOR="$REMOTE_ROOT/target_monitor.rs"
 SESSION="$REMOTE_ROOT/session.rs"
+SESSION_CONSENT_STATE="$REMOTE_ROOT/session_consent_state.rs"
+SESSION_IDENTITY="$REMOTE_ROOT/session_identity.rs"
+RUNTIME="$REMOTE_ROOT/runtime.rs"
 CONTRACT="$REMOTE_ROOT/contract.rs"
 SESSION_STATE="$REMOTE_ROOT/session_state.rs"
 SESSION_TRANSPORT_STATE="$REMOTE_ROOT/session_transport_state.rs"
@@ -60,10 +64,11 @@ TARGET="$REMOTE_ROOT/target.rs"
 SCK="$REMOTE_ROOT/screencapturekit_capture.rs"
 REQUEST="$REMOTE_ROOT/request.rs"
 CREATE_SESSION="$REMOTE_ROOT/handlers/create_session.rs"
+SESSION_LIFECYCLE="$REMOTE_ROOT/session_lifecycle.rs"
 SESSION_CREATION="$REMOTE_ROOT/session_creation.rs"
 INVOKE_BIDI="$REMOTE_ROOT/invoke_bidi.rs"
 
-for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$SESSION" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$INPUT" "$TARGET" "$SCK" "$REQUEST" "$CREATE_SESSION" "$SESSION_CREATION" "$INVOKE_BIDI"; do
+for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$INPUT" "$TARGET" "$SCK" "$REQUEST" "$CREATE_SESSION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -94,16 +99,26 @@ require 'tracker_commits_move_resize_and_lost_without_rebinding' "$TARGET_TRACKI
   'E2E-08 must have move/resize/lost tracker regression coverage'
 require 'pointer_policy_consumes_latest_target_tracker_snapshot' "$INPUT" \
   'E2E-08 input transform must test latest target tracker snapshot consumption'
+require 'current_session_input_policy_reapplies_session_input_scope_to_latest_snapshot' "$INPUT" \
+  'production input path must test reapplying session-owned input scope to the latest target snapshot'
 require 'input_policy_for_target_snapshot\(' "$INPUT" \
   'input policy must be derivable from the latest target tracker snapshot'
 require 'fn current_session_input_policy\(' "$INPUT" \
   'production input path must resolve current policy per frame'
 require 'let snapshot = session\.target_snapshot\(\);' "$INPUT" \
   'production input path must read the latest session target snapshot'
+require 'let input_scope = session\.target_binding\(\)\.input_scope\(\);' "$INPUT" \
+  'production input path must read input scope from the session-owned target binding'
 require 'if !snapshot\.input_enabled\(\)' "$INPUT" \
   'production input path must disable input after target loss'
+require 'input_policy_for_scope\(input_policy, input_scope\)' "$INPUT" \
+  'production input path must reapply input scope after deriving latest pointer target geometry'
 require 'policy\["pointer_target"\]\["target_geometry_revision"\]' "$INPUT" \
   'input policy test must assert pointer target geometry revision'
+require 'loose base policy reopen view-only pointer input' "$INPUT" \
+  'input policy tests must prove loose base policies cannot reopen view-only pointer input'
+require 'loose base policy reopen view-only keyboard input' "$INPUT" \
+  'input policy tests must prove loose base policies cannot reopen view-only keyboard input'
 require 'observe_bound_session_target_once' "$TARGET_OBSERVER" \
   'target observer must expose the bound-session observation boundary'
 require 'record_target_observation_for_session' "$TARGET_OBSERVER" \
@@ -112,23 +127,63 @@ require 'observation_provider_commits_through_session_store_boundary' "$TARGET_O
   'E2E-08 must test observer-to-session-store geometry commits'
 require 'stale_observation_cannot_commit_after_session_binding_reuse' "$TARGET_OBSERVER" \
   'stale observations must not advance a reused session binding'
+require 'RemoteDesktopTargetMonitor' "$RUNTIME" \
+  'remote desktop runtime must own a plugin-scoped target monitor'
+require 'fn track_session_target\(' "$RUNTIME" \
+  'remote desktop runtime must expose a target tracking registration boundary'
+require 'plugin\.target_monitor\.track\(plugin, session_id\)' "$RUNTIME" \
+  'target tracking registration must go through the plugin-owned target monitor'
+require 'fn cancel_session_target_tracking\(' "$RUNTIME" \
+  'remote desktop runtime must expose a target tracking cancellation boundary'
+require 'self\.target_monitor\.cancel\(session_id\)' "$RUNTIME" \
+  'target tracking cancellation must go through the plugin-owned target monitor'
+require 'RemoteDesktopPlugin::track_session_target\(&plugin, tracker_session_id\)' "$CREATE_SESSION" \
+  'create_session must register created sessions with the target monitor'
+require 'plugin\.cancel_session_target_tracking\(session_id\)' "$SESSION_LIFECYCLE" \
+  'terminal session cleanup must cancel target tracking'
+require 'fn apply_command\(command: TargetMonitorCommand, tracked: &mut HashSet<String>\) -> bool' "$TARGET_MONITOR" \
+  'target monitor must centralize command state transitions'
+require 'TargetMonitorCommand::Track \{ session_id \}' "$TARGET_MONITOR" \
+  'target monitor command state machine must handle Track explicitly'
+require 'TargetMonitorCommand::Cancel \{ session_id \}' "$TARGET_MONITOR" \
+  'target monitor command state machine must handle Cancel explicitly'
+require 'tracked\.remove\(&session_id\)' "$TARGET_MONITOR" \
+  'target monitor Cancel command must remove the session id from the tracked set'
+require 'TargetMonitorCommand::Shutdown => false' "$TARGET_MONITOR" \
+  'target monitor command state machine must handle Shutdown as the terminal command'
+require 'target_monitor_command_state_machine_tracks_cancels_and_shuts_down' "$TARGET_MONITOR" \
+  'target monitor must test track/cancel/shutdown command semantics'
+require 'fn push_target_tracking_event\(' "$SESSION" \
+  'session aggregate must own target-event transport epoch projection'
+require 'payload\["transport_epoch"\]' "$SESSION" \
+  'target lifecycle event payloads must include current transport_epoch before event-log projection'
+require 'self\.transport\.active_epoch\(\)' "$SESSION" \
+  'target lifecycle event transport_epoch must come from the session transport state'
+require 'self\.push_target_tracking_event\(event\)' "$SESSION" \
+  'record_target_observation must write target events through the session aggregate projection boundary'
+require 'target_tracking_events_include_active_transport_epoch_at_session_boundary' "$SESSION" \
+  'E2E-08 must prove target lifecycle events carry the active transport epoch'
 
 # E2E-09: target loss is not transport failure. The session aggregate must
 # degrade the media source, disable input, and project MEDIA_SOURCE_LOST with
 # failure_domain=target after TARGET_LOST.
 require 'fn record_target_observation\(' "$SESSION" \
   'session aggregate must be the committed target observation writer'
-require 'event\.event_type\(\) == "TARGET_LOST"' "$SESSION" \
-  'session must branch target loss separately from transport failure'
+require 'let target_loss_reason = match &observation' "$SESSION" \
+  'session must branch typed target loss reasons separately from transport failure'
+require 'TargetObservation::Lost \{ reason, \.\. \} => Some\(\*reason\)' "$SESSION" \
+  'session target-loss branch must preserve typed target loss reason'
+require 'TargetObservation::PermissionRevoked' "$SESSION" \
+  'session target-loss branch must handle permission revocation separately from transport failure'
 require 'Suspended,' "$CONTRACT" \
   'remote desktop lifecycle must expose an explicit Suspended state'
 require 'REMOTE_DESKTOP_SESSION_STATE_SUSPENDED' "$CONTRACT" \
   'remote desktop lifecycle must expose a canonical Suspended wire state'
-require 'fn mark_suspended\(' "$SESSION_STATE" \
+require 'fn suspend\(' "$SESSION_STATE" \
   'session state machine must centralize target-loss suspension'
-require 'self\.lifecycle\.mark_suspended\(\)' "$SESSION" \
+require 'self\.lifecycle\.suspend\(\)' "$SESSION" \
   'target loss must suspend the session lifecycle'
-reject_multiline 'm/event\.event_type\(\) == "TARGET_LOST".{0,240}?mark_degraded\(\)/s' "$SESSION" \
+reject_multiline 'm/target_loss_reason\.is_some\(\).{0,240}?mark_degraded\(\)/s' "$SESSION" \
   'target loss must not reuse transport degraded lifecycle semantics'
 require 'fn can_transition_primary\(' "$SESSION_TRANSPORT_STATE" \
   'transport phase transitions must be centralized'
@@ -140,6 +195,8 @@ require 'self\.transport\.mark_media_source_lost\(epoch\)' "$SESSION" \
   'target loss must stop the active media source'
 require 'session_events::media_source_lost' "$SESSION" \
   'target loss must project a media-source lost event'
+require_multiline 'm/media_source_lost\(\s*self\.target\.binding\(\)/s' "$SESSION" \
+  'MEDIA_SOURCE_LOST projection must consume the committed session target binding'
 require 'target_lost_stops_active_media_source_without_transport_failure' "$SESSION" \
   'E2E-09 must test target loss versus transport failure'
 require 'target_lost_index < media_source_lost_index' "$SESSION" \
@@ -156,12 +213,36 @@ require 'report_client_media_state\(epoch, "stalled"\)' "$SESSION" \
   'E2E-09 must exercise the late client media-state path after target loss'
 require 'lost_observation_returns_media_source_stop_effect_after_debounce' "$TARGET_OBSERVER" \
   'E2E-09 must test observer-debounced target loss returns media stop effect'
+require_multiline 'm/fn observe_window\(.+?owner_matches.+?window\.visibility_state != TargetVisibilityState::Visible.+?snapshot\.title\(\).+?snapshot\.focused\(\)/s' "$TARGET_OBSERVER" \
+  'window observer must prioritize hidden/minimized availability before title/focus updates'
+require 'window_observation_prioritizes_visibility_loss_over_title_or_focus_changes' "$TARGET_OBSERVER" \
+  'target observer tests must prove hidden/minimized availability outranks title/focus updates'
 require 'MEDIA_SOURCE_LOST' "$SESSION_EVENTS" \
   'session events must project MEDIA_SOURCE_LOST'
+require 'binding: &RemoteAppTargetBinding' "$SESSION_EVENTS" \
+  'MEDIA_SOURCE_LOST event builder must require committed target binding context'
+require '"subject_ura": binding\.subject_ura\(\)' "$SESSION_EVENTS" \
+  'MEDIA_SOURCE_LOST payload must carry subject URA'
+require '"binding_id": binding\.binding_id\(\)' "$SESSION_EVENTS" \
+  'MEDIA_SOURCE_LOST payload must carry binding id'
+require '"binding_epoch": binding\.binding_epoch\(\)' "$SESSION_EVENTS" \
+  'MEDIA_SOURCE_LOST payload must carry binding epoch'
+require '"target_identity_epoch": binding\.target_identity_epoch\(\)' "$SESSION_EVENTS" \
+  'MEDIA_SOURCE_LOST payload must carry target identity epoch'
+require '"target_geometry_revision": binding\.target_geometry_revision\(\)' "$SESSION_EVENTS" \
+  'MEDIA_SOURCE_LOST payload must carry target geometry revision'
+require '"media_source_epoch": binding\.media_source_epoch\(\)' "$SESSION_EVENTS" \
+  'MEDIA_SOURCE_LOST payload must carry media source epoch'
 require '"failure_domain": "target"' "$SESSION_EVENTS" \
   'MEDIA_SOURCE_LOST must be a target-domain failure'
 require '"media_transport_ready": false' "$SESSION_EVENTS" \
   'MEDIA_SOURCE_LOST must mark media transport unavailable'
+require 'events\[media_source_lost_index\]\["binding_id"\]' "$SESSION" \
+  'E2E-09 must assert event-log top-level MEDIA_SOURCE_LOST binding id'
+require 'events\[media_source_lost_index\]\["target_identity_epoch"\]' "$SESSION" \
+  'E2E-09 must assert event-log top-level MEDIA_SOURCE_LOST target identity epoch'
+require 'events\[media_source_lost_index\]\["media_source_epoch"\]' "$SESSION" \
+  'E2E-09 must assert event-log top-level MEDIA_SOURCE_LOST media source epoch'
 reject 'TRANSPORT_FAILED' "$SESSION" \
   'session target-loss tests must not rely on a transport-failed event'
 require '"TARGET_REBIND_FAILED"' "$TARGET_TRACKING" \
@@ -194,6 +275,22 @@ require 'route_state' "$VIEW" \
   'public session view must project route state'
 require 'transport_route_state\.clone\(\)' "$VIEW" \
   'public session view must reuse one route-state projection across signaling/readiness'
+require 'fn production_scope_ready\(' "$TARGET" \
+  'target binding must own the production scope readiness predicate'
+require 'self\.target\.binding\(\)\.production_scope_ready\(\)' "$SESSION" \
+  'production media readiness must be gated by target binding scope readiness'
+require '"target_scope_ready": session\.target_scope_ready\(\)' "$VIEW" \
+  'public production readiness must expose target scope readiness'
+require 'production_media_ready_requires_target_scope_ready' "$SESSION" \
+  'production online predicate must test scope fallback/widening rejection'
+require 'scope widening or display fallback must prevent production online' "$SESSION" \
+  'production readiness test must assert fallback/widening cannot report online'
+require '"scope_widened": self\.scope_audit\.scope_widened' "$TARGET" \
+  'TARGET_BOUND payload must project scope widening from the committed binding audit'
+require '"display_fallback_used": self\.scope_audit\.display_fallback_used' "$TARGET" \
+  'TARGET_BOUND payload must project display fallback from the committed binding audit'
+require 'target_bound\["payload"\]\["display_fallback_used"\]' "$SESSION" \
+  'production readiness test must assert TARGET_BOUND fallback projection'
 require '"host_only_no_nat_or_relay"' "$VIEW_TRANSPORT" \
   'host-only transport degradation must have a typed unavailable reason'
 require '"relay_unavailable"' "$VIEW_TRANSPORT" \
@@ -206,6 +303,48 @@ require 'srflx_without_relay_reports_typed_relay_unavailable_reason' "$VIEW_TRAN
   'transport tests must prove STUN-only candidates expose relay-unavailable degradation'
 require 'relay_ready' "$SPEC" \
   'SPEC must name relay_ready as the aggregate any-relay state instead of overloading TURN relay'
+
+# Consent is a session aggregate sub-state, not an immutable profile field. The
+# current public grant remains visible for audit, but input/media gates must read
+# active consent state from the aggregate.
+require 'enum RemoteDesktopConsentPhase' "$SESSION_CONSENT_STATE" \
+  'remote desktop session must have an explicit consent state machine'
+require 'struct RemoteDesktopConsentState' "$SESSION_CONSENT_STATE" \
+  'session aggregate must own consent lifecycle state'
+require 'RemoteDesktopConsentPhase::Active' "$SESSION_CONSENT_STATE" \
+  'inserted sessions must represent active consent explicitly'
+require 'RemoteDesktopConsentPhase::Revoked' "$SESSION_CONSENT_STATE" \
+  'consent state machine must represent revoked consent'
+require 'RemoteDesktopConsentPhase::Expired' "$SESSION_CONSENT_STATE" \
+  'consent state machine must represent expired consent'
+require 'fn permits_media_input\(' "$SESSION_CONSENT_STATE" \
+  'consent state must expose the media/input gate predicate'
+require 'consent: RemoteDesktopConsentState' "$SESSION" \
+  'session aggregate must own dynamic consent state'
+require 'RemoteDesktopConsentState::active' "$SESSION" \
+  'session aggregate must activate consent only after creation workflow succeeds'
+reject_multiline 'm/struct RemoteDesktopSessionProfile\s*\{[^}]*consent:\s*RemoteDesktopConsentGrant/s' "$SESSION_IDENTITY" \
+  'immutable session profile must not own dynamic consent state'
+require 'session\.consent_state\(\)\.to_value\(\)' "$VIEW" \
+  'public session view must project aggregate consent state'
+require 'if !self\.consent\.permits_media_input\(\)' "$SESSION" \
+  'input activation must require active consent'
+require 'TargetObservation::PermissionRevoked' "$SESSION" \
+  'session aggregate must consume permission revocation observations'
+require 'self\.consent\.revoke\(\)' "$SESSION" \
+  'consent revocation must advance the consent state machine'
+require '"TARGET_PERMISSION_REVOKED"' "$TARGET_TRACKING" \
+  'permission revocation must project TARGET_PERMISSION_REVOKED through target tracking'
+require 'self\.transport\.mark_media_source_lost\(epoch\)' "$SESSION" \
+  'consent revocation must mark active media source lost'
+require 'self\.consent\.expire\(\)' "$SESSION" \
+  'terminal session lifecycle must expire active consent'
+require 'consent_revocation_suspends_media_and_blocks_input_activation' "$SESSION" \
+  'consent revocation must have session-level media/input regression coverage'
+require 'permission_revoked_index < media_source_lost_index' "$SESSION" \
+  'consent revocation test must prove permission event precedes media source loss'
+require 'revoked consent must prevent input from reactivating' "$SESSION" \
+  'consent revocation test must prove inactive consent blocks input activation'
 
 # E2E-10: weak identity must fail closed as ambiguity or metadata-incomplete
 # before any stream starts. Native ScreenCaptureKit selection must also return
@@ -260,16 +399,22 @@ require 'fn input_policy_for_scope\(' "$INPUT" \
   'input policy must centralize scope-based disablement'
 require 'fn input_policy_reject_reason\(' "$INPUT" \
   'input rejection reason must be centralized for datachannel and bidi paths'
+require 'fn apply_input_frame_with_policy\(' "$INPUT" \
+  'input frame application must expose a single policy-enforced application boundary'
+require_multiline 'm/fn apply_input_frame_with_policy\([^}]+?input_policy_reject_reason\(input_policy, frame\.kind\(\)\.as_policy_key\(\)\)/s' "$INPUT" \
+  'input frame application must enforce centralized input policy before OS injection'
+require 'apply_input_frame_with_policy_is_the_policy_enforcement_boundary' "$INPUT" \
+  'input tests must prove apply_input_frame_with_policy is the policy enforcement boundary'
 require 'InputScope::ViewOnly => \{' "$INPUT" \
   'view-only input policy branch must exist'
 require 'disable_input_policy_key\(map, "keyboard_enabled"\)' "$INPUT" \
   'view-only input policy must disable keyboard'
 require 'disable_input_policy_key\(map, "pointer_enabled"\)' "$INPUT" \
   'view-only input policy must disable pointer'
-require 'Some\("input_scope_unsupported"\)' "$INPUT" \
+require_multiline 'm/fn input_policy_reject_reason\(.+?input_scope == Some\(InputScope::ViewOnly\.as_str\(\)\).+?return Some\("input_scope_unsupported"\)/s' "$INPUT" \
   'view-only key/pointer rejection must report input_scope_unsupported'
-require 'InputRejectSample::new\(reason, rejected_count\)' "$INPUT" \
-  'WebRTC input rejection diagnostics must use the centralized reject reason'
+require_multiline 'm/InputRejectSample::new\(\s*outcome\.reason\.unwrap_or\("input_injection_failed"\),\s*rejected_count/s' "$INPUT" \
+  'WebRTC input rejection diagnostics must use the policy-enforced apply outcome'
 require 'fn current_session_input_policy\(' "$INPUT" \
   'input readiness must be centralized at the session aggregate boundary'
 require 'InputTransportGuard::DirectWebRtc\(epoch\)' "$INPUT" \
@@ -280,8 +425,10 @@ require 'InputTransportGuard::DiagnosticPreview' "$INVOKE_BIDI" \
   'diagnostic bidi input path must guard frames by preview attachment state'
 require 'handle_parsed_bidi_input_frame\(&effective_input_policy' "$INVOKE_BIDI" \
   'diagnostic bidi input path must apply parsed input frames against refreshed policy'
-require 'input_policy_reject_reason\(input_policy, kind\)' "$INVOKE_BIDI" \
-  'diagnostic bidi input path must use the same reject reason contract'
+require 'apply_input_frame_with_policy\(input_policy, frame\)' "$INVOKE_BIDI" \
+  'diagnostic bidi input path must use the single policy-enforced input application boundary'
+reject 'input_policy_reject_reason' "$INVOKE_BIDI" \
+  'diagnostic bidi path must not duplicate input policy checks outside apply_input_frame_with_policy'
 require 'diagnostic_bidi_view_only_input_reports_scope_unsupported' "$INVOKE_BIDI" \
   'E2E-11 must test bidi view-only input_scope_unsupported reporting'
 require 'diagnostic_bidi_input_rechecks_session_target_snapshot' "$INVOKE_BIDI" \

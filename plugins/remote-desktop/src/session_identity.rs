@@ -39,15 +39,17 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSessionInit {
 /// Invariant 3: every session has an authenticated creator caller; subsequent
 /// control and data-plane calls must present the same caller. The token alone
 /// is not a reusable authorization object.
-/// Invariant 4: the local-user consent grant is captured once at creation and
-/// cannot be rewritten by signaling or media paths.
+/// Invariant 4: live consent state is deliberately not stored here. The session
+/// aggregate owns consent lifecycle through `RemoteDesktopConsentState`; this
+/// profile stores only creation-time identity and policy facts.
 #[derive(Debug, Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSessionProfile {
     session_id: String,
     session_token: String,
     creator_caller_ura: String,
-    consent: RemoteDesktopConsentGrant,
-    target_binding: RemoteAppTargetBinding,
+    subject_ura: String,
+    subject_type: ResourceType,
+    subject_display_name: String,
     mode: String,
     transport_preferences: Vec<String>,
     video: RemoteDesktopVideoConstraints,
@@ -55,22 +57,24 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSessionProfil
 }
 
 impl RemoteDesktopSessionProfile {
-    /// Build the immutable profile and return the requested initial lease TTL.
+    /// Build the immutable profile and return the creation-owned dynamic facts.
     pub(in crate::daemon::plugins::remote_desktop) fn from_init(
         init: RemoteDesktopSessionInit,
-    ) -> (Self, u64) {
+    ) -> (Self, RemoteDesktopConsentGrant, RemoteAppTargetBinding, u64) {
+        let target_binding = init.target_binding;
         let profile = Self {
             session_id: init.session_id,
             session_token: init.session_token,
             creator_caller_ura: init.creator_caller_ura,
-            consent: init.consent,
-            target_binding: init.target_binding,
+            subject_ura: target_binding.subject_ura().to_string(),
+            subject_type: target_binding.target_kind().resource_type(),
+            subject_display_name: target_binding.subject_display_name().to_string(),
             mode: init.mode,
             transport_preferences: init.transport_preferences,
             video: init.video,
             input_policy: init.input_policy,
         };
-        (profile, init.lease_ttl_ms)
+        (profile, init.consent, target_binding, init.lease_ttl_ms)
     }
 
     /// Stable opaque identifier for this remote desktop session.
@@ -98,31 +102,19 @@ impl RemoteDesktopSessionProfile {
         &self.creator_caller_ura
     }
 
-    /// Immutable local-user consent grant captured at session creation.
-    pub(in crate::daemon::plugins::remote_desktop) fn consent(&self) -> &RemoteDesktopConsentGrant {
-        &self.consent
-    }
-
     /// Canonical resource URA that this session is allowed to operate on.
     pub(in crate::daemon::plugins::remote_desktop) fn subject_ura(&self) -> &str {
-        self.target_binding.subject_ura()
+        &self.subject_ura
     }
 
     /// Resource type captured at session creation.
     pub(in crate::daemon::plugins::remote_desktop) fn subject_type(&self) -> ResourceType {
-        self.target_binding.target_kind().resource_type()
+        self.subject_type
     }
 
     /// Human-facing display name for the acted-on resource.
     pub(in crate::daemon::plugins::remote_desktop) fn subject_display_name(&self) -> &str {
-        self.target_binding.subject_display_name()
-    }
-
-    /// Resolved target binding captured before the active session row exists.
-    pub(in crate::daemon::plugins::remote_desktop) fn target_binding(
-        &self,
-    ) -> &RemoteAppTargetBinding {
-        &self.target_binding
+        &self.subject_display_name
     }
 
     /// Requested session mode.
