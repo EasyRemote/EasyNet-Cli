@@ -7,6 +7,7 @@ SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 mkdir -p "$SANDBOX/plugins/remote-desktop/src/handlers"
+mkdir -p "$SANDBOX/plugins/remote-desktop/src/media"
 mkdir -p "$SANDBOX/plugins/remote-desktop/src/transport"
 mkdir -p "$SANDBOX/docs/design"
 
@@ -160,6 +161,19 @@ mod tests {
 RS
 
 cat >"$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs" <<'RS'
+struct ScreenCaptureKitTarget;
+
+impl ScreenCaptureKitTarget {
+    fn capture_proof(&self) -> &ResolvedCaptureTargetProof {
+        todo!()
+    }
+}
+
+fn target_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {
+    let target = resolve_target_for_binding(ability, binding).unwrap();
+    binding.validate_reverified_capture_proof(ability, target.capture_proof());
+}
+
 fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
     let off_display_window_ids = vec![10];
     if !off_display_window_ids.is_empty() {
@@ -204,6 +218,34 @@ mod tests {
     fn fake_factory_receives_session_owned_binding_without_resource_re_resolution() {
         let seen_binding_id = Some(expected_binding_id);
         assert_eq!(seen_binding_id, Some(expected_binding_id));
+    }
+}
+RS
+
+cat >"$SANDBOX/plugins/remote-desktop/src/media/mod.rs" <<'RS'
+const XCAP_OPENH264_BACKEND: RemoteDesktopMediaBackendDescriptor =
+    RemoteDesktopMediaBackendDescriptor {
+        supported_subjects: &["display"],
+    };
+
+const XCAP_OPENH264_WEBRTC_BACKEND: RemoteDesktopMediaBackendDescriptor =
+    RemoteDesktopMediaBackendDescriptor {
+        supported_subjects: &["display"],
+    };
+
+fn xcap_supported_screen_entry(entry: ResourceEntry) -> bool {
+    let backend = entry.metadata.get("backend").and_then(Value::as_str);
+    entry.kind == ResourceType::Display && backend == Some("xcap")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn xcap_baseline_catalog_is_display_only_for_remoteapp_targets() {
+        assert!(
+            select_builtin_h264_backend(&discovered_window_entry("xcap")).is_none(),
+            "diagnostic xcap baseline must not advertise app/window capture; exact remoteapp capture requires native target binding"
+        );
     }
 }
 RS
@@ -256,6 +298,17 @@ perl -0pi -e 's/None/Some(expected_binding_id)/g' \
 
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 
+perl -0pi -e 's/supported_subjects: &\["display"\]/supported_subjects: &["display", "window", "application"]/g' \
+  "$SANDBOX/plugins/remote-desktop/src/media/mod.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted xcap baseline app/window catalog support" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/supported_subjects: &\["display", "window", "application"\]/supported_subjects: &["display"]/g' \
+  "$SANDBOX/plugins/remote-desktop/src/media/mod.rs"
+
 cat >>"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_native_media.rs" <<'RS'
 fn bad(entry: ResourceEntry) {
     target_for_entry(entry);
@@ -296,6 +349,17 @@ perl -0pi -e 's/if true/if binding.target_kind\(\) == RemoteDesktopTargetKind::D
 
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 
+perl -0pi -e 's/\n    binding\.validate_reverified_capture_proof\(ability, target\.capture_proof\(\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted SCK target startup without committed binding proof revalidation" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/(let target = resolve_target_for_binding\(ability, binding\)\.unwrap\(\);)/$1\n    binding.validate_reverified_capture_proof(ability, target.capture_proof());/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
 perl -0pi -e 's/\n        validate_resource_inventory_state\(\);//' \
   "$SANDBOX/plugins/remote-desktop/src/target.rs"
 
@@ -310,6 +374,19 @@ perl -0pi -e 's/(\n        metadata_freshness_u64\(\);)/\n        validate_resou
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 
 cat >"$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs" <<'RS'
+struct ScreenCaptureKitTarget;
+
+impl ScreenCaptureKitTarget {
+    fn capture_proof(&self) -> &ResolvedCaptureTargetProof {
+        todo!()
+    }
+}
+
+fn target_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {
+    let target = resolve_target_for_binding(ability, binding).unwrap();
+    binding.validate_reverified_capture_proof(ability, target.capture_proof());
+}
+
 fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
     Ok(())
 }
@@ -321,6 +398,19 @@ if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1
 fi
 
 cat >"$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs" <<'RS'
+struct ScreenCaptureKitTarget;
+
+impl ScreenCaptureKitTarget {
+    fn capture_proof(&self) -> &ResolvedCaptureTargetProof {
+        todo!()
+    }
+}
+
+fn target_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {
+    let target = resolve_target_for_binding(ability, binding).unwrap();
+    binding.validate_reverified_capture_proof(ability, target.capture_proof());
+}
+
 fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
     let off_display_window_ids = vec![10];
     if !off_display_window_ids.is_empty() {

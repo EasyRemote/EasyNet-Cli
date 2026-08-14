@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="${CHECK_REMOTEAPP_TARGET_BINDING_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 REMOTE_ROOT="$ROOT/plugins/remote-desktop/src"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
+SCK_CAPTURE="$REMOTE_ROOT/screencapturekit_capture.rs"
+MEDIA="$REMOTE_ROOT/media/mod.rs"
 
 fail() {
   printf 'check-remoteapp-target-binding-boundary: %s\n' "$1" >&2
@@ -98,6 +100,15 @@ require 'session\.target_binding\(\)\.clone\(\)' \
 require 'target_for_binding\(' \
   "$REMOTE_ROOT/transport/webrtc_native_media.rs" \
   'native media must start from RemoteAppTargetBinding'
+require 'fn target_for_binding\(' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit media startup must expose target_for_binding as the native binding boundary'
+require 'binding\.validate_reverified_capture_proof\(ability, target\.capture_proof\(\)\)' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit target_for_binding must validate the live capture proof against the committed session binding'
+require 'fn capture_proof\(&self\) -> &ResolvedCaptureTargetProof' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit resolved target must expose a typed capture proof for binding revalidation'
 require 'trait RemoteAppMediaSourceFactory' \
   "$REMOTE_ROOT/transport/media_source.rs" \
   'direct WebRTC media source selection must use the RemoteAppMediaSourceFactory boundary'
@@ -128,6 +139,14 @@ require 'RemoteAppMediaSource::DisplayBaseline' \
 require 'TargetResolutionError::DisplayFallbackForbidden' \
   "$REMOTE_ROOT/transport/media_source.rs" \
   'direct WebRTC baseline guard must fail app/window sessions with typed display_fallback_forbidden reason'
+require_count_at_least 'supported_subjects: &\["display"\]' "$MEDIA" 2 \
+  'both xcap baseline media backends must advertise display-only support'
+require 'entry\.kind == ResourceType::Display && backend == Some\("xcap"\)' "$MEDIA" \
+  'xcap baseline selector must be display-only'
+require 'xcap_baseline_catalog_is_display_only_for_remoteapp_targets' "$MEDIA" \
+  'media catalog must test xcap baseline does not advertise app/window support'
+require 'diagnostic xcap baseline must not advertise app/window capture' "$MEDIA" \
+  'xcap display-only test must document that app/window need native target binding'
 require_count_at_least '"target_model": self\.target_kind\.target_model\(\)' \
   "$REMOTE_ROOT/target.rs" \
   2 \

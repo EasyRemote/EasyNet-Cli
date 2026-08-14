@@ -472,7 +472,10 @@ mod tests {
         observed_at_ms: u64,
     ) -> RemoteTargetListEntry {
         RemoteTargetListEntry {
-            resource_ura: format!("easynet:///r/test/resource/{resource_id}"),
+            resource_ura: crate::daemon::persistence::resources::build_resource_ura(
+                "test",
+                resource_id,
+            ),
             owner_agent: "easynet:///r/test/agent/device.dev.media".to_string(),
             host_device_ura: "easynet:///r/test/device/dev".to_string(),
             entry_type: "window".to_string(),

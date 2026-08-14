@@ -321,7 +321,7 @@ mod tests {
         observed_at_ms: u64,
     ) -> ResourceEntry {
         ResourceEntry {
-            resource_ura: format!("easynet:///r/acme/resource/{id}"),
+            resource_ura: crate::daemon::persistence::resources::build_resource_ura("acme", id),
             owner_agent: owner_agent.to_string(),
             kind,
             binding: ResourceBinding::LocalDevice,
