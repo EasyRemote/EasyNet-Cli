@@ -57,6 +57,9 @@ mod tests {
 
     #[test]
     fn tracker_reports_rebind_failure_after_target_loss_without_policy() {}
+
+    #[test]
+    fn tracker_routes_post_loss_title_focus_through_explicit_rebind() {}
 }
 RS
 
@@ -705,6 +708,11 @@ write_fixture
 perl -0pi -e 's/"target_focus_after_loss";//' \
   "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
 run_fail 'post-loss focus observations must enter explicit rebind instead of being silently swallowed'
+
+write_fixture
+perl -0pi -e 's/tracker_routes_post_loss_title_focus_through_explicit_rebind/tracker_swallows_title_focus_reappearance/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'target tracker must test title/focus reappearance through explicit rebind semantics'
 
 write_fixture
 perl -0pi -e 's/snapshot_observer_reappearance_requires_explicit_rebind_policy/snapshot_observer_reappearance_revives_stale_media/' \

@@ -907,6 +907,27 @@ mod tests {
             .expect("window target binding resolves")
     }
 
+    fn lost_window_tracker() -> RemoteAppTargetBindingStateMachine {
+        let binding = window_binding();
+        let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding);
+        assert!(tracker
+            .commit_observation(TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "window disappeared".into(),
+                observed_at_ms: 10,
+            })
+            .is_none());
+        tracker
+            .commit_observation(TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "window still disappeared".into(),
+                observed_at_ms: 20,
+            })
+            .expect("lost commits after debounce");
+        assert_eq!(tracker.snapshot().to_value()["status"], json!("lost"));
+        tracker
+    }
+
     #[test]
     fn tracker_snapshot_starts_from_session_binding() {
         let binding = window_binding();
@@ -1047,23 +1068,7 @@ mod tests {
 
     #[test]
     fn tracker_reports_rebind_failure_after_target_loss_without_policy() {
-        let binding = window_binding();
-        let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding);
-
-        assert!(tracker
-            .commit_observation(TargetObservation::Lost {
-                reason: TargetResolutionError::TargetNotFound,
-                detail: "window disappeared".into(),
-                observed_at_ms: 10,
-            })
-            .is_none());
-        tracker
-            .commit_observation(TargetObservation::Lost {
-                reason: TargetResolutionError::TargetNotFound,
-                detail: "window still missing".into(),
-                observed_at_ms: 20,
-            })
-            .expect("lost commits after debounce");
+        let mut tracker = lost_window_tracker();
 
         assert!(
             tracker
@@ -1152,6 +1157,74 @@ mod tests {
                 observed_at_ms: 70,
             })
             .is_none());
+    }
+
+    #[test]
+    fn tracker_routes_post_loss_title_focus_through_explicit_rebind() {
+        let mut title_tracker = lost_window_tracker();
+
+        let title_rebind_attempted = title_tracker
+            .commit_observation(TargetObservation::TitleChanged {
+                title: Some("Cursor reopened".to_string()),
+                observed_at_ms: 30,
+            })
+            .expect("post-loss title observation enters explicit rebind");
+        assert_eq!(
+            title_rebind_attempted.event_type(),
+            "TARGET_REBIND_ATTEMPTED"
+        );
+        assert_eq!(
+            title_rebind_attempted.payload()["detail"],
+            json!("target_title_after_loss")
+        );
+
+        let title_rebind_failed = title_tracker
+            .commit_observation(TargetObservation::TitleChanged {
+                title: Some("Cursor reopened again".to_string()),
+                observed_at_ms: 40,
+            })
+            .expect("second title observation fails closed without rebind policy");
+        assert_eq!(title_rebind_failed.event_type(), "TARGET_REBIND_FAILED");
+        assert_eq!(
+            title_rebind_failed.payload()["reason_code"],
+            json!("explicit_rebind_required")
+        );
+        assert_eq!(
+            title_tracker.snapshot().to_value()["input_enabled"],
+            json!(false)
+        );
+
+        let mut focus_tracker = lost_window_tracker();
+        let focus_rebind_attempted = focus_tracker
+            .commit_observation(TargetObservation::FocusChanged {
+                focused: true,
+                observed_at_ms: 30,
+            })
+            .expect("post-loss focus observation enters explicit rebind");
+        assert_eq!(
+            focus_rebind_attempted.event_type(),
+            "TARGET_REBIND_ATTEMPTED"
+        );
+        assert_eq!(
+            focus_rebind_attempted.payload()["detail"],
+            json!("target_focus_after_loss")
+        );
+
+        let focus_rebind_failed = focus_tracker
+            .commit_observation(TargetObservation::FocusChanged {
+                focused: false,
+                observed_at_ms: 40,
+            })
+            .expect("second focus observation fails closed without rebind policy");
+        assert_eq!(focus_rebind_failed.event_type(), "TARGET_REBIND_FAILED");
+        assert_eq!(
+            focus_rebind_failed.payload()["frontend_action"],
+            json!("refresh_targets")
+        );
+        assert_eq!(
+            focus_tracker.snapshot().to_value()["input_enabled"],
+            json!(false)
+        );
     }
 
     #[test]

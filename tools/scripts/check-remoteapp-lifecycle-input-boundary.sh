@@ -259,6 +259,8 @@ require 'target_title_after_loss' "$TARGET_TRACKING" \
   'post-loss title observations must enter explicit rebind instead of being silently swallowed'
 require 'target_focus_after_loss' "$TARGET_TRACKING" \
   'post-loss focus observations must enter explicit rebind instead of being silently swallowed'
+require 'tracker_routes_post_loss_title_focus_through_explicit_rebind' "$TARGET_TRACKING" \
+  'target tracker must test title/focus reappearance through explicit rebind semantics'
 require 'snapshot_observer_reappearance_requires_explicit_rebind_policy' "$TARGET_OBSERVER" \
   'target observer must prove platform-visible target reappearance cannot revive media/input without explicit rebind policy'
 require 'target_reappearance_after_loss_emits_explicit_rebind_failure' "$SESSION" \
