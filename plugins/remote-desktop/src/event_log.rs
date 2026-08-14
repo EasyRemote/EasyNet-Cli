@@ -34,6 +34,27 @@ impl RemoteDesktopEventRecord {
     }
 }
 
+/// Replay projection for `remote_desktop.watch_events`.
+///
+/// What this is NOT: an unbounded history cursor. The event log is a fixed
+/// ring; when a caller asks for a sequence older than the retained window this
+/// projection prepends a diagnostic frame so consumers can re-snapshot instead
+/// of silently accepting a partial lifecycle history as complete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopEventReplay {
+    events: Vec<Value>,
+}
+
+impl RemoteDesktopEventReplay {
+    fn new(events: Vec<Value>) -> Self {
+        Self { events }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn into_events(self) -> Vec<Value> {
+        self.events
+    }
+}
+
 /// Bounded event log owned by one remote desktop session.
 ///
 /// Invariant 1: sequence numbers are monotonic within this log and only
@@ -64,6 +85,39 @@ impl RemoteDesktopEventLog {
             .iter()
             .map(RemoteDesktopEventRecord::to_value)
             .collect()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn replay_from(
+        &self,
+        session_id: &str,
+        state: RemoteDesktopSessionState,
+        from_sequence: u64,
+    ) -> RemoteDesktopEventReplay {
+        let first_retained_sequence = self.events.front().and_then(event_sequence);
+        let mut events = Vec::new();
+        if let Some(first_sequence) = first_retained_sequence {
+            if from_sequence.saturating_add(1) < first_sequence {
+                events.push(self.compaction_diagnostic_event(
+                    session_id,
+                    state,
+                    from_sequence,
+                    first_sequence,
+                ));
+            }
+        }
+        events.extend(
+            self.events
+                .iter()
+                .map(RemoteDesktopEventRecord::to_value)
+                .filter(|event| {
+                    event
+                        .get("sequence")
+                        .and_then(Value::as_u64)
+                        .map(|sequence| sequence > from_sequence)
+                        .unwrap_or(true)
+                }),
+        );
+        RemoteDesktopEventReplay::new(events)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn subscribe(
@@ -127,6 +181,54 @@ impl RemoteDesktopEventLog {
             let _ = event_tx.send(event);
         }
     }
+
+    fn compaction_diagnostic_event(
+        &self,
+        session_id: &str,
+        state: RemoteDesktopSessionState,
+        from_sequence: u64,
+        first_retained_sequence: u64,
+    ) -> Value {
+        let last_retained_sequence = self.events.back().and_then(event_sequence);
+        let marker_sequence = first_retained_sequence.saturating_sub(1);
+        let payload = json!({
+            "reason_code": "event_log_compacted",
+            "recoverability": "resnapshot",
+            "requested_from_sequence": from_sequence,
+            "first_retained_sequence": first_retained_sequence,
+            "last_retained_sequence": last_retained_sequence,
+            "next_sequence": self.next_sequence,
+            "retained_event_capacity": MAX_EVENTS_PER_SESSION,
+        });
+        json!({
+            "event_id": format!(
+                "{session_id}:event-log-compacted:{from_sequence}:{first_retained_sequence}"
+            ),
+            "session_id": session_id,
+            "sequence": marker_sequence,
+            "subject_ura": Value::Null,
+            "binding_id": Value::Null,
+            "binding_epoch": Value::Null,
+            "previous_target_identity_epoch": Value::Null,
+            "target_identity_epoch": Value::Null,
+            "target_geometry_revision": Value::Null,
+            "media_source_epoch": Value::Null,
+            "transport_epoch": Value::Null,
+            "event_type": "EVENT_LOG_COMPACTED",
+            "event_type_proto": event_type_proto_name("EVENT_LOG_COMPACTED"),
+            "reason_code": "event_log_compacted",
+            "recoverability": "resnapshot",
+            "state": state.json_name(),
+            "state_proto": state.wire_name(),
+            "terminal": state.is_terminal(),
+            "at_ms": now_ms(),
+            "payload": payload,
+        })
+    }
+}
+
+fn event_sequence(event: &RemoteDesktopEventRecord) -> Option<u64> {
+    event.value.get("sequence").and_then(Value::as_u64)
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn event_type_proto_name(
@@ -168,6 +270,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn event_type_proto_name(
         "MEDIA_SOURCE_LOST" | "TRANSPORT_FAILED" | "SESSION_DEGRADED" => {
             "REMOTE_DESKTOP_EVENT_STATE_CHANGED"
         }
+        "EVENT_LOG_COMPACTED" => "REMOTE_DESKTOP_EVENT_STATE_CHANGED",
         "TRANSPORT_BLOCKED" => "REMOTE_DESKTOP_EVENT_TRANSPORT_BLOCKED",
         "INPUT_CHANNEL_OPENING"
         | "INPUT_CHANNEL_OPENED"
@@ -237,6 +340,35 @@ mod tests {
                 "retained event sequences must remain contiguous and monotonic"
             );
         }
+    }
+
+    #[test]
+    fn event_replay_projects_compaction_before_retained_window() {
+        let mut log = RemoteDesktopEventLog::new();
+
+        for index in 0..=MAX_EVENTS_PER_SESSION {
+            log.push(
+                "rd-event-replay",
+                RemoteDesktopSessionState::Negotiating,
+                "TARGET_MOVED",
+                json!({ "index": index }),
+            );
+        }
+
+        let replay = log
+            .replay_from("rd-event-replay", RemoteDesktopSessionState::Negotiating, 0)
+            .into_events();
+        let diagnostic = replay.first().expect("replay starts with diagnostic");
+        assert_eq!(diagnostic["event_type"], json!("EVENT_LOG_COMPACTED"));
+        assert_eq!(diagnostic["reason_code"], json!("event_log_compacted"));
+        assert_eq!(diagnostic["recoverability"], json!("resnapshot"));
+        assert_eq!(
+            diagnostic["payload"]["retained_event_capacity"],
+            json!(MAX_EVENTS_PER_SESSION)
+        );
+        assert_eq!(diagnostic["payload"]["requested_from_sequence"], json!(0));
+        assert_eq!(diagnostic["payload"]["first_retained_sequence"], json!(2));
+        assert_eq!(replay[1]["sequence"], json!(2));
     }
 
     #[test]

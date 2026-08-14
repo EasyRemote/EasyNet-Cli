@@ -11,7 +11,9 @@ use tokio::sync::{broadcast, watch};
 
 use crate::daemon::persistence::resources::ResourceType;
 use crate::daemon::plugins::remote_desktop::constants::REASON_SESSION_EXPIRED;
-use crate::daemon::plugins::remote_desktop::event_log::RemoteDesktopEventLog;
+use crate::daemon::plugins::remote_desktop::event_log::{
+    RemoteDesktopEventLog, RemoteDesktopEventReplay,
+};
 use crate::daemon::plugins::remote_desktop::request::{
     RemoteDesktopInputPolicy, RemoteDesktopVideoConstraints,
 };
@@ -325,6 +327,18 @@ impl RemoteDesktopSession {
     /// Bounded event-log projection.
     pub(in crate::daemon::plugins::remote_desktop) fn events(&self) -> Vec<Value> {
         self.event_log.events()
+    }
+
+    /// Bounded replay projection for `remote_desktop.watch_events`.
+    pub(in crate::daemon::plugins::remote_desktop) fn replay_events_from(
+        &self,
+        from_sequence: u64,
+    ) -> RemoteDesktopEventReplay {
+        self.event_log.replay_from(
+            self.profile.session_id(),
+            self.lifecycle.state(),
+            from_sequence,
+        )
     }
 
     /// Subscribe to live session events without exposing the sender.

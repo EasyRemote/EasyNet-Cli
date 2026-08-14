@@ -33,18 +33,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                 }
             })?;
             ensure_session_control_access(&plugin, ABILITY_WATCH_EVENTS, &env, &args, session)?;
-            let events = session
-                .events()
-                .iter()
-                .filter(|event| {
-                    event
-                        .get("sequence")
-                        .and_then(Value::as_u64)
-                        .map(|sequence| sequence > from_sequence)
-                        .unwrap_or(true)
-                })
-                .cloned()
-                .collect();
+            let events = session.replay_events_from(from_sequence).into_events();
             if session.is_terminal() {
                 return Ok(StreamSource::Snapshot(events));
             }

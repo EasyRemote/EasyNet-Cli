@@ -72,6 +72,18 @@ require 'event_log_retains_fixed_ring_and_monotonic_sequences_under_large_storm'
   'PERF-04 must prove bounded event ring behavior under a large storm'
 require '100_000' "$EVENT_LOG" \
   'PERF-04 event storm test must push 100k events'
+require 'RemoteDesktopEventReplay' "$EVENT_LOG" \
+  'PERF-04 watch_events replay must use a domain replay projection, not handler-side JSON filtering'
+require 'event_replay_projects_compaction_before_retained_window' "$EVENT_LOG" \
+  'PERF-04 must prove replay reports compaction before the retained ring window'
+require 'EVENT_LOG_COMPACTED' "$EVENT_LOG" \
+  'PERF-04 replay must expose an explicit compaction diagnostic frame'
+require 'requested_from_sequence' "$EVENT_LOG" \
+  'PERF-04 compaction diagnostic must carry the requested replay cursor'
+require 'first_retained_sequence' "$EVENT_LOG" \
+  'PERF-04 compaction diagnostic must carry the first retained event sequence'
+require 'replay_events_from' "$ROOT/plugins/remote-desktop/src/handlers/watch_events.rs" \
+  'watch_events handler must delegate replay-window semantics to the session aggregate'
 
 require 'remote_desktop_signaling_rejects_more_than_ten_thousand_candidates_without_growth' "$SESSION_SIGNALING" \
   'PERF-05 must reject >10k trickle candidates without unbounded growth'

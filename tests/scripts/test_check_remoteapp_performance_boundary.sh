@@ -18,6 +18,7 @@ mkdir -p \
   "$SB/src/daemon/ability/builtins/resources/media" \
   "$SB/src/daemon/ability/builtins/resources" \
   "$SB/plugins/remote-desktop/src/transport" \
+  "$SB/plugins/remote-desktop/src/handlers" \
   "$SB/plugins/remote-desktop/src" \
   "$SB/tests"
 cp "$SCRIPT" "$SB/tools/scripts/check-remoteapp-performance-boundary.sh"
@@ -67,9 +68,22 @@ fn shared_host_snapshot_provider_bounds_session_fanout_to_one_enumeration_per_ti
 RS
 
 cat >"$SB/plugins/remote-desktop/src/event_log.rs" <<'RS'
+struct RemoteDesktopEventReplay;
 #[test]
 fn event_log_retains_fixed_ring_and_monotonic_sequences_under_large_storm() {
     let _ = 100_000;
+}
+#[test]
+fn event_replay_projects_compaction_before_retained_window() {
+    let _ = "EVENT_LOG_COMPACTED";
+    let _ = "requested_from_sequence";
+    let _ = "first_retained_sequence";
+}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/handlers/watch_events.rs" <<'RS'
+fn handle(session: Session) {
+    let _ = session.replay_events_from(0);
 }
 RS
 
@@ -163,5 +177,20 @@ rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "weakened PERF-03 session fanout should exit 1 (got $rc)"
 grep -q "S=128 active session ticks" /tmp/check-remoteapp-performance-boundary-fanout.out || fail "expected PERF-03 fanout failure"
+
+perl -0pi -e 's/const SESSION_COUNT: usize = 8;/const SESSION_COUNT: usize = 128;/' \
+  "$SB/plugins/remote-desktop/src/target_observer.rs"
+perl -0pi -e 's/fn event_replay_projects_compaction_before_retained_window/fn event_replay_silently_starts_at_retained_window/' \
+  "$SB/plugins/remote-desktop/src/event_log.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-event-replay.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing PERF-04 compaction replay proof should exit 1 (got $rc)"
+grep -q "compaction" /tmp/check-remoteapp-performance-boundary-event-replay.out || fail "expected PERF-04 compaction replay failure"
 
 printf 'test_check_remoteapp_performance_boundary.sh: all cases passed\n'
