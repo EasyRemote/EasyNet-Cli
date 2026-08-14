@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="${CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 SCRIPT="$ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 PROBE="$ROOT/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
+FIXTURE="$ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
 RECEIVER="$ROOT/examples/easynet-remoteapp-frame-receiver.rs"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 
@@ -21,6 +22,7 @@ require() {
 
 [[ -f "$SCRIPT" ]] || fail "missing host decoded-frame E2E harness"
 [[ -f "$PROBE" ]] || fail "missing bundled host decoded-frame probe"
+[[ -f "$FIXTURE" ]] || fail "missing bundled host sentinel fixture"
 [[ -f "$RECEIVER" ]] || fail "missing bundled host decoded-frame receiver"
 [[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
 
@@ -77,6 +79,12 @@ require 'dual_target_non_leak' "$SCRIPT" \
   'host decoded-frame E2E must bind evidence to a dual-target non-leak proof'
 require 'sentinel_fixture\.selected\.resource_ura|selected_fixture\.get\("resource_ura"\)' "$SCRIPT" \
   'host decoded-frame E2E must bind selected sentinel witness to the selected Resource URA'
+require 'EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID|selected_fixture\.get\("pid"\)' "$SCRIPT" \
+  'host decoded-frame E2E must validate selected sentinel pid when host fixture provides it'
+require 'EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID|unrelated_fixture\.get\("pid"\)' "$SCRIPT" \
+  'host decoded-frame E2E must validate unrelated sentinel pid when host fixture provides it'
+require 'resolved_identity\.get\("pid"\).*selected_pid|app_window_set\.get\("primary_pid"\).*selected_pid' "$SCRIPT" \
+  'host decoded-frame E2E must bind application sentinel pid to resolved identity or app window-set proof'
 require 'sentinel_fixture\.unrelated\.placement|unrelated_fixture\.get\("placement"\)' "$SCRIPT" \
   'host decoded-frame E2E must require unrelated sentinel witness placement'
 require 'full_display_leak_detected' "$SCRIPT" \
@@ -89,6 +97,20 @@ require '--probe-cmd|EASYNET_REMOTEAPP_FRAME_PROBE_CMD' "$SCRIPT" \
   'host decoded-frame E2E must allow explicit host probe injection'
 require 'host-remoteapp-decoded-frame-probe\.sh|BUNDLED_PROBE' "$SCRIPT" \
   'host decoded-frame E2E must default to the bundled EasyNet host probe'
+require 'host-remoteapp-sentinel-fixture\.sh|BUNDLED_SENTINEL_FIXTURE' "$SCRIPT" \
+  'host decoded-frame E2E must expose the bundled host sentinel fixture'
+require '--sentinel-fixture|EASYNET_REMOTEAPP_SENTINEL_FIXTURE' "$SCRIPT" \
+  'host decoded-frame E2E must allow launching a real host sentinel fixture'
+require '--sentinel-fixture-cmd|EASYNET_REMOTEAPP_SENTINEL_FIXTURE_CMD' "$SCRIPT" \
+  'host decoded-frame E2E must allow explicit sentinel fixture injection'
+require 'EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR' "$SCRIPT" \
+  'host decoded-frame E2E must pass a fixture state directory to sentinel fixture commands'
+require 'source "\$SENTINEL_FIXTURE_DIR/env\.sh"' "$SCRIPT" \
+  'host decoded-frame E2E must source sentinel fixture env before running the probe'
+require 'cleanup\.sh' "$SCRIPT" \
+  'host decoded-frame E2E must run fixture cleanup after host probes'
+require '\$TIMESTAMP-\$TARGET_KIND-\$\$' "$SCRIPT" \
+  'host decoded-frame E2E default report directory must isolate concurrent target-kind runs'
 require 'os\.path\.isfile|decoded_frame_sample.*exist' "$SCRIPT" \
   'host decoded-frame E2E must validate decoded frame artifact exists'
 require 'read_ppm_rgb|P6' "$SCRIPT" \
@@ -148,6 +170,39 @@ require 'resolved_identity' "$PROBE" \
   'bundled host probe must preserve target resolved identity evidence'
 require 'ambiguous target selection|TARGET_HINT|TARGET_RESOURCE_URA' "$PROBE" \
   'bundled host probe must fail closed on ambiguous picker target selection'
+require 'EASYNET_REMOTEAPP_TARGET_PID' "$PROBE" \
+  'bundled host probe must support native-pid target selection for application/window host fixtures'
+require 'primary_pid' "$PROBE" \
+  'bundled host probe must match native-pid target selection against primary_pid metadata'
+require 'metadata\.get\("pid"\)' "$PROBE" \
+  'bundled host probe must match native-pid target selection against pid metadata'
+
+require 'swiftc' "$FIXTURE" \
+  'bundled sentinel fixture must launch real native macOS windows through a compiled AppKit fixture'
+require 'AppKit' "$FIXTURE" \
+  'bundled sentinel fixture must use native AppKit windows instead of fake evidence'
+require 'EASYNET_REMOTEAPP_TARGET_HINT' "$FIXTURE" \
+  'bundled sentinel fixture must export a selected target hint for live inventory selection'
+require 'EASYNET_REMOTEAPP_TARGET_PID' "$FIXTURE" \
+  'bundled sentinel fixture must export a selected target pid for native identity selection'
+require 'EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID' "$FIXTURE" \
+  'bundled sentinel fixture must export selected sentinel pid evidence'
+require 'EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID' "$FIXTURE" \
+  'bundled sentinel fixture must export unrelated sentinel pid evidence'
+require 'EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB' "$FIXTURE" \
+  'bundled sentinel fixture must export selected RGB sentinel configuration'
+require 'EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB' "$FIXTURE" \
+  'bundled sentinel fixture must export unrelated RGB sentinel configuration'
+require 'EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL' "$FIXTURE" \
+  'bundled sentinel fixture must export selected witness label'
+require 'EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL' "$FIXTURE" \
+  'bundled sentinel fixture must export unrelated witness label'
+require 'other_application' "$FIXTURE" \
+  'bundled sentinel fixture must distinguish application non-leak placement from another application'
+require 'manifest\.json' "$FIXTURE" \
+  'bundled sentinel fixture must write a fixture manifest'
+require 'cleanup\.sh' "$FIXTURE" \
+  'bundled sentinel fixture must write an idempotent cleanup script'
 
 require 'show-remote-desktop-session' "$RECEIVER" \
   'bundled frame receiver must read the latest post-decoded-frame session projection'

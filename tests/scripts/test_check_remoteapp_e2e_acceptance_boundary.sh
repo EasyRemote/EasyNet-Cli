@@ -5,16 +5,19 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$REPO_ROOT/tools/scripts/check-remoteapp-e2e-acceptance-boundary.sh"
 HARNESS="$REPO_ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 PROBE_HARNESS="$REPO_ROOT/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
+SENTINEL_FIXTURE="$REPO_ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
 mkdir -p "$SANDBOX/tools/scripts" "$SANDBOX/docs/design" "$SANDBOX/examples"
 cp "$HARNESS" "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 cp "$PROBE_HARNESS" "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
+cp "$SENTINEL_FIXTURE" "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh"
 cp "$REPO_ROOT/examples/easynet-remoteapp-frame-receiver.rs" \
   "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
+chmod +x "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh"
 cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
 | E2E-03 exact window session | decoded stream excludes sentinel |
 | E2E-04 exact application session | decoded stream excludes other apps |
@@ -22,6 +25,24 @@ cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
 MD
 
 CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+"$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  --self-test \
+  --target-kind window >/dev/null
+"$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  --self-test \
+  --target-kind application >/dev/null
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
+perl -0pi -e 's/\$TIMESTAMP-\$TARGET_KIND-\$\$/\$TIMESTAMP/' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted colliding default report directories" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 
 PROBE="$SANDBOX/fake_probe.py"
 cat >"$PROBE" <<'PY'
@@ -111,6 +132,129 @@ EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
   --probe-cmd "python3 '$PROBE'" \
   --out-dir "$SANDBOX/e2e-out" >/dev/null
 
+FIXTURE_CMD="$SANDBOX/fake_sentinel_fixture.sh"
+cat >"$FIXTURE_CMD" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+mkdir -p "$EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR"
+cat >"$EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR/env.sh" <<'ENV'
+export EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB='255,0,0'
+export EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB='0,255,0'
+export EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL='selected-window-red'
+export EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL='unrelated-window-green'
+export EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PLACEMENT='other_window'
+export EASYNET_REMOTEAPP_TARGET_HINT='selected-window-red'
+export EASYNET_REMOTEAPP_TARGET_PID='4242'
+export EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID='4242'
+export EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID='4243'
+ENV
+cat >"$EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR/cleanup.sh" <<'CLEANUP'
+#!/usr/bin/env bash
+set -euo pipefail
+touch "$(dirname "$0")/cleanup-ran"
+CLEANUP
+chmod +x "$EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR/cleanup.sh"
+SH
+chmod +x "$FIXTURE_CMD"
+
+PROBE_FROM_FIXTURE_ENV="$SANDBOX/fake_probe_from_fixture_env.py"
+cat >"$PROBE_FROM_FIXTURE_ENV" <<'PY'
+import json
+import os
+import pathlib
+
+subject = "easynet:///r/localhost/resource/device.dev/streams/window.test"
+out = pathlib.Path(os.environ["EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON"]).parent
+sample = out / "sample-frame.ppm"
+sample.write_bytes(b"P6\n3 3\n255\n" + b"\xff\x00\x00" * 9)
+selected_rgb = [int(part) for part in os.environ["EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB"].split(",")]
+unrelated_rgb = [int(part) for part in os.environ["EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB"].split(",")]
+selected_pid = int(os.environ["EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID"])
+unrelated_pid = int(os.environ["EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID"])
+evidence = {
+    "status": "passed",
+    "live_inventory": {"ability": "resource.refresh_remote_targets"},
+    "session_id": "rd-e2e-fixture-test",
+    "selected_resource_ura": subject,
+    "invocation": {
+        "ability": "remote_desktop.create_session",
+        "subject_ura": subject,
+    },
+    "target_binding": {
+        "target_kind": "window",
+        "capture_scope": "WindowSurface",
+        "binding_id": "tb_fixture_test",
+        "binding_epoch": 1,
+        "target_identity_epoch": 1,
+        "target_geometry_revision": 1,
+        "media_source_epoch": 1,
+        "consent_epoch": 1,
+        "subject_ura": subject,
+        "scope_audit": {
+            "scope_widened": False,
+            "display_fallback_used": False,
+        },
+    },
+    "sentinel_fixture": {
+        "proof": "dual_target_non_leak",
+        "selected": {
+            "label": os.environ["EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL"],
+            "resource_ura": subject,
+            "rgb": selected_rgb,
+            "target_kind": "window",
+            "pid": selected_pid,
+        },
+        "unrelated": {
+            "label": os.environ["EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL"],
+            "placement": os.environ["EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PLACEMENT"],
+            "rgb": unrelated_rgb,
+            "pid": unrelated_pid,
+        },
+    },
+    "transport": {"kind": "webrtc"},
+    "production_media_ready": True,
+    "production_readiness": {
+        "ready": True,
+        "requires_production_codec": True,
+        "production_codec_negotiated": True,
+        "media_transport_ready": True,
+        "client_media_ready": True,
+    },
+    "decoded_frames": {
+        "count": 2,
+        "rtp_packet_count": 10,
+        "width": 3,
+        "height": 3,
+        "selected_content_present": True,
+        "unrelated_sentinel_present": False,
+        "full_display_leak_detected": False,
+        "selected_pixel_count": 9,
+        "unrelated_pixel_count": 0,
+    },
+    "artifacts": {
+        "decoded_frame_sample": str(sample),
+        "session_id": "rd-e2e-fixture-test",
+        "binding_id": "tb_fixture_test",
+        "binding_epoch": 1,
+        "capture_scope": "WindowSurface",
+    },
+}
+with open(os.environ["EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON"], "w", encoding="utf-8") as f:
+    json.dump(evidence, f)
+PY
+
+"$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  --run \
+  --sentinel-fixture \
+  --sentinel-fixture-cmd "bash '$FIXTURE_CMD'" \
+  --probe-cmd "python3 '$PROBE_FROM_FIXTURE_ENV'" \
+  --out-dir "$SANDBOX/e2e-fixture-out" >/dev/null
+[[ -f "$SANDBOX/e2e-fixture-out/sentinel-fixture/cleanup-ran" ]] || {
+  echo "remoteapp e2e harness did not run sentinel fixture cleanup" >&2
+  exit 1
+}
+
 PROBE_APP="$SANDBOX/fake_probe_application.py"
 cat >"$PROBE_APP" <<'PY'
 import json
@@ -143,6 +287,7 @@ evidence = {
         "resolved_identity": {
             "app_identity": "com.example.SelectedApp",
             "bundle_id": "com.example.SelectedApp",
+            "pid": 4242,
         },
         "app_window_set": {
             "display_id": 1,
@@ -163,11 +308,13 @@ evidence = {
             "resource_ura": subject,
             "rgb": [255, 0, 0],
             "target_kind": "application",
+            "pid": 4242,
         },
         "unrelated": {
             "label": "unrelated-app-green",
             "placement": "other_application",
             "rgb": [0, 255, 0],
+            "pid": 4243,
         },
     },
     "transport": {"kind": "webrtc"},
@@ -205,6 +352,8 @@ EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
 EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
 EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-app-red" \
 EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-app-green" \
+EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID="4242" \
+EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID="4243" \
 "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   --run \
   --target-kind application \
@@ -238,7 +387,19 @@ case "$*" in
       "metadata": {
         "availability": "available",
         "app_name": "EasyNetProbe",
-        "title": "selected-sentinel"
+        "title": "duplicate-sentinel",
+        "pid": 4242
+      }
+    },
+    {
+      "resource_ura": "easynet:///r/localhost/resource/device.dev/streams/window.other",
+      "type": "window",
+      "display_name": "EasyNet selected sentinel",
+      "metadata": {
+        "availability": "available",
+        "app_name": "EasyNetProbe",
+        "title": "duplicate-sentinel",
+        "pid": 4243
       }
     }
   ]
@@ -336,6 +497,9 @@ EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
 EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
 EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-window-red" \
 EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
+EASYNET_REMOTEAPP_TARGET_PID="4242" \
+EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID="4242" \
+EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID="4243" \
 "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   --run \
   --out-dir "$SANDBOX/bundled-probe-out" >/dev/null

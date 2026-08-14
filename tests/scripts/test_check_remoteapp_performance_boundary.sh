@@ -53,6 +53,17 @@ fn shared_host_snapshot_provider_coalesces_session_observer_reads() {
         "shared target observer must not multiply OS enumeration by session count"
     );
 }
+
+#[test]
+fn shared_host_snapshot_provider_bounds_session_fanout_to_one_enumeration_per_tick() {
+    const SESSION_COUNT: usize = 128;
+    let _ = Duration::ZERO;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "PERF-03 shared target sampler must use one host enumeration for 128 session ticks inside the same refresh window"
+    );
+}
 RS
 
 cat >"$SB/plugins/remote-desktop/src/event_log.rs" <<'RS'
@@ -137,5 +148,20 @@ rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "missing PERF-02 read-only proof should exit 1 (got $rc)"
 grep -q "PERF-02" /tmp/check-remoteapp-performance-boundary-meta.out || fail "expected PERF-02 failure"
+
+perl -0pi -e 's/meta_list_resources_can_refresh_cache/meta_list_resources_is_read_only_cache_projection/' \
+  "$SB/src/daemon/ability/builtins/resources/list.rs"
+perl -0pi -e 's/const SESSION_COUNT: usize = 128;/const SESSION_COUNT: usize = 8;/' \
+  "$SB/plugins/remote-desktop/src/target_observer.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-fanout.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "weakened PERF-03 session fanout should exit 1 (got $rc)"
+grep -q "S=128 active session ticks" /tmp/check-remoteapp-performance-boundary-fanout.out || fail "expected PERF-03 fanout failure"
 
 printf 'test_check_remoteapp_performance_boundary.sh: all cases passed\n'
