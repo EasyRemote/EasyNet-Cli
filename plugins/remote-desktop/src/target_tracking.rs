@@ -450,6 +450,12 @@ impl RemoteAppTargetBindingStateMachine {
         title: Option<String>,
         observed_at_ms: u64,
     ) -> Option<TargetTrackingEvent> {
+        if self.snapshot.status == TargetBindingPhase::Lost {
+            return self.begin_rebinding("target_title_after_loss", observed_at_ms);
+        }
+        if self.snapshot.status == TargetBindingPhase::Rebinding {
+            return self.commit_rebind_failed("target_title_after_loss", observed_at_ms);
+        }
         if self.snapshot.status != TargetBindingPhase::Resolved || self.snapshot.title == title {
             return None;
         }
@@ -470,6 +476,12 @@ impl RemoteAppTargetBindingStateMachine {
     }
 
     fn commit_focus(&mut self, focused: bool, observed_at_ms: u64) -> Option<TargetTrackingEvent> {
+        if self.snapshot.status == TargetBindingPhase::Lost {
+            return self.begin_rebinding("target_focus_after_loss", observed_at_ms);
+        }
+        if self.snapshot.status == TargetBindingPhase::Rebinding {
+            return self.commit_rebind_failed("target_focus_after_loss", observed_at_ms);
+        }
         if self.snapshot.status != TargetBindingPhase::Resolved
             || self.snapshot.focused == Some(focused)
         {

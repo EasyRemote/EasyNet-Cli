@@ -30,6 +30,8 @@ pub struct TargetTrackerSnapshot {
 fn commit_geometry() {
     geometry_event_type();
     "TARGET_PERMISSION_REVOKED";
+    "target_title_after_loss";
+    "target_focus_after_loss";
     if target_lost {
         "TARGET_REBIND_FAILED";
         "explicit_rebind_required";
@@ -560,6 +562,9 @@ mod tests {
 
     #[test]
     fn window_observation_prioritizes_visibility_loss_over_title_or_focus_changes() {}
+
+    #[test]
+    fn snapshot_observer_reappearance_requires_explicit_rebind_policy() {}
 }
 RS
 
@@ -695,6 +700,16 @@ write_fixture
 perl -0pi -e 's/tracker_reports_rebind_failure_after_target_loss_without_policy/tracker_swallows_rebind_signal/' \
   "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
 run_fail 'target tracker must test explicit rebind failure instead of silently swallowing post-loss observations'
+
+write_fixture
+perl -0pi -e 's/"target_focus_after_loss";//' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'post-loss focus observations must enter explicit rebind instead of being silently swallowed'
+
+write_fixture
+perl -0pi -e 's/snapshot_observer_reappearance_requires_explicit_rebind_policy/snapshot_observer_reappearance_revives_stale_media/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
+run_fail 'target observer must prove platform-visible target reappearance cannot revive media/input without explicit rebind policy'
 
 write_fixture
 perl -0pi -e 's/"TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_TARGET_CHANGED"/"TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_STATE_CHANGED"/' \

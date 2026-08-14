@@ -824,18 +824,22 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::time::Duration;
 
     use serde_json::json;
 
     use super::{
         observe_binding_against_host_snapshot, HostTargetSnapshot, HostTargetSnapshotProvider,
-        ObservedWindow, SharedHostTargetSnapshotProvider,
+        ObservedWindow, SharedHostTargetSnapshotProvider, SnapshotBackedTargetObservationProvider,
     };
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
-    use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+    use crate::daemon::plugins::remote_desktop::session::{
+        RemoteDesktopSession, RemoteDesktopState,
+    };
     use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
     use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::target::{
@@ -860,6 +864,19 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
+    #[derive(Debug)]
+    struct QueuedSnapshotProvider {
+        snapshots: Mutex<VecDeque<HostTargetSnapshot>>,
+    }
+
+    impl QueuedSnapshotProvider {
+        fn new(snapshots: Vec<HostTargetSnapshot>) -> Self {
+            Self {
+                snapshots: Mutex::new(VecDeque::from(snapshots)),
+            }
+        }
+    }
+
     impl HostTargetSnapshotProvider for CountingSnapshotProvider {
         fn snapshot(&self) -> anyhow::Result<HostTargetSnapshot> {
             self.calls.fetch_add(1, Ordering::SeqCst);
@@ -867,6 +884,16 @@ mod tests {
                 windows: Vec::new(),
                 display_ids: BTreeSet::new(),
             })
+        }
+    }
+
+    impl HostTargetSnapshotProvider for QueuedSnapshotProvider {
+        fn snapshot(&self) -> anyhow::Result<HostTargetSnapshot> {
+            self.snapshots
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .pop_front()
+                .ok_or_else(|| anyhow::anyhow!("queued host target snapshot exhausted"))
         }
     }
 
@@ -969,6 +996,34 @@ mod tests {
                 1,
             )
             .expect("window target binding resolves")
+    }
+
+    fn visible_window_snapshot() -> HostTargetSnapshot {
+        HostTargetSnapshot {
+            windows: vec![ObservedWindow {
+                window_id: 10,
+                pid: Some(9001),
+                bundle_id: Some("com.example.Editor".to_string()),
+                display_id: Some(42),
+                title: Some("Old title".to_string()),
+                focused: false,
+                geometry: TargetGeometry {
+                    x: Some(10.0),
+                    y: Some(20.0),
+                    width: Some(100.0),
+                    height: Some(80.0),
+                },
+                visibility_state: TargetVisibilityState::Visible,
+            }],
+            display_ids: BTreeSet::from([42]),
+        }
+    }
+
+    fn no_window_snapshot() -> HostTargetSnapshot {
+        HostTargetSnapshot {
+            windows: Vec::new(),
+            display_ids: BTreeSet::from([42]),
+        }
     }
 
     #[test]
@@ -1111,6 +1166,126 @@ mod tests {
             media_source_lost.reason,
             TargetResolutionError::TargetNotFound
         );
+    }
+
+    #[test]
+    fn snapshot_observer_reappearance_requires_explicit_rebind_policy() {
+        let store = Arc::new(RemoteDesktopSessionStore::new());
+        let epoch = TransportEpoch::new(17);
+        let mut init = test_session_init(
+            "rd-window-reappear",
+            "easynet:///r/acme/resource/window.editor",
+            vec!["webrtc".into()],
+        );
+        init.target_binding = window_binding();
+        init.mode = "interactive".to_string();
+        let mut session = RemoteDesktopSession::new(init);
+        session.begin_webrtc_negotiation(epoch);
+        session.set_local_webrtc_answer(
+            epoch,
+            json!({"type": "answer", "sdp": "v=0"}),
+            "sck-native",
+            true,
+            "easynet:///r/acme/ability/remote-desktop.transport".into(),
+        );
+        session.mark_webrtc_media_sending(epoch, "easynet-rd://rd-window-reappear".to_string());
+        assert!(
+            session.production_media_ready(),
+            "fixture starts with production media online before target loss"
+        );
+        store.with_sessions(|sessions| {
+            sessions.insert("rd-window-reappear".to_string(), session);
+        });
+
+        let provider =
+            SnapshotBackedTargetObservationProvider::new(QueuedSnapshotProvider::new(vec![
+                no_window_snapshot(),
+                no_window_snapshot(),
+                visible_window_snapshot(),
+                visible_window_snapshot(),
+            ]));
+
+        let first = observe_bound_session_target_once(&store, "rd-window-reappear", &provider);
+        assert!(first.keep_tracking);
+        assert!(
+            first.media_source_lost.is_none(),
+            "first lost snapshot is debounced"
+        );
+
+        let second = observe_bound_session_target_once(&store, "rd-window-reappear", &provider);
+        assert!(second.keep_tracking);
+        assert_eq!(
+            second
+                .media_source_lost
+                .expect("second lost snapshot stops media source")
+                .transport_epoch,
+            epoch
+        );
+
+        std::thread::sleep(Duration::from_millis(2));
+
+        let third = observe_bound_session_target_once(&store, "rd-window-reappear", &provider);
+        assert!(third.keep_tracking);
+        assert!(
+            third.media_source_lost.is_none(),
+            "rebind attempt must not restart or stop a second media source"
+        );
+
+        let fourth = observe_bound_session_target_once(&store, "rd-window-reappear", &provider);
+        assert!(fourth.keep_tracking);
+        assert!(
+            fourth.media_source_lost.is_none(),
+            "explicit rebind failure must not revive stale transport state"
+        );
+
+        store.with_sessions(|sessions| {
+            let session = sessions
+                .get("rd-window-reappear")
+                .expect("session remains inspectable");
+            assert_eq!(session.state(), RemoteDesktopState::Suspended);
+            assert_eq!(
+                session.transport_state()["primary"],
+                json!("media_source_lost")
+            );
+            assert_eq!(
+                session.target_tracking_state()["status"],
+                json!("lost"),
+                "same window id reappearing through the platform observer is not enough to restore the binding"
+            );
+            assert_eq!(
+                session.target_tracking_state()["input_enabled"],
+                json!(false)
+            );
+            assert!(!session.production_media_ready());
+
+            let events = session.events();
+            let rebind_attempted = events
+                .iter()
+                .find(|event| event["event_type"] == json!("TARGET_REBIND_ATTEMPTED"))
+                .expect("observer-visible target reappearance attempts rebind");
+            assert_eq!(
+                rebind_attempted["payload"]["target_status"],
+                json!("rebinding")
+            );
+            assert_eq!(
+                rebind_attempted["payload"]["frontend_action"],
+                json!("retry_session")
+            );
+
+            let rebind_failed = events
+                .iter()
+                .find(|event| event["event_type"] == json!("TARGET_REBIND_FAILED"))
+                .expect("observer-visible reappearance without explicit rebind policy fails closed");
+            assert_eq!(
+                rebind_failed["payload"]["reason_code"],
+                json!("explicit_rebind_required")
+            );
+            assert_eq!(
+                rebind_failed["payload"]["frontend_action"],
+                json!("refresh_targets")
+            );
+            assert_eq!(rebind_failed["payload"]["input_enabled"], json!(false));
+        });
     }
 
     #[test]

@@ -255,6 +255,12 @@ require '"input_enabled": false' "$TARGET_TRACKING" \
   'TARGET_REBIND_FAILED must keep target-scoped input disabled'
 require 'tracker_reports_rebind_failure_after_target_loss_without_policy' "$TARGET_TRACKING" \
   'target tracker must test explicit rebind failure instead of silently swallowing post-loss observations'
+require 'target_title_after_loss' "$TARGET_TRACKING" \
+  'post-loss title observations must enter explicit rebind instead of being silently swallowed'
+require 'target_focus_after_loss' "$TARGET_TRACKING" \
+  'post-loss focus observations must enter explicit rebind instead of being silently swallowed'
+require 'snapshot_observer_reappearance_requires_explicit_rebind_policy' "$TARGET_OBSERVER" \
+  'target observer must prove platform-visible target reappearance cannot revive media/input without explicit rebind policy'
 require 'target_reappearance_after_loss_emits_explicit_rebind_failure' "$SESSION" \
   'session aggregate must test post-loss target reappearance as TARGET_REBIND_FAILED'
 require_multiline '/"TARGET_REBIND_FAILED"\s*=>\s*"REMOTE_DESKTOP_EVENT_TARGET_CHANGED"/s' "$EVENT_LOG" \
