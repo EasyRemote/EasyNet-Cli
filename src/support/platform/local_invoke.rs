@@ -1231,6 +1231,7 @@ impl LocalRemoteTargetInventoryIssuer {
 /// `grant_consent` terminal receipt is carried into `create_session` through
 /// verified causal metadata, so product UI code does not construct Axon causal
 /// context itself.
+#[cfg(feature = "remote-desktop")]
 pub struct LocalRemoteDesktopSessionIssuer;
 
 /// Local control binding for one daemon-owned remote desktop session.
@@ -1239,27 +1240,50 @@ pub struct LocalRemoteDesktopSessionIssuer;
 /// support-layer projection of the create-session response fields required to
 /// issue later lifecycle/signaling Invocations without hiding tuple facts:
 /// the envelope subject remains the session's selected Resource URA and the
-/// causal context carries the original consent approval receipt.
+/// causal context carries the cryptographically verified consent receipt. Later
+/// wrappers import that proof from the create-session response metadata instead
+/// of trusting ability-payload JSON as a receipt proof.
+#[cfg(feature = "remote-desktop")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct LocalRemoteDesktopSessionControlBinding {
     subject_ura: String,
     session_id: String,
     session_token: String,
-    consent_causal_parent: Value,
+    session_causal_parent: Value,
 }
 
+#[cfg(feature = "remote-desktop")]
 impl LocalRemoteDesktopSessionControlBinding {
     pub fn from_create_session_response(value: &Value) -> anyhow::Result<Self> {
-        let session = value.get("session").unwrap_or(value);
-        Self::from_session_view(session)
-    }
-
-    pub fn from_session_view(session: &Value) -> anyhow::Result<Self> {
-        let subject_ura = required_nonempty_string(
+        let session = value.get("session").ok_or_else(|| {
+            anyhow::anyhow!(
+                "remote desktop session control binding requires create_session response.session"
+            )
+        })?;
+        let consent_invocation = value.get("consent_invocation").ok_or_else(|| {
+            anyhow::anyhow!(
+                "remote desktop session control binding requires create_session response.consent_invocation"
+            )
+        })?;
+        let subject_ura = canonical_selected_remote_target_resource_ura(required_nonempty_string(
             session,
             "subject_ura",
             "remote desktop session control binding",
-        )?;
+        )?)?;
+        let session_causal_parent =
+            crate::support::platform::local_daemon_grpc::import_verified_causal_parent_from_invocation_meta(
+                consent_invocation,
+                crate::daemon::plugins::remote_desktop::constants::ABILITY_GRANT_CONSENT,
+                &subject_ura,
+            )?;
+        Self::from_session_view_with_parent(session, subject_ura, session_causal_parent)
+    }
+
+    fn from_session_view_with_parent(
+        session: &Value,
+        subject_ura: String,
+        session_causal_parent: Value,
+    ) -> anyhow::Result<Self> {
         let session_id = required_nonempty_string(
             session,
             "session_id",
@@ -1270,20 +1294,11 @@ impl LocalRemoteDesktopSessionControlBinding {
             "session_token",
             "remote desktop session control binding",
         )?;
-        let consent_causal_parent = session
-            .get("consent")
-            .and_then(|consent| consent.get("approval_receipt"))
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "remote desktop session control binding requires consent.approval_receipt"
-                )
-            })
-            .and_then(canonical_causal_parent_from_value)?;
         Ok(Self {
-            subject_ura: canonical_selected_remote_target_resource_ura(subject_ura)?,
+            subject_ura,
             session_id: session_id.to_string(),
             session_token: session_token.to_string(),
-            consent_causal_parent,
+            session_causal_parent,
         })
     }
 
@@ -1298,17 +1313,18 @@ impl LocalRemoteDesktopSessionControlBinding {
     pub fn session_token(&self) -> &str {
         &self.session_token
     }
-
-    fn consent_causal_context(&self) -> anyhow::Result<axon_sdk::invocation::CausalContext> {
-        causal_context_from_single_parent(&self.consent_causal_parent)
-    }
 }
 
+#[cfg(feature = "remote-desktop")]
 impl LocalRemoteDesktopSessionIssuer {
     pub fn create_session(
         selected_resource_ura: &str,
         create_session_args: Value,
-    ) -> anyhow::Result<(Value, VerifiedLocalInvocationMeta)> {
+    ) -> anyhow::Result<(
+        Value,
+        VerifiedLocalInvocationMeta,
+        VerifiedLocalInvocationMeta,
+    )> {
         Self::create_session_timeout(
             selected_resource_ura,
             create_session_args,
@@ -1323,7 +1339,11 @@ impl LocalRemoteDesktopSessionIssuer {
         create_session_args: Value,
         timeout: std::time::Duration,
         trace_id: Option<&str>,
-    ) -> anyhow::Result<(Value, VerifiedLocalInvocationMeta)> {
+    ) -> anyhow::Result<(
+        Value,
+        VerifiedLocalInvocationMeta,
+        VerifiedLocalInvocationMeta,
+    )> {
         let selected_resource_ura =
             canonical_selected_remote_target_resource_ura(selected_resource_ura)?;
         let grant_target = local_remote_desktop_ability_target(
@@ -1362,7 +1382,9 @@ impl LocalRemoteDesktopSessionIssuer {
             timeout,
             trace_id,
         )?;
-        invoke_local_target_with_invocation_meta(&create_target, create_args, create_context)
+        let (session, create_meta) =
+            invoke_local_target_with_invocation_meta(&create_target, create_args, create_context)?;
+        Ok((session, create_meta, grant_meta))
     }
 
     pub fn set_description(
@@ -1468,18 +1490,18 @@ impl LocalRemoteDesktopSessionIssuer {
             binding,
             args,
         )?;
-        invoke_local_target_stream_explicit_causal(
-            &target,
-            args,
+        let causal_parents = vec![binding.session_causal_parent.clone()];
+        let context = LocalSystemInvocationIssuer::root_context(
             binding.subject_ura(),
-            axon_sdk::invocation::fresh_nonce(),
-            binding.consent_causal_context()?,
+            &causal_parents,
             timeout,
-            max_frames,
-        )
+            None,
+        )?;
+        invoke_local_target_stream_with_invocation_context(&target, args, context, max_frames)
     }
 }
 
+#[cfg(feature = "remote-desktop")]
 fn invoke_remote_desktop_session_control_rpc(
     ability: &'static str,
     binding: &LocalRemoteDesktopSessionControlBinding,
@@ -1488,21 +1510,24 @@ fn invoke_remote_desktop_session_control_rpc(
 ) -> anyhow::Result<Value> {
     let target = local_remote_desktop_ability_target(ability)?;
     let args = remote_desktop_session_control_args(ability, binding, args)?;
-    invoke_local_target_explicit_causal_timeout(
-        &target,
-        args,
+    let causal_parents = vec![binding.session_causal_parent.clone()];
+    let context = LocalSystemInvocationIssuer::root_context(
         binding.subject_ura(),
-        axon_sdk::invocation::fresh_nonce(),
-        binding.consent_causal_context()?,
+        &causal_parents,
         timeout,
-    )
+        None,
+    )?;
+    let (response, _) = invoke_local_target_with_invocation_meta(&target, args, context)?;
+    Ok(response)
 }
 
+#[cfg(feature = "remote-desktop")]
 fn local_remote_desktop_ability_target(ability: &str) -> anyhow::Result<LocalAbilityTarget> {
     let execution_host_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
     local_daemon_system_ability_target(ability, &execution_host_ura)
 }
 
+#[cfg(feature = "remote-desktop")]
 fn canonical_selected_remote_target_resource_ura(value: &str) -> anyhow::Result<String> {
     let parsed = crate::core::identity::RuntimeIdentityUra::parse(value.trim().to_string())
         .map_err(|error| anyhow::anyhow!("selected remote desktop target resource_ura {error}"))?;
@@ -1512,6 +1537,7 @@ fn canonical_selected_remote_target_resource_ura(value: &str) -> anyhow::Result<
     Ok(parsed.into_string())
 }
 
+#[cfg(feature = "remote-desktop")]
 fn create_session_args_with_consent_ticket(
     args: Value,
     consent_ticket: &str,
@@ -1539,6 +1565,7 @@ fn create_session_args_with_consent_ticket(
     Ok(Value::Object(object))
 }
 
+#[cfg(feature = "remote-desktop")]
 fn remote_desktop_session_control_args(
     ability: &'static str,
     binding: &LocalRemoteDesktopSessionControlBinding,
@@ -1584,42 +1611,6 @@ fn required_nonempty_string<'a>(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow::anyhow!("{context} requires non-empty {field}"))
-}
-
-fn canonical_causal_parent_from_value(value: &Value) -> anyhow::Result<Value> {
-    let receipt_ura = required_nonempty_string(value, "receipt_ura", "remote desktop consent")?;
-    let receipt_hash = required_nonempty_string(value, "receipt_hash", "remote desktop consent")?;
-    if hex::decode(receipt_hash)
-        .ok()
-        .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
-        .is_none()
-    {
-        anyhow::bail!("remote desktop consent receipt_hash must be 32-byte hex");
-    }
-    Ok(serde_json::json!({
-        "receipt_ura": receipt_ura,
-        "receipt_hash": receipt_hash,
-    }))
-}
-
-fn causal_context_from_single_parent(
-    parent: &Value,
-) -> anyhow::Result<axon_sdk::invocation::CausalContext> {
-    let receipt_ura = required_nonempty_string(parent, "receipt_ura", "causal parent")?;
-    let receipt_hash = required_nonempty_string(parent, "receipt_hash", "causal parent")?;
-    let receipt_hash = hex::decode(receipt_hash)?;
-    let receipt_hash: [u8; 32] = receipt_hash.try_into().map_err(|bytes: Vec<u8>| {
-        anyhow::anyhow!(
-            "causal parent receipt_hash must decode to 32 bytes, got {}",
-            bytes.len()
-        )
-    })?;
-    Ok(axon_sdk::invocation::CausalContext::Scalar(
-        axon_sdk::invocation::ReceiptRef {
-            receipt_ura: receipt_ura.to_string(),
-            receipt_hash,
-        },
-    ))
 }
 
 /// Stream a canonical local Ability URA target with public-ingress tuple facts.
@@ -1835,6 +1826,31 @@ pub fn invoke_local_target_with_invocation_meta(
     let (value, metadata) =
         crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_with_invocation_meta(request)?;
     Ok((value, VerifiedLocalInvocationMeta(metadata)))
+}
+
+/// Stream a canonical local Ability target with a named local-system
+/// invocation context.
+pub fn invoke_local_target_stream_with_invocation_context(
+    target: &LocalAbilityTarget,
+    args: Value,
+    context: LocalSystemInvocationContext<'_>,
+    max_frames: Option<usize>,
+) -> anyhow::Result<Vec<LocalStreamFrame>> {
+    let request =
+        crate::support::platform::local_daemon_grpc::LocalDaemonTargetedInvocationMetaRequest {
+            function_name: target.dispatch_name(),
+            payload_json: args,
+            callee_ura: target.callee_ura(),
+            subject_ura: &context.subject_ura,
+            invocation_nonce: context.invocation_nonce,
+            causal_parents: context.causal_parents,
+            step_timeout: context.step_timeout,
+            trace_id: context.trace_id,
+        };
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_stream_with_invocation_context(
+        request,
+        max_frames,
+    )
 }
 
 /// Invoke a canonical local target with explicit hosted-agent delegation.
@@ -2073,6 +2089,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "remote-desktop")]
     #[test]
     fn local_remote_desktop_session_target_is_remote_desktop_system_agent() {
         let target = local_daemon_system_ability_target(
@@ -2133,6 +2150,7 @@ mod tests {
         assert!(err.to_string().contains("32-byte hex"));
     }
 
+    #[cfg(feature = "remote-desktop")]
     #[test]
     fn selected_remote_desktop_target_must_be_resource_ura() {
         assert_eq!(
@@ -2147,6 +2165,7 @@ mod tests {
         assert!(err.to_string().contains("must be a Resource URA"));
     }
 
+    #[cfg(feature = "remote-desktop")]
     #[test]
     fn create_session_args_injects_consent_ticket_without_subject_args() {
         let args = create_session_args_with_consent_ticket(
@@ -2163,6 +2182,7 @@ mod tests {
         assert!(args.get("resource_ura").is_none());
     }
 
+    #[cfg(feature = "remote-desktop")]
     #[test]
     fn create_session_args_rejects_subject_and_external_consent_ticket() {
         for args in [
@@ -2181,50 +2201,44 @@ mod tests {
         }
     }
 
-    fn remote_desktop_session_response_for_control() -> serde_json::Value {
+    #[cfg(feature = "remote-desktop")]
+    fn remote_desktop_session_view_for_control() -> serde_json::Value {
         serde_json::json!({
-            "session": {
-                "subject_ura": "easynet:///r/acme/resource/device.dev/streams/window.7",
-                "session_id": "rd-control",
-                "session_token": "token-control",
-                "consent": {
-                    "approval_receipt": {
-                        "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/approve/receipt/1",
-                        "receipt_hash": "2222222222222222222222222222222222222222222222222222222222222222"
-                    }
-                }
-            }
+            "subject_ura": "easynet:///r/acme/resource/device.dev/streams/window.7",
+            "session_id": "rd-control",
+            "session_token": "token-control"
         })
     }
 
-    #[test]
-    fn remote_desktop_session_control_binding_projects_tuple_facts_from_session_view() {
-        let response = remote_desktop_session_response_for_control();
-        let binding =
-            LocalRemoteDesktopSessionControlBinding::from_create_session_response(&response)
-                .expect("session control binding");
-
-        assert_eq!(
-            binding.subject_ura(),
-            "easynet:///r/acme/resource/device.dev/streams/window.7"
-        );
-        assert_eq!(binding.session_id(), "rd-control");
-        assert_eq!(binding.session_token(), "token-control");
-        assert_eq!(
-            binding.consent_causal_parent,
+    #[cfg(feature = "remote-desktop")]
+    fn remote_desktop_test_control_binding() -> LocalRemoteDesktopSessionControlBinding {
+        LocalRemoteDesktopSessionControlBinding::from_session_view_with_parent(
+            &remote_desktop_session_view_for_control(),
+            "easynet:///r/acme/resource/device.dev/streams/window.7".to_string(),
             serde_json::json!({
-                "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/approve/receipt/1",
-                "receipt_hash": "2222222222222222222222222222222222222222222222222222222222222222"
-            })
-        );
+                "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/create/receipt/4",
+                "receipt_hash": "3333333333333333333333333333333333333333333333333333333333333333"
+            }),
+        )
+        .expect("test control binding")
     }
 
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn remote_desktop_session_control_binding_requires_verified_consent_invocation() {
+        let response = serde_json::json!({
+            "session": remote_desktop_session_view_for_control(),
+        });
+        let err = LocalRemoteDesktopSessionControlBinding::from_create_session_response(&response)
+            .expect_err("session control binding must require invocation proof");
+
+        assert!(err.to_string().contains("response.consent_invocation"));
+    }
+
+    #[cfg(feature = "remote-desktop")]
     #[test]
     fn remote_desktop_session_control_args_insert_session_fields_without_tuple_args() {
-        let response = remote_desktop_session_response_for_control();
-        let binding =
-            LocalRemoteDesktopSessionControlBinding::from_create_session_response(&response)
-                .expect("session control binding");
+        let binding = remote_desktop_test_control_binding();
         let args = remote_desktop_session_control_args(
             crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION,
             &binding,
@@ -2242,12 +2256,10 @@ mod tests {
         assert!(args.get("consent").is_none());
     }
 
+    #[cfg(feature = "remote-desktop")]
     #[test]
     fn remote_desktop_session_control_args_reject_caller_owned_binding_fields() {
-        let response = remote_desktop_session_response_for_control();
-        let binding =
-            LocalRemoteDesktopSessionControlBinding::from_create_session_response(&response)
-                .expect("session control binding");
+        let binding = remote_desktop_test_control_binding();
         for (field, args) in [
             ("subject", serde_json::json!({"subject": "bad"})),
             ("resource_ura", serde_json::json!({"resource_ura": "bad"})),
@@ -2272,15 +2284,26 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "remote-desktop")]
     #[test]
-    fn remote_desktop_session_control_binding_rejects_malformed_consent_hash() {
-        let mut response = remote_desktop_session_response_for_control();
-        response["session"]["consent"]["approval_receipt"]["receipt_hash"] =
-            serde_json::json!("abc");
+    fn remote_desktop_session_control_binding_rejects_session_only_payload_receipts() {
+        let response = serde_json::json!({
+            "session": {
+                "subject_ura": "easynet:///r/acme/resource/device.dev/streams/window.7",
+                "session_id": "rd-control",
+                "session_token": "token-control",
+                "consent": {
+                    "approval_receipt": {
+                        "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/approve/receipt/1",
+                        "receipt_hash": "2222222222222222222222222222222222222222222222222222222222222222"
+                    }
+                }
+            }
+        });
         let err = LocalRemoteDesktopSessionControlBinding::from_create_session_response(&response)
-            .expect_err("malformed consent hash must fail");
+            .expect_err("payload receipt must not replace verified invocation proof");
 
-        assert!(err.to_string().contains("32-byte hex"));
+        assert!(err.to_string().contains("response.consent_invocation"));
     }
 
     #[test]

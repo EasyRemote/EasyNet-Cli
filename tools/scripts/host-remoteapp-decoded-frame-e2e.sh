@@ -18,12 +18,16 @@ set -euo pipefail
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 BUNDLED_PROBE="$SELF_DIR/host-remoteapp-decoded-frame-probe.sh"
+BUNDLED_SENTINEL_FIXTURE="$SELF_DIR/host-remoteapp-sentinel-fixture.sh"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
-OUT_DIR="${EASYNET_REMOTEAPP_E2E_OUT_DIR:-$REPO_ROOT/target/e2e/host-remoteapp-decoded-frame/$TIMESTAMP}"
+OUT_DIR="${EASYNET_REMOTEAPP_E2E_OUT_DIR:-}"
 RUN="${EASYNET_HOST_REMOTEAPP_DECODED_FRAME_E2E:-0}"
 SELF_TEST=0
 PROBE_CMD="${EASYNET_REMOTEAPP_FRAME_PROBE_CMD:-}"
 TARGET_KIND="${EASYNET_REMOTEAPP_E2E_TARGET_KIND:-window}"
+SENTINEL_FIXTURE="${EASYNET_REMOTEAPP_SENTINEL_FIXTURE:-0}"
+SENTINEL_FIXTURE_CMD="${EASYNET_REMOTEAPP_SENTINEL_FIXTURE_CMD:-}"
+DEFAULT_SENTINEL_TOLERANCE=64
 
 usage() {
   cat <<'USAGE'
@@ -37,6 +41,15 @@ Options:
                         uses tools/scripts/host-remoteapp-decoded-frame-probe.sh.
   --target-kind KIND    Target kind: window or application. Default: window.
   --out-dir DIR         Report directory.
+  --sentinel-fixture    Launch the bundled host sentinel fixture before the
+                        probe and source its env.sh. This creates visible
+                        selected/unrelated native windows; it does not fake
+                        inventory, session creation, media, or pixel evidence.
+  --sentinel-fixture-cmd CMD
+                        Equivalent fixture command override. The command
+                        receives EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR and
+                        EASYNET_REMOTEAPP_E2E_TARGET_KIND and must write
+                        env.sh plus an optional cleanup.sh into that directory.
   --self-test           Validate harness structure with a synthetic probe.
   -h, --help            Show this help.
 
@@ -49,6 +62,10 @@ Environment:
                         Optional override for the bundled receiver. The command
                         must perform WebRTC receive/decode/pixel assertions and
                         write EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON.
+  EASYNET_REMOTEAPP_SENTINEL_FIXTURE=1
+                        Equivalent to --sentinel-fixture.
+  EASYNET_REMOTEAPP_SENTINEL_FIXTURE_CMD
+                        Same as --sentinel-fixture-cmd.
   EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB
                         Required by the bundled receiver, formatted as r,g,b.
   EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB
@@ -57,6 +74,10 @@ Environment:
                         Required label for the selected target witness.
   EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL
                         Required label for the unrelated non-target witness.
+  EASYNET_REMOTEAPP_TARGET_PID
+                        Optional positive process id used by the bundled probe
+                        to select an application/window resource by live native
+                        identity instead of diagnostic title text.
 
 Probe contract:
   The probe command receives:
@@ -91,11 +112,21 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --out-dir) OUT_DIR="${2:?missing value for --out-dir}"; shift 2 ;;
+    --sentinel-fixture) SENTINEL_FIXTURE=1; shift ;;
+    --sentinel-fixture-cmd)
+      SENTINEL_FIXTURE=1
+      SENTINEL_FIXTURE_CMD="${2:?missing value for --sentinel-fixture-cmd}"
+      shift 2
+      ;;
     --self-test) SELF_TEST=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 64 ;;
   esac
 done
+
+if [[ -z "$OUT_DIR" ]]; then
+  OUT_DIR="$REPO_ROOT/target/e2e/host-remoteapp-decoded-frame/$TIMESTAMP-$TARGET_KIND-$$"
+fi
 
 die() {
   echo "[FAIL] $*" >&2
@@ -110,6 +141,7 @@ mkdir -p "$OUT_DIR"
 REPORT_JSON="$OUT_DIR/report.json"
 REPORT_MD="$OUT_DIR/report.md"
 EVIDENCE_JSON="$OUT_DIR/decoded-frame-evidence.json"
+SENTINEL_FIXTURE_DIR="$OUT_DIR/sentinel-fixture"
 
 write_skip_report() {
   python3 - "$REPORT_JSON" "$REPORT_MD" <<'PY'
@@ -208,6 +240,18 @@ def env_int(name, default):
     require(value >= 0, f"{name} must be non-negative")
     return value
 
+def optional_positive_env_int(name):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        require(False, f"{name} must be an integer")
+        return None
+    require(value > 0, f"{name} must be positive")
+    return value
+
 def next_ppm_token(data, offset):
     while True:
         while offset < len(data) and data[offset] in b" \t\r\n":
@@ -260,7 +304,9 @@ def count_rgb_matches(rgb, expected, tolerance):
 
 selected_rgb = parse_rgb_env("EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB")
 unrelated_rgb = parse_rgb_env("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB")
-sentinel_tolerance = env_int("EASYNET_REMOTEAPP_SENTINEL_TOLERANCE", 32)
+selected_pid = optional_positive_env_int("EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID")
+unrelated_pid = optional_positive_env_int("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID")
+sentinel_tolerance = env_int("EASYNET_REMOTEAPP_SENTINEL_TOLERANCE", 64)
 selected_min_pixels = env_int("EASYNET_REMOTEAPP_SELECTED_SENTINEL_MIN_PIXELS", 8)
 
 require(isinstance(sentinel_fixture, dict),
@@ -282,6 +328,13 @@ if isinstance(selected_fixture, dict):
             f"sentinel_fixture.selected.target_kind must be {expected_kind}")
     require(selected_fixture.get("rgb") == selected_rgb,
             "sentinel_fixture.selected.rgb must match EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB")
+    fixture_selected_pid = selected_fixture.get("pid")
+    if fixture_selected_pid is not None:
+        require(isinstance(fixture_selected_pid, int) and fixture_selected_pid > 0,
+                "sentinel_fixture.selected.pid must be a positive integer when present")
+    if selected_pid is not None:
+        require(fixture_selected_pid == selected_pid,
+                "sentinel_fixture.selected.pid must match EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID")
 if isinstance(unrelated_fixture, dict):
     unrelated_label = unrelated_fixture.get("label")
     placement = unrelated_fixture.get("placement")
@@ -289,6 +342,13 @@ if isinstance(unrelated_fixture, dict):
             "sentinel_fixture.unrelated.label must be a non-empty string")
     require(unrelated_fixture.get("rgb") == unrelated_rgb,
             "sentinel_fixture.unrelated.rgb must match EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB")
+    fixture_unrelated_pid = unrelated_fixture.get("pid")
+    if fixture_unrelated_pid is not None:
+        require(isinstance(fixture_unrelated_pid, int) and fixture_unrelated_pid > 0,
+                "sentinel_fixture.unrelated.pid must be a positive integer when present")
+    if unrelated_pid is not None:
+        require(fixture_unrelated_pid == unrelated_pid,
+                "sentinel_fixture.unrelated.pid must match EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID")
     require(placement in {"outside_selected_target", "other_window", "other_application", "desktop_background"},
             "sentinel_fixture.unrelated.placement must describe a non-target surface")
     unrelated_resource_ura = unrelated_fixture.get("resource_ura")
@@ -346,8 +406,18 @@ else:
             "application target must include target_binding.resolved_identity")
     if isinstance(resolved_identity, dict):
         app_identity = resolved_identity.get("app_identity") or resolved_identity.get("bundle_id")
-        require(isinstance(app_identity, str) and app_identity.strip(),
-                "application resolved_identity must include app_identity or bundle_id")
+        app_pid = resolved_identity.get("pid")
+        require(
+            (isinstance(app_identity, str) and app_identity.strip())
+            or (isinstance(app_pid, int) and app_pid > 0),
+            "application resolved_identity must include app_identity, bundle_id, or positive pid",
+        )
+        if selected_pid is not None:
+            require(
+                app_pid == selected_pid
+                or (isinstance(app_window_set, dict) and app_window_set.get("primary_pid") == selected_pid),
+                "application evidence must bind selected sentinel pid to resolved_identity.pid or app_window_set.primary_pid",
+            )
 require(scope_widened is False, "scope_audit.scope_widened must be false")
 require(display_fallback_used is False, "scope_audit.display_fallback_used must be false")
 require(transport_kind == "webrtc", "transport.kind must be webrtc")
@@ -460,89 +530,109 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "display_fallback_used" "$0"
   grep -q "production_media_ready" "$0"
   grep -q "production_readiness.production_codec_negotiated" "$0"
-  cat >"$EVIDENCE_JSON" <<'JSON'
-{
-  "status": "passed",
-  "live_inventory": {"ability": "resource.refresh_remote_targets"},
-  "session_id": "rd-self-test",
-  "selected_resource_ura": "easynet:///r/localhost/resource/device.dev/streams/window.test",
-  "invocation": {
-    "ability": "remote_desktop.create_session",
-    "subject_ura": "easynet:///r/localhost/resource/device.dev/streams/window.test"
-  },
-  "target_binding": {
-    "subject_ura": "easynet:///r/localhost/resource/device.dev/streams/window.test",
-    "target_kind": "window",
-    "capture_scope": "WindowSurface",
+  grep -q "host-remoteapp-sentinel-fixture.sh" "$0"
+  grep -q "EASYNET_REMOTEAPP_SENTINEL_FIXTURE" "$0"
+  grep -q "cleanup.sh" "$0"
+  python3 - "$EVIDENCE_JSON" "$TARGET_KIND" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+target_kind = sys.argv[2]
+if target_kind not in {"window", "application"}:
+    raise SystemExit(f"invalid self-test target kind: {target_kind}")
+
+resource_kind = target_kind
+resource_ura = f"easynet:///r/localhost/resource/device.dev/streams/{resource_kind}.test"
+capture_scope = "AppSurface" if target_kind == "application" else "WindowSurface"
+sample = path.parent / "sample-frame.ppm"
+sample.write_bytes(b"P6\n3 3\n255\n" + b"\xff\x00\x00" * 9)
+
+resolved_identity = (
+    {
+        "app_identity": "com.example.SentinelApp",
+        "bundle_id": "com.example.SentinelApp",
+        "display_id": 1,
+    }
+    if target_kind == "application"
+    else {"window_id": 7}
+)
+target_binding = {
+    "subject_ura": resource_ura,
+    "target_kind": target_kind,
+    "capture_scope": capture_scope,
     "binding_id": "binding-test",
     "binding_epoch": 1,
     "target_identity_epoch": 1,
     "target_geometry_revision": 1,
     "media_source_epoch": 1,
     "consent_epoch": 1,
-    "resolved_identity": {
-      "window_id": 7
-    },
+    "resolved_identity": resolved_identity,
     "scope_audit": {
-      "scope_widened": false,
-      "display_fallback_used": false
-    }
-  },
-  "sentinel_fixture": {
-    "proof": "dual_target_non_leak",
-    "selected": {
-      "label": "selected-window-red",
-      "resource_ura": "easynet:///r/localhost/resource/device.dev/streams/window.test",
-      "rgb": [255, 0, 0],
-      "target_kind": "window"
+        "scope_widened": False,
+        "display_fallback_used": False,
     },
-    "unrelated": {
-      "label": "unrelated-window-green",
-      "placement": "other_window",
-      "rgb": [0, 255, 0]
-    }
-  },
-  "transport": {"kind": "webrtc"},
-  "production_media_ready": true,
-  "production_readiness": {
-    "ready": true,
-    "requires_production_codec": true,
-    "production_codec_negotiated": true,
-    "media_transport_ready": true,
-    "client_media_ready": true
-  },
-  "decoded_frames": {
-    "count": 3,
-    "rtp_packet_count": 10,
-    "width": 3,
-    "height": 3,
-    "selected_content_present": true,
-    "unrelated_sentinel_present": false,
-    "full_display_leak_detected": false,
-    "selected_pixel_count": 9,
-    "unrelated_pixel_count": 0
-  },
-  "artifacts": {
-    "decoded_frame_sample": "__SELF_TEST_SAMPLE__",
-    "binding_id": "binding-test",
-    "binding_epoch": 1,
-    "session_id": "rd-self-test",
-    "capture_scope": "WindowSurface"
-  }
 }
-JSON
-  python3 - "$EVIDENCE_JSON" <<'PY'
-import json
-import pathlib
-import sys
+if target_kind == "application":
+    target_binding["app_window_set"] = {
+        "display_id": 1,
+        "window_set_epoch": 1,
+        "resolved_window_ids": [7],
+    }
 
-path = pathlib.Path(sys.argv[1])
-sample = path.parent / "sample-frame.ppm"
-sample.write_bytes(b"P6\n3 3\n255\n" + b"\xff\x00\x00" * 9)
-data = json.loads(path.read_text(encoding="utf-8"))
-data["artifacts"]["decoded_frame_sample"] = str(sample)
-data["target_binding"]["binding_id"] = "binding-test"
-data["target_binding"]["binding_epoch"] = 1
+data = {
+    "status": "passed",
+    "live_inventory": {"ability": "resource.refresh_remote_targets"},
+    "session_id": "rd-self-test",
+    "selected_resource_ura": resource_ura,
+    "invocation": {
+        "ability": "remote_desktop.create_session",
+        "subject_ura": resource_ura,
+    },
+    "target_binding": target_binding,
+    "sentinel_fixture": {
+        "proof": "dual_target_non_leak",
+        "selected": {
+            "label": f"selected-{target_kind}-red",
+            "resource_ura": resource_ura,
+            "rgb": [255, 0, 0],
+            "target_kind": target_kind,
+        },
+        "unrelated": {
+            "label": "unrelated-green",
+            "placement": "other_application" if target_kind == "application" else "other_window",
+            "rgb": [0, 255, 0],
+        },
+    },
+    "transport": {"kind": "webrtc"},
+    "production_media_ready": True,
+    "production_readiness": {
+        "ready": True,
+        "requires_production_codec": True,
+        "production_codec_negotiated": True,
+        "media_transport_ready": True,
+        "client_media_ready": True,
+    },
+    "decoded_frames": {
+        "count": 3,
+        "rtp_packet_count": 10,
+        "width": 3,
+        "height": 3,
+        "selected_content_present": True,
+        "unrelated_sentinel_present": False,
+        "full_display_leak_detected": False,
+        "selected_pixel_count": 9,
+        "unrelated_pixel_count": 0,
+    },
+    "artifacts": {
+        "decoded_frame_sample": str(sample),
+        "binding_id": "binding-test",
+        "binding_epoch": 1,
+        "session_id": "rd-self-test",
+        "capture_scope": capture_scope,
+    },
+}
 path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
   export EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0"
@@ -565,9 +655,31 @@ if [[ -z "$PROBE_CMD" ]]; then
   PROBE_CMD="'$BUNDLED_PROBE'"
 fi
 
+cleanup_sentinel_fixture() {
+  if [[ -x "$SENTINEL_FIXTURE_DIR/cleanup.sh" ]]; then
+    "$SENTINEL_FIXTURE_DIR/cleanup.sh" >/dev/null 2>&1 || true
+  fi
+}
+
+if [[ "$SENTINEL_FIXTURE" == "1" ]]; then
+  mkdir -p "$SENTINEL_FIXTURE_DIR"
+  if [[ -z "$SENTINEL_FIXTURE_CMD" ]]; then
+    [[ -x "$BUNDLED_SENTINEL_FIXTURE" ]] || die "missing executable bundled sentinel fixture: $BUNDLED_SENTINEL_FIXTURE"
+    SENTINEL_FIXTURE_CMD="'$BUNDLED_SENTINEL_FIXTURE' --target-kind '$TARGET_KIND' --out-dir '$SENTINEL_FIXTURE_DIR'"
+  fi
+  export EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR="$SENTINEL_FIXTURE_DIR"
+  export EASYNET_REMOTEAPP_E2E_TARGET_KIND="$TARGET_KIND"
+  bash -lc "$SENTINEL_FIXTURE_CMD"
+  [[ -s "$SENTINEL_FIXTURE_DIR/env.sh" ]] || die "sentinel fixture did not write env.sh: $SENTINEL_FIXTURE_DIR/env.sh"
+  # shellcheck disable=SC1091
+  source "$SENTINEL_FIXTURE_DIR/env.sh"
+  trap cleanup_sentinel_fixture EXIT
+fi
+
 rm -f "$EVIDENCE_JSON"
 export EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON="$EVIDENCE_JSON"
 export EASYNET_REMOTEAPP_E2E_TARGET_KIND="$TARGET_KIND"
+export EASYNET_REMOTEAPP_SENTINEL_TOLERANCE="${EASYNET_REMOTEAPP_SENTINEL_TOLERANCE:-$DEFAULT_SENTINEL_TOLERANCE}"
 
 bash -lc "$PROBE_CMD"
 [[ -s "$EVIDENCE_JSON" ]] || die "probe did not write evidence JSON: $EVIDENCE_JSON"

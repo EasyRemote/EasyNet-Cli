@@ -18,8 +18,7 @@ use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session::TargetMediaSourceLost;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::target::{
-    AppWindowSetProof, RemoteAppTargetBinding, RemoteDesktopTargetKind, TargetGeometry,
-    TargetResolutionError,
+    RemoteAppTargetBinding, RemoteDesktopTargetKind, TargetGeometry, TargetResolutionError,
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::{
     TargetObservation, TargetTrackerSnapshot, TargetVisibilityState,
@@ -66,13 +65,16 @@ struct ObservedWindow {
     pid: Option<i64>,
     bundle_id: Option<String>,
     display_id: Option<u64>,
+    title: Option<String>,
+    focused: bool,
     geometry: TargetGeometry,
-    visible: bool,
+    visibility_state: TargetVisibilityState,
 }
 
 #[derive(Debug, Clone)]
 struct HostTargetSnapshot {
     windows: Vec<ObservedWindow>,
+    display_ids: BTreeSet<u64>,
 }
 
 trait HostTargetSnapshotProvider {
@@ -124,18 +126,18 @@ where
 {
     fn snapshot(&self) -> anyhow::Result<HostTargetSnapshot> {
         let now = Instant::now();
-        {
-            let cache = self.lock_cache();
-            if let Some(cached) = cache.as_ref() {
-                if now.duration_since(cached.captured_at) < self.min_refresh_interval {
-                    return Ok(cached.snapshot.clone());
-                }
+        let mut cache = self.lock_cache();
+        if let Some(cached) = cache.as_ref() {
+            if now.duration_since(cached.captured_at) < self.min_refresh_interval {
+                return Ok(cached.snapshot.clone());
             }
         }
+        // The cache guard is intentionally held across enumeration. This is a
+        // single-flight boundary: concurrent session ticks share one bounded
+        // host snapshot instead of multiplying OS work by session count.
         let snapshot = self.source.snapshot()?;
-        let mut cache = self.lock_cache();
         *cache = Some(CachedHostTargetSnapshot {
-            captured_at: now,
+            captured_at: Instant::now(),
             snapshot: snapshot.clone(),
         });
         Ok(snapshot)
@@ -162,7 +164,16 @@ where
         binding: &RemoteAppTargetBinding,
         snapshot: &TargetTrackerSnapshot,
     ) -> Option<TargetObservation> {
-        let host_snapshot = self.snapshots.snapshot().ok()?;
+        let host_snapshot = match self.snapshots.snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                return Some(TargetObservation::Lost {
+                    reason: TargetResolutionError::CaptureBackendUnavailable,
+                    detail: format!("host target snapshot failed: {error}"),
+                    observed_at_ms: now_ms(),
+                });
+            }
+        };
         observe_binding_against_host_snapshot(binding, snapshot, &host_snapshot)
     }
 }
@@ -202,6 +213,15 @@ fn observe_binding_against_host_snapshot(
     snapshot: &TargetTrackerSnapshot,
     host_snapshot: &HostTargetSnapshot,
 ) -> Option<TargetObservation> {
+    if let Some(selected_display_id) = binding.native_locator().display_id() {
+        if !host_snapshot.display_ids.contains(&selected_display_id) {
+            return Some(TargetObservation::DisplayTopologyChanged {
+                available_display_ids: host_snapshot.display_ids.iter().copied().collect(),
+                selected_display_available: false,
+                observed_at_ms: now_ms(),
+            });
+        }
+    }
     match binding.target_kind() {
         RemoteDesktopTargetKind::Display => None,
         RemoteDesktopTargetKind::Window => {
@@ -235,10 +255,22 @@ fn observe_window(
             "bound window owner identity changed",
         ));
     }
-    if !window.visible {
+    if window.visibility_state != TargetVisibilityState::Visible {
         return Some(TargetObservation::VisibilityChanged {
-            visibility_state: TargetVisibilityState::Hidden,
+            visibility_state: window.visibility_state,
             target_geometry_revision: snapshot.target_geometry_revision() + 1,
+            observed_at_ms: now_ms(),
+        });
+    }
+    if snapshot.title() != window.title.as_deref() {
+        return Some(TargetObservation::TitleChanged {
+            title: window.title.clone(),
+            observed_at_ms: now_ms(),
+        });
+    }
+    if snapshot.focused() != Some(window.focused) {
+        return Some(TargetObservation::FocusChanged {
+            focused: window.focused,
             observed_at_ms: now_ms(),
         });
     }
@@ -282,18 +314,28 @@ fn observe_application(
             "bound application has no windows on the selected display",
         ));
     }
-    if let Some(observation) =
-        application_window_set_drift_observation(binding, &selected_display_windows)
-    {
-        return Some(observation);
+    if binding.committed_app_window_set().is_none() {
+        return Some(lost(
+            TargetResolutionError::TargetMetadataIncomplete,
+            "application target binding has no committed display-scoped window set",
+        ));
     }
     let visible_selected_display_windows: Vec<&ObservedWindow> = selected_display_windows
-        .into_iter()
-        .filter(|window| window.visible)
+        .iter()
+        .copied()
+        .filter(|window| window.visibility_state == TargetVisibilityState::Visible)
         .collect();
     if visible_selected_display_windows.is_empty() {
+        let visibility_state = if selected_display_windows
+            .iter()
+            .any(|window| window.visibility_state == TargetVisibilityState::Minimized)
+        {
+            TargetVisibilityState::Minimized
+        } else {
+            TargetVisibilityState::Hidden
+        };
         return Some(TargetObservation::VisibilityChanged {
-            visibility_state: TargetVisibilityState::Hidden,
+            visibility_state,
             target_geometry_revision: snapshot.target_geometry_revision() + 1,
             observed_at_ms: now_ms(),
         });
@@ -305,37 +347,6 @@ fn observe_application(
         ));
     };
     geometry_observation(snapshot, geometry)
-}
-
-fn application_window_set_drift_observation(
-    binding: &RemoteAppTargetBinding,
-    selected_display_windows: &[&ObservedWindow],
-) -> Option<TargetObservation> {
-    let locator = binding.native_locator();
-    let expected_display = locator.display_id()?;
-    let Some(committed) = binding.committed_app_window_set() else {
-        return Some(lost(
-            TargetResolutionError::TargetMetadataIncomplete,
-            "application target binding has no committed display-scoped window set",
-        ));
-    };
-    let live_window_ids = selected_display_windows
-        .iter()
-        .map(|window| window.window_id)
-        .collect::<Vec<_>>();
-    let live = AppWindowSetProof::new(
-        expected_display,
-        locator.bundle_id().map(str::to_string),
-        locator.pid(),
-        live_window_ids,
-    );
-    if committed.matches_window_identity(&live) {
-        return None;
-    }
-    Some(lost(
-        TargetResolutionError::TargetIdentityChanged,
-        "bound application window set changed after session binding",
-    ))
 }
 
 fn geometry_observation(
@@ -415,11 +426,12 @@ fn positive_dimension(value: Option<f64>) -> Option<f64> {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use std::ffi::{c_char, c_void, CString};
+    use std::collections::BTreeSet;
+    use std::ffi::{c_char, c_void, CStr, CString};
     use std::ptr;
     use std::sync::OnceLock;
 
-    use objc2_app_kit::NSRunningApplication;
+    use objc2_app_kit::{NSRunningApplication, NSWorkspace};
 
     use super::{
         HostTargetSnapshot, HostTargetSnapshotProvider, ObservedWindow,
@@ -429,10 +441,11 @@ mod platform {
     };
     use crate::daemon::plugins::remote_desktop::target::{RemoteAppTargetBinding, TargetGeometry};
     use crate::daemon::plugins::remote_desktop::target_tracking::{
-        TargetObservation, TargetTrackerSnapshot,
+        TargetObservation, TargetTrackerSnapshot, TargetVisibilityState,
     };
 
     type CFArrayRef = *const c_void;
+    type CFBooleanRef = *const c_void;
     type CFDictionaryRef = *const c_void;
     type CFIndex = isize;
     type CFNumberRef = *const c_void;
@@ -479,6 +492,11 @@ mod platform {
             displays: *mut CGDirectDisplayID,
             matchingDisplayCount: *mut u32,
         ) -> CGError;
+        fn CGGetActiveDisplayList(
+            maxDisplays: u32,
+            activeDisplays: *mut CGDirectDisplayID,
+            displayCount: *mut u32,
+        ) -> CGError;
         fn CGRectMakeWithDictionaryRepresentation(dict: CFDictionaryRef, rect: *mut CGRect) -> u8;
     }
 
@@ -486,6 +504,8 @@ mod platform {
     unsafe extern "C" {
         fn CFArrayGetCount(array: CFArrayRef) -> CFIndex;
         fn CFArrayGetValueAtIndex(array: CFArrayRef, idx: CFIndex) -> *const c_void;
+        fn CFBooleanGetTypeID() -> CFTypeID;
+        fn CFBooleanGetValue(boolean: CFBooleanRef) -> u8;
         fn CFDictionaryGetValueIfPresent(
             dict: CFDictionaryRef,
             key: *const c_void,
@@ -500,6 +520,14 @@ mod platform {
             cStr: *const c_char,
             encoding: u32,
         ) -> CFStringRef;
+        fn CFStringGetCString(
+            theString: CFStringRef,
+            buffer: *mut c_char,
+            bufferSize: CFIndex,
+            encoding: u32,
+        ) -> u8;
+        fn CFStringGetCStringPtr(theString: CFStringRef, encoding: u32) -> *const c_char;
+        fn CFStringGetTypeID() -> CFTypeID;
     }
 
     struct CfOwned(*const c_void);
@@ -533,7 +561,9 @@ mod platform {
         alpha: CfOwned,
         bounds: CfOwned,
         layer: CfOwned,
+        name: CfOwned,
         number: CfOwned,
+        onscreen: CfOwned,
         owner_pid: CfOwned,
     }
 
@@ -543,7 +573,9 @@ mod platform {
                 alpha: CfOwned::new_string("kCGWindowAlpha")?,
                 bounds: CfOwned::new_string("kCGWindowBounds")?,
                 layer: CfOwned::new_string("kCGWindowLayer")?,
+                name: CfOwned::new_string("kCGWindowName")?,
                 number: CfOwned::new_string("kCGWindowNumber")?,
+                onscreen: CfOwned::new_string("kCGWindowIsOnscreen")?,
                 owner_pid: CfOwned::new_string("kCGWindowOwnerPID")?,
             })
         }
@@ -558,6 +590,12 @@ mod platform {
             binding: &RemoteAppTargetBinding,
             snapshot: &TargetTrackerSnapshot,
         ) -> Option<TargetObservation> {
+            if !crate::daemon::plugins::remote_desktop::screencapturekit_capture::screen_capture_permission_granted() {
+                return Some(TargetObservation::PermissionRevoked {
+                    detail: "macOS Screen Recording permission is no longer granted".to_string(),
+                    observed_at_ms: crate::daemon::plugins::remote_desktop::session::now_ms(),
+                });
+            }
             static SNAPSHOTS: OnceLock<
                 SharedHostTargetSnapshotProvider<MacOsHostTargetSnapshotProvider>,
             > = OnceLock::new();
@@ -575,6 +613,7 @@ mod platform {
         fn snapshot(&self) -> anyhow::Result<HostTargetSnapshot> {
             Ok(HostTargetSnapshot {
                 windows: observed_windows()?,
+                display_ids: active_display_ids()?,
             })
         }
     }
@@ -593,6 +632,9 @@ mod platform {
             anyhow::bail!("CGWindowListCopyWindowInfo returned a negative count");
         }
         let mut windows = Vec::new();
+        let frontmost_pid = NSWorkspace::sharedWorkspace()
+            .frontmostApplication()
+            .map(|application| i64::from(application.processIdentifier()));
         for idx in 0..count {
             let dict = unsafe { CFArrayGetValueAtIndex(array.as_ptr(), idx) as CFDictionaryRef };
             if dict.is_null() {
@@ -608,6 +650,7 @@ mod platform {
             };
             let layer = get_i64(dict, keys.layer.as_ptr()).unwrap_or(0);
             let alpha = get_f64(dict, keys.alpha.as_ptr()).unwrap_or(1.0);
+            let onscreen = get_bool(dict, keys.onscreen.as_ptr()).unwrap_or(false);
             let pid = get_i64(dict, keys.owner_pid.as_ptr()).filter(|value| *value >= 0);
             let bundle_id = pid
                 .and_then(|pid| u32::try_from(pid).ok())
@@ -617,16 +660,43 @@ mod platform {
                 pid,
                 bundle_id,
                 display_id: display_id_for_rect(rect).map(u64::from),
+                title: get_string(dict, keys.name.as_ptr()),
+                focused: pid.is_some() && pid == frontmost_pid,
                 geometry: TargetGeometry {
                     x: Some(rect.origin.x.round()),
                     y: Some(rect.origin.y.round()),
                     width: positive_dimension(rect.size.width).map(f64::from),
                     height: positive_dimension(rect.size.height).map(f64::from),
                 },
-                visible: layer == 0 && alpha > 0.01,
+                visibility_state: if layer != 0 || alpha <= 0.01 {
+                    TargetVisibilityState::Hidden
+                } else if !onscreen {
+                    TargetVisibilityState::Minimized
+                } else {
+                    TargetVisibilityState::Visible
+                },
             });
         }
         Ok(windows)
+    }
+
+    fn active_display_ids() -> anyhow::Result<BTreeSet<u64>> {
+        let mut displays = [0_u32; 32];
+        let mut count = 0_u32;
+        let error = unsafe {
+            CGGetActiveDisplayList(displays.len() as u32, displays.as_mut_ptr(), &mut count)
+        };
+        if error != 0 {
+            anyhow::bail!("CGGetActiveDisplayList failed with {error}");
+        }
+        Ok(
+            displays[..usize::try_from(count).unwrap_or(0).min(displays.len())]
+                .iter()
+                .copied()
+                .filter(|display_id| *display_id != 0)
+                .map(u64::from)
+                .collect(),
+        )
     }
 
     fn display_id_for_rect(rect: CGRect) -> Option<u32> {
@@ -689,6 +759,43 @@ mod platform {
         (ok != 0).then_some(out)
     }
 
+    fn get_bool(dict: CFDictionaryRef, key: *const c_void) -> Option<bool> {
+        let value = get_value(dict, key)? as CFBooleanRef;
+        let is_boolean = unsafe { CFGetTypeID(value) == CFBooleanGetTypeID() };
+        is_boolean.then(|| unsafe { CFBooleanGetValue(value) != 0 })
+    }
+
+    fn get_string(dict: CFDictionaryRef, key: *const c_void) -> Option<String> {
+        let value = get_value(dict, key)? as CFStringRef;
+        let is_string = unsafe { CFGetTypeID(value) == CFStringGetTypeID() };
+        if !is_string {
+            return None;
+        }
+        let ptr = unsafe { CFStringGetCStringPtr(value, KCF_STRING_ENCODING_UTF8) };
+        if !ptr.is_null() {
+            return unsafe { CStr::from_ptr(ptr) }
+                .to_str()
+                .ok()
+                .map(str::to_string);
+        }
+        let mut buffer = [0 as c_char; 4096];
+        let ok = unsafe {
+            CFStringGetCString(
+                value,
+                buffer.as_mut_ptr(),
+                buffer.len() as CFIndex,
+                KCF_STRING_ENCODING_UTF8,
+            )
+        };
+        if ok == 0 {
+            return None;
+        }
+        unsafe { CStr::from_ptr(buffer.as_ptr()) }
+            .to_str()
+            .ok()
+            .map(str::to_string)
+    }
+
     fn get_f64(dict: CFDictionaryRef, key: *const c_void) -> Option<f64> {
         let value = get_value(dict, key)? as CFNumberRef;
         let is_number = unsafe { CFGetTypeID(value) == CFNumberGetTypeID() };
@@ -716,6 +823,7 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
@@ -738,7 +846,8 @@ mod tests {
         observe_bound_session_target_once, TargetObservationProvider,
     };
     use crate::daemon::plugins::remote_desktop::target_tracking::{
-        TargetObservation, TargetTrackerSnapshot,
+        RemoteAppTargetBindingStateMachine, TargetObservation, TargetTrackerSnapshot,
+        TargetVisibilityState,
     };
     use crate::daemon::plugins::remote_desktop::test_support::{
         live_remote_target_metadata, test_session_init,
@@ -756,6 +865,7 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(HostTargetSnapshot {
                 windows: Vec::new(),
+                display_ids: BTreeSet::new(),
             })
         }
     }
@@ -825,6 +935,40 @@ mod tests {
                 observed_at_ms: 123,
             })
         }
+    }
+
+    fn window_binding() -> RemoteAppTargetBinding {
+        ResourceEntryTargetResolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &ResourceEntry {
+                    resource_ura: "easynet:///r/acme/resource/window.editor".to_string(),
+                    owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
+                    kind: ResourceType::Window,
+                    binding: ResourceBinding::LocalDevice,
+                    hardware_id: "window:macos:cgwindow:9001:10".to_string(),
+                    display_name: "Editor window".to_string(),
+                    metadata: live_remote_target_metadata(json!({
+                        "platform": "macos",
+                        "backend": "macos_core_graphics",
+                        "window_id": 10,
+                        "pid": 9001,
+                        "bundle_id": "com.example.Editor",
+                        "app_identity": "com.example.Editor",
+                        "app_name": "Editor",
+                        "title": "Old title",
+                        "x": 10,
+                        "y": 20,
+                        "width": 100,
+                        "height": 80,
+                        "geometry_revision": 1,
+                    })),
+                    first_seen_at: "2026-06-01T00:00:00Z".to_string(),
+                },
+                "interactive",
+                1,
+            )
+            .expect("window target binding resolves")
     }
 
     #[test]
@@ -990,6 +1134,96 @@ mod tests {
     }
 
     #[test]
+    fn shared_host_snapshot_provider_bounds_session_fanout_to_one_enumeration_per_tick() {
+        const SESSION_COUNT: usize = 128;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = SharedHostTargetSnapshotProvider::new(
+            CountingSnapshotProvider {
+                calls: Arc::clone(&calls),
+            },
+            Duration::from_secs(60),
+        );
+
+        for _session_tick in 0..SESSION_COUNT {
+            provider.snapshot().expect("shared host snapshot");
+        }
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "PERF-03 shared target sampler must use one host enumeration for 128 session ticks inside the same refresh window"
+        );
+
+        let expired_provider = SharedHostTargetSnapshotProvider::new(
+            CountingSnapshotProvider {
+                calls: Arc::clone(&calls),
+            },
+            Duration::ZERO,
+        );
+        expired_provider
+            .snapshot()
+            .expect("first expired-window snapshot");
+        expired_provider
+            .snapshot()
+            .expect("second expired-window snapshot");
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            3,
+            "PERF-03 cache expiry must allow a new bounded host enumeration instead of pinning stale target inventory forever"
+        );
+    }
+
+    #[test]
+    fn window_observation_prioritizes_visibility_loss_over_title_or_focus_changes() {
+        let binding = window_binding();
+        let snapshot = TargetTrackerSnapshot::from_binding(&binding);
+        let observation = observe_binding_against_host_snapshot(
+            &binding,
+            &snapshot,
+            &HostTargetSnapshot {
+                windows: vec![ObservedWindow {
+                    window_id: 10,
+                    pid: Some(9001),
+                    bundle_id: Some("com.example.Editor".to_string()),
+                    display_id: Some(42),
+                    title: Some("New title while hidden".to_string()),
+                    focused: true,
+                    geometry: TargetGeometry {
+                        x: Some(10.0),
+                        y: Some(20.0),
+                        width: Some(100.0),
+                        height: Some(80.0),
+                    },
+                    visibility_state: TargetVisibilityState::Hidden,
+                }],
+                display_ids: BTreeSet::from([42]),
+            },
+        )
+        .expect("hidden window observation");
+
+        match observation {
+            TargetObservation::VisibilityChanged {
+                visibility_state, ..
+            } => assert_eq!(visibility_state, TargetVisibilityState::Hidden),
+            other => panic!(
+                "hidden/minimized target availability must outrank title/focus observations, got {other:?}"
+            ),
+        }
+
+        let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding);
+        tracker
+            .commit_observation(observation)
+            .expect("hidden target observation commits");
+        assert_eq!(tracker.snapshot().to_value()["status"], json!("stale"));
+        assert!(
+            tracker.snapshot().pointer_target_value().is_none(),
+            "hidden window must disable pointer mapping before lower-priority title/focus updates"
+        );
+    }
+
+    #[test]
     fn application_observation_tracks_display_scoped_window_set_union() {
         let binding = ResourceEntryTargetResolver
             .resolve_for_session(
@@ -1039,7 +1273,9 @@ mod tests {
                             width: Some(100.0),
                             height: Some(80.0),
                         },
-                        visible: true,
+                        title: None,
+                        focused: false,
+                        visibility_state: TargetVisibilityState::Visible,
                     },
                     ObservedWindow {
                         window_id: 11,
@@ -1052,9 +1288,12 @@ mod tests {
                             width: Some(70.0),
                             height: Some(40.0),
                         },
-                        visible: true,
+                        title: None,
+                        focused: false,
+                        visibility_state: TargetVisibilityState::Visible,
                     },
                 ],
+                display_ids: BTreeSet::from([42]),
             },
         )
         .expect("application observation");
@@ -1071,7 +1310,7 @@ mod tests {
     }
 
     #[test]
-    fn application_observation_rejects_committed_window_set_drift() {
+    fn application_observation_tracks_same_display_window_set_churn_without_losing_target() {
         let binding = ResourceEntryTargetResolver
             .resolve_for_session(
                 "remote_desktop.create_session",
@@ -1120,7 +1359,9 @@ mod tests {
                             width: Some(100.0),
                             height: Some(80.0),
                         },
-                        visible: true,
+                        title: None,
+                        focused: false,
+                        visibility_state: TargetVisibilityState::Visible,
                     },
                     ObservedWindow {
                         window_id: 11,
@@ -1133,7 +1374,9 @@ mod tests {
                             width: Some(70.0),
                             height: Some(40.0),
                         },
-                        visible: true,
+                        title: None,
+                        focused: false,
+                        visibility_state: TargetVisibilityState::Visible,
                     },
                     ObservedWindow {
                         window_id: 12,
@@ -1146,22 +1389,93 @@ mod tests {
                             width: Some(60.0),
                             height: Some(60.0),
                         },
-                        visible: true,
+                        title: None,
+                        focused: false,
+                        visibility_state: TargetVisibilityState::Visible,
                     },
                 ],
+                display_ids: BTreeSet::from([42]),
             },
         )
         .expect("application observation");
 
         match observation {
-            TargetObservation::Lost { reason, detail, .. } => {
-                assert_eq!(reason.as_str(), "target_identity_changed");
-                assert!(
-                    detail.contains("window set changed"),
-                    "unexpected drift detail: {detail}"
-                );
+            TargetObservation::GeometryChanged { geometry, .. } => {
+                assert_eq!(geometry.x, Some(10.0));
+                assert_eq!(geometry.y, Some(20.0));
+                assert_eq!(geometry.width, Some(270.0));
+                assert_eq!(geometry.height, Some(80.0));
             }
-            other => panic!("expected application window-set drift to fail closed, got {other:?}"),
+            other => panic!(
+                "expected same-display application window-set churn to update geometry, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn application_observation_allows_observer_subset_of_committed_capture_set() {
+        let binding = ResourceEntryTargetResolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &ResourceEntry {
+                    resource_ura: "easynet:///r/acme/resource/application.editor.subset"
+                        .to_string(),
+                    owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
+                    kind: ResourceType::Application,
+                    binding: ResourceBinding::LocalDevice,
+                    hardware_id: "application:macos:cgwindow:42:bundle:com.example.Editor"
+                        .to_string(),
+                    display_name: "Editor on display 42".to_string(),
+                    metadata: live_remote_target_metadata(json!({
+                        "platform": "macos",
+                        "backend": "macos_core_graphics",
+                        "display_id": 42,
+                        "bundle_id": "com.example.Editor",
+                        "app_identity": "com.example.Editor",
+                        "primary_pid": 9001,
+                        "resolved_window_ids": [10, 11, 12],
+                        "window_set_epoch": 123,
+                        "primary_x": 10,
+                        "primary_y": 20,
+                        "primary_width": 100,
+                        "primary_height": 80,
+                    })),
+                    first_seen_at: "2026-06-01T00:00:00Z".to_string(),
+                },
+                "view_only",
+                1,
+            )
+            .expect("application target binding resolves");
+        let snapshot = TargetTrackerSnapshot::from_binding(&binding);
+        let observation = observe_binding_against_host_snapshot(
+            &binding,
+            &snapshot,
+            &HostTargetSnapshot {
+                windows: vec![ObservedWindow {
+                    window_id: 10,
+                    pid: Some(9001),
+                    bundle_id: Some("com.example.Editor".to_string()),
+                    display_id: Some(42),
+                    geometry: TargetGeometry {
+                        x: Some(10.0),
+                        y: Some(20.0),
+                        width: Some(100.0),
+                        height: Some(80.0),
+                    },
+                    title: None,
+                    focused: false,
+                    visibility_state: TargetVisibilityState::Visible,
+                }],
+                display_ids: BTreeSet::from([42]),
+            },
+        )
+        .expect("application subset observation");
+
+        match observation {
+            TargetObservation::VisibilityChanged {
+                visibility_state, ..
+            } => assert_eq!(visibility_state, TargetVisibilityState::Visible),
+            other => panic!("expected observer subset to remain visible, got {other:?}"),
         }
     }
 
@@ -1215,7 +1529,9 @@ mod tests {
                             width: Some(100.0),
                             height: Some(80.0),
                         },
-                        visible: true,
+                        title: None,
+                        focused: false,
+                        visibility_state: TargetVisibilityState::Visible,
                     },
                     ObservedWindow {
                         window_id: 12,
@@ -1228,9 +1544,12 @@ mod tests {
                             width: Some(50.0),
                             height: Some(50.0),
                         },
-                        visible: true,
+                        title: None,
+                        focused: false,
+                        visibility_state: TargetVisibilityState::Visible,
                     },
                 ],
+                display_ids: BTreeSet::from([42, 99]),
             },
         )
         .expect("application observation");

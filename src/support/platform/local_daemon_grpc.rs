@@ -923,6 +923,51 @@ pub(crate) fn invoke_local_daemon_ability_targeted_with_invocation_meta(
 }
 
 #[cfg(feature = "axon-pb")]
+pub(crate) fn invoke_local_daemon_ability_targeted_stream_with_invocation_context(
+    request: LocalDaemonTargetedInvocationMetaRequest<'_>,
+    max_frames: Option<usize>,
+) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
+    use anyhow::{anyhow, bail};
+    use axon_sdk::pb::axon::v1 as pb;
+
+    let LocalDaemonTargetedInvocationMetaRequest {
+        function_name,
+        payload_json,
+        callee_ura,
+        subject_ura,
+        invocation_nonce,
+        causal_parents,
+        step_timeout,
+        trace_id: _,
+    } = request;
+    let function_name = function_name.trim().to_string();
+    if function_name.is_empty() {
+        bail!("function_name must not be empty");
+    }
+
+    let receipt_refs = verified_receipt_refs_from_causal_parents(causal_parents)?;
+    let mut refs = receipt_refs;
+    let causal_form = match refs.len() {
+        0 => pb::causal_context::Form::None(pb::Empty {}),
+        1 => pb::causal_context::Form::Scalar(refs.remove(0)),
+        _ => pb::causal_context::Form::List(pb::ReceiptList { prior: refs }),
+    };
+    let tuple_plan = LocalDaemonSystemTuplePlan::targeted_explicit_causal(
+        &function_name,
+        payload_json,
+        callee_ura,
+        subject_ura,
+        invocation_nonce,
+        pb::CausalContext {
+            form: Some(causal_form),
+        },
+        step_timeout,
+    )
+    .map_err(|error| anyhow!("{function_name}: {error}"))?;
+    invoke_local_daemon_ability_stream_with_tuple_plan(tuple_plan, max_frames)
+}
+
+#[cfg(feature = "axon-pb")]
 pub(crate) fn invoke_local_daemon_ability_targeted_with_hosted_agent_delegation(
     request: LocalDaemonTargetedInvocationMetaRequest<'_>,
     hosted_agent_ura: &str,
@@ -1609,6 +1654,8 @@ impl UnverifiedTerminalInvocationProjection {
     ) -> anyhow::Result<VerifiedTerminalInvocationProjection> {
         use anyhow::anyhow;
 
+        let checkpoint_proof =
+            finalization_checkpoint_proof_json(&self.admission_receipt, &self.terminal_receipt)?;
         let checkpoints =
             crate::daemon::invocation::receipts::finalization_projection::verify_wire_finalization_checkpoints(
                 self.admission_receipt,
@@ -1644,6 +1691,7 @@ impl UnverifiedTerminalInvocationProjection {
             "anchor_count": causal_anchor.anchor_count,
             "cryptographic_verification": "finalization_checkpoints_verified",
             "verification_scope": "admission_and_terminal",
+            "verification_checkpoints": checkpoint_proof,
         });
         Ok(VerifiedTerminalInvocationProjection {
             invocation_id: terminal.invocation_id().to_string(),
@@ -1656,6 +1704,179 @@ impl UnverifiedTerminalInvocationProjection {
             causal_anchor,
         })
     }
+}
+
+#[cfg(feature = "axon-pb")]
+fn finalization_checkpoint_proof_json(
+    admission: &axon_sdk::pb::axon::v1::InvocationReceipt,
+    terminal: &axon_sdk::pb::axon::v1::InvocationReceipt,
+) -> anyhow::Result<serde_json::Value> {
+    use base64::{engine::general_purpose::STANDARD as B64_STANDARD, Engine as _};
+    use prost::Message as _;
+
+    fn encode_receipt(
+        receipt: &axon_sdk::pb::axon::v1::InvocationReceipt,
+    ) -> anyhow::Result<String> {
+        let mut bytes = Vec::with_capacity(receipt.encoded_len());
+        receipt.encode(&mut bytes)?;
+        Ok(B64_STANDARD.encode(bytes))
+    }
+
+    Ok(serde_json::json!({
+        "encoding": "prost.base64",
+        "admission_receipt_b64": encode_receipt(admission)?,
+        "terminal_receipt_b64": encode_receipt(terminal)?,
+    }))
+}
+
+#[cfg(feature = "axon-pb")]
+fn decode_checkpoint_receipt_b64(
+    value: &serde_json::Value,
+    field: &'static str,
+) -> anyhow::Result<axon_sdk::pb::axon::v1::InvocationReceipt> {
+    use anyhow::Context;
+    use base64::{engine::general_purpose::STANDARD as B64_STANDARD, Engine as _};
+    use prost::Message as _;
+
+    let encoded = value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("verified invocation proof missing {field}"))?;
+    let bytes = B64_STANDARD
+        .decode(encoded)
+        .with_context(|| format!("decode verified invocation proof {field}"))?;
+    axon_sdk::pb::axon::v1::InvocationReceipt::decode(bytes.as_slice())
+        .with_context(|| format!("decode verified invocation proof {field} as InvocationReceipt"))
+}
+
+#[cfg(feature = "axon-pb")]
+pub(crate) fn import_verified_causal_parent_from_invocation_meta(
+    metadata: &serde_json::Value,
+    expected_ability: &str,
+    expected_subject_ura: &str,
+) -> anyhow::Result<serde_json::Value> {
+    import_verified_causal_parent_from_invocation_meta_with_resolver(
+        metadata,
+        expected_ability,
+        expected_subject_ura,
+        &LocalKeyServiceReceiptResolver::new(),
+    )
+}
+
+#[cfg(feature = "axon-pb")]
+fn import_verified_causal_parent_from_invocation_meta_with_resolver(
+    metadata: &serde_json::Value,
+    expected_ability: &str,
+    expected_subject_ura: &str,
+    resolver: &dyn axon_sdk::invocation::KeyResolver,
+) -> anyhow::Result<serde_json::Value> {
+    use anyhow::{anyhow, bail};
+    use axon_sdk::invocation::InvocationState;
+
+    let expected_ability = expected_ability.trim();
+    if expected_ability.is_empty() {
+        bail!("verified invocation import expected_ability must not be empty");
+    }
+    let expected_subject_ura = expected_subject_ura.trim();
+    if expected_subject_ura.is_empty() {
+        bail!("verified invocation import expected_subject_ura must not be empty");
+    }
+
+    if let Some(projected_ability) = metadata
+        .get("ability")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if projected_ability != expected_ability {
+            bail!(
+                "verified invocation proof ability {projected_ability:?} does not match expected {expected_ability:?}"
+            );
+        }
+    }
+
+    let proof = metadata
+        .get("receipt")
+        .and_then(|receipt| receipt.get("verification_checkpoints"))
+        .ok_or_else(|| {
+            anyhow!("verified invocation metadata missing receipt.verification_checkpoints")
+        })?;
+    let encoding = proof
+        .get("encoding")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("verified invocation proof missing encoding"))?;
+    if encoding != "prost.base64" {
+        bail!("unsupported verified invocation proof encoding {encoding:?}");
+    }
+
+    let admission_receipt = decode_checkpoint_receipt_b64(proof, "admission_receipt_b64")?;
+    let terminal_receipt = decode_checkpoint_receipt_b64(proof, "terminal_receipt_b64")?;
+
+    let terminal_state = InvocationState::try_from(terminal_receipt.state)
+        .map_err(|error| anyhow!("verified invocation proof terminal state invalid: {error}"))?;
+    if terminal_state != InvocationState::Completed {
+        bail!("verified invocation proof terminal state must be Completed, got {terminal_state:?}");
+    }
+    let terminal_subject = terminal_receipt
+        .subject_binding
+        .as_ref()
+        .map(|binding| binding.ura.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow!("verified invocation proof terminal receipt omitted subject"))?;
+    if terminal_subject != expected_subject_ura {
+        bail!(
+            "verified invocation proof subject {terminal_subject:?} does not match expected {expected_subject_ura:?}"
+        );
+    }
+    let ability_ura =
+        axon_sdk::invocation::ability_ura_from_descriptor_ref(&terminal_receipt.ability_binding)
+            .map_err(|error| {
+                anyhow!("verified invocation proof ability binding is invalid: {error}")
+            })?;
+    let public_name = axon_sdk::ura::qualified_ability_name(ability_ura)
+        .ok_or_else(|| anyhow!("verified invocation proof ability binding has no public name"))?;
+    if public_name != expected_ability {
+        bail!(
+            "verified invocation proof terminal ability {public_name:?} does not match expected {expected_ability:?}"
+        );
+    }
+    if let Some(request_id) = metadata
+        .get("request_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if request_id != terminal_receipt.invocation_id {
+            bail!(
+                "verified invocation proof request_id {request_id:?} does not match terminal receipt invocation {:?}",
+                terminal_receipt.invocation_id
+            );
+        }
+    }
+
+    let verified = UnverifiedTerminalInvocationProjection {
+        state: "completed",
+        admission_receipt,
+        terminal_receipt,
+    }
+    .verify(resolver, expected_ability)?;
+    record_verified_causal_anchor(&verified.causal_anchor)?;
+    Ok(verified.causal_anchor.projection())
+}
+
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn import_verified_causal_parent_from_invocation_meta(
+    _metadata: &serde_json::Value,
+    expected_ability: &str,
+    _expected_subject_ura: &str,
+) -> anyhow::Result<serde_json::Value> {
+    anyhow::bail!(
+        "{expected_ability}: verified invocation proof import requires the axon-pb provider"
+    )
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2049,6 +2270,19 @@ pub(crate) fn invoke_local_daemon_ability_targeted_with_invocation_meta(
     } = request;
     anyhow::bail!(
         "invoking targeted `{}` with invocation metadata requires the `axon-pb` feature; \
+         rebuild with `cargo build --features axon-pb`",
+        function_name
+    )
+}
+
+#[cfg(not(feature = "axon-pb"))]
+pub(crate) fn invoke_local_daemon_ability_targeted_stream_with_invocation_context(
+    request: LocalDaemonTargetedInvocationMetaRequest<'_>,
+    _max_frames: Option<usize>,
+) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalStreamFrame>> {
+    let function_name = request.function_name;
+    anyhow::bail!(
+        "streaming `{}` through the local daemon Invocation endpoint requires the `axon-pb` feature; \
          rebuild with `cargo build --features axon-pb`",
         function_name
     )
@@ -2716,6 +2950,50 @@ mod tests {
         let refs = verified_receipt_refs_from_causal_parents(&[parent])
             .expect("verified projection restores a causal receipt capability");
         assert_eq!(refs.len(), 1);
+        assert_eq!(
+            refs[0].receipt_hash,
+            response
+                .terminal_receipt
+                .as_ref()
+                .expect("terminal receipt")
+                .self_hash
+        );
+    }
+
+    #[test]
+    fn verified_invocation_metadata_proof_can_rehydrate_causal_parent() {
+        let (submitted, response, signing_key) =
+            completed_receipt_response_fixture(0x34, "inv-rehydrated-proof");
+        let resolver = fixture_resolver(&response, &signing_key);
+        let projection =
+            UnverifiedTerminalInvocationProjection::from_response(&response, &submitted, "job.run")
+                .expect("well-formed unverified projection")
+                .verify(&resolver, "job.run")
+                .expect("cryptographically verified finalization projection");
+        let parent = causal_parent_claim(&response);
+        let error = verified_receipt_refs_from_causal_parents(&[parent.clone()])
+            .expect_err("fixture parent must not be accepted before proof import");
+        assert!(error
+            .to_string()
+            .contains("was not cryptographically verified"));
+
+        let metadata = serde_json::json!({
+            "ability": "job.run",
+            "request_id": projection.invocation_id,
+            "receipt": projection.receipt,
+        });
+        let imported = import_verified_causal_parent_from_invocation_meta_with_resolver(
+            &metadata,
+            "job.run",
+            &projection.subject_ura,
+            &resolver,
+        )
+        .expect("verified metadata proof imports causal parent");
+
+        assert_eq!(imported["receipt_ura"], parent["receipt_ura"]);
+        assert_eq!(imported["receipt_hash"], parent["receipt_hash"]);
+        let refs = verified_receipt_refs_from_causal_parents(&[parent])
+            .expect("imported proof restores causal receipt capability");
         assert_eq!(
             refs[0].receipt_hash,
             response

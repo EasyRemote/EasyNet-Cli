@@ -56,6 +56,7 @@ use anyhow::Context;
 use clap::{Args, Subcommand};
 use console::style;
 use serde_json::Value;
+#[cfg(feature = "remote-desktop")]
 use std::path::PathBuf;
 
 use crate::cli::commands::{
@@ -63,10 +64,11 @@ use crate::cli::commands::{
     exec, invoke, teach,
 };
 use crate::cli::daemon_client::ability_catalog::{AbilityCatalogueClient, AbilityCatalogueQuery};
+#[cfg(feature = "remote-desktop")]
 use crate::support::platform::local_invoke::{
     LocalRemoteDesktopSessionControlBinding, LocalRemoteDesktopSessionIssuer,
-    LocalRemoteTargetInventoryIssuer, LocalStreamFrame,
 };
+use crate::support::platform::local_invoke::{LocalRemoteTargetInventoryIssuer, LocalStreamFrame};
 use crate::support::platform::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
@@ -110,18 +112,23 @@ pub enum AbilityAction {
     #[command(name = "watch-remote-targets", hide = true)]
     WatchRemoteTargets(WatchRemoteTargetsArgs),
     /// Create a remote desktop session from one selected display/window/application resource.
+    #[cfg(feature = "remote-desktop")]
     #[command(name = "create-remote-desktop-session", hide = true)]
     CreateRemoteDesktopSession(CreateRemoteDesktopSessionArgs),
     /// Apply a remote desktop WebRTC signaling description for a created session.
+    #[cfg(feature = "remote-desktop")]
     #[command(name = "set-remote-desktop-description", hide = true)]
     SetRemoteDesktopDescription(SetRemoteDesktopDescriptionArgs),
     /// Read the current remote desktop session projection for host E2E verification.
+    #[cfg(feature = "remote-desktop")]
     #[command(name = "show-remote-desktop-session", hide = true)]
     ShowRemoteDesktopSession(ShowRemoteDesktopSessionArgs),
     /// Add a remote desktop WebRTC ICE candidate for a created session.
+    #[cfg(feature = "remote-desktop")]
     #[command(name = "add-remote-desktop-ice-candidate", hide = true)]
     AddRemoteDesktopIceCandidate(AddRemoteDesktopIceCandidateArgs),
     /// Watch remote desktop session lifecycle/signaling events.
+    #[cfg(feature = "remote-desktop")]
     #[command(name = "watch-remote-desktop-events", hide = true)]
     WatchRemoteDesktopEvents(WatchRemoteDesktopEventsArgs),
     /// Run a one-shot ad-hoc command on a device (ephemeral ability).
@@ -202,6 +209,7 @@ pub struct WatchRemoteTargetsArgs {
 }
 
 #[derive(Debug, Args)]
+#[cfg(feature = "remote-desktop")]
 pub struct CreateRemoteDesktopSessionArgs {
     /// Selected display/window/application Resource URA from refresh/watch remote targets.
     #[arg(long, value_name = "RESOURCE_URA")]
@@ -221,6 +229,7 @@ pub struct CreateRemoteDesktopSessionArgs {
 }
 
 #[derive(Debug, Args)]
+#[cfg(feature = "remote-desktop")]
 pub struct SetRemoteDesktopDescriptionArgs {
     /// JSON response from create-remote-desktop-session; carries subject, token, and consent receipt.
     #[arg(long, value_name = "PATH")]
@@ -240,6 +249,7 @@ pub struct SetRemoteDesktopDescriptionArgs {
 }
 
 #[derive(Debug, Args)]
+#[cfg(feature = "remote-desktop")]
 pub struct ShowRemoteDesktopSessionArgs {
     /// JSON response from create-remote-desktop-session; carries subject, token, and consent receipt.
     #[arg(long, value_name = "PATH")]
@@ -250,6 +260,7 @@ pub struct ShowRemoteDesktopSessionArgs {
 }
 
 #[derive(Debug, Args)]
+#[cfg(feature = "remote-desktop")]
 pub struct AddRemoteDesktopIceCandidateArgs {
     /// JSON response from create-remote-desktop-session; carries subject, token, and consent receipt.
     #[arg(long, value_name = "PATH")]
@@ -266,6 +277,7 @@ pub struct AddRemoteDesktopIceCandidateArgs {
 }
 
 #[derive(Debug, Args)]
+#[cfg(feature = "remote-desktop")]
 pub struct WatchRemoteDesktopEventsArgs {
     /// JSON response from create-remote-desktop-session; carries subject, token, and consent receipt.
     #[arg(long, value_name = "PATH")]
@@ -296,10 +308,15 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
         AbilityAction::Record(a) => ability_record::run(a),
         AbilityAction::RefreshRemoteTargets(a) => run_refresh_remote_targets(a),
         AbilityAction::WatchRemoteTargets(a) => run_watch_remote_targets(a),
+        #[cfg(feature = "remote-desktop")]
         AbilityAction::CreateRemoteDesktopSession(a) => run_create_remote_desktop_session(a),
+        #[cfg(feature = "remote-desktop")]
         AbilityAction::SetRemoteDesktopDescription(a) => run_set_remote_desktop_description(a),
+        #[cfg(feature = "remote-desktop")]
         AbilityAction::ShowRemoteDesktopSession(a) => run_show_remote_desktop_session(a),
+        #[cfg(feature = "remote-desktop")]
         AbilityAction::AddRemoteDesktopIceCandidate(a) => run_add_remote_desktop_ice_candidate(a),
+        #[cfg(feature = "remote-desktop")]
         AbilityAction::WatchRemoteDesktopEvents(a) => run_watch_remote_desktop_events(a),
         AbilityAction::Exec(a) => exec::run(a),
         AbilityAction::Teach(a) => teach::run_teach(a),
@@ -520,14 +537,16 @@ fn stream_frames_to_json(frames: &[LocalStreamFrame]) -> Value {
     )
 }
 
+#[cfg(feature = "remote-desktop")]
 fn run_create_remote_desktop_session(args: CreateRemoteDesktopSessionArgs) -> anyhow::Result<()> {
     let request = create_remote_desktop_session_request(&args);
-    let (session, invocation) =
+    let (session, invocation, consent_invocation) =
         LocalRemoteDesktopSessionIssuer::create_session(&args.subject, request)
             .context("invoke remote_desktop.grant_consent -> remote_desktop.create_session")?;
     let response = serde_json::json!({
         "session": session,
         "invocation": invocation.as_value(),
+        "consent_invocation": consent_invocation.as_value(),
     });
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&response)?);
@@ -546,6 +565,7 @@ fn run_create_remote_desktop_session(args: CreateRemoteDesktopSessionArgs) -> an
     Ok(())
 }
 
+#[cfg(feature = "remote-desktop")]
 fn create_remote_desktop_session_request(args: &CreateRemoteDesktopSessionArgs) -> Value {
     let mut object = serde_json::Map::new();
     if let Some(mode) = args.mode.as_ref() {
@@ -563,6 +583,7 @@ fn create_remote_desktop_session_request(args: &CreateRemoteDesktopSessionArgs) 
     Value::Object(object)
 }
 
+#[cfg(feature = "remote-desktop")]
 fn run_set_remote_desktop_description(args: SetRemoteDesktopDescriptionArgs) -> anyhow::Result<()> {
     let binding = remote_desktop_session_control_binding_from_file(&args.session_json)?;
     let request = set_remote_desktop_description_request(&args)?;
@@ -578,6 +599,7 @@ fn run_set_remote_desktop_description(args: SetRemoteDesktopDescriptionArgs) -> 
     Ok(())
 }
 
+#[cfg(feature = "remote-desktop")]
 fn run_show_remote_desktop_session(args: ShowRemoteDesktopSessionArgs) -> anyhow::Result<()> {
     let binding = remote_desktop_session_control_binding_from_file(&args.session_json)?;
     let response = LocalRemoteDesktopSessionIssuer::show_session(
@@ -595,10 +617,12 @@ fn run_show_remote_desktop_session(args: ShowRemoteDesktopSessionArgs) -> anyhow
     Ok(())
 }
 
+#[cfg(feature = "remote-desktop")]
 fn show_remote_desktop_session_request(_args: &ShowRemoteDesktopSessionArgs) -> Value {
     serde_json::json!({})
 }
 
+#[cfg(feature = "remote-desktop")]
 fn set_remote_desktop_description_request(
     args: &SetRemoteDesktopDescriptionArgs,
 ) -> anyhow::Result<Value> {
@@ -612,6 +636,7 @@ fn set_remote_desktop_description_request(
     }))
 }
 
+#[cfg(feature = "remote-desktop")]
 fn run_add_remote_desktop_ice_candidate(
     args: AddRemoteDesktopIceCandidateArgs,
 ) -> anyhow::Result<()> {
@@ -629,6 +654,7 @@ fn run_add_remote_desktop_ice_candidate(
     Ok(())
 }
 
+#[cfg(feature = "remote-desktop")]
 fn add_remote_desktop_ice_candidate_request(
     args: &AddRemoteDesktopIceCandidateArgs,
 ) -> anyhow::Result<Value> {
@@ -641,6 +667,7 @@ fn add_remote_desktop_ice_candidate_request(
     }))
 }
 
+#[cfg(feature = "remote-desktop")]
 fn run_watch_remote_desktop_events(args: WatchRemoteDesktopEventsArgs) -> anyhow::Result<()> {
     if args.max_events == 0 {
         anyhow::bail!("--max-events must be greater than zero");
@@ -674,6 +701,7 @@ fn run_watch_remote_desktop_events(args: WatchRemoteDesktopEventsArgs) -> anyhow
     Ok(())
 }
 
+#[cfg(feature = "remote-desktop")]
 fn watch_remote_desktop_events_request(args: &WatchRemoteDesktopEventsArgs) -> Value {
     let mut object = serde_json::Map::new();
     if let Some(from_sequence) = args.from_sequence {
@@ -685,6 +713,7 @@ fn watch_remote_desktop_events_request(args: &WatchRemoteDesktopEventsArgs) -> V
     Value::Object(object)
 }
 
+#[cfg(feature = "remote-desktop")]
 fn remote_desktop_session_control_binding_from_file(
     path: &PathBuf,
 ) -> anyhow::Result<LocalRemoteDesktopSessionControlBinding> {
@@ -693,6 +722,7 @@ fn remote_desktop_session_control_binding_from_file(
     LocalRemoteDesktopSessionControlBinding::from_create_session_response(&value)
 }
 
+#[cfg(feature = "remote-desktop")]
 fn json_value_from_inline_or_file(
     label: &'static str,
     inline: Option<&str>,
@@ -715,6 +745,7 @@ fn json_value_from_inline_or_file(
     }
 }
 
+#[cfg(feature = "remote-desktop")]
 fn json_file(path: &PathBuf) -> anyhow::Result<Value> {
     let raw = std::fs::read_to_string(path)?;
     serde_json::from_str(&raw).with_context(|| format!("parse JSON from {}", path.display()))
@@ -866,6 +897,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "remote-desktop")]
     fn create_remote_desktop_session_request_keeps_selected_subject_out_of_args() {
         let request = create_remote_desktop_session_request(&CreateRemoteDesktopSessionArgs {
             subject: "easynet:///r/test/resource/device.dev/streams/window.7".to_string(),
@@ -888,6 +920,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "remote-desktop")]
     fn set_remote_desktop_description_request_keeps_session_fields_out_of_args() {
         let request = set_remote_desktop_description_request(&SetRemoteDesktopDescriptionArgs {
             session_json: PathBuf::from("session.json"),
@@ -907,6 +940,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "remote-desktop")]
     fn show_remote_desktop_session_request_keeps_session_fields_out_of_args() {
         let request = show_remote_desktop_session_request(&ShowRemoteDesktopSessionArgs {
             session_json: PathBuf::from("session.json"),
@@ -921,6 +955,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "remote-desktop")]
     fn add_remote_desktop_ice_candidate_request_keeps_session_fields_out_of_args() {
         let request = add_remote_desktop_ice_candidate_request(&AddRemoteDesktopIceCandidateArgs {
             session_json: PathBuf::from("session.json"),
@@ -943,6 +978,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "remote-desktop")]
     fn watch_remote_desktop_events_request_preserves_resume_without_session_fields() {
         let request = watch_remote_desktop_events_request(&WatchRemoteDesktopEventsArgs {
             session_json: PathBuf::from("session.json"),

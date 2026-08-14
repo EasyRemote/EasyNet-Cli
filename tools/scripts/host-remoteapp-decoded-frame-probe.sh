@@ -39,6 +39,7 @@ FRAME_ANALYSIS_JSON="$OUT_DIR/frame-analysis.json"
 
 TARGET_HINT="${EASYNET_REMOTEAPP_TARGET_HINT:-}"
 TARGET_RESOURCE_URA="${EASYNET_REMOTEAPP_TARGET_RESOURCE_URA:-}"
+TARGET_PID="${EASYNET_REMOTEAPP_TARGET_PID:-}"
 DEFAULT_FRAME_RECEIVER_CMD="cargo run --quiet --example easynet-remoteapp-frame-receiver --features remote-desktop --"
 if [[ -x "$REPO_ROOT/target/debug/examples/easynet-remoteapp-frame-receiver" ]]; then
   DEFAULT_FRAME_RECEIVER_CMD="$REPO_ROOT/target/debug/examples/easynet-remoteapp-frame-receiver"
@@ -84,11 +85,11 @@ run_easynet ability refresh-remote-targets \
   --type "$TARGET_KIND" \
   --format json >"$LIVE_INVENTORY_JSON"
 
-python3 - "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" "$TARGET_KIND" "$TARGET_HINT" "$TARGET_RESOURCE_URA" <<'PY'
+python3 - "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" "$TARGET_KIND" "$TARGET_HINT" "$TARGET_RESOURCE_URA" "$TARGET_PID" <<'PY'
 import json
 import sys
 
-inventory_path, selected_path, target_kind, hint, target_resource_ura = sys.argv[1:6]
+inventory_path, selected_path, target_kind, hint, target_resource_ura, target_pid = sys.argv[1:7]
 with open(inventory_path, encoding="utf-8") as f:
     inventory = json.load(f)
 
@@ -109,8 +110,15 @@ def search_blob(resource):
         metadata.get("title"),
         metadata.get("bundle_id"),
         metadata.get("app_identity"),
+        metadata.get("pid"),
+        metadata.get("primary_pid"),
     ]
     return "\n".join(str(value).lower() for value in fields if value)
+
+def pid_matches(resource, expected_pid):
+    metadata = resource.get("metadata") if isinstance(resource.get("metadata"), dict) else {}
+    observed = [metadata.get("pid"), metadata.get("primary_pid")]
+    return any(str(value) == str(expected_pid) for value in observed if value is not None)
 
 candidates = [
     resource for resource in resources
@@ -124,6 +132,14 @@ if target_resource_ura:
     ]
     if not candidates:
         raise SystemExit(f"selected target Resource URA is not in live {target_kind} inventory: {target_resource_ura}")
+elif target_pid:
+    if not target_pid.isdigit() or int(target_pid) <= 0:
+        raise SystemExit(f"EASYNET_REMOTEAPP_TARGET_PID must be a positive integer, got {target_pid!r}")
+    candidates = [resource for resource in candidates if pid_matches(resource, target_pid)]
+    if not candidates:
+        raise SystemExit(
+            f"selected target pid is not in live {target_kind} inventory metadata: {target_pid}"
+        )
 elif hint:
     needle = hint.lower()
     candidates = [resource for resource in candidates if needle in search_blob(resource)]
@@ -248,12 +264,18 @@ def parse_rgb_env(name):
 
 selected_label = os.environ.get("EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL", "").strip()
 unrelated_label = os.environ.get("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL", "").strip()
+selected_pid = os.environ.get("EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID", "").strip()
+unrelated_pid = os.environ.get("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID", "").strip()
 if not selected_label:
     raise SystemExit("EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL is required")
 if not unrelated_label:
     raise SystemExit("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL is required")
 if selected_label == unrelated_label:
     raise SystemExit("selected and unrelated sentinel labels must be distinct")
+if selected_pid and (not selected_pid.isdigit() or int(selected_pid) <= 0):
+    raise SystemExit("EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID must be a positive integer when set")
+if unrelated_pid and (not unrelated_pid.isdigit() or int(unrelated_pid) <= 0):
+    raise SystemExit("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID must be a positive integer when set")
 
 unrelated_fixture = {
     "label": unrelated_label,
@@ -263,6 +285,8 @@ unrelated_fixture = {
     ),
     "rgb": parse_rgb_env("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB"),
 }
+if unrelated_pid:
+    unrelated_fixture["pid"] = int(unrelated_pid)
 unrelated_resource_ura = os.environ.get("EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RESOURCE_URA", "").strip()
 if unrelated_resource_ura:
     unrelated_fixture["resource_ura"] = unrelated_resource_ura
@@ -307,6 +331,7 @@ evidence = {
             "resource_ura": selected_resource_ura,
             "rgb": parse_rgb_env("EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB"),
             "target_kind": expected_kind,
+            "pid": int(selected_pid) if selected_pid else None,
         },
         "unrelated": unrelated_fixture,
     },
