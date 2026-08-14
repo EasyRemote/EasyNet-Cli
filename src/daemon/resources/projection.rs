@@ -29,7 +29,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::daemon::persistence::resources::ResourceEntry;
+use crate::daemon::persistence::resources::{ResourceEntry, ResourceType};
+
+const REMOTE_TARGET_REFRESH_ABILITY: &str = "resource.refresh_remote_targets";
+const REMOTE_TARGET_WATCH_ABILITY: &str = "resource.watch_remote_targets";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -41,6 +44,8 @@ pub struct ResourceListEntry {
     pub binding: String,
     pub display_name: String,
     pub metadata: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_projection: Option<ResourceCacheProjection>,
 }
 
 impl ResourceListEntry {
@@ -52,7 +57,40 @@ impl ResourceListEntry {
             binding: entry.binding.as_str().to_string(),
             display_name: entry.display_name.clone(),
             metadata: entry.metadata.clone(),
+            cache_projection: ResourceCacheProjection::for_resource_entry(entry),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceCacheProjection {
+    pub source: String,
+    pub selection_state: String,
+    pub live_refresh_required: bool,
+    pub refresh_ability: String,
+    pub watch_ability: String,
+    pub availability: Option<String>,
+    pub freshness: Option<Value>,
+}
+
+impl ResourceCacheProjection {
+    fn for_resource_entry(entry: &ResourceEntry) -> Option<Self> {
+        if !matches!(
+            entry.kind,
+            ResourceType::Display | ResourceType::Application | ResourceType::Window
+        ) {
+            return None;
+        }
+        Some(Self {
+            source: "meta.list_resources.cache_projection".to_string(),
+            selection_state: "cached_requires_live_refresh".to_string(),
+            live_refresh_required: true,
+            refresh_ability: REMOTE_TARGET_REFRESH_ABILITY.to_string(),
+            watch_ability: REMOTE_TARGET_WATCH_ABILITY.to_string(),
+            availability: optional_metadata_str(entry, "availability"),
+            freshness: entry.metadata.get("freshness").cloned(),
+        })
     }
 }
 
@@ -604,6 +642,7 @@ mod tests {
         assert_eq!(wire["binding"], "local_device");
         assert_eq!(wire["display_name"], "Front Camera");
         assert_eq!(wire["metadata"]["width"], 1920);
+        assert!(wire.get("cache_projection").is_none());
         assert!(wire.get("hardware_id").is_none());
         assert!(wire.get("first_seen_at").is_none());
     }
@@ -616,6 +655,48 @@ mod tests {
 
         assert_eq!(wire["resources"][0]["type"], "camera");
         assert_eq!(wire["resources"][0]["binding"], "local_device");
+    }
+
+    #[test]
+    fn resource_list_entry_marks_remote_targets_as_cache_only() {
+        let mut entry = resource_entry();
+        entry.kind = ResourceType::Window;
+        entry.resource_ura =
+            "easynet:///r/acme/resource/device.dev-1/streams/window.cursor".to_string();
+        entry.metadata = json!({
+            "availability": "available",
+            "freshness": {
+                "observed_at_ms": 123_456,
+                "stale_after_ms": 128_456,
+                "source": "live_refresh",
+            },
+        });
+
+        let cached = ResourceListEntry::from_resource_entry(&entry);
+        let wire = serde_json::to_value(&cached).expect("entry serializes");
+
+        assert_eq!(
+            wire["cache_projection"]["source"],
+            "meta.list_resources.cache_projection"
+        );
+        assert_eq!(
+            wire["cache_projection"]["selection_state"],
+            "cached_requires_live_refresh"
+        );
+        assert_eq!(wire["cache_projection"]["live_refresh_required"], true);
+        assert_eq!(
+            wire["cache_projection"]["refresh_ability"],
+            "resource.refresh_remote_targets"
+        );
+        assert_eq!(
+            wire["cache_projection"]["watch_ability"],
+            "resource.watch_remote_targets"
+        );
+        assert_eq!(wire["cache_projection"]["availability"], "available");
+        assert_eq!(
+            wire["cache_projection"]["freshness"]["stale_after_ms"],
+            128_456
+        );
     }
 
     #[test]

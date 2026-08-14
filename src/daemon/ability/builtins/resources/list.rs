@@ -3,11 +3,12 @@
 //
 // File: src/daemon/ability/builtins/resources/list.rs
 //
-// Resource discovery surface for physical-channel abilities
+// Read-only cache projection for physical-channel resources
 // (mic.subscribe, camera.subscribe, screen.subscribe, camera.record_start,
-// ...). A consumer wishing to record "Chrome" calls
-// `meta.list_resources(types=["application"])`, picks the application's
-// `resource_ura`, then invokes `screen.subscribe(subject=<that ura>)`.
+// ...). Display/window/application rows returned by this ability are not a live
+// target picker contract: consumers that need selectable remote desktop targets
+// must call `resource.refresh_remote_targets` or `resource.watch_remote_targets`
+// and then invoke with the selected `resource_ura` as the envelope subject.
 //
 // Wire shape:
 //
@@ -148,8 +149,9 @@ pub fn description() -> &'static str {
      cameras, displays, applications, windows, speakers, voice \
      profiles, ASR models). Each entry's `resource_ura` is the \
      canonical subject for media abilities (mic.subscribe, \
-     camera.snapshot, ...). Optional `types` filter narrows the \
-     result."
+     camera.snapshot, ...). Display/window/application rows are \
+     cache projections; live target pickers must use \
+     resource.refresh_remote_targets or resource.watch_remote_targets."
 }
 
 #[cfg(test)]

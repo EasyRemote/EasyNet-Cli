@@ -34,8 +34,9 @@ RESOURCE_PROJECTION="$ROOT/src/daemon/resources/projection.rs"
 RESOURCE_STORE="$ROOT/src/daemon/persistence/resources.rs"
 RESOURCE_BOOTSTRAP="$ROOT/src/daemon/ability/builtins/resources/media/resource_bootstrap.rs"
 WATCH_TARGETS="$ROOT/src/daemon/ability/builtins/resources/watch_remote_targets.rs"
+META_LIST_RESOURCES="$ROOT/src/daemon/ability/builtins/resources/list.rs"
 
-for file in "$CLI_ABILITY" "$LOCAL_INVOKE" "$CREATE_SESSION" "$SESSION_CREATION" "$SCHEMA" "$RESOURCE_SUBJECT" "$RESOURCE_PROJECTION" "$RESOURCE_STORE" "$RESOURCE_BOOTSTRAP" "$WATCH_TARGETS"; do
+for file in "$CLI_ABILITY" "$LOCAL_INVOKE" "$CREATE_SESSION" "$SESSION_CREATION" "$SCHEMA" "$RESOURCE_SUBJECT" "$RESOURCE_PROJECTION" "$RESOURCE_STORE" "$RESOURCE_BOOTSTRAP" "$WATCH_TARGETS" "$META_LIST_RESOURCES"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -79,6 +80,18 @@ require 'resource_ura' "$CLI_ABILITY" \
 
 require 'validate_remote_target_freshness' "$RESOURCE_PROJECTION" \
   'remote target picker projection must fail closed without freshness metadata'
+require 'cache_projection' "$RESOURCE_PROJECTION" \
+  'meta.list_resources remote target cache rows must expose a cache-only projection marker'
+require 'cached_requires_live_refresh' "$RESOURCE_PROJECTION" \
+  'meta.list_resources remote target cache rows must require live refresh before picker selection'
+require 'live_refresh_required' "$RESOURCE_PROJECTION" \
+  'meta.list_resources remote target cache rows must be machine-readable as live-refresh-required'
+require 'resource\.refresh_remote_targets' "$RESOURCE_PROJECTION" \
+  'cache-only remote target rows must point clients at resource.refresh_remote_targets'
+require 'resource\.watch_remote_targets' "$RESOURCE_PROJECTION" \
+  'cache-only remote target rows must point clients at resource.watch_remote_targets'
+require 'cache projections; live target pickers must use' "$META_LIST_RESOURCES" \
+  'meta.list_resources description must not present cached remote targets as live picker rows'
 require 'owner_agent: "easynet:///r/acme/agent/device\.dev-1\.media"' "$RESOURCE_PROJECTION" \
   'remote target picker projection fixtures must use a device-sponsored SystemAgent owner_agent'
 reject '"owner_agent"[[:space:]]*:[[:space:]]*"easynet:///r/[^"]*/device/' "$RESOURCE_PROJECTION" \

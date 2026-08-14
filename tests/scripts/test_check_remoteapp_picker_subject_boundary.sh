@@ -84,6 +84,17 @@ fn validate_remote_target_freshness(entry: ResourceEntry) {
     entry.metadata["freshness"]["source"];
 }
 
+fn cache_projection_for_remote_target() {
+    json!({
+        "cache_projection": {
+            "selection_state": "cached_requires_live_refresh",
+            "live_refresh_required": true,
+            "refresh_ability": "resource.refresh_remote_targets",
+            "watch_ability": "resource.watch_remote_targets",
+        }
+    });
+}
+
 fn resource_entry() -> ResourceEntry {
     ResourceEntry {
         owner_agent: "easynet:///r/acme/agent/device.dev-1.media".to_string(),
@@ -118,6 +129,12 @@ RS
 cat >"$SANDBOX/src/daemon/ability/builtins/resources/watch_remote_targets.rs" <<'RS'
 fn stable_resource_signature(map: &mut Map) {
     map.remove("freshness");
+}
+RS
+
+cat >"$SANDBOX/src/daemon/ability/builtins/resources/list.rs" <<'RS'
+fn description() -> &'static str {
+    "Display/window/application rows are cache projections; live target pickers must use resource.refresh_remote_targets or resource.watch_remote_targets."
 }
 RS
 
@@ -166,6 +183,26 @@ fn screen_resource_subject_spec() {
 RS
 
 CHECK_REMOTEAPP_PICKER_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+cp "$SANDBOX/src/daemon/resources/projection.rs" "$SANDBOX/src/daemon/resources/projection.rs.good"
+cat >"$SANDBOX/src/daemon/resources/projection.rs" <<'RS'
+fn validate_remote_target_freshness(entry: ResourceEntry) {
+    entry.metadata["freshness"]["observed_at_ms"];
+    entry.metadata["freshness"]["stale_after_ms"];
+    entry.metadata["freshness"]["source"];
+}
+
+fn resource_entry() -> ResourceEntry {
+    ResourceEntry {
+        owner_agent: "easynet:///r/acme/agent/device.dev-1.media".to_string(),
+    }
+}
+RS
+if CHECK_REMOTEAPP_PICKER_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp picker subject checker accepted missing cache-only projection marker" >&2
+  exit 1
+fi
+mv "$SANDBOX/src/daemon/resources/projection.rs.good" "$SANDBOX/src/daemon/resources/projection.rs"
 
 cp "$SANDBOX/src/support/platform/local_invoke.rs" "$SANDBOX/src/support/platform/local_invoke.rs.good"
 perl -0pi -e 's/\n    pub fn watch_remote_targets\(args: Value\) -> anyhow::Result<Vec<LocalStreamFrame>> \{\n        LocalDaemonSystemAbilityIssuer::stream\(\n            crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS,\n            args,\n        \)\n    \}//' \
