@@ -1647,6 +1647,85 @@ mod tests {
     }
 
     #[test]
+    fn remote_target_refresh_handles_large_persisted_inventory_with_indexed_batch() {
+        const PERSISTED_RESOURCE_COUNT: usize = 10_000;
+        const WINDOW_COUNT: usize = 2_000;
+        const APPLICATION_COUNT: usize = 200;
+
+        let realm = "acme";
+        let owner_agent = crate::core::ura::device_agent_ura(realm, "node-1", "media");
+        let mut file = ResourcesFile::default();
+        for index in 0..PERSISTED_RESOURCE_COUNT {
+            file.resources.push(ResourceEntry {
+                resource_ura: resources::build_resource_ura(realm, &format!("bulk-camera-{index}")),
+                owner_agent: owner_agent.clone(),
+                kind: ResourceType::Camera,
+                binding: ResourceBinding::LocalDevice,
+                hardware_id: format!("camera:bulk:{index}"),
+                display_name: format!("Bulk Camera {index}"),
+                metadata: json!({"backend": "bulk-fixture"}),
+                first_seen_at: "2026-06-01T00:00:00Z".to_string(),
+            });
+        }
+
+        let mut discovered = Vec::with_capacity(WINDOW_COUNT + APPLICATION_COUNT);
+        for index in 0..WINDOW_COUNT {
+            discovered.push(DiscoveredResource {
+                kind: ResourceType::Window,
+                hardware_id: format!("window:bulk:{index}"),
+                display_name: format!("Bulk Window {index}"),
+                metadata: json!({
+                    "backend": "bulk-fixture",
+                    "capture_target": "window",
+                    "window_id": index as u64,
+                    "pid": 10_000 + index as u64,
+                }),
+            });
+        }
+        for index in 0..APPLICATION_COUNT {
+            discovered.push(DiscoveredResource {
+                kind: ResourceType::Application,
+                hardware_id: format!("application:bulk:42:com.example.App{index}"),
+                display_name: format!("Bulk App {index}"),
+                metadata: json!({
+                    "backend": "bulk-fixture",
+                    "capture_target": "application",
+                    "display_id": 42,
+                    "bundle_id": format!("com.example.App{index}"),
+                    "app_identity": format!("com.example.App{index}"),
+                    "primary_pid": 20_000 + index as u64,
+                    "resolved_window_ids": [30_000 + index as u64],
+                    "window_set_epoch": 40_000 + index as u64,
+                }),
+            });
+        }
+
+        let refresh = apply_remote_target_refresh(
+            &mut file,
+            realm,
+            &owner_agent,
+            DiscoveredResources {
+                resources: discovered,
+                screen_target_discovery: ScreenTargetDiscoveryState::Scanned,
+            },
+            123_456,
+        )
+        .expect("large remote target refresh applies");
+
+        assert_eq!(refresh.retired_count, 0);
+        assert_eq!(refresh.resources.len(), WINDOW_COUNT + APPLICATION_COUNT);
+        assert_eq!(
+            file.resources.len(),
+            PERSISTED_RESOURCE_COUNT + WINDOW_COUNT + APPLICATION_COUNT
+        );
+        assert_eq!(
+            stable_remote_target_cache_signature(&file, realm, &owner_agent),
+            stable_remote_target_cache_signature(&file, realm, &owner_agent),
+            "large refresh must leave a deterministic cache signature"
+        );
+    }
+
+    #[test]
     fn successful_empty_screen_target_scan_prunes_stale_auto_targets() {
         let mut file = ResourcesFile::default();
         apply_discovered_resource(

@@ -125,6 +125,9 @@ pub struct BuiltinPluginFrontendContract {
     pub subject_contract_ura: Option<&'static str>,
 }
 
+pub const REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA: &str =
+    "easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject";
+
 impl BuiltinPluginFrontendContract {
     pub const INTERNAL_EXPLICIT_URA: Self = Self {
         exposure: AbilityExposure::Internal,
@@ -152,6 +155,13 @@ impl BuiltinPluginFrontendContract {
         dedicated_surface: AbilityDedicatedSurface::RemoteDesktop,
         subject_contract_kind: AbilitySubjectContractKind::DedicatedSurface,
         subject_contract_ura: None,
+    };
+
+    pub const OPERATOR_REMOTE_DESKTOP_HOST_LOCAL_PERMISSION: Self = Self {
+        exposure: AbilityExposure::Operator,
+        dedicated_surface: AbilityDedicatedSurface::RemoteDesktop,
+        subject_contract_kind: AbilitySubjectContractKind::DedicatedSurface,
+        subject_contract_ura: Some(REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA),
     };
 }
 

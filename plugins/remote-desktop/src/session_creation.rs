@@ -26,8 +26,8 @@ use crate::daemon::plugins::remote_desktop::resource::resolve_screen_resource_fr
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSessionInit;
 use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
 use crate::daemon::plugins::remote_desktop::target::{
-    verify_target_binding_for_session, RemoteAppTargetBinding, RemoteAppTargetResolver,
-    ResourceEntryTargetResolver,
+    verify_target_binding_for_session, RemoteAppTargetBinding, RemoteAppTargetError,
+    RemoteAppTargetResolver, ResolvedCaptureTargetProof, ResourceEntryTargetResolver,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +57,26 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSessionCreati
     consent_ticket: String,
     consent: Option<RemoteDesktopConsentGrant>,
     target_binding: Option<RemoteAppTargetBinding>,
+}
+
+pub(in crate::daemon::plugins::remote_desktop) trait RemoteAppTargetBindingVerifier {
+    fn verify_for_session(
+        &self,
+        ability: &'static str,
+        binding: &RemoteAppTargetBinding,
+    ) -> Result<ResolvedCaptureTargetProof, RemoteAppTargetError>;
+}
+
+pub(in crate::daemon::plugins::remote_desktop) struct PlatformRemoteAppTargetBindingVerifier;
+
+impl RemoteAppTargetBindingVerifier for PlatformRemoteAppTargetBindingVerifier {
+    fn verify_for_session(
+        &self,
+        ability: &'static str,
+        binding: &RemoteAppTargetBinding,
+    ) -> Result<ResolvedCaptureTargetProof, RemoteAppTargetError> {
+        verify_target_binding_for_session(ability, binding)
+    }
 }
 
 impl RemoteDesktopSessionCreationWorkflow {
@@ -116,8 +136,13 @@ impl RemoteDesktopSessionCreationWorkflow {
         Ok(self)
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn resolve_target(
+    pub(in crate::daemon::plugins::remote_desktop) fn resolve_target(self) -> anyhow::Result<Self> {
+        self.resolve_target_with_verifier(&PlatformRemoteAppTargetBindingVerifier)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn resolve_target_with_verifier(
         mut self,
+        verifier: &impl RemoteAppTargetBindingVerifier,
     ) -> anyhow::Result<Self> {
         self.assert_state(RemoteDesktopSessionCreationState::ResolvingTarget);
         let mut target_binding = ResourceEntryTargetResolver.resolve_for_session(
@@ -126,8 +151,7 @@ impl RemoteDesktopSessionCreationWorkflow {
             &self.mode,
             1,
         )?;
-        let capture_proof =
-            verify_target_binding_for_session(ABILITY_CREATE_SESSION, &target_binding)?;
+        let capture_proof = verifier.verify_for_session(ABILITY_CREATE_SESSION, &target_binding)?;
         target_binding.commit_capture_proof(ABILITY_CREATE_SESSION, capture_proof)?;
         self.input_policy = self.input_policy.constrained_for_binding(&target_binding);
         self.target_binding = Some(target_binding);

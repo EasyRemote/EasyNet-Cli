@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="${CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+
+fail() {
+  printf 'check-remoteapp-performance-boundary: %s\n' "$*" >&2
+  exit 1
+}
+
+require() {
+  local pattern="$1"
+  local file="$2"
+  local message="$3"
+  [[ -f "$file" ]] || fail "missing $file"
+  if ! rg -n "$pattern" "$file" >/dev/null; then
+    fail "$message"
+  fi
+}
+
+SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
+RESOURCE_BOOTSTRAP="$ROOT/src/daemon/ability/builtins/resources/media/resource_bootstrap.rs"
+RESOURCE_LIST="$ROOT/src/daemon/ability/builtins/resources/list.rs"
+TARGET_OBSERVER="$ROOT/plugins/remote-desktop/src/target_observer.rs"
+EVENT_LOG="$ROOT/plugins/remote-desktop/src/event_log.rs"
+SESSION_SIGNALING="$ROOT/plugins/remote-desktop/src/session_signaling.rs"
+SESSION_STORE="$ROOT/plugins/remote-desktop/src/session_store.rs"
+SDP="$ROOT/plugins/remote-desktop/src/sdp.rs"
+TARGET="$ROOT/plugins/remote-desktop/src/target.rs"
+WEBRTC_ENDPOINT="$ROOT/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
+INPUT="$ROOT/plugins/remote-desktop/src/input.rs"
+SCRIPT_CHECKS="$ROOT/tests/script_checks.rs"
+
+for checkpoint in PERF-01 PERF-02 PERF-03 PERF-04 PERF-05 PERF-06 PERF-07; do
+  require "$checkpoint" "$SPEC" "SPEC must retain $checkpoint performance checkpoint"
+done
+
+require 'upsert_resources_indexed' "$RESOURCE_BOOTSTRAP" \
+  'PERF-01 remote target refresh must use indexed resource mutation'
+require 'remote_target_refresh_handles_large_persisted_inventory_with_indexed_batch' "$RESOURCE_BOOTSTRAP" \
+  'PERF-01 must have a large R=10k/W=2k/A=200 remote target refresh test'
+require 'const PERSISTED_RESOURCE_COUNT: usize = 10_000' "$RESOURCE_BOOTSTRAP" \
+  'PERF-01 test must use R=10k persisted resources'
+require 'const WINDOW_COUNT: usize = 2_000' "$RESOURCE_BOOTSTRAP" \
+  'PERF-01 test must use W=2k windows'
+require 'const APPLICATION_COUNT: usize = 200' "$RESOURCE_BOOTSTRAP" \
+  'PERF-01 test must use A=200 applications'
+
+require 'meta_list_resources_is_read_only_cache_projection' "$RESOURCE_LIST" \
+  'PERF-02 must prove meta.list_resources is a read-only cache projection'
+require 'std::fs::read\(&path\)' "$RESOURCE_LIST" \
+  'PERF-02 must compare resources.json bytes before and after meta.list_resources'
+require 'modified\(\)' "$RESOURCE_LIST" \
+  'PERF-02 must compare resources.json mtime before and after meta.list_resources'
+
+require 'shared_host_snapshot_provider_coalesces_session_observer_reads' "$TARGET_OBSERVER" \
+  'PERF-03 must prove shared target sampling coalesces host enumeration'
+require 'calls\.load\(Ordering::SeqCst\)' "$TARGET_OBSERVER" \
+  'PERF-03 must inspect the host snapshot call count'
+require 'shared target observer must not multiply OS enumeration by session count' "$TARGET_OBSERVER" \
+  'PERF-03 must assert one host snapshot call per shared sampler tick'
+
+require 'event_log_retains_fixed_ring_and_monotonic_sequences_under_large_storm' "$EVENT_LOG" \
+  'PERF-04 must prove bounded event ring behavior under a large storm'
+require '100_000' "$EVENT_LOG" \
+  'PERF-04 event storm test must push 100k events'
+
+require 'remote_desktop_signaling_rejects_more_than_ten_thousand_candidates_without_growth' "$SESSION_SIGNALING" \
+  'PERF-05 must reject >10k trickle candidates without unbounded growth'
+require 'serialized_session_view_remains_bounded_at_signaling_limits' "$SESSION_STORE" \
+  'PERF-05 must prove serialized session views stay bounded'
+require 'signaling_rejects_oversized_sdp_and_ice_rows' "$SDP" \
+  'PERF-05 must reject oversized SDP and ICE rows before storage'
+
+require 'resolver_refuses_to_run_while_session_store_lock_is_held' "$TARGET" \
+  'PERF-06 must reject target resolution while session store lock is held'
+require 'endpoint_start_boundary_refuses_to_run_while_session_store_lock_is_held' "$WEBRTC_ENDPOINT" \
+  'PERF-06 must reject WebRTC endpoint startup while session store lock is held'
+require 'remote_desktop\.target\.resolve_for_session' "$TARGET" \
+  'PERF-06 must identify the target resolver lock-boundary stage'
+require '\{stage\} must not run while RemoteDesktopSessionStore is locked' "$SESSION_STORE" \
+  'PERF-06 must use an explicit shared lock-boundary diagnostic'
+
+require 'input_reject_diagnostics_are_coalesced_under_high_rate_storm' "$INPUT" \
+  'PERF-07 must prove input reject diagnostics are coalesced under a high-rate storm'
+require 'const REJECT_STORM: u64 = 10_000' "$INPUT" \
+  'PERF-07 input storm test must use 10k rejected frames'
+require 'coalesced_rejections' "$INPUT" \
+  'PERF-07 must expose coalesced rejection counts'
+
+require 'remoteapp_performance_boundary_script_holds' "$SCRIPT_CHECKS" \
+  'remoteapp performance boundary must be wired into cargo script_checks'
+
+printf 'check-remoteapp-performance-boundary: ok\n'

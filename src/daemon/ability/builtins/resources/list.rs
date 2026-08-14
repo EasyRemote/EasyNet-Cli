@@ -157,6 +157,7 @@ pub fn description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::persistence::resources::{ResourceBinding, ResourceUpsert};
 
     #[test]
     fn registration_makes_meta_list_resources_dispatchable() {
@@ -246,6 +247,58 @@ mod tests {
         assert!(
             resp.get("resources").and_then(Value::as_array).is_some(),
             "receipt body must always carry a `resources` array; got {resp}"
+        );
+    }
+
+    #[test]
+    fn meta_list_resources_is_read_only_cache_projection() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = resources::ResourcesFile::default();
+        resources::upsert_resource(
+            &mut file,
+            ResourceUpsert {
+                realm: "acme",
+                owner_agent: "easynet:///r/acme/agent/device.node-1.media",
+                kind: ResourceType::Window,
+                binding: ResourceBinding::LocalDevice,
+                hardware_id: "window:readonly:1",
+                display_name: "Read-only Window",
+                metadata: json!({
+                    "backend": "xcap",
+                    "availability": "available",
+                    "freshness": {
+                        "observed_at_ms": 1,
+                        "stale_after_ms": u64::MAX,
+                        "source": "live_refresh",
+                    },
+                }),
+            },
+        )
+        .expect("seed window resource");
+        resources::save(&file).expect("save resources");
+        let path = resources::path();
+        let before_body = std::fs::read(&path).expect("read resources before");
+        let before_modified = std::fs::metadata(&path)
+            .expect("metadata before")
+            .modified()
+            .expect("modified before");
+
+        let resp = handler(json!({"types": ["window", "application"]}))
+            .expect("meta.list_resources reads cache");
+
+        assert_eq!(resp["resources"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            std::fs::read(&path).expect("read resources after"),
+            before_body,
+            "meta.list_resources must not mutate resources.json"
+        );
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("metadata after")
+                .modified()
+                .expect("modified after"),
+            before_modified,
+            "meta.list_resources must not rewrite resources.json"
         );
     }
 }

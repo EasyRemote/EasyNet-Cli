@@ -22,9 +22,11 @@ use crate::daemon::plugins::remote_desktop::request::{
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSessionInit;
 use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
+use crate::daemon::plugins::remote_desktop::session_creation::RemoteAppTargetBindingVerifier;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::stop_session_transports;
 use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetResolver, ResourceEntryTargetResolver,
+    RemoteAppTargetBinding, RemoteAppTargetError, RemoteAppTargetResolver,
+    ResolvedCaptureTargetProof, ResourceEntryTargetResolver,
 };
 use crate::daemon::plugins::PluginRuntimeLimits;
 
@@ -89,7 +91,34 @@ pub(in crate::daemon::plugins::remote_desktop) fn create_test_session(
     args: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
     let args = with_consent_ticket(&plugin, &env, args);
-    crate::daemon::plugins::remote_desktop::handlers::create_session::handle(plugin, env, args)
+    crate::daemon::plugins::remote_desktop::handlers::create_session::handle_with_target_verifier(
+        plugin,
+        env,
+        args,
+        &TestRemoteAppTargetBindingVerifier,
+    )
+}
+
+struct TestRemoteAppTargetBindingVerifier;
+
+impl RemoteAppTargetBindingVerifier for TestRemoteAppTargetBindingVerifier {
+    fn verify_for_session(
+        &self,
+        _ability: &'static str,
+        binding: &RemoteAppTargetBinding,
+    ) -> Result<ResolvedCaptureTargetProof, RemoteAppTargetError> {
+        let locator = binding.native_locator();
+        Ok(ResolvedCaptureTargetProof::new(
+            locator.capture_backend(),
+            binding.target_kind(),
+            locator.display_id(),
+            locator.window_id(),
+            locator.pid(),
+            locator.app_identity().map(ToOwned::to_owned),
+            locator.bundle_id().map(ToOwned::to_owned),
+            Some((1280, 720)),
+        ))
+    }
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn env_for_caller(

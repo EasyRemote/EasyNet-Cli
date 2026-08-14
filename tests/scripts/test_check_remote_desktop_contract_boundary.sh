@@ -83,10 +83,12 @@ fn request_permission_rejects_target_subject_in_args_before_os_prompt() {}
 RS
 
 cat >"$SB/plugins/remote-desktop/abilities/remote_desktop.permission_status.ability.toml" <<'TOML'
+subject_contract_ura = "easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject"
 scope_subjects_uras = ["agent", "resource", "user"]
 TOML
 
 cat >"$SB/plugins/remote-desktop/abilities/remote_desktop.request_permission.ability.toml" <<'TOML'
+subject_contract_ura = "easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject"
 scope_subjects_uras = ["agent", "resource", "user"]
 TOML
 
@@ -147,5 +149,23 @@ set +e
 rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "permission descriptor scope drift should exit 1 (got $rc)"
+grep -q "must admit Agent/User plus descriptor-bound Resource subjects" \
+  /tmp/check-remote-desktop-contract-boundary-toml.out || fail "expected TOML scope failure message"
+
+perl -0pi -e 's/scope_subjects_uras = \["agent", "user"\]/scope_subjects_uras = ["agent", "resource", "user"]/' \
+  "$SB/plugins/remote-desktop/abilities/remote_desktop.request_permission.ability.toml"
+perl -0pi -e 's#subject_contract_ura = "easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject"\R##' \
+  "$SB/plugins/remote-desktop/abilities/remote_desktop.permission_status.ability.toml"
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-remote-desktop-contract-boundary.sh
+) >/tmp/check-remote-desktop-contract-boundary-subject-contract.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing host-local subject contract URA should exit 1 (got $rc)"
+grep -q "host-local permission subject policy URA" \
+  /tmp/check-remote-desktop-contract-boundary-subject-contract.out || fail "expected subject contract URA failure message"
 
 echo "test_check_remote_desktop_contract_boundary.sh: all cases passed"

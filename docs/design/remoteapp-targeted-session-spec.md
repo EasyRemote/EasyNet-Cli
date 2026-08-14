@@ -135,10 +135,9 @@ grant_consent/create_session:
   subject = selected display/window/application resource URA
 
 set_description/add_ice_candidate/watch_events/attach/refresh_lease/end_session:
-  subject = session URA when the ability acts on session lifecycle
-  or the original selected target resource URA when the existing descriptor
-  contract still requires resource subject; the surface adapter must make the
-  choice explicit and must not put subject in args
+  subject = the original selected target resource URA captured by create_session
+  session_id/session_token are access facts in args, not Invocation.subject
+  the surface adapter must not put subject or resource_ura in args
 ```
 
 The frontend must never pass `subject` in JSON args.
@@ -1080,6 +1079,12 @@ file transfer consent
 Rules:
 
 - OS screen recording permission is broad. The UI must not imply OS permission itself is scoped to one window/app.
+- `permission_status` and `request_permission` are host-local permission probes.
+  Their descriptor may admit a Resource URA only for the descriptor-bound
+  invoke-resource subject contract, not for display/window/application target
+  resources. The descriptor must publish the host-local permission
+  `subject_contract_ura` so clients do not infer target-scoped permission from
+  the coarse Resource scope label.
 - EasyNet consent must be scoped to the selected target subject.
 - Window consent cannot authorize display session.
 - Application consent cannot authorize display session.
@@ -1294,7 +1299,7 @@ Before implementing broader lifecycle tracking, the first debugging pass should 
 2. The row has metadata keys accepted by ScreenCaptureKit resolution:
    window: window_id plus pid, bundle_id, or app_identity
    application: display_id plus bundle_id/app_identity/primary_pid plus resolved_window_ids and window_set_epoch
-3. permission_status/request_permission were invoked with user-self or descriptor-bound subject, not the target resource subject.
+3. permission_status/request_permission were invoked with user-self or descriptor-bound subject, not the target resource subject, and their descriptors publish the host-local permission subject contract URA.
 4. create_session receives the selected resource URA as envelope subject.
 5. create_session performs live target resolution and returns target_binding.
 6. ScreenCaptureKit SCShareableContent contains the selected window/application at session creation time.

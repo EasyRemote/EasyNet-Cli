@@ -739,6 +739,11 @@ impl NativeTargetLocator {
         self.bundle_id.as_deref()
     }
 
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn capture_backend(&self) -> &str {
+        &self.capture_backend
+    }
+
     fn to_value(&self) -> Value {
         json!({
             "platform": self.platform,

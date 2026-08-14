@@ -382,7 +382,8 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 bidi_wire_kind: None,
                 subject_ura_kinds: PERMISSION_PROBE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
-                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
+                frontend_contract:
+                    BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP_HOST_LOCAL_PERMISSION,
                 description: schema::permission_status_description,
                 input_schema: schema::permission_status_input_schema,
             },
@@ -399,7 +400,8 @@ pub(crate) fn compiled_ability_bindings() -> &'static [RemoteDesktopCompiledAbil
                 bidi_wire_kind: None,
                 subject_ura_kinds: PERMISSION_PROBE_SUBJECT_KINDS,
                 hints: BuiltinPluginAbilityHints::NONE,
-                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
+                frontend_contract:
+                    BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP_HOST_LOCAL_PERMISSION,
                 description: schema::request_permission_description,
                 input_schema: schema::request_permission_input_schema,
             },
@@ -483,8 +485,15 @@ mod tests {
             );
             assert_eq!(
                 spec.frontend_contract,
-                BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP,
-                "remote desktop product lifecycle must be descriptor-owned"
+                if matches!(
+                    spec.name,
+                    ABILITY_PERMISSION_STATUS | ABILITY_REQUEST_PERMISSION
+                ) {
+                    BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP_HOST_LOCAL_PERMISSION
+                } else {
+                    BuiltinPluginFrontendContract::OPERATOR_REMOTE_DESKTOP
+                },
+                "remote desktop product lifecycle must be descriptor-owned, with permission probes publishing their host-local subject policy"
             );
         }
     }
@@ -655,6 +664,17 @@ mod tests {
                 "user".to_string()
             ]),
             "host-local permission probes must advertise local-system Agent, caller User, and descriptor-bound invoke resource subjects; target resources are rejected by the handler"
+        );
+        assert_eq!(
+            permission_status
+                .descriptor
+                .metadata
+                .get("subject_contract_ura")
+                .map(String::as_str),
+            Some(
+                crate::daemon::plugins::package::REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA
+            ),
+            "permission probes must publish the exact host-local subject policy contract instead of leaving Resource scope ambiguous"
         );
         let record = reg
             .control_plane_record_for_mode(ABILITY_CREATE_SESSION, DescriptorCallMode::Rpc)

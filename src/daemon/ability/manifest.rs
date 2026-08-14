@@ -1315,9 +1315,15 @@ impl AbilityManifest {
             );
         }
         if let Some(subject_contract_ura) = self.subject_contract_ura.as_deref() {
-            if self.subject_contract_kind != Some(AbilitySubjectContractKind::ExplicitUra) {
+            if !matches!(
+                self.subject_contract_kind,
+                Some(
+                    AbilitySubjectContractKind::ExplicitUra
+                        | AbilitySubjectContractKind::DedicatedSurface
+                )
+            ) {
                 anyhow::bail!(
-                    "ability.toml `subject_contract_ura` is valid only with subject_contract_kind = \"explicit-ura\""
+                    "ability.toml `subject_contract_ura` is valid only with subject_contract_kind = \"explicit-ura\" or \"dedicated-surface\""
                 );
             }
             if subject_contract_ura.trim().is_empty()
@@ -2037,6 +2043,20 @@ mod tests {
                 .unwrap()
                 .dedicated_surface(),
             Some(AbilityDedicatedSurface::Terminal)
+        );
+
+        let manifest = AbilityManifest::new("attach", "attach terminal", object_schema())
+            .unwrap()
+            .with_frontend_contract(
+                AbilityExposure::Operator,
+                AbilityDedicatedSurface::Terminal,
+                AbilitySubjectContractKind::DedicatedSurface,
+                Some("easynet:///r/_system/resource/ability-contract.terminal/session-subject-policy".to_string()),
+            )
+            .unwrap();
+        assert_eq!(
+            manifest.subject_contract_ura(),
+            Some("easynet:///r/_system/resource/ability-contract.terminal/session-subject-policy")
         );
     }
 

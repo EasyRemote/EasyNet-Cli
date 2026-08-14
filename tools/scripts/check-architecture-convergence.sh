@@ -17928,12 +17928,19 @@ if plugin_contribution.exists():
             line_number(text, owner_policy_device.start()),
             "plugin-provided AbilityImpls must publish through plugin-management SystemAgent, not direct Device",
         )
-    if text.count("owner_policy: OwnerKind::plugin_management_system()") < 2:
+    if "public_owner: OwnerKind::plugin_management_system()" not in text:
         add(
             "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
             plugin_contribution,
             1,
-            "DaemonPluginBinder static and dynamic catalogs must default plugin contribution owners to plugin-management SystemAgent",
+            "PluginContributionBuilder must default generic plugin contribution owners to plugin-management SystemAgent",
+        )
+    if "set_public_owner(&mut self, owner: OwnerKind)" not in text:
+        add(
+            "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
+            plugin_contribution,
+            1,
+            "daemon-native plugin packages must have an explicit public owner policy override",
         )
 if catalog_publication.exists():
     text = catalog_publication.read_text(encoding="utf-8", errors="replace")
@@ -18001,13 +18008,13 @@ if assembly_tests.exists():
         )
     if (
         '"remote_desktop."' in raw_text
-        and "OwnerKind::plugin_management_system()" not in raw_text
+        and "OwnerKind::remote_desktop_system()" not in raw_text
     ):
         add(
             "R145_KEYRING_AND_PLUGIN_PUBLIC_OWNER_BOUNDARY",
             assembly_tests,
             1,
-            "registry assembly tests must pin remote_desktop.* rows to plugin-management SystemAgent owner",
+            "registry assembly tests must pin remote_desktop.* rows to remote-desktop SystemAgent owner",
         )
 if remote_desktop_registration.exists():
     text = source(remote_desktop_registration)
@@ -18568,12 +18575,12 @@ if conformance_rs.exists():
     text = conformance_rs.read_text(encoding="utf-8", errors="replace")
     for token, detail in (
         (
-            "PluginManagedRemoteDesktop",
-            "positive remote_desktop conformance domain must name plugin-management ownership, not Device ownership",
+            "RemoteDesktopSystemAgent",
+            "positive remote_desktop conformance domain must name remote-desktop SystemAgent ownership, not Device or plugin-management ownership",
         ),
         (
-            "PLUGIN_MANAGED_REMOTE_DESKTOP_BASELINE",
-            "remote_desktop conformance baseline constant must not preserve obsolete DeviceRemoteDesktop naming",
+            "REMOTE_DESKTOP_SYSTEM_AGENT_BASELINE",
+            "remote_desktop conformance baseline constant must name remote-desktop SystemAgent ownership",
         ),
     ):
         if token not in text:

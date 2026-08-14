@@ -255,6 +255,13 @@ fn remoteapp_e2e_acceptance_boundary_script_holds() {
 }
 
 #[test]
+fn remoteapp_performance_boundary_script_holds() {
+    // Pins the SPEC PERF-01..PERF-07 evidence map so performance/resource
+    // requirements cannot remain documentation-only claims.
+    run_bash_script("tests/scripts/test_check_remoteapp_performance_boundary.sh");
+}
+
+#[test]
 fn frontend_ability_contract_boundary_script_holds() {
     // Pins every governed ability descriptor to one explicit execution surface
     // and subject-construction owner. Remote desktop abilities must stay on

@@ -16,6 +16,7 @@ REQUEST_PERMISSION="plugins/remote-desktop/src/handlers/request_permission.rs"
 REGISTRATION="plugins/remote-desktop/src/registration.rs"
 PERMISSION_STATUS_TOML="plugins/remote-desktop/abilities/remote_desktop.permission_status.ability.toml"
 REQUEST_PERMISSION_TOML="plugins/remote-desktop/abilities/remote_desktop.request_permission.ability.toml"
+HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA='easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject'
 
 [[ -f "$CONTRACT" ]] || fail "missing $CONTRACT"
 [[ -f "$PERMISSIONS" ]] || fail "missing $PERMISSIONS"
@@ -60,6 +61,9 @@ fi
 for descriptor in "$PERMISSION_STATUS_TOML" "$REQUEST_PERMISSION_TOML"; do
   if ! rg -n 'scope_subjects_uras = \["agent", "resource", "user"\]' "$descriptor" >/dev/null; then
     fail "$descriptor must admit Agent/User plus descriptor-bound Resource subjects"
+  fi
+  if ! rg -n "subject_contract_ura = \"$HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA\"" "$descriptor" >/dev/null; then
+    fail "$descriptor must publish the host-local permission subject policy URA"
   fi
 done
 
