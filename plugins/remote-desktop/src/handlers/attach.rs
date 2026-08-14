@@ -113,6 +113,7 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::target::{
         RemoteAppTargetResolver, ResourceEntryTargetResolver,
     };
+    use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
     use crate::daemon::plugins::remote_desktop::test_support::{
         env_for, seed_display, test_consent_causal_context, test_lock, test_runtime_limits,
     };
@@ -370,14 +371,14 @@ mod tests {
             binding: ResourceBinding::LocalDevice,
             hardware_id: "window:macos:cgwindow:10:42".to_string(),
             display_name: "Test Window".to_string(),
-            metadata: json!({
+            metadata: live_remote_target_metadata(json!({
                 "window_id": 42,
                 "pid": 10,
                 "x": 0,
                 "y": 0,
                 "width": 800,
                 "height": 600,
-            }),
+            })),
             first_seen_at: "2026-06-01T00:00:00Z".to_string(),
         };
         let target_binding = ResourceEntryTargetResolver

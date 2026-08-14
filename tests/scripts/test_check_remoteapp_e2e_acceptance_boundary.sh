@@ -8,9 +8,11 @@ PROBE_HARNESS="$REPO_ROOT/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
-mkdir -p "$SANDBOX/tools/scripts" "$SANDBOX/docs/design"
+mkdir -p "$SANDBOX/tools/scripts" "$SANDBOX/docs/design" "$SANDBOX/examples"
 cp "$HARNESS" "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 cp "$PROBE_HARNESS" "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
+cp "$REPO_ROOT/examples/easynet-remoteapp-frame-receiver.rs" \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
 cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
@@ -45,6 +47,11 @@ evidence = {
         "capture_scope": "WindowSurface",
         "binding_id": "tb_test",
         "binding_epoch": 1,
+        "target_identity_epoch": 1,
+        "target_geometry_revision": 1,
+        "media_source_epoch": 1,
+        "consent_epoch": 1,
+        "subject_ura": subject,
         "scope_audit": {
             "scope_widened": False,
             "display_fallback_used": False,
@@ -65,6 +72,14 @@ evidence = {
         },
     },
     "transport": {"kind": "webrtc"},
+    "production_media_ready": True,
+    "production_readiness": {
+        "ready": True,
+        "requires_production_codec": True,
+        "production_codec_negotiated": True,
+        "media_transport_ready": True,
+        "client_media_ready": True,
+    },
     "decoded_frames": {
         "count": 2,
         "rtp_packet_count": 10,
@@ -120,6 +135,11 @@ evidence = {
         "capture_scope": "AppSurface",
         "binding_id": "tb_app_test",
         "binding_epoch": 1,
+        "target_identity_epoch": 99,
+        "target_geometry_revision": 1,
+        "media_source_epoch": 1,
+        "consent_epoch": 1,
+        "subject_ura": subject,
         "resolved_identity": {
             "app_identity": "com.example.SelectedApp",
             "bundle_id": "com.example.SelectedApp",
@@ -151,6 +171,14 @@ evidence = {
         },
     },
     "transport": {"kind": "webrtc"},
+    "production_media_ready": True,
+    "production_readiness": {
+        "ready": True,
+        "requires_production_codec": True,
+        "production_codec_negotiated": True,
+        "media_transport_ready": True,
+        "client_media_ready": True,
+    },
     "decoded_frames": {
         "count": 2,
         "rtp_packet_count": 10,
@@ -230,6 +258,8 @@ JSON
       "binding_epoch": 1,
       "target_identity_epoch": 1,
       "target_geometry_revision": 1,
+      "media_source_epoch": 1,
+      "consent_epoch": 1,
       "resolved_identity": {
         "window_id": 7
       }
@@ -269,6 +299,14 @@ with open(os.environ["EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON"], "w", encoding="ut
         {
             "status": "passed",
             "transport": {"kind": "webrtc"},
+            "production_media_ready": True,
+            "production_readiness": {
+                "ready": True,
+                "requires_production_codec": True,
+                "production_codec_negotiated": True,
+                "media_transport_ready": True,
+                "client_media_ready": True,
+            },
             "decoded_frames": {
                 "count": 2,
                 "rtp_packet_count": 10,

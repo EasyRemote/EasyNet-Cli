@@ -214,7 +214,7 @@ Minimum target projection:
   "resource_ura": "easynet:///r/localhost/resource/device.abc/streams/window.macos.123",
   "type": "window",
   "display_name": "Cursor - EasyNet-Cli",
-  "owner_agent": "easynet:///r/localhost/agent/device.abc.runtime-resources",
+  "owner_agent": "easynet:///r/localhost/agent/device.abc.media",
   "host_device_ura": "easynet:///r/localhost/device/abc",
   "binding": "local_device",
   "metadata": {

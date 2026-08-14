@@ -285,12 +285,15 @@ evidence = {
         "receipt": invocation.get("receipt"),
     },
     "target_binding": {
+        "subject_ura": target_binding.get("subject_ura"),
         "target_kind": target_binding.get("target_kind"),
         "capture_scope": target_binding.get("capture_scope"),
         "binding_id": target_binding.get("binding_id"),
         "binding_epoch": target_binding.get("binding_epoch"),
         "target_identity_epoch": target_binding.get("target_identity_epoch"),
         "target_geometry_revision": target_binding.get("target_geometry_revision"),
+        "media_source_epoch": target_binding.get("media_source_epoch"),
+        "consent_epoch": target_binding.get("consent_epoch"),
         "resolved_identity": target_binding.get("resolved_identity"),
         "scope_audit": {
             "scope_widened": scope_audit.get("scope_widened"),

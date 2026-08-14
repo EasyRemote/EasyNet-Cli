@@ -13,7 +13,7 @@
 //   submit TargetObservation values. The session aggregate remains the single
 //   writer for state transitions and ordered event-log rows.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::target::{
     RemoteAppTargetBinding, TargetGeometry, TargetResolutionError,
@@ -573,6 +573,7 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::target_tracking::{
         TargetObservation, TargetTrackerState, TargetVisibilityState,
     };
+    use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
 
     fn window_binding() -> crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding {
         ResourceEntryTargetResolver
@@ -585,7 +586,7 @@ mod tests {
                     binding: ResourceBinding::LocalDevice,
                     hardware_id: "window:macos:cgwindow:10:42".into(),
                     display_name: "Cursor".into(),
-                    metadata: json!({
+                    metadata: live_remote_target_metadata(json!({
                         "window_id": 42,
                         "pid": 10,
                         "app_name": "Cursor",
@@ -595,7 +596,7 @@ mod tests {
                         "height": 600,
                         "target_identity_epoch": 7,
                         "geometry_revision": 3,
-                    }),
+                    })),
                     first_seen_at: "2026-06-01T00:00:00Z".into(),
                 },
                 "view_only",
@@ -746,15 +747,13 @@ mod tests {
         let binding = window_binding();
         let mut tracker = TargetTrackerState::from_binding(&binding);
 
-        assert!(
-            tracker
-                .commit_observation(TargetObservation::Lost {
-                    reason: TargetResolutionError::TargetNotFound,
-                    detail: "window disappeared".into(),
-                    observed_at_ms: 10,
-                })
-                .is_none()
-        );
+        assert!(tracker
+            .commit_observation(TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "window disappeared".into(),
+                observed_at_ms: 10,
+            })
+            .is_none());
         tracker
             .commit_observation(TargetObservation::Lost {
                 reason: TargetResolutionError::TargetNotFound,
@@ -778,15 +777,13 @@ mod tests {
                 .is_none(),
             "stale queued observations at or before committed loss must not look like rebind"
         );
-        assert!(
-            tracker
-                .commit_observation(TargetObservation::Lost {
-                    reason: TargetResolutionError::TargetNotFound,
-                    detail: "window still lost".into(),
-                    observed_at_ms: 40,
-                })
-                .is_none()
-        );
+        assert!(tracker
+            .commit_observation(TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "window still lost".into(),
+                observed_at_ms: 40,
+            })
+            .is_none());
         assert!(
             tracker
                 .commit_observation(TargetObservation::VisibilityChanged {
@@ -831,15 +828,13 @@ mod tests {
             json!("new_session_required")
         );
         assert_eq!(tracker.snapshot().to_value()["status"], json!("lost"));
-        assert!(
-            tracker
-                .commit_observation(TargetObservation::VisibilityChanged {
-                    visibility_state: TargetVisibilityState::Visible,
-                    target_geometry_revision: 9,
-                    observed_at_ms: 60,
-                })
-                .is_none()
-        );
+        assert!(tracker
+            .commit_observation(TargetObservation::VisibilityChanged {
+                visibility_state: TargetVisibilityState::Visible,
+                target_geometry_revision: 9,
+                observed_at_ms: 60,
+            })
+            .is_none());
     }
 
     #[test]

@@ -60,8 +60,8 @@ pub enum BaselineDomain {
     AbilityManagementSystemAgent,
     OpenAiCompatSystemAgent,
     A2aIntegrationSystemAgent,
-    McpHostedAgent,
-    PluginManagedRemoteDesktop,
+    McpIntegrationSystemAgent,
+    RemoteDesktopSystemAgent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -439,10 +439,10 @@ const DEVICE_BASELINE: &[BaselineAbility] = &[
     local_rpc!("skill.install", SystemAgent),
     local_rpc!("skill.remove", SystemAgent),
     local_rpc!("skill.upgrade", SystemAgent),
-    local_rpc!("mcp.bridge.list_tools", McpHostedAgent),
-    local_rpc!("mcp.bridge.call_tool", McpHostedAgent),
-    local_rpc!("mcp.client.list", McpHostedAgent),
-    local_rpc!("mcp.client.call", McpHostedAgent),
+    local_rpc!("mcp.bridge.list_tools", McpIntegrationSystemAgent),
+    local_rpc!("mcp.bridge.call_tool", McpIntegrationSystemAgent),
+    local_rpc!("mcp.client.list", McpIntegrationSystemAgent),
+    local_rpc!("mcp.client.call", McpIntegrationSystemAgent),
     local_rpc!("a2a.bridge.list_skills", A2aIntegrationSystemAgent),
     local_rpc!("a2a.bridge.send_task", A2aIntegrationSystemAgent),
     local_rpc!("a2a.client.send_task", A2aIntegrationSystemAgent),
@@ -489,25 +489,19 @@ const DEVICE_BASELINE: &[BaselineAbility] = &[
 ];
 
 #[cfg(feature = "remote-desktop")]
-const PLUGIN_MANAGED_REMOTE_DESKTOP_BASELINE: &[BaselineAbility] = &[
-    local_rpc!("remote_desktop.create_session", PluginManagedRemoteDesktop),
-    local_rpc!("remote_desktop.show_session", PluginManagedRemoteDesktop),
-    local_rpc!("remote_desktop.set_description", PluginManagedRemoteDesktop),
-    local_rpc!(
-        "remote_desktop.add_ice_candidate",
-        PluginManagedRemoteDesktop
-    ),
-    local_stream!("remote_desktop.watch_events", PluginManagedRemoteDesktop),
-    local_rpc!("remote_desktop.refresh_lease", PluginManagedRemoteDesktop),
-    local_rpc!("remote_desktop.end_session", PluginManagedRemoteDesktop),
-    local_bidi!("remote_desktop.attach", PluginManagedRemoteDesktop),
-    local_rpc!(
-        "remote_desktop.permission_status",
-        PluginManagedRemoteDesktop
-    ),
+const REMOTE_DESKTOP_SYSTEM_AGENT_BASELINE: &[BaselineAbility] = &[
+    local_rpc!("remote_desktop.create_session", RemoteDesktopSystemAgent),
+    local_rpc!("remote_desktop.show_session", RemoteDesktopSystemAgent),
+    local_rpc!("remote_desktop.set_description", RemoteDesktopSystemAgent),
+    local_rpc!("remote_desktop.add_ice_candidate", RemoteDesktopSystemAgent),
+    local_stream!("remote_desktop.watch_events", RemoteDesktopSystemAgent),
+    local_rpc!("remote_desktop.refresh_lease", RemoteDesktopSystemAgent),
+    local_rpc!("remote_desktop.end_session", RemoteDesktopSystemAgent),
+    local_bidi!("remote_desktop.attach", RemoteDesktopSystemAgent),
+    local_rpc!("remote_desktop.permission_status", RemoteDesktopSystemAgent),
     local_rpc!(
         "remote_desktop.request_permission",
-        PluginManagedRemoteDesktop
+        RemoteDesktopSystemAgent
     ),
 ];
 
@@ -528,7 +522,7 @@ impl DeviceBaseline {
         #[cfg(feature = "remote-desktop")]
         {
             let mut abilities = DEVICE_BASELINE.to_vec();
-            abilities.extend_from_slice(PLUGIN_MANAGED_REMOTE_DESKTOP_BASELINE);
+            abilities.extend_from_slice(REMOTE_DESKTOP_SYSTEM_AGENT_BASELINE);
             abilities
         }
         #[cfg(not(feature = "remote-desktop"))]

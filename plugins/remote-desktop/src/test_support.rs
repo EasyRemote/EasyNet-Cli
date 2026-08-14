@@ -6,16 +6,15 @@
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use axon_sdk::invocation::{CausalContext, ReceiptRef};
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::SyntheticScreenBackend;
 use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::daemon::persistence::resources::{
-    ResourceBinding, ResourceEntry, ResourceType, ResourceUpsert, ResourcesFile, upsert_resource,
+    upsert_resource, ResourceBinding, ResourceEntry, ResourceType, ResourceUpsert, ResourcesFile,
 };
-use crate::daemon::plugins::PluginRuntimeLimits;
 use crate::daemon::plugins::remote_desktop::constants::DEFAULT_FRAME_QUEUE_DEPTH;
 use crate::daemon::plugins::remote_desktop::request::{
     RemoteDesktopInputPolicy, RemoteDesktopVideoConstraints,
@@ -27,6 +26,7 @@ use crate::daemon::plugins::remote_desktop::session_lifecycle::stop_session_tran
 use crate::daemon::plugins::remote_desktop::target::{
     RemoteAppTargetResolver, ResourceEntryTargetResolver,
 };
+use crate::daemon::plugins::PluginRuntimeLimits;
 
 static REMOTE_DESKTOP_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -125,6 +125,24 @@ pub(in crate::daemon::plugins::remote_desktop) fn test_consent_causal_context() 
     })
 }
 
+pub(in crate::daemon::plugins::remote_desktop) fn live_remote_target_metadata(
+    mut metadata: Value,
+) -> Value {
+    let map = metadata
+        .as_object_mut()
+        .expect("remote desktop live target metadata fixture must be an object");
+    map.insert("availability".to_string(), json!("available"));
+    map.insert(
+        "freshness".to_string(),
+        json!({
+            "observed_at_ms": 1,
+            "stale_after_ms": u64::MAX,
+            "source": "live_refresh",
+        }),
+    );
+    metadata
+}
+
 pub(in crate::daemon::plugins::remote_desktop) fn test_session_init(
     session_id: &str,
     subject: &str,
@@ -210,7 +228,15 @@ pub(in crate::daemon::plugins::remote_desktop) fn seed_window(
             binding: ResourceBinding::LocalDevice,
             hardware_id,
             display_name: "Test Window",
-            metadata: json!({}),
+            metadata: live_remote_target_metadata(json!({
+                "window_id": 42,
+                "pid": 10,
+                "app_name": "Test Window",
+                "x": 0,
+                "y": 0,
+                "width": 800,
+                "height": 600,
+            })),
         },
     )
     .expect("seed remote desktop window")

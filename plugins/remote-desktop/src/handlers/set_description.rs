@@ -210,11 +210,9 @@ mod tests {
         let plugin = test_plugin();
         reset_store(&plugin);
         let subject = "easynet:///r/acme/resource/display.sdp-flood";
+        let session = RemoteDesktopSession::new(test_session_init("rd-sdp-flood", subject, vec![]));
         plugin.session_store().with_sessions(|sessions| {
-            sessions.insert(
-                "rd-sdp-flood".to_string(),
-                RemoteDesktopSession::new(test_session_init("rd-sdp-flood", subject, vec![])),
-            );
+            sessions.insert("rd-sdp-flood".to_string(), session);
         });
         let oversized_sdp = format!(
             "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n{}",

@@ -283,6 +283,7 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::target::{
         RemoteAppTargetResolver, ResourceEntryTargetResolver, TargetResolutionError,
     };
+    use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
 
     #[test]
     fn native_target_failure_preserves_frontend_recovery_context() {
@@ -296,13 +297,13 @@ mod tests {
                     binding: ResourceBinding::LocalDevice,
                     hardware_id: "window:7".to_string(),
                     display_name: "Editor".to_string(),
-                    metadata: json!({
+                    metadata: live_remote_target_metadata(json!({
                         "platform": "macos",
                         "backend": "macos_core_graphics",
                         "window_id": 7,
                         "pid": 9001,
                         "bundle_id": "com.example.Editor",
-                    }),
+                    })),
                     first_seen_at: "2026-06-01T00:00:00Z".to_string(),
                 },
                 "view_only",

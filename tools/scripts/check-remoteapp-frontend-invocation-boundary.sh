@@ -35,8 +35,9 @@ INVOCATION_TEST="$FRONTEND_SRC/store/media-channel-invocation.test.ts"
 STORE_TEST="$FRONTEND_SRC/store/media-channel-store.test.ts"
 ACCESS_TEST="$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx"
 WORKSPACE="$FRONTEND_SRC/pages/easynet/DeviceMediaWorkspacePage.tsx"
+PROTOCOL="$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
 
-for file in "$INVOCATION" "$STORE" "$ACCESS" "$INVOCATION_TEST" "$STORE_TEST" "$ACCESS_TEST" "$WORKSPACE"; do
+for file in "$INVOCATION" "$STORE" "$ACCESS" "$INVOCATION_TEST" "$STORE_TEST" "$ACCESS_TEST" "$WORKSPACE" "$PROTOCOL"; do
   [[ -f "$file" ]] || fail "missing frontend source ${file#"$FRONTEND_ROOT/"}"
 done
 
@@ -111,6 +112,13 @@ reject 'screenResources\[0\]' "$WORKSPACE" \
   'frontend workspace must not fall back to the first remote target'
 require 'Session target is no longer advertised by the live target inventory' "$WORKSPACE" \
   'frontend workspace must surface stale session target state'
+
+require 'productionReady: result\?\.production_media_ready === true \|\| productionReadiness\?\.ready === true' "$PROTOCOL" \
+  'frontend must derive remote desktop production readiness from production_media_ready/production_readiness, not capability gates'
+reject 'productionReady: productionGate\?\.ready === true \|\| mediaBackends\.some\(isRemoteDesktopProductionBackend\)' "$PROTOCOL" \
+  'frontend must not report production online from production_gate or backend availability alone'
+require 'productionReadiness' "$PROTOCOL" \
+  'frontend must preserve production_readiness evidence for remote desktop sessions'
 
 require 'requires an explicit remote desktop subject' "$INVOCATION_TEST" \
   'frontend invocation tests must cover missing remote desktop subject failures'

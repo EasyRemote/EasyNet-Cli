@@ -18,7 +18,7 @@ use std::hash::{Hash, Hasher};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axon_sdk::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, SecurityClass};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
 
@@ -1170,7 +1170,7 @@ impl RemoteAppTargetResolver for ResourceEntryTargetResolver {
         let target_kind = RemoteDesktopTargetKind::try_from(entry.kind).map_err(|error| {
             RemoteAppTargetError::new(ability, error.reason(), error.to_string())
         })?;
-        validate_resource_inventory_state(ability, entry)?;
+        validate_resource_inventory_state(ability, entry, target_kind)?;
         let capture_scope = capture_scope_for_kind(target_kind);
         let input_scope = input_scope_for_request(target_kind, requested_mode);
         let display_id = display_id(entry);
@@ -1260,9 +1260,11 @@ impl RemoteAppTargetResolver for ResourceEntryTargetResolver {
 fn validate_resource_inventory_state(
     ability: &'static str,
     entry: &ResourceEntry,
+    target_kind: RemoteDesktopTargetKind,
 ) -> Result<(), RemoteAppTargetError> {
-    if let Some(availability) = metadata_string(entry, "availability") {
-        if availability != "available" {
+    let availability = metadata_string(entry, "availability");
+    if let Some(availability_value) = availability.as_deref() {
+        if availability_value != "available" {
             let stale_reason = metadata_string(entry, "stale_reason");
             let reason = stale_reason
                 .as_deref()
@@ -1272,12 +1274,46 @@ fn validate_resource_inventory_state(
                 ability,
                 reason,
                 format!(
-                    "remote desktop target {} is not available in the live inventory; availability={availability}; stale_reason={}",
+                    "remote desktop target {} is not available in the live inventory; availability={availability_value}; stale_reason={}",
                     entry.resource_ura,
                     stale_reason.as_deref().unwrap_or("unknown")
                 ),
             ));
         }
+    }
+
+    if matches!(
+        target_kind,
+        RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application
+    ) && availability.as_deref() != Some("available")
+    {
+        return Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::TargetStale,
+            format!(
+                "{} target {} is missing live inventory availability; call resource.refresh_remote_targets before creating a session",
+                target_kind.as_str(),
+                entry.resource_ura
+            ),
+        ));
+    }
+
+    if matches!(
+        target_kind,
+        RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application
+    ) && (metadata_freshness_u64(entry, "observed_at_ms").is_none()
+        || metadata_freshness_u64(entry, "stale_after_ms").is_none()
+        || metadata_freshness_string(entry, "source").is_none())
+    {
+        return Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::TargetStale,
+            format!(
+                "{} target {} is missing live inventory freshness; call resource.refresh_remote_targets before creating a session",
+                target_kind.as_str(),
+                entry.resource_ura
+            ),
+        ));
     }
 
     if let Some(stale_after_ms) = metadata_freshness_u64(entry, "stale_after_ms") {
@@ -1481,6 +1517,18 @@ fn metadata_freshness_u64(entry: &ResourceEntry, key: &str) -> Option<u64> {
         .and_then(Value::as_u64)
 }
 
+fn metadata_freshness_string(entry: &ResourceEntry, key: &str) -> Option<String> {
+    entry
+        .metadata
+        .get("freshness")
+        .and_then(Value::as_object)
+        .and_then(|freshness| freshness.get(key))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 fn metadata_u64_array(entry: &ResourceEntry, key: &str) -> Vec<u64> {
     let mut values = entry
         .metadata
@@ -1547,6 +1595,22 @@ mod tests {
             metadata,
             first_seen_at: "2026-01-01T00:00:00Z".to_string(),
         }
+    }
+
+    fn live_metadata(mut metadata: Value) -> Value {
+        let map = metadata
+            .as_object_mut()
+            .expect("test metadata must be an object");
+        map.insert("availability".to_string(), json!("available"));
+        map.insert(
+            "freshness".to_string(),
+            json!({
+                "observed_at_ms": 1,
+                "stale_after_ms": u64::MAX,
+                "source": "live_refresh",
+            }),
+        );
+        metadata
     }
 
     #[test]
@@ -1642,16 +1706,14 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(err.reason(), TargetResolutionError::DisplayIdentityMissing);
-        assert!(
-            resolver
-                .resolve_for_session(
-                    "remote_desktop.create_session",
-                    &entry(ResourceType::Display, json!({"primary_display": true})),
-                    "view_only",
-                    1,
-                )
-                .is_ok()
-        );
+        assert!(resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(ResourceType::Display, json!({"primary_display": true})),
+                "view_only",
+                1,
+            )
+            .is_ok());
     }
 
     #[test]
@@ -1662,11 +1724,11 @@ mod tests {
                 "remote_desktop.create_session",
                 &entry(
                     ResourceType::Window,
-                    json!({
+                    live_metadata(json!({
                         "window_id": 7,
                         "app_name": "Terminal",
                         "title": "same-looking shell",
-                    }),
+                    })),
                 ),
                 "view_only",
                 1,
@@ -1683,12 +1745,12 @@ mod tests {
                 "remote_desktop.create_session",
                 &entry(
                     ResourceType::Window,
-                    json!({
+                    live_metadata(json!({
                         "window_id": 7,
                         "pid": 4242,
                         "app_name": "Terminal",
                         "title": "same-looking shell",
-                    }),
+                    })),
                 ),
                 "view_only",
                 1,
@@ -1741,6 +1803,29 @@ mod tests {
                 &entry(
                     ResourceType::Window,
                     json!({
+                        "window_id": 7,
+                        "pid": 4242,
+                    }),
+                ),
+                "view_only",
+                1,
+            )
+            .expect_err("app/window rows without live freshness must fail closed");
+        assert_eq!(err.reason(), TargetResolutionError::TargetStale);
+        assert!(
+            err.to_string().contains("missing live inventory freshness")
+                || err
+                    .to_string()
+                    .contains("missing live inventory availability"),
+            "unexpected error: {err}"
+        );
+
+        let err = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Window,
+                    json!({
                         "availability": "available",
                         "freshness": {
                             "observed_at_ms": 1,
@@ -1783,11 +1868,11 @@ mod tests {
                 "remote_desktop.create_session",
                 &entry(
                     ResourceType::Window,
-                    json!({
+                    live_metadata(json!({
                         "window_id": 7,
                         "pid": 4242,
                         "app_name": "Terminal",
-                    }),
+                    })),
                 ),
                 "view_only",
                 1,
@@ -1807,14 +1892,14 @@ mod tests {
                 "remote_desktop.create_session",
                 &entry(
                     ResourceType::Application,
-                    json!({
+                    live_metadata(json!({
                         "display_id": 1,
                         "bundle_id": "com.apple.Safari",
                         "app_identity": "com.apple.Safari",
                         "primary_pid": 42,
                         "resolved_window_ids": [70],
                         "window_set_epoch": application_window_set.window_set_epoch,
-                    }),
+                    })),
                 ),
                 "view_only",
                 1,
@@ -1836,11 +1921,11 @@ mod tests {
                 "remote_desktop.create_session",
                 &entry(
                     ResourceType::Window,
-                    json!({
+                    live_metadata(json!({
                         "window_id": 7,
                         "pid": 4242,
                         "bundle_id": "com.apple.Terminal",
-                    }),
+                    })),
                 ),
                 "view_only",
                 1,
@@ -1911,7 +1996,7 @@ mod tests {
                 "remote_desktop.create_session",
                 &entry(
                     ResourceType::Application,
-                    json!({
+                    live_metadata(json!({
                         "display_id": 42,
                         "bundle_id": "com.example.Editor",
                         "app_identity": "com.example.Editor",
@@ -1919,7 +2004,7 @@ mod tests {
                         "resolved_window_ids": [10, 11],
                         "window_set_epoch": expected_window_set.window_set_epoch,
                         "target_identity_epoch": expected_window_set.window_set_epoch,
-                    }),
+                    })),
                 ),
                 "view_only",
                 1,
@@ -1974,7 +2059,10 @@ mod tests {
         let err = resolver
             .resolve_for_session(
                 "remote_desktop.create_session",
-                &entry(ResourceType::Application, json!({"app_name": "Safari"})),
+                &entry(
+                    ResourceType::Application,
+                    live_metadata(json!({"app_name": "Safari"})),
+                ),
                 "view_only",
                 1,
             )
@@ -1985,7 +2073,7 @@ mod tests {
                 "remote_desktop.create_session",
                 &entry(
                     ResourceType::Application,
-                    json!({"display_id": 1, "app_name": "Safari"}),
+                    live_metadata(json!({"display_id": 1, "app_name": "Safari"})),
                 ),
                 "view_only",
                 1,
@@ -1997,12 +2085,12 @@ mod tests {
                 "remote_desktop.create_session",
                 &entry(
                     ResourceType::Application,
-                    json!({
+                    live_metadata(json!({
                         "display_id": 1,
                         "bundle_id": "com.apple.Safari",
                         "app_identity": "com.apple.Safari",
                         "primary_pid": 42,
-                    }),
+                    })),
                 ),
                 "view_only",
                 1,
@@ -2017,7 +2105,7 @@ mod tests {
                 "remote_desktop.create_session",
                 &entry(
                     ResourceType::Application,
-                    json!({
+                    live_metadata(json!({
                         "display_id": 1,
                         "bundle_id": "com.apple.Safari",
                         "app_identity": "com.apple.Safari",
@@ -2026,7 +2114,7 @@ mod tests {
                         "resolved_window_ids": [7, 8],
                         "window_set_epoch": 99,
                         "target_identity_epoch": 99,
-                    }),
+                    })),
                 ),
                 "interactive",
                 1,

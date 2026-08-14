@@ -1,6 +1,7 @@
 // EasyNet CLI — remote desktop create-session handler
 // ===================================================
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -9,7 +10,7 @@ use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION;
 use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
-use crate::daemon::plugins::remote_desktop::session::{RemoteDesktopSession, now_ms};
+use crate::daemon::plugins::remote_desktop::session::{now_ms, RemoteDesktopSession};
 use crate::daemon::plugins::remote_desktop::session_creation::RemoteDesktopSessionCreationWorkflow;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::prune_inactive_sessions;
 use crate::daemon::plugins::remote_desktop::view::serialize_session_with_token;
@@ -20,7 +21,9 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
     env: EnvelopeContext,
     args: Value,
 ) -> anyhow::Result<Value> {
-    let workflow = RemoteDesktopSessionCreationWorkflow::start(&env, &args)?
+    let workflow = RemoteDesktopSessionCreationWorkflow::start(&env, &args)?;
+    preflight_session_insert(&plugin, workflow.session_id())?;
+    let workflow = workflow
         .consume_consent(&plugin.consent_registry(), &env)?
         .resolve_target()?;
     let session_id = workflow.session_id().to_string();
@@ -30,23 +33,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
         .session_store()
         .with_sessions(|sessions| -> anyhow::Result<_> {
             prune_inactive_sessions(&plugin, sessions, now);
-            let active_sessions = sessions
-                .values()
-                .filter(|session| !session.is_terminal())
-                .count();
-            if active_sessions >= plugin.config().max_sessions() {
-                return Err(RemoteDesktopError::SessionStoreFull {
-                    ability: ABILITY_CREATE_SESSION,
-                }
-                .into());
-            }
-            if sessions.contains_key(&session_id) {
-                return Err(RemoteDesktopError::InvalidArgument {
-                    ability: ABILITY_CREATE_SESSION,
-                    detail: format!("session_id {session_id:?} already exists"),
-                }
-                .into());
-            }
+            ensure_session_insertable(plugin.config().max_sessions(), sessions, &session_id)?;
             let watchdog_session_id = session_id.clone();
             let tracker_session_id = session_id.clone();
             let lease_expires_at_ms = session.lease_expires_at_ms();
@@ -62,6 +49,44 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
     RemoteDesktopPlugin::schedule_session_lease(&plugin, watchdog_session_id, lease_expires_at_ms);
     RemoteDesktopPlugin::track_session_target(&plugin, tracker_session_id);
     Ok(view)
+}
+
+fn preflight_session_insert(
+    plugin: &Arc<RemoteDesktopPlugin>,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let now = now_ms();
+    plugin
+        .session_store()
+        .with_sessions(|sessions| -> anyhow::Result<()> {
+            prune_inactive_sessions(plugin, sessions, now);
+            ensure_session_insertable(plugin.config().max_sessions(), sessions, session_id)
+        })
+}
+
+fn ensure_session_insertable(
+    max_sessions: usize,
+    sessions: &HashMap<String, RemoteDesktopSession>,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    if sessions.contains_key(session_id) {
+        return Err(RemoteDesktopError::InvalidArgument {
+            ability: ABILITY_CREATE_SESSION,
+            detail: format!("session_id {session_id:?} already exists"),
+        }
+        .into());
+    }
+    let active_sessions = sessions
+        .values()
+        .filter(|session| !session.is_terminal())
+        .count();
+    if active_sessions >= max_sessions {
+        return Err(RemoteDesktopError::SessionStoreFull {
+            ability: ABILITY_CREATE_SESSION,
+        }
+        .into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -163,6 +188,58 @@ mod tests {
             response["latest_target_diagnostic"]["status"],
             json!("resolved")
         );
+    }
+
+    #[test]
+    fn create_session_duplicate_session_id_does_not_consume_consent_ticket() {
+        let _lock = test_lock();
+        let plugin = test_plugin();
+        reset_store(&plugin);
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = ResourcesFile::default();
+        let ura = seed_display(&mut file, "remote-desktop-duplicate-preflight-display");
+        resources::save(&file).unwrap();
+        let env = env_for(&ura);
+        handle(
+            Arc::clone(&plugin),
+            env.clone(),
+            with_consent_ticket(
+                &plugin,
+                &env,
+                json!({"session_id": "rd-duplicate-preflight", "mode": "view_only"}),
+            ),
+        )
+        .expect("first session inserts");
+
+        let issued = plugin
+            .consent_registry()
+            .issue(
+                env.caller(),
+                env.subject(),
+                crate::daemon::plugins::remote_desktop::consent_registry::CONSENT_INTENT,
+            )
+            .expect("second consent ticket issues");
+        let err = handle(
+            Arc::clone(&plugin),
+            env.clone(),
+            json!({
+                "session_id": "rd-duplicate-preflight",
+                "mode": "view_only",
+                "consent_ticket": issued.ticket.clone(),
+            }),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("already exists"));
+        plugin
+            .consent_registry()
+            .consume(
+                &issued.ticket,
+                env.caller(),
+                env.subject(),
+                crate::daemon::plugins::remote_desktop::consent_registry::CONSENT_INTENT,
+            )
+            .expect("duplicate-session preflight must fail before consuming consent");
     }
 
     #[test]
@@ -272,6 +349,12 @@ mod tests {
                 hardware_id: "remote-desktop-weak-window-identity",
                 display_name: "Terminal — same-looking shell",
                 metadata: json!({
+                    "availability": "available",
+                    "freshness": {
+                        "observed_at_ms": 1,
+                        "stale_after_ms": u64::MAX,
+                        "source": "live_refresh",
+                    },
                     "window_id": 7,
                     "app_name": "Terminal",
                     "title": "same-looking shell",

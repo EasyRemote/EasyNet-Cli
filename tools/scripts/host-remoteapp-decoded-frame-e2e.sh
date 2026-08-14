@@ -158,9 +158,14 @@ selected_resource_ura = get("selected_resource_ura")
 invocation_subject_ura = get("invocation.subject_ura")
 inventory_ability = get("live_inventory.ability")
 target_kind = get("target_binding.target_kind")
+target_binding_subject_ura = get("target_binding.subject_ura")
 capture_scope = get("target_binding.capture_scope")
 binding_id = get("target_binding.binding_id")
 binding_epoch = get("target_binding.binding_epoch")
+target_identity_epoch = get("target_binding.target_identity_epoch")
+target_geometry_revision = get("target_binding.target_geometry_revision")
+media_source_epoch = get("target_binding.media_source_epoch")
+consent_epoch = get("target_binding.consent_epoch")
 resolved_identity = get("target_binding.resolved_identity")
 app_window_set = get("target_binding.app_window_set")
 scope_widened = get("target_binding.scope_audit.scope_widened")
@@ -304,11 +309,21 @@ require(invocation_subject_ura == selected_resource_ura,
         "Invocation.subject must equal the selected resource_ura")
 require(get("invocation.ability") == "remote_desktop.create_session",
         "invocation ability must be remote_desktop.create_session")
+require(target_binding_subject_ura == selected_resource_ura,
+        "target_binding.subject_ura must equal the selected resource_ura")
 require(target_kind == expected_kind, f"target_binding.target_kind must be {expected_kind}")
 require(isinstance(binding_id, str) and binding_id.strip(),
         "target_binding.binding_id must be a non-empty string")
 require(isinstance(binding_epoch, int) and binding_epoch > 0,
         "target_binding.binding_epoch must be a positive integer")
+require(isinstance(target_identity_epoch, int) and target_identity_epoch > 0,
+        "target_binding.target_identity_epoch must be a positive integer")
+require(isinstance(target_geometry_revision, int) and target_geometry_revision > 0,
+        "target_binding.target_geometry_revision must be a positive integer")
+require(isinstance(media_source_epoch, int) and media_source_epoch > 0,
+        "target_binding.media_source_epoch must be a positive integer")
+require(isinstance(consent_epoch, int) and consent_epoch > 0,
+        "target_binding.consent_epoch must be a positive integer")
 if expected_kind == "window":
     require(capture_scope == "WindowSurface", "window target must use WindowSurface")
 else:
@@ -456,8 +471,15 @@ if [[ "$SELF_TEST" == "1" ]]; then
     "subject_ura": "easynet:///r/localhost/resource/device.dev/streams/window.test"
   },
   "target_binding": {
+    "subject_ura": "easynet:///r/localhost/resource/device.dev/streams/window.test",
     "target_kind": "window",
     "capture_scope": "WindowSurface",
+    "binding_id": "binding-test",
+    "binding_epoch": 1,
+    "target_identity_epoch": 1,
+    "target_geometry_revision": 1,
+    "media_source_epoch": 1,
+    "consent_epoch": 1,
     "resolved_identity": {
       "window_id": 7
     },

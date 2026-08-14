@@ -213,11 +213,11 @@ mod tests {
     };
 
     fn insert_test_session(plugin: &RemoteDesktopPlugin, session_id: &str, subject: &str) {
+        let mut init = test_session_init(session_id, subject, vec![TRANSPORT_WEBRTC.to_string()]);
+        init.lease_ttl_ms = 60_000;
+        let session = RemoteDesktopSession::new(init);
         plugin.session_store().with_sessions(|sessions| {
-            let mut init =
-                test_session_init(session_id, subject, vec![TRANSPORT_WEBRTC.to_string()]);
-            init.lease_ttl_ms = 60_000;
-            sessions.insert(session_id.to_string(), RemoteDesktopSession::new(init));
+            sessions.insert(session_id.to_string(), session);
         });
     }
 

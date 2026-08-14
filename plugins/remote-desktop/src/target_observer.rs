@@ -14,8 +14,8 @@ use std::collections::BTreeSet;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use crate::daemon::plugins::remote_desktop::session::TargetMediaSourceLost;
 use crate::daemon::plugins::remote_desktop::session::now_ms;
+use crate::daemon::plugins::remote_desktop::session::TargetMediaSourceLost;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::target::{
     AppWindowSetProof, RemoteAppTargetBinding, RemoteDesktopTargetKind, TargetGeometry,
@@ -415,7 +415,7 @@ fn positive_dimension(value: Option<f64>) -> Option<f64> {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use std::ffi::{CString, c_char, c_void};
+    use std::ffi::{c_char, c_void, CString};
     use std::ptr;
     use std::sync::OnceLock;
 
@@ -423,9 +423,9 @@ mod platform {
 
     use super::{
         HostTargetSnapshot, HostTargetSnapshotProvider, ObservedWindow,
-        PLATFORM_TARGET_SNAPSHOT_MIN_REFRESH, PlatformTargetObservationProvider,
-        SharedHostTargetSnapshotProvider, SnapshotBackedTargetObservationProvider,
-        TargetObservationProvider,
+        PlatformTargetObservationProvider, SharedHostTargetSnapshotProvider,
+        SnapshotBackedTargetObservationProvider, TargetObservationProvider,
+        PLATFORM_TARGET_SNAPSHOT_MIN_REFRESH,
     };
     use crate::daemon::plugins::remote_desktop::target::{RemoteAppTargetBinding, TargetGeometry};
     use crate::daemon::plugins::remote_desktop::target_tracking::{
@@ -716,15 +716,15 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     use serde_json::json;
 
     use super::{
-        HostTargetSnapshot, HostTargetSnapshotProvider, ObservedWindow,
-        SharedHostTargetSnapshotProvider, observe_binding_against_host_snapshot,
+        observe_binding_against_host_snapshot, HostTargetSnapshot, HostTargetSnapshotProvider,
+        ObservedWindow, SharedHostTargetSnapshotProvider,
     };
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
@@ -735,12 +735,14 @@ mod tests {
         TargetGeometry, TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::target_observer::{
-        TargetObservationProvider, observe_bound_session_target_once,
+        observe_bound_session_target_once, TargetObservationProvider,
     };
     use crate::daemon::plugins::remote_desktop::target_tracking::{
         TargetObservation, TargetTrackerSnapshot,
     };
-    use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
+    use crate::daemon::plugins::remote_desktop::test_support::{
+        live_remote_target_metadata, test_session_init,
+    };
 
     struct FakeGeometryProvider;
 
@@ -852,12 +854,10 @@ mod tests {
                 session.target_tracking_state()["target_geometry_revision"],
                 json!(2)
             );
-            assert!(
-                session
-                    .events()
-                    .iter()
-                    .any(|event| event["event_type"] == json!("TARGET_RESIZED"))
-            );
+            assert!(session
+                .events()
+                .iter()
+                .any(|event| event["event_type"] == json!("TARGET_RESIZED")));
         });
     }
 
@@ -888,12 +888,10 @@ mod tests {
                 session.target_tracking_state()["target_geometry_revision"],
                 json!(2)
             );
-            assert!(
-                session
-                    .events()
-                    .iter()
-                    .any(|event| event["event_type"] == json!("TARGET_RESIZED"))
-            );
+            assert!(session
+                .events()
+                .iter()
+                .any(|event| event["event_type"] == json!("TARGET_RESIZED")));
         });
     }
 
@@ -931,12 +929,10 @@ mod tests {
                 session.target_tracking_state()["target_geometry_revision"],
                 json!(1)
             );
-            assert!(
-                !session
-                    .events()
-                    .iter()
-                    .any(|event| event["event_type"] == json!("TARGET_RESIZED"))
-            );
+            assert!(!session
+                .events()
+                .iter()
+                .any(|event| event["event_type"] == json!("TARGET_RESIZED")));
         });
     }
 
@@ -1006,7 +1002,7 @@ mod tests {
                     hardware_id: "application:macos:cgwindow:42:bundle:com.example.Editor"
                         .to_string(),
                     display_name: "Editor on display 42".to_string(),
-                    metadata: json!({
+                    metadata: live_remote_target_metadata(json!({
                         "platform": "macos",
                         "backend": "macos_core_graphics",
                         "display_id": 42,
@@ -1019,7 +1015,7 @@ mod tests {
                         "primary_y": 20,
                         "primary_width": 100,
                         "primary_height": 80,
-                    }),
+                    })),
                     first_seen_at: "2026-06-01T00:00:00Z".to_string(),
                 },
                 "view_only",
@@ -1087,7 +1083,7 @@ mod tests {
                     hardware_id: "application:macos:cgwindow:42:bundle:com.example.Editor"
                         .to_string(),
                     display_name: "Editor on display 42".to_string(),
-                    metadata: json!({
+                    metadata: live_remote_target_metadata(json!({
                         "platform": "macos",
                         "backend": "macos_core_graphics",
                         "display_id": 42,
@@ -1100,7 +1096,7 @@ mod tests {
                         "primary_y": 20,
                         "primary_width": 100,
                         "primary_height": 80,
-                    }),
+                    })),
                     first_seen_at: "2026-06-01T00:00:00Z".to_string(),
                 },
                 "view_only",
@@ -1182,7 +1178,7 @@ mod tests {
                     hardware_id: "application:macos:cgwindow:42:bundle:com.example.Editor"
                         .to_string(),
                     display_name: "Editor on display 42".to_string(),
-                    metadata: json!({
+                    metadata: live_remote_target_metadata(json!({
                         "platform": "macos",
                         "backend": "macos_core_graphics",
                         "display_id": 42,
@@ -1195,7 +1191,7 @@ mod tests {
                         "primary_y": 20,
                         "primary_width": 100,
                         "primary_height": 80,
-                    }),
+                    })),
                     first_seen_at: "2026-06-01T00:00:00Z".to_string(),
                 },
                 "view_only",

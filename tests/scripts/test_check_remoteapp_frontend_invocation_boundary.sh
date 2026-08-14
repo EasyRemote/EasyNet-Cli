@@ -10,7 +10,8 @@ FRONTEND_SRC="$SANDBOX/Frontend/src"
 mkdir -p \
   "$FRONTEND_SRC/store" \
   "$FRONTEND_SRC/components/easynet" \
-  "$FRONTEND_SRC/pages/easynet"
+  "$FRONTEND_SRC/pages/easynet" \
+  "$FRONTEND_SRC/lib/api"
 
 cat >"$FRONTEND_SRC/store/media-channel-invocation.ts" <<'TS'
 const REMOTE_DESKTOP_SESSION_SUBJECT_REQUIRED_ABILITIES = new Set([
@@ -118,6 +119,19 @@ export function DeviceMediaWorkspacePage() {
 }
 TSX
 
+cat >"$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts" <<'TS'
+const productionGate = objectField(result, 'production_gate')
+const productionReadiness = remoteDesktopProductionReadinessFromResult(result)
+
+export function remoteDesktopViewFromResult(result: Record<string, unknown> | undefined) {
+  return {
+    productionReady: result?.production_media_ready === true || productionReadiness?.ready === true,
+    productionReadiness,
+    productionBlockedReason: stringField(productionGate, 'reason'),
+  }
+}
+TS
+
 cat >"$FRONTEND_SRC/store/media-channel-invocation.test.ts" <<'TS'
 it('passes selected subject into create session envelope', async () => {
   await invokeMediaUnary('remote_desktop.create_session', {
@@ -183,6 +197,15 @@ perl -0pi -e 's/screenResources\.find\(\(resource\) => resource\.resource_ura ==
   "$FRONTEND_SRC/pages/easynet/DeviceMediaWorkspacePage.tsx"
 if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp frontend checker accepted first-target workspace fallback" >&2
+  exit 1
+fi
+perl -0pi -e 's/screenResources\[0\]/screenResources.find((resource) => resource.resource_ura === entry.session?.subjectUra)/' \
+  "$FRONTEND_SRC/pages/easynet/DeviceMediaWorkspacePage.tsx"
+
+perl -0pi -e 's/productionReady: result\?\.production_media_ready === true \|\| productionReadiness\?\.ready === true/productionReady: productionGate?.ready === true || mediaBackends.some(isRemoteDesktopProductionBackend)/' \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted production readiness derived from capability gates" >&2
   exit 1
 fi
 

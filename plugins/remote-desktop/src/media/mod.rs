@@ -544,6 +544,7 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::target::{
         RemoteAppTargetResolver, ResourceEntryTargetResolver,
     };
+    use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
     use serde_json::json;
 
     fn xcap_display_entry() -> ResourceEntry {
@@ -567,14 +568,14 @@ mod tests {
             binding: ResourceBinding::LocalDevice,
             hardware_id: format!("window:{backend}:123:456"),
             display_name: "Cursor - main.rs".into(),
-            metadata: json!({
+            metadata: live_remote_target_metadata(json!({
                 "backend": backend,
                 "capture_target": "window",
                 "app_name": "Cursor",
                 "window_id": 456,
                 "pid": 123,
                 "title": "main.rs",
-            }),
+            })),
             first_seen_at: "2026-06-01T00:00:00Z".into(),
         }
     }
@@ -587,16 +588,17 @@ mod tests {
             binding: ResourceBinding::LocalDevice,
             hardware_id: format!("application:{backend}:1:com.apple.Safari"),
             display_name: "Safari on display 1".into(),
-            metadata: json!({
+            metadata: live_remote_target_metadata(json!({
                 "backend": backend,
                 "capture_target": "application",
                 "display_id": 1,
                 "app_name": "Safari",
                 "bundle_id": "com.apple.Safari",
+                "app_identity": "com.apple.Safari",
                 "resolved_window_ids": [10, 11],
                 "window_set_epoch": 42,
                 "primary_pid": 123,
-            }),
+            })),
             first_seen_at: "2026-06-01T00:00:00Z".into(),
         }
     }

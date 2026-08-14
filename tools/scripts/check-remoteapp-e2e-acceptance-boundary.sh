@@ -105,6 +105,16 @@ require 'target_binding\.binding_id' "$SCRIPT" \
   'host decoded-frame E2E must require a non-empty target binding id'
 require 'target_binding\.binding_epoch' "$SCRIPT" \
   'host decoded-frame E2E must require a positive target binding epoch'
+require 'target_binding\.subject_ura' "$SCRIPT" \
+  'host decoded-frame E2E must require target binding subject URA evidence'
+require 'target_binding\.target_identity_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must require target identity epoch evidence'
+require 'target_binding\.target_geometry_revision' "$SCRIPT" \
+  'host decoded-frame E2E must require target geometry revision evidence'
+require 'target_binding\.media_source_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must require media source epoch evidence'
+require 'target_binding\.consent_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must require consent epoch evidence'
 require 'artifacts\.session_id|artifact session_id' "$SCRIPT" \
   'host decoded-frame E2E must bind decoded frame artifact to session id'
 

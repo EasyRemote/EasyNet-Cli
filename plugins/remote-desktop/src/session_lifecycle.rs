@@ -315,17 +315,21 @@ mod tests {
         let ura = seed_display(&mut file, "remote-desktop-capacity-display");
         resources::save(&file).unwrap();
         {
+            let mut stale_sessions = Vec::new();
+            for index in 0..plugin.config().max_sessions() {
+                let now = now_ms();
+                let session_id = format!("stale-{index}");
+                let mut session = RemoteDesktopSession::new(test_session_init(
+                    &session_id,
+                    &ura,
+                    vec![TRANSPORT_WEBRTC.to_string()],
+                ));
+                session.set_lease_expires_at_for_test(now.saturating_sub(1));
+                session.close("test_stale");
+                stale_sessions.push((session_id, session));
+            }
             plugin.session_store().with_sessions(|sessions| {
-                for index in 0..plugin.config().max_sessions() {
-                    let now = now_ms();
-                    let session_id = format!("stale-{index}");
-                    let mut session = RemoteDesktopSession::new(test_session_init(
-                        &session_id,
-                        &ura,
-                        vec![TRANSPORT_WEBRTC.to_string()],
-                    ));
-                    session.set_lease_expires_at_for_test(now.saturating_sub(1));
-                    session.close("test_stale");
+                for (session_id, session) in stale_sessions {
                     sessions.insert(session_id, session);
                 }
             });

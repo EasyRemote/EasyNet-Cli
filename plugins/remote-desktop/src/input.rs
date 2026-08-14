@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use webrtc::data_channel::{DataChannel, DataChannelEvent};
 
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
@@ -828,15 +828,15 @@ fn apply_key_frame(frame: &KeyInputFrame) -> InputApplyOutcome {
 mod platform {
     use std::ffi::c_void;
 
-    use objc2::Message;
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
+    use objc2::Message;
     use objc2_core_foundation::CFString;
     use objc2_foundation::{NSMutableDictionary, NSNumber};
 
     use super::{
-        InputApplyOutcome, KeyInputFrame, PointerInputFrame, PointerTargetGeometry,
-        map_pointer_point,
+        map_pointer_point, InputApplyOutcome, KeyInputFrame, PointerInputFrame,
+        PointerTargetGeometry,
     };
 
     #[repr(C)]
@@ -1126,6 +1126,7 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::target_tracking::{
         TargetObservation, TargetTrackerState,
     };
+    use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
 
     fn binding_for_mode(
         entry: &ResourceEntry,
@@ -1282,7 +1283,7 @@ mod tests {
             binding: ResourceBinding::LocalDevice,
             hardware_id: "window:macos:cgwindow:10:42".into(),
             display_name: "Cursor".into(),
-            metadata: json!({
+            metadata: live_remote_target_metadata(json!({
                 "window_id": 42,
                 "pid": 10,
                 "app_name": "Cursor",
@@ -1290,7 +1291,7 @@ mod tests {
                 "y": 200,
                 "width": 800,
                 "height": 600,
-            }),
+            })),
             first_seen_at: "2026-06-01T00:00:00Z".into(),
         };
         let binding = binding_for(&entry);
@@ -1409,7 +1410,7 @@ mod tests {
             binding: ResourceBinding::LocalDevice,
             hardware_id: "window:macos:cgwindow:10:42".into(),
             display_name: "Cursor".into(),
-            metadata: json!({
+            metadata: live_remote_target_metadata(json!({
                 "window_id": 42,
                 "pid": 10,
                 "x": 100,
@@ -1417,7 +1418,7 @@ mod tests {
                 "width": 800,
                 "height": 600,
                 "geometry_revision": 1,
-            }),
+            })),
             first_seen_at: "2026-06-01T00:00:00Z".into(),
         };
         let binding = binding_for(&entry);
@@ -1464,8 +1465,10 @@ mod tests {
             binding: ResourceBinding::LocalDevice,
             hardware_id: "application:macos:cgwindow:Cursor".into(),
             display_name: "Cursor".into(),
-            metadata: json!({
+            metadata: live_remote_target_metadata(json!({
                 "display_id": 1,
+                "bundle_id": "com.example.Cursor",
+                "app_identity": "com.example.Cursor",
                 "primary_pid": 10,
                 "primary_x": 300,
                 "primary_y": 400,
@@ -1473,7 +1476,7 @@ mod tests {
                 "primary_height": 500,
                 "resolved_window_ids": [70],
                 "window_set_epoch": 1,
-            }),
+            })),
             first_seen_at: "2026-06-01T00:00:00Z".into(),
         };
         let binding = binding_for(&entry);

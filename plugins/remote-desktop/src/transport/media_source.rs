@@ -111,8 +111,15 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::target::{
         RemoteAppTargetResolver, ResourceEntryTargetResolver, TargetResolutionError,
     };
+    use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
 
     fn binding_for(kind: ResourceType, metadata: serde_json::Value) -> RemoteAppTargetBinding {
+        let metadata = match kind {
+            ResourceType::Window | ResourceType::Application => {
+                live_remote_target_metadata(metadata)
+            }
+            _ => metadata,
+        };
         ResourceEntryTargetResolver
             .resolve_for_session(
                 "remote_desktop.create_session",
