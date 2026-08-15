@@ -117,6 +117,43 @@ const ALL_INPUT_SCOPES: &[InputScope] = &[
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputScopeReason {
+    RequestedViewOnly,
+    DisplayInteractive,
+    TargetScopedInputUnsafe,
+}
+
+impl InputScopeReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::RequestedViewOnly => "requested_view_only",
+            Self::DisplayInteractive => "display_interactive",
+            Self::TargetScopedInputUnsafe => "target_scoped_keyboard_pointer_dispatch_unsafe",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InputScopeDecision {
+    scope: InputScope,
+    reason: InputScopeReason,
+}
+
+impl InputScopeDecision {
+    const fn new(scope: InputScope, reason: InputScopeReason) -> Self {
+        Self { scope, reason }
+    }
+
+    const fn scope(self) -> InputScope {
+        self.scope
+    }
+
+    const fn reason(self) -> InputScopeReason {
+        self.reason
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) enum FrontendAction {
     RefreshTargets,
     RequestPermission,
@@ -795,6 +832,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct ScopeAudit {
     effective_target_kind: RemoteDesktopTargetKind,
     capture_scope: CaptureScope,
     input_scope: InputScope,
+    input_scope_reason: InputScopeReason,
     scope_widened: bool,
     display_fallback_used: bool,
 }
@@ -807,6 +845,7 @@ impl ScopeAudit {
             "target_model": self.effective_target_kind.target_model(),
             "capture_surface": self.capture_scope.as_str(),
             "input_mode": self.input_scope.as_str(),
+            "input_scope_reason": self.input_scope_reason.as_str(),
             "scope_widened": self.scope_widened,
             "display_fallback_used": self.display_fallback_used,
         })
@@ -1083,6 +1122,7 @@ impl RemoteAppTargetBinding {
             "backend": self.backend,
             "capture_scope": self.capture_scope.as_str(),
             "input_scope": self.input_scope.as_str(),
+            "input_scope_reason": self.scope_audit.input_scope_reason.as_str(),
             "native_locator": self.native_locator.to_value(),
             "resolved_identity": self.resolved_identity.to_value(),
             "app_window_set": self.app_window_set.as_ref().map(AppWindowSetProof::to_value),
@@ -1130,6 +1170,7 @@ impl RemoteAppTargetBinding {
             "media_source_epoch": self.media_source_epoch,
             "capture_scope": self.capture_scope.as_str(),
             "input_scope": self.input_scope.as_str(),
+            "input_scope_reason": self.scope_audit.input_scope_reason.as_str(),
             "app_window_set": self.app_window_set.as_ref().map(AppWindowSetProof::to_value),
             "capture_proof": self.capture_proof.as_ref().map(ResolvedCaptureTargetProof::to_value),
             "reason_code": "target_bound",
@@ -1242,7 +1283,8 @@ impl RemoteAppTargetResolver for ResourceEntryTargetResolver {
         })?;
         validate_resource_inventory_state(ability, entry, target_kind)?;
         let capture_scope = capture_scope_for_kind(target_kind);
-        let input_scope = input_scope_for_request(target_kind, requested_mode);
+        let input_scope_decision = input_scope_for_request(target_kind, requested_mode);
+        let input_scope = input_scope_decision.scope();
         let display_id = display_id(entry);
         validate_required_identity(ability, entry, target_kind, display_id)?;
         let platform = metadata_string(entry, "platform").unwrap_or_else(|| {
@@ -1287,6 +1329,7 @@ impl RemoteAppTargetResolver for ResourceEntryTargetResolver {
             effective_target_kind: target_kind,
             capture_scope,
             input_scope,
+            input_scope_reason: input_scope_decision.reason(),
             scope_widened: false,
             display_fallback_used: false,
         };
@@ -1490,17 +1533,23 @@ fn capture_scope_for_kind(target_kind: RemoteDesktopTargetKind) -> CaptureScope 
 fn input_scope_for_request(
     target_kind: RemoteDesktopTargetKind,
     requested_mode: &str,
-) -> InputScope {
+) -> InputScopeDecision {
     if requested_mode != "interactive" {
-        return InputScope::ViewOnly;
+        return InputScopeDecision::new(InputScope::ViewOnly, InputScopeReason::RequestedViewOnly);
     }
     match target_kind {
-        RemoteDesktopTargetKind::Display => InputScope::DisplayGlobal,
+        RemoteDesktopTargetKind::Display => InputScopeDecision::new(
+            InputScope::DisplayGlobal,
+            InputScopeReason::DisplayInteractive,
+        ),
         RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application => {
             // macOS target-scoped keyboard/pointer dispatch is unsafe until the
             // focus/activation validator is implemented. The session can still
             // capture app/window surfaces in view-only mode.
-            InputScope::ViewOnly
+            InputScopeDecision::new(
+                InputScope::ViewOnly,
+                InputScopeReason::TargetScopedInputUnsafe,
+            )
         }
     }
 }
@@ -1681,6 +1730,29 @@ mod tests {
             }),
         );
         metadata
+    }
+
+    fn interactive_application_binding() -> RemoteAppTargetBinding {
+        ResourceEntryTargetResolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Application,
+                    live_metadata(json!({
+                        "display_id": 1,
+                        "bundle_id": "com.apple.Safari",
+                        "app_identity": "com.apple.Safari",
+                        "app_name": "Safari",
+                        "primary_pid": 42,
+                        "resolved_window_ids": [7, 8],
+                        "window_set_epoch": 99,
+                        "target_identity_epoch": 99,
+                    })),
+                ),
+                "interactive",
+                1,
+            )
+            .expect("display-scoped application identity must resolve")
     }
 
     #[test]
@@ -2263,26 +2335,7 @@ mod tests {
             err.reason(),
             TargetResolutionError::TargetMetadataIncomplete
         );
-        let binding = resolver
-            .resolve_for_session(
-                "remote_desktop.create_session",
-                &entry(
-                    ResourceType::Application,
-                    live_metadata(json!({
-                        "display_id": 1,
-                        "bundle_id": "com.apple.Safari",
-                        "app_identity": "com.apple.Safari",
-                        "app_name": "Safari",
-                        "primary_pid": 42,
-                        "resolved_window_ids": [7, 8],
-                        "window_set_epoch": 99,
-                        "target_identity_epoch": 99,
-                    })),
-                ),
-                "interactive",
-                1,
-            )
-            .expect("display-scoped application identity must resolve");
+        let binding = interactive_application_binding();
         let projection = binding.to_value();
         assert_eq!(projection["target_kind"], json!("application"));
         assert_eq!(
@@ -2291,6 +2344,10 @@ mod tests {
         );
         assert_eq!(projection["capture_scope"], json!("AppSurface"));
         assert_eq!(projection["input_scope"], json!("view_only"));
+        assert_eq!(
+            projection["input_scope_reason"],
+            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+        );
         assert_eq!(
             projection["resolved_identity"]["bundle_id"],
             json!("com.apple.Safari")
@@ -2301,12 +2358,37 @@ mod tests {
             json!("display_scoped_application_window_set")
         );
         assert_eq!(
+            binding.scope_audit_value()["input_scope_reason"],
+            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+        );
+        assert_eq!(
             binding.latest_target_diagnostic_value()["target_model"],
             json!("display_scoped_application_window_set")
         );
         assert_eq!(
             binding.target_bound_event_payload()["target_model"],
             json!("display_scoped_application_window_set")
+        );
+        assert_eq!(
+            binding.target_bound_event_payload()["input_scope_reason"],
+            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+        );
+    }
+
+    #[test]
+    fn application_interactive_downgrade_projects_input_scope_reason() {
+        let binding = interactive_application_binding();
+        assert_eq!(
+            binding.to_value()["input_scope_reason"],
+            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+        );
+        assert_eq!(
+            binding.scope_audit_value()["input_scope_reason"],
+            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+        );
+        assert_eq!(
+            binding.target_bound_event_payload()["input_scope_reason"],
+            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
         );
     }
 }

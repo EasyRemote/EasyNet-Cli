@@ -491,15 +491,19 @@ fn production_scope_ready() -> bool {
 
 fn target_bound_event_payload() {
     json!({
+        "input_scope_reason": self.scope_audit.input_scope_reason.as_str(),
         "scope_widened": self.scope_audit.scope_widened,
         "display_fallback_used": self.scope_audit.display_fallback_used,
     });
 }
 
-fn input_scope_for_request() {
+struct InputScopeDecision;
+
+fn input_scope_for_request() -> InputScopeDecision {
     match kind {
         RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application => {
             // target-scoped keyboard/pointer dispatch is unsafe until a focus-safe validator exists.
+            let reason = "target_scoped_keyboard_pointer_dispatch_unsafe";
             InputScope::ViewOnly
         }
         _ => InputScope::DisplayGlobal,
@@ -521,6 +525,18 @@ mod tests {
 
     #[test]
     fn application_requires_display_scoped_stable_identity() {}
+
+    #[test]
+    fn application_interactive_downgrade_projects_input_scope_reason() {
+        assert_eq!(
+            binding.scope_audit_value()["input_scope_reason"],
+            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+        );
+        assert_eq!(
+            binding.target_bound_event_payload()["input_scope_reason"],
+            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+        );
+    }
 }
 RS
 
@@ -853,6 +869,11 @@ write_fixture
 perl -0pi -e 's/"display_fallback_used": self\.scope_audit\.display_fallback_used/"display_fallback_used": false/' \
   "$SANDBOX/plugins/remote-desktop/src/target.rs"
 run_fail 'TARGET_BOUND payload must project display fallback from the committed binding audit'
+
+write_fixture
+perl -0pi -e 's/"input_scope_reason": self\.scope_audit\.input_scope_reason\.as_str\(\),//g' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+run_fail 'target binding and TARGET_BOUND projection must expose the committed input scope reason'
 
 write_fixture
 perl -0pi -e 's/PrimaryMediaPhase::MediaSourceLost => [^\n]+/PrimaryMediaPhase::MediaSourceLost => false/' \

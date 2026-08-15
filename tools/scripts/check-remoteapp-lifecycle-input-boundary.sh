@@ -429,12 +429,24 @@ require 'requested ScreenCaptureKit application identity is ambiguous' "$SCK" \
 # keyboard/pointer injection is disabled for app/window sessions.
 require 'fn input_scope_for_request\(' "$TARGET" \
   'target resolver must centralize requested mode to input scope'
+require 'InputScopeDecision' "$TARGET" \
+  'target resolver must return an explicit input scope decision, not a bare scope'
 require 'RemoteDesktopTargetKind::Window \| RemoteDesktopTargetKind::Application' "$TARGET" \
   'window/application targets must share the view-only input safety branch'
 require 'InputScope::ViewOnly' "$TARGET" \
   'app/window requested interactive mode must downgrade to view_only'
 require 'target-scoped keyboard/pointer dispatch is unsafe' "$TARGET" \
   'view-only downgrade must document the missing focus-safe validator'
+require 'target_scoped_keyboard_pointer_dispatch_unsafe' "$TARGET" \
+  'view-only downgrade must publish a stable machine-readable input scope reason'
+require '"input_scope_reason": self\.scope_audit\.input_scope_reason\.as_str\(\)' "$TARGET" \
+  'target binding and TARGET_BOUND projection must expose the committed input scope reason'
+require 'binding\.scope_audit_value\(\)\["input_scope_reason"\]' "$TARGET" \
+  'target binding tests must prove input scope reason is externally visible in scope_audit'
+require 'binding\.target_bound_event_payload\(\)\["input_scope_reason"\]' "$TARGET" \
+  'target binding tests must prove input scope reason is externally visible in TARGET_BOUND'
+require 'application_interactive_downgrade_projects_input_scope_reason' "$TARGET" \
+  'target binding tests must prove app/window interactive downgrade reason is visible'
 require 'fn input_policy_for_scope\(' "$INPUT" \
   'input policy must centralize scope-based disablement'
 require 'fn input_policy_reject_reason\(' "$INPUT" \
