@@ -68,6 +68,14 @@ require 'shared_host_snapshot_provider_coalesces_session_observer_reads' "$TARGE
   'PERF-03 must prove shared target sampling coalesces host enumeration'
 require 'shared_host_snapshot_provider_bounds_session_fanout_to_one_enumeration_per_tick' "$TARGET_OBSERVER" \
   'PERF-03 must prove 128 session ticks share one host snapshot per refresh window'
+require 'static SNAPSHOTS: OnceLock' "$TARGET_OBSERVER" \
+  'PERF-03 production platform observer must own a shared host snapshot cache'
+require 'SharedHostTargetSnapshotProvider::new' "$TARGET_OBSERVER" \
+  'PERF-03 production platform observer must construct the shared host snapshot provider'
+require 'PLATFORM_TARGET_SNAPSHOT_MIN_REFRESH' "$TARGET_OBSERVER" \
+  'PERF-03 production platform observer must use the bounded target snapshot refresh window'
+require 'SnapshotBackedTargetObservationProvider::new\(snapshots\)\.observe\(binding, snapshot\)' "$TARGET_OBSERVER" \
+  'PERF-03 production platform observer must observe through the shared snapshot-backed provider'
 require 'const SESSION_COUNT: usize = 128' "$TARGET_OBSERVER" \
   'PERF-03 shared sampler test must cover S=128 active session ticks'
 require 'Duration::ZERO' "$TARGET_OBSERVER" \

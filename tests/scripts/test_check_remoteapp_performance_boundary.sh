@@ -46,6 +46,21 @@ fn meta_list_resources_is_read_only_cache_projection() {
 RS
 
 cat >"$SB/plugins/remote-desktop/src/target_observer.rs" <<'RS'
+const PLATFORM_TARGET_SNAPSHOT_MIN_REFRESH: Duration = Duration::from_millis(250);
+static SNAPSHOTS: OnceLock<SharedHostTargetSnapshotProvider<MacOsHostTargetSnapshotProvider>> = OnceLock::new();
+
+impl TargetObservationProvider for PlatformTargetObservationProvider {
+    fn observe(&self, binding: &RemoteAppTargetBinding, snapshot: &TargetTrackerSnapshot) -> Option<TargetObservation> {
+        let snapshots = SNAPSHOTS.get_or_init(|| {
+            SharedHostTargetSnapshotProvider::new(
+                MacOsHostTargetSnapshotProvider,
+                PLATFORM_TARGET_SNAPSHOT_MIN_REFRESH,
+            )
+        });
+        SnapshotBackedTargetObservationProvider::new(snapshots).observe(binding, snapshot)
+    }
+}
+
 #[test]
 fn shared_host_snapshot_provider_coalesces_session_observer_reads() {
     assert_eq!(
@@ -207,6 +222,21 @@ set -e
 grep -q "S=128 active session ticks" /tmp/check-remoteapp-performance-boundary-fanout.out || fail "expected PERF-03 fanout failure"
 
 perl -0pi -e 's/const SESSION_COUNT: usize = 8;/const SESSION_COUNT: usize = 128;/' \
+  "$SB/plugins/remote-desktop/src/target_observer.rs"
+perl -0pi -e 's/SnapshotBackedTargetObservationProvider::new\(snapshots\)\.observe\(binding, snapshot\)/MacOsHostTargetSnapshotProvider.snapshot().ok(); None/' \
+  "$SB/plugins/remote-desktop/src/target_observer.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-production-sampler.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "production observer bypassing shared sampler should exit 1 (got $rc)"
+grep -q "shared snapshot-backed provider" /tmp/check-remoteapp-performance-boundary-production-sampler.out || fail "expected PERF-03 production sampler failure"
+
+perl -0pi -e 's/MacOsHostTargetSnapshotProvider\.snapshot\(\)\.ok\(\); None/SnapshotBackedTargetObservationProvider::new(snapshots).observe(binding, snapshot)/' \
   "$SB/plugins/remote-desktop/src/target_observer.rs"
 perl -0pi -e 's/fn event_replay_projects_compaction_before_retained_window/fn event_replay_silently_starts_at_retained_window/' \
   "$SB/plugins/remote-desktop/src/event_log.rs"
