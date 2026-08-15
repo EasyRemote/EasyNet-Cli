@@ -420,19 +420,38 @@ impl RemoteAppTargetBindingStateMachine {
             TargetVisibilityState::Lost => TargetBindingPhase::Lost,
         };
         self.snapshot.target_geometry_revision = target_geometry_revision.max(previous + 1);
-        let reason = match visibility_state {
-            TargetVisibilityState::Visible if !was_visible => "target_restored",
-            TargetVisibilityState::Visible => "target_visible",
-            TargetVisibilityState::Hidden => "target_hidden",
-            TargetVisibilityState::Minimized => "target_minimized",
-            TargetVisibilityState::Lost => "target_lost",
+        let target_reason = match visibility_state {
+            TargetVisibilityState::Hidden => Some(TargetResolutionError::TargetHidden),
+            TargetVisibilityState::Minimized => Some(TargetResolutionError::TargetMinimized),
+            TargetVisibilityState::Visible | TargetVisibilityState::Lost => None,
         };
-        self.snapshot.diagnostic = self.diagnostic_projection(
+        let reason =
+            target_reason
+                .map(TargetResolutionError::as_str)
+                .unwrap_or(match visibility_state {
+                    TargetVisibilityState::Visible if !was_visible => "target_restored",
+                    TargetVisibilityState::Visible => "target_visible",
+                    TargetVisibilityState::Hidden => "target_hidden",
+                    TargetVisibilityState::Minimized => "target_minimized",
+                    TargetVisibilityState::Lost => "target_lost",
+                });
+        let diagnostic = self.diagnostic_projection(
             self.snapshot.status.as_str(),
             json!(reason),
             reason,
             observed_at_ms,
         );
+        self.snapshot.diagnostic = if let Some(reason) = target_reason {
+            target_failure_payload(diagnostic, reason.frontend_action().as_str())
+        } else {
+            diagnostic
+        };
+        let payload = self.event_payload(reason, observed_at_ms, Some(previous));
+        let payload = if let Some(reason) = target_reason {
+            target_failure_payload(payload, reason.frontend_action().as_str())
+        } else {
+            payload
+        };
         Some(TargetTrackingEvent {
             event_type: match visibility_state {
                 TargetVisibilityState::Visible if !was_visible => "TARGET_RESTORED",
@@ -441,7 +460,7 @@ impl RemoteAppTargetBindingStateMachine {
                 TargetVisibilityState::Minimized => "TARGET_MINIMIZED",
                 TargetVisibilityState::Lost => "TARGET_LOST",
             },
-            payload: self.event_payload(reason, observed_at_ms, Some(previous)),
+            payload,
         })
     }
 
@@ -1314,7 +1333,7 @@ mod tests {
         let binding = window_binding();
         let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding);
 
-        tracker
+        let minimized = tracker
             .commit_observation(TargetObservation::VisibilityChanged {
                 visibility_state: TargetVisibilityState::Minimized,
                 target_geometry_revision: 4,
@@ -1322,8 +1341,42 @@ mod tests {
             })
             .expect("visibility change commits");
 
+        assert_eq!(minimized.event_type(), "TARGET_MINIMIZED");
+        assert_eq!(
+            minimized.payload()["reason_code"],
+            json!("target_minimized")
+        );
+        assert_eq!(minimized.payload()["failure_domain"], json!("target"));
+        assert_eq!(
+            minimized.payload()["frontend_action"],
+            json!("retry_session")
+        );
+        assert_eq!(minimized.payload()["input_enabled"], json!(false));
+        assert_eq!(
+            tracker.snapshot().latest_diagnostic()["frontend_action"],
+            json!("retry_session")
+        );
+        assert_eq!(
+            tracker.snapshot().latest_diagnostic()["failure_domain"],
+            json!("target")
+        );
+
         assert_eq!(tracker.snapshot().to_value()["status"], json!("stale"));
         assert!(tracker.snapshot().pointer_target_value().is_none());
+
+        let hidden = tracker
+            .commit_observation(TargetObservation::VisibilityChanged {
+                visibility_state: TargetVisibilityState::Hidden,
+                target_geometry_revision: 5,
+                observed_at_ms: 20,
+            })
+            .expect("hidden visibility change commits");
+
+        assert_eq!(hidden.event_type(), "TARGET_HIDDEN");
+        assert_eq!(hidden.payload()["reason_code"], json!("target_hidden"));
+        assert_eq!(hidden.payload()["failure_domain"], json!("target"));
+        assert_eq!(hidden.payload()["frontend_action"], json!("retry_session"));
+        assert_eq!(hidden.payload()["input_enabled"], json!(false));
     }
 
     #[test]

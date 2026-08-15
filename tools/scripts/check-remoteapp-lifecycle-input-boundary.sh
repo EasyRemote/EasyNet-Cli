@@ -266,6 +266,16 @@ require_multiline 'm/TargetResolutionError::TargetDisplayUnavailable\s*\.fronten
   'selected display loss must use canonical target-display-unavailable frontend action'
 require 'json!\("target_display_unavailable"\)' "$TARGET_TRACKING" \
   'display topology loss test must assert target_display_unavailable reason code'
+require 'TargetResolutionError::TargetHidden' "$TARGET_TRACKING" \
+  'hidden target visibility must use canonical target_hidden reason'
+require 'TargetResolutionError::TargetMinimized' "$TARGET_TRACKING" \
+  'minimized target visibility must use canonical target_minimized reason'
+require 'json!\("target_hidden"\)' "$TARGET_TRACKING" \
+  'hidden visibility test must assert target_hidden reason code'
+require 'json!\("target_minimized"\)' "$TARGET_TRACKING" \
+  'minimized visibility test must assert target_minimized reason code'
+require 'json!\("retry_session"\)' "$TARGET_TRACKING" \
+  'hidden/minimized visibility tests must assert canonical retry_session action'
 require '"TARGET_REBIND_FAILED"' "$TARGET_TRACKING" \
   'post-loss target observations must emit an explicit rebind failure when no Rebinding policy exists'
 require 'explicit_rebind_required' "$TARGET_TRACKING" \

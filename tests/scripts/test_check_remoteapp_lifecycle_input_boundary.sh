@@ -45,6 +45,8 @@ fn commit_geometry() {
     "target_focus_after_loss";
     payload["failure_domain"] = json!("target");
     target_failure_payload();
+    TargetResolutionError::TargetHidden;
+    TargetResolutionError::TargetMinimized;
     TargetResolutionError::TargetDisplayUnavailable.frontend_action();
     if target_lost {
         "TARGET_REBIND_FAILED";
@@ -52,6 +54,9 @@ fn commit_geometry() {
         "DISPLAY_TOPOLOGY_CHANGED";
         json!({
             "target_display_unavailable": true,
+            "target_hidden": true,
+            "target_minimized": true,
+            "retry_session": true,
             "target_status": "lost",
             "input_enabled": false,
         });
@@ -82,6 +87,9 @@ mod tests {
     #[test]
     fn display_topology_loss_projects_target_failure_recovery() {
         assert_eq!(topology_changed.payload()["reason_code"], json!("target_display_unavailable"));
+        assert_eq!(hidden.payload()["reason_code"], json!("target_hidden"));
+        assert_eq!(minimized.payload()["reason_code"], json!("target_minimized"));
+        assert_eq!(hidden.payload()["frontend_action"], json!("retry_session"));
     }
 }
 RS
@@ -829,6 +837,21 @@ write_fixture
 perl -0pi -e 's/json!\("target_display_unavailable"\)/json!("display_topology_changed")/' \
   "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
 run_fail 'display topology loss test must assert target_display_unavailable reason code'
+
+write_fixture
+perl -0pi -e 's/TargetResolutionError::TargetHidden/TargetVisibilityState::Hidden/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'hidden target visibility must use canonical target_hidden reason'
+
+write_fixture
+perl -0pi -e 's/json!\("target_minimized"\)/json!("target_minimized_regression")/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'minimized visibility test must assert target_minimized reason code'
+
+write_fixture
+perl -0pi -e 's/json!\("retry_session"\)/json!("refresh_targets")/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'hidden/minimized visibility tests must assert canonical retry_session action'
 
 write_fixture
 perl -0pi -e 's/if window\.visibility_state != TargetVisibilityState::Visible \{\n        return Some\(TargetObservation::VisibilityChanged \{\n            visibility_state: window\.visibility_state,\n        \}\);\n    \}\n    if snapshot\.title\(\) != window\.title\.as_deref\(\)/if snapshot.title() != window.title.as_deref()/' \
