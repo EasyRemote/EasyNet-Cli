@@ -138,6 +138,7 @@ struct SessionArtifactBinding {
     binding_epoch: u64,
     target_identity_epoch: u64,
     target_geometry_revision: u64,
+    media_source_epoch: u64,
     capture_scope: String,
 }
 
@@ -182,6 +183,11 @@ impl SessionArtifactBinding {
             .ok_or_else(|| {
                 anyhow!("session target_binding missing positive target_geometry_revision")
             })?;
+        let media_source_epoch = target_binding
+            .get("media_source_epoch")
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0)
+            .ok_or_else(|| anyhow!("session target_binding missing positive media_source_epoch"))?;
         let capture_scope = target_binding
             .get("capture_scope")
             .and_then(Value::as_str)
@@ -194,6 +200,7 @@ impl SessionArtifactBinding {
             binding_epoch,
             target_identity_epoch,
             target_geometry_revision,
+            media_source_epoch,
             capture_scope,
         })
     }
@@ -884,6 +891,7 @@ fn write_analysis(
             "binding_epoch": config.session_artifact.binding_epoch,
             "target_identity_epoch": config.session_artifact.target_identity_epoch,
             "target_geometry_revision": config.session_artifact.target_geometry_revision,
+            "media_source_epoch": config.session_artifact.media_source_epoch,
             "capture_scope": config.session_artifact.capture_scope
         }
     });

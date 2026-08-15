@@ -141,6 +141,8 @@ require 'artifacts\.target_identity_epoch|artifact target_identity_epoch' "$SCRI
   'host decoded-frame E2E must bind decoded frame artifact to target identity epoch'
 require 'artifacts\.target_geometry_revision|artifact target_geometry_revision' "$SCRIPT" \
   'host decoded-frame E2E must bind decoded frame artifact to target geometry revision'
+require 'artifacts\.media_source_epoch|artifact media_source_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must bind decoded frame artifact to media source epoch'
 require 'target_binding\.binding_id' "$SCRIPT" \
   'host decoded-frame E2E must require a non-empty target binding id'
 require 'target_binding\.binding_epoch' "$SCRIPT" \
@@ -161,10 +163,14 @@ require '"target_identity_epoch": config\.session_artifact\.target_identity_epoc
   'bundled frame receiver must write target identity epoch into decoded artifacts'
 require '"target_geometry_revision": config\.session_artifact\.target_geometry_revision' "$RECEIVER" \
   'bundled frame receiver must write target geometry revision into decoded artifacts'
+require '"media_source_epoch": config\.session_artifact\.media_source_epoch' "$RECEIVER" \
+  'bundled frame receiver must write media source epoch into decoded artifacts'
 require 'session target_binding missing positive target_identity_epoch' "$RECEIVER" \
   'bundled frame receiver must reject session artifacts without target identity epoch'
 require 'session target_binding missing positive target_geometry_revision' "$RECEIVER" \
   'bundled frame receiver must reject session artifacts without target geometry revision'
+require 'session target_binding missing positive media_source_epoch' "$RECEIVER" \
+  'bundled frame receiver must reject session artifacts without media source epoch'
 
 require 'ability refresh-remote-targets' "$PROBE" \
   'bundled host probe must invoke live target inventory through the EasyNet CLI'

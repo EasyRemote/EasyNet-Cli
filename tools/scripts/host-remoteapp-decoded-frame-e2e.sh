@@ -550,6 +550,8 @@ require(get("artifacts.target_identity_epoch") == target_identity_epoch,
         "decoded frame artifact target_identity_epoch must match target_binding.target_identity_epoch")
 require(get("artifacts.target_geometry_revision") == target_geometry_revision,
         "decoded frame artifact target_geometry_revision must match target_binding.target_geometry_revision")
+require(get("artifacts.media_source_epoch") == media_source_epoch,
+        "decoded frame artifact media_source_epoch must match target_binding.media_source_epoch")
 require(get("artifacts.capture_scope") == capture_scope,
         "decoded frame artifact capture_scope must match target_binding.capture_scope")
 
@@ -711,6 +713,7 @@ data = {
         "binding_epoch": 1,
         "target_identity_epoch": 1,
         "target_geometry_revision": 1,
+        "media_source_epoch": 1,
         "session_id": "rd-self-test",
         "capture_scope": capture_scope,
     },
