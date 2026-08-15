@@ -18,6 +18,7 @@ use webrtc::peer_connection::PeerConnection;
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::open_display_recorder_with_xcap;
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions;
 use crate::daemon::plugins::remote_desktop::media::encode::BuiltinH264Config;
+use crate::daemon::plugins::remote_desktop::session_events::WebRtcFailureEventKind;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::{
@@ -57,6 +58,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcSession {
 
 #[derive(Debug)]
 struct DirectWebRtcFailureProjection {
+    event_kind: WebRtcFailureEventKind,
     reason: String,
     message: String,
     context: Value,
@@ -136,6 +138,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
                         sessions.mark_direct_webrtc_failed_with_context(
                             &session_id,
                             epoch,
+                            failure.event_kind,
                             &failure.reason,
                             failure.message,
                             failure.context,
@@ -162,6 +165,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
             sessions.mark_direct_webrtc_failed_with_context(
                 &session_id,
                 epoch,
+                failure.event_kind,
                 &failure.reason,
                 failure.message,
                 failure.context,
@@ -241,6 +245,7 @@ fn direct_webrtc_target_failure_projection(
 ) -> DirectWebRtcFailureProjection {
     let target_reason = target_error.reason();
     DirectWebRtcFailureProjection {
+        event_kind: WebRtcFailureEventKind::MediaSourceLost,
         reason: target_reason.as_str().to_string(),
         message: target_error.to_string(),
         context: json!({
@@ -265,6 +270,7 @@ fn direct_webrtc_native_failure_projection(
     let message = err.to_string();
     let Some(target_error) = err.downcast_ref::<RemoteAppTargetError>() else {
         return DirectWebRtcFailureProjection {
+            event_kind: WebRtcFailureEventKind::TransportFailed,
             reason: "native_media_pipeline_failed".to_string(),
             message,
             context: Value::Null,
@@ -319,6 +325,7 @@ mod tests {
         let failure = direct_webrtc_native_failure_projection(&err, &binding);
 
         assert_eq!(failure.reason, "target_identity_changed");
+        assert_eq!(failure.event_kind, WebRtcFailureEventKind::MediaSourceLost);
         assert_eq!(failure.context["failure_domain"], json!("target"));
         assert_eq!(failure.context["frontend_action"], json!("refresh_targets"));
         assert_eq!(
@@ -355,6 +362,7 @@ mod tests {
         let failure = direct_webrtc_native_failure_projection(&err, &binding);
 
         assert_eq!(failure.reason, "native_media_pipeline_failed");
+        assert_eq!(failure.event_kind, WebRtcFailureEventKind::TransportFailed);
         assert_eq!(failure.message, "encoder queue closed");
         assert!(failure.context.is_null());
     }

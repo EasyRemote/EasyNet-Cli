@@ -880,6 +880,7 @@ impl RemoteDesktopSession {
     pub(in crate::daemon::plugins::remote_desktop) fn mark_webrtc_failed_with_context(
         &mut self,
         epoch: TransportEpoch,
+        event_kind: session_events::WebRtcFailureEventKind,
         reason: &str,
         message: String,
         context: serde_json::Value,
@@ -895,6 +896,7 @@ impl RemoteDesktopSession {
         self.signaling.set_webrtc_error(reason);
         self.touch();
         self.push_projected_event(session_events::webrtc_failed_with_context(
+            event_kind,
             reason,
             message,
             epoch.value(),

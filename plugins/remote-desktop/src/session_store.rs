@@ -16,6 +16,7 @@ use crate::daemon::plugins::remote_desktop::sdp::ice_candidate_text;
 use crate::daemon::plugins::remote_desktop::session::{
     RemoteDesktopSession, TargetMediaSourceLost,
 };
+use crate::daemon::plugins::remote_desktop::session_events::WebRtcFailureEventKind;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 use crate::daemon::plugins::remote_desktop::target_tracking::{
@@ -204,6 +205,7 @@ impl RemoteDesktopSessionStore {
         self.mark_direct_webrtc_failed_with_context(
             session_id,
             epoch,
+            WebRtcFailureEventKind::TransportFailed,
             reason,
             message,
             Value::Null,
@@ -214,6 +216,7 @@ impl RemoteDesktopSessionStore {
         &self,
         session_id: &str,
         epoch: TransportEpoch,
+        event_kind: WebRtcFailureEventKind,
         reason: &str,
         message: String,
         context: Value,
@@ -223,7 +226,7 @@ impl RemoteDesktopSessionStore {
             return;
         };
         if let Some(preview_stop) =
-            session.mark_webrtc_failed_with_context(epoch, reason, message, context)
+            session.mark_webrtc_failed_with_context(epoch, event_kind, reason, message, context)
         {
             let _ = preview_stop.send(true);
         }

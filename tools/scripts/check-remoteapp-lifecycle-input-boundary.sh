@@ -71,9 +71,10 @@ SESSION_LIFECYCLE="$REMOTE_ROOT/session_lifecycle.rs"
 SESSION_CREATION="$REMOTE_ROOT/session_creation.rs"
 INVOKE_BIDI="$REMOTE_ROOT/invoke_bidi.rs"
 WEBRTC_ENDPOINT="$REMOTE_ROOT/transport/webrtc_endpoint.rs"
+WEBRTC_MEDIA="$REMOTE_ROOT/transport/webrtc_media.rs"
 WEBRTC_NEGOTIATION="$REMOTE_ROOT/transport/webrtc_negotiation.rs"
 
-for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_NEGOTIATION"; do
+for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NEGOTIATION"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -254,6 +255,18 @@ require '"failure_domain": "target"' "$SESSION_EVENTS" \
   'MEDIA_SOURCE_LOST must be a target-domain failure'
 require '"media_transport_ready": false' "$SESSION_EVENTS" \
   'MEDIA_SOURCE_LOST must mark media transport unavailable'
+require 'enum WebRtcFailureEventKind' "$SESSION_EVENTS" \
+  'WebRTC failure projection must use explicit SPEC event taxonomy'
+require 'Self::MediaSourceLost => "MEDIA_SOURCE_LOST"' "$SESSION_EVENTS" \
+  'WebRTC target/media-source failures must project MEDIA_SOURCE_LOST'
+require 'Self::TransportFailed => "TRANSPORT_FAILED"' "$SESSION_EVENTS" \
+  'WebRTC transport failures must project TRANSPORT_FAILED'
+reject '"SESSION_FAILED"' "$SESSION_EVENTS" \
+  'remote desktop event stream must not collapse typed WebRTC failures into SESSION_FAILED'
+require 'WebRtcFailureEventKind::MediaSourceLost' "$WEBRTC_MEDIA" \
+  'native target failures must be projected as media-source loss, not generic session failure'
+require 'WebRtcFailureEventKind::TransportFailed' "$SESSION_STORE" \
+  'direct WebRTC endpoint failures must default to TRANSPORT_FAILED'
 require 'events\[media_source_lost_index\]\["binding_id"\]' "$SESSION" \
   'E2E-09 must assert event-log top-level MEDIA_SOURCE_LOST binding id'
 require 'events\[media_source_lost_index\]\["target_identity_epoch"\]' "$SESSION" \

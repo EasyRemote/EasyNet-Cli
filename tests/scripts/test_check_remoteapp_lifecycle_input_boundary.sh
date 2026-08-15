@@ -320,6 +320,20 @@ mod tests {
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/session_events.rs" <<'RS'
+enum WebRtcFailureEventKind {
+    MediaSourceLost,
+    TransportFailed,
+}
+
+impl WebRtcFailureEventKind {
+    fn event_type(self) -> &'static str {
+        match self {
+            Self::MediaSourceLost => "MEDIA_SOURCE_LOST",
+            Self::TransportFailed => "TRANSPORT_FAILED",
+        }
+    }
+}
+
 fn media_source_lost(binding: &RemoteAppTargetBinding) {
     json!({
         "event_type": "MEDIA_SOURCE_LOST",
@@ -334,6 +348,12 @@ fn media_source_lost(binding: &RemoteAppTargetBinding) {
     });
 }
 
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_media.rs" <<'RS'
+fn direct_webrtc_target_failure_projection() {
+    WebRtcFailureEventKind::MediaSourceLost;
+}
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/event_log.rs" <<'RS'
@@ -376,6 +396,10 @@ RS
   cat >"$SANDBOX/plugins/remote-desktop/src/session_store.rs" <<'RS'
 fn mark_direct_webrtc_media_ready(session_id: &str) {
     direct_webrtc_endpoint_ura(session_id);
+}
+
+fn mark_direct_webrtc_failed() {
+    WebRtcFailureEventKind::TransportFailed;
 }
 
 #[cfg(test)]
@@ -1010,6 +1034,16 @@ write_fixture
 perl -0pi -e 's/session_events::media_source_lost\(self\.target\.binding\(\)\)/session_events::media_source_lost()/' \
   "$SANDBOX/plugins/remote-desktop/src/session.rs"
 run_fail 'MEDIA_SOURCE_LOST projection must consume the committed session target binding'
+
+write_fixture
+perl -0pi -e 's/WebRtcFailureEventKind::MediaSourceLost/WebRtcFailureEventKind::TransportFailed/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_media.rs"
+run_fail 'native target failures must be projected as media-source loss, not generic session failure'
+
+write_fixture
+perl -0pi -e 's/Self::TransportFailed => "TRANSPORT_FAILED"/Self::TransportFailed => "SESSION_FAILED"/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'WebRTC transport failures must project TRANSPORT_FAILED'
 
 write_fixture
 perl -0pi -e 's/"binding_id": binding\.binding_id\(\),//' \

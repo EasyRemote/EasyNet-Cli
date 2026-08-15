@@ -14,6 +14,28 @@ use crate::daemon::plugins::remote_desktop::target::{
 
 type RemoteDesktopEventProjection = (&'static str, Value);
 
+/// Domain event used when a production WebRTC worker reaches a terminal
+/// failure.
+///
+/// The transport worker can fail because the bound media source is no longer
+/// valid, or because the WebRTC/relay transport failed while the target remains
+/// valid. Keeping this choice explicit prevents the event stream from
+/// collapsing SPEC-distinct recovery paths into a generic session failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) enum WebRtcFailureEventKind {
+    MediaSourceLost,
+    TransportFailed,
+}
+
+impl WebRtcFailureEventKind {
+    const fn event_type(self) -> &'static str {
+        match self {
+            Self::MediaSourceLost => "MEDIA_SOURCE_LOST",
+            Self::TransportFailed => "TRANSPORT_FAILED",
+        }
+    }
+}
+
 /// Build the immutable `SESSION_CREATED` payload.
 ///
 /// This projection module does not mutate session state and does not write to
@@ -333,6 +355,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn media_source_lost(
 
 /// Build a WebRTC failure payload with typed domain context.
 pub(in crate::daemon::plugins::remote_desktop) fn webrtc_failed_with_context(
+    event_kind: WebRtcFailureEventKind,
     reason: &str,
     message: String,
     transport_epoch: u64,
@@ -350,7 +373,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_failed_with_context(
             payload.insert(key.clone(), value.clone());
         }
     }
-    ("SESSION_FAILED", payload)
+    (event_kind.event_type(), payload)
 }
 
 #[cfg(test)]
@@ -363,7 +386,7 @@ mod tests {
 
     use super::{
         media_source_lost, preview_transport_connected, webrtc_failed_with_context,
-        webrtc_sender_ready,
+        webrtc_sender_ready, WebRtcFailureEventKind,
     };
 
     #[test]
@@ -378,6 +401,7 @@ mod tests {
     #[test]
     fn webrtc_failure_payload_preserves_typed_target_context() {
         let (event_type, payload) = webrtc_failed_with_context(
+            WebRtcFailureEventKind::MediaSourceLost,
             "target_identity_changed",
             "target changed".to_string(),
             7,
@@ -388,7 +412,7 @@ mod tests {
             }),
         );
 
-        assert_eq!(event_type, "SESSION_FAILED");
+        assert_eq!(event_type, "MEDIA_SOURCE_LOST");
         assert_eq!(payload["reason"], json!("target_identity_changed"));
         assert_eq!(payload["message"], json!("target changed"));
         assert_eq!(payload["transport_kind"], json!("webrtc"));
@@ -396,6 +420,27 @@ mod tests {
         assert_eq!(payload["failure_domain"], json!("target"));
         assert_eq!(payload["frontend_action"], json!("refresh_targets"));
         assert_eq!(payload["binding_id"], json!("tb_test"));
+    }
+
+    #[test]
+    fn webrtc_failure_payload_projects_transport_failure_event() {
+        let (event_type, payload) = webrtc_failed_with_context(
+            WebRtcFailureEventKind::TransportFailed,
+            "webrtc_peer_connection_failed",
+            "peer connection failed".to_string(),
+            11,
+            json!({
+                "failure_domain": "transport",
+                "frontend_action": "retry_session",
+            }),
+        );
+
+        assert_eq!(event_type, "TRANSPORT_FAILED");
+        assert_eq!(payload["reason"], json!("webrtc_peer_connection_failed"));
+        assert_eq!(payload["transport_kind"], json!("webrtc"));
+        assert_eq!(payload["transport_epoch"], json!(11));
+        assert_eq!(payload["failure_domain"], json!("transport"));
+        assert_eq!(payload["frontend_action"], json!("retry_session"));
     }
 
     #[test]
