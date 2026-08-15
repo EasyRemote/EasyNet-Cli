@@ -233,6 +233,25 @@ fn observe_binding_against_host_snapshot(
     }
 }
 
+#[cfg(any(test, not(target_os = "macos")))]
+fn unsupported_platform_target_observation(
+    binding: &RemoteAppTargetBinding,
+) -> Option<TargetObservation> {
+    match binding.target_kind() {
+        RemoteDesktopTargetKind::Display => None,
+        RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application => {
+            Some(TargetObservation::Lost {
+                reason: TargetResolutionError::UnsupportedCaptureScope,
+                detail: format!(
+                    "platform target observer cannot validate {} scoped capture",
+                    binding.target_kind().as_str()
+                ),
+                observed_at_ms: now_ms(),
+            })
+        }
+    }
+}
+
 fn observe_window(
     binding: &RemoteAppTargetBinding,
     snapshot: &TargetTrackerSnapshot,
@@ -833,8 +852,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        observe_binding_against_host_snapshot, HostTargetSnapshot, HostTargetSnapshotProvider,
-        ObservedWindow, SharedHostTargetSnapshotProvider, SnapshotBackedTargetObservationProvider,
+        observe_binding_against_host_snapshot, unsupported_platform_target_observation,
+        HostTargetSnapshot, HostTargetSnapshotProvider, ObservedWindow,
+        SharedHostTargetSnapshotProvider, SnapshotBackedTargetObservationProvider,
     };
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::constants::direct_webrtc_endpoint_ura;
@@ -997,6 +1017,40 @@ mod tests {
                 1,
             )
             .expect("window target binding resolves")
+    }
+
+    fn application_binding() -> RemoteAppTargetBinding {
+        ResourceEntryTargetResolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &ResourceEntry {
+                    resource_ura: "easynet:///r/acme/resource/application.editor".to_string(),
+                    owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
+                    kind: ResourceType::Application,
+                    binding: ResourceBinding::LocalDevice,
+                    hardware_id: "application:macos:cgwindow:42:bundle:com.example.Editor"
+                        .to_string(),
+                    display_name: "Editor on display 42".to_string(),
+                    metadata: live_remote_target_metadata(json!({
+                        "platform": "macos",
+                        "backend": "macos_core_graphics",
+                        "display_id": 42,
+                        "bundle_id": "com.example.Editor",
+                        "app_identity": "com.example.Editor",
+                        "primary_pid": 9001,
+                        "resolved_window_ids": [10, 11],
+                        "window_set_epoch": 123,
+                        "primary_x": 10,
+                        "primary_y": 20,
+                        "primary_width": 100,
+                        "primary_height": 80,
+                    })),
+                    first_seen_at: "2026-06-01T00:00:00Z".to_string(),
+                },
+                "view_only",
+                1,
+            )
+            .expect("application target binding resolves")
     }
 
     fn visible_window_snapshot() -> HostTargetSnapshot {
@@ -1353,6 +1407,41 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_platform_observer_fails_app_window_targets_closed() {
+        let window_observation = unsupported_platform_target_observation(&window_binding())
+            .expect("unsupported platform must fail window target closed");
+        match window_observation {
+            TargetObservation::Lost { reason, detail, .. } => {
+                assert_eq!(reason, TargetResolutionError::UnsupportedCaptureScope);
+                assert!(detail.contains("window scoped capture"));
+            }
+            other => panic!("expected unsupported window target loss, got {other:?}"),
+        }
+
+        let application_observation =
+            unsupported_platform_target_observation(&application_binding())
+                .expect("unsupported platform must fail application target closed");
+        match application_observation {
+            TargetObservation::Lost { reason, detail, .. } => {
+                assert_eq!(reason, TargetResolutionError::UnsupportedCaptureScope);
+                assert!(detail.contains("application scoped capture"));
+            }
+            other => panic!("expected unsupported application target loss, got {other:?}"),
+        }
+
+        let display_binding = test_session_init(
+            "rd-display-unsupported-platform-observer",
+            "easynet:///r/acme/resource/display.unsupported-platform",
+            vec!["webrtc".into()],
+        )
+        .target_binding;
+        assert!(
+            unsupported_platform_target_observation(&display_binding).is_none(),
+            "display target observation may remain a platform no-op because display capture is not app/window-scoped"
+        );
+    }
+
+    #[test]
     fn window_observation_prioritizes_visibility_loss_over_title_or_focus_changes() {
         let binding = window_binding();
         let snapshot = TargetTrackerSnapshot::from_binding(&binding);
@@ -1402,37 +1491,7 @@ mod tests {
 
     #[test]
     fn application_observation_tracks_display_scoped_window_set_union() {
-        let binding = ResourceEntryTargetResolver
-            .resolve_for_session(
-                "remote_desktop.create_session",
-                &ResourceEntry {
-                    resource_ura: "easynet:///r/acme/resource/application.editor".to_string(),
-                    owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
-                    kind: ResourceType::Application,
-                    binding: ResourceBinding::LocalDevice,
-                    hardware_id: "application:macos:cgwindow:42:bundle:com.example.Editor"
-                        .to_string(),
-                    display_name: "Editor on display 42".to_string(),
-                    metadata: live_remote_target_metadata(json!({
-                        "platform": "macos",
-                        "backend": "macos_core_graphics",
-                        "display_id": 42,
-                        "bundle_id": "com.example.Editor",
-                        "app_identity": "com.example.Editor",
-                        "primary_pid": 9001,
-                        "resolved_window_ids": [10, 11],
-                        "window_set_epoch": 123,
-                        "primary_x": 10,
-                        "primary_y": 20,
-                        "primary_width": 100,
-                        "primary_height": 80,
-                    })),
-                    first_seen_at: "2026-06-01T00:00:00Z".to_string(),
-                },
-                "view_only",
-                1,
-            )
-            .expect("application target binding resolves");
+        let binding = application_binding();
         let snapshot = TargetTrackerSnapshot::from_binding(&binding);
         let observation = observe_binding_against_host_snapshot(
             &binding,
@@ -1488,37 +1547,7 @@ mod tests {
 
     #[test]
     fn application_observation_tracks_same_display_window_set_churn_without_losing_target() {
-        let binding = ResourceEntryTargetResolver
-            .resolve_for_session(
-                "remote_desktop.create_session",
-                &ResourceEntry {
-                    resource_ura: "easynet:///r/acme/resource/application.editor.drift".to_string(),
-                    owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
-                    kind: ResourceType::Application,
-                    binding: ResourceBinding::LocalDevice,
-                    hardware_id: "application:macos:cgwindow:42:bundle:com.example.Editor"
-                        .to_string(),
-                    display_name: "Editor on display 42".to_string(),
-                    metadata: live_remote_target_metadata(json!({
-                        "platform": "macos",
-                        "backend": "macos_core_graphics",
-                        "display_id": 42,
-                        "bundle_id": "com.example.Editor",
-                        "app_identity": "com.example.Editor",
-                        "primary_pid": 9001,
-                        "resolved_window_ids": [10, 11],
-                        "window_set_epoch": 123,
-                        "primary_x": 10,
-                        "primary_y": 20,
-                        "primary_width": 100,
-                        "primary_height": 80,
-                    })),
-                    first_seen_at: "2026-06-01T00:00:00Z".to_string(),
-                },
-                "view_only",
-                1,
-            )
-            .expect("application target binding resolves");
+        let binding = application_binding();
         let snapshot = TargetTrackerSnapshot::from_binding(&binding);
         let observation = observe_binding_against_host_snapshot(
             &binding,
@@ -1658,37 +1687,7 @@ mod tests {
 
     #[test]
     fn application_observation_rejects_multi_display_window_set() {
-        let binding = ResourceEntryTargetResolver
-            .resolve_for_session(
-                "remote_desktop.create_session",
-                &ResourceEntry {
-                    resource_ura: "easynet:///r/acme/resource/application.editor.multi".to_string(),
-                    owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
-                    kind: ResourceType::Application,
-                    binding: ResourceBinding::LocalDevice,
-                    hardware_id: "application:macos:cgwindow:42:bundle:com.example.Editor"
-                        .to_string(),
-                    display_name: "Editor on display 42".to_string(),
-                    metadata: live_remote_target_metadata(json!({
-                        "platform": "macos",
-                        "backend": "macos_core_graphics",
-                        "display_id": 42,
-                        "bundle_id": "com.example.Editor",
-                        "app_identity": "com.example.Editor",
-                        "primary_pid": 9001,
-                        "resolved_window_ids": [10, 11],
-                        "window_set_epoch": 123,
-                        "primary_x": 10,
-                        "primary_y": 20,
-                        "primary_width": 100,
-                        "primary_height": 80,
-                    })),
-                    first_seen_at: "2026-06-01T00:00:00Z".to_string(),
-                },
-                "view_only",
-                1,
-            )
-            .expect("application target binding resolves");
+        let binding = application_binding();
         let snapshot = TargetTrackerSnapshot::from_binding(&binding);
         let observation = observe_binding_against_host_snapshot(
             &binding,
@@ -1742,7 +1741,10 @@ mod tests {
 
 #[cfg(not(target_os = "macos"))]
 mod platform {
-    use super::{PlatformTargetObservationProvider, TargetObservationProvider};
+    use super::{
+        unsupported_platform_target_observation, PlatformTargetObservationProvider,
+        TargetObservationProvider,
+    };
     use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
     use crate::daemon::plugins::remote_desktop::target_tracking::{
         TargetObservation, TargetTrackerSnapshot,
@@ -1751,10 +1753,10 @@ mod platform {
     impl TargetObservationProvider for PlatformTargetObservationProvider {
         fn observe(
             &self,
-            _binding: &RemoteAppTargetBinding,
+            binding: &RemoteAppTargetBinding,
             _snapshot: &TargetTrackerSnapshot,
         ) -> Option<TargetObservation> {
-            None
+            unsupported_platform_target_observation(binding)
         }
     }
 }

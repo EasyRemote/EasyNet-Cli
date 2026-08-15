@@ -983,6 +983,17 @@ fn observe_bound_session_target_once() {
     record_target_observation_for_session();
 }
 
+fn unsupported_platform_target_observation(binding: &RemoteAppTargetBinding) -> Option<TargetObservation> {
+    match binding.target_kind() {
+        RemoteDesktopTargetKind::Display => None,
+        RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application => {
+            Some(TargetObservation::Lost {
+                reason: TargetResolutionError::UnsupportedCaptureScope,
+            })
+        }
+    }
+}
+
 fn observe_window() {
     if !owner_matches(binding, window) {
         return lost();
@@ -1016,6 +1027,16 @@ mod tests {
 
     #[test]
     fn snapshot_observer_reappearance_requires_explicit_rebind_policy() {}
+
+    #[test]
+    fn unsupported_platform_observer_fails_app_window_targets_closed() {}
+}
+
+#[cfg(not(target_os = "macos"))]
+mod platform {
+    fn observe(binding: &RemoteAppTargetBinding) -> Option<TargetObservation> {
+        unsupported_platform_target_observation(binding)
+    }
 }
 RS
 
@@ -1256,6 +1277,21 @@ write_fixture
 perl -0pi -e 's/window_observation_prioritizes_visibility_loss_over_title_or_focus_changes/window_observation_allows_title_to_mask_hidden_state/' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
 run_fail 'target observer tests must prove hidden/minimized availability outranks title/focus updates'
+
+write_fixture
+perl -0pi -e 's/unsupported_platform_target_observation/unsupported_platform_noop_observation/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
+run_fail 'target observer must centralize unsupported platform app/window fail-closed semantics'
+
+write_fixture
+perl -0pi -e 's/unsupported_platform_target_observation\(binding\)/None/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
+run_fail 'non-macOS platform target observer must fail app/window targets closed instead of silently returning no observation'
+
+write_fixture
+perl -0pi -e 's/unsupported_platform_observer_fails_app_window_targets_closed/unsupported_platform_observer_silently_noops/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
+run_fail 'target observer tests must prove unsupported platforms fail app/window targets closed'
 
 write_fixture
 perl -0pi -e 's/RemoteDesktopPlugin::track_session_target\(&plugin, tracker_session_id\);//' \
