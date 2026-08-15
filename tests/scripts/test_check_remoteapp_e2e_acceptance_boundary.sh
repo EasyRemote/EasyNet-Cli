@@ -25,6 +25,7 @@ cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
 | E2E-03 exact window session | decoded stream excludes sentinel |
 | E2E-04 exact application session | decoded stream excludes other apps |
 | E2E-05 stale window fail-closed | no active session row |
+| E2E-06 no media re-resolution | media starts from stored target binding |
 | E2E-07 display fallback forbidden | no decoded full display |
 | E2E-08 move/resize tracking | ordered target geometry events |
 | E2E-09 target loss vs transport failure | target loss is not transport failure |

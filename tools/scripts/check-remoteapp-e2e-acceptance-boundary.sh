@@ -34,6 +34,8 @@ require 'E2E-04 exact application session' "$SPEC" \
   'SPEC must retain exact application decoded-frame acceptance'
 require 'E2E-05 stale window fail-closed' "$SPEC" \
   'SPEC must retain stale window fail-closed acceptance'
+require 'E2E-06 no media re-resolution' "$SPEC" \
+  'SPEC must retain no media re-resolution acceptance'
 require 'E2E-07 display fallback forbidden' "$SPEC" \
   'SPEC must retain display fallback decoded-frame acceptance'
 require 'E2E-08 move/resize tracking' "$SPEC" \
@@ -155,6 +157,16 @@ require 'target-loss lifecycle evidence must leave the session suspended' "$SCRI
   'host lifecycle E2E must validate suspended state after target loss'
 require 'target-loss lifecycle evidence must disable input' "$SCRIPT" \
   'host lifecycle E2E must validate input disablement after target loss'
+require '--pre-media-resource-refresh|EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH' "$SCRIPT" \
+  'host decoded-frame E2E must support pre-media resource refresh for no-re-resolution evidence'
+require 'pre-media resource refresh must run after create_session' "$SCRIPT" \
+  'host decoded-frame E2E must validate refresh happens after create_session'
+require 'pre-media resource refresh must run before media receiver start' "$SCRIPT" \
+  'host decoded-frame E2E must validate refresh happens before media starts'
+require 'pre-media resource refresh evidence must preserve the session target binding id' "$SCRIPT" \
+  'host decoded-frame E2E must bind pre-media refresh evidence to the stored target binding id'
+require 'pre-media resource refresh must observe the selected target still live before media starts' "$SCRIPT" \
+  'host decoded-frame E2E must verify refreshed inventory still contains the selected target before media starts'
 require 'EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR' "$SCRIPT" \
   'host decoded-frame E2E must pass a fixture state directory to sentinel fixture commands'
 require 'source "\$SENTINEL_FIXTURE_DIR/env\.sh"' "$SCRIPT" \
@@ -282,6 +294,16 @@ require 'show-remote-desktop-session' "$PROBE" \
   'bundled host probe must record post-action daemon session projection for lifecycle evidence'
 require 'evidence\["lifecycle"\] = lifecycle' "$PROBE" \
   'bundled host probe must publish canonical lifecycle evidence'
+require 'EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH' "$PROBE" \
+  'bundled host probe must consume pre-media refresh scenario selection'
+require 'PRE_MEDIA_REFRESH_JSON' "$PROBE" \
+  'bundled host probe must persist pre-media resource refresh evidence'
+require 'evidence\["pre_media_resource_refresh"\]' "$PROBE" \
+  'bundled host probe must publish pre-media refresh evidence'
+require 'after_create_session.*True' "$PROBE" \
+  'bundled host probe must mark pre-media refresh as after create_session'
+require 'before_media_start.*True' "$PROBE" \
+  'bundled host probe must mark pre-media refresh as before media start'
 
 require 'swiftc' "$FIXTURE" \
   'bundled sentinel fixture must launch real native macOS windows through a compiled AppKit fixture'

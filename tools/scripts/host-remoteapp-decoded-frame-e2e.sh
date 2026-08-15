@@ -27,6 +27,7 @@ PROBE_CMD="${EASYNET_REMOTEAPP_FRAME_PROBE_CMD:-}"
 PROBE_CMD_USES_BUNDLED=0
 TARGET_KIND="${EASYNET_REMOTEAPP_E2E_TARGET_KIND:-window}"
 LIFECYCLE_SCENARIO="${EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO:-none}"
+PRE_MEDIA_RESOURCE_REFRESH="${EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH:-0}"
 SENTINEL_FIXTURE="${EASYNET_REMOTEAPP_SENTINEL_FIXTURE:-0}"
 SENTINEL_FIXTURE_CMD="${EASYNET_REMOTEAPP_SENTINEL_FIXTURE_CMD:-}"
 DEFAULT_SENTINEL_TOLERANCE=64
@@ -52,6 +53,11 @@ Options:
                         or target-loss. The bundled fixture executes the host
                         action and the probe records post-action daemon session
                         events.
+  --pre-media-resource-refresh
+                        After create_session succeeds and before the WebRTC
+                        receiver starts, refresh target inventory again. This
+                        proves media starts from the stored target_binding, not
+                        a later ResourceEntry re-resolution.
   --sentinel-fixture-cmd CMD
                         Equivalent fixture command override. The command
                         receives EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR and
@@ -76,6 +82,8 @@ Environment:
   EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO
                         Optional lifecycle scenario: none, move-resize, or
                         target-loss.
+  EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH=1
+                        Equivalent to --pre-media-resource-refresh.
   EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB
                         Required by the bundled receiver, formatted as r,g,b.
   EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB
@@ -141,6 +149,7 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2
       ;;
+    --pre-media-resource-refresh) PRE_MEDIA_RESOURCE_REFRESH=1; shift ;;
     --sentinel-fixture-cmd)
       SENTINEL_FIXTURE=1
       SENTINEL_FIXTURE_CMD="${2:?missing value for --sentinel-fixture-cmd}"
@@ -316,6 +325,7 @@ sentinel_fixture = get("sentinel_fixture")
 selected_fixture = get("sentinel_fixture.selected")
 unrelated_fixture = get("sentinel_fixture.unrelated")
 lifecycle = get("lifecycle")
+pre_media_refresh = get("pre_media_resource_refresh")
 
 def parse_rgb_env(name):
     raw = os.environ.get(name, "").strip()
@@ -623,6 +633,25 @@ require(get("artifacts.capture_scope") == capture_scope,
         "decoded frame artifact capture_scope must match target_binding.capture_scope")
 
 lifecycle_scenario = os.environ.get("EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO", "none")
+pre_media_resource_refresh = os.environ.get("EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH", "0")
+if pre_media_resource_refresh == "1":
+    require(isinstance(pre_media_refresh, dict),
+            "pre-media resource refresh evidence must include a pre_media_resource_refresh object")
+    require(pre_media_refresh.get("ability") == "resource.refresh_remote_targets",
+            "pre-media resource refresh must use resource.refresh_remote_targets")
+    require(pre_media_refresh.get("after_create_session") is True,
+            "pre-media resource refresh must run after create_session")
+    require(pre_media_refresh.get("before_media_start") is True,
+            "pre-media resource refresh must run before media receiver start")
+    require(pre_media_refresh.get("selected_resource_ura") == selected_resource_ura,
+            "pre-media resource refresh evidence must preserve the selected Resource URA")
+    require(pre_media_refresh.get("session_binding_id") == binding_id,
+            "pre-media resource refresh evidence must preserve the session target binding id")
+    require(pre_media_refresh.get("session_binding_epoch") == binding_epoch,
+            "pre-media resource refresh evidence must preserve the session target binding epoch")
+    require(pre_media_refresh.get("selected_resource_still_live") is True,
+            "pre-media resource refresh must observe the selected target still live before media starts")
+
 if lifecycle_scenario != "none":
     require(expected_kind == "window",
             "host lifecycle scenarios currently require a window target")
@@ -704,6 +733,7 @@ report = {
         "full_display_leak_detected": get("decoded_frames.full_display_leak_detected"),
         "sentinel_fixture": sentinel_fixture,
         "lifecycle": lifecycle,
+        "pre_media_resource_refresh": pre_media_refresh,
     },
 }
 open(report_path, "w", encoding="utf-8").write(json.dumps(report, indent=2, sort_keys=True) + "\n")
@@ -736,6 +766,8 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "production_readiness.production_codec_negotiated" "$0"
   grep -q "production_readiness.client_media_ready" "$0"
   grep -q "EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO" "$0"
+  grep -q "EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH" "$0"
+  grep -q "pre-media resource refresh must run before media receiver start" "$0"
   grep -q "TARGET_MOVED" "$0"
   grep -q "TARGET_LOST" "$0"
   grep -q "host-remoteapp-sentinel-fixture.sh" "$0"
@@ -869,14 +901,25 @@ if target_kind == "window":
             },
         },
     }
+    data["pre_media_resource_refresh"] = {
+        "ability": "resource.refresh_remote_targets",
+        "after_create_session": True,
+        "before_media_start": True,
+        "selected_resource_ura": resource_ura,
+        "session_binding_id": "binding-test",
+        "session_binding_epoch": 1,
+        "selected_resource_still_live": True,
+    }
 path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
   export EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0"
   export EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0"
   if [[ "$TARGET_KIND" == "window" ]]; then
     export EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO="move-resize"
+    export EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH="1"
   else
     export EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO="none"
+    export EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH="0"
   fi
   validate_evidence
   echo "host-remoteapp-decoded-frame-e2e self-test ok"
@@ -930,6 +973,7 @@ rm -f "$EVIDENCE_JSON"
 export EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON="$EVIDENCE_JSON"
 export EASYNET_REMOTEAPP_E2E_TARGET_KIND="$TARGET_KIND"
 export EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO="$LIFECYCLE_SCENARIO"
+export EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH="$PRE_MEDIA_RESOURCE_REFRESH"
 export EASYNET_REMOTEAPP_SENTINEL_TOLERANCE="${EASYNET_REMOTEAPP_SENTINEL_TOLERANCE:-$DEFAULT_SENTINEL_TOLERANCE}"
 
 bash -lc "$PROBE_CMD"

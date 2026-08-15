@@ -27,6 +27,11 @@ case "$LIFECYCLE_SCENARIO" in
   none|move-resize|target-loss) ;;
   *) echo "[FAIL] invalid EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO: $LIFECYCLE_SCENARIO" >&2; exit 64 ;;
 esac
+PRE_MEDIA_RESOURCE_REFRESH="${EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH:-0}"
+case "$PRE_MEDIA_RESOURCE_REFRESH" in
+  0|1) ;;
+  *) echo "[FAIL] invalid EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH: $PRE_MEDIA_RESOURCE_REFRESH" >&2; exit 64 ;;
+esac
 
 EVIDENCE_JSON="${EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON:-}"
 [[ -n "$EVIDENCE_JSON" ]] || {
@@ -43,6 +48,7 @@ SESSION_JSON="$OUT_DIR/session.json"
 FRAME_ANALYSIS_JSON="$OUT_DIR/frame-analysis.json"
 LIFECYCLE_EVENTS_JSON="$OUT_DIR/lifecycle-events.json"
 LIFECYCLE_SESSION_JSON="$OUT_DIR/lifecycle-session.json"
+PRE_MEDIA_REFRESH_JSON="$OUT_DIR/pre-media-refresh.json"
 
 TARGET_HINT="${EASYNET_REMOTEAPP_TARGET_HINT:-}"
 TARGET_RESOURCE_URA="${EASYNET_REMOTEAPP_TARGET_RESOURCE_URA:-}"
@@ -191,6 +197,12 @@ run_easynet ability create-remote-desktop-session \
   --transport webrtc \
   --format json >"$SESSION_JSON"
 
+if [[ "$PRE_MEDIA_RESOURCE_REFRESH" == "1" ]]; then
+  run_easynet ability refresh-remote-targets \
+    --type "$TARGET_KIND" \
+    --format json >"$PRE_MEDIA_REFRESH_JSON"
+fi
+
 rm -f "$FRAME_ANALYSIS_JSON"
 export EASYNET_REMOTEAPP_LIVE_INVENTORY_JSON="$LIVE_INVENTORY_JSON"
 export EASYNET_REMOTEAPP_SELECTED_RESOURCE_JSON="$SELECTED_RESOURCE_JSON"
@@ -300,7 +312,7 @@ PY
 
 run_lifecycle_scenario
 
-python3 - "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" "$SESSION_JSON" "$FRAME_ANALYSIS_JSON" "$EVIDENCE_JSON" "$TARGET_KIND" "$LIFECYCLE_SCENARIO" "$LIFECYCLE_EVENTS_JSON" "$LIFECYCLE_SESSION_JSON" <<'PY'
+python3 - "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" "$SESSION_JSON" "$FRAME_ANALYSIS_JSON" "$EVIDENCE_JSON" "$TARGET_KIND" "$LIFECYCLE_SCENARIO" "$LIFECYCLE_EVENTS_JSON" "$LIFECYCLE_SESSION_JSON" "$PRE_MEDIA_RESOURCE_REFRESH" "$PRE_MEDIA_REFRESH_JSON" <<'PY'
 import json
 import os
 import sys
@@ -315,7 +327,9 @@ import sys
     lifecycle_scenario,
     lifecycle_events_path,
     lifecycle_session_path,
-) = sys.argv[1:10]
+    pre_media_resource_refresh,
+    pre_media_refresh_path,
+) = sys.argv[1:12]
 
 def load(path):
     with open(path, encoding="utf-8") as f:
@@ -330,6 +344,9 @@ lifecycle_session = None
 if lifecycle_scenario != "none":
     lifecycle_events = load(lifecycle_events_path)
     lifecycle_session = load(lifecycle_session_path)
+pre_media_refresh = None
+if pre_media_resource_refresh == "1":
+    pre_media_refresh = load(pre_media_refresh_path)
 
 session = session_response.get("session")
 invocation = session_response.get("invocation")
@@ -472,6 +489,50 @@ evidence = {
 
 if expected_kind == "application":
     evidence["target_binding"]["app_window_set"] = target_binding.get("app_window_set")
+
+if pre_media_resource_refresh == "1":
+    refreshed_resources = (
+        pre_media_refresh.get("resources")
+        if isinstance(pre_media_refresh, dict)
+        else None
+    )
+    if not isinstance(refreshed_resources, list):
+        raise SystemExit("pre-media resource refresh response missing resources array")
+    selected_after_refresh = next(
+        (
+            resource
+            for resource in refreshed_resources
+            if isinstance(resource, dict)
+            and resource.get("resource_ura") == selected_resource_ura
+            and resource.get("type") == expected_kind
+        ),
+        None,
+    )
+    selected_refresh_metadata = (
+        selected_after_refresh.get("metadata")
+        if isinstance(selected_after_refresh, dict)
+        and isinstance(selected_after_refresh.get("metadata"), dict)
+        else {}
+    )
+    evidence["pre_media_resource_refresh"] = {
+        "ability": "resource.refresh_remote_targets",
+        "after_create_session": True,
+        "before_media_start": True,
+        "selected_resource_ura": selected_resource_ura,
+        "returned_resource_count": len(refreshed_resources),
+        "selected_resource_still_live": selected_after_refresh is not None
+        and selected_refresh_metadata.get("availability", "available") == "available",
+        "selected_resource_freshness_source": (
+            selected_refresh_metadata.get("freshness", {}).get("source")
+            if isinstance(selected_refresh_metadata.get("freshness"), dict)
+            else None
+        ),
+        "session_binding_id": target_binding.get("binding_id"),
+        "session_binding_epoch": target_binding.get("binding_epoch"),
+        "target_identity_epoch": target_binding.get("target_identity_epoch"),
+        "target_geometry_revision": target_binding.get("target_geometry_revision"),
+        "media_source_epoch": target_binding.get("media_source_epoch"),
+    }
 
 if lifecycle_scenario != "none":
     lifecycle = {
