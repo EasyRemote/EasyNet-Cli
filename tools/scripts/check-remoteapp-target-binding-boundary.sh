@@ -261,6 +261,23 @@ require 'input_policy_for_binding\(' \
 require 'target_binding\(\)' \
   "$REMOTE_ROOT/handlers/attach.rs" \
   'diagnostic attach must consume the session-owned target binding'
+reject 'require_diagnostic_preview_supported' "$REMOTE_ROOT" \
+  'diagnostic attach support must be selected by a binding-owned frame source, not a target-layer display-only guard'
+require 'capture_binding_diagnostic_jpeg\(' \
+  "$REMOTE_ROOT/invoke_bidi.rs" \
+  'diagnostic InvokeBidi frame loop must capture through a target_binding-owned frame source'
+require 'capture_native_binding_diagnostic_jpeg\(' \
+  "$REMOTE_ROOT/invoke_bidi.rs" \
+  'diagnostic InvokeBidi app/window path must select a native binding-backed adapter'
+reject 'capture_subject: DiagnosticCaptureSubject' \
+  "$REMOTE_ROOT/invoke_bidi.rs" \
+  'diagnostic InvokeBidi frame loop must not carry a ResourceEntry-shaped capture subject as its media boundary'
+require 'diagnostic_jpeg_window_capture_does_not_use_resource_entry_backend' \
+  "$REMOTE_ROOT/invoke_bidi.rs" \
+  'diagnostic InvokeBidi must test that app/window capture does not fall back to the ResourceEntry backend'
+require 'fn capture_jpeg_for_binding\(' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit must expose a binding-backed one-shot diagnostic capture adapter'
 require 'off_display_window_ids' \
   "$REMOTE_ROOT/screencapturekit_capture.rs" \
   'ScreenCaptureKit application binding must detect app windows outside the selected display'

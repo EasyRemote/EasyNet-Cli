@@ -328,6 +328,68 @@ pub fn rgba_bytes_to_rgb_frame(
     })
 }
 
+pub fn bgra_bytes_to_rgb_frame(
+    bgra: &[u8],
+    source_width: u32,
+    source_height: u32,
+    source_stride: usize,
+    options: &ScreenCaptureOptions,
+) -> anyhow::Result<RawRgbFrame> {
+    let minimum_stride = source_width as usize * 4;
+    if source_width == 0
+        || source_height == 0
+        || source_stride < minimum_stride
+        || bgra.len() < source_stride.saturating_mul(source_height as usize)
+    {
+        anyhow::bail!(
+            "{ABILITY_SCREEN_SNAPSHOT}: invalid BGRA frame dimensions {source_width}x{source_height} stride={source_stride}; \
+             reason={REASON_RESOURCE_UNAVAILABLE}"
+        );
+    }
+
+    let region = options.region.unwrap_or(CaptureRegion {
+        x: 0,
+        y: 0,
+        w: source_width,
+        h: source_height,
+    });
+    validate_region(region, source_width, source_height)?;
+
+    let mut rgb = Vec::with_capacity((region.w * region.h * 3) as usize);
+    for y in region.y..region.y + region.h {
+        let row_start = y as usize * source_stride + region.x as usize * 4;
+        let row_end = row_start + region.w as usize * 4;
+        let row = &bgra[row_start..row_end];
+        for px in row.chunks_exact(4) {
+            rgb.push(px[2]);
+            rgb.push(px[1]);
+            rgb.push(px[0]);
+        }
+    }
+
+    let mut width = region.w;
+    let mut height = region.h;
+    if let Some(target) = options.resolution {
+        rgb = resize_rgb_nearest(&rgb, width, height, target.width, target.height);
+        width = target.width;
+        height = target.height;
+    }
+    Ok(RawRgbFrame {
+        rgb_bytes: rgb,
+        width,
+        height,
+    })
+}
+
+pub fn rgb_frame_to_jpeg(frame: RawRgbFrame) -> anyhow::Result<EncodedFrame> {
+    let jpeg = encode_jpeg_checked(&frame.rgb_bytes, frame.width, frame.height)?;
+    Ok(EncodedFrame {
+        jpeg_bytes: jpeg,
+        width: frame.width,
+        height: frame.height,
+    })
+}
+
 #[cfg(feature = "native-media")]
 fn select_monitor(
     monitors: Vec<xcap::Monitor>,

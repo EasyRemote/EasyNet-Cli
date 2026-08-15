@@ -40,7 +40,6 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                 })?;
                 ensure_session_access(&plugin, ABILITY_ATTACH_SESSION, &env, &args, session)?;
                 let target_binding = session.target_binding().clone();
-                target_binding.require_diagnostic_preview_supported(ABILITY_ATTACH_SESSION)?;
                 let options = parse_attach_capture_options(&args, session)?;
                 let encoding = parse_attach_encoding(&args)?;
                 let input_policy = session.input_policy().to_value();
@@ -402,34 +401,27 @@ mod tests {
     }
 
     #[test]
-    fn attach_bidi_rejects_window_preview_before_resource_entry_capture_bypass() {
+    fn attach_bidi_accepts_window_binding_before_frame_source_selection() {
         let _lock = test_lock();
-        let plugin = RemoteDesktopPlugin::new(
-            Arc::new(SyntheticScreenBackend),
-            test_runtime_limits().into(),
-        );
-        let subject_ura = "easynet:///r/acme/resource/device.01DEV/streams/window.test";
-        insert_window_session(&plugin, "rd-window-preview-rejected", subject_ura);
-
-        let err = handle(
-            Arc::clone(&plugin),
-            env_for(subject_ura),
-            json!({
-                "session_id": "rd-window-preview-rejected",
-                "session_token": "token",
-            }),
-        )
-        .expect_err("diagnostic InvokeBidi preview must not capture window via ResourceEntry");
-
-        assert!(err
-            .to_string()
-            .contains("diagnostic InvokeBidi preview is display-only"));
-        plugin.session_store().with_sessions(|sessions| {
-            let session = sessions.get("rd-window-preview-rejected").unwrap();
-            assert!(
-                !session.preview_attached(),
-                "unsupported diagnostic preview must fail before installing preview transport"
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let plugin = RemoteDesktopPlugin::new(
+                Arc::new(SyntheticScreenBackend),
+                test_runtime_limits().into(),
             );
+            let subject_ura = "easynet:///r/acme/resource/device.01DEV/streams/window.test";
+            insert_window_session(&plugin, "rd-window-preview-accepted", subject_ura);
+
+            let bidi = handle(
+                Arc::clone(&plugin),
+                env_for(subject_ura),
+                json!({
+                    "session_id": "rd-window-preview-accepted",
+                    "session_token": "token",
+                }),
+            )
+            .expect("attach handler must accept a session-owned window binding");
+
+            let _ = bidi.to_client.send(json!({"type": "close"})).await;
         });
     }
 

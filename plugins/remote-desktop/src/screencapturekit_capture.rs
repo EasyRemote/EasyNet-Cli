@@ -42,13 +42,21 @@ use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, AnyThread, DefinedClass};
 use objc2_core_foundation::CGRect;
 use objc2_core_media::{CMSampleBuffer, CMTime};
-use objc2_core_video::CVImageBuffer;
+use objc2_core_video::{
+    kCVPixelFormatType_32BGRA, kCVReturnSuccess, CVImageBuffer, CVPixelBufferGetBaseAddress,
+    CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight, CVPixelBufferGetPixelFormatType,
+    CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags,
+    CVPixelBufferUnlockBaseAddress,
+};
 use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol, NSString};
 use objc2_screen_capture_kit::{
     SCContentFilter, SCDisplay, SCRunningApplication, SCShareableContent, SCStream,
     SCStreamConfiguration, SCStreamOutput, SCStreamOutputType, SCWindow,
 };
 
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
+    bgra_bytes_to_rgb_frame, rgb_frame_to_jpeg, EncodedFrame, ScreenCaptureOptions,
+};
 use crate::daemon::plugins::remote_desktop::target::{
     AppWindowSetProof, RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind,
     ResolvedCaptureTargetProof, TargetResolutionError,
@@ -234,6 +242,86 @@ pub(in crate::daemon::plugins::remote_desktop) fn target_for_binding(
     let target = resolve_target_for_binding(ability, binding)?;
     binding.validate_reverified_capture_proof(ability, target.capture_proof())?;
     Ok(target)
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn capture_jpeg_for_binding(
+    ability: &'static str,
+    binding: &RemoteAppTargetBinding,
+    options: &ScreenCaptureOptions,
+) -> anyhow::Result<EncodedFrame> {
+    let target = target_for_binding(ability, binding)?;
+    let (width, height) = target.native_dimensions();
+    let (tx, rx) = sync_channel::<CapturedFrame>(1);
+    let sender = Arc::new(Mutex::new(Some(tx)));
+    let sink: FrameSink = {
+        let sender = Arc::clone(&sender);
+        Arc::new(move |frame| {
+            if let Some(tx) = take_completion_sender(&sender) {
+                let _ = tx.send(frame);
+            }
+        })
+    };
+    let stream = ScreenCaptureKitStream::start(ability, target, width, height, options.fps, sink)?;
+    let frame = rx.recv_timeout(Duration::from_secs(3)).map_err(|err| {
+        anyhow::anyhow!(
+            "{ability}: ScreenCaptureKit did not produce a diagnostic frame for binding {}: {err}; \
+             reason={}",
+            binding.binding_id(),
+            TargetResolutionError::CaptureBackendUnavailable.as_str()
+        )
+    })?;
+    drop(stream);
+    encode_bgra_image_buffer_as_jpeg(&frame.image_buffer, ability, options)
+}
+
+fn encode_bgra_image_buffer_as_jpeg(
+    image_buffer: &CVImageBuffer,
+    ability: &'static str,
+    options: &ScreenCaptureOptions,
+) -> anyhow::Result<EncodedFrame> {
+    let pixel_format = CVPixelBufferGetPixelFormatType(image_buffer);
+    if pixel_format != kCVPixelFormatType_32BGRA {
+        anyhow::bail!(
+            "{ability}: ScreenCaptureKit returned unsupported pixel format 0x{pixel_format:08x}; \
+             reason={}",
+            TargetResolutionError::CaptureBackendUnavailable.as_str()
+        );
+    }
+
+    let lock_flags = CVPixelBufferLockFlags::ReadOnly;
+    let lock_result = unsafe { CVPixelBufferLockBaseAddress(image_buffer, lock_flags) };
+    if lock_result != kCVReturnSuccess {
+        anyhow::bail!(
+            "{ability}: CVPixelBufferLockBaseAddress failed with {lock_result}; \
+             reason={}",
+            TargetResolutionError::CaptureBackendUnavailable.as_str()
+        );
+    }
+
+    let result = encode_locked_bgra_image_buffer_as_jpeg(image_buffer, ability, options);
+    let _ = unsafe { CVPixelBufferUnlockBaseAddress(image_buffer, lock_flags) };
+    result
+}
+
+fn encode_locked_bgra_image_buffer_as_jpeg(
+    image_buffer: &CVImageBuffer,
+    ability: &'static str,
+    options: &ScreenCaptureOptions,
+) -> anyhow::Result<EncodedFrame> {
+    let width = CVPixelBufferGetWidth(image_buffer);
+    let height = CVPixelBufferGetHeight(image_buffer);
+    let stride = CVPixelBufferGetBytesPerRow(image_buffer);
+    let base = CVPixelBufferGetBaseAddress(image_buffer);
+    if width == 0 || height == 0 || stride < width.saturating_mul(4) || base.is_null() {
+        anyhow::bail!(
+            "{ability}: ScreenCaptureKit returned invalid pixel buffer dimensions \
+             {width}x{height} stride={stride}; reason={}",
+            TargetResolutionError::CaptureBackendUnavailable.as_str()
+        );
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(base.cast::<u8>(), stride * height) };
+    let rgb = bgra_bytes_to_rgb_frame(bytes, width as u32, height as u32, stride, options)?;
+    rgb_frame_to_jpeg(rgb)
 }
 
 fn resolve_target_for_binding(

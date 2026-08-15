@@ -1122,23 +1122,6 @@ impl RemoteAppTargetBinding {
         }
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn require_diagnostic_preview_supported(
-        &self,
-        ability: &'static str,
-    ) -> Result<(), RemoteAppTargetError> {
-        if self.target_kind == RemoteDesktopTargetKind::Display {
-            return Ok(());
-        }
-        Err(RemoteAppTargetError::new(
-            ability,
-            TargetResolutionError::CaptureBackendUnavailable,
-            format!(
-                "diagnostic InvokeBidi preview is display-only until a binding-backed {} preview adapter exists; use direct WebRTC native media for exact app/window capture",
-                self.target_kind.as_str()
-            ),
-        ))
-    }
-
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
         let binding_ready = self.production_scope_ready();
         json!({

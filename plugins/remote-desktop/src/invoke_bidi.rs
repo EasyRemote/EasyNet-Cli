@@ -29,7 +29,7 @@ use crate::daemon::plugins::remote_desktop::media::encode::{
 use crate::daemon::plugins::remote_desktop::request::AttachEncoding;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::target::{
-    DiagnosticCaptureSubject, RemoteAppTargetBinding,
+    RemoteAppTargetBinding, RemoteDesktopTargetKind,
 };
 use crate::daemon::plugins::remote_desktop::transport::BidiTerminalGuard;
 
@@ -53,7 +53,6 @@ pub(in crate::daemon::plugins::remote_desktop) fn spawn_bidi_capture_worker(
 ) {
     let (latest_frame_tx, latest_frame_rx) = watch::channel::<Option<Vec<BidiOutputFrame>>>(None);
     let input_policy = input_policy_for_binding(config.input_policy, &config.target_binding);
-    let capture_subject = config.target_binding.diagnostic_capture_subject().clone();
     let target_binding = config.target_binding;
     spawn_bidi_control_loop(
         Arc::clone(&config.session_store),
@@ -73,7 +72,6 @@ pub(in crate::daemon::plugins::remote_desktop) fn spawn_bidi_capture_worker(
         session_id: config.session_id,
         backend: config.backend,
         target_binding,
-        capture_subject,
         options: config.options,
         encoding: config.encoding,
         latest_frame: latest_frame_tx,
@@ -177,13 +175,60 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle_bidi_input_frame_for_se
 
 async fn capture_bidi_frame(
     backend: Arc<dyn ScreenSnapshotBackend>,
-    capture_subject: DiagnosticCaptureSubject,
+    target_binding: RemoteAppTargetBinding,
     options: ScreenCaptureOptions,
 ) -> anyhow::Result<EncodedFrame> {
-    let entry = capture_subject.to_backend_resource_entry();
-    tokio::task::spawn_blocking(move || backend.capture_jpeg(&entry, &options))
-        .await
-        .map_err(|err| anyhow::anyhow!("{ABILITY_ATTACH_SESSION}: capture task failed: {err}"))?
+    tokio::task::spawn_blocking(move || {
+        capture_binding_diagnostic_jpeg(backend, &target_binding, &options)
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!("{ABILITY_ATTACH_SESSION}: capture task failed: {err}"))?
+}
+
+fn capture_binding_diagnostic_jpeg(
+    backend: Arc<dyn ScreenSnapshotBackend>,
+    target_binding: &RemoteAppTargetBinding,
+    options: &ScreenCaptureOptions,
+) -> anyhow::Result<EncodedFrame> {
+    match target_binding.target_kind() {
+        RemoteDesktopTargetKind::Display => {
+            let entry = target_binding
+                .diagnostic_capture_subject()
+                .to_backend_resource_entry();
+            backend.capture_jpeg(&entry, options)
+        }
+        RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application => {
+            capture_native_binding_diagnostic_jpeg(target_binding, options)
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn capture_native_binding_diagnostic_jpeg(
+    target_binding: &RemoteAppTargetBinding,
+    options: &ScreenCaptureOptions,
+) -> anyhow::Result<EncodedFrame> {
+    crate::daemon::plugins::remote_desktop::screencapturekit_capture::capture_jpeg_for_binding(
+        ABILITY_ATTACH_SESSION,
+        target_binding,
+        options,
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn capture_native_binding_diagnostic_jpeg(
+    target_binding: &RemoteAppTargetBinding,
+    _options: &ScreenCaptureOptions,
+) -> anyhow::Result<EncodedFrame> {
+    Err(crate::daemon::plugins::remote_desktop::target::RemoteAppTargetError::new(
+        ABILITY_ATTACH_SESSION,
+        crate::daemon::plugins::remote_desktop::target::TargetResolutionError::CaptureBackendUnavailable,
+        format!(
+            "diagnostic InvokeBidi preview for {} requires a binding-backed native capture adapter; display fallback is forbidden",
+            target_binding.target_kind().as_str()
+        ),
+    )
+    .into())
 }
 
 fn build_bidi_frames(seq: u64, hardware_id: &str, frame: EncodedFrame) -> Vec<BidiOutputFrame> {
@@ -287,7 +332,6 @@ struct BidiFrameLoopConfig {
     session_id: String,
     backend: Arc<dyn ScreenSnapshotBackend>,
     target_binding: RemoteAppTargetBinding,
-    capture_subject: DiagnosticCaptureSubject,
     options: ScreenCaptureOptions,
     encoding: AttachEncoding,
     latest_frame: watch::Sender<Option<Vec<BidiOutputFrame>>>,
@@ -302,7 +346,6 @@ fn spawn_bidi_frame_loop(config: BidiFrameLoopConfig) {
         session_id,
         backend,
         target_binding,
-        capture_subject,
         options,
         encoding,
         latest_frame,
@@ -311,9 +354,13 @@ fn spawn_bidi_frame_loop(config: BidiFrameLoopConfig) {
         max_frame_queue_depth,
     } = config;
     let terminal_guard = BidiTerminalGuard::new();
+    let hardware_id = target_binding
+        .diagnostic_capture_subject()
+        .hardware_id()
+        .to_string();
     if encoding == AttachEncoding::AnnexBH264
         && spawn_builtin_h264_stream(
-            target_binding,
+            target_binding.clone(),
             options.clone(),
             max_frame_queue_depth,
             control_to_client.clone(),
@@ -343,13 +390,13 @@ fn spawn_bidi_frame_loop(config: BidiFrameLoopConfig) {
             let started = Instant::now();
             let capture = capture_bidi_frame(
                 Arc::clone(&backend),
-                capture_subject.clone(),
+                target_binding.clone(),
                 options.clone(),
             )
             .await;
             match capture {
                 Ok(frame) => {
-                    let frame = build_bidi_frames(seq, capture_subject.hardware_id(), frame);
+                    let frame = build_bidi_frames(seq, &hardware_id, frame);
                     seq = seq.saturating_add(1);
                     if latest_frame.send(Some(frame)).is_err() {
                         break;
@@ -462,6 +509,124 @@ fn spawn_latest_frame_forwarder(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use tokio::sync::broadcast;
+
+    use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
+    use crate::daemon::plugins::remote_desktop::target::{
+        RemoteAppTargetResolver, ResourceEntryTargetResolver,
+    };
+
+    #[derive(Debug)]
+    struct CountingScreenBackend {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl ScreenSnapshotBackend for CountingScreenBackend {
+        fn capture_jpeg(
+            &self,
+            _entry: &ResourceEntry,
+            _options: &ScreenCaptureOptions,
+        ) -> anyhow::Result<EncodedFrame> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(EncodedFrame {
+                jpeg_bytes: vec![0xff, 0xd8, 0xff, 0xd9],
+                width: 1,
+                height: 1,
+            })
+        }
+
+        fn open_stream(
+            &self,
+            _entry: ResourceEntry,
+            _options: ScreenCaptureOptions,
+        ) -> anyhow::Result<broadcast::Receiver<Value>> {
+            anyhow::bail!("stream not used by diagnostic frame source tests")
+        }
+    }
+
+    fn display_binding_for_test() -> RemoteAppTargetBinding {
+        let entry = ResourceEntry {
+            resource_ura: "easynet:///r/acme/resource/device.01DEV/streams/display.test"
+                .to_string(),
+            owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
+            kind: ResourceType::Display,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "display:test".to_string(),
+            display_name: "Test Display".to_string(),
+            metadata: json!({"primary_display": true, "backend": "xcap"}),
+            first_seen_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        ResourceEntryTargetResolver
+            .resolve_for_session(ABILITY_ATTACH_SESSION, &entry, "view_only", 1)
+            .expect("display target binding resolves")
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn window_binding_for_test() -> RemoteAppTargetBinding {
+        let entry = ResourceEntry {
+            resource_ura: "easynet:///r/acme/resource/device.01DEV/streams/window.test".to_string(),
+            owner_agent: "easynet:///r/acme/agent/device.01DEV.media".to_string(),
+            kind: ResourceType::Window,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "window:macos:cgwindow:10:42".to_string(),
+            display_name: "Test Window".to_string(),
+            metadata:
+                crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata(
+                    json!({
+                        "window_id": 42,
+                        "pid": 10,
+                        "x": 0,
+                        "y": 0,
+                        "width": 800,
+                        "height": 600,
+                    }),
+                ),
+            first_seen_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        ResourceEntryTargetResolver
+            .resolve_for_session(ABILITY_ATTACH_SESSION, &entry, "view_only", 1)
+            .expect("window target binding resolves")
+    }
+
+    #[test]
+    fn diagnostic_jpeg_display_capture_uses_explicit_display_backend_adapter() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let frame = capture_binding_diagnostic_jpeg(
+            Arc::new(CountingScreenBackend {
+                calls: Arc::clone(&calls),
+            }),
+            &display_binding_for_test(),
+            &ScreenCaptureOptions::default(),
+        )
+        .expect("display diagnostic capture uses backend adapter");
+
+        assert_eq!(frame.width, 1);
+        assert_eq!(frame.height, 1);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn diagnostic_jpeg_window_capture_does_not_use_resource_entry_backend() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let err = capture_binding_diagnostic_jpeg(
+            Arc::new(CountingScreenBackend {
+                calls: Arc::clone(&calls),
+            }),
+            &window_binding_for_test(),
+            &ScreenCaptureOptions::default(),
+        )
+        .expect_err("non-macOS window diagnostic capture must fail closed without fallback");
+
+        assert!(err.to_string().contains("capture_backend_unavailable"));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "window diagnostic capture must not route through ResourceEntry backend"
+        );
+    }
 
     #[test]
     fn h264_terminal_failure_marks_diagnostic_preview_failed() {

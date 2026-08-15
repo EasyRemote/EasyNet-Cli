@@ -180,6 +180,20 @@ fn attach(session: Session) {
 }
 RS
 
+cat >"$SANDBOX/plugins/remote-desktop/src/invoke_bidi.rs" <<'RS'
+fn capture_binding_diagnostic_jpeg(binding: RemoteAppTargetBinding) {
+    capture_native_binding_diagnostic_jpeg(binding);
+}
+
+fn capture_native_binding_diagnostic_jpeg(binding: RemoteAppTargetBinding) {}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn diagnostic_jpeg_window_capture_does_not_use_resource_entry_backend() {}
+}
+RS
+
 cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_negotiation.rs" <<'RS'
 fn negotiate(session: Session) {
     let binding = session.target_binding().clone();
@@ -236,6 +250,8 @@ fn target_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {
     let target = resolve_target_for_binding(ability, binding).unwrap();
     binding.validate_reverified_capture_proof(ability, target.capture_proof());
 }
+
+fn capture_jpeg_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {}
 
 fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
     let off_display_window_ids = vec![10];
@@ -528,6 +544,8 @@ fn target_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {
     binding.validate_reverified_capture_proof(ability, target.capture_proof());
 }
 
+fn capture_jpeg_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {}
+
 fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
     Ok(())
 }
@@ -551,6 +569,8 @@ fn target_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {
     let target = resolve_target_for_binding(ability, binding).unwrap();
     binding.validate_reverified_capture_proof(ability, target.capture_proof());
 }
+
+fn capture_jpeg_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {}
 
 fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
     let off_display_window_ids = vec![10];
