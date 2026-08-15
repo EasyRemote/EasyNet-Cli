@@ -918,7 +918,9 @@ pub(in crate::daemon::plugins::remote_desktop) fn now_ms() -> u64 {
 mod tests {
     use serde_json::json;
 
-    use crate::daemon::plugins::remote_desktop::constants::direct_webrtc_endpoint_ura;
+    use crate::daemon::plugins::remote_desktop::constants::{
+        direct_webrtc_endpoint_ura, REASON_SESSION_EXPIRED,
+    };
     use crate::daemon::plugins::remote_desktop::session::{
         RemoteDesktopSession, RemoteDesktopState,
     };
@@ -992,6 +994,53 @@ mod tests {
             session.latest_target_diagnostic()["frontend_action"],
             json!("refresh_targets")
         );
+    }
+
+    #[test]
+    fn session_close_events_project_terminal_reason_code() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-close-event",
+            "easynet:///r/acme/resource/display.test",
+            vec!["webrtc".into()],
+        ));
+
+        session.close("caller_ended");
+
+        let event = session
+            .events()
+            .into_iter()
+            .find(|event| event["event_type"] == json!("SESSION_CLOSED"))
+            .expect("SESSION_CLOSED event");
+        assert_eq!(event["reason_code"], json!("caller_ended"));
+        assert_eq!(event["recoverability"], json!("closed"));
+        assert_eq!(event["payload"]["reason_code"], json!("caller_ended"));
+        assert_eq!(event["payload"]["recoverability"], json!("closed"));
+        assert_eq!(event["terminal"], json!(true));
+    }
+
+    #[test]
+    fn session_expiry_events_project_terminal_reason_code() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-expire-event",
+            "easynet:///r/acme/resource/display.test",
+            vec!["webrtc".into()],
+        ));
+
+        session.expire(42);
+
+        let event = session
+            .events()
+            .into_iter()
+            .find(|event| event["event_type"] == json!("SESSION_CLOSED"))
+            .expect("SESSION_CLOSED event");
+        assert_eq!(event["reason_code"], json!(REASON_SESSION_EXPIRED));
+        assert_eq!(event["recoverability"], json!("closed"));
+        assert_eq!(
+            event["payload"]["reason_code"],
+            json!(REASON_SESSION_EXPIRED)
+        );
+        assert_eq!(event["payload"]["recoverability"], json!("closed"));
+        assert_eq!(event["terminal"], json!(true));
     }
 
     #[test]

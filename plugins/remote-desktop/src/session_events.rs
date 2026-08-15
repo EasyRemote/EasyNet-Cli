@@ -278,7 +278,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn session_closing(
 pub(in crate::daemon::plugins::remote_desktop) fn session_closed(
     reason: &str,
 ) -> RemoteDesktopEventProjection {
-    ("SESSION_CLOSED", json!({ "reason": reason }))
+    (
+        "SESSION_CLOSED",
+        json!({
+            "reason": reason,
+            "reason_code": reason,
+            "recoverability": "closed",
+        }),
+    )
 }
 
 /// Build a lease-expiry closed payload.
@@ -290,6 +297,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn session_expired(
         "SESSION_CLOSED",
         json!({
             "reason": reason,
+            "reason_code": reason,
+            "recoverability": "closed",
             "lease_expires_at_ms": lease_expires_at_ms,
         }),
     )
@@ -404,9 +413,9 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
 
     use super::{
-        media_source_lost, preview_transport_connected, transport_blocked,
-        webrtc_failed_with_context, webrtc_sender_ready, webrtc_transport_failure_context,
-        WebRtcFailureEventKind,
+        media_source_lost, preview_transport_connected, session_closed, session_expired,
+        transport_blocked, webrtc_failed_with_context, webrtc_sender_ready,
+        webrtc_transport_failure_context, WebRtcFailureEventKind,
     };
 
     #[test]
@@ -416,6 +425,27 @@ mod tests {
 
         assert_eq!(preview_payload["transport_kind"], json!("invoke_bidi"));
         assert_eq!(webrtc_payload["transport_kind"], json!("webrtc"));
+    }
+
+    #[test]
+    fn session_closed_payload_projects_terminal_reason_code() {
+        let (event_type, payload) = session_closed("caller_ended");
+
+        assert_eq!(event_type, "SESSION_CLOSED");
+        assert_eq!(payload["reason"], json!("caller_ended"));
+        assert_eq!(payload["reason_code"], json!("caller_ended"));
+        assert_eq!(payload["recoverability"], json!("closed"));
+    }
+
+    #[test]
+    fn session_expired_payload_projects_terminal_reason_code() {
+        let (event_type, payload) = session_expired("session_expired", 42);
+
+        assert_eq!(event_type, "SESSION_CLOSED");
+        assert_eq!(payload["reason"], json!("session_expired"));
+        assert_eq!(payload["reason_code"], json!("session_expired"));
+        assert_eq!(payload["recoverability"], json!("closed"));
+        assert_eq!(payload["lease_expires_at_ms"], json!(42));
     }
 
     #[test]

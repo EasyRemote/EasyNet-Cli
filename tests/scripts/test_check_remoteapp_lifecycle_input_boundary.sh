@@ -193,6 +193,12 @@ mod tests {
     }
 
     #[test]
+    fn session_close_events_project_terminal_reason_code() {}
+
+    #[test]
+    fn session_expiry_events_project_terminal_reason_code() {}
+
+    #[test]
     fn pending_target_loss_deactivates_input_before_media_loss_debounce() {
         assert!(media_loss.is_none());
         assert_eq!(session.lifecycle_phase(), RemoteDesktopSessionPhase::MediaActive);
@@ -343,6 +349,22 @@ fn webrtc_transport_failure_context() {
     });
 }
 
+fn session_closed(reason: &str) {
+    json!({
+        "reason": reason,
+        "reason_code": reason,
+        "recoverability": "closed",
+    });
+}
+
+fn session_expired(reason: &str) {
+    json!({
+        "reason": reason,
+        "reason_code": reason,
+        "recoverability": "closed",
+    });
+}
+
 fn media_source_lost(binding: &RemoteAppTargetBinding) {
     json!({
         "event_type": "MEDIA_SOURCE_LOST",
@@ -369,6 +391,12 @@ fn transport_blocked() {
 
 #[test]
 fn transport_blocked_projects_capture_backend_reason_code() {}
+
+#[test]
+fn session_closed_payload_projects_terminal_reason_code() {}
+
+#[test]
+fn session_expired_payload_projects_terminal_reason_code() {}
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_media.rs" <<'RS'
@@ -1144,6 +1172,36 @@ write_fixture
 perl -0pi -e 's/assert_eq!\(event\["recoverability"\], json!\("retry_session"\)\);//' \
   "$SANDBOX/plugins/remote-desktop/src/session_store.rs"
 run_fail 'session-store tests must prove TRANSPORT_FAILED top-level recoverability is projected'
+
+write_fixture
+perl -0pi -e 's/"reason_code": reason,//' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'SESSION_CLOSED caller path must publish terminal reason_code and closed recoverability'
+
+write_fixture
+perl -0pi -e 's/"recoverability": "closed",//' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'SESSION_CLOSED caller path must publish terminal reason_code and closed recoverability'
+
+write_fixture
+perl -0pi -e 's/session_closed_payload_projects_terminal_reason_code/session_closed_payload_lacks_terminal_reason_code/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'session event tests must prove caller close payload publishes terminal reason_code'
+
+write_fixture
+perl -0pi -e 's/session_expired_payload_projects_terminal_reason_code/session_expired_payload_lacks_terminal_reason_code/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'session event tests must prove lease expiry payload publishes terminal reason_code'
+
+write_fixture
+perl -0pi -e 's/session_close_events_project_terminal_reason_code/session_close_events_lack_terminal_reason_code/' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate tests must prove close event-log top-level reason_code is projected'
+
+write_fixture
+perl -0pi -e 's/session_expiry_events_project_terminal_reason_code/session_expiry_events_lack_terminal_reason_code/' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate tests must prove expiry event-log top-level reason_code is projected'
 
 write_fixture
 perl -0pi -e 's/"binding_id": binding\.binding_id\(\),//' \
