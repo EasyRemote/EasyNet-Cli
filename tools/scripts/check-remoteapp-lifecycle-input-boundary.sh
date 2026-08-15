@@ -270,6 +270,10 @@ require 'WebRtcFailureEventKind::TransportFailed' "$SESSION_STORE" \
   'direct WebRTC endpoint failures must default to TRANSPORT_FAILED'
 require 'fn webrtc_transport_failure_context' "$SESSION_EVENTS" \
   'direct WebRTC transport failures must share one canonical recovery context helper'
+require '"reason_code": TargetResolutionError::TransportRouteUnavailable\.as_str\(\)' "$SESSION_EVENTS" \
+  'direct WebRTC transport failure context must publish canonical transport_route_unavailable reason_code'
+require '"recoverability": "retry_session"' "$SESSION_EVENTS" \
+  'direct WebRTC transport failure context must publish retry_session recoverability'
 require '"failure_domain": "transport"' "$SESSION_EVENTS" \
   'direct WebRTC transport failure context must identify the transport domain'
 require 'FrontendAction::RetrySession\.as_str\(\)' "$SESSION_EVENTS" \
@@ -278,6 +282,10 @@ require 'webrtc_transport_failure_context\(\)' "$SESSION_STORE" \
   'direct WebRTC default failure path must not emit empty transport failure context'
 require 'direct_webrtc_transport_failure_projects_recovery_context' "$SESSION_STORE" \
   'session-store tests must prove default transport failures publish recovery context'
+require 'event\["reason_code"\]' "$SESSION_STORE" \
+  'session-store tests must prove TRANSPORT_FAILED top-level reason_code is projected'
+require 'event\["recoverability"\]' "$SESSION_STORE" \
+  'session-store tests must prove TRANSPORT_FAILED top-level recoverability is projected'
 require 'events\[media_source_lost_index\]\["binding_id"\]' "$SESSION" \
   'E2E-09 must assert event-log top-level MEDIA_SOURCE_LOST binding id'
 require 'events\[media_source_lost_index\]\["target_identity_epoch"\]' "$SESSION" \

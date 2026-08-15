@@ -623,6 +623,13 @@ mod tests {
                 event["payload"]["reason"],
                 json!("webrtc_peer_connection_failed")
             );
+            assert_eq!(event["reason_code"], json!("transport_route_unavailable"));
+            assert_eq!(event["recoverability"], json!("retry_session"));
+            assert_eq!(
+                event["payload"]["reason_code"],
+                json!("transport_route_unavailable")
+            );
+            assert_eq!(event["payload"]["recoverability"], json!("retry_session"));
             assert_eq!(event["payload"]["failure_domain"], json!("transport"));
             assert_eq!(event["payload"]["frontend_action"], json!("retry_session"));
             assert_eq!(event["payload"]["transport_kind"], json!(TRANSPORT_WEBRTC));

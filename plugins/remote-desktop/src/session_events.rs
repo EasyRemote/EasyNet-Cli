@@ -388,6 +388,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_failed_with_context(
 /// still semantically valid but the production transport path failed.
 pub(in crate::daemon::plugins::remote_desktop) fn webrtc_transport_failure_context() -> Value {
     json!({
+        "reason_code": TargetResolutionError::TransportRouteUnavailable.as_str(),
+        "recoverability": "retry_session",
         "failure_domain": "transport",
         "frontend_action": FrontendAction::RetrySession.as_str(),
     })
@@ -454,6 +456,8 @@ mod tests {
         assert_eq!(payload["reason"], json!("webrtc_peer_connection_failed"));
         assert_eq!(payload["transport_kind"], json!("webrtc"));
         assert_eq!(payload["transport_epoch"], json!(11));
+        assert_eq!(payload["reason_code"], json!("transport_route_unavailable"));
+        assert_eq!(payload["recoverability"], json!("retry_session"));
         assert_eq!(payload["failure_domain"], json!("transport"));
         assert_eq!(payload["frontend_action"], json!("retry_session"));
     }

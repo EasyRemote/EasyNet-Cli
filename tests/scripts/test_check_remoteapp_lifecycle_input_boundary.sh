@@ -336,6 +336,8 @@ impl WebRtcFailureEventKind {
 
 fn webrtc_transport_failure_context() {
     json!({
+        "reason_code": TargetResolutionError::TransportRouteUnavailable.as_str(),
+        "recoverability": "retry_session",
         "failure_domain": "transport",
         "frontend_action": FrontendAction::RetrySession.as_str(),
     });
@@ -465,6 +467,8 @@ mod tests {
 
     #[test]
     fn direct_webrtc_transport_failure_projects_recovery_context() {
+        assert_eq!(event["reason_code"], json!("transport_route_unavailable"));
+        assert_eq!(event["recoverability"], json!("retry_session"));
         assert_eq!(event["payload"]["failure_domain"], json!("transport"));
         assert_eq!(event["payload"]["frontend_action"], json!("retry_session"));
     }
@@ -1102,6 +1106,16 @@ perl -0pi -e 's/Self::TransportFailed => "TRANSPORT_FAILED"/Self::TransportFaile
 run_fail 'WebRTC transport failures must project TRANSPORT_FAILED'
 
 write_fixture
+perl -0pi -e 's/"reason_code": TargetResolutionError::TransportRouteUnavailable\.as_str\(\),//' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'direct WebRTC transport failure context must publish canonical transport_route_unavailable reason_code'
+
+write_fixture
+perl -0pi -e 's/"recoverability": "retry_session",//' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'direct WebRTC transport failure context must publish retry_session recoverability'
+
+write_fixture
 perl -0pi -e 's/"failure_domain": "transport"/"failure_domain": "session"/' \
   "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
 run_fail 'direct WebRTC transport failure context must identify the transport domain'
@@ -1120,6 +1134,16 @@ write_fixture
 perl -0pi -e 's/direct_webrtc_transport_failure_projects_recovery_context/direct_webrtc_transport_failure_lacks_recovery_context/' \
   "$SANDBOX/plugins/remote-desktop/src/session_store.rs"
 run_fail 'session-store tests must prove default transport failures publish recovery context'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(event\["reason_code"\], json!\("transport_route_unavailable"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session_store.rs"
+run_fail 'session-store tests must prove TRANSPORT_FAILED top-level reason_code is projected'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(event\["recoverability"\], json!\("retry_session"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session_store.rs"
+run_fail 'session-store tests must prove TRANSPORT_FAILED top-level recoverability is projected'
 
 write_fixture
 perl -0pi -e 's/"binding_id": binding\.binding_id\(\),//' \
