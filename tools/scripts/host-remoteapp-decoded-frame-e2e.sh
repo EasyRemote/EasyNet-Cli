@@ -546,6 +546,10 @@ require(get("artifacts.binding_id") == binding_id,
         "decoded frame artifact binding_id must match target_binding.binding_id")
 require(get("artifacts.binding_epoch") == binding_epoch,
         "decoded frame artifact binding_epoch must match target_binding.binding_epoch")
+require(get("artifacts.target_identity_epoch") == target_identity_epoch,
+        "decoded frame artifact target_identity_epoch must match target_binding.target_identity_epoch")
+require(get("artifacts.target_geometry_revision") == target_geometry_revision,
+        "decoded frame artifact target_geometry_revision must match target_binding.target_geometry_revision")
 require(get("artifacts.capture_scope") == capture_scope,
         "decoded frame artifact capture_scope must match target_binding.capture_scope")
 
@@ -705,6 +709,8 @@ data = {
         "decoded_frame_sample": str(sample),
         "binding_id": "binding-test",
         "binding_epoch": 1,
+        "target_identity_epoch": 1,
+        "target_geometry_revision": 1,
         "session_id": "rd-self-test",
         "capture_scope": capture_scope,
     },

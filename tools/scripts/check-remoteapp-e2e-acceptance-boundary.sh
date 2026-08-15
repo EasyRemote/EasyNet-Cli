@@ -137,6 +137,10 @@ require 'unrelated_pixel_count' "$SCRIPT" \
   'host decoded-frame E2E must validate unrelated sentinel pixel count'
 require 'artifacts\.binding_id|artifact binding_id' "$SCRIPT" \
   'host decoded-frame E2E must bind decoded frame artifact to target binding'
+require 'artifacts\.target_identity_epoch|artifact target_identity_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must bind decoded frame artifact to target identity epoch'
+require 'artifacts\.target_geometry_revision|artifact target_geometry_revision' "$SCRIPT" \
+  'host decoded-frame E2E must bind decoded frame artifact to target geometry revision'
 require 'target_binding\.binding_id' "$SCRIPT" \
   'host decoded-frame E2E must require a non-empty target binding id'
 require 'target_binding\.binding_epoch' "$SCRIPT" \
@@ -153,6 +157,14 @@ require 'target_binding\.consent_epoch' "$SCRIPT" \
   'host decoded-frame E2E must require consent epoch evidence'
 require 'artifacts\.session_id|artifact session_id' "$SCRIPT" \
   'host decoded-frame E2E must bind decoded frame artifact to session id'
+require '"target_identity_epoch": config\.session_artifact\.target_identity_epoch' "$RECEIVER" \
+  'bundled frame receiver must write target identity epoch into decoded artifacts'
+require '"target_geometry_revision": config\.session_artifact\.target_geometry_revision' "$RECEIVER" \
+  'bundled frame receiver must write target geometry revision into decoded artifacts'
+require 'session target_binding missing positive target_identity_epoch' "$RECEIVER" \
+  'bundled frame receiver must reject session artifacts without target identity epoch'
+require 'session target_binding missing positive target_geometry_revision' "$RECEIVER" \
+  'bundled frame receiver must reject session artifacts without target geometry revision'
 
 require 'ability refresh-remote-targets' "$PROBE" \
   'bundled host probe must invoke live target inventory through the EasyNet CLI'

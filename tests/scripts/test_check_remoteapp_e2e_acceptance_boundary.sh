@@ -120,6 +120,8 @@ evidence = {
         "session_id": "rd-e2e-test",
         "binding_id": "tb_test",
         "binding_epoch": 1,
+        "target_identity_epoch": 1,
+        "target_geometry_revision": 1,
         "capture_scope": "WindowSurface",
     },
 }
@@ -148,6 +150,22 @@ if EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
     --probe-cmd "python3 '$PROBE_NO_WINDOW_ID'" \
     --out-dir "$SANDBOX/e2e-no-window-id" >/dev/null 2>&1; then
   echo "remoteapp e2e harness accepted window evidence without resolved_identity.window_id" >&2
+  exit 1
+fi
+
+PROBE_NO_ARTIFACT_EPOCHS="$SANDBOX/fake_probe_no_artifact_epochs.py"
+cp "$PROBE" "$PROBE_NO_ARTIFACT_EPOCHS"
+perl -0pi -e 's/,\n        "target_identity_epoch": 1,\n        "target_geometry_revision": 1//' \
+  "$PROBE_NO_ARTIFACT_EPOCHS"
+if EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
+  EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-window-red" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+    --run \
+    --probe-cmd "python3 '$PROBE_NO_ARTIFACT_EPOCHS'" \
+    --out-dir "$SANDBOX/e2e-no-artifact-epochs" >/dev/null 2>&1; then
+  echo "remoteapp e2e harness accepted decoded artifact without target epoch/revision binding" >&2
   exit 1
 fi
 
@@ -226,6 +244,8 @@ evidence = {
         "session_id": "rd-e2e-no-client-ready",
         "binding_id": "tb_no_client_ready",
         "binding_epoch": 1,
+        "target_identity_epoch": 1,
+        "target_geometry_revision": 1,
         "capture_scope": "WindowSurface",
     },
 }
@@ -353,6 +373,8 @@ evidence = {
         "session_id": "rd-e2e-fixture-test",
         "binding_id": "tb_fixture_test",
         "binding_epoch": 1,
+        "target_identity_epoch": 1,
+        "target_geometry_revision": 1,
         "capture_scope": "WindowSurface",
     },
 }
@@ -486,6 +508,8 @@ evidence = {
         "session_id": "rd-e2e-app-test",
         "binding_id": "tb_app_test",
         "binding_epoch": 1,
+        "target_identity_epoch": 99,
+        "target_geometry_revision": 1,
         "capture_scope": "AppSurface",
     },
 }
@@ -646,6 +670,8 @@ with open(os.environ["EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON"], "w", encoding="ut
                 "session_id": "rd-e2e-probe",
                 "binding_id": "tb_test",
                 "binding_epoch": 1,
+                "target_identity_epoch": 1,
+                "target_geometry_revision": 1,
                 "capture_scope": "WindowSurface",
             },
         },
@@ -717,6 +743,17 @@ perl -0pi -e 's/window target must include target_binding\.resolved_identity/win
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp e2e acceptance checker accepted missing window resolved identity assertion" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
+perl -0pi -e 's/artifacts\.target_identity_epoch/artifacts.target_identity_epoch_omitted/g; s/artifact target_identity_epoch/artifact identity epoch omitted/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted missing artifact target identity epoch assertion" >&2
   exit 1
 fi
 mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
