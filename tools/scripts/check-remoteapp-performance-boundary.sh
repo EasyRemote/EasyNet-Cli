@@ -40,6 +40,7 @@ SESSION_SIGNALING="$ROOT/plugins/remote-desktop/src/session_signaling.rs"
 SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
 SESSION_STORE="$ROOT/plugins/remote-desktop/src/session_store.rs"
 VIEW="$ROOT/plugins/remote-desktop/src/view.rs"
+VIEW_TRANSPORT="$ROOT/plugins/remote-desktop/src/view_transport.rs"
 SDP="$ROOT/plugins/remote-desktop/src/sdp.rs"
 TARGET="$ROOT/plugins/remote-desktop/src/target.rs"
 WEBRTC_ENDPOINT="$ROOT/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
@@ -142,6 +143,18 @@ require 'session\.signaling_view\(transport_route_state\.clone\(\)\)' "$VIEW" \
   'PERF-05 public session view must consume the bounded signaling projection'
 require 'production_readiness_reports_route_blocker_before_client_presentation' "$SESSION" \
   'PERF-05 production readiness must report route blockers before client presentation blockers'
+require 'struct RemoteDesktopTransportReadinessBlocker' "$VIEW_TRANSPORT" \
+  'PERF-05 transport route blockers must be centralized in a transport readiness blocker projection'
+require '"readiness_blocker": self\.readiness_blocker\(\)' "$VIEW_TRANSPORT" \
+  'PERF-05 transport summary and metadata must project the canonical readiness blocker'
+require '"readiness_blocker": transport_view\.readiness_blocker\(\)' "$VIEW" \
+  'PERF-05 production_readiness must reuse the transport readiness blocker'
+require 'view\["production_readiness"\]\["readiness_blocker"\]\["frontend_action"\]' "$SESSION" \
+  'PERF-05 production readiness tests must prove route blockers publish frontend recovery action'
+require 'summary\["readiness_blocker"\]\["frontend_action"\]' "$VIEW_TRANSPORT" \
+  'PERF-05 transport view tests must prove blockers publish frontend recovery action'
+require 'transports\[0\]\["metadata"\]\["readiness_blocker"\]' "$VIEW_TRANSPORT" \
+  'PERF-05 transport metadata must reuse the summary readiness blocker'
 reject 'let remote_ice_candidates = session\.remote_ice_candidates\(\)' "$VIEW" \
   'PERF-05 public session view must not manually clone remote ICE candidates'
 reject 'let local_ice_candidates = session\.local_ice_candidates\(\)' "$VIEW" \

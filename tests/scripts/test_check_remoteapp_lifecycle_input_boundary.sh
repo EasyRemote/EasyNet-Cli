@@ -618,12 +618,15 @@ RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/view_transport.rs" <<'RS'
 fn transport_route_state() {
+    struct RemoteDesktopTransportReadinessBlocker;
     fn summary() {
         "message": self.message,
         "reason_code": self.reason_code.clone(),
+        "readiness_blocker": self.readiness_blocker(),
         "metadata": {
             "input_channel_label": INPUT_DATA_CHANNEL_LABEL,
             "reason_code": self.reason_code.clone(),
+            "readiness_blocker": self.readiness_blocker(),
         };
     }
     json!({
@@ -635,7 +638,7 @@ fn transport_route_state() {
         "production_ready": self.production_ready(session),
         "production_route_ready": self.production_route_ready(),
     });
-    fn transport_reason_code() {
+    fn transport_readiness_blocker() {
         TargetResolutionError::TransportRouteUnavailable;
         "transport_route_unavailable";
         RemoteDesktopTransportBlocker::from_webrtc_error;
@@ -1838,9 +1841,9 @@ perl -0pi -e 's/"input_channel_label": INPUT_DATA_CHANNEL_LABEL,\s*"reason_code"
 run_fail 'primary transport metadata must preserve canonical route degradation reason_code'
 
 write_fixture
-perl -0pi -e 's/fn transport_reason_code/fn transport_detail_reason/' \
+perl -0pi -e 's/fn transport_readiness_blocker/fn transport_detail_reason/' \
   "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
-run_fail 'transport route reason_code derivation must be centralized in the transport view projection'
+run_fail 'transport route reason_code derivation must be centralized in the transport readiness blocker projection'
 
 write_fixture
 perl -0pi -e 's/fn transport_route_failed/fn transport_error_failed/' \

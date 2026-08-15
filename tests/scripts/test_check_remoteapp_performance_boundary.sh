@@ -159,12 +159,41 @@ RS
 
 cat >"$SB/plugins/remote-desktop/src/session.rs" <<'RS'
 #[test]
-fn production_readiness_reports_route_blocker_before_client_presentation() {}
+fn production_readiness_reports_route_blocker_before_client_presentation() {
+    assert_eq!(
+        view["production_readiness"]["readiness_blocker"]["frontend_action"],
+        json!("retry_session")
+    );
+}
 RS
 
 cat >"$SB/plugins/remote-desktop/src/view.rs" <<'RS'
 fn serialize_session(session: Session, transport_route_state: Value) {
     let _ = session.signaling_view(transport_route_state.clone());
+    json!({
+        "readiness_blocker": transport_view.readiness_blocker(),
+    });
+}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/view_transport.rs" <<'RS'
+struct RemoteDesktopTransportReadinessBlocker;
+
+fn summary() {
+    json!({
+        "readiness_blocker": self.readiness_blocker(),
+    });
+    json!({
+        "metadata": {
+            "readiness_blocker": self.readiness_blocker(),
+        },
+    });
+}
+
+#[test]
+fn route_readiness_blockers_project_frontend_recovery_action() {
+    assert_eq!(summary["readiness_blocker"]["frontend_action"], json!("retry_session"));
+    assert_eq!(transports[0]["metadata"]["readiness_blocker"], summary["readiness_blocker"]);
 }
 RS
 
@@ -452,6 +481,28 @@ grep -q "route blockers before client presentation blockers" /tmp/check-remoteap
 
 perl -0pi -e 's/production_readiness_reports_client_before_route/production_readiness_reports_route_blocker_before_client_presentation/' \
   "$SB/plugins/remote-desktop/src/session.rs"
+perl -0pi -e 's/view\["production_readiness"\]\["readiness_blocker"\]\["frontend_action"\]/view["production_readiness"]["readiness_blocker"]["missing_frontend_action"]/' \
+  "$SB/plugins/remote-desktop/src/session.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-readiness-action.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing production readiness blocker action assertion should exit 1 (got $rc)"
+grep -q "frontend recovery action" /tmp/check-remoteapp-performance-boundary-readiness-action.out || fail "expected readiness blocker action failure"
+
+cat >"$SB/plugins/remote-desktop/src/session.rs" <<'RS'
+#[test]
+fn production_readiness_reports_route_blocker_before_client_presentation() {
+    assert_eq!(
+        view["production_readiness"]["readiness_blocker"]["frontend_action"],
+        json!("retry_session")
+    );
+}
+RS
 perl -0pi -e 's/const MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE: u64 = 8;//' \
   "$SB/plugins/remote-desktop/src/input.rs"
 

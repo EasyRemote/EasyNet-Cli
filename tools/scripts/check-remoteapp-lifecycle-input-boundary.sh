@@ -574,8 +574,10 @@ require_multiline '/fn summary\([\s\S]*?"message": self\.message,\s*"reason_code
   'public transport summary must project canonical route degradation reason_code'
 require_multiline '/"metadata": \{[\s\S]*?"input_channel_label": INPUT_DATA_CHANNEL_LABEL,\s*"reason_code": self\.reason_code\.clone\(\)/s' "$VIEW_TRANSPORT" \
   'primary transport metadata must preserve canonical route degradation reason_code'
-require 'fn transport_reason_code\(' "$VIEW_TRANSPORT" \
-  'transport route reason_code derivation must be centralized in the transport view projection'
+require 'fn transport_readiness_blocker\(' "$VIEW_TRANSPORT" \
+  'transport route reason_code derivation must be centralized in the transport readiness blocker projection'
+require 'struct RemoteDesktopTransportReadinessBlocker' "$VIEW_TRANSPORT" \
+  'transport route recovery metadata must be centralized in the transport readiness blocker projection'
 require 'fn transport_route_failed\(' "$VIEW_TRANSPORT" \
   'transport route failed predicate must be explicit instead of treating every WebRTC error as a route failure'
 require 'struct RemoteDesktopTransportBlocker' "$TRANSPORT_BLOCKER" \

@@ -1743,6 +1743,18 @@ mod tests {
             view["production_readiness"]["blocked_reason"],
             json!("transport_route_unavailable")
         );
+        assert_eq!(
+            view["production_readiness"]["readiness_blocker"]["unavailable_reason"],
+            json!("host_only_no_nat_or_relay")
+        );
+        assert_eq!(
+            view["production_readiness"]["readiness_blocker"]["recoverability"],
+            json!("retry_session")
+        );
+        assert_eq!(
+            view["production_readiness"]["readiness_blocker"]["frontend_action"],
+            json!("retry_session")
+        );
     }
 
     #[test]

@@ -12,7 +12,7 @@ use crate::daemon::plugins::remote_desktop::constants::{
 };
 use crate::daemon::plugins::remote_desktop::input::INPUT_DATA_CHANNEL_LABEL;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
-use crate::daemon::plugins::remote_desktop::target::TargetResolutionError;
+use crate::daemon::plugins::remote_desktop::target::{FrontendAction, TargetResolutionError};
 use crate::daemon::plugins::remote_desktop::transport_blocker::RemoteDesktopTransportBlocker;
 
 /// Transport view facts derived from one session row.
@@ -23,6 +23,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopTransportView
     endpoint_ura: Value,
     reason_code: Value,
     unavailable_reason: Value,
+    readiness_blocker: Option<RemoteDesktopTransportReadinessBlocker>,
     route_state: Value,
     production_route_ready: bool,
     message: &'static str,
@@ -35,8 +36,15 @@ impl RemoteDesktopTransportView {
     ) -> Self {
         let endpoint_ura = direct_endpoint_ura(session);
         let route_state_projection = CandidateRouteState::from_session(session);
-        let reason_code = transport_reason_code(session, &route_state_projection);
-        let unavailable_reason = transport_unavailable_reason(session, &route_state_projection);
+        let readiness_blocker = transport_readiness_blocker(session, &route_state_projection);
+        let reason_code = readiness_blocker
+            .as_ref()
+            .map(RemoteDesktopTransportReadinessBlocker::reason_code_value)
+            .unwrap_or(Value::Null);
+        let unavailable_reason = readiness_blocker
+            .as_ref()
+            .map(RemoteDesktopTransportReadinessBlocker::unavailable_reason_value)
+            .unwrap_or_else(|| transport_pending_unavailable_reason(session));
         let route_state = transport_route_state(&route_state_projection);
         let production_route_ready = route_state_projection.production_remote_ready();
         let message = transport_message(session);
@@ -44,6 +52,7 @@ impl RemoteDesktopTransportView {
             endpoint_ura,
             reason_code,
             unavailable_reason,
+            readiness_blocker,
             route_state,
             production_route_ready,
             message,
@@ -53,6 +62,13 @@ impl RemoteDesktopTransportView {
     /// Return the typed route-readiness projection.
     pub(in crate::daemon::plugins::remote_desktop) fn route_state(&self) -> Value {
         self.route_state.clone()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn readiness_blocker(&self) -> Value {
+        self.readiness_blocker
+            .as_ref()
+            .map(RemoteDesktopTransportReadinessBlocker::to_value)
+            .unwrap_or(Value::Null)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn production_route_ready(&self) -> bool {
@@ -83,6 +99,7 @@ impl RemoteDesktopTransportView {
             "message": self.message,
             "reason_code": self.reason_code.clone(),
             "unavailable_reason": self.unavailable_reason.clone(),
+            "readiness_blocker": self.readiness_blocker(),
             "route_state": self.route_state.clone(),
             "input_channel_label": INPUT_DATA_CHANNEL_LABEL,
             "required_runtime": ["os_capture_stream", "video_encoder", "webrtc_peer_connection", "data_channel_input"]
@@ -111,6 +128,7 @@ impl RemoteDesktopTransportView {
                     "input_channel_label": INPUT_DATA_CHANNEL_LABEL,
                     "reason_code": self.reason_code.clone(),
                     "unavailable_reason": self.unavailable_reason.clone(),
+                    "readiness_blocker": self.readiness_blocker(),
                     "route_state": self.route_state.clone()
                 },
             },
@@ -143,6 +161,55 @@ impl RemoteDesktopTransportView {
 
 fn transport_route_state(route_state: &CandidateRouteState) -> Value {
     route_state.to_value()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RemoteDesktopTransportReadinessBlocker {
+    reason_code: &'static str,
+    unavailable_reason: String,
+    failure_domain: &'static str,
+    recoverability: &'static str,
+    frontend_action: &'static str,
+}
+
+impl RemoteDesktopTransportReadinessBlocker {
+    fn native(reason: &str, blocker: RemoteDesktopTransportBlocker) -> Self {
+        Self {
+            reason_code: blocker.reason_code_str(),
+            unavailable_reason: reason.to_string(),
+            failure_domain: blocker.failure_domain(),
+            recoverability: blocker.recoverability(),
+            frontend_action: blocker.frontend_action().as_str(),
+        }
+    }
+
+    fn route(unavailable_reason: &'static str) -> Self {
+        Self {
+            reason_code: TargetResolutionError::TransportRouteUnavailable.as_str(),
+            unavailable_reason: unavailable_reason.to_string(),
+            failure_domain: "transport_route",
+            recoverability: "retry_session",
+            frontend_action: FrontendAction::RetrySession.as_str(),
+        }
+    }
+
+    fn reason_code_value(&self) -> Value {
+        json!(self.reason_code)
+    }
+
+    fn unavailable_reason_value(&self) -> Value {
+        json!(self.unavailable_reason)
+    }
+
+    fn to_value(&self) -> Value {
+        json!({
+            "reason_code": self.reason_code,
+            "unavailable_reason": self.unavailable_reason,
+            "failure_domain": self.failure_domain,
+            "recoverability": self.recoverability,
+            "frontend_action": self.frontend_action,
+        })
+    }
 }
 
 #[derive(Debug, Default)]
@@ -286,38 +353,43 @@ fn transport_route_failed(session: &RemoteDesktopSession) -> bool {
     session.webrtc_ice_state() == Some("failed") || session.webrtc_peer_state() == Some("failed")
 }
 
-fn transport_reason_code(
+fn transport_readiness_blocker(
     session: &RemoteDesktopSession,
     route_state: &CandidateRouteState,
-) -> Value {
-    if let Some(blocker) = session
-        .webrtc_error()
-        .and_then(RemoteDesktopTransportBlocker::from_webrtc_error)
-    {
-        json!(blocker.reason_code_str())
+) -> Option<RemoteDesktopTransportReadinessBlocker> {
+    if let Some((reason, blocker)) = session.webrtc_error().and_then(|reason| {
+        RemoteDesktopTransportBlocker::from_webrtc_error(reason).map(|blocker| (reason, blocker))
+    }) {
+        Some(RemoteDesktopTransportReadinessBlocker::native(
+            reason, blocker,
+        ))
     } else if route_state.blocks_production_remote_readiness() {
-        json!(TargetResolutionError::TransportRouteUnavailable.as_str())
-    } else if session.media_transport_ready() {
-        Value::Null
+        Some(RemoteDesktopTransportReadinessBlocker::route(
+            route_unavailable_reason(session, route_state),
+        ))
     } else {
-        Value::Null
+        None
     }
 }
 
-fn transport_unavailable_reason(
+fn route_unavailable_reason(
     session: &RemoteDesktopSession,
     route_state: &CandidateRouteState,
-) -> Value {
-    if let Some(error) = session.webrtc_error() {
-        json!(error)
-    } else if session.webrtc_ice_state() == Some("failed") {
-        json!("webrtc_ice_failed")
-    } else if session.webrtc_peer_state() == Some("connected") {
-        json!("webrtc_media_first_frame_pending")
+) -> &'static str {
+    if session.webrtc_ice_state() == Some("failed") {
+        "webrtc_ice_failed"
+    } else if session.webrtc_peer_state() == Some("failed") {
+        "webrtc_peer_failed"
     } else if route_state.host_only() {
-        json!("host_only_no_nat_or_relay")
-    } else if route_state.has_candidate() && !route_state.relay_ready() {
-        json!("relay_unavailable")
+        "host_only_no_nat_or_relay"
+    } else {
+        "relay_unavailable"
+    }
+}
+
+fn transport_pending_unavailable_reason(session: &RemoteDesktopSession) -> Value {
+    if session.webrtc_peer_state() == Some("connected") {
+        json!("webrtc_media_first_frame_pending")
     } else if session.media_transport_ready() {
         Value::Null
     } else if session.local_description().is_some() {
@@ -453,6 +525,30 @@ mod tests {
             summary["unavailable_reason"],
             json!("host_only_no_nat_or_relay")
         );
+        assert_eq!(
+            summary["readiness_blocker"]["reason_code"],
+            json!("transport_route_unavailable")
+        );
+        assert_eq!(
+            summary["readiness_blocker"]["unavailable_reason"],
+            json!("host_only_no_nat_or_relay")
+        );
+        assert_eq!(
+            summary["readiness_blocker"]["failure_domain"],
+            json!("transport_route")
+        );
+        assert_eq!(
+            summary["readiness_blocker"]["recoverability"],
+            json!("retry_session")
+        );
+        assert_eq!(
+            summary["readiness_blocker"]["frontend_action"],
+            json!("retry_session")
+        );
+        assert_eq!(
+            transports[0]["metadata"]["readiness_blocker"],
+            summary["readiness_blocker"]
+        );
     }
 
     #[test]
@@ -543,6 +639,18 @@ mod tests {
         assert_eq!(summary["route_state"]["route_class"], json!("stun_srflx"));
         assert_eq!(summary["reason_code"], json!("transport_route_unavailable"));
         assert_eq!(summary["unavailable_reason"], json!("relay_unavailable"));
+        assert_eq!(
+            summary["readiness_blocker"]["failure_domain"],
+            json!("transport_route")
+        );
+        assert_eq!(
+            summary["readiness_blocker"]["recoverability"],
+            json!("retry_session")
+        );
+        assert_eq!(
+            summary["readiness_blocker"]["frontend_action"],
+            json!("retry_session")
+        );
     }
 
     #[test]
@@ -681,6 +789,18 @@ mod tests {
         assert_eq!(
             summary["unavailable_reason"],
             json!("native_media_plugin_required")
+        );
+        assert_eq!(
+            summary["readiness_blocker"]["failure_domain"],
+            json!("runtime")
+        );
+        assert_eq!(
+            summary["readiness_blocker"]["recoverability"],
+            json!("unsupported")
+        );
+        assert_eq!(
+            summary["readiness_blocker"]["frontend_action"],
+            json!("show_unsupported")
         );
     }
 }

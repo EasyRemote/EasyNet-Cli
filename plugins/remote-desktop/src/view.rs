@@ -105,6 +105,7 @@ fn production_readiness_view(
         "client_media_ready": session.client_media_ready(),
         "production_route_ready": transport_view.production_route_ready(),
         "route_state": transport_view.route_state(),
+        "readiness_blocker": transport_view.readiness_blocker(),
     })
 }
 
