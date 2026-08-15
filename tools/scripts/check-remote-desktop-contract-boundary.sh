@@ -46,8 +46,31 @@ if ! rg -n 'enum HostLocalPermissionProbeSubject' "$PERMISSIONS" >/dev/null; the
   fail "remote-desktop permission probes must use an explicit host-local subject policy"
 fi
 
+if ! rg -n 'REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA' "$PERMISSIONS" >/dev/null; then
+  fail "remote-desktop permission responses must use the compiled host-local subject contract URA"
+fi
+
 if ! rg -n 'UserSelf|UserInvokeResource|LocalSystemLoopback' "$PERMISSIONS" >/dev/null; then
   fail "remote-desktop permission subject policy must name user-self, descriptor-bound invoke resource, and local-system loopback states"
+fi
+
+if ! rg -n 'host_local_permission_subject_contract' "$PERMISSIONS" >/dev/null; then
+  fail "remote-desktop permission responses must project a host-local subject contract"
+fi
+
+permission_response_contract_count="$(
+  { rg -n '"subject_contract": host_local_permission_subject_contract\(\)' "$PERMISSIONS" || true; } | wc -l | tr -d ' '
+)"
+if [[ "$permission_response_contract_count" != "2" ]]; then
+  fail "remote-desktop permission_status/request_permission responses must include the host-local subject contract"
+fi
+
+if ! rg -n '"target_resource_subjects_allowed": false' "$PERMISSIONS" >/dev/null; then
+  fail "remote-desktop permission responses must explicitly reject target resource subjects"
+fi
+
+if ! rg -n '"allowed_subjects": \[' "$PERMISSIONS" >/dev/null; then
+  fail "remote-desktop permission responses must enumerate allowed host-local subject shapes"
 fi
 
 if ! rg -n 'RemoteDesktopError::InvalidArgument' "$PERMISSIONS" >/dev/null; then

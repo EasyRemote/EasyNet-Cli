@@ -24,6 +24,7 @@ mod tests {
 
     use serde_json::json;
 
+    use crate::daemon::plugins::package::REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA;
     use crate::daemon::plugins::remote_desktop::constants::REASON_INVALID_ARGUMENT;
 
     #[test]
@@ -50,6 +51,14 @@ mod tests {
         )
         .unwrap();
         assert!(response.get("granted").is_some());
+        assert_eq!(
+            response["subject_contract"]["subject_contract_ura"],
+            json!(REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA)
+        );
+        assert_eq!(
+            response["subject_contract"]["target_resource_subjects_allowed"],
+            json!(false)
+        );
     }
 
     #[test]

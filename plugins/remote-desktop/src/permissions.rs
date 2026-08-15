@@ -7,6 +7,7 @@
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::EnvelopeContext;
+use crate::daemon::plugins::package::REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA;
 use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::input::{
     input_injection_available, request_input_injection_permission,
@@ -143,11 +144,27 @@ fn reject_permission_subject_in_args(ability: &'static str, args: &Value) -> any
     Ok(())
 }
 
+pub(in crate::daemon::plugins::remote_desktop) fn host_local_permission_subject_contract() -> Value
+{
+    json!({
+        "kind": "host_local_permission_probe",
+        "subject_contract_ura": REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA,
+        "allowed_subjects": [
+            "caller_user_self",
+            "descriptor_bound_invoke_resource",
+            "local_system_loopback",
+        ],
+        "target_resource_subjects_allowed": false,
+        "target_resource_rejection_reason": "host_local_permission_probe",
+    })
+}
+
 pub(in crate::daemon::plugins::remote_desktop) fn screen_capture_permission_status() -> Value {
     let granted = platform_screen_capture_permission_granted();
     let input_granted = input_injection_available();
     json!({
         "permission": "screen_capture",
+        "subject_contract": host_local_permission_subject_contract(),
         "platform": std::env::consts::OS,
         "granted": granted,
         "requestable": platform_screen_capture_permission_requestable(),
@@ -180,6 +197,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn request_screen_capture_permiss
     };
     json!({
         "permission": "screen_capture",
+        "subject_contract": host_local_permission_subject_contract(),
         "platform": std::env::consts::OS,
         "granted": after,
         "previously_granted": before,
@@ -239,4 +257,46 @@ fn platform_screen_capture_settings_hint() -> &'static str {
 #[cfg(not(target_os = "macos"))]
 fn platform_screen_capture_settings_hint() -> &'static str {
     "No OS-level screen-capture TCC prompt is required on this platform."
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn host_local_permission_subject_contract_projects_explicit_policy() {
+        let contract = host_local_permission_subject_contract();
+        assert_eq!(
+            contract["subject_contract_ura"],
+            json!(REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA)
+        );
+        assert_eq!(
+            contract["allowed_subjects"],
+            json!([
+                "caller_user_self",
+                "descriptor_bound_invoke_resource",
+                "local_system_loopback"
+            ])
+        );
+        assert_eq!(contract["target_resource_subjects_allowed"], json!(false));
+        assert_eq!(
+            contract["target_resource_rejection_reason"],
+            json!("host_local_permission_probe")
+        );
+    }
+
+    #[test]
+    fn screen_capture_permission_status_reports_host_local_subject_contract() {
+        let response = screen_capture_permission_status();
+        assert_eq!(
+            response["subject_contract"]["subject_contract_ura"],
+            json!(REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA)
+        );
+        assert_eq!(
+            response["subject_contract"]["target_resource_subjects_allowed"],
+            json!(false)
+        );
+    }
 }

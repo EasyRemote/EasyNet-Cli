@@ -31,6 +31,9 @@ fn media_backend_contract_rejects_retired_web_rtc_transport_alias() {}
 RS
 
 cat >"$SB/plugins/remote-desktop/src/permissions.rs" <<'RS'
+const REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA: &str =
+    "easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject";
+
 enum HostLocalPermissionProbeSubject {
     UserSelf,
     UserInvokeResource,
@@ -39,6 +42,30 @@ enum HostLocalPermissionProbeSubject {
 
 fn host_local_subject_error() {
     RemoteDesktopError::InvalidArgument;
+}
+
+fn host_local_permission_subject_contract() {
+    json!({
+        "subject_contract_ura": REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA,
+        "allowed_subjects": [
+            "caller_user_self",
+            "descriptor_bound_invoke_resource",
+            "local_system_loopback",
+        ],
+        "target_resource_subjects_allowed": false,
+    });
+}
+
+fn screen_capture_permission_status() {
+    json!({
+        "subject_contract": host_local_permission_subject_contract(),
+    });
+}
+
+fn request_screen_capture_permission() {
+    json!({
+        "subject_contract": host_local_permission_subject_contract(),
+    });
 }
 RS
 
@@ -167,5 +194,77 @@ set -e
 [[ "$rc" == "1" ]] || fail "missing host-local subject contract URA should exit 1 (got $rc)"
 grep -q "host-local permission subject policy URA" \
   /tmp/check-remote-desktop-contract-boundary-subject-contract.out || fail "expected subject contract URA failure message"
+
+cat >"$SB/plugins/remote-desktop/abilities/remote_desktop.permission_status.ability.toml" <<'TOML'
+subject_contract_ura = "easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject"
+scope_subjects_uras = ["agent", "resource", "user"]
+TOML
+
+perl -0pi -e 's/"subject_contract": host_local_permission_subject_contract\(\),//' \
+  "$SB/plugins/remote-desktop/src/permissions.rs"
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-remote-desktop-contract-boundary.sh
+) >/tmp/check-remote-desktop-contract-boundary-response-contract.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing response subject contract should exit 1 (got $rc)"
+grep -q "responses must include the host-local subject contract" \
+  /tmp/check-remote-desktop-contract-boundary-response-contract.out || fail "expected response contract failure message"
+
+cat >"$SB/plugins/remote-desktop/src/permissions.rs" <<'RS'
+const REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA: &str =
+    "easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject";
+
+enum HostLocalPermissionProbeSubject {
+    UserSelf,
+    UserInvokeResource,
+    LocalSystemLoopback,
+}
+
+fn host_local_subject_error() {
+    RemoteDesktopError::InvalidArgument;
+}
+
+fn host_local_permission_subject_contract() {
+    json!({
+        "subject_contract_ura": REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA,
+        "allowed_subjects": [
+            "caller_user_self",
+            "descriptor_bound_invoke_resource",
+            "local_system_loopback",
+        ],
+        "target_resource_subjects_allowed": false,
+    });
+}
+
+fn screen_capture_permission_status() {
+    json!({
+        "subject_contract": host_local_permission_subject_contract(),
+    });
+}
+
+fn request_screen_capture_permission() {
+    json!({
+        "subject_contract": host_local_permission_subject_contract(),
+    });
+}
+RS
+
+perl -0pi -e 's/"target_resource_subjects_allowed": false/"target_resource_subjects_allowed": true/' \
+  "$SB/plugins/remote-desktop/src/permissions.rs"
+
+set +e
+(
+  cd "$SB"
+  bash tools/scripts/check-remote-desktop-contract-boundary.sh
+) >/tmp/check-remote-desktop-contract-boundary-target-resource.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "target-resource permission probe drift should exit 1 (got $rc)"
+grep -q "responses must explicitly reject target resource subjects" \
+  /tmp/check-remote-desktop-contract-boundary-target-resource.out || fail "expected target resource rejection failure message"
 
 echo "test_check_remote_desktop_contract_boundary.sh: all cases passed"
