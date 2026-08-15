@@ -207,6 +207,7 @@ rtp_packet_count = get("decoded_frames.rtp_packet_count")
 transport_kind = get("transport.kind")
 production_media_ready = get("production_media_ready")
 production_readiness = get("production_readiness")
+client_media_ready = get("production_readiness.client_media_ready")
 decoded_frame_sample = get("artifacts.decoded_frame_sample")
 decoded_width = get("decoded_frames.width")
 decoded_height = get("decoded_frames.height")
@@ -434,6 +435,8 @@ if isinstance(production_readiness, dict):
             "production_readiness.production_codec_negotiated must be true")
     require(production_readiness.get("media_transport_ready") is True,
             "production_readiness.media_transport_ready must be true")
+    require(production_readiness.get("client_media_ready") is True,
+            "production_readiness.client_media_ready must be true after the receiver reports decoded/presenting media")
 require(isinstance(rtp_packet_count, int) and rtp_packet_count > 0,
         "decoded_frames.rtp_packet_count must be a positive integer")
 require(isinstance(decoded_frame_count, int) and decoded_frame_count > 0,
@@ -492,6 +495,7 @@ report = {
         "display_fallback_used": display_fallback_used,
         "production_media_ready": production_media_ready,
         "production_readiness": production_readiness,
+        "client_media_ready": client_media_ready,
         "rtp_packet_count": rtp_packet_count,
         "decoded_frame_count": decoded_frame_count,
         "decoded_width": decoded_width,
@@ -530,6 +534,7 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "display_fallback_used" "$0"
   grep -q "production_media_ready" "$0"
   grep -q "production_readiness.production_codec_negotiated" "$0"
+  grep -q "production_readiness.client_media_ready" "$0"
   grep -q "host-remoteapp-sentinel-fixture.sh" "$0"
   grep -q "EASYNET_REMOTEAPP_SENTINEL_FIXTURE" "$0"
   grep -q "cleanup.sh" "$0"

@@ -132,6 +132,96 @@ EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
   --probe-cmd "python3 '$PROBE'" \
   --out-dir "$SANDBOX/e2e-out" >/dev/null
 
+PROBE_NO_CLIENT_READY="$SANDBOX/fake_probe_no_client_ready.py"
+cat >"$PROBE_NO_CLIENT_READY" <<'PY'
+import json
+import os
+import pathlib
+
+subject = "easynet:///r/localhost/resource/device.dev/streams/window.test"
+out = pathlib.Path(os.environ["EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON"]).parent
+sample = out / "sample-frame.ppm"
+sample.write_bytes(b"P6\n3 3\n255\n" + b"\xff\x00\x00" * 9)
+evidence = {
+    "status": "passed",
+    "live_inventory": {"ability": "resource.refresh_remote_targets"},
+    "session_id": "rd-e2e-no-client-ready",
+    "selected_resource_ura": subject,
+    "invocation": {
+        "ability": "remote_desktop.create_session",
+        "subject_ura": subject,
+    },
+    "target_binding": {
+        "target_kind": "window",
+        "capture_scope": "WindowSurface",
+        "binding_id": "tb_no_client_ready",
+        "binding_epoch": 1,
+        "target_identity_epoch": 1,
+        "target_geometry_revision": 1,
+        "media_source_epoch": 1,
+        "consent_epoch": 1,
+        "subject_ura": subject,
+        "scope_audit": {
+            "scope_widened": False,
+            "display_fallback_used": False,
+        },
+    },
+    "sentinel_fixture": {
+        "proof": "dual_target_non_leak",
+        "selected": {
+            "label": "selected-window-red",
+            "resource_ura": subject,
+            "rgb": [255, 0, 0],
+            "target_kind": "window",
+        },
+        "unrelated": {
+            "label": "unrelated-window-green",
+            "placement": "other_window",
+            "rgb": [0, 255, 0],
+        },
+    },
+    "transport": {"kind": "webrtc"},
+    "production_media_ready": True,
+    "production_readiness": {
+        "ready": True,
+        "requires_production_codec": True,
+        "production_codec_negotiated": True,
+        "media_transport_ready": True,
+    },
+    "decoded_frames": {
+        "count": 2,
+        "rtp_packet_count": 10,
+        "width": 3,
+        "height": 3,
+        "selected_content_present": True,
+        "unrelated_sentinel_present": False,
+        "full_display_leak_detected": False,
+        "selected_pixel_count": 9,
+        "unrelated_pixel_count": 0,
+    },
+    "artifacts": {
+        "decoded_frame_sample": str(sample),
+        "session_id": "rd-e2e-no-client-ready",
+        "binding_id": "tb_no_client_ready",
+        "binding_epoch": 1,
+        "capture_scope": "WindowSurface",
+    },
+}
+with open(os.environ["EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON"], "w", encoding="utf-8") as f:
+    json.dump(evidence, f)
+PY
+if EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
+  EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-window-red" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+    --run \
+    --probe-cmd "python3 '$PROBE_NO_CLIENT_READY'" \
+    --out-dir "$SANDBOX/e2e-no-client-ready" >/dev/null 2>&1; then
+  echo "remoteapp e2e harness accepted production readiness without client_media_ready" >&2
+  exit 1
+fi
+
 FIXTURE_CMD="$SANDBOX/fake_sentinel_fixture.sh"
 cat >"$FIXTURE_CMD" <<'SH'
 #!/usr/bin/env bash
@@ -503,6 +593,17 @@ EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID="4243" \
 "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   --run \
   --out-dir "$SANDBOX/bundled-probe-out" >/dev/null
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
+perl -0pi -e 's/client_media_ready/clientPresentingOmitted/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted missing client-presenting readiness assertion" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 
 cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"

@@ -797,6 +797,11 @@ fn write_analysis(
             .get("production_media_ready")
             .cloned()
             .unwrap_or(Value::Bool(false)),
+        "client_media_ready": session_view
+            .get("production_readiness")
+            .and_then(|readiness| readiness.get("client_media_ready"))
+            .cloned()
+            .unwrap_or(Value::Bool(false)),
         "decoded_frames": {
             "count": observation.frame.count,
             "rtp_packet_count": observation.frame.rtp_packet_count,

@@ -61,6 +61,8 @@ require 'production_readiness\.production_codec_negotiated|production_codec_nego
   'host decoded-frame E2E must prove a production codec was negotiated'
 require 'production_readiness\.media_transport_ready|media_transport_ready' "$SCRIPT" \
   'host decoded-frame E2E must prove the production media transport is active'
+require 'production_readiness\.client_media_ready|production_readiness\.get\("client_media_ready"\)|"client_media_ready"' "$SCRIPT" \
+  'host decoded-frame E2E must prove the receiver/browser reported client-presenting media'
 require 'decoded_frames\.count' "$SCRIPT" \
   'host decoded-frame E2E must validate positive decoded frame count'
 require 'decoded_frames\.width|decoded_width' "$SCRIPT" \
@@ -162,6 +164,8 @@ require 'EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON' "$PROBE" \
   'bundled host probe must consume decoded-frame analysis from the receiver'
 require 'production_readiness = frame\.get\("production_readiness"\)' "$PROBE" \
   'bundled host probe must require post-negotiation production readiness from the frame receiver'
+require 'production_readiness\.get\("client_media_ready"\)|"client_media_ready"' "$PROBE" \
+  'bundled host probe must preserve client-presenting readiness evidence'
 require '"production_media_ready": frame\.get\("production_media_ready"\)' "$PROBE" \
   'bundled host probe must carry post-negotiation production_media_ready into canonical evidence'
 require 'verified Invocation\.subject|invocation\.get\("subject_ura"\)' "$PROBE" \
@@ -212,6 +216,8 @@ require '"production_media_ready": session_view' "$RECEIVER" \
   'bundled frame receiver must write production_media_ready from the latest session projection'
 require '"production_readiness": session_view' "$RECEIVER" \
   'bundled frame receiver must write production_readiness from the latest session projection'
+require '"client_media_ready": session_view' "$RECEIVER" \
+  'bundled frame receiver must write explicit client-presenting readiness from the latest session projection'
 
 bash "$SCRIPT" --self-test >/dev/null
 

@@ -249,6 +249,10 @@ if not isinstance(transport, dict):
 production_readiness = frame.get("production_readiness")
 if not isinstance(production_readiness, dict):
     raise SystemExit("frame analysis missing production_readiness object from post-negotiation session view")
+if production_readiness.get("client_media_ready") is not True:
+    raise SystemExit(
+        "frame analysis production_readiness.client_media_ready must be true after decoded-frame presentation"
+    )
 
 def parse_rgb_env(name):
     raw = os.environ.get(name, "").strip()
