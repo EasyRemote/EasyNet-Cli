@@ -216,7 +216,7 @@ const productionReadiness = remoteDesktopProductionReadinessFromResult(result)
 
 export function remoteDesktopViewFromResult(result: Record<string, unknown> | undefined) {
   return {
-    productionReady: result?.production_media_ready === true || productionReadiness?.ready === true,
+    productionReady: productionReadiness?.ready === true,
     productionReadiness,
     productionBlockedReason: productionReadiness?.blockedReason ?? stringField(productionGate, 'reason'),
     latestTargetDiagnostic: remoteDesktopTargetDiagnosticFromValue(objectField(result, 'latest_target_diagnostic')),
@@ -417,11 +417,22 @@ fi
 perl -0pi -e 's/const reason = view\.productionBlockedReason/const reason = remoteDesktopTargetRecoveryMessage(view)\n    ?? view.productionBlockedReason/' \
   "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
 
-perl -0pi -e 's/productionReady: result\?\.production_media_ready === true \|\| productionReadiness\?\.ready === true/productionReady: productionGate?.ready === true || mediaBackends.some(isRemoteDesktopProductionBackend)/' \
+perl -0pi -e 's/productionReady: productionReadiness\?\.ready === true/productionReady: productionGate?.ready === true || mediaBackends.some(isRemoteDesktopProductionBackend)/' \
   "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
 if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp frontend checker accepted production readiness derived from capability gates" >&2
   exit 1
 fi
+perl -0pi -e 's/productionReady: productionGate\?\.ready === true \|\| mediaBackends\.some\(isRemoteDesktopProductionBackend\)/productionReady: productionReadiness?.ready === true/' \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
+
+perl -0pi -e 's/productionReady: productionReadiness\?\.ready === true/productionReady: result?.production_media_ready === true || productionReadiness?.ready === true/' \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted legacy production_media_ready OR predicate" >&2
+  exit 1
+fi
+perl -0pi -e 's/productionReady: result\?\.production_media_ready === true \|\| productionReadiness\?\.ready === true/productionReady: productionReadiness?.ready === true/' \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
 
 echo "test_check_remoteapp_frontend_invocation_boundary.sh: all cases passed"

@@ -162,8 +162,10 @@ reject 'screenResources\[0\]' "$WORKSPACE" \
 require 'Session target is no longer advertised by the live target inventory' "$WORKSPACE" \
   'frontend workspace must surface stale session target state'
 
-require 'productionReady: result\?\.production_media_ready === true \|\| productionReadiness\?\.ready === true' "$PROTOCOL" \
-  'frontend must derive remote desktop production readiness from production_media_ready/production_readiness, not capability gates'
+require 'productionReady: productionReadiness\?\.ready === true' "$PROTOCOL" \
+  'frontend production online must derive from production_readiness.ready only'
+reject 'productionReady: result\?\.production_media_ready === true \|\| productionReadiness\?\.ready === true' "$PROTOCOL" \
+  'frontend must not OR legacy production_media_ready into the production online predicate'
 reject 'productionReady: productionGate\?\.ready === true \|\| mediaBackends\.some\(isRemoteDesktopProductionBackend\)' "$PROTOCOL" \
   'frontend must not report production online from production_gate or backend availability alone'
 require 'productionReadiness' "$PROTOCOL" \
