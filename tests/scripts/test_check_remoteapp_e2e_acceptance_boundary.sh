@@ -505,6 +505,17 @@ fi
   echo "remoteapp e2e harness launched sentinel fixture before bundled probe runtime preflight" >&2
   exit 1
 }
+python3 - "$SANDBOX/e2e-preflight-out/report.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    report = json.load(f)
+if report.get("status") != "failed":
+    raise SystemExit("remoteapp e2e preflight failure did not write failed status")
+if "bundled_probe_preflight_failed" not in str(report.get("reason", "")):
+    raise SystemExit("remoteapp e2e preflight failure did not preserve preflight failure reason")
+PY
 
 PROBE_APP="$SANDBOX/fake_probe_application.py"
 cat >"$PROBE_APP" <<'PY'

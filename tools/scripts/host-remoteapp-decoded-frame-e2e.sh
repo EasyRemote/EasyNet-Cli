@@ -224,6 +224,28 @@ with open(sys.argv[2], "w", encoding="utf-8") as f:
 PY
 }
 
+write_failure_report() {
+  local reason="$1"
+  python3 - "$REPORT_JSON" "$REPORT_MD" "$TARGET_KIND" "$reason" <<'PY'
+import json
+import sys
+
+report_path, md_path, target_kind, reason = sys.argv[1:5]
+report = {
+    "enabled": True,
+    "status": "failed",
+    "target_kind": target_kind,
+    "reason": reason,
+}
+open(report_path, "w", encoding="utf-8").write(json.dumps(report, indent=2, sort_keys=True) + "\n")
+with open(md_path, "w", encoding="utf-8") as f:
+    f.write("# Host remoteapp decoded-frame E2E report\n\n")
+    f.write("- Status: `failed`\n")
+    f.write(f"- Target kind: `{target_kind}`\n")
+    f.write(f"- Reason: `{reason}`\n")
+PY
+}
+
 validate_evidence() {
   python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" "$TARGET_KIND" <<'PY'
 import json
@@ -777,7 +799,11 @@ if [[ -z "$PROBE_CMD" ]]; then
 fi
 
 if [[ "$PROBE_CMD_USES_BUNDLED" == "1" ]]; then
-  preflight_bundled_probe_runtime
+  if ! preflight_output="$(preflight_bundled_probe_runtime 2>&1)"; then
+    write_failure_report "bundled_probe_preflight_failed: $preflight_output"
+    echo "$preflight_output" >&2
+    exit 1
+  fi
 fi
 
 cleanup_sentinel_fixture() {

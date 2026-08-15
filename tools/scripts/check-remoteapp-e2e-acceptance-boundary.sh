@@ -131,6 +131,10 @@ require 'cleanup\.sh' "$SCRIPT" \
   'host decoded-frame E2E must run fixture cleanup after host probes'
 require 'preflight_bundled_probe_runtime' "$SCRIPT" \
   'host decoded-frame E2E must preflight bundled EasyNet probe runtime before launching host fixtures'
+require 'write_failure_report' "$SCRIPT" \
+  'host decoded-frame E2E must write a structured failure report when enabled preflight cannot run'
+require 'bundled_probe_preflight_failed' "$SCRIPT" \
+  'host decoded-frame E2E failure report must identify bundled probe preflight failures'
 require 'EASYNET_REMOTEAPP_CONTROL_DISCOVERY_JSON' "$SCRIPT" \
   'host decoded-frame E2E must allow explicit control discovery path for bundled probe preflight'
 require 'daemon_identity' "$SCRIPT" \
