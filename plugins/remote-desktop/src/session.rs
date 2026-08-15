@@ -1095,6 +1095,22 @@ mod tests {
             json!("REMOTE_DESKTOP_SESSION_STATE_SUSPENDED")
         );
         assert_eq!(
+            events[target_lost_index]["payload"]["failure_domain"],
+            json!("target")
+        );
+        assert_eq!(
+            events[target_lost_index]["payload"]["frontend_action"],
+            json!("refresh_targets")
+        );
+        assert_eq!(
+            events[target_lost_index]["payload"]["target_status"],
+            json!("lost")
+        );
+        assert_eq!(
+            events[target_lost_index]["payload"]["input_enabled"],
+            json!(false)
+        );
+        assert_eq!(
             events[target_lost_index]["transport_epoch"],
             json!(epoch.value())
         );

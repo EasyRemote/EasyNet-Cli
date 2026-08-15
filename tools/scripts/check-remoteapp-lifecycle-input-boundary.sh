@@ -252,6 +252,14 @@ require 'events\[media_source_lost_index\]\["media_source_epoch"\]' "$SESSION" \
   'E2E-09 must assert event-log top-level MEDIA_SOURCE_LOST media source epoch'
 reject 'TRANSPORT_FAILED' "$SESSION" \
   'session target-loss tests must not rely on a transport-failed event'
+require 'target_failure_payload' "$TARGET_TRACKING" \
+  'target failure events must share one projection for failure-domain recovery fields'
+require 'payload\["failure_domain"\] = json!\("target"\)' "$TARGET_TRACKING" \
+  'TARGET_LOST and permission revocation payloads must be target-domain failures'
+require 'events\[target_lost_index\]\["payload"\]\["frontend_action"\]' "$SESSION" \
+  'E2E-09 must assert TARGET_LOST carries frontend recovery action'
+require 'events\[target_lost_index\]\["payload"\]\["failure_domain"\]' "$SESSION" \
+  'E2E-09 must assert TARGET_LOST is a target-domain failure'
 require '"TARGET_REBIND_FAILED"' "$TARGET_TRACKING" \
   'post-loss target observations must emit an explicit rebind failure when no Rebinding policy exists'
 require 'explicit_rebind_required' "$TARGET_TRACKING" \

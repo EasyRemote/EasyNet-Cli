@@ -43,6 +43,8 @@ fn commit_geometry() {
     "TARGET_PERMISSION_REVOKED";
     "target_title_after_loss";
     "target_focus_after_loss";
+    payload["failure_domain"] = json!("target");
+    target_failure_payload();
     if target_lost {
         "TARGET_REBIND_FAILED";
         "explicit_rebind_required";
@@ -52,6 +54,8 @@ fn commit_geometry() {
         });
     }
 }
+
+fn target_failure_payload() {}
 
 fn geometry_event_type() -> &'static str {
     if moved() {
@@ -131,6 +135,8 @@ mod tests {
         assert!(target_lost_index < media_source_lost_index);
         assert_eq!(session.state(), RemoteDesktopState::Suspended);
         assert_eq!(events[target_lost_index]["state_proto"], json!("REMOTE_DESKTOP_SESSION_STATE_SUSPENDED"));
+        assert_eq!(events[target_lost_index]["payload"]["failure_domain"], json!("target"));
+        assert_eq!(events[target_lost_index]["payload"]["frontend_action"], json!("refresh_targets"));
         assert_eq!(events[target_lost_index]["transport_epoch"], json!(epoch.value()));
         assert_eq!(events[media_source_lost_index]["binding_id"], json!(session.target_binding().binding_id()));
         assert_eq!(events[media_source_lost_index]["target_identity_epoch"], json!(session.target_binding().target_identity_epoch()));
@@ -795,6 +801,16 @@ write_fixture
 perl -0pi -e 's/target_lost_index < media_source_lost_index/media_source_lost_index < target_lost_index/' \
   "$SANDBOX/plugins/remote-desktop/src/session.rs"
 run_fail 'E2E-09 must prove TARGET_LOST is ordered before MEDIA_SOURCE_LOST'
+
+write_fixture
+perl -0pi -e 's/target_failure_payload/target_failure_projection_regression/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'target failure events must share one projection for failure-domain recovery fields'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(events\[target_lost_index\]\["payload"\]\["frontend_action"\], json!\("refresh_targets"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'E2E-09 must assert TARGET_LOST carries frontend recovery action'
 
 write_fixture
 perl -0pi -e 's/if window\.visibility_state != TargetVisibilityState::Visible \{\n        return Some\(TargetObservation::VisibilityChanged \{\n            visibility_state: window\.visibility_state,\n        \}\);\n    \}\n    if snapshot\.title\(\) != window\.title\.as_deref\(\)/if snapshot.title() != window.title.as_deref()/' \

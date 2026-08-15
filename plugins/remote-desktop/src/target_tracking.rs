@@ -550,7 +550,12 @@ impl RemoteAppTargetBindingStateMachine {
             .as_str());
         Some(TargetTrackingEvent {
             event_type: "TARGET_PERMISSION_REVOKED",
-            payload,
+            payload: target_failure_payload(
+                payload,
+                TargetResolutionError::TargetPermissionMissing
+                    .frontend_action()
+                    .as_str(),
+            ),
         })
     }
 
@@ -658,9 +663,12 @@ impl RemoteAppTargetBindingStateMachine {
             },
             "observed_at_ms": observed_at_ms,
         });
+        let mut payload =
+            self.event_payload(pending.reason.as_str(), observed_at_ms, Some(previous));
+        payload["detail"] = json!(pending.detail);
         Some(TargetTrackingEvent {
             event_type: "TARGET_LOST",
-            payload: self.event_payload(pending.reason.as_str(), observed_at_ms, Some(previous)),
+            payload: target_failure_payload(payload, pending.reason.frontend_action().as_str()),
         })
     }
 
@@ -848,12 +856,22 @@ impl RemoteAppTargetBindingStateMachine {
             "target_geometry_revision": self.snapshot.target_geometry_revision,
             "media_source_epoch": self.snapshot.media_source_epoch,
             "visibility_state": self.snapshot.visibility_state.as_str(),
+            "target_status": self.snapshot.status.as_str(),
+            "input_enabled": self.snapshot.input_enabled(),
             "reason_code": reason_code,
             "recoverability": self.snapshot.status.recoverability(),
+            "frontend_action": Value::Null,
             "observed_at_ms": observed_at_ms,
             "geometry": self.snapshot.geometry.to_value(),
         })
     }
+}
+
+fn target_failure_payload(mut payload: Value, frontend_action: &str) -> Value {
+    payload["failure_domain"] = json!("target");
+    payload["input_enabled"] = json!(false);
+    payload["frontend_action"] = json!(frontend_action);
+    payload
 }
 
 fn geometry_event_type(previous: &TargetGeometry, next: &TargetGeometry) -> &'static str {
@@ -993,6 +1011,10 @@ mod tests {
             })
             .expect("lost commits");
         assert_eq!(lost.event_type(), "TARGET_LOST");
+        assert_eq!(lost.payload()["failure_domain"], json!("target"));
+        assert_eq!(lost.payload()["frontend_action"], json!("refresh_targets"));
+        assert_eq!(lost.payload()["target_status"], json!("lost"));
+        assert_eq!(lost.payload()["input_enabled"], json!(false));
         assert_eq!(tracker.snapshot().to_value()["status"], json!("lost"));
         assert!(tracker.snapshot().pointer_target_value().is_none());
     }
