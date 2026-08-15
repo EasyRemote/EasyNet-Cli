@@ -197,6 +197,7 @@ struct BoundAdmissionDescriptor {
     hosted_agent_device_ura: Option<String>,
     action: AccessAction,
     safe_read: bool,
+    subject_contract_ura: Option<String>,
 }
 
 #[derive(Clone)]
@@ -1086,6 +1087,7 @@ impl AdmissionFacade {
             hosted_agent_device_ura,
             action,
             safe_read: action == AccessAction::Read,
+            subject_contract_ura: descriptor.metadata.get("subject_contract_ura").cloned(),
         })
     }
 
@@ -1257,6 +1259,11 @@ impl AdmissionFacade {
             &input.ability,
             daemon_call_mode(input.call_mode),
             descriptor_ref,
+        )?;
+        reject_host_local_permission_probe_target_resource_subject(
+            &descriptor,
+            &input.envelope,
+            &input.ability,
         )?;
         require_local_hosted_agent_publication_ready(
             &descriptor.owner_ura,
@@ -3862,6 +3869,46 @@ fn envelope_requires_authority(envelope: &Envelope, ability: &str) -> bool {
     )
 }
 
+fn reject_host_local_permission_probe_target_resource_subject(
+    descriptor: &BoundAdmissionDescriptor,
+    envelope: &Envelope,
+    ability: &str,
+) -> Result<(), Status> {
+    if descriptor.subject_contract_ura.as_deref()
+        != Some(
+            crate::daemon::plugins::package::REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA,
+        )
+    {
+        return Ok(());
+    }
+    let Some(subject_ura) = envelope.subject.as_ref().map(|subject| subject.ura.trim()) else {
+        return Ok(());
+    };
+    let subject = parse_ura(subject_ura).map_err(|error| {
+        Status::invalid_argument(format!(
+            "host-local permission probe subject_ura is not canonical: {error}"
+        ))
+    })?;
+    if !host_local_permission_probe_target_resource_subject(&subject) {
+        return Ok(());
+    }
+    Err(Status::invalid_argument(format!(
+        "{ability}: screen-capture permission probes are host-local and MUST NOT be scoped to a remote desktop resource subject; reason=invalid_argument"
+    )))
+}
+
+fn host_local_permission_probe_target_resource_subject(
+    subject: &crate::core::ura::ParsedURA,
+) -> bool {
+    subject.kind == URAKind::Resource
+        && (subject
+            .resource_owner_id()
+            .is_some_and(|owner| owner.starts_with("device."))
+            || subject
+                .resource_path()
+                .is_some_and(|path| path.starts_with("streams/")))
+}
+
 /// A Device is the cryptographic sponsor and host of its declared native
 /// SystemAgents. That exact relationship authorizes only the pre-session
 /// owner-projection publication needed to establish the live catalog; it is
@@ -4330,6 +4377,18 @@ mod tests {
         }
     }
 
+    fn bound_read_descriptor_with_subject_contract(
+        subject_contract_ura: Option<&str>,
+    ) -> BoundAdmissionDescriptor {
+        BoundAdmissionDescriptor {
+            owner_ura: "easynet:///r/example/agent/device.dev-a.remote-desktop".to_string(),
+            hosted_agent_device_ura: None,
+            action: AccessAction::Read,
+            safe_read: true,
+            subject_contract_ura: subject_contract_ura.map(str::to_string),
+        }
+    }
+
     fn local_system_terminal_authority_request(
         now_ms: i64,
     ) -> authority_metadata::SessionAuthorityRequest {
@@ -4678,6 +4737,50 @@ mod tests {
             &envelope,
             crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
         ));
+    }
+
+    #[test]
+    fn host_local_permission_contract_rejects_target_resource_subject_as_invalid_argument() {
+        let descriptor = bound_read_descriptor_with_subject_contract(Some(
+            crate::daemon::plugins::package::REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA,
+        ));
+        let envelope = authority_wire_envelope(
+            Some("easynet:///r/example/user/alice"),
+            Some("easynet:///r/example/agent/device.dev-a.remote-desktop"),
+            Some("easynet:///r/example/resource/device.dev-a/streams/window.7"),
+        );
+
+        let error = reject_host_local_permission_probe_target_resource_subject(
+            &descriptor,
+            &envelope,
+            "remote_desktop.permission_status",
+        )
+        .expect_err("target resource subject must be malformed for host-local permission probes");
+
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert!(error.message().contains("MUST NOT be scoped"), "{error}");
+        assert!(
+            error.message().contains("reason=invalid_argument"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn ordinary_resource_ability_keeps_authority_required_for_target_resource_subject() {
+        let descriptor = bound_read_descriptor_with_subject_contract(None);
+        let envelope = authority_wire_envelope(
+            Some("easynet:///r/example/user/alice"),
+            Some("easynet:///r/example/agent/device.dev-a.media"),
+            Some("easynet:///r/example/resource/device.dev-a/streams/window.7"),
+        );
+
+        reject_host_local_permission_probe_target_resource_subject(
+            &descriptor,
+            &envelope,
+            "screen.snapshot",
+        )
+        .expect("non permission-probe descriptors must not be reclassified");
+        assert!(envelope_requires_authority(&envelope, "screen.snapshot"));
     }
 
     #[test]

@@ -6,6 +6,7 @@ SCRIPT="$ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 PROBE="$ROOT/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
 FIXTURE="$ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
 CREATE_FAILCLOSED="$ROOT/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
+PERMISSION_SUBJECT="$ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 RECEIVER="$ROOT/examples/easynet-remoteapp-frame-receiver.rs"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 
@@ -25,9 +26,12 @@ require() {
 [[ -f "$PROBE" ]] || fail "missing bundled host decoded-frame probe"
 [[ -f "$FIXTURE" ]] || fail "missing bundled host sentinel fixture"
 [[ -f "$CREATE_FAILCLOSED" ]] || fail "missing host create_session fail-closed E2E harness"
+[[ -f "$PERMISSION_SUBJECT" ]] || fail "missing host permission subject E2E harness"
 [[ -f "$RECEIVER" ]] || fail "missing bundled host decoded-frame receiver"
 [[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
 
+require 'E2E-02 permission subject correctness' "$SPEC" \
+  'SPEC must retain permission subject correctness acceptance'
 require 'E2E-03 exact window session' "$SPEC" \
   'SPEC must retain exact window decoded-frame acceptance'
 require 'E2E-04 exact application session' "$SPEC" \
@@ -42,6 +46,23 @@ require 'E2E-08 move/resize tracking' "$SPEC" \
   'SPEC must retain live move/resize acceptance'
 require 'E2E-09 target loss vs transport failure' "$SPEC" \
   'SPEC must retain live target-loss acceptance'
+
+require 'remote_desktop\.permission_status' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must invoke remote_desktop.permission_status'
+require 'remote_desktop\.request_permission' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must invoke remote_desktop.request_permission'
+require 'descriptor-bound user invoke Resource' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must require descriptor-bound permission probe subject evidence'
+require 'display window application|for kind in display window application' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must test display/window/application target subjects'
+require 'MUST NOT be scoped' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must require the target-resource rejection reason'
+require 'AUTHORITY_REQUIRED.*not|must not be misclassified as missing runtime authority' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must reject AUTHORITY_REQUIRED misclassification'
+require 'target_resource_subjects_allowed.*False|target_resource_subjects_allowed.*false' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must prove the permission contract forbids target resources'
+require 'subject_contract_ura' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must prove descriptor and response subject contract URA'
 
 require 'resource\.refresh_remote_targets' "$SCRIPT" \
   'host decoded-frame E2E must prove live refresh inventory was used'
