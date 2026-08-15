@@ -429,6 +429,18 @@ require 'target_focus_after_loss' "$TARGET_TRACKING" \
   'post-loss focus observations must enter explicit rebind instead of being silently swallowed'
 require 'tracker_routes_post_loss_title_focus_through_explicit_rebind' "$TARGET_TRACKING" \
   'target tracker must test title/focus reappearance through explicit rebind semantics'
+require 'fn contains_window_id\(' "$TARGET" \
+  'application window-set proof must own resolved window membership checks'
+require 'fn resolved_window_count\(' "$TARGET" \
+  'application window-set proof must expose committed set size for drift detection'
+require 'committed_window_set\.contains_window_id\(window\.window_id\)' "$TARGET_OBSERVER" \
+  'application observer must filter host windows through the committed app window-set proof'
+require 'committed_window_set\.resolved_window_count\(\)' "$TARGET_OBSERVER" \
+  'application observer must detect committed app window-set contraction'
+require 'TargetResolutionError::TargetIdentityChanged' "$TARGET_OBSERVER" \
+  'application window-set drift must fail closed as target_identity_changed'
+require 'application_observer_rejects_committed_window_set_drift' "$TARGET_OBSERVER" \
+  'target observer must test committed application window-set expansion/contraction drift'
 require 'snapshot_observer_reappearance_requires_explicit_rebind_policy' "$TARGET_OBSERVER" \
   'target observer must prove platform-visible target reappearance cannot revive media/input without explicit rebind policy'
 require 'target_reappearance_after_loss_emits_explicit_rebind_failure' "$SESSION" \

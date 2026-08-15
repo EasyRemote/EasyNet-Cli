@@ -304,6 +304,12 @@ fn observe_application(
 ) -> Option<TargetObservation> {
     let locator = binding.native_locator();
     let expected_display = locator.display_id()?;
+    let Some(committed_window_set) = binding.committed_app_window_set() else {
+        return Some(lost(
+            TargetResolutionError::TargetMetadataIncomplete,
+            "application target binding has no committed display-scoped window set",
+        ));
+    };
     let matching: Vec<&ObservedWindow> = windows
         .iter()
         .filter(|window| app_owner_matches(binding, window))
@@ -334,15 +340,28 @@ fn observe_application(
             "bound application has no windows on the selected display",
         ));
     }
-    if binding.committed_app_window_set().is_none() {
+    let selected_display_window_ids: BTreeSet<u64> = selected_display_windows
+        .iter()
+        .map(|window| window.window_id)
+        .collect();
+    if selected_display_windows
+        .iter()
+        .any(|window| !committed_window_set.contains_window_id(window.window_id))
+        || selected_display_window_ids
+            .iter()
+            .filter(|window_id| committed_window_set.contains_window_id(**window_id))
+            .count()
+            != committed_window_set.resolved_window_count()
+    {
         return Some(lost(
-            TargetResolutionError::TargetMetadataIncomplete,
-            "application target binding has no committed display-scoped window set",
+            TargetResolutionError::TargetIdentityChanged,
+            "bound application display-scoped window set no longer matches the committed session proof",
         ));
     }
     let visible_selected_display_windows: Vec<&ObservedWindow> = selected_display_windows
         .iter()
         .copied()
+        .filter(|window| committed_window_set.contains_window_id(window.window_id))
         .filter(|window| window.visibility_state == TargetVisibilityState::Visible)
         .collect();
     if visible_selected_display_windows.is_empty() {
@@ -406,7 +425,7 @@ fn app_owner_matches(binding: &RemoteAppTargetBinding, window: &ObservedWindow) 
         .evaluate(NativeAppIdentityCandidate::new(
             window.pid,
             window.bundle_id.as_deref(),
-            window.bundle_id.as_deref(),
+            None,
         ))
         .matched()
 }
@@ -1076,10 +1095,76 @@ mod tests {
         }
     }
 
+    fn app_window(window_id: u64, x: f64, width: f64) -> ObservedWindow {
+        ObservedWindow {
+            window_id,
+            pid: Some(9001),
+            bundle_id: Some("com.example.Editor".to_string()),
+            display_id: Some(42),
+            title: Some(format!("Editor window {window_id}")),
+            focused: false,
+            geometry: TargetGeometry {
+                x: Some(x),
+                y: Some(20.0),
+                width: Some(width),
+                height: Some(80.0),
+            },
+            visibility_state: TargetVisibilityState::Visible,
+        }
+    }
+
     fn no_window_snapshot() -> HostTargetSnapshot {
         HostTargetSnapshot {
             windows: Vec::new(),
             display_ids: BTreeSet::from([42]),
+        }
+    }
+
+    #[test]
+    fn application_observer_rejects_committed_window_set_drift() {
+        let binding = application_binding();
+        let snapshot = TargetTrackerSnapshot::from_binding(&binding);
+        let extra_window = HostTargetSnapshot {
+            windows: vec![
+                app_window(10, 10.0, 100.0),
+                app_window(11, 120.0, 100.0),
+                app_window(12, 240.0, 100.0),
+            ],
+            display_ids: BTreeSet::from([42]),
+        };
+
+        let extra_observation =
+            observe_binding_against_host_snapshot(&binding, &snapshot, &extra_window)
+                .expect("window-set drift must fail closed");
+        match extra_observation {
+            TargetObservation::Lost { reason, detail, .. } => {
+                assert_eq!(reason, TargetResolutionError::TargetIdentityChanged);
+                assert!(
+                    detail.contains("window set"),
+                    "failure detail must name application window-set drift; got {detail}"
+                );
+            }
+            other => panic!("window-set expansion must not project as geometry update: {other:?}"),
+        }
+
+        let missing_window = HostTargetSnapshot {
+            windows: vec![app_window(10, 10.0, 100.0)],
+            display_ids: BTreeSet::from([42]),
+        };
+        let missing_observation =
+            observe_binding_against_host_snapshot(&binding, &snapshot, &missing_window)
+                .expect("missing committed app window must fail closed");
+        match missing_observation {
+            TargetObservation::Lost { reason, detail, .. } => {
+                assert_eq!(reason, TargetResolutionError::TargetIdentityChanged);
+                assert!(
+                    detail.contains("window set"),
+                    "failure detail must name application window-set drift; got {detail}"
+                );
+            }
+            other => {
+                panic!("window-set contraction must not project as geometry update: {other:?}")
+            }
         }
     }
 

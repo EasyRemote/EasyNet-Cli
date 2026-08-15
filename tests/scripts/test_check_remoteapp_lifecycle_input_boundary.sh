@@ -877,6 +877,7 @@ RS
 enum TargetResolutionError {
     TargetIdentityAmbiguous,
     TargetMetadataIncomplete,
+    TargetIdentityChanged,
 }
 
 const TARGET_IDENTITY_AMBIGUOUS: TargetResolutionError =
@@ -899,6 +900,18 @@ fn target_bound_event_payload() {
 }
 
 struct InputScopeDecision;
+
+struct AppWindowSetProof;
+
+impl AppWindowSetProof {
+    fn contains_window_id(&self, window_id: u64) -> bool {
+        true
+    }
+
+    fn resolved_window_count(&self) -> usize {
+        2
+    }
+}
 
 fn input_scope_for_request() -> InputScopeDecision {
     match kind {
@@ -1050,6 +1063,25 @@ fn observe_window() {
     }
 }
 
+fn observe_application() {
+    let committed_window_set = binding.committed_app_window_set().unwrap();
+    let selected_display_windows = windows;
+    let selected_display_window_ids = ids;
+    if selected_display_windows
+        .iter()
+        .any(|window| !committed_window_set.contains_window_id(window.window_id))
+        || selected_display_window_ids
+            .iter()
+            .filter(|window_id| committed_window_set.contains_window_id(**window_id))
+            .count()
+            != committed_window_set.resolved_window_count()
+    {
+        return Some(TargetObservation::Lost {
+            reason: TargetResolutionError::TargetIdentityChanged,
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1063,6 +1095,9 @@ mod tests {
 
     #[test]
     fn window_observation_prioritizes_visibility_loss_over_title_or_focus_changes() {}
+
+    #[test]
+    fn application_observer_rejects_committed_window_set_drift() {}
 
     #[test]
     fn snapshot_observer_reappearance_requires_explicit_rebind_policy() {}
@@ -1376,6 +1411,26 @@ write_fixture
 perl -0pi -e 's/tracker_routes_post_loss_title_focus_through_explicit_rebind/tracker_swallows_title_focus_reappearance/' \
   "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
 run_fail 'target tracker must test title/focus reappearance through explicit rebind semantics'
+
+write_fixture
+perl -0pi -e 's/fn contains_window_id/fn contains_window_id_removed/' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+run_fail 'application window-set proof must own resolved window membership checks'
+
+write_fixture
+perl -0pi -e 's/window\.window_id/window.unchecked_id/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
+run_fail 'application observer must filter host windows through the committed app window-set proof'
+
+write_fixture
+perl -0pi -e 's/resolved_window_count/unchecked_window_count/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
+run_fail 'application observer must detect committed app window-set contraction'
+
+write_fixture
+perl -0pi -e 's/application_observer_rejects_committed_window_set_drift/application_observer_allows_window_set_drift/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
+run_fail 'target observer must test committed application window-set expansion/contraction drift'
 
 write_fixture
 perl -0pi -e 's/snapshot_observer_reappearance_requires_explicit_rebind_policy/snapshot_observer_reappearance_revives_stale_media/' \

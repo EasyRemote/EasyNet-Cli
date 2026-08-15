@@ -585,6 +585,17 @@ impl AppWindowSetProof {
         })
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn contains_window_id(
+        &self,
+        window_id: u64,
+    ) -> bool {
+        self.resolved_window_ids.binary_search(&window_id).is_ok()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn resolved_window_count(&self) -> usize {
+        self.resolved_window_ids.len()
+    }
+
     fn diagnostic_label(&self) -> String {
         format!(
             "display_id={}, bundle_id={:?}, primary_pid={:?}, resolved_window_ids={:?}, window_set_epoch={}",
