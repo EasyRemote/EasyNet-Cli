@@ -542,6 +542,7 @@ evidence = {
         "resolved_identity": {
             "app_identity": "com.example.SelectedApp",
             "bundle_id": "com.example.SelectedApp",
+            "display_id": 1,
             "pid": 4242,
         },
         "app_window_set": {
@@ -619,6 +620,25 @@ EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID="4243" \
   --target-kind application \
   --probe-cmd "python3 '$PROBE_APP'" \
   --out-dir "$SANDBOX/e2e-app-out" >/dev/null
+
+PROBE_APP_DISPLAY_MISMATCH="$SANDBOX/fake_probe_application_display_mismatch.py"
+cp "$PROBE_APP" "$PROBE_APP_DISPLAY_MISMATCH"
+perl -0pi -e 's/"display_id": 1,\n            "pid": 4242/"display_id": 99,\n            "pid": 4242/' \
+  "$PROBE_APP_DISPLAY_MISMATCH"
+if EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
+  EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-app-red" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-app-green" \
+  EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID="4242" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID="4243" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+    --run \
+    --target-kind application \
+    --probe-cmd "python3 '$PROBE_APP_DISPLAY_MISMATCH'" \
+    --out-dir "$SANDBOX/e2e-app-display-mismatch" >/dev/null 2>&1; then
+  echo "remoteapp e2e harness accepted application resolved identity display mismatch" >&2
+  exit 1
+fi
 
 cat >"$SANDBOX/control.json" <<'JSON'
 {

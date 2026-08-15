@@ -496,11 +496,17 @@ else:
             "application target must include target_binding.resolved_identity")
     if isinstance(resolved_identity, dict):
         app_identity = resolved_identity.get("app_identity") or resolved_identity.get("bundle_id")
+        identity_display_id = resolved_identity.get("display_id")
         app_pid = resolved_identity.get("pid")
         require(
             (isinstance(app_identity, str) and app_identity.strip())
             or (isinstance(app_pid, int) and app_pid > 0),
             "application resolved_identity must include app_identity, bundle_id, or positive pid",
+        )
+        require(
+            isinstance(app_window_set, dict)
+            and identity_display_id == app_window_set.get("display_id"),
+            "application resolved_identity.display_id must match app_window_set.display_id",
         )
         if selected_pid is not None:
             require(

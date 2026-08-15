@@ -67,6 +67,10 @@ require 'window_set_epoch' "$SCRIPT" \
   'host decoded-frame E2E must require application window-set epoch'
 require 'resolved_identity' "$SCRIPT" \
   'host decoded-frame E2E must require application resolved identity evidence'
+require 'identity_display_id = resolved_identity\.get\("display_id"\)' "$SCRIPT" \
+  'host decoded-frame E2E must read application resolved identity display id'
+require 'application resolved_identity\.display_id must match app_window_set\.display_id' "$SCRIPT" \
+  'host decoded-frame E2E must bind application identity to the display-scoped window set'
 require 'transport\.kind.*webrtc|transport_kind.*webrtc|"webrtc"' "$SCRIPT" \
   'host decoded-frame E2E must validate WebRTC transport evidence'
 require 'production_media_ready' "$SCRIPT" \
