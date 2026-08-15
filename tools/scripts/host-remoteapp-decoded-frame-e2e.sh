@@ -542,6 +542,8 @@ if isinstance(decoded_frame_sample, str) and os.path.isfile(decoded_frame_sample
             "decoded_frames.unrelated_pixel_count must match independent artifact scan")
 require(get("artifacts.session_id") == get("session_id"),
         "decoded frame artifact session_id must match evidence session_id")
+require(get("artifacts.subject_ura") == target_binding_subject_ura,
+        "decoded frame artifact subject_ura must match target_binding.subject_ura")
 require(get("artifacts.binding_id") == binding_id,
         "decoded frame artifact binding_id must match target_binding.binding_id")
 require(get("artifacts.binding_epoch") == binding_epoch,
@@ -552,6 +554,8 @@ require(get("artifacts.target_geometry_revision") == target_geometry_revision,
         "decoded frame artifact target_geometry_revision must match target_binding.target_geometry_revision")
 require(get("artifacts.media_source_epoch") == media_source_epoch,
         "decoded frame artifact media_source_epoch must match target_binding.media_source_epoch")
+require(get("artifacts.consent_epoch") == consent_epoch,
+        "decoded frame artifact consent_epoch must match target_binding.consent_epoch")
 require(get("artifacts.capture_scope") == capture_scope,
         "decoded frame artifact capture_scope must match target_binding.capture_scope")
 
@@ -709,11 +713,13 @@ data = {
     },
     "artifacts": {
         "decoded_frame_sample": str(sample),
+        "subject_ura": resource_ura,
         "binding_id": "binding-test",
         "binding_epoch": 1,
         "target_identity_epoch": 1,
         "target_geometry_revision": 1,
         "media_source_epoch": 1,
+        "consent_epoch": 1,
         "session_id": "rd-self-test",
         "capture_scope": capture_scope,
     },

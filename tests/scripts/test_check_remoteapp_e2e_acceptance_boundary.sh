@@ -117,12 +117,14 @@ evidence = {
     },
     "artifacts": {
         "decoded_frame_sample": str(sample),
+        "subject_ura": subject,
         "session_id": "rd-e2e-test",
         "binding_id": "tb_test",
         "binding_epoch": 1,
         "target_identity_epoch": 1,
         "target_geometry_revision": 1,
         "media_source_epoch": 1,
+        "consent_epoch": 1,
         "capture_scope": "WindowSurface",
     },
 }
@@ -156,7 +158,7 @@ fi
 
 PROBE_NO_ARTIFACT_EPOCHS="$SANDBOX/fake_probe_no_artifact_epochs.py"
 cp "$PROBE" "$PROBE_NO_ARTIFACT_EPOCHS"
-perl -0pi -e 's/,\n        "target_identity_epoch": 1,\n        "target_geometry_revision": 1,\n        "media_source_epoch": 1,\n        "capture_scope": "WindowSurface"/,\n        "capture_scope": "WindowSurface"/' \
+perl -0pi -e 's/("artifacts": \{[^}]*?        "binding_epoch": 1,)\n        "target_identity_epoch": 1,\n        "target_geometry_revision": 1,/$1/s' \
   "$PROBE_NO_ARTIFACT_EPOCHS"
 if EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
   EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
@@ -172,7 +174,7 @@ fi
 
 PROBE_NO_ARTIFACT_MEDIA_EPOCH="$SANDBOX/fake_probe_no_artifact_media_epoch.py"
 cp "$PROBE" "$PROBE_NO_ARTIFACT_MEDIA_EPOCH"
-perl -0pi -e 's/,\n        "media_source_epoch": 1,\n        "capture_scope": "WindowSurface"/,\n        "capture_scope": "WindowSurface"/' \
+perl -0pi -e 's/("artifacts": \{[^}]*?)\n        "media_source_epoch": 1,/$1/s' \
   "$PROBE_NO_ARTIFACT_MEDIA_EPOCH"
 if EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
   EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
@@ -183,6 +185,38 @@ if EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
     --probe-cmd "python3 '$PROBE_NO_ARTIFACT_MEDIA_EPOCH'" \
     --out-dir "$SANDBOX/e2e-no-artifact-media-epoch" >/dev/null 2>&1; then
   echo "remoteapp e2e harness accepted decoded artifact without media source epoch binding" >&2
+  exit 1
+fi
+
+PROBE_NO_ARTIFACT_SUBJECT="$SANDBOX/fake_probe_no_artifact_subject.py"
+cp "$PROBE" "$PROBE_NO_ARTIFACT_SUBJECT"
+perl -0pi -e 's/("artifacts": \{[^}]*?)\n        "subject_ura": subject,/$1/s' \
+  "$PROBE_NO_ARTIFACT_SUBJECT"
+if EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
+  EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-window-red" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+    --run \
+    --probe-cmd "python3 '$PROBE_NO_ARTIFACT_SUBJECT'" \
+    --out-dir "$SANDBOX/e2e-no-artifact-subject" >/dev/null 2>&1; then
+  echo "remoteapp e2e harness accepted decoded artifact without target subject binding" >&2
+  exit 1
+fi
+
+PROBE_NO_ARTIFACT_CONSENT_EPOCH="$SANDBOX/fake_probe_no_artifact_consent_epoch.py"
+cp "$PROBE" "$PROBE_NO_ARTIFACT_CONSENT_EPOCH"
+perl -0pi -e 's/("artifacts": \{[^}]*?)\n        "consent_epoch": 1,/$1/s' \
+  "$PROBE_NO_ARTIFACT_CONSENT_EPOCH"
+if EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
+  EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-window-red" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+    --run \
+    --probe-cmd "python3 '$PROBE_NO_ARTIFACT_CONSENT_EPOCH'" \
+    --out-dir "$SANDBOX/e2e-no-artifact-consent-epoch" >/dev/null 2>&1; then
+  echo "remoteapp e2e harness accepted decoded artifact without consent epoch binding" >&2
   exit 1
 fi
 
@@ -258,12 +292,14 @@ evidence = {
     },
     "artifacts": {
         "decoded_frame_sample": str(sample),
+        "subject_ura": subject,
         "session_id": "rd-e2e-no-client-ready",
         "binding_id": "tb_no_client_ready",
         "binding_epoch": 1,
         "target_identity_epoch": 1,
         "target_geometry_revision": 1,
         "media_source_epoch": 1,
+        "consent_epoch": 1,
         "capture_scope": "WindowSurface",
     },
 }
@@ -388,12 +424,14 @@ evidence = {
     },
     "artifacts": {
         "decoded_frame_sample": str(sample),
+        "subject_ura": subject,
         "session_id": "rd-e2e-fixture-test",
         "binding_id": "tb_fixture_test",
         "binding_epoch": 1,
         "target_identity_epoch": 1,
         "target_geometry_revision": 1,
         "media_source_epoch": 1,
+        "consent_epoch": 1,
         "capture_scope": "WindowSurface",
     },
 }
@@ -524,12 +562,14 @@ evidence = {
     },
     "artifacts": {
         "decoded_frame_sample": str(sample),
+        "subject_ura": subject,
         "session_id": "rd-e2e-app-test",
         "binding_id": "tb_app_test",
         "binding_epoch": 1,
         "target_identity_epoch": 99,
         "target_geometry_revision": 1,
         "media_source_epoch": 1,
+        "consent_epoch": 1,
         "capture_scope": "AppSurface",
     },
 }
@@ -687,12 +727,14 @@ with open(os.environ["EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON"], "w", encoding="ut
             },
             "artifacts": {
                 "decoded_frame_sample": str(sample),
+                "subject_ura": "easynet:///r/localhost/resource/device.dev/streams/window.test",
                 "session_id": "rd-e2e-probe",
                 "binding_id": "tb_test",
                 "binding_epoch": 1,
                 "target_identity_epoch": 1,
                 "target_geometry_revision": 1,
                 "media_source_epoch": 1,
+                "consent_epoch": 1,
                 "capture_scope": "WindowSurface",
             },
         },
@@ -786,6 +828,28 @@ perl -0pi -e 's/artifacts\.media_source_epoch/artifacts.media_source_epoch_omitt
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp e2e acceptance checker accepted missing artifact media source epoch assertion" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
+perl -0pi -e 's/artifacts\.subject_ura/artifacts.subject_ura_omitted/g; s/artifact subject_ura/artifact subject omitted/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted missing artifact subject assertion" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
+perl -0pi -e 's/artifacts\.consent_epoch/artifacts.consent_epoch_omitted/g; s/artifact consent_epoch/artifact consent epoch omitted/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted missing artifact consent epoch assertion" >&2
   exit 1
 fi
 mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \

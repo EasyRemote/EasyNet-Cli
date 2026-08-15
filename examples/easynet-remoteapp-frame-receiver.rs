@@ -134,11 +134,13 @@ impl ReceiverConfig {
 #[derive(Clone, Serialize)]
 struct SessionArtifactBinding {
     session_id: String,
+    subject_ura: String,
     binding_id: String,
     binding_epoch: u64,
     target_identity_epoch: u64,
     target_geometry_revision: u64,
     media_source_epoch: u64,
+    consent_epoch: u64,
     capture_scope: String,
 }
 
@@ -164,6 +166,12 @@ impl SessionArtifactBinding {
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| anyhow!("session target_binding missing binding_id"))?
             .to_string();
+        let subject_ura = target_binding
+            .get("subject_ura")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("session target_binding missing subject_ura"))?
+            .to_string();
         let binding_epoch = target_binding
             .get("binding_epoch")
             .and_then(Value::as_u64)
@@ -188,6 +196,11 @@ impl SessionArtifactBinding {
             .and_then(Value::as_u64)
             .filter(|value| *value > 0)
             .ok_or_else(|| anyhow!("session target_binding missing positive media_source_epoch"))?;
+        let consent_epoch = target_binding
+            .get("consent_epoch")
+            .and_then(Value::as_u64)
+            .filter(|value| *value > 0)
+            .ok_or_else(|| anyhow!("session target_binding missing positive consent_epoch"))?;
         let capture_scope = target_binding
             .get("capture_scope")
             .and_then(Value::as_str)
@@ -196,11 +209,13 @@ impl SessionArtifactBinding {
             .to_string();
         Ok(Self {
             session_id,
+            subject_ura,
             binding_id,
             binding_epoch,
             target_identity_epoch,
             target_geometry_revision,
             media_source_epoch,
+            consent_epoch,
             capture_scope,
         })
     }
@@ -887,11 +902,13 @@ fn write_analysis(
         "artifacts": {
             "decoded_frame_sample": decoded_frame_sample,
             "session_id": config.session_artifact.session_id,
+            "subject_ura": config.session_artifact.subject_ura,
             "binding_id": config.session_artifact.binding_id,
             "binding_epoch": config.session_artifact.binding_epoch,
             "target_identity_epoch": config.session_artifact.target_identity_epoch,
             "target_geometry_revision": config.session_artifact.target_geometry_revision,
             "media_source_epoch": config.session_artifact.media_source_epoch,
+            "consent_epoch": config.session_artifact.consent_epoch,
             "capture_scope": config.session_artifact.capture_scope
         }
     });

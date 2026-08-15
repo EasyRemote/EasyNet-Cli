@@ -159,18 +159,30 @@ require 'target_binding\.consent_epoch' "$SCRIPT" \
   'host decoded-frame E2E must require consent epoch evidence'
 require 'artifacts\.session_id|artifact session_id' "$SCRIPT" \
   'host decoded-frame E2E must bind decoded frame artifact to session id'
+require 'artifacts\.subject_ura|artifact subject_ura' "$SCRIPT" \
+  'host decoded-frame E2E must bind decoded frame artifact to target subject'
+require 'artifacts\.consent_epoch|artifact consent_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must bind decoded frame artifact to consent epoch'
 require '"target_identity_epoch": config\.session_artifact\.target_identity_epoch' "$RECEIVER" \
   'bundled frame receiver must write target identity epoch into decoded artifacts'
 require '"target_geometry_revision": config\.session_artifact\.target_geometry_revision' "$RECEIVER" \
   'bundled frame receiver must write target geometry revision into decoded artifacts'
 require '"media_source_epoch": config\.session_artifact\.media_source_epoch' "$RECEIVER" \
   'bundled frame receiver must write media source epoch into decoded artifacts'
+require '"subject_ura": config\.session_artifact\.subject_ura' "$RECEIVER" \
+  'bundled frame receiver must write target subject into decoded artifacts'
+require '"consent_epoch": config\.session_artifact\.consent_epoch' "$RECEIVER" \
+  'bundled frame receiver must write consent epoch into decoded artifacts'
+require 'session target_binding missing subject_ura' "$RECEIVER" \
+  'bundled frame receiver must reject session artifacts without target subject'
 require 'session target_binding missing positive target_identity_epoch' "$RECEIVER" \
   'bundled frame receiver must reject session artifacts without target identity epoch'
 require 'session target_binding missing positive target_geometry_revision' "$RECEIVER" \
   'bundled frame receiver must reject session artifacts without target geometry revision'
 require 'session target_binding missing positive media_source_epoch' "$RECEIVER" \
   'bundled frame receiver must reject session artifacts without media source epoch'
+require 'session target_binding missing positive consent_epoch' "$RECEIVER" \
+  'bundled frame receiver must reject session artifacts without consent epoch'
 
 require 'ability refresh-remote-targets' "$PROBE" \
   'bundled host probe must invoke live target inventory through the EasyNet CLI'
