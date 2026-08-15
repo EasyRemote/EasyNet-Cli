@@ -409,7 +409,7 @@ fn optional_input_policy(args: &Value) -> anyhow::Result<Option<&Map<String, Val
     }
 }
 
-fn optional_u64_field(
+pub(in crate::daemon::plugins::remote_desktop) fn optional_u64_field(
     args: &Value,
     key: &'static str,
     ability: &str,

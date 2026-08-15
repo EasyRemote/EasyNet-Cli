@@ -97,8 +97,22 @@ fn event_replay_projects_compaction_before_retained_window() {
 RS
 
 cat >"$SB/plugins/remote-desktop/src/handlers/watch_events.rs" <<'RS'
-fn handle(session: Session) {
-    let _ = session.replay_events_from(0);
+fn handle(args: Args, session: Session) {
+    let from_sequence =
+        optional_u64_field(&args, "from_sequence", ABILITY_WATCH_EVENTS)?.unwrap_or(0);
+    let _ = session.replay_events_from(from_sequence);
+}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/request.rs" <<'RS'
+pub(in crate::daemon::plugins::remote_desktop) fn optional_u64_field() {}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/handlers/mod.rs" <<'RS'
+#[test]
+fn watch_events_rejects_malformed_replay_cursor() {
+    let _ = "from_sequence";
+    let _ = REASON_INVALID_ARGUMENT;
 }
 RS
 
@@ -253,6 +267,51 @@ grep -q "compaction" /tmp/check-remoteapp-performance-boundary-event-replay.out 
 
 perl -0pi -e 's/fn event_replay_silently_starts_at_retained_window/fn event_replay_projects_compaction_before_retained_window/' \
   "$SB/plugins/remote-desktop/src/event_log.rs"
+perl -0pi -e 's/optional_u64_field\(&args, "from_sequence", ABILITY_WATCH_EVENTS\)\?\.unwrap_or\(0\)/args.get("from_sequence").and_then(Value::as_u64).unwrap_or(0)/' \
+  "$SB/plugins/remote-desktop/src/handlers/watch_events.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-watch-events-parser.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "handler-side malformed replay cursor parsing should exit 1 (got $rc)"
+grep -q "typed request parser" /tmp/check-remoteapp-performance-boundary-watch-events-parser.out || fail "expected watch_events typed parser failure"
+
+perl -0pi -e 's/args\.get\("from_sequence"\)\.and_then\(Value::as_u64\)\.unwrap_or\(0\)/optional_u64_field(\&args, "from_sequence", ABILITY_WATCH_EVENTS)?.unwrap_or(0)/' \
+  "$SB/plugins/remote-desktop/src/handlers/watch_events.rs"
+perl -0pi -e 's/pub\(in crate::daemon::plugins::remote_desktop\) fn optional_u64_field/fn optional_u64_field/' \
+  "$SB/plugins/remote-desktop/src/request.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-u64-parser-visibility.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "non-shared replay cursor parser should exit 1 (got $rc)"
+grep -q "typed optional u64 parsing" /tmp/check-remoteapp-performance-boundary-u64-parser-visibility.out || fail "expected optional_u64_field visibility failure"
+
+perl -0pi -e 's/fn optional_u64_field/pub(in crate::daemon::plugins::remote_desktop) fn optional_u64_field/' \
+  "$SB/plugins/remote-desktop/src/request.rs"
+perl -0pi -e 's/watch_events_rejects_malformed_replay_cursor/watch_events_accepts_malformed_replay_cursor/' \
+  "$SB/plugins/remote-desktop/src/handlers/mod.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-watch-events-test.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing malformed replay cursor regression test should exit 1 (got $rc)"
+grep -q "malformed replay cursors" /tmp/check-remoteapp-performance-boundary-watch-events-test.out || fail "expected watch_events malformed cursor test failure"
+
+perl -0pi -e 's/watch_events_accepts_malformed_replay_cursor/watch_events_rejects_malformed_replay_cursor/' \
+  "$SB/plugins/remote-desktop/src/handlers/mod.rs"
 perl -0pi -e 's/fn to_bounded_view/fn to_unbounded_view/' \
   "$SB/plugins/remote-desktop/src/session_signaling.rs"
 

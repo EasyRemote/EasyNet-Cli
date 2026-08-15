@@ -33,6 +33,9 @@ RESOURCE_BOOTSTRAP="$ROOT/src/daemon/ability/builtins/resources/media/resource_b
 RESOURCE_LIST="$ROOT/src/daemon/ability/builtins/resources/list.rs"
 TARGET_OBSERVER="$ROOT/plugins/remote-desktop/src/target_observer.rs"
 EVENT_LOG="$ROOT/plugins/remote-desktop/src/event_log.rs"
+REQUEST="$ROOT/plugins/remote-desktop/src/request.rs"
+HANDLERS="$ROOT/plugins/remote-desktop/src/handlers/mod.rs"
+WATCH_EVENTS="$ROOT/plugins/remote-desktop/src/handlers/watch_events.rs"
 SESSION_SIGNALING="$ROOT/plugins/remote-desktop/src/session_signaling.rs"
 SESSION_STORE="$ROOT/plugins/remote-desktop/src/session_store.rs"
 VIEW="$ROOT/plugins/remote-desktop/src/view.rs"
@@ -101,8 +104,18 @@ require 'requested_from_sequence' "$EVENT_LOG" \
   'PERF-04 compaction diagnostic must carry the requested replay cursor'
 require 'first_retained_sequence' "$EVENT_LOG" \
   'PERF-04 compaction diagnostic must carry the first retained event sequence'
-require 'replay_events_from' "$ROOT/plugins/remote-desktop/src/handlers/watch_events.rs" \
+require 'replay_events_from' "$WATCH_EVENTS" \
   'watch_events handler must delegate replay-window semantics to the session aggregate'
+require 'optional_u64_field\(&args, "from_sequence", ABILITY_WATCH_EVENTS\)' "$WATCH_EVENTS" \
+  'watch_events handler must parse from_sequence through the typed request parser'
+reject '\.get\("from_sequence"\)' "$WATCH_EVENTS" \
+  'watch_events handler must not silently parse malformed from_sequence with direct JSON access'
+require 'pub\(in crate::daemon::plugins::remote_desktop\) fn optional_u64_field' "$REQUEST" \
+  'remote desktop request parser must expose typed optional u64 parsing to ability handlers'
+require 'watch_events_rejects_malformed_replay_cursor' "$HANDLERS" \
+  'PERF-04 must prove watch_events rejects malformed replay cursors'
+require 'REASON_INVALID_ARGUMENT' "$HANDLERS" \
+  'watch_events malformed replay cursor test must assert invalid_argument diagnostics'
 
 require 'remote_desktop_signaling_rejects_more_than_ten_thousand_candidates_without_growth' "$SESSION_SIGNALING" \
   'PERF-05 must reject >10k trickle candidates without unbounded growth'

@@ -283,4 +283,52 @@ mod tests {
             json!(inputs.binding_id)
         );
     }
+
+    #[test]
+    fn watch_events_rejects_malformed_replay_cursor() {
+        let _lock = test_lock();
+        let plugin = test_plugin();
+        reset_store(&plugin);
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = ResourcesFile::default();
+        let ura = seed_display(&mut file, "remote-desktop-watch-events-cursor");
+        resources::save(&file).unwrap();
+
+        let created = crate::daemon::plugins::remote_desktop::test_support::create_test_session(
+            Arc::clone(&plugin),
+            env_for(&ura),
+            json!({
+                "session_id": "rd-watch-events-cursor",
+                "mode": "view_only",
+                "lease_ttl_ms": 5000,
+            }),
+        )
+        .unwrap();
+        let token = created["session_token"]
+            .as_str()
+            .expect("create_session returns session_token")
+            .to_string();
+
+        let err = watch_events::handle(
+            Arc::clone(&plugin),
+            env_for(&ura),
+            json!({
+                "session_id": "rd-watch-events-cursor",
+                "session_token": token,
+                "from_sequence": "latest"
+            }),
+        )
+        .expect_err("watch_events must reject malformed replay cursors before streaming");
+        let message = err.to_string();
+        assert!(
+            message.contains("from_sequence"),
+            "error must name malformed replay cursor; got {message}"
+        );
+        assert!(
+            message.contains(
+                crate::daemon::plugins::remote_desktop::constants::REASON_INVALID_ARGUMENT
+            ),
+            "error must carry invalid_argument reason; got {message}"
+        );
+    }
 }
