@@ -43,6 +43,12 @@ require 'Invocation\.subject|invocation\.subject_ura' "$SCRIPT" \
   'host decoded-frame E2E must validate selected resource URA as Invocation.subject'
 require 'WindowSurface' "$SCRIPT" \
   'host decoded-frame E2E must distinguish exact window capture'
+require 'window target must include target_binding\.resolved_identity' "$SCRIPT" \
+  'host decoded-frame E2E must require window resolved identity evidence'
+require 'resolved_identity\.get\("window_id"\)|window_id = resolved_identity\.get\("window_id"\)' "$SCRIPT" \
+  'host decoded-frame E2E must require exact native window id evidence'
+require 'window evidence must bind selected sentinel pid to resolved_identity\.pid or owner_pid' "$SCRIPT" \
+  'host decoded-frame E2E must bind window sentinel pid to resolved owner identity when provided'
 require 'AppSurface' "$SCRIPT" \
   'host decoded-frame E2E must distinguish exact application capture'
 require 'app_window_set = get\("target_binding\.app_window_set"\)' "$SCRIPT" \

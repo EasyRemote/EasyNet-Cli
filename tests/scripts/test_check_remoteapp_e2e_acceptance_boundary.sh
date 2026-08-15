@@ -73,6 +73,9 @@ evidence = {
         "media_source_epoch": 1,
         "consent_epoch": 1,
         "subject_ura": subject,
+        "resolved_identity": {
+            "window_id": 7,
+        },
         "scope_audit": {
             "scope_widened": False,
             "display_fallback_used": False,
@@ -132,6 +135,22 @@ EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
   --probe-cmd "python3 '$PROBE'" \
   --out-dir "$SANDBOX/e2e-out" >/dev/null
 
+PROBE_NO_WINDOW_ID="$SANDBOX/fake_probe_no_window_id.py"
+cp "$PROBE" "$PROBE_NO_WINDOW_ID"
+perl -0pi -e 's/,\n        "resolved_identity": \{\n            "window_id": 7,\n        \}//' \
+  "$PROBE_NO_WINDOW_ID"
+if EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
+  EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-window-red" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+    --run \
+    --probe-cmd "python3 '$PROBE_NO_WINDOW_ID'" \
+    --out-dir "$SANDBOX/e2e-no-window-id" >/dev/null 2>&1; then
+  echo "remoteapp e2e harness accepted window evidence without resolved_identity.window_id" >&2
+  exit 1
+fi
+
 PROBE_NO_CLIENT_READY="$SANDBOX/fake_probe_no_client_ready.py"
 cat >"$PROBE_NO_CLIENT_READY" <<'PY'
 import json
@@ -161,6 +180,9 @@ evidence = {
         "media_source_epoch": 1,
         "consent_epoch": 1,
         "subject_ura": subject,
+        "resolved_identity": {
+            "window_id": 7,
+        },
         "scope_audit": {
             "scope_widened": False,
             "display_fallback_used": False,
@@ -281,6 +303,10 @@ evidence = {
         "media_source_epoch": 1,
         "consent_epoch": 1,
         "subject_ura": subject,
+        "resolved_identity": {
+            "window_id": 7,
+            "pid": selected_pid,
+        },
         "scope_audit": {
             "scope_widened": False,
             "display_fallback_used": False,
@@ -557,7 +583,8 @@ JSON
       "media_source_epoch": 1,
       "consent_epoch": 1,
       "resolved_identity": {
-        "window_id": 7
+        "window_id": 7,
+        "pid": 4242
       }
     },
     "scope_audit": {
@@ -679,6 +706,17 @@ perl -0pi -e 's/app_window_set/app_window_set_omitted/g' \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp e2e acceptance checker accepted missing application window-set assertion" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
+perl -0pi -e 's/window target must include target_binding\.resolved_identity/window target identity omitted/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted missing window resolved identity assertion" >&2
   exit 1
 fi
 mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \

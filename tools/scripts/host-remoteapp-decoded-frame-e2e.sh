@@ -448,6 +448,16 @@ require(isinstance(consent_epoch, int) and consent_epoch > 0,
         "target_binding.consent_epoch must be a positive integer")
 if expected_kind == "window":
     require(capture_scope == "WindowSurface", "window target must use WindowSurface")
+    require(isinstance(resolved_identity, dict),
+            "window target must include target_binding.resolved_identity")
+    if isinstance(resolved_identity, dict):
+        window_id = resolved_identity.get("window_id")
+        require(isinstance(window_id, int) and window_id > 0,
+                "window resolved_identity.window_id must be a positive integer")
+        if selected_pid is not None:
+            window_pid = resolved_identity.get("pid") or resolved_identity.get("owner_pid")
+            require(window_pid == selected_pid,
+                    "window evidence must bind selected sentinel pid to resolved_identity.pid or owner_pid")
 else:
     require(capture_scope == "AppSurface", "application target must use AppSurface")
     require(isinstance(app_window_set, dict),
