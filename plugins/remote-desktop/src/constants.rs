@@ -57,11 +57,11 @@ pub(crate) const DIAGNOSTIC_RELAY_TARGET_BITRATE_KBPS: u32 = 24_000;
 pub(crate) const DEFAULT_VIDEO_STREAM_BITRATE_KBPS: u32 = DIAGNOSTIC_RELAY_TARGET_BITRATE_KBPS;
 pub(crate) const ATTACH_ENCODING_ANNEXB_H264: &str = "annexb_h264";
 pub(crate) const ATTACH_ENCODING_JPEG_BINARY: &str = "jpeg_binary";
-const DIRECT_WEBRTC_ENDPOINT_PREFIX: &str = "easynet:///r/local/resource/remote-desktop-session.";
+const DIRECT_WEBRTC_ENDPOINT_PREFIX: &str = "easynet:///r/local/resource/remote-desktop-transport.";
 
 pub(crate) fn direct_webrtc_endpoint_ura(session_id: &str) -> String {
     format!(
-        "{DIRECT_WEBRTC_ENDPOINT_PREFIX}{}/transport/webrtc",
+        "{DIRECT_WEBRTC_ENDPOINT_PREFIX}{}/endpoint/webrtc",
         hex::encode(session_id.as_bytes())
     )
 }
@@ -82,7 +82,7 @@ mod tests {
 
         assert_eq!(
             endpoint_ura,
-            "easynet:///r/local/resource/remote-desktop-session.72642f73657373696f6e3a31/transport/webrtc"
+            "easynet:///r/local/resource/remote-desktop-transport.72642f73657373696f6e3a31/endpoint/webrtc"
         );
         assert!(!endpoint_ura.contains("rd/session:1"));
     }

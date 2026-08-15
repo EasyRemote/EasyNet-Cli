@@ -27,7 +27,7 @@ MD
   cat >"$SANDBOX/plugins/remote-desktop/src/constants.rs" <<'RS'
 fn direct_webrtc_endpoint_ura(session_id: &str) -> String {
     format!(
-        "easynet:///r/local/resource/remote-desktop-session.{}/transport/webrtc",
+        "easynet:///r/local/resource/remote-desktop-transport.{}/endpoint/webrtc",
         hex::encode(session_id.as_bytes())
     )
 }

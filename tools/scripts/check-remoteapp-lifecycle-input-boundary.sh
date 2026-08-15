@@ -325,8 +325,10 @@ require 'relay_ready' "$SPEC" \
 # transport address.
 require 'fn direct_webrtc_endpoint_ura\(session_id: &str\) -> String' "$CONSTANTS" \
   'direct WebRTC endpoint evidence must be generated through one canonical URA helper'
-require 'easynet:///r/local/resource/remote-desktop-session\.' "$CONSTANTS" \
-  'direct WebRTC endpoint helper must publish a session resource URA'
+require 'easynet:///r/local/resource/remote-desktop-transport\.' "$CONSTANTS" \
+  'direct WebRTC endpoint helper must publish a transport endpoint resource URA'
+require '/endpoint/webrtc' "$CONSTANTS" \
+  'direct WebRTC endpoint helper must identify a WebRTC endpoint resource, not a session subject'
 require 'hex::encode\(session_id\.as_bytes\(\)\)' "$CONSTANTS" \
   'direct WebRTC endpoint helper must encode raw session ids before inserting them into URA path segments'
 require 'direct_webrtc_endpoint_ura\(session_id\)' "$SESSION_STORE" \
