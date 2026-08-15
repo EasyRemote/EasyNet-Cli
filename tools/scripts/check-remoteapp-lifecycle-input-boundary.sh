@@ -426,6 +426,26 @@ require 'snapshot_observer_reappearance_requires_explicit_rebind_policy' "$TARGE
   'target observer must prove platform-visible target reappearance cannot revive media/input without explicit rebind policy'
 require 'target_reappearance_after_loss_emits_explicit_rebind_failure' "$SESSION" \
   'session aggregate must test post-loss target reappearance as TARGET_REBIND_FAILED'
+require_multiline 'm/rebind_attempted\["reason_code"\]\s*,\s*json!\("target_rebind_attempted"\)/s' "$SESSION" \
+  'session aggregate must assert TARGET_REBIND_ATTEMPTED top-level reason_code'
+require_multiline 'm/rebind_attempted\["recoverability"\]\s*,\s*json!\("retry_session"\)/s' "$SESSION" \
+  'session aggregate must assert TARGET_REBIND_ATTEMPTED top-level recoverability'
+require 'rebind_attempted\["binding_id"\]' "$SESSION" \
+  'session aggregate must assert TARGET_REBIND_ATTEMPTED top-level binding id'
+require 'rebind_attempted\["target_identity_epoch"\]' "$SESSION" \
+  'session aggregate must assert TARGET_REBIND_ATTEMPTED top-level target identity epoch'
+require 'rebind_attempted\["media_source_epoch"\]' "$SESSION" \
+  'session aggregate must assert TARGET_REBIND_ATTEMPTED top-level media source epoch'
+require_multiline 'm/rebind_failed\["reason_code"\]\s*,\s*json!\("explicit_rebind_required"\)/s' "$SESSION" \
+  'session aggregate must assert TARGET_REBIND_FAILED top-level reason_code'
+require_multiline 'm/rebind_failed\["recoverability"\]\s*,\s*json!\("new_session_required"\)/s' "$SESSION" \
+  'session aggregate must assert TARGET_REBIND_FAILED top-level recoverability'
+require 'rebind_failed\["binding_id"\]' "$SESSION" \
+  'session aggregate must assert TARGET_REBIND_FAILED top-level binding id'
+require 'rebind_failed\["target_identity_epoch"\]' "$SESSION" \
+  'session aggregate must assert TARGET_REBIND_FAILED top-level target identity epoch'
+require 'rebind_failed\["media_source_epoch"\]' "$SESSION" \
+  'session aggregate must assert TARGET_REBIND_FAILED top-level media source epoch'
 require_multiline '/"TARGET_REBIND_FAILED"\s*=>\s*"REMOTE_DESKTOP_EVENT_TARGET_CHANGED"/s' "$EVENT_LOG" \
   'event log must project TARGET_REBIND_FAILED as a canonical target change'
 require 'transport_route_state' "$VIEW_TRANSPORT" \

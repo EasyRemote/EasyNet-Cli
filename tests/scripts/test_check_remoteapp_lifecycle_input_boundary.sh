@@ -256,7 +256,19 @@ mod tests {
 
     #[test]
     fn target_reappearance_after_loss_emits_explicit_rebind_failure() {
-        assert_eq!(event["event_type"], json!("TARGET_REBIND_FAILED"));
+        let rebind_attempted = event;
+        assert_eq!(rebind_attempted["reason_code"], json!("target_rebind_attempted"));
+        assert_eq!(rebind_attempted["recoverability"], json!("retry_session"));
+        assert_eq!(rebind_attempted["binding_id"], json!(session.target_binding().binding_id()));
+        assert_eq!(rebind_attempted["target_identity_epoch"], json!(session.target_binding().target_identity_epoch()));
+        assert_eq!(rebind_attempted["media_source_epoch"], json!(session.target_binding().media_source_epoch()));
+        let rebind_failed = event;
+        assert_eq!(rebind_failed["event_type"], json!("TARGET_REBIND_FAILED"));
+        assert_eq!(rebind_failed["reason_code"], json!("explicit_rebind_required"));
+        assert_eq!(rebind_failed["recoverability"], json!("new_session_required"));
+        assert_eq!(rebind_failed["binding_id"], json!(session.target_binding().binding_id()));
+        assert_eq!(rebind_failed["target_identity_epoch"], json!(session.target_binding().target_identity_epoch()));
+        assert_eq!(rebind_failed["media_source_epoch"], json!(session.target_binding().media_source_epoch()));
     }
 
     #[test]
@@ -1228,6 +1240,36 @@ write_fixture
 perl -0pi -e 's/snapshot_observer_reappearance_requires_explicit_rebind_policy/snapshot_observer_reappearance_revives_stale_media/' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
 run_fail 'target observer must prove platform-visible target reappearance cannot revive media/input without explicit rebind policy'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(rebind_attempted\["reason_code"\], json!\("target_rebind_attempted"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate must assert TARGET_REBIND_ATTEMPTED top-level reason_code'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(rebind_attempted\["recoverability"\], json!\("retry_session"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate must assert TARGET_REBIND_ATTEMPTED top-level recoverability'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(rebind_attempted\["binding_id"\], json!\(session\.target_binding\(\)\.binding_id\(\)\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate must assert TARGET_REBIND_ATTEMPTED top-level binding id'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(rebind_failed\["reason_code"\], json!\("explicit_rebind_required"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate must assert TARGET_REBIND_FAILED top-level reason_code'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(rebind_failed\["recoverability"\], json!\("new_session_required"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate must assert TARGET_REBIND_FAILED top-level recoverability'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(rebind_failed\["target_identity_epoch"\], json!\(session\.target_binding\(\)\.target_identity_epoch\(\)\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate must assert TARGET_REBIND_FAILED top-level target identity epoch'
 
 write_fixture
 perl -0pi -e 's/"TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_TARGET_CHANGED"/"TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_STATE_CHANGED"/' \

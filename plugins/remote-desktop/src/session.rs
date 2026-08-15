@@ -1811,14 +1811,84 @@ mod tests {
             .find(|event| event["event_type"] == json!("TARGET_REBIND_ATTEMPTED"))
             .expect("target reappearance emits rebind attempted");
         assert_eq!(
+            rebind_attempted["reason_code"],
+            json!("target_rebind_attempted")
+        );
+        assert_eq!(rebind_attempted["recoverability"], json!("retry_session"));
+        assert_eq!(rebind_attempted["state"], json!("suspended"));
+        assert_eq!(
+            rebind_attempted["event_type_proto"],
+            json!("REMOTE_DESKTOP_EVENT_TARGET_CHANGED")
+        );
+        assert_eq!(
+            rebind_attempted["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            rebind_attempted["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
+        assert_eq!(
+            rebind_attempted["binding_epoch"],
+            json!(session.target_binding().binding_epoch())
+        );
+        assert_eq!(
+            rebind_attempted["target_identity_epoch"],
+            json!(session.target_binding().target_identity_epoch())
+        );
+        assert_eq!(
+            rebind_attempted["target_geometry_revision"],
+            json!(session.target_binding().target_geometry_revision())
+        );
+        assert_eq!(
+            rebind_attempted["media_source_epoch"],
+            json!(session.target_binding().media_source_epoch())
+        );
+        assert_eq!(
             rebind_attempted["payload"]["target_status"],
             json!("rebinding")
+        );
+        assert_eq!(
+            rebind_attempted["payload"]["frontend_action"],
+            json!("retry_session")
         );
         let rebind_failed = events
             .iter()
             .find(|event| event["event_type"] == json!("TARGET_REBIND_FAILED"))
             .expect("reappearance without explicit rebind policy must be typed");
         assert_eq!(rebind_failed["state"], json!("suspended"));
+        assert_eq!(
+            rebind_failed["reason_code"],
+            json!("explicit_rebind_required")
+        );
+        assert_eq!(
+            rebind_failed["recoverability"],
+            json!("new_session_required")
+        );
+        assert_eq!(
+            rebind_failed["subject_ura"],
+            json!(session.target_binding().subject_ura())
+        );
+        assert_eq!(
+            rebind_failed["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
+        assert_eq!(
+            rebind_failed["binding_epoch"],
+            json!(session.target_binding().binding_epoch())
+        );
+        assert_eq!(
+            rebind_failed["target_identity_epoch"],
+            json!(session.target_binding().target_identity_epoch())
+        );
+        assert_eq!(
+            rebind_failed["target_geometry_revision"],
+            json!(session.target_binding().target_geometry_revision())
+        );
+        assert_eq!(
+            rebind_failed["media_source_epoch"],
+            json!(session.target_binding().media_source_epoch())
+        );
         assert_eq!(
             rebind_failed["event_type_proto"],
             json!("REMOTE_DESKTOP_EVENT_TARGET_CHANGED")
