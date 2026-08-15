@@ -120,7 +120,7 @@ const ALL_INPUT_SCOPES: &[InputScope] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InputScopeReason {
     RequestedViewOnly,
-    DisplayInteractive,
+    InputConsentRequired,
     TargetScopedInputUnsafe,
 }
 
@@ -128,7 +128,7 @@ impl InputScopeReason {
     const fn as_str(self) -> &'static str {
         match self {
             Self::RequestedViewOnly => "requested_view_only",
-            Self::DisplayInteractive => "display_interactive",
+            Self::InputConsentRequired => "input_consent_required",
             Self::TargetScopedInputUnsafe => "target_scoped_keyboard_pointer_dispatch_unsafe",
         }
     }
@@ -1677,10 +1677,12 @@ fn input_scope_for_request(
         return InputScopeDecision::new(InputScope::ViewOnly, InputScopeReason::RequestedViewOnly);
     }
     match target_kind {
-        RemoteDesktopTargetKind::Display => InputScopeDecision::new(
-            InputScope::DisplayGlobal,
-            InputScopeReason::DisplayInteractive,
-        ),
+        // Capture/session consent does not authorize keyboard or pointer input.
+        // Until a separate EasyNet input-consent authority is available, even
+        // display sessions requested as interactive remain view-only.
+        RemoteDesktopTargetKind::Display => {
+            InputScopeDecision::new(InputScope::ViewOnly, InputScopeReason::InputConsentRequired)
+        }
         RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application => {
             // macOS target-scoped keyboard/pointer dispatch is unsafe until the
             // focus/activation validator is implemented. The session can still
@@ -1892,6 +1894,23 @@ mod tests {
                 1,
             )
             .expect("display-scoped application identity must resolve")
+    }
+
+    fn interactive_display_binding() -> RemoteAppTargetBinding {
+        ResourceEntryTargetResolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Display,
+                    live_metadata(json!({
+                        "display_id": 1,
+                        "target_identity_epoch": 9,
+                    })),
+                ),
+                "interactive",
+                1,
+            )
+            .expect("display identity must resolve")
     }
 
     #[test]
@@ -2770,6 +2789,24 @@ mod tests {
         assert_eq!(
             binding.target_bound_event_payload()["input_scope_reason"],
             json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+        );
+    }
+
+    #[test]
+    fn display_interactive_downgrades_until_input_consent_exists() {
+        let binding = interactive_display_binding();
+        assert_eq!(binding.to_value()["input_scope"], json!("view_only"));
+        assert_eq!(
+            binding.to_value()["input_scope_reason"],
+            json!("input_consent_required")
+        );
+        assert_eq!(
+            binding.scope_audit_value()["input_scope_reason"],
+            json!("input_consent_required")
+        );
+        assert_eq!(
+            binding.target_bound_event_payload()["input_scope_reason"],
+            json!("input_consent_required")
         );
     }
 }

@@ -804,6 +804,8 @@ fn current_session_input_policy() {
     input_policy_for_scope(input_policy, input_scope);
 }
 
+fn display_interactive_without_input_consent_remains_view_only() {}
+
 fn input_policy_for_scope() {
     match scope {
         InputScope::ViewOnly => {
@@ -942,12 +944,15 @@ impl AppWindowSetProof {
 
 fn input_scope_for_request() -> InputScopeDecision {
     match kind {
+        RemoteDesktopTargetKind::Display => {
+            let reason = "input_consent_required";
+            InputScope::ViewOnly
+        }
         RemoteDesktopTargetKind::Window | RemoteDesktopTargetKind::Application => {
             // target-scoped keyboard/pointer dispatch is unsafe until a focus-safe validator exists.
             let reason = "target_scoped_keyboard_pointer_dispatch_unsafe";
             InputScope::ViewOnly
         }
-        _ => InputScope::DisplayGlobal,
     }
 }
 
@@ -980,6 +985,18 @@ mod tests {
         assert_eq!(
             binding.target_bound_event_payload()["consent_epoch"],
             json!(binding.consent_epoch())
+        );
+    }
+
+    #[test]
+    fn display_interactive_downgrades_until_input_consent_exists() {
+        assert_eq!(
+            binding.scope_audit_value()["input_scope_reason"],
+            json!("input_consent_required")
+        );
+        assert_eq!(
+            binding.target_bound_event_payload()["input_scope_reason"],
+            json!("input_consent_required")
         );
     }
 }

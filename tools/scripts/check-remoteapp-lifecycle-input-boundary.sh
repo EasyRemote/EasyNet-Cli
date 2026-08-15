@@ -728,9 +728,11 @@ require 'requested ScreenCaptureKit window identity is ambiguous' "$SCK" \
 require 'requested ScreenCaptureKit application identity is ambiguous' "$SCK" \
   'application selection ambiguity must be typed'
 
-# E2E-11: app/window input remains view-only until a focus-safe target-local
-# input validator exists. Pointer geometry may be computed for diagnostics, but
-# keyboard/pointer injection is disabled for app/window sessions.
+# E2E-11: capture/session consent is not input consent. Display sessions and
+# app/window sessions remain view-only until explicit input consent exists; app
+# and window sessions additionally require a focus-safe target-local input
+# validator. Pointer geometry may be computed for diagnostics, but
+# keyboard/pointer injection is disabled without those proofs.
 require 'fn input_scope_for_request\(' "$TARGET" \
   'target resolver must centralize requested mode to input scope'
 require 'InputScopeDecision' "$TARGET" \
@@ -738,7 +740,11 @@ require 'InputScopeDecision' "$TARGET" \
 require 'RemoteDesktopTargetKind::Window \| RemoteDesktopTargetKind::Application' "$TARGET" \
   'window/application targets must share the view-only input safety branch'
 require 'InputScope::ViewOnly' "$TARGET" \
-  'app/window requested interactive mode must downgrade to view_only'
+  'requested interactive mode must downgrade to view_only when input authority is missing'
+require 'input_consent_required' "$TARGET" \
+  'display interactive downgrade must publish missing input consent as a stable reason'
+require 'display_interactive_downgrades_until_input_consent_exists' "$TARGET" \
+  'target binding tests must prove display interactive does not imply input consent'
 require 'target-scoped keyboard/pointer dispatch is unsafe' "$TARGET" \
   'view-only downgrade must document the missing focus-safe validator'
 require 'target_scoped_keyboard_pointer_dispatch_unsafe' "$TARGET" \
@@ -753,6 +759,8 @@ require 'binding\.target_bound_event_payload\(\)\["consent_epoch"\]' "$TARGET" \
   'target binding tests must prove consent epoch is externally visible in TARGET_BOUND'
 require 'application_interactive_downgrade_projects_input_scope_reason' "$TARGET" \
   'target binding tests must prove app/window interactive downgrade reason is visible'
+require 'display_interactive_without_input_consent_remains_view_only' "$INPUT" \
+  'input policy tests must prove display interactive cannot enable key/pointer without input consent'
 require 'fn input_policy_for_scope\(' "$INPUT" \
   'input policy must centralize scope-based disablement'
 require 'fn input_policy_reject_reason\(' "$INPUT" \

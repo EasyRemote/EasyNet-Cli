@@ -1405,7 +1405,7 @@ mod tests {
     }
 
     #[test]
-    fn display_global_input_scope_preserves_interactive_policy() {
+    fn display_interactive_without_input_consent_remains_view_only() {
         let entry = ResourceEntry {
             resource_ura: "easynet:///r/acme/resource/display.test".into(),
             owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
@@ -1433,15 +1433,21 @@ mod tests {
             &binding,
         );
 
-        assert_eq!(policy["input_scope"], json!("display_global"));
+        assert_eq!(policy["input_scope"], json!("view_only"));
         assert_eq!(
             policy["unsupported_input_types"],
             json!(["clipboard", "file_drop"])
         );
-        assert!(input_policy_allows(&policy, "key"));
-        assert!(input_policy_allows(&policy, "pointer"));
-        assert_eq!(input_policy_reject_reason(&policy, "key"), None);
-        assert_eq!(input_policy_reject_reason(&policy, "pointer"), None);
+        assert!(!input_policy_allows(&policy, "key"));
+        assert!(!input_policy_allows(&policy, "pointer"));
+        assert_eq!(
+            input_policy_reject_reason(&policy, "key"),
+            Some("input_scope_unsupported")
+        );
+        assert_eq!(
+            input_policy_reject_reason(&policy, "pointer"),
+            Some("input_scope_unsupported")
+        );
         assert!(
             !input_policy_allows(&policy, "clipboard"),
             "clipboard must remain unsupported on the input data channel"
