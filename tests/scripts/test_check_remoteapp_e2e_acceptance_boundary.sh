@@ -6,6 +6,7 @@ SCRIPT="$REPO_ROOT/tools/scripts/check-remoteapp-e2e-acceptance-boundary.sh"
 HARNESS="$REPO_ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 PROBE_HARNESS="$REPO_ROOT/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
 SENTINEL_FIXTURE="$REPO_ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+CREATE_FAILCLOSED="$REPO_ROOT/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
@@ -13,14 +14,17 @@ mkdir -p "$SANDBOX/tools/scripts" "$SANDBOX/docs/design" "$SANDBOX/examples"
 cp "$HARNESS" "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 cp "$PROBE_HARNESS" "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
 cp "$SENTINEL_FIXTURE" "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+cp "$CREATE_FAILCLOSED" "$SANDBOX/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
 cp "$REPO_ROOT/examples/easynet-remoteapp-frame-receiver.rs" \
   "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+chmod +x "$SANDBOX/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
 cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
 | E2E-03 exact window session | decoded stream excludes sentinel |
 | E2E-04 exact application session | decoded stream excludes other apps |
+| E2E-05 stale window fail-closed | no active session row |
 | E2E-07 display fallback forbidden | no decoded full display |
 | E2E-08 move/resize tracking | ordered target geometry events |
 | E2E-09 target loss vs transport failure | target loss is not transport failure |
@@ -34,6 +38,8 @@ CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   --self-test \
   --target-kind application >/dev/null
+"$SANDBOX/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh" \
+  --self-test >/dev/null
 
 cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"

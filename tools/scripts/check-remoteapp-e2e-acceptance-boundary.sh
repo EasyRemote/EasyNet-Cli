@@ -5,6 +5,7 @@ ROOT="${CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}"
 SCRIPT="$ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 PROBE="$ROOT/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
 FIXTURE="$ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+CREATE_FAILCLOSED="$ROOT/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
 RECEIVER="$ROOT/examples/easynet-remoteapp-frame-receiver.rs"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 
@@ -23,6 +24,7 @@ require() {
 [[ -f "$SCRIPT" ]] || fail "missing host decoded-frame E2E harness"
 [[ -f "$PROBE" ]] || fail "missing bundled host decoded-frame probe"
 [[ -f "$FIXTURE" ]] || fail "missing bundled host sentinel fixture"
+[[ -f "$CREATE_FAILCLOSED" ]] || fail "missing host create_session fail-closed E2E harness"
 [[ -f "$RECEIVER" ]] || fail "missing bundled host decoded-frame receiver"
 [[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
 
@@ -30,6 +32,8 @@ require 'E2E-03 exact window session' "$SPEC" \
   'SPEC must retain exact window decoded-frame acceptance'
 require 'E2E-04 exact application session' "$SPEC" \
   'SPEC must retain exact application decoded-frame acceptance'
+require 'E2E-05 stale window fail-closed' "$SPEC" \
+  'SPEC must retain stale window fail-closed acceptance'
 require 'E2E-07 display fallback forbidden' "$SPEC" \
   'SPEC must retain display fallback decoded-frame acceptance'
 require 'E2E-08 move/resize tracking' "$SPEC" \
@@ -317,6 +321,29 @@ require 'window\.close\(\)' "$FIXTURE" \
   'bundled sentinel fixture must support native selected-window close for target-loss E2E'
 require 'EASYNET_REMOTEAPP_SELECTED_CONTROL_SH' "$FIXTURE" \
   'bundled sentinel fixture must export the selected lifecycle control helper'
+
+require 'stale-window' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must support stale-window scenario'
+require 'resource\.refresh_remote_targets' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must select from live target inventory before closing the window'
+require 'EASYNET_REMOTEAPP_SELECTED_CONTROL_SH' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must close the native selected window through the fixture control helper'
+require '--session-id' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must use a deterministic session id for absence probing'
+require 'remote_desktop\.create_session' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must invoke remote_desktop.create_session'
+require 'target_not_found.*target_stale|target_stale.*target_not_found' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must accept the SPEC stale-window failure reasons'
+require 'refresh_targets' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must require refresh_targets frontend action'
+require 'remote_desktop\.show_session' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must probe the deterministic session id after create failure'
+require 'session_not_found' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must prove no active session row was inserted'
+require 'session_token_mismatch' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must distinguish no-row absence from inserted-row token mismatch'
+require 'create_session args must not contain subject, subject_ura, or resource_ura' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must preserve selected Resource URA as Invocation.subject'
 
 require 'show-remote-desktop-session' "$RECEIVER" \
   'bundled frame receiver must read the latest post-decoded-frame session projection'

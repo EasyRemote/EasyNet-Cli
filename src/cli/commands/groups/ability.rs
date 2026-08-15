@@ -218,6 +218,9 @@ pub struct CreateRemoteDesktopSessionArgs {
     /// Selected display/window/application Resource URA from refresh/watch remote targets.
     #[arg(long, value_name = "RESOURCE_URA")]
     pub subject: String,
+    /// Deterministic session id for host E2E failure-path probes.
+    #[arg(long, value_name = "SESSION_ID", hide = true)]
+    pub session_id: Option<String>,
     /// Remote desktop session mode.
     #[arg(long, value_parser = ["view_only", "interactive"])]
     pub mode: Option<String>,
@@ -593,6 +596,9 @@ fn run_create_remote_desktop_session(args: CreateRemoteDesktopSessionArgs) -> an
 #[cfg(feature = "remote-desktop")]
 fn create_remote_desktop_session_request(args: &CreateRemoteDesktopSessionArgs) -> Value {
     let mut object = serde_json::Map::new();
+    if let Some(session_id) = args.session_id.as_ref() {
+        object.insert("session_id".to_string(), serde_json::json!(session_id));
+    }
     if let Some(mode) = args.mode.as_ref() {
         object.insert("mode".to_string(), serde_json::json!(mode));
     }
@@ -957,6 +963,7 @@ mod tests {
     fn create_remote_desktop_session_request_keeps_selected_subject_out_of_args() {
         let request = create_remote_desktop_session_request(&CreateRemoteDesktopSessionArgs {
             subject: "easynet:///r/test/resource/device.dev/streams/window.7".to_string(),
+            session_id: None,
             mode: Some("view_only".to_string()),
             transport_preferences: vec!["webrtc".to_string()],
             lease_ttl_ms: Some(30_000),
@@ -970,6 +977,31 @@ mod tests {
                 "transport_preferences": ["webrtc"],
                 "lease_ttl_ms": 30000,
             })
+        );
+        assert!(request.get("subject").is_none());
+        assert!(request.get("resource_ura").is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "remote-desktop")]
+    fn create_remote_desktop_session_request_accepts_hidden_session_id_for_e2e_absence_probe() {
+        let request = create_remote_desktop_session_request(&CreateRemoteDesktopSessionArgs {
+            subject: "easynet:///r/test/resource/device.dev/streams/window.7".to_string(),
+            session_id: Some("rd-stale-window-e2e".to_string()),
+            mode: Some("view_only".to_string()),
+            transport_preferences: vec!["webrtc".to_string()],
+            lease_ttl_ms: None,
+            format: OutputFormat::Json,
+        });
+
+        assert_eq!(
+            request["session_id"],
+            serde_json::json!("rd-stale-window-e2e")
+        );
+        assert_eq!(request["mode"], serde_json::json!("view_only"));
+        assert_eq!(
+            request["transport_preferences"],
+            serde_json::json!(["webrtc"])
         );
         assert!(request.get("subject").is_none());
         assert!(request.get("resource_ura").is_none());
