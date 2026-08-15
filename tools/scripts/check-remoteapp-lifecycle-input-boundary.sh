@@ -80,6 +80,13 @@ for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$SESSION" "
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
+require 'target_field\("consent_epoch"\)' "$EVENT_LOG" \
+  'event log must lift consent epoch from target event payloads'
+require '"consent_epoch": consent_epoch' "$EVENT_LOG" \
+  'watch-events rows must project consent epoch as a top-level field'
+require '"consent_epoch": Value::Null' "$EVENT_LOG" \
+  'event-log compaction marker must preserve the consent epoch field shape'
+
 for checkpoint in \
   'E2E-08 move/resize tracking' \
   'E2E-09 target loss vs transport failure' \
@@ -263,6 +270,8 @@ require '"target_geometry_revision": binding\.target_geometry_revision\(\)' "$SE
   'MEDIA_SOURCE_LOST payload must carry target geometry revision'
 require '"media_source_epoch": binding\.media_source_epoch\(\)' "$SESSION_EVENTS" \
   'MEDIA_SOURCE_LOST payload must carry media source epoch'
+require_multiline '/fn media_source_lost\((?:(?!fn client_media_reason_code).)*"consent_epoch": binding\.consent_epoch\(\)/s' "$SESSION_EVENTS" \
+  'MEDIA_SOURCE_LOST payload must carry consent epoch'
 require '"failure_domain": "target"' "$SESSION_EVENTS" \
   'MEDIA_SOURCE_LOST must be a target-domain failure'
 require '"media_transport_ready": false' "$SESSION_EVENTS" \
@@ -329,7 +338,7 @@ require 'event\["recoverability"\]' "$SESSION_STORE" \
   'session-store tests must prove TRANSPORT_FAILED top-level recoverability is projected'
 require_multiline '/fn session_created\((?:(?!fn capture_target_resolved).)*"reason_code": "session_created",(?:(?!fn capture_target_resolved).)*"recoverability": "continue"/s' "$SESSION_EVENTS" \
   'SESSION_CREATED path must publish initial reason_code and continue recoverability'
-require_multiline '/fn capture_target_resolved\((?:(?!fn target_bound).)*"subject_ura": binding\.subject_ura\(\),(?:(?!fn target_bound).)*"binding_id": binding\.binding_id\(\),(?:(?!fn target_bound).)*"binding_epoch": binding\.binding_epoch\(\),(?:(?!fn target_bound).)*"previous_target_identity_epoch": Value::Null,(?:(?!fn target_bound).)*"target_identity_epoch": binding\.target_identity_epoch\(\),(?:(?!fn target_bound).)*"target_geometry_revision": binding\.target_geometry_revision\(\),(?:(?!fn target_bound).)*"media_source_epoch": binding\.media_source_epoch\(\),(?:(?!fn target_bound).)*"reason_code": "capture_target_resolved",(?:(?!fn target_bound).)*"recoverability": "continue"/s' "$SESSION_EVENTS" \
+require_multiline '/fn capture_target_resolved\((?:(?!fn session_closed)(?!fn target_bound).)*"subject_ura": binding\.subject_ura\(\),(?:(?!fn session_closed)(?!fn target_bound).)*"binding_id": binding\.binding_id\(\),(?:(?!fn session_closed)(?!fn target_bound).)*"binding_epoch": binding\.binding_epoch\(\),(?:(?!fn session_closed)(?!fn target_bound).)*"previous_target_identity_epoch": Value::Null,(?:(?!fn session_closed)(?!fn target_bound).)*"target_identity_epoch": binding\.target_identity_epoch\(\),(?:(?!fn session_closed)(?!fn target_bound).)*"target_geometry_revision": binding\.target_geometry_revision\(\),(?:(?!fn session_closed)(?!fn target_bound).)*"media_source_epoch": binding\.media_source_epoch\(\),(?:(?!fn session_closed)(?!fn target_bound).)*"consent_epoch": binding\.consent_epoch\(\),(?:(?!fn session_closed)(?!fn target_bound).)*"reason_code": "capture_target_resolved",(?:(?!fn session_closed)(?!fn target_bound).)*"recoverability": "continue"/s' "$SESSION_EVENTS" \
   'CAPTURE_TARGET_RESOLVED path must publish initial binding context and continue recoverability'
 require_multiline '/fn session_closing\((?:(?!fn session_closed).)*"reason_code": reason,(?:(?!fn session_closed).)*"recoverability": "closing"/s' "$SESSION_EVENTS" \
   'SESSION_CLOSING path must publish terminal reason_code and closing recoverability'
@@ -343,6 +352,8 @@ require 'session_created_payload_projects_initial_reason_code' "$SESSION_EVENTS"
   'session event tests must prove SESSION_CREATED publishes initial reason_code'
 require 'capture_target_resolved_payload_projects_initial_binding_context' "$SESSION_EVENTS" \
   'session event tests must prove CAPTURE_TARGET_RESOLVED publishes binding context'
+require 'payload\["consent_epoch"\]' "$SESSION_EVENTS" \
+  'session event tests must prove target binding events publish consent epoch'
 require 'session_closed_payload_projects_terminal_reason_code' "$SESSION_EVENTS" \
   'session event tests must prove caller close payload publishes terminal reason_code'
 require 'session_expired_payload_projects_terminal_reason_code' "$SESSION_EVENTS" \
@@ -367,6 +378,8 @@ require 'events\[media_source_lost_index\]\["target_identity_epoch"\]' "$SESSION
   'E2E-09 must assert event-log top-level MEDIA_SOURCE_LOST target identity epoch'
 require 'events\[media_source_lost_index\]\["media_source_epoch"\]' "$SESSION" \
   'E2E-09 must assert event-log top-level MEDIA_SOURCE_LOST media source epoch'
+require 'events\[media_source_lost_index\]\["consent_epoch"\]' "$SESSION" \
+  'E2E-09 must assert event-log top-level MEDIA_SOURCE_LOST consent epoch'
 reject 'TRANSPORT_FAILED' "$SESSION" \
   'session target-loss tests must not rely on a transport-failed event'
 require 'target_failure_payload' "$TARGET_TRACKING" \
@@ -525,8 +538,12 @@ require '"scope_widened": self\.scope_audit\.scope_widened' "$TARGET" \
   'TARGET_BOUND payload must project scope widening from the committed binding audit'
 require '"display_fallback_used": self\.scope_audit\.display_fallback_used' "$TARGET" \
   'TARGET_BOUND payload must project display fallback from the committed binding audit'
+require '"consent_epoch": self\.consent_epoch' "$TARGET" \
+  'TARGET_BOUND payload must project consent epoch from the committed binding'
 require 'target_bound\["payload"\]\["display_fallback_used"\]' "$SESSION" \
   'production readiness test must assert TARGET_BOUND fallback projection'
+require 'bound\["consent_epoch"\]|target_bound\["consent_epoch"\]' "$SESSION" \
+  'session tests must assert TARGET_BOUND top-level consent epoch projection'
 require 'TargetResolutionError::TransportRouteUnavailable' "$VIEW_TRANSPORT" \
   'transport route degradation must expose the SPEC canonical transport_route_unavailable reason code from the shared taxonomy'
 require_multiline '/fn summary\([\s\S]*?"message": self\.message,\s*"reason_code": self\.reason_code\.clone\(\)/s' "$VIEW_TRANSPORT" \
@@ -732,6 +749,8 @@ require 'binding\.scope_audit_value\(\)\["input_scope_reason"\]' "$TARGET" \
   'target binding tests must prove input scope reason is externally visible in scope_audit'
 require 'binding\.target_bound_event_payload\(\)\["input_scope_reason"\]' "$TARGET" \
   'target binding tests must prove input scope reason is externally visible in TARGET_BOUND'
+require 'binding\.target_bound_event_payload\(\)\["consent_epoch"\]' "$TARGET" \
+  'target binding tests must prove consent epoch is externally visible in TARGET_BOUND'
 require 'application_interactive_downgrade_projects_input_scope_reason' "$TARGET" \
   'target binding tests must prove app/window interactive downgrade reason is visible'
 require 'fn input_policy_for_scope\(' "$INPUT" \

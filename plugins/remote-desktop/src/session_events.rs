@@ -73,6 +73,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn capture_target_resolved(
             "target_identity_epoch": binding.target_identity_epoch(),
             "target_geometry_revision": binding.target_geometry_revision(),
             "media_source_epoch": binding.media_source_epoch(),
+            "consent_epoch": binding.consent_epoch(),
             "reason_code": "capture_target_resolved",
             "recoverability": "continue",
             "target_binding": binding.to_value(),
@@ -421,6 +422,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn media_source_lost(
             "target_identity_epoch": binding.target_identity_epoch(),
             "target_geometry_revision": binding.target_geometry_revision(),
             "media_source_epoch": binding.media_source_epoch(),
+            "consent_epoch": binding.consent_epoch(),
             "reason": reason.as_str(),
             "reason_code": reason.as_str(),
             "recoverability": "requires_target_refresh",
@@ -554,6 +556,10 @@ mod tests {
             payload["media_source_epoch"],
             json!(init.target_binding.media_source_epoch())
         );
+        assert_eq!(
+            payload["consent_epoch"],
+            json!(init.target_binding.consent_epoch())
+        );
         assert_eq!(payload["reason_code"], json!("capture_target_resolved"));
         assert_eq!(payload["recoverability"], json!("continue"));
         assert_eq!(
@@ -664,6 +670,10 @@ mod tests {
         assert_eq!(
             payload["media_source_epoch"],
             json!(init.target_binding.media_source_epoch())
+        );
+        assert_eq!(
+            payload["consent_epoch"],
+            json!(init.target_binding.consent_epoch())
         );
         assert_eq!(payload["reason"], json!("target_permission_missing"));
         assert_eq!(payload["reason_code"], json!("target_permission_missing"));

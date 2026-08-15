@@ -1111,10 +1111,18 @@ mod tests {
             resolved["media_source_epoch"],
             json!(session.target_binding().media_source_epoch())
         );
+        assert_eq!(
+            resolved["consent_epoch"],
+            json!(session.target_binding().consent_epoch())
+        );
 
         let bound = &events[bound_index];
         assert_eq!(bound["reason_code"], json!("target_bound"));
         assert_eq!(bound["recoverability"], json!("continue"));
+        assert_eq!(
+            bound["consent_epoch"],
+            json!(session.target_binding().consent_epoch())
+        );
     }
 
     #[test]
@@ -1296,6 +1304,10 @@ mod tests {
         assert_eq!(
             events[media_source_lost_index]["media_source_epoch"],
             json!(session.target_binding().media_source_epoch())
+        );
+        assert_eq!(
+            events[media_source_lost_index]["consent_epoch"],
+            json!(session.target_binding().consent_epoch())
         );
         assert_eq!(
             events[media_source_lost_index]["payload"]["frontend_action"],

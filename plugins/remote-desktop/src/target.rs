@@ -1273,6 +1273,7 @@ impl RemoteAppTargetBinding {
             "target_identity_epoch": self.target_identity_epoch,
             "target_geometry_revision": self.target_geometry_revision,
             "media_source_epoch": self.media_source_epoch,
+            "consent_epoch": self.consent_epoch,
             "capture_scope": self.capture_scope.as_str(),
             "input_scope": self.input_scope.as_str(),
             "input_scope_reason": self.scope_audit.input_scope_reason.as_str(),
@@ -2744,6 +2745,10 @@ mod tests {
         assert_eq!(
             binding.target_bound_event_payload()["target_model"],
             json!("display_scoped_application_window_set")
+        );
+        assert_eq!(
+            binding.target_bound_event_payload()["consent_epoch"],
+            json!(binding.consent_epoch())
         );
         assert_eq!(
             binding.target_bound_event_payload()["input_scope_reason"],

@@ -147,6 +147,7 @@ impl RemoteDesktopEventLog {
         let target_identity_epoch = target_field("target_identity_epoch");
         let target_geometry_revision = target_field("target_geometry_revision");
         let media_source_epoch = target_field("media_source_epoch");
+        let consent_epoch = target_field("consent_epoch");
         let transport_epoch = target_field("transport_epoch");
         let reason_code = target_field("reason_code");
         let recoverability = target_field("recoverability");
@@ -161,6 +162,7 @@ impl RemoteDesktopEventLog {
             "target_identity_epoch": target_identity_epoch,
             "target_geometry_revision": target_geometry_revision,
             "media_source_epoch": media_source_epoch,
+            "consent_epoch": consent_epoch,
             "transport_epoch": transport_epoch,
             "event_type": event_type,
             "event_type_proto": event_type_proto_name(event_type),
@@ -213,6 +215,7 @@ impl RemoteDesktopEventLog {
             "target_identity_epoch": Value::Null,
             "target_geometry_revision": Value::Null,
             "media_source_epoch": Value::Null,
+            "consent_epoch": Value::Null,
             "transport_epoch": Value::Null,
             "event_type": "EVENT_LOG_COMPACTED",
             "event_type_proto": event_type_proto_name("EVENT_LOG_COMPACTED"),

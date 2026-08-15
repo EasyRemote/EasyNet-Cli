@@ -188,6 +188,7 @@ mod tests {
         assert_eq!(events[media_source_lost_index]["binding_id"], json!(session.target_binding().binding_id()));
         assert_eq!(events[media_source_lost_index]["target_identity_epoch"], json!(session.target_binding().target_identity_epoch()));
         assert_eq!(events[media_source_lost_index]["media_source_epoch"], json!(session.target_binding().media_source_epoch()));
+        assert_eq!(events[media_source_lost_index]["consent_epoch"], json!(session.target_binding().consent_epoch()));
         assert_eq!(session.target_tracking_state()["input_enabled"], json!(false));
         assert!(events.iter().all(|event| event["event_type"] != json!("SESSION_DEGRADED")));
     }
@@ -278,6 +279,7 @@ mod tests {
             "scope widening or display fallback must prevent production online"
         );
         assert_eq!(target_bound["payload"]["display_fallback_used"], json!(true));
+        assert_eq!(target_bound["consent_epoch"], json!(session.target_binding().consent_epoch()));
     }
 
     #[test]
@@ -421,11 +423,17 @@ fn capture_target_resolved(binding: &RemoteAppTargetBinding) {
         "target_identity_epoch": binding.target_identity_epoch(),
         "target_geometry_revision": binding.target_geometry_revision(),
         "media_source_epoch": binding.media_source_epoch(),
+        "consent_epoch": binding.consent_epoch(),
         "reason_code": "capture_target_resolved",
         "recoverability": "continue",
         "target_binding": binding.to_value(),
         "scope_audit": binding.scope_audit_value(),
     });
+}
+
+#[test]
+fn capture_target_resolved_payload_projects_initial_binding_context() {
+    assert_eq!(payload["consent_epoch"], json!(binding.consent_epoch()));
 }
 
 fn session_closed(reason: &str) {
@@ -461,6 +469,7 @@ fn media_source_lost(binding: &RemoteAppTargetBinding) {
         "target_identity_epoch": binding.target_identity_epoch(),
         "target_geometry_revision": binding.target_geometry_revision(),
         "media_source_epoch": binding.media_source_epoch(),
+        "consent_epoch": binding.consent_epoch(),
         "failure_domain": "target",
         "media_transport_ready": false,
     });
@@ -538,6 +547,14 @@ RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/event_log.rs" <<'RS'
 fn event_type_proto_name(event_type: &str) -> &'static str {
+    let target_field = |name: &str| payload.get(name).cloned().unwrap_or(Value::Null);
+    let consent_epoch = target_field("consent_epoch");
+    json!({
+        "consent_epoch": consent_epoch,
+    });
+    json!({
+        "consent_epoch": Value::Null,
+    });
     match event_type {
         "TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_TARGET_CHANGED",
         _ => "REMOTE_DESKTOP_EVENT_STATE_CHANGED",
@@ -902,6 +919,7 @@ fn production_scope_ready() -> bool {
 
 fn target_bound_event_payload() {
     json!({
+        "consent_epoch": self.consent_epoch,
         "input_scope_reason": self.scope_audit.input_scope_reason.as_str(),
         "scope_widened": self.scope_audit.scope_widened,
         "display_fallback_used": self.scope_audit.display_fallback_used,
@@ -958,6 +976,10 @@ mod tests {
         assert_eq!(
             binding.target_bound_event_payload()["input_scope_reason"],
             json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+        );
+        assert_eq!(
+            binding.target_bound_event_payload()["consent_epoch"],
+            json!(binding.consent_epoch())
         );
     }
 }
@@ -1482,9 +1504,29 @@ perl -0pi -e 's/"TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_TARGET_CHANGED"/
 run_fail 'event log must project TARGET_REBIND_FAILED as a canonical target change'
 
 write_fixture
+perl -0pi -e 's/let consent_epoch = target_field\("consent_epoch"\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/event_log.rs"
+run_fail 'event log must lift consent epoch from target event payloads'
+
+write_fixture
+perl -0pi -e 's/"consent_epoch": consent_epoch,//' \
+  "$SANDBOX/plugins/remote-desktop/src/event_log.rs"
+run_fail 'watch-events rows must project consent epoch as a top-level field'
+
+write_fixture
 perl -0pi -e 's/session_events::media_source_lost\(self\.target\.binding\(\)\)/session_events::media_source_lost()/' \
   "$SANDBOX/plugins/remote-desktop/src/session.rs"
 run_fail 'MEDIA_SOURCE_LOST projection must consume the committed session target binding'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(payload\["consent_epoch"\], json!\(binding\.consent_epoch\(\)\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'session event tests must prove target binding events publish consent epoch'
+
+write_fixture
+perl -0pi -e 's/(fn media_source_lost\([\s\S]*?)\n        "consent_epoch": binding\.consent_epoch\(\),/$1/s' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'MEDIA_SOURCE_LOST payload must carry consent epoch'
 
 write_fixture
 perl -0pi -e 's/WebRtcFailureEventKind::MediaSourceLost/WebRtcFailureEventKind::TransportFailed/' \
@@ -1547,14 +1589,14 @@ perl -0pi -e 's/session_created_payload_projects_initial_reason_code/session_cre
 run_fail 'session event tests must prove SESSION_CREATED publishes initial reason_code'
 
 write_fixture
-perl -0pi -e 's/"binding_id": binding\.binding_id\(\),//' \
+perl -0pi -e '$n=0; s/"binding_id": binding\.binding_id\(\)/++$n == 1 ? "\"binding_id_omitted\": binding.binding_id()" : $&/ge' \
   "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
 run_fail 'CAPTURE_TARGET_RESOLVED path must publish initial binding context and continue recoverability'
 
 write_fixture
-perl -0pi -e 's/capture_target_resolved_payload_projects_initial_binding_context/capture_target_resolved_lacks_initial_binding_context/' \
+perl -0pi -e 's/assert_eq!\(payload\["consent_epoch"\], json!\(binding\.consent_epoch\(\)\)\);//' \
   "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
-run_fail 'session event tests must prove CAPTURE_TARGET_RESOLVED publishes binding context'
+run_fail 'session event tests must prove target binding events publish consent epoch'
 
 write_fixture
 perl -0pi -e 's/initial_session_events_project_reason_codes_in_order/initial_session_events_lack_reason_code_projection/' \
@@ -1810,6 +1852,16 @@ write_fixture
 perl -0pi -e 's/"display_fallback_used": self\.scope_audit\.display_fallback_used/"display_fallback_used": false/' \
   "$SANDBOX/plugins/remote-desktop/src/target.rs"
 run_fail 'TARGET_BOUND payload must project display fallback from the committed binding audit'
+
+write_fixture
+perl -0pi -e 's/"consent_epoch": self\.consent_epoch,//' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+run_fail 'TARGET_BOUND payload must project consent epoch from the committed binding'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(target_bound\["consent_epoch"\], json!\(session\.target_binding\(\)\.consent_epoch\(\)\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session tests must assert TARGET_BOUND top-level consent epoch projection'
 
 write_fixture
 perl -0pi -e 's/"input_scope_reason": self\.scope_audit\.input_scope_reason\.as_str\(\),//g' \
