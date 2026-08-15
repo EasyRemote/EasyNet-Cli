@@ -13,7 +13,7 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use webrtc::data_channel::{DataChannel, DataChannelEvent};
 
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
@@ -201,17 +201,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_binding(
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_target_snapshot(
-    mut input_policy: Value,
+    input_policy: Value,
     snapshot: &TargetTrackerSnapshot,
 ) -> Value {
-    let Some(pointer_target) = snapshot.pointer_target_value() else {
-        return input_policy;
-    };
-    let Some(map) = input_policy.as_object_mut() else {
-        return input_policy;
-    };
-    map.insert("pointer_target".to_string(), pointer_target);
-    input_policy
+    let mut map = input_policy_object(input_policy);
+    if let Some(pointer_target) = snapshot.pointer_target_value() {
+        map.insert("pointer_target".to_string(), pointer_target);
+    }
+    Value::Object(map)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -220,31 +217,36 @@ pub(in crate::daemon::plugins::remote_desktop) enum InputTransportGuard {
     DiagnosticPreview,
 }
 
-fn input_policy_for_scope(mut input_policy: Value, input_scope: InputScope) -> Value {
-    let Some(map) = input_policy.as_object_mut() else {
-        return input_policy;
-    };
+fn input_policy_for_scope(input_policy: Value, input_scope: InputScope) -> Value {
+    let mut map = input_policy_object(input_policy);
     map.insert("input_scope".to_string(), json!(input_scope.as_str()));
-    disable_input_policy_key(map, "clipboard_enabled");
-    disable_input_policy_key(map, "file_drop_enabled");
+    disable_input_policy_key(&mut map, "clipboard_enabled");
+    disable_input_policy_key(&mut map, "file_drop_enabled");
     map.insert(
         "unsupported_input_types".to_string(),
         unsupported_input_channel_types_value(),
     );
     match input_scope {
         InputScope::ViewOnly => {
-            disable_input_policy_key(map, "keyboard_enabled");
-            disable_input_policy_key(map, "pointer_enabled");
+            disable_input_policy_key(&mut map, "keyboard_enabled");
+            disable_input_policy_key(&mut map, "pointer_enabled");
         }
         InputScope::TargetLocal => {
-            disable_input_policy_key(map, "keyboard_enabled");
+            disable_input_policy_key(&mut map, "keyboard_enabled");
         }
         InputScope::DisplayGlobal => {}
     }
-    input_policy
+    Value::Object(map)
 }
 
-fn disable_input_policy_key(map: &mut serde_json::Map<String, Value>, key: &'static str) {
+fn input_policy_object(input_policy: Value) -> Map<String, Value> {
+    match input_policy {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    }
+}
+
+fn disable_input_policy_key(map: &mut Map<String, Value>, key: &'static str) {
     map.insert(key.to_string(), json!(false));
 }
 
@@ -1540,6 +1542,54 @@ mod tests {
         assert!(
             !input_policy_allows(&policy, "file_drop"),
             "file drop must remain unsupported on the input data channel"
+        );
+    }
+
+    #[test]
+    fn input_policy_builder_canonicalizes_non_object_base_policy() {
+        let entry = ResourceEntry {
+            resource_ura: "easynet:///r/acme/resource/window.canonical-policy".into(),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
+            kind: ResourceType::Window,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "window:macos:cgwindow:10:42".into(),
+            display_name: "Cursor".into(),
+            metadata: live_remote_target_metadata(json!({
+                "window_id": 42,
+                "pid": 10,
+                "app_name": "Cursor",
+                "x": 100,
+                "y": 200,
+                "width": 800,
+                "height": 600,
+                "geometry_revision": 7,
+            })),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        let binding = binding_for_mode(&entry, "interactive");
+
+        let policy = input_policy_for_binding(json!("caller-supplied malformed policy"), &binding);
+
+        assert_eq!(policy["input_scope"], json!("view_only"));
+        assert_eq!(policy["keyboard_enabled"], json!(false));
+        assert_eq!(policy["pointer_enabled"], json!(false));
+        assert_eq!(policy["clipboard_enabled"], json!(false));
+        assert_eq!(policy["file_drop_enabled"], json!(false));
+        assert_eq!(
+            policy["unsupported_input_types"],
+            json!(["clipboard", "file_drop"])
+        );
+        assert_eq!(
+            policy["pointer_target"]["target_geometry_revision"],
+            json!(7)
+        );
+        assert_eq!(
+            input_policy_reject_reason(&policy, "pointer"),
+            Some("input_scope_unsupported")
+        );
+        assert_eq!(
+            input_policy_reject_reason(&policy, "clipboard"),
+            Some("clipboard_input_unsupported")
         );
     }
 

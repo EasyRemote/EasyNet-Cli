@@ -769,6 +769,8 @@ fn input_policy_for_target_snapshot() {
     let _ = policy["pointer_target"]["target_geometry_revision"];
 }
 
+fn input_policy_object() {}
+
 enum InputTransportGuard {
     DirectWebRtc(TransportEpoch),
     DiagnosticPreview,
@@ -788,8 +790,8 @@ fn current_session_input_policy() {
 fn input_policy_for_scope() {
     match scope {
         InputScope::ViewOnly => {
-            disable_input_policy_key(map, "keyboard_enabled");
-            disable_input_policy_key(map, "pointer_enabled");
+            disable_input_policy_key(&mut map, "keyboard_enabled");
+            disable_input_policy_key(&mut map, "pointer_enabled");
         }
     }
 }
@@ -830,6 +832,21 @@ mod tests {
         assert!(
             !input_policy_allows(&policy, "key"),
             "current session policy must not let a loose base policy reopen view-only keyboard input"
+        );
+    }
+
+    #[test]
+    fn input_policy_builder_canonicalizes_non_object_base_policy() {
+        assert_eq!(policy["input_scope"], json!("view_only"));
+        assert_eq!(policy["keyboard_enabled"], json!(false));
+        assert_eq!(policy["pointer_enabled"], json!(false));
+        assert_eq!(
+            policy["unsupported_input_types"],
+            json!(["clipboard", "file_drop"])
+        );
+        assert_eq!(
+            input_policy_reject_reason(&policy, "pointer"),
+            Some("input_scope_unsupported")
         );
     }
 
@@ -1796,7 +1813,7 @@ perl -0pi -e 's/target_identity_ambiguous/target_metadata_incomplete/' \
 run_fail 'weak target identity handler test must assert target_identity_ambiguous'
 
 write_fixture
-perl -0pi -e 's/disable_input_policy_key\(map, "pointer_enabled"\);/enable_input_policy_key(map, "pointer_enabled");/' \
+perl -0pi -e 's/disable_input_policy_key\(&mut map, "pointer_enabled"\);/enable_input_policy_key(&mut map, "pointer_enabled");/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
 run_fail 'view-only input policy must disable pointer'
 

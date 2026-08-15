@@ -734,9 +734,9 @@ require 'apply_input_frame_with_policy_is_the_policy_enforcement_boundary' "$INP
   'input tests must prove apply_input_frame_with_policy is the policy enforcement boundary'
 require 'InputScope::ViewOnly => \{' "$INPUT" \
   'view-only input policy branch must exist'
-require 'disable_input_policy_key\(map, "keyboard_enabled"\)' "$INPUT" \
+require 'disable_input_policy_key\(&mut map, "keyboard_enabled"\)' "$INPUT" \
   'view-only input policy must disable keyboard'
-require 'disable_input_policy_key\(map, "pointer_enabled"\)' "$INPUT" \
+require 'disable_input_policy_key\(&mut map, "pointer_enabled"\)' "$INPUT" \
   'view-only input policy must disable pointer'
 require_multiline 'm/fn input_policy_reject_reason\(.+?input_scope == Some\(InputScope::ViewOnly\.as_str\(\)\).+?return Some\("input_scope_unsupported"\)/s' "$INPUT" \
   'view-only key/pointer rejection must report input_scope_unsupported'
@@ -766,6 +766,10 @@ require 'maps_application_pointer_through_primary_window_bounds' "$INPUT" \
   'E2E-11 must test application pointer mapping remains view-only'
 require '!input_policy_allows\(&policy, "pointer"\)' "$INPUT" \
   'E2E-11 tests must assert app/window pointer input is disabled'
+require 'fn input_policy_object\(' "$INPUT" \
+  'input policy construction must canonicalize arbitrary caller JSON into a domain-owned object'
+require 'input_policy_builder_canonicalizes_non_object_base_policy' "$INPUT" \
+  'E2E-11 must prove malformed/non-object base policy cannot bypass canonical view-only enforcement'
 require 'input_policy_reports_clipboard_and_file_drop_unsupported_even_when_requested' "$REQUEST" \
   'input parser must report unsupported rich input types explicitly'
 require 'UNSUPPORTED_INPUT_CHANNEL_TYPES' "$INPUT" \
