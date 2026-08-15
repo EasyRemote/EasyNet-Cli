@@ -8,6 +8,7 @@ FIXTURE="$ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
 TARGET_FRESHNESS="$ROOT/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
 CREATE_FAILCLOSED="$ROOT/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
 PERMISSION_SUBJECT="$ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
+DISPLAY_FALLBACK_FORBIDDEN="$ROOT/tools/scripts/host-remoteapp-display-fallback-forbidden-e2e.sh"
 RECEIVER="$ROOT/examples/easynet-remoteapp-frame-receiver.rs"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 
@@ -29,6 +30,7 @@ require() {
 [[ -f "$TARGET_FRESHNESS" ]] || fail "missing host target picker freshness E2E harness"
 [[ -f "$CREATE_FAILCLOSED" ]] || fail "missing host create_session fail-closed E2E harness"
 [[ -f "$PERMISSION_SUBJECT" ]] || fail "missing host permission subject E2E harness"
+[[ -f "$DISPLAY_FALLBACK_FORBIDDEN" ]] || fail "missing host display fallback forbidden E2E harness"
 [[ -f "$RECEIVER" ]] || fail "missing bundled host decoded-frame receiver"
 [[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
 
@@ -67,6 +69,25 @@ require 'target_resource_subjects_allowed.*False|target_resource_subjects_allowe
   'host permission subject E2E must prove the permission contract forbids target resources'
 require 'subject_contract_ura' "$PERMISSION_SUBJECT" \
   'host permission subject E2E must prove descriptor and response subject contract URA'
+
+require 'remote_desktop\.create_session' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must invoke remote_desktop.create_session'
+require 'remote_desktop\.show_session' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must prove absence through remote_desktop.show_session'
+require 'display_identity_missing|display_identity_mismatch|display_fallback_forbidden' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must require typed target-identity/fallback failure'
+require 'display_id.*monitor_id.*primary_display|primary_display.*display_id.*monitor_id' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must construct a malformed display without display identity'
+require 'active_session_row_inserted.*False|active_session_row_inserted.*false' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must prove no active session row was inserted'
+require 'first_display_capture_started.*False|first_display_capture_started.*false' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must prove no first-display capture started'
+require 'media_start_attempted.*False|media_start_attempted.*false' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must prove media startup was not attempted'
+require 'session_failed_before_media' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must bind decoded-frame absence to pre-media session failure'
+require 'restore_resources|resource_registry_restored' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must restore the operator resource registry'
 
 require 'resource\.refresh_remote_targets' "$TARGET_FRESHNESS" \
   'host target picker freshness E2E must refresh through resource.refresh_remote_targets'
