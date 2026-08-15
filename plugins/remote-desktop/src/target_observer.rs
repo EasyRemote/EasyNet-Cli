@@ -18,7 +18,8 @@ use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session::TargetMediaSourceLost;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, RemoteDesktopTargetKind, TargetGeometry, TargetResolutionError,
+    NativeAppIdentityCandidate, RemoteAppTargetBinding, RemoteDesktopTargetKind, TargetGeometry,
+    TargetResolutionError,
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::{
     TargetObservation, TargetTrackerSnapshot, TargetVisibilityState,
@@ -399,14 +400,15 @@ fn owner_matches(binding: &RemoteAppTargetBinding, window: &ObservedWindow) -> b
 }
 
 fn app_owner_matches(binding: &RemoteAppTargetBinding, window: &ObservedWindow) -> bool {
-    let locator = binding.native_locator();
-    locator.pid().is_none_or(|pid| window.pid == Some(pid))
-        && locator
-            .bundle_id()
-            .is_none_or(|bundle| window.bundle_id.as_deref() == Some(bundle))
-        && locator
-            .app_identity()
-            .is_none_or(|identity| window.bundle_id.as_deref() == Some(identity))
+    binding
+        .native_locator()
+        .app_identity_expectation()
+        .evaluate(NativeAppIdentityCandidate::new(
+            window.pid,
+            window.bundle_id.as_deref(),
+            window.bundle_id.as_deref(),
+        ))
+        .matched()
 }
 
 fn union_geometry(windows: &[&ObservedWindow]) -> Option<TargetGeometry> {

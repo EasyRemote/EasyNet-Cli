@@ -82,6 +82,15 @@ impl ScopeAudit {
     }
 }
 
+struct NativeAppIdentityCandidate;
+struct NativeAppIdentityExpectation;
+
+impl NativeTargetLocator {
+    fn app_identity_expectation(&self) -> NativeAppIdentityExpectation {
+        NativeAppIdentityExpectation
+    }
+}
+
 impl ResourceEntryTargetResolver {
     fn resolve_for_session(&self, ability: &'static str, entry: &ResourceEntry, target_kind: RemoteDesktopTargetKind) {
         validate_owner_agent_ura(ability, entry)?;
@@ -142,6 +151,12 @@ mod tests {
 
     #[test]
     fn target_binding_rejects_non_agent_owner_projection() {}
+
+    #[test]
+    fn native_app_identity_expectation_matches_canonical_bundle_aliases() {}
+
+    #[test]
+    fn native_app_identity_expectation_requires_all_declared_identity_fields() {}
 }
 RS
 
@@ -252,6 +267,16 @@ fn target_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {
 }
 
 fn capture_jpeg_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {}
+
+fn sck_app_identity_match(expected: NativeAppIdentityExpectation, app: SCRunningApplication) {
+    NativeAppIdentityCandidate;
+    expected.evaluate(app);
+}
+
+fn select_application_for_binding(binding: &RemoteAppTargetBinding) {
+    let expected = binding.native_locator().app_identity_expectation();
+    sck_app_identity_match(expected, app);
+}
 
 fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
     let off_display_window_ids = vec![10];
@@ -493,6 +518,39 @@ perl -0pi -e 's/if true/if binding.target_kind\(\) == RemoteDesktopTargetKind::D
 
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 
+perl -0pi -e 's/NativeAppIdentityExpectation/NativeAppIdentityExpectationRemoved/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted missing native app identity expectation" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/NativeAppIdentityExpectationRemoved/NativeAppIdentityExpectation/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+perl -0pi -e 's/sck_app_identity_match/manual_app_identity_match/g' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted SCK selector without centralized identity matcher" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/manual_app_identity_match/sck_app_identity_match/g' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
+perl -0pi -e 's/fn select_application_for_binding\(binding: &RemoteAppTargetBinding\) \{\n/fn select_application_for_binding(binding: &RemoteAppTargetBinding) {\n    let expected_pid = 42;\n/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted SCK-local expected_pid matcher state" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/\n    let expected_pid = 42;//' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
 perl -0pi -e 's/\n    binding\.validate_reverified_capture_proof\(ability, target\.capture_proof\(\)\);//' \
   "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
 
@@ -546,6 +604,16 @@ fn target_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {
 
 fn capture_jpeg_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {}
 
+fn sck_app_identity_match(expected: NativeAppIdentityExpectation, app: SCRunningApplication) {
+    NativeAppIdentityCandidate;
+    expected.evaluate(app);
+}
+
+fn select_application_for_binding(binding: &RemoteAppTargetBinding) {
+    let expected = binding.native_locator().app_identity_expectation();
+    sck_app_identity_match(expected, app);
+}
+
 fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
     Ok(())
 }
@@ -571,6 +639,16 @@ fn target_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {
 }
 
 fn capture_jpeg_for_binding(ability: &'static str, binding: &RemoteAppTargetBinding) {}
+
+fn sck_app_identity_match(expected: NativeAppIdentityExpectation, app: SCRunningApplication) {
+    NativeAppIdentityCandidate;
+    expected.evaluate(app);
+}
+
+fn select_application_for_binding(binding: &RemoteAppTargetBinding) {
+    let expected = binding.native_locator().app_identity_expectation();
+    sck_app_identity_match(expected, app);
+}
 
 fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
     let off_display_window_ids = vec![10];

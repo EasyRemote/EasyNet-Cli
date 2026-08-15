@@ -48,7 +48,7 @@ use objc2_core_video::{
     CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags,
     CVPixelBufferUnlockBaseAddress,
 };
-use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol};
 use objc2_screen_capture_kit::{
     SCContentFilter, SCDisplay, SCRunningApplication, SCShareableContent, SCStream,
     SCStreamConfiguration, SCStreamOutput, SCStreamOutputType, SCWindow,
@@ -58,7 +58,8 @@ use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
     bgra_bytes_to_rgb_frame, rgb_frame_to_jpeg, EncodedFrame, ScreenCaptureOptions,
 };
 use crate::daemon::plugins::remote_desktop::target::{
-    AppWindowSetProof, RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind,
+    AppWindowSetProof, NativeAppIdentityCandidate, NativeAppIdentityExpectation,
+    NativeAppIdentityMatch, RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind,
     ResolvedCaptureTargetProof, TargetResolutionError,
 };
 
@@ -448,12 +449,7 @@ fn select_application_window_set_for_binding(
         let Some(app) = (unsafe { window.owningApplication() }) else {
             continue;
         };
-        if sck_app_matches_binding(
-            locator.pid(),
-            locator.bundle_id(),
-            locator.app_identity(),
-            &app,
-        ) {
+        if sck_app_matches_binding(binding, &app) {
             let window_id = unsafe { window.windowID() as u64 };
             if sck_window_overlaps_display(&window, display) {
                 window_ids.push(window_id);
@@ -671,9 +667,7 @@ fn select_window_for_binding(
 ) -> Result<Retained<SCWindow>, RemoteAppTargetError> {
     let locator = binding.native_locator();
     let expected_id = locator.window_id();
-    let expected_pid = locator.pid();
-    let expected_app_identity = locator.app_identity();
-    let expected_bundle_id = locator.bundle_id();
+    let expected_owner = locator.app_identity_expectation();
     let mut candidates = Vec::new();
     let mut id_seen = false;
     for window in windows.iter() {
@@ -683,25 +677,10 @@ fn select_window_for_binding(
         }
         id_seen = true;
         let app = unsafe { window.owningApplication() };
-        let pid_matches = expected_pid.map(|pid| {
-            app.as_deref()
-                .map(|app| unsafe { app.processID() as i64 == pid })
-                .unwrap_or(false)
-        });
-        let bundle_matches = expected_bundle_id.map(|bundle_id| {
-            app.as_deref()
-                .map(|app| ns_string_eq(unsafe { app.bundleIdentifier() }.as_ref(), bundle_id))
-                .unwrap_or(false)
-        });
-        let app_identity_matches = expected_app_identity.map(|app_identity| {
-            app.as_deref()
-                .map(|app| ns_string_eq(unsafe { app.bundleIdentifier() }.as_ref(), app_identity))
-                .unwrap_or(false)
-        });
-        let owner_matches = pid_matches.unwrap_or(true)
-            && bundle_matches.unwrap_or(true)
-            && app_identity_matches.unwrap_or(true);
-        if owner_matches {
+        if app
+            .as_deref()
+            .is_some_and(|app| sck_app_identity_match(expected_owner, app).matched())
+        {
             candidates.push(window);
         }
     }
@@ -731,33 +710,13 @@ fn select_application_for_binding(
     binding: &RemoteAppTargetBinding,
 ) -> Result<Retained<SCRunningApplication>, RemoteAppTargetError> {
     let locator = binding.native_locator();
-    let expected_pid = locator.pid();
-    let expected_app_identity = locator.app_identity();
-    let expected_bundle_id = locator.bundle_id();
+    let expected_owner = locator.app_identity_expectation();
     let mut candidates = Vec::new();
     let mut identity_seen = false;
     for app in applications.iter() {
-        let pid_matches = expected_pid
-            .map(|pid| unsafe { app.processID() as i64 == pid })
-            .unwrap_or(true);
-        if expected_pid.is_some() && pid_matches {
-            identity_seen = true;
-        }
-        let bundle_matches = expected_bundle_id
-            .map(|bundle_id| ns_string_eq(unsafe { app.bundleIdentifier() }.as_ref(), bundle_id))
-            .unwrap_or(true);
-        if expected_bundle_id.is_some() && bundle_matches {
-            identity_seen = true;
-        }
-        let app_identity_matches = expected_app_identity
-            .map(|app_identity| {
-                ns_string_eq(unsafe { app.bundleIdentifier() }.as_ref(), app_identity)
-            })
-            .unwrap_or(true);
-        if expected_app_identity.is_some() && app_identity_matches {
-            identity_seen = true;
-        }
-        if pid_matches && bundle_matches && app_identity_matches {
+        let result = sck_app_identity_match(expected_owner, &app);
+        identity_seen |= result.any_expected_field_seen();
+        if result.matched() {
             candidates.push(app);
         }
     }
@@ -781,19 +740,22 @@ fn select_application_for_binding(
     }
 }
 
-fn sck_app_matches_binding(
-    expected_pid: Option<i64>,
-    expected_bundle_id: Option<&str>,
-    expected_app_identity: Option<&str>,
+fn sck_app_matches_binding(binding: &RemoteAppTargetBinding, app: &SCRunningApplication) -> bool {
+    sck_app_identity_match(binding.native_locator().app_identity_expectation(), app).matched()
+}
+
+fn sck_app_identity_match(
+    expected: NativeAppIdentityExpectation<'_>,
     app: &SCRunningApplication,
-) -> bool {
-    expected_pid.is_none_or(|pid| unsafe { app.processID() as i64 == pid })
-        && expected_bundle_id.is_none_or(|bundle_id| {
-            ns_string_eq(unsafe { app.bundleIdentifier() }.as_ref(), bundle_id)
-        })
-        && expected_app_identity.is_none_or(|app_identity| {
-            ns_string_eq(unsafe { app.bundleIdentifier() }.as_ref(), app_identity)
-        })
+) -> NativeAppIdentityMatch {
+    let bundle_id = unsafe { app.bundleIdentifier() }.to_string();
+    let bundle_id = bundle_id.trim();
+    let bundle_id = (!bundle_id.is_empty()).then_some(bundle_id);
+    expected.evaluate(NativeAppIdentityCandidate::new(
+        Some(unsafe { app.processID() as i64 }),
+        bundle_id,
+        bundle_id,
+    ))
 }
 
 fn filter_dimensions_for_kind(
@@ -838,10 +800,6 @@ fn positive_dimensions(
         width.round().max(2.0) as usize,
         height.round().max(2.0) as usize,
     ))
-}
-
-fn ns_string_eq(value: &NSString, expected: &str) -> bool {
-    value.to_string() == expected
 }
 
 fn running_application_identity(app: &SCRunningApplication) -> (Option<i64>, Option<String>) {

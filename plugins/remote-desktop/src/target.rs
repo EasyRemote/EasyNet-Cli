@@ -808,6 +808,80 @@ pub(in crate::daemon::plugins::remote_desktop) struct NativeTargetLocator {
     title: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) struct NativeAppIdentityCandidate<'a> {
+    pid: Option<i64>,
+    bundle_id: Option<&'a str>,
+    app_identity: Option<&'a str>,
+}
+
+impl<'a> NativeAppIdentityCandidate<'a> {
+    pub(in crate::daemon::plugins::remote_desktop) const fn new(
+        pid: Option<i64>,
+        bundle_id: Option<&'a str>,
+        app_identity: Option<&'a str>,
+    ) -> Self {
+        Self {
+            pid,
+            bundle_id,
+            app_identity,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) struct NativeAppIdentityExpectation<'a> {
+    expected_pid: Option<i64>,
+    expected_bundle_id: Option<&'a str>,
+    expected_app_identity: Option<&'a str>,
+}
+
+impl<'a> NativeAppIdentityExpectation<'a> {
+    pub(in crate::daemon::plugins::remote_desktop) fn evaluate(
+        self,
+        candidate: NativeAppIdentityCandidate<'_>,
+    ) -> NativeAppIdentityMatch {
+        let pid_matches = self
+            .expected_pid
+            .is_none_or(|expected| candidate.pid == Some(expected));
+        let bundle_matches = self.expected_bundle_id.is_none_or(|expected| {
+            candidate.bundle_id == Some(expected) || candidate.app_identity == Some(expected)
+        });
+        let app_identity_matches = self.expected_app_identity.is_none_or(|expected| {
+            candidate.app_identity == Some(expected) || candidate.bundle_id == Some(expected)
+        });
+        let any_expected_field_seen = self
+            .expected_pid
+            .is_some_and(|expected| candidate.pid == Some(expected))
+            || self.expected_bundle_id.is_some_and(|expected| {
+                candidate.bundle_id == Some(expected) || candidate.app_identity == Some(expected)
+            })
+            || self.expected_app_identity.is_some_and(|expected| {
+                candidate.app_identity == Some(expected) || candidate.bundle_id == Some(expected)
+            });
+        NativeAppIdentityMatch {
+            matched: pid_matches && bundle_matches && app_identity_matches,
+            any_expected_field_seen,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) struct NativeAppIdentityMatch {
+    matched: bool,
+    any_expected_field_seen: bool,
+}
+
+impl NativeAppIdentityMatch {
+    pub(in crate::daemon::plugins::remote_desktop) const fn matched(self) -> bool {
+        self.matched
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) const fn any_expected_field_seen(self) -> bool {
+        self.any_expected_field_seen
+    }
+}
+
 impl NativeTargetLocator {
     pub(in crate::daemon::plugins::remote_desktop) fn primary_display(&self) -> bool {
         self.primary_display
@@ -831,6 +905,16 @@ impl NativeTargetLocator {
 
     pub(in crate::daemon::plugins::remote_desktop) fn bundle_id(&self) -> Option<&str> {
         self.bundle_id.as_deref()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn app_identity_expectation(
+        &self,
+    ) -> NativeAppIdentityExpectation<'_> {
+        NativeAppIdentityExpectation {
+            expected_pid: self.pid,
+            expected_bundle_id: self.bundle_id.as_deref(),
+            expected_app_identity: self.app_identity.as_deref(),
+        }
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn title(&self) -> Option<&str> {
@@ -1870,6 +1954,62 @@ mod tests {
             ALL_TARGET_RESOLUTION_ERRORS.len(),
             "canonical target reason table must not contain aliases"
         );
+    }
+
+    #[test]
+    fn native_app_identity_expectation_matches_canonical_bundle_aliases() {
+        let expected = NativeAppIdentityExpectation {
+            expected_pid: Some(42),
+            expected_bundle_id: Some("com.example.Editor"),
+            expected_app_identity: Some("com.example.Editor"),
+        };
+
+        let matched = expected.evaluate(NativeAppIdentityCandidate::new(
+            Some(42),
+            Some("com.example.Editor"),
+            None,
+        ));
+        assert!(matched.matched());
+        assert!(matched.any_expected_field_seen());
+
+        let aliased = expected.evaluate(NativeAppIdentityCandidate::new(
+            Some(42),
+            None,
+            Some("com.example.Editor"),
+        ));
+        assert!(
+            aliased.matched(),
+            "macOS bundle id and app identity may arrive through either platform projection field"
+        );
+        assert!(aliased.any_expected_field_seen());
+    }
+
+    #[test]
+    fn native_app_identity_expectation_requires_all_declared_identity_fields() {
+        let expected = NativeAppIdentityExpectation {
+            expected_pid: Some(42),
+            expected_bundle_id: Some("com.example.Editor"),
+            expected_app_identity: Some("com.example.Editor"),
+        };
+
+        let pid_only = expected.evaluate(NativeAppIdentityCandidate::new(
+            Some(42),
+            Some("com.example.Other"),
+            Some("com.example.Other"),
+        ));
+        assert!(!pid_only.matched());
+        assert!(
+            pid_only.any_expected_field_seen(),
+            "selectors should classify partial identity sightings as mismatch instead of not_found"
+        );
+
+        let no_field_seen = expected.evaluate(NativeAppIdentityCandidate::new(
+            Some(7),
+            Some("com.example.Other"),
+            Some("com.example.Other"),
+        ));
+        assert!(!no_field_seen.matched());
+        assert!(!no_field_seen.any_expected_field_seen());
     }
 
     #[test]

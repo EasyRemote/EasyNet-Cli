@@ -6,6 +6,7 @@ REMOTE_ROOT="$ROOT/plugins/remote-desktop/src"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 SCK_CAPTURE="$REMOTE_ROOT/screencapturekit_capture.rs"
 MEDIA="$REMOTE_ROOT/media/mod.rs"
+TARGET_DOMAIN="$REMOTE_ROOT/target.rs"
 
 fail() {
   printf 'check-remoteapp-target-binding-boundary: %s\n' "$1" >&2
@@ -275,9 +276,39 @@ reject 'capture_subject: DiagnosticCaptureSubject' \
 require 'diagnostic_jpeg_window_capture_does_not_use_resource_entry_backend' \
   "$REMOTE_ROOT/invoke_bidi.rs" \
   'diagnostic InvokeBidi must test that app/window capture does not fall back to the ResourceEntry backend'
+require 'struct NativeAppIdentityExpectation\b' \
+  "$TARGET_DOMAIN" \
+  'target domain must centralize native app identity expectations'
+require 'struct NativeAppIdentityCandidate\b' \
+  "$TARGET_DOMAIN" \
+  'target domain must centralize observed native app identity candidates'
+require 'fn app_identity_expectation' \
+  "$TARGET_DOMAIN" \
+  'native target locator must expose a canonical app identity expectation'
+require 'native_app_identity_expectation_matches_canonical_bundle_aliases' \
+  "$TARGET_DOMAIN" \
+  'target domain must test canonical bundle/app identity alias matching'
+require 'native_app_identity_expectation_requires_all_declared_identity_fields' \
+  "$TARGET_DOMAIN" \
+  'target domain must test complete native app identity matching semantics'
 require 'fn capture_jpeg_for_binding\(' \
   "$SCK_CAPTURE" \
   'ScreenCaptureKit must expose a binding-backed one-shot diagnostic capture adapter'
+require 'sck_app_identity_match' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit selectors must consume the centralized native app identity matcher'
+require 'app_identity_expectation\(\)' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit selectors must derive identity expectations from the committed target binding'
+reject 'expected_pid' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit selectors must not redeclare pid matching outside the target-domain identity matcher'
+reject 'expected_bundle_id' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit selectors must not redeclare bundle matching outside the target-domain identity matcher'
+reject 'expected_app_identity' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit selectors must not redeclare app identity matching outside the target-domain identity matcher'
 require 'off_display_window_ids' \
   "$REMOTE_ROOT/screencapturekit_capture.rs" \
   'ScreenCaptureKit application binding must detect app windows outside the selected display'
