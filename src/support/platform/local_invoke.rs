@@ -1529,12 +1529,61 @@ fn local_remote_desktop_ability_target(ability: &str) -> anyhow::Result<LocalAbi
 
 #[cfg(feature = "remote-desktop")]
 fn canonical_selected_remote_target_resource_ura(value: &str) -> anyhow::Result<String> {
-    let parsed = crate::core::identity::RuntimeIdentityUra::parse(value.trim().to_string())
+    let value = value.trim();
+    let parsed = crate::core::identity::RuntimeIdentityUra::parse(value)
         .map_err(|error| anyhow::anyhow!("selected remote desktop target resource_ura {error}"))?;
     if parsed.kind() != crate::core::ura::URAKind::Resource {
         anyhow::bail!("selected remote desktop target must be a Resource URA");
     }
+    SelectedRemoteDesktopTargetSubjectKind::parse(value)?;
     Ok(parsed.into_string())
+}
+
+#[cfg(feature = "remote-desktop")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectedRemoteDesktopTargetSubjectKind {
+    Display,
+    Window,
+    Application,
+}
+
+#[cfg(feature = "remote-desktop")]
+impl SelectedRemoteDesktopTargetSubjectKind {
+    fn parse(subject_ura: &str) -> anyhow::Result<Self> {
+        let parsed = crate::core::ura::parse_ura(subject_ura).map_err(|error| {
+            anyhow::anyhow!("selected remote desktop target resource_ura is not canonical: {error}")
+        })?;
+        if parsed.kind != crate::core::ura::URAKind::Resource {
+            anyhow::bail!("selected remote desktop target must be a Resource URA");
+        }
+        let owner = parsed.resource_owner_id().ok_or_else(|| {
+            anyhow::anyhow!(
+                "selected remote desktop target must be a device-owned display/window/application resource subject"
+            )
+        })?;
+        if !owner.starts_with("device.") {
+            anyhow::bail!(
+                "selected remote desktop target must be a device-owned display/window/application resource subject"
+            );
+        }
+        let path = parsed.resource_path().ok_or_else(|| {
+            anyhow::anyhow!(
+                "selected remote desktop target must be a device stream display/window/application resource subject"
+            )
+        })?;
+        if path.starts_with("streams/display.") {
+            return Ok(Self::Display);
+        }
+        if path.starts_with("streams/window.") {
+            return Ok(Self::Window);
+        }
+        if path.starts_with("streams/application.") {
+            return Ok(Self::Application);
+        }
+        anyhow::bail!(
+            "selected remote desktop target must be a device stream display/window/application resource subject"
+        )
+    }
 }
 
 #[cfg(feature = "remote-desktop")]
@@ -2152,17 +2201,44 @@ mod tests {
 
     #[cfg(feature = "remote-desktop")]
     #[test]
-    fn selected_remote_desktop_target_must_be_resource_ura() {
-        assert_eq!(
-            canonical_selected_remote_target_resource_ura(
-                "easynet:///r/acme/resource/device.dev/streams/application.com.example"
-            )
-            .expect("resource target"),
-            "easynet:///r/acme/resource/device.dev/streams/application.com.example"
-        );
+    fn selected_remote_desktop_target_must_be_capture_resource_subject() {
+        for subject in [
+            "easynet:///r/acme/resource/device.dev/streams/display.1",
+            "easynet:///r/acme/resource/device.dev/streams/window.7",
+            "easynet:///r/acme/resource/device.dev/streams/application.com.example",
+        ] {
+            assert_eq!(
+                canonical_selected_remote_target_resource_ura(subject)
+                    .expect("remote desktop target resource"),
+                subject
+            );
+        }
+
         let err = canonical_selected_remote_target_resource_ura("easynet:///r/acme/device/dev")
             .expect_err("Device URA must not be accepted as selected target");
         assert!(err.to_string().contains("must be a Resource URA"));
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn selected_remote_desktop_target_rejects_non_capture_resources() {
+        for subject in [
+            "easynet:///r/acme/resource/device.dev/streams/mic.1",
+            "easynet:///r/acme/resource/resource-1",
+            "easynet:///r/acme/resource/user.alice/runtime-state/read",
+            "easynet:///r/acme/resource/user.alice/streams/display.1",
+        ] {
+            let err = canonical_selected_remote_target_resource_ura(subject)
+                .expect_err("non-capture resource must not enter remote desktop session workflow");
+            assert!(
+                err.to_string()
+                    .contains("device-owned display/window/application resource subject")
+                    || err
+                        .to_string()
+                        .contains("display/window/application resource subject"),
+                "{err}"
+            );
+        }
     }
 
     #[cfg(feature = "remote-desktop")]

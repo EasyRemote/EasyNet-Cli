@@ -6,7 +6,7 @@ SCRIPT="$REPO_ROOT/tools/scripts/check-remoteapp-session-subject-boundary.sh"
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
-mkdir -p "$SANDBOX/plugins/remote-desktop/src" "$SANDBOX/plugins/remote-desktop/abilities"
+mkdir -p "$SANDBOX/plugins/remote-desktop/src" "$SANDBOX/plugins/remote-desktop/abilities" "$SANDBOX/src/support/platform"
 
 cat >"$SANDBOX/plugins/remote-desktop/src/session_access.rs" <<'RS'
 fn ensure_session_control_identity(ability: &'static str, env: EnvelopeContext, args: Value, session: Session) {
@@ -28,6 +28,25 @@ fn serialize(session: Session) -> Value {
         "subject_ura": session.subject_ura(),
     })
 }
+RS
+
+cat >"$SANDBOX/src/support/platform/local_invoke.rs" <<'RS'
+enum SelectedRemoteDesktopTargetSubjectKind {
+    Display,
+    Window,
+    Application,
+}
+
+fn canonical_selected_remote_target_resource_ura(path: &str) {
+    let _ = parsed.resource_owner_id();
+    let _ = "device.";
+    let _ = "streams/display.";
+    let _ = "streams/window.";
+    let _ = "streams/application.";
+}
+
+#[test]
+fn selected_remote_desktop_target_rejects_non_capture_resources() {}
 RS
 
 for ability in show_session set_description add_ice_candidate refresh_lease watch_events end_session; do
@@ -55,6 +74,14 @@ fn bad_subject() {
 RS
 if CHECK_REMOTEAPP_SESSION_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp session subject checker accepted synthetic session URA subject" >&2
+  exit 1
+fi
+rm "$SANDBOX/plugins/remote-desktop/src/handler.rs"
+
+perl -0pi -e 's/selected_remote_desktop_target_rejects_non_capture_resources/selected_remote_desktop_target_accepts_any_resource/' \
+  "$SANDBOX/src/support/platform/local_invoke.rs"
+if CHECK_REMOTEAPP_SESSION_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp session subject checker accepted generic resource target issuer" >&2
   exit 1
 fi
 

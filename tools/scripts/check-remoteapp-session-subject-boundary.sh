@@ -5,6 +5,7 @@ ROOT="${CHECK_REMOTEAPP_SESSION_SUBJECT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}
 REMOTE_ROOT="$ROOT/plugins/remote-desktop/src"
 SESSION_ACCESS="$REMOTE_ROOT/session_access.rs"
 VIEW="$REMOTE_ROOT/view.rs"
+LOCAL_INVOKE="$ROOT/src/support/platform/local_invoke.rs"
 
 fail() {
   printf 'check-remoteapp-session-subject-boundary: %s\n' "$1" >&2
@@ -29,6 +30,7 @@ reject() {
 
 [[ -f "$SESSION_ACCESS" ]] || fail "missing remote desktop session_access.rs"
 [[ -f "$VIEW" ]] || fail "missing remote desktop view.rs"
+[[ -f "$LOCAL_INVOKE" ]] || fail "missing local remote desktop invocation issuer"
 
 require 'reject_subject_in_args\(ability, args\)' "$SESSION_ACCESS" \
   'session control must reject subject/resource_ura duplicated in ability args'
@@ -42,6 +44,20 @@ require '"subject_ura": session\.subject_ura\(\)' "$VIEW" \
   'session views must expose the original selected resource URA as subject_ura'
 require '"session_id": session\.session_id\(\)' "$VIEW" \
   'session views must keep session_id as a session access identifier'
+require 'SelectedRemoteDesktopTargetSubjectKind' "$LOCAL_INVOKE" \
+  'local remote desktop issuer must classify selected target resource subjects before dispatch'
+require 'resource_owner_id\(\)' "$LOCAL_INVOKE" \
+  'local remote desktop issuer must verify selected target resource owner before dispatch'
+require 'device\.' "$LOCAL_INVOKE" \
+  'local remote desktop issuer must require device-owned selected target resources'
+require 'streams/display\.' "$LOCAL_INVOKE" \
+  'local remote desktop issuer must accept display stream resource subjects explicitly'
+require 'streams/window\.' "$LOCAL_INVOKE" \
+  'local remote desktop issuer must accept window stream resource subjects explicitly'
+require 'streams/application\.' "$LOCAL_INVOKE" \
+  'local remote desktop issuer must accept application stream resource subjects explicitly'
+require 'selected_remote_desktop_target_rejects_non_capture_resources' "$LOCAL_INVOKE" \
+  'local remote desktop issuer must reject non-capture resource subjects before grant/create dispatch'
 
 # Production remote-desktop code must not route lifecycle abilities by a
 # synthetic remote-desktop-session resource subject. Session ids and tokens are
