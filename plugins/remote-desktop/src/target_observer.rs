@@ -901,6 +901,10 @@ mod tests {
 
     struct FakeGeometryProvider;
 
+    struct CountingObservationProvider {
+        calls: Arc<AtomicUsize>,
+    }
+
     #[derive(Debug)]
     struct CountingSnapshotProvider {
         calls: Arc<AtomicUsize>,
@@ -955,6 +959,17 @@ mod tests {
                 target_geometry_revision: snapshot.target_geometry_revision() + 1,
                 observed_at_ms: 123,
             })
+        }
+    }
+
+    impl TargetObservationProvider for CountingObservationProvider {
+        fn observe(
+            &self,
+            _binding: &RemoteAppTargetBinding,
+            _snapshot: &TargetTrackerSnapshot,
+        ) -> Option<TargetObservation> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            None
         }
     }
 
@@ -1234,6 +1249,50 @@ mod tests {
                 .iter()
                 .any(|event| event["event_type"] == json!("TARGET_RESIZED")));
         });
+    }
+
+    #[test]
+    fn observer_stops_tracking_missing_or_terminal_sessions_without_polling_provider() {
+        let store = Arc::new(RemoteDesktopSessionStore::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = CountingObservationProvider {
+            calls: Arc::clone(&calls),
+        };
+
+        let missing = observe_bound_session_target_once(&store, "rd-missing", &provider);
+        assert!(
+            !missing.keep_tracking,
+            "missing sessions must stop target monitor tracking"
+        );
+        assert!(missing.media_source_lost.is_none());
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "missing sessions must not poll host target state"
+        );
+
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-terminal-observation",
+            "easynet:///r/acme/resource/display.terminal",
+            vec!["webrtc".into()],
+        ));
+        session.close("test_terminal");
+        store.with_sessions(|sessions| {
+            sessions.insert("rd-terminal-observation".to_string(), session);
+        });
+
+        let terminal =
+            observe_bound_session_target_once(&store, "rd-terminal-observation", &provider);
+        assert!(
+            !terminal.keep_tracking,
+            "terminal sessions must stop target monitor tracking"
+        );
+        assert!(terminal.media_source_lost.is_none());
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "terminal sessions must not keep polling host target state"
+        );
     }
 
     #[test]
@@ -1635,7 +1694,7 @@ mod tests {
     }
 
     #[test]
-    fn application_observation_tracks_same_display_window_set_churn_without_losing_target() {
+    fn application_observation_rejects_same_display_window_set_expansion() {
         let binding = application_binding();
         let snapshot = TargetTrackerSnapshot::from_binding(&binding);
         let observation = observe_binding_against_host_snapshot(
@@ -1692,23 +1751,24 @@ mod tests {
                 display_ids: BTreeSet::from([42]),
             },
         )
-        .expect("application observation");
+        .expect("application window-set expansion observation");
 
         match observation {
-            TargetObservation::GeometryChanged { geometry, .. } => {
-                assert_eq!(geometry.x, Some(10.0));
-                assert_eq!(geometry.y, Some(20.0));
-                assert_eq!(geometry.width, Some(270.0));
-                assert_eq!(geometry.height, Some(80.0));
+            TargetObservation::Lost { reason, detail, .. } => {
+                assert_eq!(reason, TargetResolutionError::TargetIdentityChanged);
+                assert!(
+                    detail.contains("window set"),
+                    "failure detail must name application window-set drift; got {detail}"
+                );
             }
             other => panic!(
-                "expected same-display application window-set churn to update geometry, got {other:?}"
+                "same-display application window-set expansion must require rebind/new consent, got {other:?}"
             ),
         }
     }
 
     #[test]
-    fn application_observation_allows_observer_subset_of_committed_capture_set() {
+    fn application_observation_rejects_observer_subset_of_committed_capture_set() {
         let binding = ResourceEntryTargetResolver
             .resolve_for_session(
                 "remote_desktop.create_session",
@@ -1767,10 +1827,16 @@ mod tests {
         .expect("application subset observation");
 
         match observation {
-            TargetObservation::VisibilityChanged {
-                visibility_state, ..
-            } => assert_eq!(visibility_state, TargetVisibilityState::Visible),
-            other => panic!("expected observer subset to remain visible, got {other:?}"),
+            TargetObservation::Lost { reason, detail, .. } => {
+                assert_eq!(reason, TargetResolutionError::TargetIdentityChanged);
+                assert!(
+                    detail.contains("window set"),
+                    "failure detail must name missing committed app window-set proof; got {detail}"
+                );
+            }
+            other => panic!(
+                "observer subset of committed app window set must require rebind/new consent, got {other:?}"
+            ),
         }
     }
 

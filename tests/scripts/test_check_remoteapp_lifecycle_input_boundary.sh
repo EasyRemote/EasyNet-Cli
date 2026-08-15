@@ -1101,6 +1101,9 @@ RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/target_observer.rs" <<'RS'
 fn observe_bound_session_target_once() {
+    let Some(inputs) = sessions.target_observation_inputs_for_session(session_id) else {
+        return TargetObservationPollResult::stop_tracking();
+    };
     record_target_observation_for_session();
 }
 
@@ -1157,6 +1160,9 @@ mod tests {
     fn observation_provider_commits_through_session_store_boundary() {}
 
     #[test]
+    fn observer_stops_tracking_missing_or_terminal_sessions_without_polling_provider() {}
+
+    #[test]
     fn stale_observation_cannot_commit_after_session_binding_reuse() {}
 
     #[test]
@@ -1167,6 +1173,12 @@ mod tests {
 
     #[test]
     fn application_observer_rejects_committed_window_set_drift() {}
+
+    #[test]
+    fn application_observation_rejects_same_display_window_set_expansion() {}
+
+    #[test]
+    fn application_observation_rejects_observer_subset_of_committed_capture_set() {}
 
     #[test]
     fn snapshot_observer_reappearance_requires_explicit_rebind_policy() {}
@@ -1447,6 +1459,16 @@ perl -0pi -e 's/plugin\.cancel_session_target_tracking\(session_id\);//' \
 run_fail 'terminal session cleanup must cancel target tracking'
 
 write_fixture
+perl -0pi -e 's/return TargetObservationPollResult::stop_tracking\(\);/return TargetObservationPollResult::keep_tracking();/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
+run_fail 'target observer must return stop_tracking when the session is missing or terminal'
+
+write_fixture
+perl -0pi -e 's/observer_stops_tracking_missing_or_terminal_sessions_without_polling_provider/observer_keeps_tracking_terminal_sessions/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
+run_fail 'target observer tests must prove missing/terminal sessions stop tracking without polling host state'
+
+write_fixture
 perl -0pi -e 's/TargetMonitorCommand::Cancel \{ session_id \} => \{\n            tracked\.remove\(&session_id\);\n            true\n        \}/TargetMonitorCommand::Cancel { session_id } => true/' \
   "$SANDBOX/plugins/remote-desktop/src/target_monitor.rs"
 run_fail 'target monitor Cancel command must remove the session id from the tracked set'
@@ -1500,6 +1522,16 @@ write_fixture
 perl -0pi -e 's/application_observer_rejects_committed_window_set_drift/application_observer_allows_window_set_drift/' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
 run_fail 'target observer must test committed application window-set expansion/contraction drift'
+
+write_fixture
+perl -0pi -e 's/application_observation_rejects_same_display_window_set_expansion/application_observation_allows_same_display_window_set_expansion/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
+run_fail 'application observer must reject same-display app window-set expansion without rebind consent'
+
+write_fixture
+perl -0pi -e 's/application_observation_rejects_observer_subset_of_committed_capture_set/application_observation_allows_observer_subset_of_committed_capture_set/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
+run_fail 'application observer must reject missing committed app windows without silently narrowing capture'
 
 write_fixture
 perl -0pi -e 's/snapshot_observer_reappearance_requires_explicit_rebind_policy/snapshot_observer_reappearance_revives_stale_media/' \

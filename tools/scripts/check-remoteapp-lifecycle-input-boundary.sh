@@ -150,8 +150,12 @@ require 'observe_bound_session_target_once' "$TARGET_OBSERVER" \
   'target observer must expose the bound-session observation boundary'
 require 'record_target_observation_for_session' "$TARGET_OBSERVER" \
   'target observer must commit through the session store boundary'
+require 'return TargetObservationPollResult::stop_tracking\(\);' "$TARGET_OBSERVER" \
+  'target observer must return stop_tracking when the session is missing or terminal'
 require 'observation_provider_commits_through_session_store_boundary' "$TARGET_OBSERVER" \
   'E2E-08 must test observer-to-session-store geometry commits'
+require 'observer_stops_tracking_missing_or_terminal_sessions_without_polling_provider' "$TARGET_OBSERVER" \
+  'target observer tests must prove missing/terminal sessions stop tracking without polling host state'
 require 'stale_observation_cannot_commit_after_session_binding_reuse' "$TARGET_OBSERVER" \
   'stale observations must not advance a reused session binding'
 require 'unsupported_platform_target_observation' "$TARGET_OBSERVER" \
@@ -464,6 +468,10 @@ require 'TargetResolutionError::TargetIdentityChanged' "$TARGET_OBSERVER" \
   'application window-set drift must fail closed as target_identity_changed'
 require 'application_observer_rejects_committed_window_set_drift' "$TARGET_OBSERVER" \
   'target observer must test committed application window-set expansion/contraction drift'
+require 'application_observation_rejects_same_display_window_set_expansion' "$TARGET_OBSERVER" \
+  'application observer must reject same-display app window-set expansion without rebind consent'
+require 'application_observation_rejects_observer_subset_of_committed_capture_set' "$TARGET_OBSERVER" \
+  'application observer must reject missing committed app windows without silently narrowing capture'
 require 'snapshot_observer_reappearance_requires_explicit_rebind_policy' "$TARGET_OBSERVER" \
   'target observer must prove platform-visible target reappearance cannot revive media/input without explicit rebind policy'
 require 'target_reappearance_after_loss_emits_explicit_rebind_failure' "$SESSION" \
