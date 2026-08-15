@@ -4,10 +4,10 @@
 // File: plugins/remote-desktop/src/view.rs
 // Description: JSON response projection for remote desktop sessions.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::daemon::plugins::remote_desktop::input::{
-    input_injection_available, INPUT_DATA_CHANNEL_LABEL,
+    INPUT_DATA_CHANNEL_LABEL, input_injection_available,
 };
 use crate::daemon::plugins::remote_desktop::media::{
     backend_catalog_view, production_gate_view, sdk_contract_view,
@@ -121,10 +121,12 @@ fn production_readiness_blocked_reason(
         json!("production_codec_not_negotiated")
     } else if !session.media_transport_ready() {
         json!("media_transport_not_ready")
-    } else if !transport_view.production_route_ready() {
+    } else if transport_view.has_route_readiness_blocker() {
         json!("transport_route_unavailable")
     } else if !session.client_media_ready() {
         json!("client_media_not_presenting")
+    } else if !transport_view.production_route_ready() {
+        json!("transport_route_unavailable")
     } else {
         json!("production_readiness_incomplete")
     }

@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, watch};
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
@@ -19,12 +19,12 @@ use crate::daemon::plugins::remote_desktop::constants::{
     REASON_RESOURCE_UNAVAILABLE, TRANSPORT_INVOKE_BIDI,
 };
 use crate::daemon::plugins::remote_desktop::input::{
-    apply_input_frame_with_policy, current_session_input_policy, input_policy_for_binding,
-    parse_input_frame, unsupported_input_channel_reason, InputTransportGuard,
-    RemoteDesktopInputFrame,
+    InputTransportGuard, RemoteDesktopInputFrame, apply_input_frame_with_policy,
+    current_session_input_policy, input_policy_for_binding, parse_input_frame,
+    unsupported_input_channel_reason,
 };
 use crate::daemon::plugins::remote_desktop::media::encode::{
-    spawn_builtin_h264_stream, BuiltinH264StreamTerminal, BuiltinH264TerminalCallback,
+    BuiltinH264StreamTerminal, BuiltinH264TerminalCallback, spawn_builtin_h264_stream,
 };
 use crate::daemon::plugins::remote_desktop::request::AttachEncoding;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
@@ -94,6 +94,16 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle_bidi_input_frame(
 }
 
 fn parse_bidi_input_frame(frame: Value) -> Result<RemoteDesktopInputFrame, Value> {
+    if let Some(frame_type) = frame.get("type").and_then(Value::as_str) {
+        if let Some(reason) = unsupported_input_channel_reason(frame_type) {
+            return Err(json!({
+                "type": "warn",
+                "code": reason,
+                "input_type": frame_type,
+                "message": "clipboard and file-drop frames require dedicated remote desktop abilities",
+            }));
+        }
+    }
     let text = match serde_json::to_string(&frame) {
         Ok(text) => text,
         Err(err) => {
