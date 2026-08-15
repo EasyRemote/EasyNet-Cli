@@ -233,6 +233,21 @@ fn creation_workflow() {
 }
 RS
 
+cat >"$SANDBOX/plugins/remote-desktop/src/session_identity.rs" <<'RS'
+struct RemoteDesktopSessionProfile {
+    session_id: String,
+    subject_ura: String,
+}
+RS
+
+cat >"$SANDBOX/plugins/remote-desktop/src/session.rs" <<'RS'
+impl RemoteDesktopSession {
+    fn subject_type(&self) -> ResourceType {
+        self.target.binding().target_kind().resource_type()
+    }
+}
+RS
+
 cat >"$SANDBOX/plugins/remote-desktop/src/handlers/attach.rs" <<'RS'
 fn attach(session: Session) {
     let binding = session.target_binding();
@@ -464,6 +479,28 @@ fi
 
 perl -0pi -e 's/assert!\(sessions\.contains_key\("rd-weak-window"\)\);/assert!(!sessions.contains_key("rd-weak-window"));/' \
   "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
+
+perl -0pi -e 's/struct RemoteDesktopSessionProfile \{/struct RemoteDesktopSessionProfile {\\n    subject_type: ResourceType,/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_identity.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted cached subject_type in session profile" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/\\n    subject_type: ResourceType,//' \
+  "$SANDBOX/plugins/remote-desktop/src/session_identity.rs"
+
+perl -0pi -e 's/self\.target\.binding\(\)\.target_kind\(\)\.resource_type\(\)/self.profile.subject_type()/g' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted subject_type projection from session profile" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/self\.profile\.subject_type\(\)/self.target.binding().target_kind().resource_type()/g' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
 
 perl -0pi -e 's@app_name/title are diagnostic hints, not production routing identity@app_name title can route production target@' \
   "$SANDBOX/plugins/remote-desktop/src/target.rs"

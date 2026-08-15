@@ -7,6 +7,8 @@ SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 SCK_CAPTURE="$REMOTE_ROOT/screencapturekit_capture.rs"
 MEDIA="$REMOTE_ROOT/media/mod.rs"
 TARGET_DOMAIN="$REMOTE_ROOT/target.rs"
+SESSION="$REMOTE_ROOT/session.rs"
+SESSION_IDENTITY="$REMOTE_ROOT/session_identity.rs"
 MEDIA_SOURCE_FACTORY="$REMOTE_ROOT/transport/media_source.rs"
 
 fail() {
@@ -93,6 +95,13 @@ require 'verify_target_binding_for_session\(' \
 require 'RemoteDesktopSessionCreationWorkflow::start' \
   "$REMOTE_ROOT/handlers/create_session.rs" \
   'create_session handler must delegate pre-row lifecycle to RemoteDesktopSessionCreationWorkflow'
+reject 'subject_type:\s*ResourceType' "$SESSION_IDENTITY" \
+  'session profile must not cache subject_type; public subject_type must derive from the committed target binding'
+reject 'subject_type:\s*target_binding\.target_kind\(\)\.resource_type\(\)' "$SESSION_IDENTITY" \
+  'session identity must not duplicate target kind from the committed binding'
+require_multiline 'm/fn subject_type\(&self\) -> ResourceType\s*\{\s*self\.target\.binding\(\)\.target_kind\(\)\.resource_type\(\)\s*\}/s' \
+  "$SESSION" \
+  'public subject_type projection must derive from RemoteAppTargetBinding, not session profile state'
 require 'create_session_rejects_stale_window_inventory_before_session_insert' \
   "$REMOTE_ROOT/handlers/create_session.rs" \
   'E2E-05 must have a stale window create_session fail-closed test'

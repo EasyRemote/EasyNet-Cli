@@ -4,7 +4,6 @@
 // File: plugins/remote-desktop/src/session_identity.rs
 // Description: Immutable identity and caller-visible policy captured at session creation.
 
-use crate::daemon::persistence::resources::ResourceType;
 use crate::daemon::plugins::remote_desktop::request::{
     RemoteDesktopInputPolicy, RemoteDesktopVideoConstraints,
 };
@@ -48,7 +47,6 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSessionProfil
     session_token: String,
     creator_caller_ura: String,
     subject_ura: String,
-    subject_type: ResourceType,
     subject_display_name: String,
     mode: String,
     transport_preferences: Vec<String>,
@@ -67,7 +65,6 @@ impl RemoteDesktopSessionProfile {
             session_token: init.session_token,
             creator_caller_ura: init.creator_caller_ura,
             subject_ura: target_binding.subject_ura().to_string(),
-            subject_type: target_binding.target_kind().resource_type(),
             subject_display_name: target_binding.subject_display_name().to_string(),
             mode: init.mode,
             transport_preferences: init.transport_preferences,
@@ -105,11 +102,6 @@ impl RemoteDesktopSessionProfile {
     /// Canonical resource URA that this session is allowed to operate on.
     pub(in crate::daemon::plugins::remote_desktop) fn subject_ura(&self) -> &str {
         &self.subject_ura
-    }
-
-    /// Resource type captured at session creation.
-    pub(in crate::daemon::plugins::remote_desktop) fn subject_type(&self) -> ResourceType {
-        self.subject_type
     }
 
     /// Human-facing display name for the acted-on resource.

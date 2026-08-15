@@ -146,9 +146,13 @@ impl RemoteDesktopSession {
         self.profile.subject_ura()
     }
 
-    /// Resource type captured at session creation.
+    /// Resource type projected from the committed target binding.
+    ///
+    /// `subject_type` remains a public response projection for existing
+    /// consumers, but it is not stored in the immutable profile. The committed
+    /// `RemoteAppTargetBinding` is the only target-kind source of truth.
     pub(in crate::daemon::plugins::remote_desktop) fn subject_type(&self) -> ResourceType {
-        self.profile.subject_type()
+        self.target.binding().target_kind().resource_type()
     }
 
     /// Human-facing display name for the acted-on resource.
