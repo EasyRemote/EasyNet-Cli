@@ -16,7 +16,7 @@
 use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, TargetGeometry, TargetResolutionError,
+    FrontendAction, RemoteAppTargetBinding, TargetGeometry, TargetResolutionError,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -512,14 +512,25 @@ impl RemoteAppTargetBindingStateMachine {
         } else {
             "target_blurred"
         };
-        self.snapshot.diagnostic = self.diagnostic_projection(
+        let target_action = (!focused).then_some(FrontendAction::RetrySession);
+        let diagnostic = self.diagnostic_projection(
             self.snapshot.status.as_str(),
             Value::Null,
             reason,
             observed_at_ms,
         );
+        self.snapshot.diagnostic = if let Some(action) = target_action {
+            target_failure_payload(diagnostic, action.as_str())
+        } else {
+            diagnostic
+        };
         let mut payload = self.event_payload(reason, observed_at_ms, None);
         payload["focused"] = json!(focused);
+        let payload = if let Some(action) = target_action {
+            target_failure_payload(payload, action.as_str())
+        } else {
+            payload
+        };
         Some(TargetTrackingEvent {
             event_type: if focused {
                 "TARGET_FOCUSED"
@@ -919,7 +930,7 @@ fn geometry_event_type(previous: &TargetGeometry, next: &TargetGeometry) -> &'st
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::target::{
@@ -1394,8 +1405,20 @@ mod tests {
             .expect("focus loss commits");
 
         assert_eq!(blurred.event_type(), "TARGET_BLURRED");
+        assert_eq!(blurred.payload()["reason_code"], json!("target_blurred"));
+        assert_eq!(blurred.payload()["failure_domain"], json!("target"));
+        assert_eq!(blurred.payload()["frontend_action"], json!("retry_session"));
+        assert_eq!(blurred.payload()["input_enabled"], json!(false));
         assert_eq!(tracker.snapshot().to_value()["focused"], json!(false));
         assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(false));
+        assert_eq!(
+            tracker.snapshot().latest_diagnostic()["failure_domain"],
+            json!("target")
+        );
+        assert_eq!(
+            tracker.snapshot().latest_diagnostic()["frontend_action"],
+            json!("retry_session")
+        );
         assert!(tracker.snapshot().pointer_target_value().is_none());
 
         let focused = tracker
@@ -1406,6 +1429,7 @@ mod tests {
             .expect("focus recovery commits");
 
         assert_eq!(focused.event_type(), "TARGET_FOCUSED");
+        assert_eq!(focused.payload()["frontend_action"], Value::Null);
         assert_eq!(tracker.snapshot().to_value()["focused"], json!(true));
         assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(true));
         assert!(tracker.snapshot().pointer_target_value().is_some());

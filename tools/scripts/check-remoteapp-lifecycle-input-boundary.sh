@@ -276,6 +276,12 @@ require 'json!\("target_minimized"\)' "$TARGET_TRACKING" \
   'minimized visibility test must assert target_minimized reason code'
 require 'json!\("retry_session"\)' "$TARGET_TRACKING" \
   'hidden/minimized visibility tests must assert canonical retry_session action'
+require 'FrontendAction::RetrySession' "$TARGET_TRACKING" \
+  'focus-loss target visibility must use canonical retry_session action'
+require 'TARGET_BLURRED' "$TARGET_TRACKING" \
+  'focus loss must emit TARGET_BLURRED'
+require 'json!\("target_blurred"\)' "$TARGET_TRACKING" \
+  'focus loss test must assert target_blurred reason code'
 require '"TARGET_REBIND_FAILED"' "$TARGET_TRACKING" \
   'post-loss target observations must emit an explicit rebind failure when no Rebinding policy exists'
 require 'explicit_rebind_required' "$TARGET_TRACKING" \

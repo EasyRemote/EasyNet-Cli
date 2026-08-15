@@ -45,9 +45,11 @@ fn commit_geometry() {
     "target_focus_after_loss";
     payload["failure_domain"] = json!("target");
     target_failure_payload();
+    FrontendAction::RetrySession;
     TargetResolutionError::TargetHidden;
     TargetResolutionError::TargetMinimized;
     TargetResolutionError::TargetDisplayUnavailable.frontend_action();
+    "TARGET_BLURRED";
     if target_lost {
         "TARGET_REBIND_FAILED";
         "explicit_rebind_required";
@@ -56,6 +58,7 @@ fn commit_geometry() {
             "target_display_unavailable": true,
             "target_hidden": true,
             "target_minimized": true,
+            "target_blurred": true,
             "retry_session": true,
             "target_status": "lost",
             "input_enabled": false,
@@ -89,6 +92,7 @@ mod tests {
         assert_eq!(topology_changed.payload()["reason_code"], json!("target_display_unavailable"));
         assert_eq!(hidden.payload()["reason_code"], json!("target_hidden"));
         assert_eq!(minimized.payload()["reason_code"], json!("target_minimized"));
+        assert_eq!(blurred.payload()["reason_code"], json!("target_blurred"));
         assert_eq!(hidden.payload()["frontend_action"], json!("retry_session"));
     }
 }
@@ -852,6 +856,16 @@ write_fixture
 perl -0pi -e 's/json!\("retry_session"\)/json!("refresh_targets")/' \
   "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
 run_fail 'hidden/minimized visibility tests must assert canonical retry_session action'
+
+write_fixture
+perl -0pi -e 's/FrontendAction::RetrySession/FrontendAction::RefreshTargets/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'focus-loss target visibility must use canonical retry_session action'
+
+write_fixture
+perl -0pi -e 's/json!\("target_blurred"\)/json!("target_focused")/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'focus loss test must assert target_blurred reason code'
 
 write_fixture
 perl -0pi -e 's/if window\.visibility_state != TargetVisibilityState::Visible \{\n        return Some\(TargetObservation::VisibilityChanged \{\n            visibility_state: window\.visibility_state,\n        \}\);\n    \}\n    if snapshot\.title\(\) != window\.title\.as_deref\(\)/if snapshot.title() != window.title.as_deref()/' \
