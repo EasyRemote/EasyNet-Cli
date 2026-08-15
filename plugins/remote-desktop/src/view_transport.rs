@@ -12,12 +12,15 @@ use crate::daemon::plugins::remote_desktop::constants::{
 use crate::daemon::plugins::remote_desktop::input::INPUT_DATA_CHANNEL_LABEL;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
 
+const REASON_TRANSPORT_ROUTE_UNAVAILABLE: &str = "transport_route_unavailable";
+
 /// Transport view facts derived from one session row.
 ///
 /// This type is a DTO helper only. It does not decide session lifecycle,
 /// mutate signaling state, or select media backends.
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopTransportView {
     endpoint_ura: Value,
+    reason_code: Value,
     unavailable_reason: Value,
     route_state: Value,
     message: &'static str,
@@ -30,11 +33,13 @@ impl RemoteDesktopTransportView {
     ) -> Self {
         let endpoint_ura = direct_endpoint_ura(session);
         let route_state_projection = CandidateRouteState::from_session(session);
+        let reason_code = transport_reason_code(session, &route_state_projection);
         let unavailable_reason = transport_unavailable_reason(session, &route_state_projection);
         let route_state = transport_route_state(&route_state_projection);
         let message = transport_message(session);
         Self {
             endpoint_ura,
+            reason_code,
             unavailable_reason,
             route_state,
             message,
@@ -60,6 +65,7 @@ impl RemoteDesktopTransportView {
             "endpoint_ura": self.endpoint_ura.clone(),
             "preview_ability": "screen.subscribe",
             "message": self.message,
+            "reason_code": self.reason_code.clone(),
             "unavailable_reason": self.unavailable_reason.clone(),
             "route_state": self.route_state.clone(),
             "input_channel_label": INPUT_DATA_CHANNEL_LABEL,
@@ -86,6 +92,7 @@ impl RemoteDesktopTransportView {
                     "media_plane": "rtp_srtp",
                     "input_plane": "webrtc_data_channel",
                     "input_channel_label": INPUT_DATA_CHANNEL_LABEL,
+                    "reason_code": self.reason_code.clone(),
                     "unavailable_reason": self.unavailable_reason.clone(),
                     "route_state": self.route_state.clone()
                 },
@@ -140,9 +147,7 @@ impl CandidateRouteState {
         {
             route_state.observe_candidate(&candidate);
         }
-        route_state.failed = session.webrtc_error().is_some()
-            || session.webrtc_ice_state() == Some("failed")
-            || session.webrtc_peer_state() == Some("failed");
+        route_state.failed = transport_route_failed(session);
         route_state
     }
 
@@ -255,6 +260,26 @@ fn direct_endpoint_ura(session: &RemoteDesktopSession) -> Value {
     }
 }
 
+fn transport_route_failed(session: &RemoteDesktopSession) -> bool {
+    session.webrtc_ice_state() == Some("failed") || session.webrtc_peer_state() == Some("failed")
+}
+
+fn transport_reason_code(
+    session: &RemoteDesktopSession,
+    route_state: &CandidateRouteState,
+) -> Value {
+    if session.media_transport_ready() {
+        Value::Null
+    } else if route_state.failed
+        || route_state.host_only()
+        || (route_state.has_candidate() && !route_state.relay_ready())
+    {
+        json!(REASON_TRANSPORT_ROUTE_UNAVAILABLE)
+    } else {
+        Value::Null
+    }
+}
+
 fn transport_unavailable_reason(
     session: &RemoteDesktopSession,
     route_state: &CandidateRouteState,
@@ -298,7 +323,7 @@ fn transport_message(session: &RemoteDesktopSession) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     use super::RemoteDesktopTransportView;
     use crate::daemon::plugins::remote_desktop::constants::{
@@ -364,6 +389,7 @@ mod tests {
 
         let view = RemoteDesktopTransportView::from_session(&session);
         let summary = view.summary(&session);
+        let transports = view.transport_list(&session);
 
         assert_eq!(summary["route_state"]["host_candidate"], json!(true));
         assert_eq!(summary["route_state"]["host_only"], json!(true));
@@ -373,6 +399,11 @@ mod tests {
         assert_eq!(summary["route_state"]["nat_traversal_ready"], json!(false));
         assert_eq!(summary["route_state"]["relay_ready"], json!(false));
         assert_eq!(summary["route_state"]["route_class"], json!("host_only"));
+        assert_eq!(summary["reason_code"], json!("transport_route_unavailable"));
+        assert_eq!(
+            transports[0]["metadata"]["reason_code"],
+            json!("transport_route_unavailable")
+        );
         assert_eq!(
             summary["unavailable_reason"],
             json!("host_only_no_nat_or_relay")
@@ -408,6 +439,7 @@ mod tests {
         assert_eq!(summary["route_state"]["stun_srflx"], json!(true));
         assert_eq!(summary["route_state"]["relay_ready"], json!(false));
         assert_eq!(summary["route_state"]["route_class"], json!("stun_srflx"));
+        assert_eq!(summary["reason_code"], json!("transport_route_unavailable"));
         assert_eq!(summary["unavailable_reason"], json!("relay_unavailable"));
     }
 
@@ -465,6 +497,7 @@ mod tests {
         assert_eq!(summary["route_state"]["relay_ready"], json!(true));
         assert_eq!(summary["route_state"]["failed"], json!(true));
         assert_eq!(summary["route_state"]["route_class"], json!("failed"));
+        assert_eq!(summary["reason_code"], json!("transport_route_unavailable"));
     }
 
     #[test]
@@ -496,6 +529,28 @@ mod tests {
         assert_eq!(
             summary["route_state"]["route_class"],
             json!("easynet_relay")
+        );
+        assert_eq!(summary["reason_code"], Value::Null);
+    }
+
+    #[test]
+    fn native_media_error_does_not_report_route_failure_reason_code() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-native-media-plugin-required",
+            "easynet:///r/acme/resource/display.01",
+            vec![TRANSPORT_WEBRTC.to_string()],
+        ));
+        session.mark_transport_blocked("native_media_plugin_required", "native");
+
+        let view = RemoteDesktopTransportView::from_session(&session);
+        let summary = view.summary(&session);
+
+        assert_eq!(summary["route_state"]["failed"], json!(false));
+        assert_eq!(summary["route_state"]["route_class"], json!("none"));
+        assert_eq!(summary["reason_code"], Value::Null);
+        assert_eq!(
+            summary["unavailable_reason"],
+            json!("native_media_plugin_required")
         );
     }
 }

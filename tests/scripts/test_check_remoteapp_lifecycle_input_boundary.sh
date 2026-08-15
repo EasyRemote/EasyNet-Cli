@@ -374,6 +374,14 @@ RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/view_transport.rs" <<'RS'
 fn transport_route_state() {
+    fn summary() {
+        "message": self.message,
+        "reason_code": self.reason_code.clone(),
+        "metadata": {
+            "input_channel_label": INPUT_DATA_CHANNEL_LABEL,
+            "reason_code": self.reason_code.clone(),
+        };
+    }
     json!({
         "host_candidate": true,
         "stun_srflx": false,
@@ -382,6 +390,11 @@ fn transport_route_state() {
         "failed": false,
         "production_ready": session.production_media_ready(),
     });
+    fn transport_reason_code() {
+        REASON_TRANSPORT_ROUTE_UNAVAILABLE;
+        "transport_route_unavailable";
+    }
+    fn transport_route_failed() {}
     "host_only_no_nat_or_relay";
     "relay_unavailable";
 }
@@ -397,7 +410,9 @@ fn host_only_candidates_are_not_reported_as_nat_or_relay_ready() {}
 fn easynet_relay_does_not_imply_turn_relay() {}
 
 #[test]
-fn srflx_without_relay_reports_typed_relay_unavailable_reason() {}
+fn srflx_without_relay_reports_typed_relay_unavailable_reason() {
+    assert_eq!(summary["reason_code"], json!("transport_route_unavailable"));
+}
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/session_store.rs" <<'RS'
@@ -1090,6 +1105,31 @@ perl -0pi -e 's/fn transport_route_state/fn transport_summary_without_routes/' \
 run_fail 'transport view must expose host/STUN/TURN/EasyNet relay route state'
 
 write_fixture
+perl -0pi -e 's/REASON_TRANSPORT_ROUTE_UNAVAILABLE/REMOTE_DESKTOP_TRANSPORT_ROUTE_DETAIL/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'transport route degradation must expose the SPEC canonical transport_route_unavailable reason code'
+
+write_fixture
+perl -0pi -e 's/"message": self\.message,\s*"reason_code": self\.reason_code\.clone\(\),/"message": self.message,/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'public transport summary must project canonical route degradation reason_code'
+
+write_fixture
+perl -0pi -e 's/"input_channel_label": INPUT_DATA_CHANNEL_LABEL,\s*"reason_code": self\.reason_code\.clone\(\),/"input_channel_label": INPUT_DATA_CHANNEL_LABEL,/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'primary transport metadata must preserve canonical route degradation reason_code'
+
+write_fixture
+perl -0pi -e 's/fn transport_reason_code/fn transport_detail_reason/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'transport route reason_code derivation must be centralized in the transport view projection'
+
+write_fixture
+perl -0pi -e 's/fn transport_route_failed/fn transport_error_failed/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'transport route failed predicate must be explicit instead of treating every WebRTC error as a route failure'
+
+write_fixture
 perl -0pi -e 's/"host_only_no_nat_or_relay"/"webrtc_ice_connecting"/' \
   "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
 run_fail 'host-only transport degradation must have a typed unavailable reason'
@@ -1098,6 +1138,11 @@ write_fixture
 perl -0pi -e 's/"relay_unavailable"/"webrtc_ice_connecting"/' \
   "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
 run_fail 'relay-unavailable transport degradation must have a typed unavailable reason'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(summary\["reason_code"\], json!\("transport_route_unavailable"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'transport tests must assert canonical route degradation reason_code'
 
 write_fixture
 perl -0pi -e 's/route_state/route_summary/g' \

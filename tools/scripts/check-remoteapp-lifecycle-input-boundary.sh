@@ -411,10 +411,24 @@ require '"display_fallback_used": self\.scope_audit\.display_fallback_used' "$TA
   'TARGET_BOUND payload must project display fallback from the committed binding audit'
 require 'target_bound\["payload"\]\["display_fallback_used"\]' "$SESSION" \
   'production readiness test must assert TARGET_BOUND fallback projection'
+require 'REASON_TRANSPORT_ROUTE_UNAVAILABLE' "$VIEW_TRANSPORT" \
+  'transport route degradation must expose the SPEC canonical transport_route_unavailable reason code'
+require_multiline '/fn summary\([\s\S]*?"message": self\.message,\s*"reason_code": self\.reason_code\.clone\(\)/s' "$VIEW_TRANSPORT" \
+  'public transport summary must project canonical route degradation reason_code'
+require_multiline '/"metadata": \{[\s\S]*?"input_channel_label": INPUT_DATA_CHANNEL_LABEL,\s*"reason_code": self\.reason_code\.clone\(\)/s' "$VIEW_TRANSPORT" \
+  'primary transport metadata must preserve canonical route degradation reason_code'
+require 'fn transport_reason_code\(' "$VIEW_TRANSPORT" \
+  'transport route reason_code derivation must be centralized in the transport view projection'
+require 'fn transport_route_failed\(' "$VIEW_TRANSPORT" \
+  'transport route failed predicate must be explicit instead of treating every WebRTC error as a route failure'
 require '"host_only_no_nat_or_relay"' "$VIEW_TRANSPORT" \
   'host-only transport degradation must have a typed unavailable reason'
 require '"relay_unavailable"' "$VIEW_TRANSPORT" \
   'relay-unavailable transport degradation must have a typed unavailable reason'
+require 'summary\["reason_code"\]' "$VIEW_TRANSPORT" \
+  'transport tests must assert canonical route degradation reason_code'
+require 'transport_route_unavailable' "$VIEW_TRANSPORT" \
+  'transport tests must cover the canonical transport_route_unavailable reason code'
 require 'host_only_candidates_are_not_reported_as_nat_or_relay_ready' "$VIEW_TRANSPORT" \
   'transport tests must prove host-only candidates are not NAT/relay readiness'
 require 'easynet_relay_does_not_imply_turn_relay' "$VIEW_TRANSPORT" \
