@@ -80,6 +80,7 @@ export async function rdCreate(entry: Entry, env: { resource?: { resource_ura: s
 }
 
 export const actions = {
+  rdReportClientMediaState: (key: string, state: 'presenting' | 'stalled' | 'detached') => reportClientMediaState(key, state),
   rdRequestPermission: async (key: string) => {
     const entry = entries[key]
     const result = await invokeMediaUnary('remote_desktop.request_permission', {
@@ -88,6 +89,36 @@ export const actions = {
     })
     return result
   },
+}
+
+function reportClientMediaState(key: string, state: 'presenting' | 'stalled' | 'detached') {
+  const currentView = entries[key].session
+  const epoch = currentView.transportEpoch
+  const desired = state
+  return invokeMediaUnary('remote_desktop.report_client_state', {
+    deviceUra: entries[key].deviceUra,
+    subjectURA: currentView.subjectUra,
+    causalContext: remoteDesktopSessionCausalContext(currentView),
+    args: {
+      session_id: currentView.sessionId,
+      session_token: currentView.sessionToken,
+      transport_epoch: epoch,
+      state: desired,
+    },
+  })
+}
+
+function presentationTimeoutGuard(key: string, currentView: RemoteDesktopView) {
+  const currentRefs = refsFor(key)
+  if (
+    currentRefs.clientMediaReportedState === 'presenting' ||
+    currentView?.clientMediaReady === true
+  ) return
+  patchEntry(key, { webrtcStatus: 'remote desktop did not present a frame within 10s' })
+}
+
+function onConnectionStateChange(pc: RTCPeerConnection) {
+  if (pc.connectionState === 'connected') updateWebRtcStatus()
 }
 
 function assertRemoteDesktopCreateSessionIdentity(result: Record<string, unknown> | undefined): void {
@@ -101,9 +132,41 @@ function assertRemoteDesktopCreateSessionIdentity(result: Record<string, unknown
 TS
 
 cat >"$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx" <<'TSX'
+function WebRtcVideoViewport({
+  stream,
+  onPresented,
+  onStalled,
+}: {
+  stream: MediaStream
+  onPresented: () => void
+  onStalled: () => void
+}) {
+  const videoWithFrameCallback = video as HTMLVideoElement & {
+    requestVideoFrameCallback?: (callback: () => void) => number
+  }
+  videoWithFrameCallback.requestVideoFrameCallback?.(() => {
+    onPresented()
+  })
+  const handlePlaying = () => {
+    if (!videoWithFrameCallback.requestVideoFrameCallback) onPresented()
+  }
+  video.addEventListener('playing', handlePlaying)
+  video.addEventListener('stalled', onStalled)
+  return <video />
+}
+
 export function DeviceMediaAccess() {
   const baseRuntimeReady = online === true && !resourceRuntimeOffline
   const remoteTargetReady = baseRuntimeReady && !remoteTargetError
+  const reportClientMediaState = useMediaChannelStore((state) => state.rdReportClientMediaState)
+  const reportPresented = useCallback(
+    () => reportClientMediaState(channelKey, 'presenting'),
+    [channelKey, reportClientMediaState],
+  )
+  const reportStalled = useCallback(
+    () => reportClientMediaState(channelKey, 'stalled'),
+    [channelKey, reportClientMediaState],
+  )
   const remoteTargetData = listRemoteDesktopTargets()
   const result = invokeMediaUnary('resource.refresh_remote_targets', {})
   const screenResources = remoteTargetData.resources
@@ -111,6 +174,13 @@ export function DeviceMediaAccess() {
   if (selectedScreenURA && !screenResources.some((resource) => resource.resource_ura === selectedScreenURA)) {
     setSelectedScreenURA(undefined)
   }
+  const viewport = (
+    <WebRtcVideoViewport
+      stream={preview.mediaStream}
+      onPresented={reportPresented}
+      onStalled={reportStalled}
+    />
+  )
   return remoteTargetReady && screenResource ? <div /> : null
 }
 TSX
@@ -230,6 +300,33 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
 fi
 perl -0pi -e 's/screenResources\[0\]/screenResources.find((resource) => resource.resource_ura === entry.session?.subjectUra)/' \
   "$FRONTEND_SRC/pages/easynet/DeviceMediaWorkspacePage.tsx"
+
+perl -0pi -e 's/requestVideoFrameCallback/requestPeerConnectionCallback/g' \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing decoded-frame callback presentation gate" >&2
+  exit 1
+fi
+perl -0pi -e 's/requestPeerConnectionCallback/requestVideoFrameCallback/g' \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+
+perl -0pi -e "s/reportClientMediaState\\(channelKey, 'presenting'\\)/reportClientMediaState(channelKey, 'stalled')/" \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted decoded-frame callback that does not report presenting" >&2
+  exit 1
+fi
+perl -0pi -e "s/reportClientMediaState\\(channelKey, 'stalled'\\)/reportClientMediaState(channelKey, 'presenting')/" \
+  "$FRONTEND_SRC/components/easynet/DeviceMediaAccess.tsx"
+
+perl -0pi -e "s/if \\(pc\\.connectionState === 'connected'\\) updateWebRtcStatus\\(\\)/if (pc.connectionState === 'connected') reportClientMediaState(key, 'presenting')/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted peer-connected client presentation report" >&2
+  exit 1
+fi
+perl -0pi -e "s/if \\(pc\\.connectionState === 'connected'\\) reportClientMediaState\\(key, 'presenting'\\)/if (pc.connectionState === 'connected') updateWebRtcStatus()/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
 
 perl -0pi -e 's/productionReady: result\?\.production_media_ready === true \|\| productionReadiness\?\.ready === true/productionReady: productionGate?.ready === true || mediaBackends.some(isRemoteDesktopProductionBackend)/' \
   "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"

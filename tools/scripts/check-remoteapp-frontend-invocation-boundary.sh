@@ -114,6 +114,20 @@ require_multiline '/rdRequestPermission:[\s\S]*invokeMediaUnary\('\''remote_desk
   'frontend request_permission must invoke the host-local permission probe without a target subjectURA'
 reject_multiline '/remote_desktop\.request_permission(?:(?!\}\)).)*subjectURA:/s' "$STORE" \
   'frontend request_permission must not scope host-local permission probes to the selected remote desktop resource'
+require "invokeMediaUnary\\('remote_desktop\\.report_client_state'" "$STORE" \
+  'frontend must report browser/client media presentation through remote_desktop.report_client_state'
+require 'subjectURA: currentView\.subjectUra' "$STORE" \
+  'frontend client media report must use the session subject URA as Invocation.subject'
+require 'transport_epoch: epoch' "$STORE" \
+  'frontend client media report must bind presentation state to the negotiated transport epoch'
+require 'state: desired' "$STORE" \
+  'frontend client media report must submit the latest desired client media state'
+require "clientMediaReportedState === 'presenting'" "$STORE" \
+  'frontend presentation timeout must observe the reported client-presenting state'
+require 'remote desktop did not present a frame within' "$STORE" \
+  'frontend must fail closed when decoded-frame presentation is not observed'
+reject_multiline '/pc\.connectionState === '\''connected'\''[\s\S]{0,240}reportClientMediaState\(key, '\''presenting'\''\)/s' "$STORE" \
+  'frontend must not report production presentation from peer-connection connected alone'
 
 require 'resource\.refresh_remote_targets' "$ACCESS" \
   'frontend display/application/window picker must use live resource.refresh_remote_targets'
@@ -127,6 +141,14 @@ require 'baseRuntimeReady' "$ACCESS" \
   'frontend must separate base media runtime readiness from remote target readiness'
 require 'remoteTargetReady' "$ACCESS" \
   'frontend must gate only screen/remote desktop launchers on live target readiness'
+require 'requestVideoFrameCallback' "$ACCESS" \
+  'frontend WebRTC viewport must prefer decoded-frame callbacks for client-presenting evidence'
+require 'if \(!videoWithFrameCallback\.requestVideoFrameCallback\) onPresented\(\)' "$ACCESS" \
+  'frontend WebRTC viewport may use playing only as a no-requestVideoFrameCallback fallback'
+require 'onPresented=\{reportPresented\}' "$ACCESS" \
+  'frontend WebRTC viewport must wire decoded-frame presentation to client media reporting'
+require "reportClientMediaState\\(channelKey, 'presenting'\\)" "$ACCESS" \
+  'frontend media viewport must report presenting only through the remote desktop client media state action'
 
 require 'listRemoteDesktopTargets' "$WORKSPACE" \
   'frontend workspace must use live remote target inventory'
