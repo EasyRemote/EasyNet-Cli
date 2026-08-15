@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::constants::{TRANSPORT_INVOKE_BIDI, TRANSPORT_WEBRTC};
 use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, TargetResolutionError,
+    FrontendAction, RemoteAppTargetBinding, TargetResolutionError,
 };
 
 type RemoteDesktopEventProjection = (&'static str, Value);
@@ -376,6 +376,15 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_failed_with_context(
     (event_kind.event_type(), payload)
 }
 
+/// Default domain context for direct WebRTC failures whose selected target is
+/// still semantically valid but the production transport path failed.
+pub(in crate::daemon::plugins::remote_desktop) fn webrtc_transport_failure_context() -> Value {
+    json!({
+        "failure_domain": "transport",
+        "frontend_action": FrontendAction::RetrySession.as_str(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -386,7 +395,7 @@ mod tests {
 
     use super::{
         media_source_lost, preview_transport_connected, webrtc_failed_with_context,
-        webrtc_sender_ready, WebRtcFailureEventKind,
+        webrtc_sender_ready, webrtc_transport_failure_context, WebRtcFailureEventKind,
     };
 
     #[test]
@@ -429,10 +438,7 @@ mod tests {
             "webrtc_peer_connection_failed",
             "peer connection failed".to_string(),
             11,
-            json!({
-                "failure_domain": "transport",
-                "frontend_action": "retry_session",
-            }),
+            webrtc_transport_failure_context(),
         );
 
         assert_eq!(event_type, "TRANSPORT_FAILED");

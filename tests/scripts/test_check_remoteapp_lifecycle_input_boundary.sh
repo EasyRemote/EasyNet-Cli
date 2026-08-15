@@ -334,6 +334,13 @@ impl WebRtcFailureEventKind {
     }
 }
 
+fn webrtc_transport_failure_context() {
+    json!({
+        "failure_domain": "transport",
+        "frontend_action": FrontendAction::RetrySession.as_str(),
+    });
+}
+
 fn media_source_lost(binding: &RemoteAppTargetBinding) {
     json!({
         "event_type": "MEDIA_SOURCE_LOST",
@@ -400,6 +407,7 @@ fn mark_direct_webrtc_media_ready(session_id: &str) {
 
 fn mark_direct_webrtc_failed() {
     WebRtcFailureEventKind::TransportFailed;
+    webrtc_transport_failure_context();
 }
 
 #[cfg(test)]
@@ -411,6 +419,12 @@ mod tests {
         assert!(session.report_client_media_state(TransportEpoch::new(1), "presenting"));
         assert_eq!(view["transport"]["production_ready"], json!(false));
         assert_eq!(view["transports"][0]["metadata"]["production_ready"], json!(false));
+    }
+
+    #[test]
+    fn direct_webrtc_transport_failure_projects_recovery_context() {
+        assert_eq!(event["payload"]["failure_domain"], json!("transport"));
+        assert_eq!(event["payload"]["frontend_action"], json!("retry_session"));
     }
 }
 RS
@@ -1044,6 +1058,26 @@ write_fixture
 perl -0pi -e 's/Self::TransportFailed => "TRANSPORT_FAILED"/Self::TransportFailed => "SESSION_FAILED"/' \
   "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
 run_fail 'WebRTC transport failures must project TRANSPORT_FAILED'
+
+write_fixture
+perl -0pi -e 's/"failure_domain": "transport"/"failure_domain": "session"/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'direct WebRTC transport failure context must identify the transport domain'
+
+write_fixture
+perl -0pi -e 's/FrontendAction::RetrySession\.as_str\(\)/"close_session"/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'direct WebRTC transport failure context must publish retry_session recovery action'
+
+write_fixture
+perl -0pi -e 's/webrtc_transport_failure_context\(\);/Value::Null;/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_store.rs"
+run_fail 'direct WebRTC default failure path must not emit empty transport failure context'
+
+write_fixture
+perl -0pi -e 's/direct_webrtc_transport_failure_projects_recovery_context/direct_webrtc_transport_failure_lacks_recovery_context/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_store.rs"
+run_fail 'session-store tests must prove default transport failures publish recovery context'
 
 write_fixture
 perl -0pi -e 's/"binding_id": binding\.binding_id\(\),//' \

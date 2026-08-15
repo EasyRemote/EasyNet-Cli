@@ -16,7 +16,9 @@ use crate::daemon::plugins::remote_desktop::sdp::ice_candidate_text;
 use crate::daemon::plugins::remote_desktop::session::{
     RemoteDesktopSession, TargetMediaSourceLost,
 };
-use crate::daemon::plugins::remote_desktop::session_events::WebRtcFailureEventKind;
+use crate::daemon::plugins::remote_desktop::session_events::{
+    webrtc_transport_failure_context, WebRtcFailureEventKind,
+};
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 use crate::daemon::plugins::remote_desktop::target_tracking::{
@@ -208,7 +210,7 @@ impl RemoteDesktopSessionStore {
             WebRtcFailureEventKind::TransportFailed,
             reason,
             message,
-            Value::Null,
+            webrtc_transport_failure_context(),
         );
     }
 
@@ -595,6 +597,37 @@ mod tests {
                 .events()
                 .iter()
                 .any(|event| event["event_type"] == json!("PEER_CONNECTION_STATE_CHANGED")));
+        });
+    }
+
+    #[test]
+    fn direct_webrtc_transport_failure_projects_recovery_context() {
+        let store = RemoteDesktopSessionStore::new();
+        insert_test_session(&store, "rd-transport-failed");
+
+        store.mark_direct_webrtc_failed(
+            "rd-transport-failed",
+            TransportEpoch::new(1),
+            "webrtc_peer_connection_failed",
+            "device-side peer connection entered failed".to_string(),
+        );
+
+        store.with_sessions(|sessions| {
+            let session = sessions.get("rd-transport-failed").unwrap();
+            let event = session
+                .events()
+                .into_iter()
+                .find(|event| event["event_type"] == json!("TRANSPORT_FAILED"))
+                .expect("transport failure event");
+            assert_eq!(
+                event["payload"]["reason"],
+                json!("webrtc_peer_connection_failed")
+            );
+            assert_eq!(event["payload"]["failure_domain"], json!("transport"));
+            assert_eq!(event["payload"]["frontend_action"], json!("retry_session"));
+            assert_eq!(event["payload"]["transport_kind"], json!(TRANSPORT_WEBRTC));
+            assert_eq!(event["payload"]["media_transport_ready"], json!(false));
+            assert_eq!(event["payload"]["transport_epoch"], json!(1));
         });
     }
 
