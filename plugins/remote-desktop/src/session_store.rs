@@ -635,6 +635,36 @@ mod tests {
                 view["production_readiness"]["production_codec_negotiated"],
                 json!(true)
             );
+            assert_eq!(
+                view["production_readiness"]["client_media_ready"],
+                json!(false)
+            );
+            assert_eq!(view["production_media_ready"], json!(false));
+            assert_eq!(view["production_readiness"]["ready"], json!(false));
+            assert_eq!(
+                view["production_readiness"]["blocked_reason"],
+                json!("client_media_not_presenting")
+            );
+            assert_eq!(view["transport"]["production_ready"], json!(false));
+            assert_eq!(view["transports"][0]["production_ready"], json!(false));
+        });
+        store.with_sessions(|sessions| {
+            assert!(sessions
+                .get_mut("rd-production-ready")
+                .unwrap()
+                .report_client_media_state(TransportEpoch::new(1), "presenting"));
+        });
+        store.with_sessions(|sessions| {
+            let view = serialize_session(sessions.get("rd-production-ready").unwrap());
+            assert_eq!(view["media_transport_ready"], json!(true));
+            assert_eq!(
+                view["production_readiness"]["production_codec_negotiated"],
+                json!(true)
+            );
+            assert_eq!(
+                view["production_readiness"]["client_media_ready"],
+                json!(true)
+            );
             assert_eq!(view["production_media_ready"], json!(true));
             assert_eq!(view["production_readiness"]["ready"], json!(true));
             assert_eq!(view["production_readiness"]["blocked_reason"], json!(null));

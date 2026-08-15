@@ -287,6 +287,7 @@ impl RemoteDesktopSession {
         self.target.binding().production_scope_ready()
             && self.signaling.production_codec_negotiated()
             && self.transport.media_transport_ready()
+            && self.transport.client_media_ready()
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn target_scope_ready(&self) -> bool {
@@ -1444,6 +1445,7 @@ mod tests {
             epoch,
             direct_webrtc_endpoint_ura("rd-target-rebind-failed"),
         );
+        assert!(session.report_client_media_state(epoch, "presenting"));
         assert!(session.production_media_ready());
 
         session.record_target_observation(TargetObservation::Lost {

@@ -106,6 +106,7 @@ fn production_media_ready() -> bool {
     self.target.binding().production_scope_ready()
         && self.signaling.production_codec_negotiated()
         && self.transport.media_transport_ready()
+        && self.transport.client_media_ready()
 }
 
 fn activate_input_for_transport_epoch() {
@@ -327,6 +328,8 @@ mod tests {
     #[test]
     fn production_media_ready_requires_production_codec_and_sender_ready() {
         assert_eq!(view["production_readiness"]["blocked_reason"], json!("production_codec_not_negotiated"));
+        assert_eq!(view["production_readiness"]["client_media_ready"], json!(false));
+        assert!(session.report_client_media_state(TransportEpoch::new(1), "presenting"));
         assert_eq!(view["transport"]["production_ready"], json!(false));
         assert_eq!(view["transports"][0]["metadata"]["production_ready"], json!(false));
     }
@@ -372,6 +375,8 @@ fn production_readiness_blocked_reason(session: &RemoteDesktopSession) -> Value 
         json!("production_codec_not_negotiated")
     } else if !session.media_transport_ready() {
         json!("media_transport_not_ready")
+    } else if !session.client_media_ready() {
+        json!("client_media_not_presenting")
     } else {
         json!("production_readiness_incomplete")
     }
@@ -887,6 +892,11 @@ perl -0pi -e 's/self\.target\.binding\(\)\.production_scope_ready\(\)\s*&&\s*//'
 run_fail 'production media readiness must be gated by target binding scope readiness'
 
 write_fixture
+perl -0pi -e 's/\n        && self\.transport\.client_media_ready\(\)//' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'production media readiness must wait for client presenting evidence, not only device sender readiness'
+
+write_fixture
 perl -0pi -e 's/"target_scope_ready": session\.target_scope_ready\(\),//' \
   "$SANDBOX/plugins/remote-desktop/src/view.rs"
 run_fail 'public production readiness must expose target scope readiness'
@@ -895,6 +905,11 @@ write_fixture
 perl -0pi -e 's/"blocked_reason": production_readiness_blocked_reason\(session\),//' \
   "$SANDBOX/plugins/remote-desktop/src/view.rs"
 run_fail 'public production readiness must expose one typed blocked_reason instead of forcing UI inference'
+
+write_fixture
+perl -0pi -e 's/\n    } else if !session\.client_media_ready\(\) \{\n        json!\("client_media_not_presenting"\)//' \
+  "$SANDBOX/plugins/remote-desktop/src/view.rs"
+run_fail 'production readiness must distinguish missing client presenting/decoded evidence'
 
 write_fixture
 perl -0pi -e 's/"production_ready": session\.production_media_ready\(\),//' \

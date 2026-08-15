@@ -294,6 +294,8 @@ require 'fn production_scope_ready\(' "$TARGET" \
   'target binding must own the production scope readiness predicate'
 require 'self\.target\.binding\(\)\.production_scope_ready\(\)' "$SESSION" \
   'production media readiness must be gated by target binding scope readiness'
+require '&& self\.transport\.client_media_ready\(\)' "$SESSION" \
+  'production media readiness must wait for client presenting evidence, not only device sender readiness'
 require '"target_scope_ready": session\.target_scope_ready\(\)' "$VIEW" \
   'public production readiness must expose target scope readiness'
 require '"blocked_reason": production_readiness_blocked_reason\(session\)' "$VIEW" \
@@ -306,6 +308,8 @@ require '"production_codec_not_negotiated"' "$VIEW" \
   'production readiness must distinguish non-production or missing codec blockers'
 require '"media_transport_not_ready"' "$VIEW" \
   'production readiness must distinguish media transport blockers'
+require '"client_media_not_presenting"' "$VIEW" \
+  'production readiness must distinguish missing client presenting/decoded evidence'
 require 'production_media_ready_requires_target_scope_ready' "$SESSION" \
   'production online predicate must test scope fallback/widening rejection'
 require 'scope widening or display fallback must prevent production online' "$SESSION" \
@@ -314,6 +318,10 @@ require 'production_media_ready_requires_production_codec_and_sender_ready' "$SE
   'production readiness must test non-production codec and sender readiness blockers'
 require 'view\["production_readiness"\]\["blocked_reason"\]' "$SESSION_STORE" \
   'production readiness tests must assert the public blocked_reason projection'
+require 'view\["production_readiness"\]\["client_media_ready"\]' "$SESSION_STORE" \
+  'production readiness tests must assert client presenting evidence before online'
+require 'report_client_media_state\(TransportEpoch::new\(1\), "presenting"\)' "$SESSION_STORE" \
+  'production readiness tests must prove client presenting flips production online after sender readiness'
 require 'view\["transport"\]\["production_ready"\]' "$SESSION_STORE" \
   'public transport summary must expose production_ready separately from primary_ready'
 require 'view\["transports"\]\[0\]\["metadata"\]\["production_ready"\]' "$SESSION_STORE" \
