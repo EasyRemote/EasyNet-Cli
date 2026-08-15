@@ -62,6 +62,10 @@ evidence = {
     "invocation": {
         "ability": "remote_desktop.create_session",
         "subject_ura": subject,
+        "args": {
+            "mode": "view_only",
+            "transport": "webrtc"
+        },
     },
     "target_binding": {
         "target_kind": "window",
@@ -139,6 +143,22 @@ EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
   --run \
   --probe-cmd "python3 '$PROBE'" \
   --out-dir "$SANDBOX/e2e-out" >/dev/null
+
+PROBE_ARGS_SUBJECT="$SANDBOX/fake_probe_args_subject.py"
+cp "$PROBE" "$PROBE_ARGS_SUBJECT"
+perl -0pi -e 's/"transport": "webrtc"/"transport": "webrtc",\n            "subject_ura": subject/' \
+  "$PROBE_ARGS_SUBJECT"
+if EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
+  EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-window-red" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+    --run \
+    --probe-cmd "python3 '$PROBE_ARGS_SUBJECT'" \
+    --out-dir "$SANDBOX/e2e-args-subject" >/dev/null 2>&1; then
+  echo "remoteapp e2e harness accepted create_session subject identity inside invocation args" >&2
+  exit 1
+fi
 
 PROBE_NO_WINDOW_ID="$SANDBOX/fake_probe_no_window_id.py"
 cp "$PROBE" "$PROBE_NO_WINDOW_ID"
@@ -869,6 +889,17 @@ mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
 
 cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
+perl -0pi -e 's/contains_create_session_subject_arg/contains_create_session_subject_arg_omitted/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted missing create_session args subject rejection" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
 perl -0pi -e 's/sentinel_fixture/sentinel_fixture_omitted/g' \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
@@ -884,6 +915,17 @@ perl -0pi -e 's/EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD/EASYNET_REMOTEAPP_FAKE_RECE
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
 if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp e2e acceptance checker accepted bundled probe without receiver command contract" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
+
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh.good"
+perl -0pi -e 's/"args": invocation\.get\("args"\),//' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted bundled probe without invocation args preservation" >&2
   exit 1
 fi
 mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh.good" \

@@ -41,6 +41,12 @@ require 'remote_desktop\.create_session' "$SCRIPT" \
   'host decoded-frame E2E must prove remote_desktop.create_session was invoked'
 require 'Invocation\.subject|invocation\.subject_ura' "$SCRIPT" \
   'host decoded-frame E2E must validate selected resource URA as Invocation.subject'
+require 'invocation_args = get\("invocation\.args"\)' "$SCRIPT" \
+  'host decoded-frame E2E must inspect create_session invocation args when evidence reports them'
+require 'def contains_create_session_subject_arg\(value\):' "$SCRIPT" \
+  'host decoded-frame E2E must recursively reject subject identity inside create_session args'
+require 'remote_desktop\.create_session args must not contain subject, subject_ura, or resource_ura' "$SCRIPT" \
+  'host decoded-frame E2E must prove create_session selected target is not passed through args'
 require 'WindowSurface' "$SCRIPT" \
   'host decoded-frame E2E must distinguish exact window capture'
 require 'window target must include target_binding\.resolved_identity' "$SCRIPT" \
@@ -212,6 +218,8 @@ require '"production_media_ready": frame\.get\("production_media_ready"\)' "$PRO
   'bundled host probe must carry post-negotiation production_media_ready into canonical evidence'
 require 'verified Invocation\.subject|invocation\.get\("subject_ura"\)' "$PROBE" \
   'bundled host probe must validate verified Invocation.subject against the selected Resource URA'
+require '"args": invocation\.get\("args"\)' "$PROBE" \
+  'bundled host probe must preserve create_session invocation args for no-subject-in-args evidence'
 require 'resolved_identity' "$PROBE" \
   'bundled host probe must preserve target resolved identity evidence'
 require 'ambiguous target selection|TARGET_HINT|TARGET_RESOURCE_URA' "$PROBE" \

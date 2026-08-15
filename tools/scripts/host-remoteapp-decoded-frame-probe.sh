@@ -308,6 +308,7 @@ evidence = {
     "invocation": {
         "ability": invocation.get("ability"),
         "subject_ura": invocation.get("subject_ura"),
+        "args": invocation.get("args"),
         "callee_ura": invocation.get("callee_ura"),
         "request_id": invocation.get("request_id"),
         "receipt": invocation.get("receipt"),

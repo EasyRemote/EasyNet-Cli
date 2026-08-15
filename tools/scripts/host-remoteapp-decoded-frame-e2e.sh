@@ -249,6 +249,7 @@ def get(path, default=None):
 
 selected_resource_ura = get("selected_resource_ura")
 invocation_subject_ura = get("invocation.subject_ura")
+invocation_args = get("invocation.args")
 inventory_ability = get("live_inventory.ability")
 target_kind = get("target_binding.target_kind")
 target_binding_subject_ura = get("target_binding.subject_ura")
@@ -313,6 +314,17 @@ def optional_positive_env_int(name):
         return None
     require(value > 0, f"{name} must be positive")
     return value
+
+def contains_create_session_subject_arg(value):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in {"subject", "subject_ura", "resource_ura"}:
+                return True
+            if contains_create_session_subject_arg(child):
+                return True
+    elif isinstance(value, list):
+        return any(contains_create_session_subject_arg(child) for child in value)
+    return False
 
 def next_ppm_token(data, offset):
     while True:
@@ -431,6 +443,11 @@ require(invocation_subject_ura == selected_resource_ura,
         "Invocation.subject must equal the selected resource_ura")
 require(get("invocation.ability") == "remote_desktop.create_session",
         "invocation ability must be remote_desktop.create_session")
+if invocation_args is not None:
+    require(isinstance(invocation_args, dict),
+            "invocation.args must be an object when reported")
+    require(not contains_create_session_subject_arg(invocation_args),
+            "remote_desktop.create_session args must not contain subject, subject_ura, or resource_ura")
 require(target_binding_subject_ura == selected_resource_ura,
         "target_binding.subject_ura must equal the selected resource_ura")
 require(target_kind == expected_kind, f"target_binding.target_kind must be {expected_kind}")
