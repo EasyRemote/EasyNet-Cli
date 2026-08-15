@@ -32,6 +32,10 @@ require 'E2E-04 exact application session' "$SPEC" \
   'SPEC must retain exact application decoded-frame acceptance'
 require 'E2E-07 display fallback forbidden' "$SPEC" \
   'SPEC must retain display fallback decoded-frame acceptance'
+require 'E2E-08 move/resize tracking' "$SPEC" \
+  'SPEC must retain live move/resize acceptance'
+require 'E2E-09 target loss vs transport failure' "$SPEC" \
+  'SPEC must retain live target-loss acceptance'
 
 require 'resource\.refresh_remote_targets' "$SCRIPT" \
   'host decoded-frame E2E must prove live refresh inventory was used'
@@ -123,6 +127,30 @@ require '--sentinel-fixture|EASYNET_REMOTEAPP_SENTINEL_FIXTURE' "$SCRIPT" \
   'host decoded-frame E2E must allow launching a real host sentinel fixture'
 require '--sentinel-fixture-cmd|EASYNET_REMOTEAPP_SENTINEL_FIXTURE_CMD' "$SCRIPT" \
   'host decoded-frame E2E must allow explicit sentinel fixture injection'
+require '--lifecycle-scenario|EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO' "$SCRIPT" \
+  'host decoded-frame E2E must support explicit lifecycle acceptance scenarios'
+require 'move-resize' "$SCRIPT" \
+  'host lifecycle E2E must support move/resize evidence'
+require 'target-loss' "$SCRIPT" \
+  'host lifecycle E2E must support target-loss evidence'
+require 'move-resize lifecycle evidence must include TARGET_MOVED' "$SCRIPT" \
+  'host lifecycle E2E must validate TARGET_MOVED evidence'
+require 'move-resize lifecycle evidence must include TARGET_RESIZED' "$SCRIPT" \
+  'host lifecycle E2E must validate TARGET_RESIZED evidence'
+require 'move-resize lifecycle evidence must show input transform consuming the latest geometry revision' "$SCRIPT" \
+  'host lifecycle E2E must validate input transform geometry-revision coupling when pointer target is projected'
+require 'move-resize lifecycle evidence without pointer target must keep pointer input disabled' "$SCRIPT" \
+  'host lifecycle E2E must validate view-only move/resize keeps pointer input disabled'
+require 'target-loss lifecycle evidence must include TARGET_LOST' "$SCRIPT" \
+  'host lifecycle E2E must validate TARGET_LOST evidence'
+require 'target-loss lifecycle evidence must include MEDIA_SOURCE_LOST' "$SCRIPT" \
+  'host lifecycle E2E must validate MEDIA_SOURCE_LOST evidence'
+require 'target-loss lifecycle evidence must not collapse target loss into TRANSPORT_FAILED' "$SCRIPT" \
+  'host lifecycle E2E must validate target loss is not a transport failure'
+require 'target-loss lifecycle evidence must leave the session suspended' "$SCRIPT" \
+  'host lifecycle E2E must validate suspended state after target loss'
+require 'target-loss lifecycle evidence must disable input' "$SCRIPT" \
+  'host lifecycle E2E must validate input disablement after target loss'
 require 'EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR' "$SCRIPT" \
   'host decoded-frame E2E must pass a fixture state directory to sentinel fixture commands'
 require 'source "\$SENTINEL_FIXTURE_DIR/env\.sh"' "$SCRIPT" \
@@ -242,6 +270,14 @@ require 'primary_pid' "$PROBE" \
   'bundled host probe must match native-pid target selection against primary_pid metadata'
 require 'metadata\.get\("pid"\)' "$PROBE" \
   'bundled host probe must match native-pid target selection against pid metadata'
+require 'EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO' "$PROBE" \
+  'bundled host probe must consume lifecycle scenario selection'
+require 'EASYNET_REMOTEAPP_SELECTED_CONTROL_SH' "$PROBE" \
+  'bundled host probe must execute selected sentinel lifecycle controls'
+require 'show-remote-desktop-session' "$PROBE" \
+  'bundled host probe must record post-action daemon session projection for lifecycle evidence'
+require 'evidence\["lifecycle"\] = lifecycle' "$PROBE" \
+  'bundled host probe must publish canonical lifecycle evidence'
 
 require 'swiftc' "$FIXTURE" \
   'bundled sentinel fixture must launch real native macOS windows through a compiled AppKit fixture'
@@ -269,6 +305,18 @@ require 'manifest\.json' "$FIXTURE" \
   'bundled sentinel fixture must write a fixture manifest'
 require 'cleanup\.sh' "$FIXTURE" \
   'bundled sentinel fixture must write an idempotent cleanup script'
+require 'selected-control\.sh' "$FIXTURE" \
+  'bundled sentinel fixture must write a selected-window lifecycle control script'
+require 'action == "move"' "$FIXTURE" \
+  'bundled sentinel fixture must support a true move-only host lifecycle action'
+require 'move_resize' "$FIXTURE" \
+  'bundled sentinel fixture must support move/resize host lifecycle actions'
+require 'window\.setFrame' "$FIXTURE" \
+  'bundled sentinel fixture must move and resize through the native AppKit window'
+require 'window\.close\(\)' "$FIXTURE" \
+  'bundled sentinel fixture must support native selected-window close for target-loss E2E'
+require 'EASYNET_REMOTEAPP_SELECTED_CONTROL_SH' "$FIXTURE" \
+  'bundled sentinel fixture must export the selected lifecycle control helper'
 
 require 'show-remote-desktop-session' "$RECEIVER" \
   'bundled frame receiver must read the latest post-decoded-frame session projection'

@@ -22,6 +22,11 @@ case "$TARGET_KIND" in
   window|application) ;;
   *) echo "[FAIL] invalid EASYNET_REMOTEAPP_E2E_TARGET_KIND: $TARGET_KIND" >&2; exit 64 ;;
 esac
+LIFECYCLE_SCENARIO="${EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO:-none}"
+case "$LIFECYCLE_SCENARIO" in
+  none|move-resize|target-loss) ;;
+  *) echo "[FAIL] invalid EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO: $LIFECYCLE_SCENARIO" >&2; exit 64 ;;
+esac
 
 EVIDENCE_JSON="${EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON:-}"
 [[ -n "$EVIDENCE_JSON" ]] || {
@@ -36,6 +41,8 @@ LIVE_INVENTORY_JSON="$OUT_DIR/live-inventory.json"
 SELECTED_RESOURCE_JSON="$OUT_DIR/selected-resource.json"
 SESSION_JSON="$OUT_DIR/session.json"
 FRAME_ANALYSIS_JSON="$OUT_DIR/frame-analysis.json"
+LIFECYCLE_EVENTS_JSON="$OUT_DIR/lifecycle-events.json"
+LIFECYCLE_SESSION_JSON="$OUT_DIR/lifecycle-session.json"
 
 TARGET_HINT="${EASYNET_REMOTEAPP_TARGET_HINT:-}"
 TARGET_RESOURCE_URA="${EASYNET_REMOTEAPP_TARGET_RESOURCE_URA:-}"
@@ -195,12 +202,120 @@ export EASYNET_REMOTEAPP_E2E_TARGET_KIND="$TARGET_KIND"
 bash -lc "$FRAME_RECEIVER_CMD"
 [[ -s "$FRAME_ANALYSIS_JSON" ]] || die "frame receiver did not write frame analysis JSON: $FRAME_ANALYSIS_JSON"
 
-python3 - "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" "$SESSION_JSON" "$FRAME_ANALYSIS_JSON" "$EVIDENCE_JSON" "$TARGET_KIND" <<'PY'
+run_lifecycle_scenario() {
+  [[ "$LIFECYCLE_SCENARIO" == "none" ]] && return 0
+  [[ "$TARGET_KIND" == "window" ]] || die "lifecycle scenario $LIFECYCLE_SCENARIO currently requires a window target"
+  [[ -x "${EASYNET_REMOTEAPP_SELECTED_CONTROL_SH:-}" ]] || die \
+    "lifecycle scenario requires EASYNET_REMOTEAPP_SELECTED_CONTROL_SH from the sentinel fixture"
+
+  local action
+  case "$LIFECYCLE_SCENARIO" in
+    move-resize) action="move-resize" ;;
+    target-loss) action="close" ;;
+    *) die "unsupported lifecycle scenario: $LIFECYCLE_SCENARIO" ;;
+  esac
+
+  "$EASYNET_REMOTEAPP_SELECTED_CONTROL_SH" "$action"
+
+  python3 - "$REPO_ROOT" "$SESSION_JSON" "$LIFECYCLE_EVENTS_JSON" "$LIFECYCLE_SESSION_JSON" "$LIFECYCLE_SCENARIO" <<'PY'
+import json
+import pathlib
+import subprocess
+import sys
+import time
+
+repo_root, session_json, events_json, lifecycle_session_json, scenario = sys.argv[1:6]
+easynet = pathlib.Path(repo_root) / "target" / "debug" / "easynet"
+cmd_base = [str(easynet) if easynet.exists() else "easynet"]
+
+with open(session_json, encoding="utf-8") as f:
+    initial_session = json.load(f)
+initial_revision = (
+    initial_session.get("target_binding", {}).get("target_geometry_revision")
+    if isinstance(initial_session, dict)
+    else None
+)
+
+def show_session():
+    shown = subprocess.run(
+        cmd_base + [
+            "ability",
+            "show-remote-desktop-session",
+            "--session-json",
+            session_json,
+            "--format",
+            "json",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=8,
+    )
+    return json.loads(shown.stdout), shown.stdout
+
+def event_types(session):
+    return [
+        event.get("event_type")
+        for event in session.get("events", [])
+        if isinstance(event, dict)
+    ]
+
+def scenario_ready(session):
+    types = event_types(session)
+    if scenario == "move-resize":
+        current_revision = session.get("target_tracking", {}).get("target_geometry_revision")
+        return (
+            "TARGET_MOVED" in types
+            and "TARGET_RESIZED" in types
+            and isinstance(current_revision, int)
+            and isinstance(initial_revision, int)
+            and current_revision > initial_revision
+        )
+    if scenario == "target-loss":
+        return (
+            "TARGET_LOST" in types
+            and "MEDIA_SOURCE_LOST" in types
+            and session.get("state") == "suspended"
+            and session.get("target_tracking", {}).get("input_enabled") is False
+        )
+    return True
+
+session = {}
+raw = "{}\n"
+deadline = time.time() + 12.0
+while True:
+    session, raw = show_session()
+    if scenario_ready(session) or time.time() >= deadline:
+        break
+    time.sleep(0.35)
+
+pathlib.Path(lifecycle_session_json).write_text(raw, encoding="utf-8")
+pathlib.Path(events_json).write_text(
+    json.dumps(session.get("events", []), indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+}
+
+run_lifecycle_scenario
+
+python3 - "$LIVE_INVENTORY_JSON" "$SELECTED_RESOURCE_JSON" "$SESSION_JSON" "$FRAME_ANALYSIS_JSON" "$EVIDENCE_JSON" "$TARGET_KIND" "$LIFECYCLE_SCENARIO" "$LIFECYCLE_EVENTS_JSON" "$LIFECYCLE_SESSION_JSON" <<'PY'
 import json
 import os
 import sys
 
-inventory_path, selected_path, session_path, frame_path, evidence_path, expected_kind = sys.argv[1:7]
+(
+    inventory_path,
+    selected_path,
+    session_path,
+    frame_path,
+    evidence_path,
+    expected_kind,
+    lifecycle_scenario,
+    lifecycle_events_path,
+    lifecycle_session_path,
+) = sys.argv[1:10]
 
 def load(path):
     with open(path, encoding="utf-8") as f:
@@ -210,6 +325,11 @@ inventory = load(inventory_path)
 selected = load(selected_path)
 session_response = load(session_path)
 frame = load(frame_path)
+lifecycle_events = []
+lifecycle_session = None
+if lifecycle_scenario != "none":
+    lifecycle_events = load(lifecycle_events_path)
+    lifecycle_session = load(lifecycle_session_path)
 
 session = session_response.get("session")
 invocation = session_response.get("invocation")
@@ -352,6 +472,18 @@ evidence = {
 
 if expected_kind == "application":
     evidence["target_binding"]["app_window_set"] = target_binding.get("app_window_set")
+
+if lifecycle_scenario != "none":
+    lifecycle = {
+        "scenario": lifecycle_scenario,
+        "events": lifecycle_events,
+        "session": lifecycle_session,
+    }
+    if lifecycle_scenario == "move-resize":
+        lifecycle["required_events"] = ["TARGET_MOVED", "TARGET_RESIZED"]
+    elif lifecycle_scenario == "target-loss":
+        lifecycle["required_events"] = ["TARGET_LOST", "MEDIA_SOURCE_LOST"]
+    evidence["lifecycle"] = lifecycle
 
 with open(evidence_path, "w", encoding="utf-8") as f:
     json.dump(evidence, f, indent=2, sort_keys=True)

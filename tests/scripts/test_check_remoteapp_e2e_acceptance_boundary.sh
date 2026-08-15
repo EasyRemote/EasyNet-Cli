@@ -22,6 +22,8 @@ cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
 | E2E-03 exact window session | decoded stream excludes sentinel |
 | E2E-04 exact application session | decoded stream excludes other apps |
 | E2E-07 display fallback forbidden | no decoded full display |
+| E2E-08 move/resize tracking | ordered target geometry events |
+| E2E-09 target loss vs transport failure | target loss is not transport failure |
 MD
 
 CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
@@ -143,6 +145,19 @@ EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
   --run \
   --probe-cmd "python3 '$PROBE'" \
   --out-dir "$SANDBOX/e2e-out" >/dev/null
+
+if EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
+  EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-window-red" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+    --run \
+    --probe-cmd "python3 '$PROBE'" \
+    --lifecycle-scenario move-resize \
+    --out-dir "$SANDBOX/e2e-missing-lifecycle" >/dev/null 2>&1; then
+  echo "remoteapp e2e harness accepted lifecycle scenario evidence without lifecycle events" >&2
+  exit 1
+fi
 
 PROBE_ARGS_SUBJECT="$SANDBOX/fake_probe_args_subject.py"
 cp "$PROBE" "$PROBE_ARGS_SUBJECT"

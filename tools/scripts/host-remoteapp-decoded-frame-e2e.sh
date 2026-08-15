@@ -26,6 +26,7 @@ SELF_TEST=0
 PROBE_CMD="${EASYNET_REMOTEAPP_FRAME_PROBE_CMD:-}"
 PROBE_CMD_USES_BUNDLED=0
 TARGET_KIND="${EASYNET_REMOTEAPP_E2E_TARGET_KIND:-window}"
+LIFECYCLE_SCENARIO="${EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO:-none}"
 SENTINEL_FIXTURE="${EASYNET_REMOTEAPP_SENTINEL_FIXTURE:-0}"
 SENTINEL_FIXTURE_CMD="${EASYNET_REMOTEAPP_SENTINEL_FIXTURE_CMD:-}"
 DEFAULT_SENTINEL_TOLERANCE=64
@@ -46,6 +47,11 @@ Options:
                         probe and source its env.sh. This creates visible
                         selected/unrelated native windows; it does not fake
                         inventory, session creation, media, or pixel evidence.
+  --lifecycle-scenario SCENARIO
+                        Optional window lifecycle scenario: none, move-resize,
+                        or target-loss. The bundled fixture executes the host
+                        action and the probe records post-action daemon session
+                        events.
   --sentinel-fixture-cmd CMD
                         Equivalent fixture command override. The command
                         receives EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR and
@@ -67,6 +73,9 @@ Environment:
                         Equivalent to --sentinel-fixture.
   EASYNET_REMOTEAPP_SENTINEL_FIXTURE_CMD
                         Same as --sentinel-fixture-cmd.
+  EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO
+                        Optional lifecycle scenario: none, move-resize, or
+                        target-loss.
   EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB
                         Required by the bundled receiver, formatted as r,g,b.
   EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB
@@ -125,6 +134,13 @@ while [[ $# -gt 0 ]]; do
       ;;
     --out-dir) OUT_DIR="${2:?missing value for --out-dir}"; shift 2 ;;
     --sentinel-fixture) SENTINEL_FIXTURE=1; shift ;;
+    --lifecycle-scenario)
+      case "${2:?missing value for --lifecycle-scenario}" in
+        none|move-resize|target-loss) LIFECYCLE_SCENARIO="$2" ;;
+        *) echo "invalid lifecycle scenario: $2" >&2; exit 64 ;;
+      esac
+      shift 2
+      ;;
     --sentinel-fixture-cmd)
       SENTINEL_FIXTURE=1
       SENTINEL_FIXTURE_CMD="${2:?missing value for --sentinel-fixture-cmd}"
@@ -299,6 +315,7 @@ decoded_height = get("decoded_frames.height")
 sentinel_fixture = get("sentinel_fixture")
 selected_fixture = get("sentinel_fixture.selected")
 unrelated_fixture = get("sentinel_fixture.unrelated")
+lifecycle = get("lifecycle")
 
 def parse_rgb_env(name):
     raw = os.environ.get(name, "").strip()
@@ -605,6 +622,61 @@ require(get("artifacts.consent_epoch") == consent_epoch,
 require(get("artifacts.capture_scope") == capture_scope,
         "decoded frame artifact capture_scope must match target_binding.capture_scope")
 
+lifecycle_scenario = os.environ.get("EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO", "none")
+if lifecycle_scenario != "none":
+    require(expected_kind == "window",
+            "host lifecycle scenarios currently require a window target")
+    require(isinstance(lifecycle, dict),
+            "lifecycle scenario evidence must include a lifecycle object")
+    lifecycle_events = lifecycle.get("events") if isinstance(lifecycle, dict) else None
+    lifecycle_session = lifecycle.get("session") if isinstance(lifecycle, dict) else None
+    require(isinstance(lifecycle_events, list),
+            "lifecycle.events must be a list of daemon session events")
+    require(isinstance(lifecycle_session, dict),
+            "lifecycle.session must include the post-action show_session view")
+    event_types = [
+        event.get("event_type")
+        for event in lifecycle_events
+        if isinstance(event, dict)
+    ]
+    if lifecycle_scenario == "move-resize":
+        require("TARGET_MOVED" in event_types,
+                "move-resize lifecycle evidence must include TARGET_MOVED")
+        require("TARGET_RESIZED" in event_types,
+                "move-resize lifecycle evidence must include TARGET_RESIZED")
+        moved = next((event for event in lifecycle_events if isinstance(event, dict) and event.get("event_type") == "TARGET_MOVED"), None)
+        resized = next((event for event in lifecycle_events if isinstance(event, dict) and event.get("event_type") == "TARGET_RESIZED"), None)
+        require(moved is not None and resized is not None and moved.get("sequence", 0) < resized.get("sequence", 0),
+                "move-resize lifecycle evidence must order TARGET_MOVED before TARGET_RESIZED")
+        current_revision = lifecycle_session.get("target_tracking", {}).get("target_geometry_revision") if isinstance(lifecycle_session, dict) else None
+        require(isinstance(current_revision, int) and current_revision > target_geometry_revision,
+                "move-resize lifecycle evidence must advance target_geometry_revision")
+        input_policy = lifecycle_session.get("input_policy", {}) if isinstance(lifecycle_session, dict) else {}
+        pointer_target = input_policy.get("pointer_target") if isinstance(input_policy, dict) else None
+        if isinstance(pointer_target, dict):
+            require(pointer_target.get("target_geometry_revision") == current_revision,
+                    "move-resize lifecycle evidence must show input transform consuming the latest geometry revision")
+        else:
+            require(input_policy.get("pointer_enabled") is False,
+                    "move-resize lifecycle evidence without pointer target must keep pointer input disabled")
+    elif lifecycle_scenario == "target-loss":
+        require("TARGET_LOST" in event_types,
+                "target-loss lifecycle evidence must include TARGET_LOST")
+        require("MEDIA_SOURCE_LOST" in event_types,
+                "target-loss lifecycle evidence must include MEDIA_SOURCE_LOST")
+        lost_index = event_types.index("TARGET_LOST") if "TARGET_LOST" in event_types else -1
+        media_lost_index = event_types.index("MEDIA_SOURCE_LOST") if "MEDIA_SOURCE_LOST" in event_types else -1
+        require(0 <= lost_index < media_lost_index,
+                "target-loss lifecycle evidence must order TARGET_LOST before MEDIA_SOURCE_LOST")
+        require("TRANSPORT_FAILED" not in event_types,
+                "target-loss lifecycle evidence must not collapse target loss into TRANSPORT_FAILED")
+        require(lifecycle_session.get("state") == "suspended",
+                "target-loss lifecycle evidence must leave the session suspended")
+        require(lifecycle_session.get("target_tracking", {}).get("input_enabled") is False,
+                "target-loss lifecycle evidence must disable input")
+    else:
+        require(False, f"unsupported lifecycle scenario in validation: {lifecycle_scenario}")
+
 report = {
     "enabled": True,
     "status": "failed" if errors else "passed",
@@ -631,6 +703,7 @@ report = {
         "unrelated_sentinel_present": get("decoded_frames.unrelated_sentinel_present"),
         "full_display_leak_detected": get("decoded_frames.full_display_leak_detected"),
         "sentinel_fixture": sentinel_fixture,
+        "lifecycle": lifecycle,
     },
 }
 open(report_path, "w", encoding="utf-8").write(json.dumps(report, indent=2, sort_keys=True) + "\n")
@@ -662,6 +735,9 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "production_media_ready" "$0"
   grep -q "production_readiness.production_codec_negotiated" "$0"
   grep -q "production_readiness.client_media_ready" "$0"
+  grep -q "EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO" "$0"
+  grep -q "TARGET_MOVED" "$0"
+  grep -q "TARGET_LOST" "$0"
   grep -q "host-remoteapp-sentinel-fixture.sh" "$0"
   grep -q "EASYNET_REMOTEAPP_SENTINEL_FIXTURE" "$0"
   grep -q "cleanup.sh" "$0"
@@ -775,10 +851,33 @@ data = {
         "capture_scope": capture_scope,
     },
 }
+if target_kind == "window":
+    data["lifecycle"] = {
+        "scenario": "move-resize",
+        "events": [
+            {"event_type": "TARGET_MOVED", "sequence": 20},
+            {"event_type": "TARGET_RESIZED", "sequence": 21},
+        ],
+        "session": {
+            "state": "negotiating",
+            "target_tracking": {
+                "target_geometry_revision": 2,
+                "input_enabled": True,
+            },
+            "input_policy": {
+                "pointer_enabled": False,
+            },
+        },
+    }
 path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
   export EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0"
   export EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0"
+  if [[ "$TARGET_KIND" == "window" ]]; then
+    export EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO="move-resize"
+  else
+    export EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO="none"
+  fi
   validate_evidence
   echo "host-remoteapp-decoded-frame-e2e self-test ok"
   exit 0
@@ -830,6 +929,7 @@ fi
 rm -f "$EVIDENCE_JSON"
 export EASYNET_REMOTEAPP_FRAME_EVIDENCE_JSON="$EVIDENCE_JSON"
 export EASYNET_REMOTEAPP_E2E_TARGET_KIND="$TARGET_KIND"
+export EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO="$LIFECYCLE_SCENARIO"
 export EASYNET_REMOTEAPP_SENTINEL_TOLERANCE="${EASYNET_REMOTEAPP_SENTINEL_TOLERANCE:-$DEFAULT_SENTINEL_TOLERANCE}"
 
 bash -lc "$PROBE_CMD"

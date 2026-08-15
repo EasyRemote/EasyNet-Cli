@@ -33,6 +33,8 @@ Output:
   Writes:
     env.sh              Exported sentinel variables for the E2E harness.
     manifest.json       Fixture metadata and process ids.
+    selected-control.sh  Control helper for moving/resizing/closing the selected
+                        sentinel window during lifecycle E2E scenarios.
     cleanup.sh          Idempotent cleanup command.
 
 The fixture requires macOS and swiftc because it launches AppKit windows. It
@@ -150,8 +152,8 @@ func parseByte(_ value: String) -> CGFloat {
 }
 
 let args = CommandLine.arguments
-guard args.count == 8 else {
-    fputs("usage: SentinelWindow <title> <r,g,b> <x> <y> <width> <height> <activation>\n", stderr)
+guard args.count == 10 else {
+    fputs("usage: SentinelWindow <title> <r,g,b> <x> <y> <width> <height> <activation> <command-file> <ack-file>\n", stderr)
     exit(64)
 }
 
@@ -167,6 +169,8 @@ let y = Double(args[4]) ?? 120
 let width = Double(args[5]) ?? 420
 let height = Double(args[6]) ?? 260
 let activation = args[7]
+let commandPath = args[8]
+let ackPath = args[9]
 
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
@@ -191,6 +195,45 @@ window.orderFrontRegardless()
 if activation == "activate" {
     app.activate(ignoringOtherApps: true)
 }
+
+var lastCommand = ""
+Timer.scheduledTimer(withTimeInterval: 0.10, repeats: true) { _ in
+    guard let raw = try? String(contentsOfFile: commandPath, encoding: .utf8) else {
+        return
+    }
+    let command = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if command.isEmpty || command == lastCommand {
+        return
+    }
+    lastCommand = command
+    let parts = command.split(separator: " ").map(String.init)
+    guard let action = parts.first else {
+        return
+    }
+    if action == "move", parts.count == 3,
+       let nextX = Double(parts[1]),
+       let nextY = Double(parts[2]) {
+        let current = window.frame
+        let next = NSRect(x: nextX, y: nextY, width: current.width, height: current.height)
+        window.setFrame(next, display: true, animate: false)
+        try? "move".write(toFile: ackPath, atomically: true, encoding: .utf8)
+    } else if action == "move_resize", parts.count == 5,
+       let nextX = Double(parts[1]),
+       let nextY = Double(parts[2]),
+       let nextWidth = Double(parts[3]),
+       let nextHeight = Double(parts[4]) {
+        let next = NSRect(x: nextX, y: nextY, width: nextWidth, height: nextHeight)
+        window.setFrame(next, display: true, animate: false)
+        window.contentView?.frame = NSRect(x: 0, y: 0, width: nextWidth, height: nextHeight)
+        try? "move_resize".write(toFile: ackPath, atomically: true, encoding: .utf8)
+    } else if action == "close" {
+        try? "close".write(toFile: ackPath, atomically: true, encoding: .utf8)
+        window.close()
+        app.terminate(nil)
+    } else {
+        try? "unknown".write(toFile: ackPath, atomically: true, encoding: .utf8)
+    }
+}
 app.run()
 SWIFT
 
@@ -198,13 +241,16 @@ swiftc "$SWIFT_SRC" -framework AppKit -o "$SELECTED_BIN"
 cp "$SELECTED_BIN" "$UNRELATED_BIN"
 chmod +x "$SELECTED_BIN" "$UNRELATED_BIN"
 
-rm -f "$PIDS_FILE"
-"$SELECTED_BIN" "$SELECTED_LABEL" "$SELECTED_RGB" 80 160 460 300 activate \
+SELECTED_COMMAND_FILE="$OUT_DIR/selected-command.txt"
+SELECTED_ACK_FILE="$OUT_DIR/selected-ack.txt"
+SELECTED_CONTROL_SH="$OUT_DIR/selected-control.sh"
+rm -f "$PIDS_FILE" "$SELECTED_COMMAND_FILE" "$SELECTED_ACK_FILE"
+"$SELECTED_BIN" "$SELECTED_LABEL" "$SELECTED_RGB" 80 160 460 300 activate "$SELECTED_COMMAND_FILE" "$SELECTED_ACK_FILE" \
   >"$OUT_DIR/selected.log" 2>&1 &
 SELECTED_PID="$!"
 printf '%s\n' "$SELECTED_PID" >>"$PIDS_FILE"
 
-"$UNRELATED_BIN" "$UNRELATED_LABEL" "$UNRELATED_RGB" 620 160 460 300 activate \
+"$UNRELATED_BIN" "$UNRELATED_LABEL" "$UNRELATED_RGB" 620 160 460 300 activate "$OUT_DIR/unrelated-command.txt" "$OUT_DIR/unrelated-ack.txt" \
   >"$OUT_DIR/unrelated.log" 2>&1 &
 UNRELATED_PID="$!"
 printf '%s\n' "$UNRELATED_PID" >>"$PIDS_FILE"
@@ -218,9 +264,9 @@ for pid in "$SELECTED_PID" "$UNRELATED_PID"; do
   fi
 done
 
-python3 - "$ENV_FILE" "$MANIFEST_JSON" "$CLEANUP_SH" "$OUT_DIR" "$REPO_ROOT" \
+python3 - "$ENV_FILE" "$MANIFEST_JSON" "$CLEANUP_SH" "$SELECTED_CONTROL_SH" "$OUT_DIR" "$REPO_ROOT" \
   "$TARGET_KIND" "$SELECTED_LABEL" "$UNRELATED_LABEL" "$SELECTED_RGB" "$UNRELATED_RGB" \
-  "$UNRELATED_PLACEMENT" "$SELECTED_PID" "$UNRELATED_PID" <<'PY'
+  "$UNRELATED_PLACEMENT" "$SELECTED_PID" "$UNRELATED_PID" "$SELECTED_COMMAND_FILE" "$SELECTED_ACK_FILE" <<'PY'
 import json
 import shlex
 import sys
@@ -229,6 +275,7 @@ import sys
     env_path,
     manifest_path,
     cleanup_path,
+    control_path,
     out_dir,
     repo_root,
     target_kind,
@@ -239,7 +286,9 @@ import sys
     unrelated_placement,
     selected_pid,
     unrelated_pid,
-) = sys.argv[1:14]
+    selected_command_file,
+    selected_ack_file,
+) = sys.argv[1:17]
 
 exports = {
     "EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB": selected_rgb,
@@ -252,6 +301,7 @@ exports = {
     "EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID": selected_pid,
     "EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID": unrelated_pid,
     "EASYNET_REMOTEAPP_SENTINEL_FIXTURE_MANIFEST": manifest_path,
+    "EASYNET_REMOTEAPP_SELECTED_CONTROL_SH": control_path,
 }
 
 with open(env_path, "w", encoding="utf-8") as f:
@@ -277,12 +327,59 @@ with open(manifest_path, "w", encoding="utf-8") as f:
     json.dump(manifest, f, indent=2, sort_keys=True)
     f.write("\n")
 
+with open(control_path, "w", encoding="utf-8") as f:
+    f.write("#!/usr/bin/env bash\n")
+    f.write("set -euo pipefail\n")
+    f.write("ACTION=\"${1:?action required}\"\n")
+    f.write(f"COMMAND_FILE={shlex.quote(selected_command_file)}\n")
+    f.write(f"ACK_FILE={shlex.quote(selected_ack_file)}\n")
+    f.write("wait_ack() {\n")
+    f.write("  local expected=\"${1:?expected ack required}\"\n")
+    f.write("  python3 - \"$ACK_FILE\" \"$expected\" <<'ACKPY'\n")
+    f.write("import pathlib, sys, time\n")
+    f.write("ack = pathlib.Path(sys.argv[1])\n")
+    f.write("expected = sys.argv[2]\n")
+    f.write("deadline = time.time() + 5.0\n")
+    f.write("while time.time() < deadline:\n")
+    f.write("    if ack.exists() and ack.read_text(encoding='utf-8').strip() == expected:\n")
+    f.write("        raise SystemExit(0)\n")
+    f.write("    time.sleep(0.05)\n")
+    f.write("raise SystemExit(f'sentinel action {expected} was not acknowledged by AppKit fixture')\n")
+    f.write("ACKPY\n")
+    f.write("}\n")
+    f.write("send_move_resize() {\n")
+    f.write("  local x=\"${1:?x required}\" y=\"${2:?y required}\" width=\"${3:?width required}\" height=\"${4:?height required}\"\n")
+    f.write("  rm -f \"$ACK_FILE\"\n")
+    f.write("  printf 'move_resize %s %s %s %s\\n' \"$x\" \"$y\" \"$width\" \"$height\" >\"$COMMAND_FILE\"\n")
+    f.write("  wait_ack move_resize\n")
+    f.write("}\n")
+    f.write("send_move() {\n")
+    f.write("  local x=\"${1:?x required}\" y=\"${2:?y required}\"\n")
+    f.write("  rm -f \"$ACK_FILE\"\n")
+    f.write("  printf 'move %s %s\\n' \"$x\" \"$y\" >\"$COMMAND_FILE\"\n")
+    f.write("  wait_ack move\n")
+    f.write("}\n")
+    f.write("case \"$ACTION\" in\n")
+    f.write("  move-resize)\n")
+    f.write("    send_move 120 220\n")
+    f.write("    sleep 1.1\n")
+    f.write("    send_move_resize 120 220 620 360\n")
+    f.write("    ;;\n")
+    f.write("  close)\n")
+    f.write("    rm -f \"$ACK_FILE\"\n")
+    f.write("    printf 'close\\n' >\"$COMMAND_FILE\"\n")
+    f.write("    wait_ack close\n")
+    f.write("    ;;\n")
+    f.write("  *) echo \"unknown selected sentinel action: $ACTION\" >&2; exit 64 ;;\n")
+    f.write("esac\n")
+
 with open(cleanup_path, "w", encoding="utf-8") as f:
     f.write("#!/usr/bin/env bash\n")
     f.write("set -euo pipefail\n")
     f.write(f"{shlex.quote(repo_root + '/tools/scripts/host-remoteapp-sentinel-fixture.sh')} --stop --out-dir {shlex.quote(out_dir)}\n")
 PY
 chmod +x "$CLEANUP_SH"
+chmod +x "$SELECTED_CONTROL_SH"
 
 printf 'host-remoteapp-sentinel-fixture: started selected_pid=%s unrelated_pid=%s env=%s\n' \
   "$SELECTED_PID" "$UNRELATED_PID" "$ENV_FILE"
