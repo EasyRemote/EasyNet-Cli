@@ -241,7 +241,7 @@ fn commit_started_endpoint(
                 backend_id,
                 production_ready,
                 direct_webrtc_endpoint_ura(session_id),
-            );
+            )?;
             Ok(())
         })
 }

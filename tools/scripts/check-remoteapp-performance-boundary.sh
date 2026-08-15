@@ -125,6 +125,14 @@ require 'remote_desktop_signaling_bounded_view_projects_counts_and_limits' "$SES
   'PERF-05 must test bounded signaling view limits and candidate elision'
 require 'signaling_state_validates_local_and_remote_ice_rows_before_storage' "$SESSION_SIGNALING" \
   'PERF-05 signaling state must validate local and remote ICE rows before storage'
+require 'signaling_state_rejects_oversized_descriptions_before_storage' "$SESSION_SIGNALING" \
+  'PERF-05 signaling state must reject oversized local and remote descriptions before storage'
+require 'validate_signaling_description_size\(&value\)' "$SESSION_SIGNALING" \
+  'PERF-05 signaling description byte limits must be enforced by the signaling domain object'
+require 'set_local_webrtc_answer\(' "$SESSION_SIGNALING" \
+  'PERF-05 local WebRTC answer commits must flow through bounded signaling state'
+reject 'RemoteDesktopSessionDescription::new\("local", answer\)\.expect' "$SESSION_SIGNALING" \
+  'PERF-05 generated local WebRTC answers must not panic or bypass signaling description limits'
 require '"signaling_limits"' "$SESSION_SIGNALING" \
   'PERF-05 bounded signaling view must publish explicit signaling limits'
 require '"remote_ice_candidates_elided": true' "$SESSION_SIGNALING" \

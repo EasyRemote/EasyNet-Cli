@@ -10,7 +10,9 @@ use crate::daemon::plugins::remote_desktop::constants::{
     MAX_ICE_CANDIDATE_BYTES, MAX_LOCAL_ICE_CANDIDATES, MAX_REMOTE_ICE_CANDIDATES,
     MAX_SIGNALING_DESCRIPTION_BYTES, TRANSPORT_WEBRTC,
 };
-use crate::daemon::plugins::remote_desktop::sdp::validate_ice_candidate_row;
+use crate::daemon::plugins::remote_desktop::sdp::{
+    validate_ice_candidate_row, validate_signaling_description_size,
+};
 
 /// SDP description accepted for one side of a remote desktop session.
 ///
@@ -26,10 +28,13 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSessionDescri
 impl RemoteDesktopSessionDescription {
     fn new(side: &str, value: Value) -> anyhow::Result<Self> {
         match side {
-            "local" | "remote" => Ok(Self {
-                side: side.to_string(),
-                value,
-            }),
+            "local" | "remote" => {
+                validate_signaling_description_size(&value)?;
+                Ok(Self {
+                    side: side.to_string(),
+                    value,
+                })
+            }
             _ => anyhow::bail!("side must be local or remote"),
         }
     }
@@ -348,14 +353,14 @@ impl RemoteDesktopSignalingState {
         backend_id: &str,
         production_ready: bool,
         endpoint_ura: String,
-    ) {
-        self.local_description =
-            Some(RemoteDesktopSessionDescription::new("local", answer).expect("literal side"));
+    ) -> anyhow::Result<()> {
+        self.local_description = Some(RemoteDesktopSessionDescription::new("local", answer)?);
         self.negotiated_codec = Some(RemoteDesktopNegotiatedCodec::h264_baseline(
             endpoint_ura,
             backend_id,
             production_ready,
         ));
+        Ok(())
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn record_webrtc_diagnostic(
@@ -391,12 +396,14 @@ mod tests {
     fn remote_desktop_signaling_answer_projects_negotiated_codec() {
         let mut signaling = RemoteDesktopSignalingState::new();
 
-        signaling.set_local_webrtc_answer(
-            json!({ "type": "answer", "sdp": "v=0" }),
-            "native",
-            true,
-            direct_webrtc_endpoint_ura("signaling-answer"),
-        );
+        signaling
+            .set_local_webrtc_answer(
+                json!({ "type": "answer", "sdp": "v=0" }),
+                "native",
+                true,
+                direct_webrtc_endpoint_ura("signaling-answer"),
+            )
+            .expect("local answer records");
 
         assert_eq!(
             signaling.local_description(),
@@ -505,6 +512,44 @@ mod tests {
         assert_eq!(view["webrtc_ice_state"], json!("checking"));
         assert_eq!(view["webrtc_peer_state"], json!("connecting"));
         assert_eq!(view["webrtc_error"], json!("relay_unavailable"));
+    }
+
+    #[test]
+    fn signaling_state_rejects_oversized_descriptions_before_storage() {
+        let mut signaling = RemoteDesktopSignalingState::new();
+        let oversized_sdp = format!(
+            "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n{}",
+            "a=x\r\n".repeat((MAX_SIGNALING_DESCRIPTION_BYTES / 5) + 2)
+        );
+
+        let remote_err = signaling
+            .set_description("remote", json!({"type": "offer", "sdp": oversized_sdp}))
+            .expect_err("remote description must be bounded by signaling state")
+            .to_string();
+
+        assert!(remote_err.contains("exceeds"), "got {remote_err}");
+        assert_eq!(signaling.remote_description(), None);
+
+        let oversized_answer = json!({
+            "type": "answer",
+            "sdp": format!(
+                "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n{}",
+                "a=y\r\n".repeat((MAX_SIGNALING_DESCRIPTION_BYTES / 5) + 2)
+            )
+        });
+        let local_err = signaling
+            .set_local_webrtc_answer(
+                oversized_answer,
+                "native",
+                true,
+                direct_webrtc_endpoint_ura("signaling-oversized-answer"),
+            )
+            .expect_err("generated local answer must be bounded by signaling state")
+            .to_string();
+
+        assert!(local_err.contains("exceeds"), "got {local_err}");
+        assert_eq!(signaling.local_description(), None);
+        assert_eq!(signaling.negotiated_codec(), None);
     }
 
     #[test]

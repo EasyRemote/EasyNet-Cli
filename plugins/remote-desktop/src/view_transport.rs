@@ -365,13 +365,15 @@ mod tests {
             vec![TRANSPORT_WEBRTC.to_string()],
         ));
         session.begin_webrtc_negotiation(TransportEpoch::new(1));
-        session.set_local_webrtc_answer(
-            TransportEpoch::new(1),
-            json!({ "type": "answer", "sdp": "v=0" }),
-            "native",
-            true,
-            direct_webrtc_endpoint_ura("rd-first-frame-pending"),
-        );
+        session
+            .set_local_webrtc_answer(
+                TransportEpoch::new(1),
+                json!({ "type": "answer", "sdp": "v=0" }),
+                "native",
+                true,
+                direct_webrtc_endpoint_ura("rd-first-frame-pending"),
+            )
+            .expect("local answer records");
         session.record_webrtc_diagnostic(
             "PEER_CONNECTION_STATE_CHANGED",
             None,
@@ -413,13 +415,15 @@ mod tests {
             vec![TRANSPORT_WEBRTC.to_string()],
         ));
         session.begin_webrtc_negotiation(TransportEpoch::new(1));
-        session.set_local_webrtc_answer(
-            TransportEpoch::new(1),
-            json!({ "type": "answer", "sdp": "v=0" }),
-            "native",
-            true,
-            direct_webrtc_endpoint_ura("rd-host-only-route"),
-        );
+        session
+            .set_local_webrtc_answer(
+                TransportEpoch::new(1),
+                json!({ "type": "answer", "sdp": "v=0" }),
+                "native",
+                true,
+                direct_webrtc_endpoint_ura("rd-host-only-route"),
+            )
+            .expect("local answer records");
         session
             .record_local_ice_candidate(json!({
                 "candidate": "candidate:1 1 UDP 2122252543 127.0.0.1 50000 typ host",
@@ -461,13 +465,15 @@ mod tests {
             vec![TRANSPORT_WEBRTC.to_string()],
         ));
         session.begin_webrtc_negotiation(epoch);
-        session.set_local_webrtc_answer(
-            epoch,
-            json!({ "type": "answer", "sdp": "v=0" }),
-            "native",
-            true,
-            endpoint_ura.clone(),
-        );
+        session
+            .set_local_webrtc_answer(
+                epoch,
+                json!({ "type": "answer", "sdp": "v=0" }),
+                "native",
+                true,
+                endpoint_ura.clone(),
+            )
+            .expect("local answer records");
         session
             .record_local_ice_candidate(json!({
                 "candidate": "candidate:1 1 UDP 2122252543 127.0.0.1 50000 typ host",
@@ -512,13 +518,15 @@ mod tests {
             vec![TRANSPORT_WEBRTC.to_string()],
         ));
         session.begin_webrtc_negotiation(TransportEpoch::new(1));
-        session.set_local_webrtc_answer(
-            TransportEpoch::new(1),
-            json!({ "type": "answer", "sdp": "v=0" }),
-            "native",
-            true,
-            direct_webrtc_endpoint_ura("rd-srflx-only-route"),
-        );
+        session
+            .set_local_webrtc_answer(
+                TransportEpoch::new(1),
+                json!({ "type": "answer", "sdp": "v=0" }),
+                "native",
+                true,
+                direct_webrtc_endpoint_ura("rd-srflx-only-route"),
+            )
+            .expect("local answer records");
         session
             .record_local_ice_candidate(json!({
                 "candidate": "candidate:1 1 UDP 1686052607 203.0.113.1 50000 typ srflx",

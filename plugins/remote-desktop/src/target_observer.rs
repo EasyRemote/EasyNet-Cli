@@ -1323,13 +1323,15 @@ mod tests {
         init.mode = "interactive".to_string();
         let mut session = RemoteDesktopSession::new(init);
         session.begin_webrtc_negotiation(epoch);
-        session.set_local_webrtc_answer(
-            epoch,
-            json!({"type": "answer", "sdp": "v=0"}),
-            "sck-native",
-            true,
-            "easynet:///r/acme/ability/remote-desktop.transport".into(),
-        );
+        session
+            .set_local_webrtc_answer(
+                epoch,
+                json!({"type": "answer", "sdp": "v=0"}),
+                "sck-native",
+                true,
+                "easynet:///r/acme/ability/remote-desktop.transport".into(),
+            )
+            .expect("local answer records");
         session.mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-window-reappear"));
         assert!(session.report_client_media_state(epoch, "presenting"));
         assert!(

@@ -653,7 +653,8 @@ mod tests {
                     "xcap-openh264-webrtc",
                     false,
                     "easynet:///r/acme/session/rd-non-production-ready/webrtc/1".to_string(),
-                );
+                )
+                .expect("non-production local answer records");
         });
         store.mark_direct_webrtc_media_ready("rd-non-production-ready", TransportEpoch::new(1));
         store.with_sessions(|sessions| {
@@ -688,7 +689,8 @@ mod tests {
                     "macos-sck-videotoolbox-webrtc",
                     true,
                     "easynet:///r/acme/session/rd-production-ready/webrtc/1".to_string(),
-                );
+                )
+                .expect("production local answer records");
         });
         store.mark_direct_webrtc_media_ready("rd-production-ready", TransportEpoch::new(1));
         store.with_sessions(|sessions| {

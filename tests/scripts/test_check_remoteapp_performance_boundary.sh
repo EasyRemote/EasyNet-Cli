@@ -117,6 +117,18 @@ fn watch_events_rejects_malformed_replay_cursor() {
 RS
 
 cat >"$SB/plugins/remote-desktop/src/session_signaling.rs" <<'RS'
+impl RemoteDesktopSessionDescription {
+    fn new(value: Value) -> anyhow::Result<Self> {
+        validate_signaling_description_size(&value)?;
+        Ok(Self)
+    }
+}
+
+fn set_local_webrtc_answer(answer: Value) -> anyhow::Result<()> {
+    RemoteDesktopSessionDescription::new(answer)?;
+    Ok(())
+}
+
 fn to_bounded_view() {
     "signaling_limits";
     "remote_ice_candidates_elided": true;
@@ -130,6 +142,9 @@ fn remote_desktop_signaling_bounded_view_projects_counts_and_limits() {}
 
 #[test]
 fn signaling_state_validates_local_and_remote_ice_rows_before_storage() {}
+
+#[test]
+fn signaling_state_rejects_oversized_descriptions_before_storage() {}
 RS
 
 cat >"$SB/plugins/remote-desktop/src/session_store.rs" <<'RS'
@@ -341,6 +356,51 @@ set -e
 grep -q "validate local and remote ICE rows before storage" /tmp/check-remoteapp-performance-boundary-ice-row-validation.out || fail "expected PERF-05 ICE row validation failure"
 
 perl -0pi -e 's/fn signaling_state_skips_ice_row_validation/fn signaling_state_validates_local_and_remote_ice_rows_before_storage/' \
+  "$SB/plugins/remote-desktop/src/session_signaling.rs"
+perl -0pi -e 's/fn signaling_state_rejects_oversized_descriptions_before_storage/fn signaling_state_accepts_oversized_descriptions/' \
+  "$SB/plugins/remote-desktop/src/session_signaling.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-description-validation-test.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing signaling description-size validation test should exit 1 (got $rc)"
+grep -q "oversized local and remote descriptions" /tmp/check-remoteapp-performance-boundary-description-validation-test.out || fail "expected PERF-05 signaling description validation test failure"
+
+perl -0pi -e 's/fn signaling_state_accepts_oversized_descriptions/fn signaling_state_rejects_oversized_descriptions_before_storage/' \
+  "$SB/plugins/remote-desktop/src/session_signaling.rs"
+perl -0pi -e 's/validate_signaling_description_size\(&value\)\?;//' \
+  "$SB/plugins/remote-desktop/src/session_signaling.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-description-domain.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing signaling domain description-size validation should exit 1 (got $rc)"
+grep -q "signaling description byte limits" /tmp/check-remoteapp-performance-boundary-description-domain.out || fail "expected PERF-05 signaling description domain validation failure"
+
+perl -0pi -e 's/(fn new\(value: Value\) -> anyhow::Result<Self> \{\n)/$1        validate_signaling_description_size(\x26value)?;\n/' \
+  "$SB/plugins/remote-desktop/src/session_signaling.rs"
+perl -0pi -e 's/RemoteDesktopSessionDescription::new\(answer\)\?;/RemoteDesktopSessionDescription::new("local", answer).expect("literal side");/' \
+  "$SB/plugins/remote-desktop/src/session_signaling.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-local-answer-expect.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "local WebRTC answer expect path should exit 1 (got $rc)"
+grep -q "generated local WebRTC answers" /tmp/check-remoteapp-performance-boundary-local-answer-expect.out || fail "expected PERF-05 local answer expect failure"
+
+perl -0pi -e 's/RemoteDesktopSessionDescription::new\("local", answer\)\.expect\("literal side"\);/RemoteDesktopSessionDescription::new(answer)?;/' \
   "$SB/plugins/remote-desktop/src/session_signaling.rs"
 perl -0pi -e 's/"remote_ice_candidates_elided": true/"remote_ice_candidates": []/' \
   "$SB/plugins/remote-desktop/src/session_signaling.rs"

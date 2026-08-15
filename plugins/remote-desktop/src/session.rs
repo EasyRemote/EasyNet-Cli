@@ -643,12 +643,16 @@ impl RemoteDesktopSession {
         backend_id: &str,
         production_ready: bool,
         endpoint_ura: String,
-    ) {
+    ) -> anyhow::Result<()> {
         if self.lifecycle.is_terminal() || !self.transport.accepts_epoch(epoch) {
-            return;
+            return Ok(());
         }
-        self.signaling
-            .set_local_webrtc_answer(answer, backend_id, production_ready, endpoint_ura);
+        self.signaling.set_local_webrtc_answer(
+            answer,
+            backend_id,
+            production_ready,
+            endpoint_ura,
+        )?;
         self.reconcile_lifecycle();
         self.touch();
         self.push_projected_event(session_events::local_webrtc_answer_set(
@@ -656,6 +660,7 @@ impl RemoteDesktopSession {
             production_ready,
             epoch.value(),
         ));
+        Ok(())
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn begin_webrtc_negotiation(
@@ -1625,13 +1630,15 @@ mod tests {
         let epoch = TransportEpoch::new(13);
 
         session.begin_webrtc_negotiation(epoch);
-        session.set_local_webrtc_answer(
-            epoch,
-            json!({"type": "answer", "sdp": "v=0"}),
-            "sck-native",
-            true,
-            "easynet:///r/acme/ability/remote-desktop.transport".into(),
-        );
+        session
+            .set_local_webrtc_answer(
+                epoch,
+                json!({"type": "answer", "sdp": "v=0"}),
+                "sck-native",
+                true,
+                "easynet:///r/acme/ability/remote-desktop.transport".into(),
+            )
+            .expect("local answer records");
         session.mark_webrtc_media_sending(
             epoch,
             direct_webrtc_endpoint_ura("rd-production-scope-gate"),
@@ -1730,13 +1737,15 @@ mod tests {
         ));
         let epoch = TransportEpoch::new(11);
         session.begin_webrtc_negotiation(epoch);
-        session.set_local_webrtc_answer(
-            epoch,
-            json!({"type": "answer", "sdp": "v=0"}),
-            "sck-native",
-            true,
-            "easynet:///r/acme/ability/remote-desktop.transport".into(),
-        );
+        session
+            .set_local_webrtc_answer(
+                epoch,
+                json!({"type": "answer", "sdp": "v=0"}),
+                "sck-native",
+                true,
+                "easynet:///r/acme/ability/remote-desktop.transport".into(),
+            )
+            .expect("local answer records");
         session.mark_webrtc_media_sending(
             epoch,
             direct_webrtc_endpoint_ura("rd-target-rebind-failed"),
