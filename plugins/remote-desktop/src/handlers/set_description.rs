@@ -236,7 +236,7 @@ mod tests {
         plugin.session_store().with_sessions(|sessions| {
             let session = sessions.get("rd-sdp-flood").unwrap();
             assert!(
-                session.remote_description().is_none(),
+                session.signaling_view(Value::Null)["remote_description"].is_null(),
                 "oversized SDP must not mutate existing session signaling"
             );
         });

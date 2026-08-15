@@ -244,11 +244,6 @@ impl RemoteDesktopSession {
         self.signaling.local_description()
     }
 
-    /// Remote SDP description received from the caller.
-    pub(in crate::daemon::plugins::remote_desktop) fn remote_description(&self) -> Option<Value> {
-        self.signaling.remote_description()
-    }
-
     /// Remote ICE candidates accepted for this session.
     pub(in crate::daemon::plugins::remote_desktop) fn remote_ice_candidates(&self) -> Vec<Value> {
         self.signaling.remote_ice_candidates()
@@ -257,6 +252,14 @@ impl RemoteDesktopSession {
     /// Local ICE candidates produced by the device-side endpoint.
     pub(in crate::daemon::plugins::remote_desktop) fn local_ice_candidates(&self) -> Vec<Value> {
         self.signaling.local_ice_candidates()
+    }
+
+    /// Bounded WebRTC signaling projection for public session views.
+    pub(in crate::daemon::plugins::remote_desktop) fn signaling_view(
+        &self,
+        route_state: Value,
+    ) -> Value {
+        self.signaling.to_bounded_view(route_state)
     }
 
     /// Latest ICE state reported by the WebRTC backend.

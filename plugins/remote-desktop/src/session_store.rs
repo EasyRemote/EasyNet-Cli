@@ -522,6 +522,26 @@ mod tests {
             view["signaling"]["local_ice_candidate_count"],
             json!(MAX_LOCAL_ICE_CANDIDATES)
         );
+        assert_eq!(
+            view["signaling"]["signaling_limits"]["local_ice_candidate_count"],
+            json!(MAX_LOCAL_ICE_CANDIDATES)
+        );
+        assert_eq!(
+            view["signaling"]["signaling_limits"]["ice_candidate_bytes"],
+            json!(MAX_ICE_CANDIDATE_BYTES)
+        );
+        assert_eq!(
+            view["signaling"]["signaling_limits"]["description_bytes"],
+            json!(MAX_SIGNALING_DESCRIPTION_BYTES)
+        );
+        assert_eq!(
+            view["signaling"]["remote_ice_candidates_elided"],
+            json!(true)
+        );
+        assert_eq!(
+            view["signaling"]["local_ice_candidates_truncated"],
+            json!(false)
+        );
         let serialized_len = serde_json::to_vec(&view).unwrap().len();
         let derived_bound = (MAX_SIGNALING_DESCRIPTION_BYTES * 2)
             + (MAX_LOCAL_ICE_CANDIDATES * MAX_ICE_CANDIDATE_BYTES * 3)

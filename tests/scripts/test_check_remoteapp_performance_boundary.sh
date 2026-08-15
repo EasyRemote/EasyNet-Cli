@@ -88,15 +88,31 @@ fn handle(session: Session) {
 RS
 
 cat >"$SB/plugins/remote-desktop/src/session_signaling.rs" <<'RS'
+fn to_bounded_view() {
+    "signaling_limits";
+    "remote_ice_candidates_elided": true;
+}
+
 #[test]
 fn remote_desktop_signaling_rejects_more_than_ten_thousand_candidates_without_growth() {}
+
+#[test]
+fn remote_desktop_signaling_bounded_view_projects_counts_and_limits() {}
 RS
 
 cat >"$SB/plugins/remote-desktop/src/session_store.rs" <<'RS'
 #[test]
-fn serialized_session_view_remains_bounded_at_signaling_limits() {}
+fn serialized_session_view_remains_bounded_at_signaling_limits() {
+    let _ = "remote_ice_candidates_elided";
+}
 fn assert_current_thread_unlocked(stage: &str) {
     assert_eq!(0, 0, "{stage} must not run while RemoteDesktopSessionStore is locked");
+}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/view.rs" <<'RS'
+fn serialize_session(session: Session, transport_route_state: Value) {
+    let _ = session.signaling_view(transport_route_state.clone());
 }
 RS
 
@@ -192,5 +208,50 @@ rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "missing PERF-04 compaction replay proof should exit 1 (got $rc)"
 grep -q "compaction" /tmp/check-remoteapp-performance-boundary-event-replay.out || fail "expected PERF-04 compaction replay failure"
+
+perl -0pi -e 's/fn event_replay_silently_starts_at_retained_window/fn event_replay_projects_compaction_before_retained_window/' \
+  "$SB/plugins/remote-desktop/src/event_log.rs"
+perl -0pi -e 's/fn to_bounded_view/fn to_unbounded_view/' \
+  "$SB/plugins/remote-desktop/src/session_signaling.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-signaling-view.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing bounded signaling view should exit 1 (got $rc)"
+grep -q "bounded public view projection" /tmp/check-remoteapp-performance-boundary-signaling-view.out || fail "expected PERF-05 bounded signaling view failure"
+
+perl -0pi -e 's/fn to_unbounded_view/fn to_bounded_view/' \
+  "$SB/plugins/remote-desktop/src/session_signaling.rs"
+perl -0pi -e 's/"remote_ice_candidates_elided": true/"remote_ice_candidates": []/' \
+  "$SB/plugins/remote-desktop/src/session_signaling.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-remote-elision.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing remote candidate elision should exit 1 (got $rc)"
+grep -q "remote ICE candidate rows elided" /tmp/check-remoteapp-performance-boundary-remote-elision.out || fail "expected PERF-05 remote elision failure"
+
+perl -0pi -e 's/"remote_ice_candidates": \[\]/"remote_ice_candidates_elided": true/' \
+  "$SB/plugins/remote-desktop/src/session_signaling.rs"
+perl -0pi -e 's/let _ = session\.signaling_view\(transport_route_state\.clone\(\)\);/let remote_ice_candidates = session.remote_ice_candidates();/' \
+  "$SB/plugins/remote-desktop/src/view.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-manual-view.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "manual signaling view projection should exit 1 (got $rc)"
+grep -q "bounded signaling projection" /tmp/check-remoteapp-performance-boundary-manual-view.out || fail "expected PERF-05 manual view projection failure"
 
 printf 'test_check_remoteapp_performance_boundary.sh: all cases passed\n'

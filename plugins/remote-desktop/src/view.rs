@@ -29,22 +29,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
     let transport_view = RemoteDesktopTransportView::from_session(session);
     let video = session.video().to_value();
     let input_policy = session.input_policy().to_value();
-    let remote_ice_candidates = session.remote_ice_candidates();
-    let local_ice_candidates = session.local_ice_candidates();
     let media_stats = session.media_stats();
     let production_media_ready = session.production_media_ready();
     let transport_route_state = transport_view.route_state();
-    let signaling = json!({
-        "local_description": session.local_description(),
-        "remote_description": session.remote_description(),
-        "ice_candidate_count": remote_ice_candidates.len(),
-        "local_ice_candidate_count": local_ice_candidates.len(),
-        "local_ice_candidates": local_ice_candidates,
-        "webrtc_ice_state": session.webrtc_ice_state(),
-        "webrtc_peer_state": session.webrtc_peer_state(),
-        "webrtc_error": session.webrtc_error(),
-        "route_state": transport_route_state.clone(),
-    });
+    let signaling = session.signaling_view(transport_route_state.clone());
     let production_readiness = production_readiness_view(session, transport_route_state.clone());
     let mut view = json!({
         "session_id": session.session_id(),

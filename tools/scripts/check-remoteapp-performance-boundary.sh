@@ -18,6 +18,16 @@ require() {
   fi
 }
 
+reject() {
+  local pattern="$1"
+  local file="$2"
+  local message="$3"
+  [[ -f "$file" ]] || fail "missing $file"
+  if rg -n "$pattern" "$file" >/dev/null; then
+    fail "$message"
+  fi
+}
+
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 RESOURCE_BOOTSTRAP="$ROOT/src/daemon/ability/builtins/resources/media/resource_bootstrap.rs"
 RESOURCE_LIST="$ROOT/src/daemon/ability/builtins/resources/list.rs"
@@ -25,6 +35,7 @@ TARGET_OBSERVER="$ROOT/plugins/remote-desktop/src/target_observer.rs"
 EVENT_LOG="$ROOT/plugins/remote-desktop/src/event_log.rs"
 SESSION_SIGNALING="$ROOT/plugins/remote-desktop/src/session_signaling.rs"
 SESSION_STORE="$ROOT/plugins/remote-desktop/src/session_store.rs"
+VIEW="$ROOT/plugins/remote-desktop/src/view.rs"
 SDP="$ROOT/plugins/remote-desktop/src/sdp.rs"
 TARGET="$ROOT/plugins/remote-desktop/src/target.rs"
 WEBRTC_ENDPOINT="$ROOT/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
@@ -87,8 +98,24 @@ require 'replay_events_from' "$ROOT/plugins/remote-desktop/src/handlers/watch_ev
 
 require 'remote_desktop_signaling_rejects_more_than_ten_thousand_candidates_without_growth' "$SESSION_SIGNALING" \
   'PERF-05 must reject >10k trickle candidates without unbounded growth'
+require 'fn to_bounded_view\(' "$SESSION_SIGNALING" \
+  'PERF-05 signaling state must own bounded public view projection'
+require 'remote_desktop_signaling_bounded_view_projects_counts_and_limits' "$SESSION_SIGNALING" \
+  'PERF-05 must test bounded signaling view limits and candidate elision'
+require '"signaling_limits"' "$SESSION_SIGNALING" \
+  'PERF-05 bounded signaling view must publish explicit signaling limits'
+require '"remote_ice_candidates_elided": true' "$SESSION_SIGNALING" \
+  'PERF-05 bounded signaling view must keep remote ICE candidate rows elided'
+require 'session\.signaling_view\(transport_route_state\.clone\(\)\)' "$VIEW" \
+  'PERF-05 public session view must consume the bounded signaling projection'
+reject 'let remote_ice_candidates = session\.remote_ice_candidates\(\)' "$VIEW" \
+  'PERF-05 public session view must not manually clone remote ICE candidates'
+reject 'let local_ice_candidates = session\.local_ice_candidates\(\)' "$VIEW" \
+  'PERF-05 public session view must not manually clone local ICE candidates'
 require 'serialized_session_view_remains_bounded_at_signaling_limits' "$SESSION_STORE" \
   'PERF-05 must prove serialized session views stay bounded'
+require 'remote_ice_candidates_elided' "$SESSION_STORE" \
+  'PERF-05 serialized session view test must assert remote candidate elision'
 require 'signaling_rejects_oversized_sdp_and_ice_rows' "$SDP" \
   'PERF-05 must reject oversized SDP and ICE rows before storage'
 

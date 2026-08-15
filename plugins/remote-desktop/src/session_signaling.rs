@@ -7,7 +7,8 @@
 use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::constants::{
-    MAX_LOCAL_ICE_CANDIDATES, MAX_REMOTE_ICE_CANDIDATES, TRANSPORT_WEBRTC,
+    MAX_ICE_CANDIDATE_BYTES, MAX_LOCAL_ICE_CANDIDATES, MAX_REMOTE_ICE_CANDIDATES,
+    MAX_SIGNALING_DESCRIPTION_BYTES, TRANSPORT_WEBRTC,
 };
 
 /// SDP description accepted for one side of a remote desktop session.
@@ -197,6 +198,31 @@ impl RemoteDesktopSignalingState {
             .collect()
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn to_bounded_view(
+        &self,
+        route_state: Value,
+    ) -> Value {
+        json!({
+            "local_description": self.local_description(),
+            "remote_description": self.remote_description(),
+            "ice_candidate_count": self.remote_ice_candidates.len(),
+            "local_ice_candidate_count": self.local_ice_candidates.len(),
+            "local_ice_candidates": self.local_ice_candidates(),
+            "webrtc_ice_state": self.webrtc_ice_state(),
+            "webrtc_peer_state": self.webrtc_peer_state(),
+            "webrtc_error": self.webrtc_error(),
+            "route_state": route_state,
+            "signaling_limits": {
+                "remote_ice_candidate_count": MAX_REMOTE_ICE_CANDIDATES,
+                "local_ice_candidate_count": MAX_LOCAL_ICE_CANDIDATES,
+                "ice_candidate_bytes": MAX_ICE_CANDIDATE_BYTES,
+                "description_bytes": MAX_SIGNALING_DESCRIPTION_BYTES,
+            },
+            "local_ice_candidates_truncated": false,
+            "remote_ice_candidates_elided": true,
+        })
+    }
+
     pub(in crate::daemon::plugins::remote_desktop) fn webrtc_ice_state(&self) -> Option<&str> {
         self.webrtc_ice_state.as_deref()
     }
@@ -353,7 +379,8 @@ mod tests {
     use serde_json::json;
 
     use crate::daemon::plugins::remote_desktop::constants::{
-        direct_webrtc_endpoint_ura, MAX_LOCAL_ICE_CANDIDATES, MAX_REMOTE_ICE_CANDIDATES,
+        direct_webrtc_endpoint_ura, MAX_ICE_CANDIDATE_BYTES, MAX_LOCAL_ICE_CANDIDATES,
+        MAX_REMOTE_ICE_CANDIDATES, MAX_SIGNALING_DESCRIPTION_BYTES,
     };
 
     use super::RemoteDesktopSignalingState;
@@ -419,6 +446,63 @@ mod tests {
         );
 
         assert_eq!(signaling.webrtc_peer_state(), Some("connected"));
+    }
+
+    #[test]
+    fn remote_desktop_signaling_bounded_view_projects_counts_and_limits() {
+        let mut signaling = RemoteDesktopSignalingState::new();
+        signaling
+            .set_description("remote", json!({"type": "offer", "sdp": "v=0"}))
+            .expect("remote description records");
+        signaling
+            .push_remote_ice_candidate(json!({
+                "candidate": "candidate:remote 1 UDP 2122252543 127.0.0.1 41000 typ host",
+                "sdpMid": "0",
+                "sdpMLineIndex": 0
+            }))
+            .expect("remote candidate records");
+        signaling
+            .push_local_ice_candidate(json!({
+                "candidate": "candidate:local 1 UDP 2122252543 127.0.0.1 42000 typ host",
+                "sdpMid": "0",
+                "sdpMLineIndex": 0
+            }))
+            .expect("local candidate records");
+        signaling.record_webrtc_diagnostic(
+            Some("relay_unavailable".to_string()),
+            &json!({
+                "ice_connection_state": "checking",
+                "peer_connection_state": "connecting",
+            }),
+        );
+
+        let view = signaling.to_bounded_view(json!("host_only_no_nat_or_relay"));
+
+        assert_eq!(view["ice_candidate_count"], json!(1));
+        assert_eq!(view["local_ice_candidate_count"], json!(1));
+        assert_eq!(view["local_ice_candidates"].as_array().unwrap().len(), 1);
+        assert_eq!(view["remote_ice_candidates_elided"], json!(true));
+        assert_eq!(view["local_ice_candidates_truncated"], json!(false));
+        assert_eq!(
+            view["signaling_limits"]["remote_ice_candidate_count"],
+            json!(MAX_REMOTE_ICE_CANDIDATES)
+        );
+        assert_eq!(
+            view["signaling_limits"]["local_ice_candidate_count"],
+            json!(MAX_LOCAL_ICE_CANDIDATES)
+        );
+        assert_eq!(
+            view["signaling_limits"]["ice_candidate_bytes"],
+            json!(MAX_ICE_CANDIDATE_BYTES)
+        );
+        assert_eq!(
+            view["signaling_limits"]["description_bytes"],
+            json!(MAX_SIGNALING_DESCRIPTION_BYTES)
+        );
+        assert_eq!(view["route_state"], json!("host_only_no_nat_or_relay"));
+        assert_eq!(view["webrtc_ice_state"], json!("checking"));
+        assert_eq!(view["webrtc_peer_state"], json!("connecting"));
+        assert_eq!(view["webrtc_error"], json!("relay_unavailable"));
     }
 
     #[test]
