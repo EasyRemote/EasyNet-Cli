@@ -258,6 +258,10 @@ evidence = {
     "invocation": {
         "ability": "remote_desktop.create_session",
         "subject_ura": subject,
+        "args": {
+            "mode": "view_only",
+            "transport": "webrtc",
+        },
     },
     "target_binding": {
         "target_kind": "window",
@@ -386,6 +390,10 @@ evidence = {
     "invocation": {
         "ability": "remote_desktop.create_session",
         "subject_ura": subject,
+        "args": {
+            "mode": "view_only",
+            "transport": "webrtc",
+        },
     },
     "target_binding": {
         "target_kind": "window",
@@ -516,6 +524,10 @@ evidence = {
     "invocation": {
         "ability": "remote_desktop.create_session",
         "subject_ura": subject,
+        "args": {
+            "mode": "view_only",
+            "transport": "webrtc",
+        },
     },
     "target_binding": {
         "target_kind": "application",
@@ -699,6 +711,11 @@ JSON
   "invocation": {
     "ability": "remote_desktop.create_session",
     "subject_ura": "easynet:///r/localhost/resource/device.dev/streams/window.test",
+    "args": {
+      "mode": "view_only",
+      "transport_preferences": ["webrtc"],
+      "consent_ticket": "ticket-from-grant"
+    },
     "callee_ura": "easynet:///r/localhost/agent/device.dev.remote-desktop",
     "request_id": "invocation-test"
   }
@@ -775,6 +792,27 @@ EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID="4243" \
 "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   --run \
   --out-dir "$SANDBOX/bundled-probe-out" >/dev/null
+
+FAKE_EASYNET_NO_INVOCATION_ARGS="$SANDBOX/fake-easynet-no-invocation-args"
+cp "$FAKE_EASYNET" "$FAKE_EASYNET_NO_INVOCATION_ARGS"
+perl -0pi -e 's/\n    "args": \{\n      "mode": "view_only",\n      "transport_preferences": \["webrtc"\],\n      "consent_ticket": "ticket-from-grant"\n    \},//' \
+  "$FAKE_EASYNET_NO_INVOCATION_ARGS"
+if EASYNET_REMOTEAPP_EASYNET_BIN="$FAKE_EASYNET_NO_INVOCATION_ARGS" \
+  EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD="python3 '$FRAME_RECEIVER'" \
+  EASYNET_REMOTEAPP_CONTROL_DISCOVERY_JSON="$SANDBOX/control.json" \
+  EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
+  EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-window-red" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL="unrelated-window-green" \
+  EASYNET_REMOTEAPP_TARGET_PID="4242" \
+  EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID="4242" \
+  EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID="4243" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+    --run \
+    --out-dir "$SANDBOX/bundled-probe-missing-args" >/dev/null 2>&1; then
+  echo "remoteapp host E2E accepted bundled probe evidence without verified invocation args" >&2
+  exit 1
+fi
 
 cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"

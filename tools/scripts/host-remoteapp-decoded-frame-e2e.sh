@@ -92,6 +92,7 @@ Probe contract:
   It must create the JSON file and prove:
     - live picker used resource.refresh_remote_targets or resource.watch_remote_targets
     - selected resource_ura was used as Invocation.subject
+    - verified remote_desktop.create_session invocation args were preserved and did not carry subject identity
     - remote_desktop.create_session returned a target_binding for that target
     - WebRTC media was decoded into at least one frame
     - decoded frames included selected target content
@@ -443,9 +444,9 @@ require(invocation_subject_ura == selected_resource_ura,
         "Invocation.subject must equal the selected resource_ura")
 require(get("invocation.ability") == "remote_desktop.create_session",
         "invocation ability must be remote_desktop.create_session")
-if invocation_args is not None:
-    require(isinstance(invocation_args, dict),
-            "invocation.args must be an object when reported")
+require(isinstance(invocation_args, dict),
+        "verified Invocation.args must be reported as an object")
+if isinstance(invocation_args, dict):
     require(not contains_create_session_subject_arg(invocation_args),
             "remote_desktop.create_session args must not contain subject, subject_ura, or resource_ura")
 require(target_binding_subject_ura == selected_resource_ura,
@@ -692,6 +693,11 @@ data = {
     "invocation": {
         "ability": "remote_desktop.create_session",
         "subject_ura": resource_ura,
+        "args": {
+            "mode": "view_only",
+            "transport_preferences": ["webrtc"],
+            "consent_ticket": "self-test-consent-ticket",
+        },
     },
     "target_binding": target_binding,
     "sentinel_fixture": {

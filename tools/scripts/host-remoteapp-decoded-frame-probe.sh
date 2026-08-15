@@ -233,6 +233,9 @@ if invocation.get("subject_ura") != selected_resource_ura:
     raise SystemExit("verified Invocation.subject does not match selected resource_ura")
 if invocation.get("ability") != "remote_desktop.create_session":
     raise SystemExit("verified invocation ability is not remote_desktop.create_session")
+invocation_args = invocation.get("args")
+if not isinstance(invocation_args, dict):
+    raise SystemExit("verified remote_desktop.create_session invocation metadata missing args object")
 
 decoded_frames = frame.get("decoded_frames")
 if not isinstance(decoded_frames, dict):
