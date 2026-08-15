@@ -79,6 +79,17 @@ export async function rdCreate(entry: Entry, env: { resource?: { resource_ura: s
   return view
 }
 
+export const actions = {
+  rdRequestPermission: async (key: string) => {
+    const entry = entries[key]
+    const result = await invokeMediaUnary('remote_desktop.request_permission', {
+      deviceUra: entry.deviceUra,
+      args: {},
+    })
+    return result
+  },
+}
+
 function assertRemoteDesktopCreateSessionIdentity(result: Record<string, unknown> | undefined): void {
   if (!stringField(result, 'session_id')) {
     throw new Error('remote_desktop.create_session response did not include session_id')
@@ -175,6 +186,15 @@ fi
 perl -0pi -e "s/  'remote_desktop\\.grant_consent',/  'remote_desktop.grant_consent',\\n  'remote_desktop.create_session',/" \
   "$FRONTEND_SRC/store/media-channel-invocation.ts"
 
+perl -0pi -e "s/  'remote_desktop\\.end_session',/  'remote_desktop.end_session',\\n  'remote_desktop.request_permission',/" \
+  "$FRONTEND_SRC/store/media-channel-invocation.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted target-subject requirement for request_permission" >&2
+  exit 1
+fi
+perl -0pi -e "s/\\n  'remote_desktop\\.request_permission',//" \
+  "$FRONTEND_SRC/store/media-channel-invocation.ts"
+
 perl -0pi -e "s/mode: 'view_only',/mode: 'view_only',\\n      subject_ura: resource.resource_ura,/" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
@@ -182,6 +202,15 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   exit 1
 fi
 perl -0pi -e "s/\\n      subject_ura: resource\\.resource_ura,//" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e 's/(deviceUra: entry\.deviceUra,\n)/$1      subjectURA: selectedTarget.resource_ura,\n/' \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted target-scoped request_permission" >&2
+  exit 1
+fi
+perl -0pi -e "s/\\n      subjectURA: selectedTarget\\.resource_ura,//" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 
 perl -0pi -e 's/screenResources\.find\(\(resource\) => resource\.resource_ura === selectedScreenURA\)/screenResources[0]/' \

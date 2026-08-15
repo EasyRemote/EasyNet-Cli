@@ -17,11 +17,27 @@ require() {
   rg -q -- "$pattern" "$path" || fail "$message"
 }
 
+require_multiline() {
+  local pattern="$1"
+  local path="$2"
+  local message="$3"
+  perl -0ne "exit(($pattern) ? 0 : 1)" "$path" || fail "$message"
+}
+
 reject() {
   local pattern="$1"
   local path="$2"
   local message="$3"
   if rg -q -- "$pattern" "$path"; then
+    fail "$message"
+  fi
+}
+
+reject_multiline() {
+  local pattern="$1"
+  local path="$2"
+  local message="$3"
+  if perl -0ne "exit(($pattern) ? 0 : 1)" "$path"; then
     fail "$message"
   fi
 }
@@ -57,6 +73,12 @@ for ability in \
   require "'$ability'" "$INVOCATION" \
     "frontend subject-required ability set must include $ability"
 done
+for ability in \
+  remote_desktop.permission_status \
+  remote_desktop.request_permission; do
+  reject "'$ability'" "$INVOCATION" \
+    "frontend host-local permission probe $ability must not require a target resource subject"
+done
 
 require 'requireRemoteDesktopSessionSubject\(ability, opts\.subjectURA\)' "$INVOCATION" \
   'frontend unary/stream media invocation paths must reject remote desktop calls without subjectURA'
@@ -88,6 +110,10 @@ reject 'subject_ura:' "$STORE" \
   'frontend create_session args must not carry subject_ura; use Invocation.subject'
 reject 'resource_ura: resource\.resource_ura' "$STORE" \
   'frontend create_session args must not carry resource_ura; use Invocation.subject'
+require_multiline '/rdRequestPermission:[\s\S]*invokeMediaUnary\('\''remote_desktop\.request_permission'\''[\s\S]*deviceUra: entry\.deviceUra,[\s\S]*args: \{\},[\s\S]*\}\)/s' "$STORE" \
+  'frontend request_permission must invoke the host-local permission probe without a target subjectURA'
+reject_multiline '/remote_desktop\.request_permission(?:(?!\}\)).)*subjectURA:/s' "$STORE" \
+  'frontend request_permission must not scope host-local permission probes to the selected remote desktop resource'
 
 require 'resource\.refresh_remote_targets' "$ACCESS" \
   'frontend display/application/window picker must use live resource.refresh_remote_targets'
