@@ -132,6 +132,14 @@ require 'input_reject_diagnostics_are_coalesced_under_high_rate_storm' "$INPUT" 
   'PERF-07 must prove input reject diagnostics are coalesced under a high-rate storm'
 require 'const REJECT_STORM: u64 = 10_000' "$INPUT" \
   'PERF-07 input storm test must use 10k rejected frames'
+require 'const MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE' "$INPUT" \
+  'PERF-07 input reject diagnostics must have a hard sample cap per signature'
+require '< MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE' "$INPUT" \
+  'PERF-07 input reject coalescer must enforce the hard sample cap'
+require 'sample cap plus flush summary' "$INPUT" \
+  'PERF-07 input storm test must assert sample cap plus flush summary'
+require 'diagnostic_sample_limit' "$INPUT" \
+  'PERF-07 input reject diagnostics must publish the sample limit'
 require 'coalesced_rejections' "$INPUT" \
   'PERF-07 must expose coalesced rejection counts'
 

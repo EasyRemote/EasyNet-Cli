@@ -24,6 +24,7 @@ use crate::daemon::plugins::remote_desktop::target_tracking::TargetTrackerSnapsh
 pub const INPUT_DATA_CHANNEL_LABEL: &str = "easynet.remote_desktop.input.v1";
 pub const MAX_INPUT_FRAME_BYTES: usize = 16 * 1024;
 const INPUT_REJECTION_DIAGNOSTIC_INTERVAL: u64 = 120;
+const MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE: u64 = 8;
 pub(in crate::daemon::plugins::remote_desktop) const UNSUPPORTED_INPUT_CHANNEL_TYPES: &[&str] =
     &["clipboard", "file_drop"];
 
@@ -499,12 +500,17 @@ impl InputRejectCoalescer {
         if pending.observed_total == 1 {
             events.push(pending.payload("first"));
             pending.emitted_total = 1;
+            pending.emitted_diagnostic_samples = 1;
         } else if pending
             .observed_total
             .is_multiple_of(INPUT_REJECTION_DIAGNOSTIC_INTERVAL)
+            && pending.emitted_diagnostic_samples
+                < MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE
         {
             events.push(pending.payload("interval"));
             pending.emitted_total = pending.observed_total;
+            pending.emitted_diagnostic_samples =
+                pending.emitted_diagnostic_samples.saturating_add(1);
         }
         events
     }
@@ -569,6 +575,7 @@ struct PendingInputReject {
     last_rejected_count: u64,
     observed_total: u64,
     emitted_total: u64,
+    emitted_diagnostic_samples: u64,
 }
 
 impl PendingInputReject {
@@ -580,6 +587,7 @@ impl PendingInputReject {
             last_rejected_count: sample.rejected_count,
             observed_total: 0,
             emitted_total: 0,
+            emitted_diagnostic_samples: 0,
         }
     }
 
@@ -618,6 +626,10 @@ impl PendingInputReject {
             json!(self.observed_total.saturating_sub(self.emitted_total)),
         );
         payload.insert("diagnostic_sample".to_string(), json!(diagnostic_sample));
+        payload.insert(
+            "diagnostic_sample_limit".to_string(),
+            json!(MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE),
+        );
         Value::Object(payload)
     }
 }
@@ -1234,14 +1246,30 @@ mod tests {
             emitted.push(payload);
         }
 
+        let sampled_events = emitted
+            .iter()
+            .filter(|event| event["diagnostic_sample"] != json!("flush"))
+            .count() as u64;
+        assert_eq!(
+            sampled_events, MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE,
+            "input rejection diagnostics must have a hard sample cap per signature"
+        );
         assert_eq!(
             emitted.len() as u64,
-            1 + (REJECT_STORM / INPUT_REJECTION_DIAGNOSTIC_INTERVAL) + 1,
-            "input rejection diagnostics must be sampled instead of emitted per frame"
+            MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE + 1,
+            "input rejection diagnostics must be bounded by sample cap plus flush summary"
         );
         assert_eq!(
             emitted.first().unwrap()["diagnostic_sample"],
             json!("first")
+        );
+        assert_eq!(
+            emitted.first().unwrap()["diagnostic_sample_limit"],
+            json!(MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE)
+        );
+        assert!(
+            emitted.len() as u64 <= 10,
+            "10k rejected frames must not produce more than ten diagnostics"
         );
         assert_eq!(emitted.last().unwrap()["diagnostic_sample"], json!("flush"));
         assert_eq!(

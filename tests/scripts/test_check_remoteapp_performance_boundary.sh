@@ -135,9 +135,18 @@ fn endpoint_start_boundary_refuses_to_run_while_session_store_lock_is_held() {}
 RS
 
 cat >"$SB/plugins/remote-desktop/src/input.rs" <<'RS'
+const MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE: u64 = 8;
+
+fn observe() {
+    if emitted_diagnostic_samples < MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE {
+        let _ = "diagnostic_sample_limit";
+    }
+}
+
 #[test]
 fn input_reject_diagnostics_are_coalesced_under_high_rate_storm() {
     const REJECT_STORM: u64 = 10_000;
+    assert_eq!(emitted.len(), MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE + 1, "sample cap plus flush summary");
     let _ = "coalesced_rejections";
 }
 RS
@@ -253,5 +262,35 @@ rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "manual signaling view projection should exit 1 (got $rc)"
 grep -q "bounded signaling projection" /tmp/check-remoteapp-performance-boundary-manual-view.out || fail "expected PERF-05 manual view projection failure"
+
+perl -0pi -e 's/let remote_ice_candidates = session\.remote_ice_candidates\(\);/let _ = session.signaling_view(transport_route_state.clone());/' \
+  "$SB/plugins/remote-desktop/src/view.rs"
+perl -0pi -e 's/const MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE: u64 = 8;//' \
+  "$SB/plugins/remote-desktop/src/input.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-input-cap.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing input reject sample cap should exit 1 (got $rc)"
+grep -q "hard sample cap" /tmp/check-remoteapp-performance-boundary-input-cap.out || fail "expected PERF-07 sample cap failure"
+
+perl -0pi -e 's/fn observe\(\) \{/const MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE: u64 = 8;\nfn observe() {/' \
+  "$SB/plugins/remote-desktop/src/input.rs"
+perl -0pi -e 's/emitted_diagnostic_samples < MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE/emitted_diagnostic_samples > 0/' \
+  "$SB/plugins/remote-desktop/src/input.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-input-enforce.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing input reject sample cap enforcement should exit 1 (got $rc)"
+grep -q "enforce the hard sample cap" /tmp/check-remoteapp-performance-boundary-input-enforce.out || fail "expected PERF-07 cap enforcement failure"
 
 printf 'test_check_remoteapp_performance_boundary.sh: all cases passed\n'
