@@ -352,7 +352,35 @@ fn serialize_session() {
 }
 RS
 
+  cat >"$SANDBOX/plugins/remote-desktop/src/view_device.rs" <<'RS'
+fn device_capabilities_view() {
+    json!({
+        "unsupported_input_types": unsupported_input_channel_types_value(),
+        "unsupported_capabilities": [
+            {
+                "capability": "clipboard",
+                "future_abilities": ["remote_desktop.clipboard.write"]
+            },
+            {
+                "capability": "file_transfer",
+                "future_abilities": ["remote_desktop.file_transfer.send"]
+            }
+        ],
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn device_capabilities_report_clipboard_and_file_transfer_unsupported() {}
+}
+RS
+
   cat >"$SANDBOX/plugins/remote-desktop/src/input.rs" <<'RS'
+const UNSUPPORTED_INPUT_CHANNEL_TYPES: &[&str] = &["clipboard", "file_drop"];
+
+fn unsupported_input_channel_types_value() {}
+
 fn input_policy_for_target_snapshot() {
     let _ = policy["pointer_target"]["target_geometry_revision"];
 }
@@ -564,6 +592,10 @@ fn select_application_for_binding() {
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/request.rs" <<'RS'
+fn request_projection() {
+    unsupported_input_channel_types_value();
+}
+
 #[test]
 fn input_policy_reports_clipboard_and_file_drop_unsupported_even_when_requested() {}
 RS
@@ -891,5 +923,20 @@ write_fixture
 perl -0pi -e 's/Some\("input_scope_unsupported"\)/Some("input_disabled")/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
 run_fail 'view-only key/pointer rejection must report input_scope_unsupported'
+
+write_fixture
+perl -0pi -e 's/"unsupported_input_types": unsupported_input_channel_types_value\(\),/"supported_input_types": unsupported_input_channel_types_value(),/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must report unsupported input channel types'
+
+write_fixture
+perl -0pi -e 's/"unsupported_capabilities":/"enabled_capabilities":/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must report unsupported rich-input capabilities'
+
+write_fixture
+perl -0pi -e 's/unsupported_input_channel_types_value\(\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/request.rs"
+run_fail 'request input policy projection must reuse the input-domain unsupported type set'
 
 printf 'test_check_remoteapp_lifecycle_input_boundary.sh: all cases passed\n'

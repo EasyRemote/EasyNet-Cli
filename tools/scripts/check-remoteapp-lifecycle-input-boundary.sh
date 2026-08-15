@@ -59,6 +59,7 @@ SESSION_EVENTS="$REMOTE_ROOT/session_events.rs"
 EVENT_LOG="$REMOTE_ROOT/event_log.rs"
 VIEW_TRANSPORT="$REMOTE_ROOT/view_transport.rs"
 VIEW="$REMOTE_ROOT/view.rs"
+VIEW_DEVICE="$REMOTE_ROOT/view_device.rs"
 INPUT="$REMOTE_ROOT/input.rs"
 TARGET="$REMOTE_ROOT/target.rs"
 CONSTANTS="$REMOTE_ROOT/constants.rs"
@@ -72,7 +73,7 @@ INVOKE_BIDI="$REMOTE_ROOT/invoke_bidi.rs"
 WEBRTC_ENDPOINT="$REMOTE_ROOT/transport/webrtc_endpoint.rs"
 WEBRTC_NEGOTIATION="$REMOTE_ROOT/transport/webrtc_negotiation.rs"
 
-for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$INPUT" "$TARGET" "$CONSTANTS" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_NEGOTIATION"; do
+for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_NEGOTIATION"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -478,5 +479,21 @@ require '!input_policy_allows\(&policy, "pointer"\)' "$INPUT" \
   'E2E-11 tests must assert app/window pointer input is disabled'
 require 'input_policy_reports_clipboard_and_file_drop_unsupported_even_when_requested' "$REQUEST" \
   'input parser must report unsupported rich input types explicitly'
+require 'UNSUPPORTED_INPUT_CHANNEL_TYPES' "$INPUT" \
+  'unsupported rich input types must have one input-domain source of truth'
+require 'unsupported_input_channel_types_value\(\)' "$REQUEST" \
+  'request input policy projection must reuse the input-domain unsupported type set'
+require 'unsupported_input_channel_types_value\(\)' "$VIEW_DEVICE" \
+  'device capability metadata must reuse the input-domain unsupported type set'
+require '"unsupported_input_types": unsupported_input_channel_types_value\(\)' "$VIEW_DEVICE" \
+  'device capabilities must report unsupported input channel types'
+require '"unsupported_capabilities":' "$VIEW_DEVICE" \
+  'device capabilities must report unsupported rich-input capabilities'
+require '"remote_desktop\.clipboard\.write"' "$VIEW_DEVICE" \
+  'device capabilities must point clipboard to future split abilities instead of datachannel support'
+require '"remote_desktop\.file_transfer\.send"' "$VIEW_DEVICE" \
+  'device capabilities must point file transfer to future split abilities instead of datachannel support'
+require 'device_capabilities_report_clipboard_and_file_transfer_unsupported' "$VIEW_DEVICE" \
+  'device capability tests must prove clipboard/file transfer are reported unsupported'
 
 printf 'check-remoteapp-lifecycle-input-boundary: ok\n'

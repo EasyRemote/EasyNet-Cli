@@ -24,6 +24,12 @@ use crate::daemon::plugins::remote_desktop::target_tracking::TargetTrackerSnapsh
 pub const INPUT_DATA_CHANNEL_LABEL: &str = "easynet.remote_desktop.input.v1";
 pub const MAX_INPUT_FRAME_BYTES: usize = 16 * 1024;
 const INPUT_REJECTION_DIAGNOSTIC_INTERVAL: u64 = 120;
+pub(in crate::daemon::plugins::remote_desktop) const UNSUPPORTED_INPUT_CHANNEL_TYPES: &[&str] =
+    &["clipboard", "file_drop"];
+
+pub(in crate::daemon::plugins::remote_desktop) fn unsupported_input_channel_types_value() -> Value {
+    json!(UNSUPPORTED_INPUT_CHANNEL_TYPES)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteDesktopInputKind {
@@ -222,7 +228,7 @@ fn input_policy_for_scope(mut input_policy: Value, input_scope: InputScope) -> V
     disable_input_policy_key(map, "file_drop_enabled");
     map.insert(
         "unsupported_input_types".to_string(),
-        json!(["clipboard", "file_drop"]),
+        unsupported_input_channel_types_value(),
     );
     match input_scope {
         InputScope::ViewOnly => {

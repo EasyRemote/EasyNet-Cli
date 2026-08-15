@@ -18,6 +18,7 @@ use crate::daemon::plugins::remote_desktop::constants::{
     MAX_VIDEO_DIMENSION, MIN_ATTACH_FPS, NATIVE_MAX_BITRATE_KBPS, NATIVE_MIN_BITRATE_KBPS,
     REASON_INVALID_ARGUMENT, TRANSPORT_INVOKE_BIDI, TRANSPORT_PREVIEW_STREAM, TRANSPORT_WEBRTC,
 };
+use crate::daemon::plugins::remote_desktop::input::unsupported_input_channel_types_value;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
 use crate::daemon::plugins::remote_desktop::target::{InputScope, RemoteAppTargetBinding};
 
@@ -130,7 +131,7 @@ impl RemoteDesktopInputPolicy {
             "pointer_enabled": self.pointer_enabled,
             "clipboard_enabled": self.clipboard_enabled,
             "file_drop_enabled": self.file_drop_enabled,
-            "unsupported_input_types": ["clipboard", "file_drop"],
+            "unsupported_input_types": unsupported_input_channel_types_value(),
         })
     }
 }

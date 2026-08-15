@@ -12,7 +12,7 @@ use crate::daemon::plugins::remote_desktop::constants::{
     DEFAULT_VIDEO_STREAM_BITRATE_KBPS, MAX_ATTACH_FPS, NATIVE_MAX_BITRATE_KBPS,
 };
 use crate::daemon::plugins::remote_desktop::input::{
-    input_injection_available, INPUT_DATA_CHANNEL_LABEL,
+    input_injection_available, unsupported_input_channel_types_value, INPUT_DATA_CHANNEL_LABEL,
 };
 use crate::daemon::plugins::remote_desktop::media::{
     backend_catalog_view, production_gate_view, sdk_contract_view, MACOS_SCK_VIDEOTOOLBOX_BACKEND,
@@ -133,11 +133,34 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
         "data_channel_input": true,
         "input_channel_label": INPUT_DATA_CHANNEL_LABEL,
         "supported_input_events": ["pointer.move", "pointer.down", "pointer.up", "key.down", "key.up"],
+        "unsupported_input_types": unsupported_input_channel_types_value(),
+        "unsupported_capabilities": [
+            {
+                "capability": "clipboard",
+                "reason": "split_ability_required",
+                "future_abilities": [
+                    "remote_desktop.clipboard.read",
+                    "remote_desktop.clipboard.write",
+                    "remote_desktop.clipboard.watch"
+                ]
+            },
+            {
+                "capability": "file_transfer",
+                "reason": "split_ability_required",
+                "future_abilities": [
+                    "remote_desktop.file_transfer.create",
+                    "remote_desktop.file_transfer.accept",
+                    "remote_desktop.file_transfer.send",
+                    "remote_desktop.file_transfer.cancel"
+                ]
+            }
+        ],
         "input_plane": {
             "kind": "webrtc_data_channel",
             "label": INPUT_DATA_CHANNEL_LABEL,
             "low_latency": true,
             "supported_events": ["pointer.move", "pointer.down", "pointer.up", "key.down", "key.up"],
+            "unsupported_input_types": unsupported_input_channel_types_value(),
         },
         "low_latency_mode": true,
         "max_fps": max_fps,
@@ -154,6 +177,43 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
             "reason": reason,
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::device_capabilities_view;
+
+    #[test]
+    fn device_capabilities_report_clipboard_and_file_transfer_unsupported() {
+        let capabilities = device_capabilities_view();
+
+        assert_eq!(
+            capabilities["unsupported_input_types"],
+            json!(["clipboard", "file_drop"])
+        );
+        assert_eq!(
+            capabilities["input_plane"]["unsupported_input_types"],
+            json!(["clipboard", "file_drop"])
+        );
+        assert_eq!(
+            capabilities["unsupported_capabilities"][0]["capability"],
+            json!("clipboard")
+        );
+        assert_eq!(
+            capabilities["unsupported_capabilities"][0]["reason"],
+            json!("split_ability_required")
+        );
+        assert_eq!(
+            capabilities["unsupported_capabilities"][1]["capability"],
+            json!("file_transfer")
+        );
+        assert_eq!(
+            capabilities["unsupported_capabilities"][1]["future_abilities"][2],
+            json!("remote_desktop.file_transfer.send")
+        );
+    }
 }
 
 /// Empty latest-metrics DTO used until runtime metrics arrive.
