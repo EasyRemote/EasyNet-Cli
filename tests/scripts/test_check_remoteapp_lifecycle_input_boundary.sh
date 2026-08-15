@@ -82,7 +82,11 @@ mod tests {
     fn tracker_commits_move_resize_and_lost_without_rebinding() {}
 
     #[test]
-    fn tracker_reports_rebind_failure_after_target_loss_without_policy() {}
+    fn tracker_reports_rebind_failure_after_target_loss_without_policy() {
+        assert_eq!(rebind_attempted.payload()["failure_domain"], json!("target"));
+        assert_eq!(rebind_failed.payload()["failure_domain"], json!("target"));
+        assert_eq!(tracker.snapshot().latest_diagnostic()["failure_domain"], json!("target"));
+    }
 
     #[test]
     fn tracker_routes_post_loss_title_focus_through_explicit_rebind() {}
@@ -901,6 +905,16 @@ write_fixture
 perl -0pi -e 's/tracker_reports_rebind_failure_after_target_loss_without_policy/tracker_swallows_rebind_signal/' \
   "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
 run_fail 'target tracker must test explicit rebind failure instead of silently swallowing post-loss observations'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(rebind_attempted\.payload\(\)\["failure_domain"\], json!\("target"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'TARGET_REBIND_ATTEMPTED must project target failure domain'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(rebind_failed\.payload\(\)\["failure_domain"\], json!\("target"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'TARGET_REBIND_FAILED must project target failure domain'
 
 write_fixture
 perl -0pi -e 's/"target_focus_after_loss";//' \

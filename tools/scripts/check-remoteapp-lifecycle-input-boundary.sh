@@ -290,6 +290,12 @@ require 'target_status' "$TARGET_TRACKING" \
   'TARGET_REBIND_FAILED must expose lost target status so frontend cannot treat it as a normal geometry update'
 require '"input_enabled": false' "$TARGET_TRACKING" \
   'TARGET_REBIND_FAILED must keep target-scoped input disabled'
+require 'rebind_attempted\.payload\(\)\["failure_domain"\]' "$TARGET_TRACKING" \
+  'TARGET_REBIND_ATTEMPTED must project target failure domain'
+require 'rebind_failed\.payload\(\)\["failure_domain"\]' "$TARGET_TRACKING" \
+  'TARGET_REBIND_FAILED must project target failure domain'
+require 'tracker\.snapshot\(\)\.latest_diagnostic\(\)\["failure_domain"\]' "$TARGET_TRACKING" \
+  'rebind latest diagnostics must project target failure domain'
 require 'tracker_reports_rebind_failure_after_target_loss_without_policy' "$TARGET_TRACKING" \
   'target tracker must test explicit rebind failure instead of silently swallowing post-loss observations'
 require 'target_title_after_loss' "$TARGET_TRACKING" \

@@ -1190,6 +1190,7 @@ mod tests {
             "easynet:///r/acme/ability/remote-desktop.transport".into(),
         );
         session.mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-window-reappear"));
+        assert!(session.report_client_media_state(epoch, "presenting"));
         assert!(
             session.production_media_ready(),
             "fixture starts with production media online before target loss"

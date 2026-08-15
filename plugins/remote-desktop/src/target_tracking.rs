@@ -732,26 +732,27 @@ impl RemoteAppTargetBindingStateMachine {
         }
         self.snapshot.status = TargetBindingPhase::Rebinding;
         self.rebind_started_at_ms = Some(observed_at_ms);
-        self.snapshot.diagnostic = json!({
-            "status": TargetBindingPhase::Rebinding.as_str(),
-            "reason": "target_rebind_attempted",
-            "detail": detail,
-            "subject_ura": self.binding.subject_ura(),
-            "binding_id": self.snapshot.binding_id,
-            "binding_epoch": self.snapshot.binding_epoch,
-            "target_identity_epoch": self.snapshot.target_identity_epoch,
-            "target_geometry_revision": self.snapshot.target_geometry_revision,
-            "media_source_epoch": self.snapshot.media_source_epoch,
-            "visibility_state": self.snapshot.visibility_state.as_str(),
-            "input_enabled": false,
-            "recoverability": TargetBindingPhase::Rebinding.recoverability(),
-            "frontend_action": "retry_session",
-            "rebind_deadline_ms": observed_at_ms.saturating_add(AUTOMATIC_REBIND_WINDOW_MS),
-            "observed_at_ms": observed_at_ms,
-        });
-        Some(TargetTrackingEvent {
-            event_type: "TARGET_REBIND_ATTEMPTED",
-            payload: json!({
+        let frontend_action = FrontendAction::RetrySession.as_str();
+        self.snapshot.diagnostic = target_failure_payload(
+            json!({
+                "status": TargetBindingPhase::Rebinding.as_str(),
+                "reason": "target_rebind_attempted",
+                "detail": detail,
+                "subject_ura": self.binding.subject_ura(),
+                "binding_id": self.snapshot.binding_id,
+                "binding_epoch": self.snapshot.binding_epoch,
+                "target_identity_epoch": self.snapshot.target_identity_epoch,
+                "target_geometry_revision": self.snapshot.target_geometry_revision,
+                "media_source_epoch": self.snapshot.media_source_epoch,
+                "visibility_state": self.snapshot.visibility_state.as_str(),
+                "recoverability": TargetBindingPhase::Rebinding.recoverability(),
+                "rebind_deadline_ms": observed_at_ms.saturating_add(AUTOMATIC_REBIND_WINDOW_MS),
+                "observed_at_ms": observed_at_ms,
+            }),
+            frontend_action,
+        );
+        let payload = target_failure_payload(
+            json!({
                 "subject_ura": self.binding.subject_ura(),
                 "binding_id": self.snapshot.binding_id,
                 "binding_epoch": self.snapshot.binding_epoch,
@@ -761,15 +762,18 @@ impl RemoteAppTargetBindingStateMachine {
                 "media_source_epoch": self.snapshot.media_source_epoch,
                 "visibility_state": self.snapshot.visibility_state.as_str(),
                 "target_status": TargetBindingPhase::Rebinding.as_str(),
-                "input_enabled": false,
                 "reason_code": "target_rebind_attempted",
                 "detail": detail,
                 "recoverability": TargetBindingPhase::Rebinding.recoverability(),
-                "frontend_action": "retry_session",
                 "rebind_deadline_ms": observed_at_ms.saturating_add(AUTOMATIC_REBIND_WINDOW_MS),
                 "observed_at_ms": observed_at_ms,
                 "geometry": self.snapshot.geometry.to_value(),
             }),
+            frontend_action,
+        );
+        Some(TargetTrackingEvent {
+            event_type: "TARGET_REBIND_ATTEMPTED",
+            payload,
         })
     }
 
@@ -790,27 +794,28 @@ impl RemoteAppTargetBindingStateMachine {
             rebind_started_at_ms.map(|started| started.saturating_add(AUTOMATIC_REBIND_WINDOW_MS));
         self.snapshot.status = TargetBindingPhase::Lost;
         let reason_code = "explicit_rebind_required";
-        self.snapshot.diagnostic = json!({
-            "status": TargetBindingPhase::Lost.as_str(),
-            "reason": reason_code,
-            "detail": detail,
-            "subject_ura": self.binding.subject_ura(),
-            "binding_id": self.snapshot.binding_id,
-            "binding_epoch": self.snapshot.binding_epoch,
-            "target_identity_epoch": self.snapshot.target_identity_epoch,
-            "target_geometry_revision": self.snapshot.target_geometry_revision,
-            "visibility_state": self.snapshot.visibility_state.as_str(),
-            "target_status": TargetBindingPhase::Lost.as_str(),
-            "input_enabled": false,
-            "recoverability": "new_session_required",
-            "frontend_action": "refresh_targets",
-            "observed_at_ms": observed_at_ms,
-            "rebind_started_at_ms": rebind_started_at_ms,
-            "rebind_deadline_ms": rebind_deadline_ms,
-        });
-        Some(TargetTrackingEvent {
-            event_type: "TARGET_REBIND_FAILED",
-            payload: json!({
+        let frontend_action = FrontendAction::RefreshTargets.as_str();
+        self.snapshot.diagnostic = target_failure_payload(
+            json!({
+                "status": TargetBindingPhase::Lost.as_str(),
+                "reason": reason_code,
+                "detail": detail,
+                "subject_ura": self.binding.subject_ura(),
+                "binding_id": self.snapshot.binding_id,
+                "binding_epoch": self.snapshot.binding_epoch,
+                "target_identity_epoch": self.snapshot.target_identity_epoch,
+                "target_geometry_revision": self.snapshot.target_geometry_revision,
+                "visibility_state": self.snapshot.visibility_state.as_str(),
+                "target_status": TargetBindingPhase::Lost.as_str(),
+                "recoverability": "new_session_required",
+                "observed_at_ms": observed_at_ms,
+                "rebind_started_at_ms": rebind_started_at_ms,
+                "rebind_deadline_ms": rebind_deadline_ms,
+            }),
+            frontend_action,
+        );
+        let payload = target_failure_payload(
+            json!({
                 "subject_ura": self.binding.subject_ura(),
                 "binding_id": self.snapshot.binding_id,
                 "binding_epoch": self.snapshot.binding_epoch,
@@ -821,16 +826,19 @@ impl RemoteAppTargetBindingStateMachine {
                 "media_source_epoch": self.snapshot.media_source_epoch,
                 "visibility_state": self.snapshot.visibility_state.as_str(),
                 "target_status": TargetBindingPhase::Lost.as_str(),
-                "input_enabled": false,
                 "reason_code": reason_code,
                 "detail": detail,
                 "recoverability": "new_session_required",
-                "frontend_action": "refresh_targets",
                 "observed_at_ms": observed_at_ms,
                 "rebind_started_at_ms": rebind_started_at_ms,
                 "rebind_deadline_ms": rebind_deadline_ms,
                 "geometry": self.snapshot.geometry.to_value(),
             }),
+            frontend_action,
+        );
+        Some(TargetTrackingEvent {
+            event_type: "TARGET_REBIND_FAILED",
+            payload,
         })
     }
 
@@ -1189,6 +1197,23 @@ mod tests {
             rebind_attempted.payload()["target_status"],
             json!("rebinding")
         );
+        assert_eq!(
+            rebind_attempted.payload()["failure_domain"],
+            json!("target")
+        );
+        assert_eq!(
+            rebind_attempted.payload()["frontend_action"],
+            json!("retry_session")
+        );
+        assert_eq!(rebind_attempted.payload()["input_enabled"], json!(false));
+        assert_eq!(
+            tracker.snapshot().latest_diagnostic()["failure_domain"],
+            json!("target")
+        );
+        assert_eq!(
+            tracker.snapshot().latest_diagnostic()["frontend_action"],
+            json!("retry_session")
+        );
 
         let rebind_failed = tracker
             .commit_observation(TargetObservation::VisibilityChanged {
@@ -1207,11 +1232,20 @@ mod tests {
             rebind_failed.payload()["frontend_action"],
             json!("refresh_targets")
         );
+        assert_eq!(rebind_failed.payload()["failure_domain"], json!("target"));
         assert_eq!(rebind_failed.payload()["target_status"], json!("lost"));
         assert_eq!(rebind_failed.payload()["input_enabled"], json!(false));
         assert_eq!(
             rebind_failed.payload()["previous_target_geometry_revision"],
             rebind_failed.payload()["target_geometry_revision"]
+        );
+        assert_eq!(
+            tracker.snapshot().latest_diagnostic()["failure_domain"],
+            json!("target")
+        );
+        assert_eq!(
+            tracker.snapshot().latest_diagnostic()["frontend_action"],
+            json!("refresh_targets")
         );
         assert_eq!(
             tracker.snapshot().latest_diagnostic()["recoverability"],
@@ -1245,6 +1279,10 @@ mod tests {
             title_rebind_attempted.payload()["detail"],
             json!("target_title_after_loss")
         );
+        assert_eq!(
+            title_rebind_attempted.payload()["failure_domain"],
+            json!("target")
+        );
 
         let title_rebind_failed = title_tracker
             .commit_observation(TargetObservation::TitleChanged {
@@ -1256,6 +1294,10 @@ mod tests {
         assert_eq!(
             title_rebind_failed.payload()["reason_code"],
             json!("explicit_rebind_required")
+        );
+        assert_eq!(
+            title_rebind_failed.payload()["failure_domain"],
+            json!("target")
         );
         assert_eq!(
             title_tracker.snapshot().to_value()["input_enabled"],
@@ -1277,6 +1319,10 @@ mod tests {
             focus_rebind_attempted.payload()["detail"],
             json!("target_focus_after_loss")
         );
+        assert_eq!(
+            focus_rebind_attempted.payload()["failure_domain"],
+            json!("target")
+        );
 
         let focus_rebind_failed = focus_tracker
             .commit_observation(TargetObservation::FocusChanged {
@@ -1288,6 +1334,10 @@ mod tests {
         assert_eq!(
             focus_rebind_failed.payload()["frontend_action"],
             json!("refresh_targets")
+        );
+        assert_eq!(
+            focus_rebind_failed.payload()["failure_domain"],
+            json!("target")
         );
         assert_eq!(
             focus_tracker.snapshot().to_value()["input_enabled"],
