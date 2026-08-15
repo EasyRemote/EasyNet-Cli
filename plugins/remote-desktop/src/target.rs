@@ -575,7 +575,11 @@ impl AppWindowSetProof {
         })
     }
 
-    fn to_value(&self) -> Value {
+    pub(in crate::daemon::plugins::remote_desktop) fn window_set_epoch(&self) -> u64 {
+        self.window_set_epoch
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
         json!({
             "display_id": self.display_id,
             "bundle_id": self.bundle_id,
@@ -585,13 +589,7 @@ impl AppWindowSetProof {
         })
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn contains_window_id(
-        &self,
-        window_id: u64,
-    ) -> bool {
-        self.resolved_window_ids.binary_search(&window_id).is_ok()
-    }
-
+    #[cfg(test)]
     pub(in crate::daemon::plugins::remote_desktop) fn resolved_window_count(&self) -> usize {
         self.resolved_window_ids.len()
     }
@@ -1103,6 +1101,22 @@ impl RemoteAppTargetBinding {
         &self,
     ) -> Option<&AppWindowSetProof> {
         self.app_window_set.as_ref()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn update_application_window_set(
+        &mut self,
+        app_window_set: AppWindowSetProof,
+        geometry: TargetGeometry,
+        target_geometry_revision: u64,
+    ) -> bool {
+        if self.target_kind != RemoteDesktopTargetKind::Application {
+            return false;
+        }
+        self.target_identity_epoch = app_window_set.window_set_epoch();
+        self.target_geometry_revision = target_geometry_revision;
+        self.geometry = geometry;
+        self.app_window_set = Some(app_window_set);
+        true
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn geometry(&self) -> &TargetGeometry {

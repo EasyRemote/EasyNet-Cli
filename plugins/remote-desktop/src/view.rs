@@ -4,10 +4,10 @@
 // File: plugins/remote-desktop/src/view.rs
 // Description: JSON response projection for remote desktop sessions.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::input::{
-    INPUT_DATA_CHANNEL_LABEL, input_injection_available,
+    input_injection_available, INPUT_DATA_CHANNEL_LABEL,
 };
 use crate::daemon::plugins::remote_desktop::media::{
     backend_catalog_view, production_gate_view, sdk_contract_view,
@@ -30,7 +30,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
     let video = session.video().to_value();
     let input_policy = session.input_policy().to_value();
     let media_stats = session.media_stats();
-    let production_media_ready = transport_view.production_ready(session);
+    let production_media_ready = session.production_media_ready();
     let transport_route_state = transport_view.route_state();
     let signaling = session.signaling_view(transport_route_state.clone());
     let production_readiness = production_readiness_view(session, &transport_view);
@@ -96,8 +96,8 @@ fn production_readiness_view(
     transport_view: &RemoteDesktopTransportView,
 ) -> Value {
     json!({
-        "ready": transport_view.production_ready(session),
-        "blocked_reason": production_readiness_blocked_reason(session, transport_view),
+        "ready": session.production_media_ready(),
+        "blocked_reason": production_readiness_blocked_reason(session),
         "target_scope_ready": session.target_scope_ready(),
         "requires_production_codec": true,
         "production_codec_negotiated": session.production_codec_negotiated(),
@@ -105,15 +105,12 @@ fn production_readiness_view(
         "client_media_ready": session.client_media_ready(),
         "production_route_ready": transport_view.production_route_ready(),
         "route_state": transport_view.route_state(),
-        "readiness_blocker": transport_view.readiness_blocker(),
+        "route_readiness_blocker": transport_view.readiness_blocker(),
     })
 }
 
-fn production_readiness_blocked_reason(
-    session: &RemoteDesktopSession,
-    transport_view: &RemoteDesktopTransportView,
-) -> Value {
-    if transport_view.production_ready(session) {
+fn production_readiness_blocked_reason(session: &RemoteDesktopSession) -> Value {
+    if session.production_media_ready() {
         Value::Null
     } else if !session.target_scope_ready() {
         json!("target_scope_not_ready")
@@ -121,12 +118,8 @@ fn production_readiness_blocked_reason(
         json!("production_codec_not_negotiated")
     } else if !session.media_transport_ready() {
         json!("media_transport_not_ready")
-    } else if transport_view.has_route_readiness_blocker() {
-        json!("transport_route_unavailable")
     } else if !session.client_media_ready() {
         json!("client_media_not_presenting")
-    } else if !transport_view.production_route_ready() {
-        json!("transport_route_unavailable")
     } else {
         json!("production_readiness_incomplete")
     }

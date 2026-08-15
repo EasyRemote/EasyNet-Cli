@@ -1702,7 +1702,7 @@ mod tests {
     }
 
     #[test]
-    fn production_readiness_reports_route_blocker_before_client_presentation() {
+    fn production_readiness_reports_client_blocker_and_route_degradation_before_presentation() {
         let epoch = TransportEpoch::new(19);
         let endpoint_ura = direct_webrtc_endpoint_ura("rd-route-before-client");
         let mut session = RemoteDesktopSession::new(test_session_init(
@@ -1745,18 +1745,18 @@ mod tests {
         );
         assert_eq!(
             view["production_readiness"]["blocked_reason"],
-            json!("transport_route_unavailable")
+            json!("client_media_not_presenting")
         );
         assert_eq!(
-            view["production_readiness"]["readiness_blocker"]["unavailable_reason"],
+            view["production_readiness"]["route_readiness_blocker"]["unavailable_reason"],
             json!("host_only_no_nat_or_relay")
         );
         assert_eq!(
-            view["production_readiness"]["readiness_blocker"]["recoverability"],
+            view["production_readiness"]["route_readiness_blocker"]["recoverability"],
             json!("retry_session")
         );
         assert_eq!(
-            view["production_readiness"]["readiness_blocker"]["frontend_action"],
+            view["production_readiness"]["route_readiness_blocker"]["frontend_action"],
             json!("retry_session")
         );
     }

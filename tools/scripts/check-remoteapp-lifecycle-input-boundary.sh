@@ -456,22 +456,22 @@ require 'target_focus_after_loss' "$TARGET_TRACKING" \
   'post-loss focus observations must enter explicit rebind instead of being silently swallowed'
 require 'tracker_routes_post_loss_title_focus_through_explicit_rebind' "$TARGET_TRACKING" \
   'target tracker must test title/focus reappearance through explicit rebind semantics'
-require 'fn contains_window_id\(' "$TARGET" \
-  'application window-set proof must own resolved window membership checks'
-require 'fn resolved_window_count\(' "$TARGET" \
-  'application window-set proof must expose committed set size for drift detection'
-require 'committed_window_set\.contains_window_id\(window\.window_id\)' "$TARGET_OBSERVER" \
-  'application observer must filter host windows through the committed app window-set proof'
-require 'committed_window_set\.resolved_window_count\(\)' "$TARGET_OBSERVER" \
-  'application observer must detect committed app window-set contraction'
-require 'TargetResolutionError::TargetIdentityChanged' "$TARGET_OBSERVER" \
-  'application window-set drift must fail closed as target_identity_changed'
-require 'application_observer_rejects_committed_window_set_drift' "$TARGET_OBSERVER" \
-  'target observer must test committed application window-set expansion/contraction drift'
-require 'application_observation_rejects_same_display_window_set_expansion' "$TARGET_OBSERVER" \
-  'application observer must reject same-display app window-set expansion without rebind consent'
-require 'application_observation_rejects_observer_subset_of_committed_capture_set' "$TARGET_OBSERVER" \
-  'application observer must reject missing committed app windows without silently narrowing capture'
+require 'fn window_set_epoch\(' "$TARGET" \
+  'application window-set proof must expose the recomputed identity epoch'
+require 'ApplicationWindowSetChanged' "$TARGET_TRACKING" \
+  'target tracking must model same-app application window-set changes explicitly'
+require 'update_application_window_set' "$TARGET" \
+  'session-owned target binding must update application window-set state through a domain method'
+require 'AppWindowSetProof::new' "$TARGET_OBSERVER" \
+  'application observer must rederive the current display-scoped app window-set proof'
+require 'TargetObservation::ApplicationWindowSetChanged' "$TARGET_OBSERVER" \
+  'application observer must report same-app window-set drift as a rebind observation'
+require 'application_observer_reports_committed_window_set_drift_as_rebind' "$TARGET_OBSERVER" \
+  'target observer must test committed application window-set expansion/contraction rebind evidence'
+require 'application_observation_rebinds_same_display_window_set_expansion' "$TARGET_OBSERVER" \
+  'application observer must test same-display app window-set expansion rebind evidence'
+require 'application_observation_rebinds_same_app_window_set_subset' "$TARGET_OBSERVER" \
+  'application observer must test same-display app window-set contraction rebind evidence'
 require 'snapshot_observer_reappearance_requires_explicit_rebind_policy' "$TARGET_OBSERVER" \
   'target observer must prove platform-visible target reappearance cannot revive media/input without explicit rebind policy'
 require 'target_reappearance_after_loss_emits_explicit_rebind_failure' "$SESSION" \
@@ -528,7 +528,7 @@ require '&& self\.transport\.client_media_ready\(\)' "$SESSION" \
   'production media readiness must wait for client presenting evidence, not only device sender readiness'
 require '"target_scope_ready": session\.target_scope_ready\(\)' "$VIEW" \
   'public production readiness must expose target scope readiness'
-require '"blocked_reason": production_readiness_blocked_reason\(session, transport_view\)' "$VIEW" \
+require '"blocked_reason": production_readiness_blocked_reason\(session\)' "$VIEW" \
   'public production readiness must expose one typed blocked_reason instead of forcing UI inference'
 require 'fn production_readiness_blocked_reason\(' "$VIEW" \
   'production readiness blocked reason must be centralized in the session view projection'
@@ -618,8 +618,8 @@ require 'host_only_route_keeps_production_offline_after_client_media_presents' "
   'transport tests must prove host-only routes cannot report production online after client media presents'
 require '"production_route_ready": transport_view\.production_route_ready\(\)' "$VIEW" \
   'public production readiness must expose production route readiness'
-require 'transport_route_unavailable' "$VIEW" \
-  'public production readiness must block production online on route-unavailable sessions'
+require '"route_readiness_blocker": transport_view\.readiness_blocker\(\)' "$VIEW" \
+  'public production readiness must carry route degradation separately from the media online predicate'
 require 'summary\["reason_code"\]' "$VIEW_TRANSPORT" \
   'transport tests must assert canonical route degradation reason_code'
 require 'transport_route_unavailable' "$VIEW_TRANSPORT" \

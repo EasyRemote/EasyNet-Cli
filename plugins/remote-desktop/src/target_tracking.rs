@@ -16,7 +16,8 @@
 use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::target::{
-    FrontendAction, RemoteAppTargetBinding, TargetGeometry, TargetResolutionError,
+    AppWindowSetProof, FrontendAction, RemoteAppTargetBinding, TargetGeometry,
+    TargetResolutionError,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,6 +261,13 @@ pub(in crate::daemon::plugins::remote_desktop) enum TargetObservation {
         focused: bool,
         observed_at_ms: u64,
     },
+    ApplicationWindowSetChanged {
+        app_window_set: AppWindowSetProof,
+        geometry: TargetGeometry,
+        target_identity_epoch: u64,
+        target_geometry_revision: u64,
+        observed_at_ms: u64,
+    },
     PermissionRevoked {
         detail: String,
         observed_at_ms: u64,
@@ -390,6 +398,19 @@ impl RemoteAppTargetBindingStateMachine {
                 focused,
                 observed_at_ms,
             } => self.commit_focus(focused, observed_at_ms),
+            TargetObservation::ApplicationWindowSetChanged {
+                app_window_set,
+                geometry,
+                target_identity_epoch,
+                target_geometry_revision,
+                observed_at_ms,
+            } => self.commit_application_window_set(
+                app_window_set,
+                geometry,
+                target_identity_epoch,
+                target_geometry_revision,
+                observed_at_ms,
+            ),
             TargetObservation::PermissionRevoked {
                 detail,
                 observed_at_ms,
@@ -604,6 +625,61 @@ impl RemoteAppTargetBindingStateMachine {
             },
             payload,
         })
+    }
+
+    fn commit_application_window_set(
+        &mut self,
+        app_window_set: AppWindowSetProof,
+        geometry: TargetGeometry,
+        target_identity_epoch: u64,
+        target_geometry_revision: u64,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEvent> {
+        if self.snapshot.status == TargetBindingPhase::Lost {
+            return self.begin_rebinding("application_window_set_after_loss", observed_at_ms);
+        }
+        if self.snapshot.status == TargetBindingPhase::Rebinding {
+            return self.commit_rebind_failed("application_window_set_after_loss", observed_at_ms);
+        }
+        self.clear_pending_lost();
+        let previous_identity_epoch = self.snapshot.target_identity_epoch;
+        let previous_geometry_revision = self.snapshot.target_geometry_revision;
+        if previous_identity_epoch == target_identity_epoch && self.snapshot.geometry == geometry {
+            return None;
+        }
+        let next_geometry_revision = target_geometry_revision.max(previous_geometry_revision + 1);
+        if !self.binding.update_application_window_set(
+            app_window_set.clone(),
+            geometry.clone(),
+            next_geometry_revision,
+        ) {
+            return self.commit_lost(
+                TargetResolutionError::TargetMetadataIncomplete,
+                "application window-set observation cannot update non-application binding"
+                    .to_string(),
+                observed_at_ms,
+            );
+        }
+        self.snapshot.status = TargetBindingPhase::Resolved;
+        self.snapshot.visibility_state = TargetVisibilityState::Visible;
+        self.snapshot.geometry = geometry;
+        self.snapshot.target_identity_epoch = target_identity_epoch;
+        self.snapshot.target_geometry_revision = next_geometry_revision;
+        self.snapshot.diagnostic = self.diagnostic_projection(
+            "resolved",
+            Value::Null,
+            "application_window_set_changed",
+            observed_at_ms,
+        );
+        let mut payload = self.event_payload(
+            "application_window_set_changed",
+            observed_at_ms,
+            Some(previous_geometry_revision),
+        );
+        payload["previous_target_identity_epoch"] = json!(previous_identity_epoch);
+        payload["target_identity_epoch"] = json!(target_identity_epoch);
+        payload["app_window_set"] = app_window_set.to_value();
+        self.coalesced_lifecycle_event("TARGET_REBOUND", payload, observed_at_ms)
     }
 
     fn commit_permission_revoked(

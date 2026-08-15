@@ -734,11 +734,12 @@ mod tests {
                 view["production_readiness"]["production_route_ready"],
                 json!(false)
             );
-            assert_eq!(view["production_media_ready"], json!(false));
-            assert_eq!(view["production_readiness"]["ready"], json!(false));
+            assert_eq!(view["production_media_ready"], json!(true));
+            assert_eq!(view["production_readiness"]["ready"], json!(true));
+            assert_eq!(view["production_readiness"]["blocked_reason"], json!(null));
             assert_eq!(
-                view["production_readiness"]["blocked_reason"],
-                json!("transport_route_unavailable")
+                view["production_readiness"]["route_readiness_blocker"],
+                json!(null)
             );
             assert_eq!(view["transport"]["production_ready"], json!(false));
             assert_eq!(view["transports"][0]["production_ready"], json!(false));

@@ -10,7 +10,7 @@ use crate::daemon::plugins::remote_desktop::constants::ABILITY_WATCH_EVENTS;
 use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::request::{optional_u64_field, require_str};
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
-use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
+use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_audit_access;
 
 /// Handle `remote_desktop.watch_events`.
 pub(in crate::daemon::plugins::remote_desktop) fn handle(
@@ -30,7 +30,13 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                     session_id: session_id.to_string(),
                 }
             })?;
-            ensure_session_control_access(&plugin, ABILITY_WATCH_EVENTS, &env, &args, session)?;
+            ensure_session_control_audit_access(
+                &plugin,
+                ABILITY_WATCH_EVENTS,
+                &env,
+                &args,
+                session,
+            )?;
             let events = session.replay_events_from(from_sequence).into_events();
             if session.is_terminal() {
                 return Ok(StreamSource::Snapshot(events));

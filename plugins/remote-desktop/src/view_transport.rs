@@ -4,11 +4,11 @@
 // File: plugins/remote-desktop/src/view_transport.rs
 // Description: JSON transport projections for remote desktop session views.
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::constants::{
-    ABILITY_ATTACH_SESSION, TRANSPORT_INVOKE_BIDI, TRANSPORT_PREVIEW_STREAM, TRANSPORT_WEBRTC,
-    direct_webrtc_endpoint_ura,
+    direct_webrtc_endpoint_ura, ABILITY_ATTACH_SESSION, TRANSPORT_INVOKE_BIDI,
+    TRANSPORT_PREVIEW_STREAM, TRANSPORT_WEBRTC,
 };
 use crate::daemon::plugins::remote_desktop::input::INPUT_DATA_CHANNEL_LABEL;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
@@ -73,12 +73,6 @@ impl RemoteDesktopTransportView {
 
     pub(in crate::daemon::plugins::remote_desktop) fn production_route_ready(&self) -> bool {
         self.production_route_ready
-    }
-
-    pub(in crate::daemon::plugins::remote_desktop) fn has_route_readiness_blocker(&self) -> bool {
-        self.readiness_blocker
-            .as_ref()
-            .is_some_and(RemoteDesktopTransportReadinessBlocker::is_route)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn production_ready(
@@ -215,10 +209,6 @@ impl RemoteDesktopTransportReadinessBlocker {
             "recoverability": self.recoverability,
             "frontend_action": self.frontend_action,
         })
-    }
-
-    fn is_route(&self) -> bool {
-        self.failure_domain == "transport_route"
     }
 }
 
@@ -429,11 +419,11 @@ fn transport_message(session: &RemoteDesktopSession) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     use super::RemoteDesktopTransportView;
     use crate::daemon::plugins::remote_desktop::constants::{
-        TRANSPORT_WEBRTC, direct_webrtc_endpoint_ura,
+        direct_webrtc_endpoint_ura, TRANSPORT_WEBRTC,
     };
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
     use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;

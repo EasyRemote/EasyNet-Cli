@@ -38,6 +38,18 @@ pub(in crate::daemon::plugins::remote_desktop) fn ensure_session_control_access(
     ensure_session_liveness(plugin, ability, session)
 }
 
+pub(in crate::daemon::plugins::remote_desktop) fn ensure_session_control_audit_access(
+    plugin: &RemoteDesktopPlugin,
+    ability: &'static str,
+    env: &EnvelopeContext,
+    args: &Value,
+    session: &mut RemoteDesktopSession,
+) -> anyhow::Result<()> {
+    ensure_session_control_identity(ability, env, args, session)?;
+    let _ = expire_session_if_needed(plugin, session, now_ms());
+    Ok(())
+}
+
 fn ensure_session_liveness(
     plugin: &RemoteDesktopPlugin,
     ability: &'static str,
@@ -169,7 +181,7 @@ mod tests {
     };
 
     #[test]
-    fn expired_session_rejects_non_end_operations() {
+    fn expired_session_allows_audit_read_and_then_idempotent_end() {
         let _lock = test_lock();
         let plugin = test_plugin();
         reset_store(&plugin);
@@ -198,13 +210,14 @@ mod tests {
             });
         }
 
-        let err = crate::daemon::plugins::remote_desktop::handlers::show_session::handle(
+        let shown = crate::daemon::plugins::remote_desktop::handlers::show_session::handle(
             Arc::clone(&plugin),
             env_for(&ura),
             json!({"session_id": "rd-expired-test", "session_token": token.clone()}),
         )
-        .unwrap_err();
-        assert!(err.to_string().contains(REASON_SESSION_EXPIRED));
+        .unwrap();
+        assert_eq!(shown["state"], json!("closed"));
+        assert_eq!(shown["end_reason"], json!(REASON_SESSION_EXPIRED));
 
         let ended = crate::daemon::plugins::remote_desktop::handlers::end_session::handle(
             Arc::clone(&plugin),
@@ -246,14 +259,14 @@ mod tests {
             });
         }
 
-        let err = crate::daemon::plugins::remote_desktop::handlers::show_session::handle(
+        let shown = crate::daemon::plugins::remote_desktop::handlers::show_session::handle(
             Arc::clone(&plugin),
             env_for(&ura),
             json!({"session_id": "rd-expired-preview-test", "session_token": token}),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(err.to_string().contains(REASON_SESSION_EXPIRED));
+        assert_eq!(shown["end_reason"], json!(REASON_SESSION_EXPIRED));
         assert!(
             *stop_rx.borrow_and_update(),
             "lease expiry must signal the preview worker stop channel"

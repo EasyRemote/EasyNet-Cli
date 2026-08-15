@@ -44,6 +44,7 @@ struct TargetLifecycleEventCoalescer;
 
 fn commit_geometry() {
     geometry_event_type();
+    ApplicationWindowSetChanged;
     "TARGET_PERMISSION_REVOKED";
     "target_title_after_loss";
     "target_focus_after_loss";
@@ -756,15 +757,16 @@ fn serialize_session() {
             "route_state": transport_route_state.clone(),
         },
         "production_readiness": {
-            "blocked_reason": production_readiness_blocked_reason(session, transport_view),
+            "blocked_reason": production_readiness_blocked_reason(session),
             "target_scope_ready": session.target_scope_ready(),
             "production_route_ready": transport_view.production_route_ready(),
+            "route_readiness_blocker": transport_view.readiness_blocker(),
             "route_state": transport_route_state.clone(),
         },
     });
 }
 
-fn production_readiness_blocked_reason(session: &RemoteDesktopSession, transport_view: &RemoteDesktopTransportView) -> Value {
+fn production_readiness_blocked_reason(session: &RemoteDesktopSession) -> Value {
     if session.production_media_ready() {
         Value::Null
     } else if !session.target_scope_ready() {
@@ -775,8 +777,6 @@ fn production_readiness_blocked_reason(session: &RemoteDesktopSession, transport
         json!("media_transport_not_ready")
     } else if !session.client_media_ready() {
         json!("client_media_not_presenting")
-    } else if !transport_view.production_route_ready() {
-        json!("transport_route_unavailable")
     } else {
         json!("production_readiness_incomplete")
     }
@@ -986,14 +986,12 @@ struct InputScopeDecision;
 struct AppWindowSetProof;
 
 impl AppWindowSetProof {
-    fn contains_window_id(&self, window_id: u64) -> bool {
-        true
-    }
-
-    fn resolved_window_count(&self) -> usize {
+    fn window_set_epoch(&self) -> u64 {
         2
     }
 }
+
+fn update_application_window_set() {}
 
 fn input_scope_for_request() -> InputScopeDecision {
     match kind {
@@ -1171,18 +1169,9 @@ fn observe_application() {
     let committed_window_set = binding.committed_app_window_set().unwrap();
     let selected_display_windows = windows;
     let selected_display_window_ids = ids;
-    if selected_display_windows
-        .iter()
-        .any(|window| !committed_window_set.contains_window_id(window.window_id))
-        || selected_display_window_ids
-            .iter()
-            .filter(|window_id| committed_window_set.contains_window_id(**window_id))
-            .count()
-            != committed_window_set.resolved_window_count()
-    {
-        return Some(TargetObservation::Lost {
-            reason: TargetResolutionError::TargetIdentityChanged,
-        });
+    let current_window_set = AppWindowSetProof::new(selected_display_window_ids);
+    if &current_window_set != committed_window_set {
+        return Some(TargetObservation::ApplicationWindowSetChanged {});
     }
 }
 
@@ -1204,13 +1193,13 @@ mod tests {
     fn window_observation_prioritizes_visibility_loss_over_title_or_focus_changes() {}
 
     #[test]
-    fn application_observer_rejects_committed_window_set_drift() {}
+    fn application_observer_reports_committed_window_set_drift_as_rebind() {}
 
     #[test]
-    fn application_observation_rejects_same_display_window_set_expansion() {}
+    fn application_observation_rebinds_same_display_window_set_expansion() {}
 
     #[test]
-    fn application_observation_rejects_observer_subset_of_committed_capture_set() {}
+    fn application_observation_rebinds_same_app_window_set_subset() {}
 
     #[test]
     fn snapshot_observer_reappearance_requires_explicit_rebind_policy() {}
@@ -1536,34 +1525,34 @@ perl -0pi -e 's/tracker_routes_post_loss_title_focus_through_explicit_rebind/tra
 run_fail 'target tracker must test title/focus reappearance through explicit rebind semantics'
 
 write_fixture
-perl -0pi -e 's/fn contains_window_id/fn contains_window_id_removed/' \
+perl -0pi -e 's/fn window_set_epoch/fn window_set_epoch_removed/' \
   "$SANDBOX/plugins/remote-desktop/src/target.rs"
-run_fail 'application window-set proof must own resolved window membership checks'
+run_fail 'application window-set proof must expose the recomputed identity epoch'
 
 write_fixture
-perl -0pi -e 's/window\.window_id/window.unchecked_id/g' \
+perl -0pi -e 's/ApplicationWindowSetChanged/ApplicationWindowSetUnchecked/g' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
-run_fail 'application observer must filter host windows through the committed app window-set proof'
+run_fail 'application observer must report same-app window-set drift as a rebind observation'
 
 write_fixture
-perl -0pi -e 's/resolved_window_count/unchecked_window_count/g' \
+perl -0pi -e 's/AppWindowSetProof::new/AppWindowSetProof::unchecked/g' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
-run_fail 'application observer must detect committed app window-set contraction'
+run_fail 'application observer must rederive the current display-scoped app window-set proof'
 
 write_fixture
-perl -0pi -e 's/application_observer_rejects_committed_window_set_drift/application_observer_allows_window_set_drift/' \
+perl -0pi -e 's/application_observer_reports_committed_window_set_drift_as_rebind/application_observer_allows_window_set_drift/' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
-run_fail 'target observer must test committed application window-set expansion/contraction drift'
+run_fail 'target observer must test committed application window-set expansion/contraction rebind evidence'
 
 write_fixture
-perl -0pi -e 's/application_observation_rejects_same_display_window_set_expansion/application_observation_allows_same_display_window_set_expansion/' \
+perl -0pi -e 's/application_observation_rebinds_same_display_window_set_expansion/application_observation_allows_same_display_window_set_expansion/' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
-run_fail 'application observer must reject same-display app window-set expansion without rebind consent'
+run_fail 'application observer must test same-display app window-set expansion rebind evidence'
 
 write_fixture
-perl -0pi -e 's/application_observation_rejects_observer_subset_of_committed_capture_set/application_observation_allows_observer_subset_of_committed_capture_set/' \
+perl -0pi -e 's/application_observation_rebinds_same_app_window_set_subset/application_observation_allows_observer_subset_of_committed_capture_set/' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
-run_fail 'application observer must reject missing committed app windows without silently narrowing capture'
+run_fail 'application observer must test same-display app window-set contraction rebind evidence'
 
 write_fixture
 perl -0pi -e 's/snapshot_observer_reappearance_requires_explicit_rebind_policy/snapshot_observer_reappearance_revives_stale_media/' \
@@ -1941,7 +1930,7 @@ perl -0pi -e 's/"target_scope_ready": session\.target_scope_ready\(\),//' \
 run_fail 'public production readiness must expose target scope readiness'
 
 write_fixture
-perl -0pi -e 's/"blocked_reason": production_readiness_blocked_reason\(session, transport_view\),//' \
+perl -0pi -e 's/"blocked_reason": production_readiness_blocked_reason\(session\),//' \
   "$SANDBOX/plugins/remote-desktop/src/view.rs"
 run_fail 'public production readiness must expose one typed blocked_reason instead of forcing UI inference'
 

@@ -141,16 +141,16 @@ require '"remote_ice_candidates_elided": true' "$SESSION_SIGNALING" \
   'PERF-05 bounded signaling view must keep remote ICE candidate rows elided'
 require 'session\.signaling_view\(transport_route_state\.clone\(\)\)' "$VIEW" \
   'PERF-05 public session view must consume the bounded signaling projection'
-require 'production_readiness_reports_route_blocker_before_client_presentation' "$SESSION" \
-  'PERF-05 production readiness must report route blockers before client presentation blockers'
+require 'production_readiness_reports_client_blocker_and_route_degradation_before_presentation' "$SESSION" \
+  'PERF-05 production readiness must report client presentation blockers while preserving route degradation evidence'
 require 'struct RemoteDesktopTransportReadinessBlocker' "$VIEW_TRANSPORT" \
   'PERF-05 transport route blockers must be centralized in a transport readiness blocker projection'
 require '"readiness_blocker": self\.readiness_blocker\(\)' "$VIEW_TRANSPORT" \
   'PERF-05 transport summary and metadata must project the canonical readiness blocker'
-require '"readiness_blocker": transport_view\.readiness_blocker\(\)' "$VIEW" \
-  'PERF-05 production_readiness must reuse the transport readiness blocker'
-require 'view\["production_readiness"\]\["readiness_blocker"\]\["frontend_action"\]' "$SESSION" \
-  'PERF-05 production readiness tests must prove route blockers publish frontend recovery action'
+require '"route_readiness_blocker": transport_view\.readiness_blocker\(\)' "$VIEW" \
+  'PERF-05 production_readiness must expose the transport route blocker without making it the media readiness blocker'
+require 'view\["production_readiness"\]\["route_readiness_blocker"\]\["frontend_action"\]' "$SESSION" \
+  'PERF-05 production readiness tests must prove route blockers publish frontend recovery action separately'
 require 'summary\["readiness_blocker"\]\["frontend_action"\]' "$VIEW_TRANSPORT" \
   'PERF-05 transport view tests must prove blockers publish frontend recovery action'
 require 'transports\[0\]\["metadata"\]\["readiness_blocker"\]' "$VIEW_TRANSPORT" \

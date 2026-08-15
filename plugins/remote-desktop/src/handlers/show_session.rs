@@ -10,7 +10,7 @@ use crate::daemon::plugins::remote_desktop::constants::ABILITY_SHOW_SESSION;
 use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::request::require_str;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
-use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
+use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_audit_access;
 use crate::daemon::plugins::remote_desktop::view::serialize_session;
 
 /// Handle `remote_desktop.show_session`.
@@ -29,7 +29,13 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                     session_id: session_id.to_string(),
                 }
             })?;
-            ensure_session_control_access(&plugin, ABILITY_SHOW_SESSION, &env, &args, session)?;
+            ensure_session_control_audit_access(
+                &plugin,
+                ABILITY_SHOW_SESSION,
+                &env,
+                &args,
+                session,
+            )?;
             Ok(serialize_session(session))
         })
 }

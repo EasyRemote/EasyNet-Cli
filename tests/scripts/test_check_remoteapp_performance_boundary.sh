@@ -159,9 +159,9 @@ RS
 
 cat >"$SB/plugins/remote-desktop/src/session.rs" <<'RS'
 #[test]
-fn production_readiness_reports_route_blocker_before_client_presentation() {
+fn production_readiness_reports_client_blocker_and_route_degradation_before_presentation() {
     assert_eq!(
-        view["production_readiness"]["readiness_blocker"]["frontend_action"],
+        view["production_readiness"]["route_readiness_blocker"]["frontend_action"],
         json!("retry_session")
     );
 }
@@ -171,7 +171,7 @@ cat >"$SB/plugins/remote-desktop/src/view.rs" <<'RS'
 fn serialize_session(session: Session, transport_route_state: Value) {
     let _ = session.signaling_view(transport_route_state.clone());
     json!({
-        "readiness_blocker": transport_view.readiness_blocker(),
+        "route_readiness_blocker": transport_view.readiness_blocker(),
     });
 }
 RS
@@ -466,7 +466,7 @@ grep -q "bounded signaling projection" /tmp/check-remoteapp-performance-boundary
 
 perl -0pi -e 's/let remote_ice_candidates = session\.remote_ice_candidates\(\);/let _ = session.signaling_view(transport_route_state.clone());/' \
   "$SB/plugins/remote-desktop/src/view.rs"
-perl -0pi -e 's/production_readiness_reports_route_blocker_before_client_presentation/production_readiness_reports_client_before_route/' \
+perl -0pi -e 's/production_readiness_reports_client_blocker_and_route_degradation_before_presentation/production_readiness_reports_client_before_route/' \
   "$SB/plugins/remote-desktop/src/session.rs"
 
 set +e
@@ -477,11 +477,11 @@ set +e
 rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "missing route-before-client readiness regression should exit 1 (got $rc)"
-grep -q "route blockers before client presentation blockers" /tmp/check-remoteapp-performance-boundary-route-before-client.out || fail "expected PERF-05 route-before-client failure"
+grep -q "client presentation blockers while preserving route degradation evidence" /tmp/check-remoteapp-performance-boundary-route-before-client.out || fail "expected PERF-05 route-degradation evidence failure"
 
-perl -0pi -e 's/production_readiness_reports_client_before_route/production_readiness_reports_route_blocker_before_client_presentation/' \
+perl -0pi -e 's/production_readiness_reports_client_before_route/production_readiness_reports_client_blocker_and_route_degradation_before_presentation/' \
   "$SB/plugins/remote-desktop/src/session.rs"
-perl -0pi -e 's/view\["production_readiness"\]\["readiness_blocker"\]\["frontend_action"\]/view["production_readiness"]["readiness_blocker"]["missing_frontend_action"]/' \
+perl -0pi -e 's/view\["production_readiness"\]\["route_readiness_blocker"\]\["frontend_action"\]/view["production_readiness"]["route_readiness_blocker"]["missing_frontend_action"]/' \
   "$SB/plugins/remote-desktop/src/session.rs"
 
 set +e
@@ -496,9 +496,9 @@ grep -q "frontend recovery action" /tmp/check-remoteapp-performance-boundary-rea
 
 cat >"$SB/plugins/remote-desktop/src/session.rs" <<'RS'
 #[test]
-fn production_readiness_reports_route_blocker_before_client_presentation() {
+fn production_readiness_reports_client_blocker_and_route_degradation_before_presentation() {
     assert_eq!(
-        view["production_readiness"]["readiness_blocker"]["frontend_action"],
+        view["production_readiness"]["route_readiness_blocker"]["frontend_action"],
         json!("retry_session")
     );
 }

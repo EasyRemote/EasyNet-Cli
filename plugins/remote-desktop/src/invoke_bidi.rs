@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch};
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
@@ -19,12 +19,12 @@ use crate::daemon::plugins::remote_desktop::constants::{
     REASON_RESOURCE_UNAVAILABLE, TRANSPORT_INVOKE_BIDI,
 };
 use crate::daemon::plugins::remote_desktop::input::{
-    InputTransportGuard, RemoteDesktopInputFrame, apply_input_frame_with_policy,
-    current_session_input_policy, input_policy_for_binding, parse_input_frame,
-    unsupported_input_channel_reason,
+    apply_input_frame_with_policy, current_session_input_policy, input_policy_for_binding,
+    parse_input_frame, unsupported_input_channel_reason, InputTransportGuard,
+    RemoteDesktopInputFrame,
 };
 use crate::daemon::plugins::remote_desktop::media::encode::{
-    BuiltinH264StreamTerminal, BuiltinH264TerminalCallback, spawn_builtin_h264_stream,
+    spawn_builtin_h264_stream, BuiltinH264StreamTerminal, BuiltinH264TerminalCallback,
 };
 use crate::daemon::plugins::remote_desktop::request::AttachEncoding;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;

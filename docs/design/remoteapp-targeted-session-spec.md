@@ -213,7 +213,7 @@ Minimum target projection:
   "resource_ura": "easynet:///r/localhost/resource/device.abc/streams/window.macos.123",
   "type": "window",
   "display_name": "Cursor - EasyNet-Cli",
-  "owner_agent": "easynet:///r/localhost/agent/device.abc.media",
+  "resource_owner_agent": "easynet:///r/localhost/agent/device.abc.media",
   "host_device_ura": "easynet:///r/localhost/device/abc",
   "binding": "local_device",
   "metadata": {
@@ -238,6 +238,11 @@ Minimum target projection:
   }
 }
 ```
+
+`resource_owner_agent` names the inventory owner that discovered the selectable
+resource. It is not the `remote_desktop.*` invocation callee. The remote desktop
+callee remains the device-sponsored RemoteDesktop SystemAgent; the selected
+display/window/application Resource URA is the invocation subject.
 
 ## 7. Target binding
 

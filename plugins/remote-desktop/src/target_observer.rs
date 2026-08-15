@@ -18,8 +18,8 @@ use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session::TargetMediaSourceLost;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::target::{
-    NativeAppIdentityCandidate, RemoteAppTargetBinding, RemoteDesktopTargetKind, TargetGeometry,
-    TargetResolutionError,
+    AppWindowSetProof, NativeAppIdentityCandidate, RemoteAppTargetBinding, RemoteDesktopTargetKind,
+    TargetGeometry, TargetResolutionError,
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::{
     TargetObservation, TargetTrackerSnapshot, TargetVisibilityState,
@@ -344,24 +344,9 @@ fn observe_application(
         .iter()
         .map(|window| window.window_id)
         .collect();
-    if selected_display_windows
-        .iter()
-        .any(|window| !committed_window_set.contains_window_id(window.window_id))
-        || selected_display_window_ids
-            .iter()
-            .filter(|window_id| committed_window_set.contains_window_id(**window_id))
-            .count()
-            != committed_window_set.resolved_window_count()
-    {
-        return Some(lost(
-            TargetResolutionError::TargetIdentityChanged,
-            "bound application display-scoped window set no longer matches the committed session proof",
-        ));
-    }
     let visible_selected_display_windows: Vec<&ObservedWindow> = selected_display_windows
         .iter()
         .copied()
-        .filter(|window| committed_window_set.contains_window_id(window.window_id))
         .filter(|window| window.visibility_state == TargetVisibilityState::Visible)
         .collect();
     if visible_selected_display_windows.is_empty() {
@@ -385,6 +370,21 @@ fn observe_application(
             "bound application window set has incomplete geometry in host target snapshot",
         ));
     };
+    let current_window_set = AppWindowSetProof::new(
+        expected_display,
+        locator.bundle_id().map(str::to_string),
+        locator.pid(),
+        selected_display_window_ids.into_iter().collect(),
+    );
+    if &current_window_set != committed_window_set {
+        return Some(TargetObservation::ApplicationWindowSetChanged {
+            target_identity_epoch: current_window_set.window_set_epoch(),
+            app_window_set: current_window_set,
+            geometry,
+            target_geometry_revision: snapshot.target_geometry_revision() + 1,
+            observed_at_ms: now_ms(),
+        });
+    }
     geometry_observation(snapshot, geometry)
 }
 
@@ -1136,7 +1136,7 @@ mod tests {
     }
 
     #[test]
-    fn application_observer_rejects_committed_window_set_drift() {
+    fn application_observer_reports_committed_window_set_drift_as_rebind() {
         let binding = application_binding();
         let snapshot = TargetTrackerSnapshot::from_binding(&binding);
         let extra_window = HostTargetSnapshot {
@@ -1150,16 +1150,19 @@ mod tests {
 
         let extra_observation =
             observe_binding_against_host_snapshot(&binding, &snapshot, &extra_window)
-                .expect("window-set drift must fail closed");
+                .expect("window-set drift must be reported");
         match extra_observation {
-            TargetObservation::Lost { reason, detail, .. } => {
-                assert_eq!(reason, TargetResolutionError::TargetIdentityChanged);
-                assert!(
-                    detail.contains("window set"),
-                    "failure detail must name application window-set drift; got {detail}"
-                );
+            TargetObservation::ApplicationWindowSetChanged {
+                app_window_set,
+                geometry,
+                target_identity_epoch,
+                ..
+            } => {
+                assert_eq!(app_window_set.resolved_window_count(), 3);
+                assert_eq!(target_identity_epoch, app_window_set.window_set_epoch());
+                assert_eq!(geometry.width, Some(330.0));
             }
-            other => panic!("window-set expansion must not project as geometry update: {other:?}"),
+            other => panic!("window-set expansion must project as app rebind: {other:?}"),
         }
 
         let missing_window = HostTargetSnapshot {
@@ -1168,18 +1171,19 @@ mod tests {
         };
         let missing_observation =
             observe_binding_against_host_snapshot(&binding, &snapshot, &missing_window)
-                .expect("missing committed app window must fail closed");
+                .expect("missing committed app window must be reported");
         match missing_observation {
-            TargetObservation::Lost { reason, detail, .. } => {
-                assert_eq!(reason, TargetResolutionError::TargetIdentityChanged);
-                assert!(
-                    detail.contains("window set"),
-                    "failure detail must name application window-set drift; got {detail}"
-                );
+            TargetObservation::ApplicationWindowSetChanged {
+                app_window_set,
+                geometry,
+                target_identity_epoch,
+                ..
+            } => {
+                assert_eq!(app_window_set.resolved_window_count(), 1);
+                assert_eq!(target_identity_epoch, app_window_set.window_set_epoch());
+                assert_eq!(geometry.width, Some(100.0));
             }
-            other => {
-                panic!("window-set contraction must not project as geometry update: {other:?}")
-            }
+            other => panic!("window-set contraction must project as app rebind: {other:?}"),
         }
     }
 
@@ -1683,18 +1687,25 @@ mod tests {
         .expect("application observation");
 
         match observation {
-            TargetObservation::GeometryChanged { geometry, .. } => {
+            TargetObservation::ApplicationWindowSetChanged {
+                app_window_set,
+                geometry,
+                target_identity_epoch,
+                ..
+            } => {
+                assert_eq!(app_window_set.resolved_window_count(), 2);
+                assert_eq!(target_identity_epoch, app_window_set.window_set_epoch());
                 assert_eq!(geometry.x, Some(10.0));
                 assert_eq!(geometry.y, Some(20.0));
                 assert_eq!(geometry.width, Some(190.0));
                 assert_eq!(geometry.height, Some(80.0));
             }
-            other => panic!("expected app window-set union geometry, got {other:?}"),
+            other => panic!("expected app window-set rebind with union geometry, got {other:?}"),
         }
     }
 
     #[test]
-    fn application_observation_rejects_same_display_window_set_expansion() {
+    fn application_observation_rebinds_same_display_window_set_expansion() {
         let binding = application_binding();
         let snapshot = TargetTrackerSnapshot::from_binding(&binding);
         let observation = observe_binding_against_host_snapshot(
@@ -1754,21 +1765,24 @@ mod tests {
         .expect("application window-set expansion observation");
 
         match observation {
-            TargetObservation::Lost { reason, detail, .. } => {
-                assert_eq!(reason, TargetResolutionError::TargetIdentityChanged);
-                assert!(
-                    detail.contains("window set"),
-                    "failure detail must name application window-set drift; got {detail}"
-                );
+            TargetObservation::ApplicationWindowSetChanged {
+                app_window_set,
+                geometry,
+                target_identity_epoch,
+                ..
+            } => {
+                assert_eq!(app_window_set.resolved_window_count(), 3);
+                assert_eq!(target_identity_epoch, app_window_set.window_set_epoch());
+                assert_eq!(geometry.width, Some(270.0));
             }
             other => panic!(
-                "same-display application window-set expansion must require rebind/new consent, got {other:?}"
+                "same-display application window-set expansion must produce rebind evidence, got {other:?}"
             ),
         }
     }
 
     #[test]
-    fn application_observation_rejects_observer_subset_of_committed_capture_set() {
+    fn application_observation_rebinds_same_app_window_set_subset() {
         let binding = ResourceEntryTargetResolver
             .resolve_for_session(
                 "remote_desktop.create_session",
@@ -1827,15 +1841,18 @@ mod tests {
         .expect("application subset observation");
 
         match observation {
-            TargetObservation::Lost { reason, detail, .. } => {
-                assert_eq!(reason, TargetResolutionError::TargetIdentityChanged);
-                assert!(
-                    detail.contains("window set"),
-                    "failure detail must name missing committed app window-set proof; got {detail}"
-                );
+            TargetObservation::ApplicationWindowSetChanged {
+                app_window_set,
+                geometry,
+                target_identity_epoch,
+                ..
+            } => {
+                assert_eq!(app_window_set.resolved_window_count(), 1);
+                assert_eq!(target_identity_epoch, app_window_set.window_set_epoch());
+                assert_eq!(geometry.width, Some(100.0));
             }
             other => panic!(
-                "observer subset of committed app window set must require rebind/new consent, got {other:?}"
+                "same app/display window-set drift must update the application binding, got {other:?}"
             ),
         }
     }
