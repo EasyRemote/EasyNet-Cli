@@ -230,6 +230,8 @@ require 'target_loss_rejects_late_client_media_state_without_degrading_session' 
   'E2E-09 must test late client media state cannot degrade a suspended target-loss session'
 require 'report_client_media_state\(epoch, "stalled"\)' "$SESSION" \
   'E2E-09 must exercise the late client media-state path after target loss'
+require_multiline 'm/all\(\|event\| event\["event_type"\] != json!\("SESSION_DEGRADED"\)\)/s' "$SESSION" \
+  'target-domain media source loss tests must assert SESSION_DEGRADED is not emitted'
 require 'lost_observation_returns_media_source_stop_effect_after_debounce' "$TARGET_OBSERVER" \
   'E2E-09 must test observer-debounced target loss returns media stop effect'
 require_multiline 'm/fn observe_window\(.+?owner_matches.+?window\.visibility_state != TargetVisibilityState::Visible.+?snapshot\.title\(\).+?snapshot\.focused\(\)/s' "$TARGET_OBSERVER" \
@@ -258,6 +260,36 @@ require '"failure_domain": "target"' "$SESSION_EVENTS" \
   'MEDIA_SOURCE_LOST must be a target-domain failure'
 require '"media_transport_ready": false' "$SESSION_EVENTS" \
   'MEDIA_SOURCE_LOST must mark media transport unavailable'
+require 'fn session_degraded\(' "$SESSION_EVENTS" \
+  'session events must project explicit SESSION_DEGRADED lifecycle rows'
+require '"SESSION_DEGRADED"' "$SESSION_EVENTS" \
+  'SESSION_DEGRADED event type must be emitted by the session event builder'
+require 'fn client_media_reason_code\(' "$SESSION_EVENTS" \
+  'client media degradation reason_code derivation must be centralized'
+require '"client_media_stalled"' "$SESSION_EVENTS" \
+  'client media stalled degradation must have a typed reason_code'
+require_multiline '/fn session_degraded\((?:(?!fn client_media_reason_code).)*"recoverability": "retry_session"/s' "$SESSION_EVENTS" \
+  'SESSION_DEGRADED must expose a retry recovery class'
+require '"failure_domain": "client_media"' "$SESSION_EVENTS" \
+  'SESSION_DEGRADED must stay separate from target and transport failure domains'
+require '"frontend_action": FrontendAction::RetrySession\.as_str\(\)' "$SESSION_EVENTS" \
+  'SESSION_DEGRADED must carry an actionable frontend recovery hint'
+require '"primary_phase": primary_phase' "$SESSION_EVENTS" \
+  'SESSION_DEGRADED must expose the transport primary phase that caused degradation'
+require 'session_degraded_payload_projects_recovery_context' "$SESSION_EVENTS" \
+  'session event tests must prove SESSION_DEGRADED recovery payload shape'
+require 'session_events::session_degraded' "$SESSION" \
+  'session aggregate must emit SESSION_DEGRADED from lifecycle health projection'
+require 'client_media_stall_emits_session_degraded_recovery_event' "$SESSION" \
+  'session aggregate tests must prove client media stall emits SESSION_DEGRADED'
+require 'client_state_index < degraded_index' "$SESSION" \
+  'client media stall test must prove the cause event precedes SESSION_DEGRADED'
+require 'degraded\["reason_code"\], json!\("client_media_stalled"\)' "$SESSION" \
+  'SESSION_DEGRADED aggregate test must assert top-level reason_code'
+require 'degraded\["recoverability"\], json!\("retry_session"\)' "$SESSION" \
+  'SESSION_DEGRADED aggregate test must assert top-level recoverability'
+require 'degraded\["payload"\]\["primary_phase"\], json!\("degraded"\)' "$SESSION" \
+  'SESSION_DEGRADED aggregate test must assert degraded transport phase'
 require 'enum WebRtcFailureEventKind' "$SESSION_EVENTS" \
   'WebRTC failure projection must use explicit SPEC event taxonomy'
 require 'Self::MediaSourceLost => "MEDIA_SOURCE_LOST"' "$SESSION_EVENTS" \
@@ -274,11 +306,11 @@ require 'fn webrtc_transport_failure_context' "$SESSION_EVENTS" \
   'direct WebRTC transport failures must share one canonical recovery context helper'
 require '"reason_code": TargetResolutionError::TransportRouteUnavailable\.as_str\(\)' "$SESSION_EVENTS" \
   'direct WebRTC transport failure context must publish canonical transport_route_unavailable reason_code'
-require '"recoverability": "retry_session"' "$SESSION_EVENTS" \
+require_multiline '/fn webrtc_transport_failure_context\((?:(?!fn session_created).)*"recoverability": "retry_session"/s' "$SESSION_EVENTS" \
   'direct WebRTC transport failure context must publish retry_session recoverability'
 require '"failure_domain": "transport"' "$SESSION_EVENTS" \
   'direct WebRTC transport failure context must identify the transport domain'
-require 'FrontendAction::RetrySession\.as_str\(\)' "$SESSION_EVENTS" \
+require_multiline '/fn webrtc_transport_failure_context\((?:(?!fn session_created).)*FrontendAction::RetrySession\.as_str\(\)/s' "$SESSION_EVENTS" \
   'direct WebRTC transport failure context must publish retry_session recovery action'
 require 'webrtc_transport_failure_context\(\)' "$SESSION_STORE" \
   'direct WebRTC default failure path must not emit empty transport failure context'

@@ -873,6 +873,13 @@ impl RemoteDesktopSession {
             state,
             epoch.value(),
         ));
+        if let Some(phase @ PrimaryMediaPhase::Degraded) = self.transport.primary_phase() {
+            self.push_projected_event(session_events::session_degraded(
+                state,
+                epoch.value(),
+                phase.as_str(),
+            ));
+        }
         true
     }
 
@@ -1289,6 +1296,12 @@ mod tests {
             events[media_source_lost_index]["payload"]["frontend_action"],
             json!("refresh_targets")
         );
+        assert!(
+            events
+                .iter()
+                .all(|event| event["event_type"] != json!("SESSION_DEGRADED")),
+            "target-domain media source loss must not be collapsed into session degradation"
+        );
     }
 
     #[test]
@@ -1323,6 +1336,73 @@ mod tests {
             !session.activate_input_for_transport_epoch(TransportEpoch::new(12)),
             "stale or unrelated transport epochs cannot activate input"
         );
+    }
+
+    #[test]
+    fn client_media_stall_emits_session_degraded_recovery_event() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-client-media-stalled",
+            "easynet:///r/acme/resource/display.test",
+            vec!["webrtc".into()],
+        ));
+        let epoch = TransportEpoch::new(29);
+
+        session.begin_webrtc_negotiation(epoch);
+        session.mark_webrtc_media_sending(
+            epoch,
+            direct_webrtc_endpoint_ura("rd-client-media-stalled"),
+        );
+        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert_eq!(session.state(), RemoteDesktopState::Connected);
+        assert_eq!(
+            session.transport_state()["primary"],
+            json!("client_presenting")
+        );
+
+        assert!(session.report_client_media_state(epoch, "stalled"));
+        assert_eq!(session.state(), RemoteDesktopState::Degraded);
+        assert_eq!(session.transport_state()["primary"], json!("degraded"));
+        assert!(session.media_transport_ready());
+        assert!(!session.client_media_ready());
+        assert!(!session.production_media_ready());
+
+        let events = session.events();
+        let client_state_index = events
+            .iter()
+            .position(|event| event["event_type"] == json!("CLIENT_MEDIA_STALLED"))
+            .expect("CLIENT_MEDIA_STALLED event");
+        let degraded_index = events
+            .iter()
+            .position(|event| event["event_type"] == json!("SESSION_DEGRADED"))
+            .expect("SESSION_DEGRADED event");
+        assert!(
+            client_state_index < degraded_index,
+            "client media state cause must precede lifecycle degradation projection"
+        );
+
+        let stalled = &events[client_state_index];
+        assert_eq!(stalled["reason_code"], json!("client_media_stalled"));
+        assert_eq!(stalled["recoverability"], json!("retry_session"));
+        assert_eq!(stalled["transport_epoch"], json!(epoch.value()));
+
+        let degraded = &events[degraded_index];
+        assert_eq!(degraded["state"], json!("degraded"));
+        assert_eq!(
+            degraded["event_type_proto"],
+            json!("REMOTE_DESKTOP_EVENT_STATE_CHANGED")
+        );
+        assert_eq!(degraded["reason_code"], json!("client_media_stalled"));
+        assert_eq!(degraded["recoverability"], json!("retry_session"));
+        assert_eq!(degraded["transport_epoch"], json!(epoch.value()));
+        assert_eq!(degraded["payload"]["failure_domain"], json!("client_media"));
+        assert_eq!(
+            degraded["payload"]["frontend_action"],
+            json!("retry_session")
+        );
+        assert_eq!(degraded["payload"]["primary_phase"], json!("degraded"));
+        assert_eq!(degraded["payload"]["media_transport_ready"], json!(true));
+        assert_eq!(degraded["payload"]["client_media_ready"], json!(false));
+        assert_eq!(degraded["terminal"], json!(false));
     }
 
     #[test]

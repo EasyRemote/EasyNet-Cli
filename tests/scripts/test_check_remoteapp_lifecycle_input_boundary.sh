@@ -148,6 +148,11 @@ fn push_target_tracking_event() {
     payload["transport_epoch"] = self.transport.active_epoch();
 }
 
+fn report_client_media_state() {
+    session_events::client_media_state_changed(state, epoch.value());
+    session_events::session_degraded(state, epoch.value(), "degraded");
+}
+
 fn production_media_ready() -> bool {
     self.target.binding().production_scope_ready()
         && self.signaling.production_codec_negotiated()
@@ -184,6 +189,7 @@ mod tests {
         assert_eq!(events[media_source_lost_index]["target_identity_epoch"], json!(session.target_binding().target_identity_epoch()));
         assert_eq!(events[media_source_lost_index]["media_source_epoch"], json!(session.target_binding().media_source_epoch()));
         assert_eq!(session.target_tracking_state()["input_enabled"], json!(false));
+        assert!(events.iter().all(|event| event["event_type"] != json!("SESSION_DEGRADED")));
     }
 
     #[test]
@@ -227,6 +233,25 @@ mod tests {
         assert_eq!(session.state(), RemoteDesktopState::Suspended);
         assert_eq!(session.transport_state()["primary"], json!("media_source_lost"));
         assert_eq!(session.transport_state()["device_sending"], json!(false));
+        assert!(events.iter().all(|event| event["event_type"] != json!("SESSION_DEGRADED")));
+    }
+
+    #[test]
+    fn client_media_stall_emits_session_degraded_recovery_event() {
+        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.report_client_media_state(epoch, "stalled"));
+        assert_eq!(session.state(), RemoteDesktopState::Degraded);
+        assert_eq!(session.transport_state()["primary"], json!("degraded"));
+        assert!(!session.client_media_ready());
+        assert!(!session.production_media_ready());
+        let client_state_index = 1;
+        let degraded_index = 2;
+        assert!(client_state_index < degraded_index);
+        let degraded = event;
+        assert_eq!(degraded["reason_code"], json!("client_media_stalled"));
+        assert_eq!(degraded["recoverability"], json!("retry_session"));
+        assert_eq!(degraded["payload"]["primary_phase"], json!("degraded"));
+        assert_eq!(degraded["payload"]["frontend_action"], json!("retry_session"));
     }
 
     #[test]
@@ -429,6 +454,35 @@ fn media_source_lost(binding: &RemoteAppTargetBinding) {
     });
 }
 
+fn client_media_reason_code(state: &str) -> &'static str {
+    match state {
+        "presenting" => "client_media_presenting",
+        "detached" => "client_media_detached",
+        _ => "client_media_stalled",
+    }
+}
+
+fn client_media_state_changed(state: &str) {
+    json!({
+        "reason_code": client_media_reason_code(state),
+        "recoverability": if state == "presenting" { "continue" } else { "retry_session" },
+    });
+}
+
+fn session_degraded(client_state: &str, transport_epoch: u64, primary_phase: &str) {
+    json!({
+        "event_type": "SESSION_DEGRADED",
+        "reason_code": client_media_reason_code(client_state),
+        "recoverability": "retry_session",
+        "failure_domain": "client_media",
+        "frontend_action": FrontendAction::RetrySession.as_str(),
+        "transport_kind": TRANSPORT_WEBRTC,
+        "transport_epoch": transport_epoch,
+        "primary_phase": primary_phase,
+        "client_media_ready": false,
+    });
+}
+
 fn transport_blocked() {
     let blocker = RemoteDesktopTransportBlocker::from_webrtc_error(reason);
     json!({
@@ -456,6 +510,9 @@ fn session_closed_payload_projects_terminal_reason_code() {}
 
 #[test]
 fn session_expired_payload_projects_terminal_reason_code() {}
+
+#[test]
+fn session_degraded_payload_projects_recovery_context() {}
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_media.rs" <<'RS'
@@ -1401,6 +1458,31 @@ write_fixture
 perl -0pi -e 's/\.suspend\(\)/.mark_degraded()/g' \
   "$SANDBOX/plugins/remote-desktop/src/session.rs"
 run_fail 'target loss must suspend the session lifecycle'
+
+write_fixture
+perl -0pi -e 's/\n    session_events::session_degraded\(state, epoch\.value\(\), "degraded"\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate must emit SESSION_DEGRADED from lifecycle health projection'
+
+write_fixture
+perl -0pi -e 's/client_media_stall_emits_session_degraded_recovery_event/client_media_stall_missing_lifecycle_projection/' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate tests must prove client media stall emits SESSION_DEGRADED'
+
+write_fixture
+perl -0pi -e 's/assert!\(events\.iter\(\)\.all\(\|event\| event\["event_type"\] != json!\("SESSION_DEGRADED"\)\)\);//g' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'target-domain media source loss tests must assert SESSION_DEGRADED is not emitted'
+
+write_fixture
+perl -0pi -e 's/"failure_domain": "client_media"/"failure_domain": "target"/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'SESSION_DEGRADED must stay separate from target and transport failure domains'
+
+write_fixture
+perl -0pi -e 's/session_degraded_payload_projects_recovery_context/session_degraded_payload_missing_recovery_context/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'session event tests must prove SESSION_DEGRADED recovery payload shape'
 
 write_fixture
 perl -0pi -e 's/self\.target\.binding\(\)\.production_scope_ready\(\)\s*&&\s*//' \

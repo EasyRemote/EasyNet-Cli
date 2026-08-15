@@ -345,6 +345,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn client_media_state_changed(
     state: &str,
     transport_epoch: u64,
 ) -> RemoteDesktopEventProjection {
+    let reason_code = client_media_reason_code(state);
     (
         if state == "presenting" {
             "TRANSPORT_CONNECTED"
@@ -356,8 +357,50 @@ pub(in crate::daemon::plugins::remote_desktop) fn client_media_state_changed(
             "client_state": state,
             "client_media_ready": state == "presenting",
             "transport_epoch": transport_epoch,
+            "reason_code": reason_code,
+            "recoverability": client_media_recoverability(state),
         }),
     )
+}
+
+/// Build the non-terminal lifecycle projection emitted when the client media
+/// plane stops presenting while the device media source remains selected.
+pub(in crate::daemon::plugins::remote_desktop) fn session_degraded(
+    client_state: &str,
+    transport_epoch: u64,
+    primary_phase: &str,
+) -> RemoteDesktopEventProjection {
+    (
+        "SESSION_DEGRADED",
+        json!({
+            "reason_code": client_media_reason_code(client_state),
+            "recoverability": "retry_session",
+            "failure_domain": "client_media",
+            "frontend_action": FrontendAction::RetrySession.as_str(),
+            "transport_kind": TRANSPORT_WEBRTC,
+            "transport_epoch": transport_epoch,
+            "primary_phase": primary_phase,
+            "client_state": client_state,
+            "media_transport_ready": true,
+            "client_media_ready": false,
+        }),
+    )
+}
+
+fn client_media_reason_code(state: &str) -> &'static str {
+    match state {
+        "presenting" => "client_media_presenting",
+        "detached" => "client_media_detached",
+        _ => "client_media_stalled",
+    }
+}
+
+fn client_media_recoverability(state: &str) -> &'static str {
+    if state == "presenting" {
+        "continue"
+    } else {
+        "retry_session"
+    }
 }
 
 /// Build a target-scoped media source loss event.
@@ -432,7 +475,7 @@ mod tests {
 
     use super::{
         capture_target_resolved, media_source_lost, preview_transport_connected, session_closed,
-        session_closing, session_created, session_expired, transport_blocked,
+        session_closing, session_created, session_degraded, session_expired, transport_blocked,
         webrtc_failed_with_context, webrtc_sender_ready, webrtc_transport_failure_context,
         WebRtcFailureEventKind,
     };
@@ -621,6 +664,23 @@ mod tests {
         assert_eq!(payload["transport_kind"], json!("webrtc"));
         assert_eq!(payload["media_transport_ready"], json!(false));
         assert_eq!(payload["transport_epoch"], json!(9));
+    }
+
+    #[test]
+    fn session_degraded_payload_projects_recovery_context() {
+        let (event_type, payload) = session_degraded("stalled", 13, "degraded");
+
+        assert_eq!(event_type, "SESSION_DEGRADED");
+        assert_eq!(payload["reason_code"], json!("client_media_stalled"));
+        assert_eq!(payload["recoverability"], json!("retry_session"));
+        assert_eq!(payload["failure_domain"], json!("client_media"));
+        assert_eq!(payload["frontend_action"], json!("retry_session"));
+        assert_eq!(payload["transport_kind"], json!("webrtc"));
+        assert_eq!(payload["transport_epoch"], json!(13));
+        assert_eq!(payload["primary_phase"], json!("degraded"));
+        assert_eq!(payload["client_state"], json!("stalled"));
+        assert_eq!(payload["media_transport_ready"], json!(true));
+        assert_eq!(payload["client_media_ready"], json!(false));
     }
 
     #[test]
