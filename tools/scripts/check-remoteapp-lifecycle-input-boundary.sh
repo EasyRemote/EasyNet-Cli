@@ -593,6 +593,16 @@ reject 'webrtc://direct/|easynet-rd://|ura://endpoint' "$REMOTE_ROOT" \
   'remote desktop endpoint_ura evidence must be EasyNet URA only'
 reject '"endpoint_ura": "ability:' "$REMOTE_ROOT" \
   'diagnostic ability names must not be projected through endpoint_ura'
+reject 'screen\.subscribe' "$REMOTE_ROOT" \
+  'remote desktop diagnostic preview must not project the unrelated screen.subscribe ability'
+require 'preview_ability": ABILITY_ATTACH_SESSION' "$VIEW_TRANSPORT" \
+  'transport summary must project remote_desktop.attach as the diagnostic preview ability'
+require 'preview_ability": ABILITY_ATTACH_SESSION' "$SESSION_EVENTS" \
+  'session-created event must project remote_desktop.attach as the diagnostic preview ability'
+require 'transport_summary_projects_remote_desktop_attach_as_preview_ability' "$VIEW_TRANSPORT" \
+  'transport tests must prove preview_ability uses the remote desktop attach ability'
+require 'session_created_projects_remote_desktop_attach_as_preview_ability' "$SESSION_EVENTS" \
+  'event tests must prove preview_ability uses the remote desktop attach ability'
 
 # Consent is a session aggregate sub-state, not an immutable profile field. The
 # current public grant remains visible for audit, but input/media gates must read

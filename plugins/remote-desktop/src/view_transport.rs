@@ -7,7 +7,8 @@
 use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::constants::{
-    direct_webrtc_endpoint_ura, TRANSPORT_INVOKE_BIDI, TRANSPORT_PREVIEW_STREAM, TRANSPORT_WEBRTC,
+    direct_webrtc_endpoint_ura, ABILITY_ATTACH_SESSION, TRANSPORT_INVOKE_BIDI,
+    TRANSPORT_PREVIEW_STREAM, TRANSPORT_WEBRTC,
 };
 use crate::daemon::plugins::remote_desktop::input::INPUT_DATA_CHANNEL_LABEL;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
@@ -78,7 +79,7 @@ impl RemoteDesktopTransportView {
             "production_route_ready": self.production_route_ready(),
             "preferred": session.transport_preferences(),
             "endpoint_ura": self.endpoint_ura.clone(),
-            "preview_ability": "screen.subscribe",
+            "preview_ability": ABILITY_ATTACH_SESSION,
             "message": self.message,
             "reason_code": self.reason_code.clone(),
             "unavailable_reason": self.unavailable_reason.clone(),
@@ -385,6 +386,23 @@ mod tests {
             json!("webrtc_media_first_frame_pending")
         );
         assert_eq!(summary["primary_ready"], json!(false));
+    }
+
+    #[test]
+    fn transport_summary_projects_remote_desktop_attach_as_preview_ability() {
+        let session = RemoteDesktopSession::new(test_session_init(
+            "rd-preview-ability",
+            "easynet:///r/acme/resource/display.01",
+            vec![TRANSPORT_WEBRTC.to_string()],
+        ));
+
+        let view = RemoteDesktopTransportView::from_session(&session);
+        let summary = view.summary(&session);
+        let transports = view.transport_list(&session);
+
+        assert_eq!(summary["preview_ability"], json!("remote_desktop.attach"));
+        assert_eq!(transports[1]["endpoint_ura"], Value::Null);
+        assert_eq!(transports[2]["endpoint_ura"], Value::Null);
     }
 
     #[test]

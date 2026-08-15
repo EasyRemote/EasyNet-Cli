@@ -406,7 +406,7 @@ fn session_created() {
     json!({
         "transport_kind": TRANSPORT_WEBRTC,
         "media_transport_ready": false,
-        "preview_ability": "screen.subscribe",
+        "preview_ability": ABILITY_ATTACH_SESSION,
         "reason_code": "session_created",
         "recoverability": "continue",
     });
@@ -525,6 +525,9 @@ fn session_expired_payload_projects_terminal_reason_code() {}
 
 #[test]
 fn session_degraded_payload_projects_recovery_context() {}
+
+#[test]
+fn session_created_projects_remote_desktop_attach_as_preview_ability() {}
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_media.rs" <<'RS'
@@ -590,6 +593,12 @@ fn direct_endpoint_ura(session: &RemoteDesktopSession) {
     direct_webrtc_endpoint_ura(session.session_id());
 }
 
+fn diagnostic_preview_summary() {
+    json!({
+        "preview_ability": ABILITY_ATTACH_SESSION,
+    });
+}
+
 #[test]
 fn host_only_candidates_are_not_reported_as_nat_or_relay_ready() {}
 
@@ -606,6 +615,9 @@ fn turn_relay_hostname_containing_easynet_is_not_easynet_relay() {}
 fn srflx_without_relay_reports_typed_relay_unavailable_reason() {
     assert_eq!(summary["reason_code"], json!("transport_route_unavailable"));
 }
+
+#[test]
+fn transport_summary_projects_remote_desktop_attach_as_preview_ability() {}
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/session_store.rs" <<'RS'
@@ -1076,6 +1088,36 @@ write_fixture
 perl -0pi -e 's#"relay_unavailable";#"relay_unavailable"; "webrtc://direct/legacy";#' \
   "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
 run_fail 'remote desktop endpoint_ura evidence must be EasyNet URA only'
+
+write_fixture
+perl -0pi -e 's/ABILITY_ATTACH_SESSION/"screen.subscribe"/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'remote desktop diagnostic preview must not project the unrelated screen.subscribe ability'
+
+write_fixture
+perl -0pi -e 's/ABILITY_ATTACH_SESSION/"screen.subscribe"/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'remote desktop diagnostic preview must not project the unrelated screen.subscribe ability'
+
+write_fixture
+perl -0pi -e 's/preview_ability": ABILITY_ATTACH_SESSION/preview_ability": "remote_desktop.attach"/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'transport summary must project remote_desktop.attach as the diagnostic preview ability'
+
+write_fixture
+perl -0pi -e 's/preview_ability": ABILITY_ATTACH_SESSION/preview_ability": "remote_desktop.attach"/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'session-created event must project remote_desktop.attach as the diagnostic preview ability'
+
+write_fixture
+perl -0pi -e 's/transport_summary_projects_remote_desktop_attach_as_preview_ability/transport_summary_projects_screen_subscribe_as_preview_ability/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'transport tests must prove preview_ability uses the remote desktop attach ability'
+
+write_fixture
+perl -0pi -e 's/session_created_projects_remote_desktop_attach_as_preview_ability/session_created_projects_screen_subscribe_as_preview_ability/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'event tests must prove preview_ability uses the remote desktop attach ability'
 
 write_fixture
 perl -0pi -e 's/tracker_commits_move_resize_and_lost_without_rebinding/tracker_misses_regression/' \

@@ -7,7 +7,9 @@
 
 use serde_json::{json, Value};
 
-use crate::daemon::plugins::remote_desktop::constants::{TRANSPORT_INVOKE_BIDI, TRANSPORT_WEBRTC};
+use crate::daemon::plugins::remote_desktop::constants::{
+    ABILITY_ATTACH_SESSION, TRANSPORT_INVOKE_BIDI, TRANSPORT_WEBRTC,
+};
 use crate::daemon::plugins::remote_desktop::target::{
     FrontendAction, RemoteAppTargetBinding, TargetResolutionError,
 };
@@ -49,7 +51,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn session_created() -> RemoteDes
         json!({
             "transport_kind": TRANSPORT_WEBRTC,
             "media_transport_ready": false,
-            "preview_ability": "screen.subscribe",
+            "preview_ability": ABILITY_ATTACH_SESSION,
             "reason_code": "session_created",
             "recoverability": "continue",
         }),
@@ -487,6 +489,13 @@ mod tests {
 
         assert_eq!(preview_payload["transport_kind"], json!("invoke_bidi"));
         assert_eq!(webrtc_payload["transport_kind"], json!("webrtc"));
+    }
+
+    #[test]
+    fn session_created_projects_remote_desktop_attach_as_preview_ability() {
+        let (_, payload) = session_created();
+
+        assert_eq!(payload["preview_ability"], json!("remote_desktop.attach"));
     }
 
     #[test]
