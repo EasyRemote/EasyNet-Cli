@@ -59,8 +59,10 @@ pub enum RemoteDesktopInputFrame {
     #[serde(rename = "key")]
     Key(KeyInputFrame),
     #[serde(rename = "clipboard")]
+    #[allow(dead_code)]
     Clipboard(ClipboardInputFrame),
     #[serde(rename = "file_drop")]
+    #[allow(dead_code)]
     FileDrop(FileDropInputFrame),
 }
 
@@ -128,12 +130,14 @@ pub struct KeyInputFrame {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(dead_code)]
 pub struct ClipboardInputFrame {
     pub text: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(dead_code)]
 pub struct FileDropInputFrame {
     pub files: Vec<String>,
 }
@@ -832,6 +836,7 @@ fn map_axis(
 }
 
 fn validate_input_frame(frame: &RemoteDesktopInputFrame) -> anyhow::Result<()> {
+    reject_unsupported_input_channel_frame(frame)?;
     match frame {
         RemoteDesktopInputFrame::Pointer(pointer) => {
             match pointer.action.as_str() {
@@ -865,22 +870,17 @@ fn validate_input_frame(frame: &RemoteDesktopInputFrame) -> anyhow::Result<()> {
                 anyhow::bail!("key input frame must include key or code")
             }
         }
-        RemoteDesktopInputFrame::Clipboard(clipboard) => {
-            if clipboard.text.len() > MAX_INPUT_FRAME_BYTES {
-                anyhow::bail!("clipboard input frame is too large")
-            }
-        }
-        RemoteDesktopInputFrame::FileDrop(file_drop) => {
-            if file_drop.files.is_empty() {
-                anyhow::bail!("file drop frame must include at least one path")
-            }
-            if file_drop.files.len() > 64 {
-                anyhow::bail!("file drop frame contains too many paths")
-            }
-            if file_drop.files.iter().any(|path| path.trim().is_empty()) {
-                anyhow::bail!("file drop frame paths must be non-empty")
-            }
-        }
+        RemoteDesktopInputFrame::Clipboard(_) | RemoteDesktopInputFrame::FileDrop(_) => {}
+    }
+    Ok(())
+}
+
+fn reject_unsupported_input_channel_frame(frame: &RemoteDesktopInputFrame) -> anyhow::Result<()> {
+    if let Some(reason) = unsupported_input_channel_reason(frame.kind().as_policy_key()) {
+        anyhow::bail!(
+            "unsupported remote desktop input data-channel frame type {:?}: {reason}; use split abilities",
+            frame.kind()
+        )
     }
     Ok(())
 }
@@ -1351,14 +1351,6 @@ mod tests {
             ),
             (r#"{"type":"clipboard"}"#, "missing field `text`"),
             (r#"{"type":"file_drop"}"#, "missing field `files`"),
-            (
-                r#"{"type":"file_drop","files":[]}"#,
-                "file drop frame must include at least one path",
-            ),
-            (
-                r#"{"type":"file_drop","files":["/tmp/a","  "]}"#,
-                "file drop frame paths must be non-empty",
-            ),
         ] {
             let err = parse_input_frame(raw)
                 .expect_err("schema-incomplete input frame must fail closed")
@@ -1708,7 +1700,9 @@ mod tests {
         let pointer =
             parse_input_frame(r#"{"type":"pointer","action":"move","x":10,"y":20}"#).unwrap();
         let key = parse_input_frame(r#"{"type":"key","action":"down","code":"KeyA"}"#).unwrap();
-        let clipboard = parse_input_frame(r#"{"type":"clipboard","text":"hello"}"#).unwrap();
+        let clipboard = RemoteDesktopInputFrame::Clipboard(ClipboardInputFrame {
+            text: "hello".to_string(),
+        });
 
         let pointer_denied = apply_input_frame_with_policy(
             &json!({
@@ -1751,8 +1745,12 @@ mod tests {
 
     #[test]
     fn clipboard_and_file_drop_frames_are_explicitly_unsupported_on_input_channel() {
-        let clipboard = parse_input_frame(r#"{"type":"clipboard","text":"hello"}"#).unwrap();
-        let file_drop = parse_input_frame(r#"{"type":"file_drop","files":["/tmp/a"]}"#).unwrap();
+        let clipboard = RemoteDesktopInputFrame::Clipboard(ClipboardInputFrame {
+            text: "hello".to_string(),
+        });
+        let file_drop = RemoteDesktopInputFrame::FileDrop(FileDropInputFrame {
+            files: vec!["/tmp/a".to_string()],
+        });
 
         let clipboard_outcome =
             apply_input_frame_with_policy(&json!({"clipboard_enabled": true}), &clipboard);
@@ -1776,6 +1774,26 @@ mod tests {
         assert_eq!(
             unsupported_input_channel_reason("file_drop"),
             Some("file_drop_input_unsupported")
+        );
+    }
+
+    #[test]
+    fn parse_input_frame_rejects_clipboard_and_file_drop_before_policy_application() {
+        let clipboard = parse_input_frame(r#"{"type":"clipboard","text":"hello"}"#).unwrap_err();
+        let file_drop =
+            parse_input_frame(r#"{"type":"file_drop","files":["/tmp/a"]}"#).unwrap_err();
+
+        assert!(
+            clipboard
+                .to_string()
+                .contains("clipboard_input_unsupported"),
+            "clipboard frames must fail the input data-channel validation boundary"
+        );
+        assert!(
+            file_drop
+                .to_string()
+                .contains("file_drop_input_unsupported"),
+            "file-drop frames must fail the input data-channel validation boundary"
         );
     }
 

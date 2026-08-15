@@ -803,6 +803,12 @@ fn input_policy_reject_reason() -> Option<&'static str> {
     None
 }
 
+fn reject_unsupported_input_channel_frame() {}
+
+fn validate_input_frame() {
+    reject_unsupported_input_channel_frame(frame)?;
+}
+
 fn apply_input_frame_with_policy() {
     if let Some(reason) = input_policy_reject_reason(input_policy, frame.kind().as_policy_key()) {
         return InputApplyOutcome::rejected(reason);
@@ -860,6 +866,9 @@ mod tests {
         assert_eq!(view_only_key.reason, Some("input_scope_unsupported"));
         assert_eq!(clipboard_outcome.reason, Some("clipboard_input_unsupported"));
     }
+
+    #[test]
+    fn parse_input_frame_rejects_clipboard_and_file_drop_before_policy_application() {}
 
     #[test]
     fn maps_window_relative_pointer_to_global_screen_point() {
@@ -1841,6 +1850,16 @@ write_fixture
 perl -0pi -e 's/apply_input_frame_with_policy_is_the_policy_enforcement_boundary/apply_input_frame_policy_boundary_missing/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
 run_fail 'input tests must prove apply_input_frame_with_policy is the policy enforcement boundary'
+
+write_fixture
+perl -0pi -e 's/reject_unsupported_input_channel_frame\(frame\)\?;//' \
+  "$SANDBOX/plugins/remote-desktop/src/input.rs"
+run_fail 'input frame validation must reject unsupported rich input before policy application'
+
+write_fixture
+perl -0pi -e 's/parse_input_frame_rejects_clipboard_and_file_drop_before_policy_application/parse_input_frame_accepts_rich_input/' \
+  "$SANDBOX/plugins/remote-desktop/src/input.rs"
+run_fail 'input parser tests must prove clipboard/file-drop fail before policy application'
 
 write_fixture
 perl -0pi -e 's/current_session_input_policy/static_input_policy/' \

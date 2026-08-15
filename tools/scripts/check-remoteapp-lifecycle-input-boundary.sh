@@ -738,12 +738,18 @@ require 'fn input_policy_for_scope\(' "$INPUT" \
   'input policy must centralize scope-based disablement'
 require 'fn input_policy_reject_reason\(' "$INPUT" \
   'input rejection reason must be centralized for datachannel and bidi paths'
+require 'fn reject_unsupported_input_channel_frame\(' "$INPUT" \
+  'unsupported rich input frames must be rejected at the input data-channel validation boundary'
+require_multiline 'm/fn validate_input_frame\([^}]+?reject_unsupported_input_channel_frame\(frame\)\?/s' "$INPUT" \
+  'input frame validation must reject unsupported rich input before policy application'
 require 'fn apply_input_frame_with_policy\(' "$INPUT" \
   'input frame application must expose a single policy-enforced application boundary'
 require_multiline 'm/fn apply_input_frame_with_policy\([^}]+?input_policy_reject_reason\(input_policy, frame\.kind\(\)\.as_policy_key\(\)\)/s' "$INPUT" \
   'input frame application must enforce centralized input policy before OS injection'
 require 'apply_input_frame_with_policy_is_the_policy_enforcement_boundary' "$INPUT" \
   'input tests must prove apply_input_frame_with_policy is the policy enforcement boundary'
+require 'parse_input_frame_rejects_clipboard_and_file_drop_before_policy_application' "$INPUT" \
+  'input parser tests must prove clipboard/file-drop fail before policy application'
 require 'InputScope::ViewOnly => \{' "$INPUT" \
   'view-only input policy branch must exist'
 require 'disable_input_policy_key\(&mut map, "keyboard_enabled"\)' "$INPUT" \
