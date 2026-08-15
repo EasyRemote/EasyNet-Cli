@@ -588,10 +588,26 @@ impl RemoteAppTargetBindingStateMachine {
             "display_topology_changed",
             observed_at_ms,
         );
-        let mut payload = self.event_payload("display_topology_changed", observed_at_ms, None);
+        let reason = if selected_display_available {
+            "display_topology_changed"
+        } else {
+            TargetResolutionError::TargetDisplayUnavailable.as_str()
+        };
+        let mut payload = self.event_payload(reason, observed_at_ms, None);
+        payload["detail"] = json!("display_topology_changed");
         payload["previous_display_ids"] = json!(previous_display_ids);
         payload["available_display_ids"] = json!(self.snapshot.available_display_ids);
         payload["selected_display_available"] = json!(selected_display_available);
+        let payload = if selected_display_available {
+            payload
+        } else {
+            target_failure_payload(
+                payload,
+                TargetResolutionError::TargetDisplayUnavailable
+                    .frontend_action()
+                    .as_str(),
+            )
+        };
         Some(TargetTrackingEvent {
             event_type: "DISPLAY_TOPOLOGY_CHANGED",
             payload,
@@ -1247,6 +1263,50 @@ mod tests {
             focus_tracker.snapshot().to_value()["input_enabled"],
             json!(false)
         );
+    }
+
+    #[test]
+    fn display_topology_loss_projects_target_failure_recovery() {
+        let binding = window_binding();
+        let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding);
+
+        let topology_changed = tracker
+            .commit_observation(TargetObservation::DisplayTopologyChanged {
+                available_display_ids: vec![99, 42, 42],
+                selected_display_available: false,
+                observed_at_ms: 30,
+            })
+            .expect("selected display loss emits topology event");
+
+        assert_eq!(topology_changed.event_type(), "DISPLAY_TOPOLOGY_CHANGED");
+        assert_eq!(
+            topology_changed.payload()["reason_code"],
+            json!("target_display_unavailable")
+        );
+        assert_eq!(
+            topology_changed.payload()["detail"],
+            json!("display_topology_changed")
+        );
+        assert_eq!(
+            topology_changed.payload()["failure_domain"],
+            json!("target")
+        );
+        assert_eq!(
+            topology_changed.payload()["frontend_action"],
+            json!("show_unsupported")
+        );
+        assert_eq!(topology_changed.payload()["target_status"], json!("stale"));
+        assert_eq!(topology_changed.payload()["input_enabled"], json!(false));
+        assert_eq!(
+            topology_changed.payload()["selected_display_available"],
+            json!(false)
+        );
+        assert_eq!(
+            topology_changed.payload()["available_display_ids"],
+            json!([42, 99])
+        );
+        assert_eq!(tracker.snapshot().to_value()["status"], json!("stale"));
+        assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(false));
     }
 
     #[test]

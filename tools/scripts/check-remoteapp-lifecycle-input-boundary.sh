@@ -260,6 +260,12 @@ require 'events\[target_lost_index\]\["payload"\]\["frontend_action"\]' "$SESSIO
   'E2E-09 must assert TARGET_LOST carries frontend recovery action'
 require 'events\[target_lost_index\]\["payload"\]\["failure_domain"\]' "$SESSION" \
   'E2E-09 must assert TARGET_LOST is a target-domain failure'
+require 'display_topology_loss_projects_target_failure_recovery' "$TARGET_TRACKING" \
+  'display topology loss must have target-domain failure recovery coverage'
+require_multiline 'm/TargetResolutionError::TargetDisplayUnavailable\s*\.frontend_action\(\)/s' "$TARGET_TRACKING" \
+  'selected display loss must use canonical target-display-unavailable frontend action'
+require 'json!\("target_display_unavailable"\)' "$TARGET_TRACKING" \
+  'display topology loss test must assert target_display_unavailable reason code'
 require '"TARGET_REBIND_FAILED"' "$TARGET_TRACKING" \
   'post-loss target observations must emit an explicit rebind failure when no Rebinding policy exists'
 require 'explicit_rebind_required' "$TARGET_TRACKING" \

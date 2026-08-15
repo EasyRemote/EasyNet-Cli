@@ -45,10 +45,13 @@ fn commit_geometry() {
     "target_focus_after_loss";
     payload["failure_domain"] = json!("target");
     target_failure_payload();
+    TargetResolutionError::TargetDisplayUnavailable.frontend_action();
     if target_lost {
         "TARGET_REBIND_FAILED";
         "explicit_rebind_required";
+        "DISPLAY_TOPOLOGY_CHANGED";
         json!({
+            "target_display_unavailable": true,
             "target_status": "lost",
             "input_enabled": false,
         });
@@ -75,6 +78,11 @@ mod tests {
 
     #[test]
     fn tracker_routes_post_loss_title_focus_through_explicit_rebind() {}
+
+    #[test]
+    fn display_topology_loss_projects_target_failure_recovery() {
+        assert_eq!(topology_changed.payload()["reason_code"], json!("target_display_unavailable"));
+    }
 }
 RS
 
@@ -811,6 +819,16 @@ write_fixture
 perl -0pi -e 's/assert_eq!\(events\[target_lost_index\]\["payload"\]\["frontend_action"\], json!\("refresh_targets"\)\);//' \
   "$SANDBOX/plugins/remote-desktop/src/session.rs"
 run_fail 'E2E-09 must assert TARGET_LOST carries frontend recovery action'
+
+write_fixture
+perl -0pi -e 's/display_topology_loss_projects_target_failure_recovery/display_topology_loss_missing_recovery/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'display topology loss must have target-domain failure recovery coverage'
+
+write_fixture
+perl -0pi -e 's/json!\("target_display_unavailable"\)/json!("display_topology_changed")/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'display topology loss test must assert target_display_unavailable reason code'
 
 write_fixture
 perl -0pi -e 's/if window\.visibility_state != TargetVisibilityState::Visible \{\n        return Some\(TargetObservation::VisibilityChanged \{\n            visibility_state: window\.visibility_state,\n        \}\);\n    \}\n    if snapshot\.title\(\) != window\.title\.as_deref\(\)/if snapshot.title() != window.title.as_deref()/' \
