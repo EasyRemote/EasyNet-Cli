@@ -120,10 +120,10 @@ fn production_readiness_blocked_reason(
         json!("production_codec_not_negotiated")
     } else if !session.media_transport_ready() {
         json!("media_transport_not_ready")
-    } else if !session.client_media_ready() {
-        json!("client_media_not_presenting")
     } else if !transport_view.production_route_ready() {
         json!("transport_route_unavailable")
+    } else if !session.client_media_ready() {
+        json!("client_media_not_presenting")
     } else {
         json!("production_readiness_incomplete")
     }

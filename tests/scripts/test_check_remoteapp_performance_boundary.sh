@@ -157,6 +157,11 @@ fn assert_current_thread_unlocked(stage: &str) {
 }
 RS
 
+cat >"$SB/plugins/remote-desktop/src/session.rs" <<'RS'
+#[test]
+fn production_readiness_reports_route_blocker_before_client_presentation() {}
+RS
+
 cat >"$SB/plugins/remote-desktop/src/view.rs" <<'RS'
 fn serialize_session(session: Session, transport_route_state: Value) {
     let _ = session.signaling_view(transport_route_state.clone());
@@ -432,6 +437,21 @@ grep -q "bounded signaling projection" /tmp/check-remoteapp-performance-boundary
 
 perl -0pi -e 's/let remote_ice_candidates = session\.remote_ice_candidates\(\);/let _ = session.signaling_view(transport_route_state.clone());/' \
   "$SB/plugins/remote-desktop/src/view.rs"
+perl -0pi -e 's/production_readiness_reports_route_blocker_before_client_presentation/production_readiness_reports_client_before_route/' \
+  "$SB/plugins/remote-desktop/src/session.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-route-before-client.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing route-before-client readiness regression should exit 1 (got $rc)"
+grep -q "route blockers before client presentation blockers" /tmp/check-remoteapp-performance-boundary-route-before-client.out || fail "expected PERF-05 route-before-client failure"
+
+perl -0pi -e 's/production_readiness_reports_client_before_route/production_readiness_reports_route_blocker_before_client_presentation/' \
+  "$SB/plugins/remote-desktop/src/session.rs"
 perl -0pi -e 's/const MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE: u64 = 8;//' \
   "$SB/plugins/remote-desktop/src/input.rs"
 

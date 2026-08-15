@@ -1698,6 +1698,54 @@ mod tests {
     }
 
     #[test]
+    fn production_readiness_reports_route_blocker_before_client_presentation() {
+        let epoch = TransportEpoch::new(19);
+        let endpoint_ura = direct_webrtc_endpoint_ura("rd-route-before-client");
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-route-before-client",
+            "easynet:///r/acme/resource/display.test",
+            vec!["webrtc".into()],
+        ));
+
+        session.begin_webrtc_negotiation(epoch);
+        session
+            .set_local_webrtc_answer(
+                epoch,
+                json!({"type": "answer", "sdp": "v=0"}),
+                "sck-native",
+                true,
+                endpoint_ura.clone(),
+            )
+            .expect("local answer records");
+        session
+            .record_local_ice_candidate(json!({
+                "candidate": "candidate:1 1 UDP 2122252543 127.0.0.1 50000 typ host",
+                "sdpMid": "0",
+                "sdpMLineIndex": 0
+            }))
+            .expect("local host candidate records");
+        session.mark_webrtc_media_sending(epoch, endpoint_ura);
+
+        assert!(session.production_codec_negotiated());
+        assert!(session.media_transport_ready());
+        assert!(!session.client_media_ready());
+
+        let view = serialize_session(&session);
+        assert_eq!(
+            view["production_readiness"]["production_route_ready"],
+            json!(false)
+        );
+        assert_eq!(
+            view["production_readiness"]["route_state"]["route_class"],
+            json!("host_only")
+        );
+        assert_eq!(
+            view["production_readiness"]["blocked_reason"],
+            json!("transport_route_unavailable")
+        );
+    }
+
+    #[test]
     fn target_loss_rejects_late_client_media_state_without_degrading_session() {
         let mut session = RemoteDesktopSession::new(test_session_init(
             "rd-target-loss-late-client-state",

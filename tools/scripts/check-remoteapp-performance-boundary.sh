@@ -37,6 +37,7 @@ REQUEST="$ROOT/plugins/remote-desktop/src/request.rs"
 HANDLERS="$ROOT/plugins/remote-desktop/src/handlers/mod.rs"
 WATCH_EVENTS="$ROOT/plugins/remote-desktop/src/handlers/watch_events.rs"
 SESSION_SIGNALING="$ROOT/plugins/remote-desktop/src/session_signaling.rs"
+SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
 SESSION_STORE="$ROOT/plugins/remote-desktop/src/session_store.rs"
 VIEW="$ROOT/plugins/remote-desktop/src/view.rs"
 SDP="$ROOT/plugins/remote-desktop/src/sdp.rs"
@@ -139,6 +140,8 @@ require '"remote_ice_candidates_elided": true' "$SESSION_SIGNALING" \
   'PERF-05 bounded signaling view must keep remote ICE candidate rows elided'
 require 'session\.signaling_view\(transport_route_state\.clone\(\)\)' "$VIEW" \
   'PERF-05 public session view must consume the bounded signaling projection'
+require 'production_readiness_reports_route_blocker_before_client_presentation' "$SESSION" \
+  'PERF-05 production readiness must report route blockers before client presentation blockers'
 reject 'let remote_ice_candidates = session\.remote_ice_candidates\(\)' "$VIEW" \
   'PERF-05 public session view must not manually clone remote ICE candidates'
 reject 'let local_ice_candidates = session\.local_ice_candidates\(\)' "$VIEW" \
