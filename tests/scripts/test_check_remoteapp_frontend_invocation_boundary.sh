@@ -225,6 +225,17 @@ function remoteDesktopTargetTrackingFromValue(value: Record<string, unknown> | u
     inputEnabled: value?.input_enabled === true,
   }
 }
+
+export function remoteDesktopTargetRecoveryMessage(view: RemoteDesktopView): string | undefined {
+  return view.latestTargetDiagnostic?.frontendAction
+}
+
+export function remoteDesktopProductionBlockedMessage(view: RemoteDesktopView): string {
+  const reason = remoteDesktopTargetRecoveryMessage(view)
+    ?? view.productionBlockedReason
+    ?? 'native_media_plugin_required'
+  return reason
+}
 TS
 
 cat >"$FRONTEND_SRC/lib/api/remote-desktop-protocol.test.ts" <<'TS'
@@ -233,6 +244,12 @@ it('projects target diagnostics and tracking state from the runtime session view
     latest_target_diagnostic: { frontend_action: 'refresh_targets' },
     target_tracking: { input_enabled: false },
   }).latestTargetDiagnostic.frontendAction).toBe('refresh_targets')
+})
+
+it('does not treat ordinary view-only input state as target recovery failure', () => {
+  expect(remoteDesktopTargetRecoveryMessage({
+    targetTracking: { inputEnabled: false },
+  })).toBeUndefined()
 })
 TS
 
@@ -358,6 +375,15 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   exit 1
 fi
 perl -0pi -e "s/    productionBlockedReason: productionReadiness\\?\\.blockedReason \\?\\? stringField\\(productionGate, 'reason'\\),/    productionBlockedReason: productionReadiness?.blockedReason ?? stringField(productionGate, 'reason'),\\n    latestTargetDiagnostic: remoteDesktopTargetDiagnosticFromValue(objectField(result, 'latest_target_diagnostic')),\\n    targetTracking: remoteDesktopTargetTrackingFromValue(objectField(result, 'target_tracking')),/" \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
+
+perl -0pi -e 's/const reason = remoteDesktopTargetRecoveryMessage\(view\)\n    \?\? view\.productionBlockedReason/const reason = view.productionBlockedReason/' \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted production blocked message without target recovery priority" >&2
+  exit 1
+fi
+perl -0pi -e 's/const reason = view\.productionBlockedReason/const reason = remoteDesktopTargetRecoveryMessage(view)\n    ?? view.productionBlockedReason/' \
   "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
 
 perl -0pi -e 's/productionReady: result\?\.production_media_ready === true \|\| productionReadiness\?\.ready === true/productionReady: productionGate?.ready === true || mediaBackends.some(isRemoteDesktopProductionBackend)/' \

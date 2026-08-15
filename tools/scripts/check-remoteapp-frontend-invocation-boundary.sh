@@ -176,6 +176,10 @@ require 'frontendAction' "$PROTOCOL" \
   'frontend must expose target diagnostic frontend_action for recovery UI decisions'
 require 'inputEnabled' "$PROTOCOL" \
   'frontend must expose target tracking input_enabled so target loss cannot appear interactive'
+require 'remoteDesktopTargetRecoveryMessage' "$PROTOCOL" \
+  'frontend must derive target-domain recovery messages from runtime target diagnostics'
+require_multiline 'm/const reason = remoteDesktopTargetRecoveryMessage\(view\)\s*\?\?\s*view\.productionBlockedReason/s' "$PROTOCOL" \
+  'frontend production blocked messages must prefer runtime target recovery diagnostics'
 
 require 'requires an explicit remote desktop subject' "$INVOCATION_TEST" \
   'frontend invocation tests must cover missing remote desktop subject failures'
@@ -187,6 +191,8 @@ require 'reports missing remote desktop session subject before projection fallba
   'frontend store tests must prove create_session subject_ura is checked before projection'
 require 'projects target diagnostics and tracking state from the runtime session view' "$PROTOCOL_TEST" \
   'frontend protocol tests must cover latest target diagnostic and tracking projection'
+require 'does not treat ordinary view-only input state as target recovery failure' "$PROTOCOL_TEST" \
+  'frontend protocol tests must prove view-only input state is not misreported as target loss'
 require 'keeps base media controls available when remote desktop target refresh fails' "$ACCESS_TEST" \
   'frontend access tests must prove remote target failure does not disable base media'
 
