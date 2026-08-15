@@ -50,6 +50,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn session_created() -> RemoteDes
             "transport_kind": TRANSPORT_WEBRTC,
             "media_transport_ready": false,
             "preview_ability": "screen.subscribe",
+            "reason_code": "session_created",
+            "recoverability": "continue",
         }),
     )
 }
@@ -62,6 +64,15 @@ pub(in crate::daemon::plugins::remote_desktop) fn capture_target_resolved(
     (
         "CAPTURE_TARGET_RESOLVED",
         json!({
+            "subject_ura": binding.subject_ura(),
+            "binding_id": binding.binding_id(),
+            "binding_epoch": binding.binding_epoch(),
+            "previous_target_identity_epoch": Value::Null,
+            "target_identity_epoch": binding.target_identity_epoch(),
+            "target_geometry_revision": binding.target_geometry_revision(),
+            "media_source_epoch": binding.media_source_epoch(),
+            "reason_code": "capture_target_resolved",
+            "recoverability": "continue",
             "target_binding": binding.to_value(),
             "scope_audit": binding.scope_audit_value(),
             "latest_target_diagnostic": binding.latest_target_diagnostic_value(),
@@ -420,9 +431,10 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
 
     use super::{
-        media_source_lost, preview_transport_connected, session_closed, session_closing,
-        session_expired, transport_blocked, webrtc_failed_with_context, webrtc_sender_ready,
-        webrtc_transport_failure_context, WebRtcFailureEventKind,
+        capture_target_resolved, media_source_lost, preview_transport_connected, session_closed,
+        session_closing, session_created, session_expired, transport_blocked,
+        webrtc_failed_with_context, webrtc_sender_ready, webrtc_transport_failure_context,
+        WebRtcFailureEventKind,
     };
 
     #[test]
@@ -442,6 +454,60 @@ mod tests {
         assert_eq!(payload["reason"], json!("caller_ended"));
         assert_eq!(payload["reason_code"], json!("caller_ended"));
         assert_eq!(payload["recoverability"], json!("closing"));
+    }
+
+    #[test]
+    fn session_created_payload_projects_initial_reason_code() {
+        let (event_type, payload) = session_created();
+
+        assert_eq!(event_type, "SESSION_CREATED");
+        assert_eq!(payload["transport_kind"], json!("webrtc"));
+        assert_eq!(payload["media_transport_ready"], json!(false));
+        assert_eq!(payload["reason_code"], json!("session_created"));
+        assert_eq!(payload["recoverability"], json!("continue"));
+    }
+
+    #[test]
+    fn capture_target_resolved_payload_projects_initial_binding_context() {
+        let init = test_session_init(
+            "rd-capture-target-resolved",
+            "easynet:///r/acme/resource/display.test",
+            vec!["webrtc".into()],
+        );
+        let (event_type, payload) = capture_target_resolved(&init.target_binding);
+
+        assert_eq!(event_type, "CAPTURE_TARGET_RESOLVED");
+        assert_eq!(
+            payload["subject_ura"],
+            json!("easynet:///r/acme/resource/display.test")
+        );
+        assert_eq!(
+            payload["binding_id"],
+            json!(init.target_binding.binding_id())
+        );
+        assert_eq!(
+            payload["binding_epoch"],
+            json!(init.target_binding.binding_epoch())
+        );
+        assert_eq!(payload["previous_target_identity_epoch"], json!(null));
+        assert_eq!(
+            payload["target_identity_epoch"],
+            json!(init.target_binding.target_identity_epoch())
+        );
+        assert_eq!(
+            payload["target_geometry_revision"],
+            json!(init.target_binding.target_geometry_revision())
+        );
+        assert_eq!(
+            payload["media_source_epoch"],
+            json!(init.target_binding.media_source_epoch())
+        );
+        assert_eq!(payload["reason_code"], json!("capture_target_resolved"));
+        assert_eq!(payload["recoverability"], json!("continue"));
+        assert_eq!(
+            payload["target_binding"]["binding_id"],
+            json!(init.target_binding.binding_id())
+        );
     }
 
     #[test]

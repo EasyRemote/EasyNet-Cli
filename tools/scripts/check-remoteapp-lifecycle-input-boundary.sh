@@ -244,6 +244,8 @@ require '"subject_ura": binding\.subject_ura\(\)' "$SESSION_EVENTS" \
   'MEDIA_SOURCE_LOST payload must carry subject URA'
 require '"binding_id": binding\.binding_id\(\)' "$SESSION_EVENTS" \
   'MEDIA_SOURCE_LOST payload must carry binding id'
+require_multiline '/fn media_source_lost\((?:(?!fn webrtc_transport_failure_context).)*"binding_id": binding\.binding_id\(\)/s' "$SESSION_EVENTS" \
+  'MEDIA_SOURCE_LOST payload must carry binding id from the committed binding'
 require '"binding_epoch": binding\.binding_epoch\(\)' "$SESSION_EVENTS" \
   'MEDIA_SOURCE_LOST payload must carry binding epoch'
 require '"target_identity_epoch": binding\.target_identity_epoch\(\)' "$SESSION_EVENTS" \
@@ -286,6 +288,10 @@ require 'event\["reason_code"\]' "$SESSION_STORE" \
   'session-store tests must prove TRANSPORT_FAILED top-level reason_code is projected'
 require 'event\["recoverability"\]' "$SESSION_STORE" \
   'session-store tests must prove TRANSPORT_FAILED top-level recoverability is projected'
+require_multiline '/fn session_created\((?:(?!fn capture_target_resolved).)*"reason_code": "session_created",(?:(?!fn capture_target_resolved).)*"recoverability": "continue"/s' "$SESSION_EVENTS" \
+  'SESSION_CREATED path must publish initial reason_code and continue recoverability'
+require_multiline '/fn capture_target_resolved\((?:(?!fn target_bound).)*"subject_ura": binding\.subject_ura\(\),(?:(?!fn target_bound).)*"binding_id": binding\.binding_id\(\),(?:(?!fn target_bound).)*"binding_epoch": binding\.binding_epoch\(\),(?:(?!fn target_bound).)*"previous_target_identity_epoch": Value::Null,(?:(?!fn target_bound).)*"target_identity_epoch": binding\.target_identity_epoch\(\),(?:(?!fn target_bound).)*"target_geometry_revision": binding\.target_geometry_revision\(\),(?:(?!fn target_bound).)*"media_source_epoch": binding\.media_source_epoch\(\),(?:(?!fn target_bound).)*"reason_code": "capture_target_resolved",(?:(?!fn target_bound).)*"recoverability": "continue"/s' "$SESSION_EVENTS" \
+  'CAPTURE_TARGET_RESOLVED path must publish initial binding context and continue recoverability'
 require_multiline '/fn session_closing\((?:(?!fn session_closed).)*"reason_code": reason,(?:(?!fn session_closed).)*"recoverability": "closing"/s' "$SESSION_EVENTS" \
   'SESSION_CLOSING path must publish terminal reason_code and closing recoverability'
 require_multiline '/fn session_closed\((?:(?!fn session_expired).)*"reason_code": reason,(?:(?!fn session_expired).)*"recoverability": "closed"/s' "$SESSION_EVENTS" \
@@ -294,10 +300,20 @@ require_multiline '/fn session_expired\((?:(?!fn webrtc_sender_ready).)*"reason_
   'SESSION_CLOSED lease-expiry path must publish terminal reason_code and closed recoverability'
 require 'session_closing_payload_projects_terminal_reason_code' "$SESSION_EVENTS" \
   'session event tests must prove closing payload publishes terminal reason_code'
+require 'session_created_payload_projects_initial_reason_code' "$SESSION_EVENTS" \
+  'session event tests must prove SESSION_CREATED publishes initial reason_code'
+require 'capture_target_resolved_payload_projects_initial_binding_context' "$SESSION_EVENTS" \
+  'session event tests must prove CAPTURE_TARGET_RESOLVED publishes binding context'
 require 'session_closed_payload_projects_terminal_reason_code' "$SESSION_EVENTS" \
   'session event tests must prove caller close payload publishes terminal reason_code'
 require 'session_expired_payload_projects_terminal_reason_code' "$SESSION_EVENTS" \
   'session event tests must prove lease expiry payload publishes terminal reason_code'
+require 'initial_session_events_project_reason_codes_in_order' "$SESSION" \
+  'session aggregate tests must prove initial event-log top-level reason_code order'
+require 'created_index < resolved_index && resolved_index < bound_index' "$SESSION" \
+  'session aggregate tests must prove initial session, resolution, and bound events are ordered'
+require 'resolved\["binding_id"\]' "$SESSION" \
+  'session aggregate tests must prove CAPTURE_TARGET_RESOLVED top-level binding id is projected'
 require 'session_close_events_project_terminal_reason_code' "$SESSION" \
   'session aggregate tests must prove close event-log top-level reason_code is projected'
 require 'closing_index < closed_index' "$SESSION" \

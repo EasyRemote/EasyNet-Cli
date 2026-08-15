@@ -1035,6 +1035,77 @@ mod tests {
     }
 
     #[test]
+    fn initial_session_events_project_reason_codes_in_order() {
+        let session = RemoteDesktopSession::new(test_session_init(
+            "rd-initial-events",
+            "easynet:///r/acme/resource/display.test",
+            vec!["webrtc".into()],
+        ));
+
+        let events = session.events();
+        let created_index = events
+            .iter()
+            .position(|event| event["event_type"] == json!("SESSION_CREATED"))
+            .expect("SESSION_CREATED event");
+        let resolved_index = events
+            .iter()
+            .position(|event| event["event_type"] == json!("CAPTURE_TARGET_RESOLVED"))
+            .expect("CAPTURE_TARGET_RESOLVED event");
+        let bound_index = events
+            .iter()
+            .position(|event| event["event_type"] == json!("TARGET_BOUND"))
+            .expect("TARGET_BOUND event");
+        assert!(
+            created_index < resolved_index && resolved_index < bound_index,
+            "initial events must keep session, resolution, and binding order"
+        );
+
+        let created = &events[created_index];
+        assert_eq!(created["reason_code"], json!("session_created"));
+        assert_eq!(created["recoverability"], json!("continue"));
+        assert_eq!(created["payload"]["reason_code"], json!("session_created"));
+        assert_eq!(created["payload"]["recoverability"], json!("continue"));
+
+        let resolved = &events[resolved_index];
+        assert_eq!(resolved["reason_code"], json!("capture_target_resolved"));
+        assert_eq!(resolved["recoverability"], json!("continue"));
+        assert_eq!(
+            resolved["payload"]["reason_code"],
+            json!("capture_target_resolved")
+        );
+        assert_eq!(resolved["payload"]["recoverability"], json!("continue"));
+        assert_eq!(
+            resolved["subject_ura"],
+            json!("easynet:///r/acme/resource/display.test")
+        );
+        assert_eq!(
+            resolved["binding_id"],
+            json!(session.target_binding().binding_id())
+        );
+        assert_eq!(
+            resolved["binding_epoch"],
+            json!(session.target_binding().binding_epoch())
+        );
+        assert_eq!(resolved["previous_target_identity_epoch"], json!(null));
+        assert_eq!(
+            resolved["target_identity_epoch"],
+            json!(session.target_binding().target_identity_epoch())
+        );
+        assert_eq!(
+            resolved["target_geometry_revision"],
+            json!(session.target_binding().target_geometry_revision())
+        );
+        assert_eq!(
+            resolved["media_source_epoch"],
+            json!(session.target_binding().media_source_epoch())
+        );
+
+        let bound = &events[bound_index];
+        assert_eq!(bound["reason_code"], json!("target_bound"));
+        assert_eq!(bound["recoverability"], json!("continue"));
+    }
+
+    #[test]
     fn session_expiry_events_project_terminal_reason_code() {
         let mut session = RemoteDesktopSession::new(test_session_init(
             "rd-expire-event",

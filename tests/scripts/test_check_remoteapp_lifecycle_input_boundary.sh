@@ -205,6 +205,16 @@ mod tests {
     fn session_expiry_events_project_terminal_reason_code() {}
 
     #[test]
+    fn initial_session_events_project_reason_codes_in_order() {
+        assert!(created_index < resolved_index && resolved_index < bound_index);
+        assert_eq!(created["reason_code"], json!("session_created"));
+        assert_eq!(created["recoverability"], json!("continue"));
+        assert_eq!(resolved["reason_code"], json!("capture_target_resolved"));
+        assert_eq!(resolved["recoverability"], json!("continue"));
+        assert_eq!(resolved["binding_id"], json!(session.target_binding().binding_id()));
+    }
+
+    #[test]
     fn pending_target_loss_deactivates_input_before_media_loss_debounce() {
         assert!(media_loss.is_none());
         assert_eq!(session.lifecycle_phase(), RemoteDesktopSessionPhase::MediaActive);
@@ -355,6 +365,32 @@ fn webrtc_transport_failure_context() {
     });
 }
 
+fn session_created() {
+    json!({
+        "transport_kind": TRANSPORT_WEBRTC,
+        "media_transport_ready": false,
+        "preview_ability": "screen.subscribe",
+        "reason_code": "session_created",
+        "recoverability": "continue",
+    });
+}
+
+fn capture_target_resolved(binding: &RemoteAppTargetBinding) {
+    json!({
+        "subject_ura": binding.subject_ura(),
+        "binding_id": binding.binding_id(),
+        "binding_epoch": binding.binding_epoch(),
+        "previous_target_identity_epoch": Value::Null,
+        "target_identity_epoch": binding.target_identity_epoch(),
+        "target_geometry_revision": binding.target_geometry_revision(),
+        "media_source_epoch": binding.media_source_epoch(),
+        "reason_code": "capture_target_resolved",
+        "recoverability": "continue",
+        "target_binding": binding.to_value(),
+        "scope_audit": binding.scope_audit_value(),
+    });
+}
+
 fn session_closed(reason: &str) {
     json!({
         "reason": reason,
@@ -405,6 +441,12 @@ fn transport_blocked() {
 
 #[test]
 fn transport_blocked_projects_capture_backend_reason_code() {}
+
+#[test]
+fn session_created_payload_projects_initial_reason_code() {}
+
+#[test]
+fn capture_target_resolved_payload_projects_initial_binding_context() {}
 
 #[test]
 fn session_closing_payload_projects_terminal_reason_code() {}
@@ -1191,6 +1233,41 @@ perl -0pi -e 's/assert_eq!\(event\["recoverability"\], json!\("retry_session"\)\
 run_fail 'session-store tests must prove TRANSPORT_FAILED top-level recoverability is projected'
 
 write_fixture
+perl -0pi -e 's/"reason_code": "session_created",//' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'SESSION_CREATED path must publish initial reason_code and continue recoverability'
+
+write_fixture
+perl -0pi -e 's/session_created_payload_projects_initial_reason_code/session_created_payload_lacks_initial_reason_code/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'session event tests must prove SESSION_CREATED publishes initial reason_code'
+
+write_fixture
+perl -0pi -e 's/"binding_id": binding\.binding_id\(\),//' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'CAPTURE_TARGET_RESOLVED path must publish initial binding context and continue recoverability'
+
+write_fixture
+perl -0pi -e 's/capture_target_resolved_payload_projects_initial_binding_context/capture_target_resolved_lacks_initial_binding_context/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'session event tests must prove CAPTURE_TARGET_RESOLVED publishes binding context'
+
+write_fixture
+perl -0pi -e 's/initial_session_events_project_reason_codes_in_order/initial_session_events_lack_reason_code_projection/' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate tests must prove initial event-log top-level reason_code order'
+
+write_fixture
+perl -0pi -e 's/assert!\(created_index < resolved_index && resolved_index < bound_index\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate tests must prove initial session, resolution, and bound events are ordered'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(resolved\["binding_id"\], json!\(session\.target_binding\(\)\.binding_id\(\)\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate tests must prove CAPTURE_TARGET_RESOLVED top-level binding id is projected'
+
+write_fixture
 perl -0pi -e 's/"recoverability": "closing",//' \
   "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
 run_fail 'SESSION_CLOSING path must publish terminal reason_code and closing recoverability'
@@ -1241,9 +1318,9 @@ perl -0pi -e 's/session_expiry_events_project_terminal_reason_code/session_expir
 run_fail 'session aggregate tests must prove expiry event-log top-level reason_code is projected'
 
 write_fixture
-perl -0pi -e 's/"binding_id": binding\.binding_id\(\),//' \
+perl -0pi -e 's/(fn media_source_lost\((?:(?!fn transport_blocked).)*?)"binding_id": binding\.binding_id\(\),/$1/s' \
   "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
-run_fail 'MEDIA_SOURCE_LOST payload must carry binding id'
+run_fail 'MEDIA_SOURCE_LOST payload must carry binding id from the committed binding'
 
 write_fixture
 perl -0pi -e 's/TargetResolutionError::CaptureBackendUnavailable/TargetResolutionError::TransportRouteUnavailable/' \
