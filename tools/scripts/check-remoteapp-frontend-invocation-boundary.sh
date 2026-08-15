@@ -176,6 +176,12 @@ require 'frontendAction' "$PROTOCOL" \
   'frontend must expose target diagnostic frontend_action for recovery UI decisions'
 require 'inputEnabled' "$PROTOCOL" \
   'frontend must expose target tracking input_enabled so target loss cannot appear interactive'
+require 'remoteDesktopInputFrameAllowed' "$PROTOCOL" \
+  'frontend must derive remote desktop input eligibility from runtime target tracking and input policy'
+require 'remoteDesktopInputFrameAllowed' "$STORE" \
+  'frontend store input sender must use the remote desktop input eligibility helper'
+require_multiline 'm/rdSendInput:\s*\(key,\s*frame\)\s*=>\s*\{(?:(?!bindCanvas).)*remoteDesktopInputFrameAllowed\(session,\s*frame\)/s' "$STORE" \
+  'frontend rdSendInput must check session target tracking/input policy before sending frames'
 require 'remoteDesktopTargetRecoveryMessage' "$PROTOCOL" \
   'frontend must derive target-domain recovery messages from runtime target diagnostics'
 require_multiline 'm/const reason = remoteDesktopTargetRecoveryMessage\(view\)\s*\?\?\s*view\.productionBlockedReason/s' "$PROTOCOL" \
@@ -193,6 +199,8 @@ require 'projects target diagnostics and tracking state from the runtime session
   'frontend protocol tests must cover latest target diagnostic and tracking projection'
 require 'does not treat ordinary view-only input state as target recovery failure' "$PROTOCOL_TEST" \
   'frontend protocol tests must prove view-only input state is not misreported as target loss'
+require 'gates frontend input frames on runtime target tracking and input policy' "$PROTOCOL_TEST" \
+  'frontend protocol tests must cover target-tracking and input-policy input gating'
 require 'keeps base media controls available when remote desktop target refresh fails' "$ACCESS_TEST" \
   'frontend access tests must prove remote target failure does not disable base media'
 

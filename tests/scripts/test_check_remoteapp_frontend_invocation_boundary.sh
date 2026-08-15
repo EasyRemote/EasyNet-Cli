@@ -57,6 +57,8 @@ function requireRemoteDesktopSessionSubject(ability: string, subjectURA: string 
 TS
 
 cat >"$FRONTEND_SRC/store/media-channel-store.ts" <<'TS'
+import { remoteDesktopInputFrameAllowed } from '@/lib/api/remote-desktop-protocol'
+
 export async function rdCreate(entry: Entry, env: { resource?: { resource_ura: string } }) {
   const resource = env.resource
   if (!resource) return
@@ -81,6 +83,14 @@ export async function rdCreate(entry: Entry, env: { resource?: { resource_ura: s
 
 export const actions = {
   rdReportClientMediaState: (key: string, state: 'presenting' | 'stalled' | 'detached') => reportClientMediaState(key, state),
+  rdSendInput: (key, frame) => {
+    const session = entries[key]?.session
+    if (!session || !remoteDesktopInputFrameAllowed(session, frame)) return false
+    const channel = refsFor(key).inputChannel
+    if (!channel || channel.readyState !== 'open') return false
+    channel.send(JSON.stringify(frame))
+    return true
+  },
   rdRequestPermission: async (key: string) => {
     const entry = entries[key]
     const result = await invokeMediaUnary('remote_desktop.request_permission', {
@@ -230,6 +240,10 @@ export function remoteDesktopTargetRecoveryMessage(view: RemoteDesktopView): str
   return view.latestTargetDiagnostic?.frontendAction
 }
 
+export function remoteDesktopInputFrameAllowed(view: RemoteDesktopView, frame: Record<string, unknown>): boolean {
+  return view.targetTracking?.inputEnabled !== false && frame.type !== 'blocked'
+}
+
 export function remoteDesktopProductionBlockedMessage(view: RemoteDesktopView): string {
   const reason = remoteDesktopTargetRecoveryMessage(view)
     ?? view.productionBlockedReason
@@ -250,6 +264,12 @@ it('does not treat ordinary view-only input state as target recovery failure', (
   expect(remoteDesktopTargetRecoveryMessage({
     targetTracking: { inputEnabled: false },
   })).toBeUndefined()
+})
+
+it('gates frontend input frames on runtime target tracking and input policy', () => {
+  expect(remoteDesktopInputFrameAllowed({
+    targetTracking: { inputEnabled: false },
+  }, { type: 'pointer' })).toBe(false)
 })
 TS
 
@@ -366,6 +386,17 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   exit 1
 fi
 perl -0pi -e "s/if \\(pc\\.connectionState === 'connected'\\) reportClientMediaState\\(key, 'presenting'\\)/if (pc.connectionState === 'connected') updateWebRtcStatus()/" \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e 's/remoteDesktopInputFrameAllowed\(session, frame\)/true/' \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted input send without runtime target-tracking/policy gate" >&2
+  exit 1
+fi
+perl -0pi -e 's/if \(!session \|\| true\) return false/if (!session || remoteDesktopInputFrameAllowed(session, frame)) return false/' \
+  "$FRONTEND_SRC/store/media-channel-store.ts"
+perl -0pi -e 's/if \(!session \|\| remoteDesktopInputFrameAllowed\(session, frame\)\) return false/if (!session || !remoteDesktopInputFrameAllowed(session, frame)) return false/' \
   "$FRONTEND_SRC/store/media-channel-store.ts"
 
 perl -0pi -e "s/    latestTargetDiagnostic: remoteDesktopTargetDiagnosticFromValue\\(objectField\\(result, 'latest_target_diagnostic'\\)\\),\\n    targetTracking: remoteDesktopTargetTrackingFromValue\\(objectField\\(result, 'target_tracking'\\)\\),//" \
