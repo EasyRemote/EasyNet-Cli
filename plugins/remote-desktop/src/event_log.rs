@@ -234,34 +234,41 @@ fn event_sequence(event: &RemoteDesktopEventRecord) -> Option<u64> {
     event.value.get("sequence").and_then(Value::as_u64)
 }
 
+const TARGET_CHANGED_EVENT_TYPES: &[&str] = &[
+    "CAPTURE_TARGET_STALE",
+    "CAPTURE_TARGET_IDENTITY_MISMATCH",
+    "CAPTURE_TARGET_AMBIGUOUS",
+    "DISPLAY_FALLBACK_FORBIDDEN",
+    "SCREEN_CAPTURE_PERMISSION_DENIED",
+    "TARGET_MOVED",
+    "TARGET_RESIZED",
+    "TARGET_TITLE_CHANGED",
+    "TARGET_FOCUSED",
+    "TARGET_BLURRED",
+    "TARGET_HIDDEN",
+    "TARGET_VISIBLE",
+    "TARGET_MINIMIZED",
+    "TARGET_RESTORED",
+    "TARGET_LOST",
+    "TARGET_REBIND_ATTEMPTED",
+    "TARGET_REBOUND",
+    "TARGET_REBIND_FAILED",
+    "TARGET_BINDING_CHANGED",
+    "TARGET_PERMISSION_REVOKED",
+    "DISPLAY_TOPOLOGY_CHANGED",
+];
+
 pub(in crate::daemon::plugins::remote_desktop) fn event_type_proto_name(
     event_type: &str,
 ) -> &'static str {
+    if TARGET_CHANGED_EVENT_TYPES.contains(&event_type) {
+        return "REMOTE_DESKTOP_EVENT_TARGET_CHANGED";
+    }
+
     match event_type {
         "SESSION_CREATED" => "REMOTE_DESKTOP_EVENT_SESSION_CREATED",
         "CAPTURE_TARGET_RESOLVED" => "REMOTE_DESKTOP_EVENT_CAPTURE_TARGET_RESOLVED",
         "TARGET_BOUND" => "REMOTE_DESKTOP_EVENT_TARGET_BOUND",
-        "CAPTURE_TARGET_STALE"
-        | "CAPTURE_TARGET_IDENTITY_MISMATCH"
-        | "CAPTURE_TARGET_AMBIGUOUS"
-        | "DISPLAY_FALLBACK_FORBIDDEN"
-        | "SCREEN_CAPTURE_PERMISSION_DENIED"
-        | "TARGET_MOVED"
-        | "TARGET_RESIZED"
-        | "TARGET_TITLE_CHANGED"
-        | "TARGET_FOCUSED"
-        | "TARGET_BLURRED"
-        | "TARGET_VISIBLE"
-        | "TARGET_HIDDEN"
-        | "TARGET_MINIMIZED"
-        | "TARGET_RESTORED"
-        | "TARGET_LOST"
-        | "TARGET_REBIND_ATTEMPTED"
-        | "TARGET_REBOUND"
-        | "TARGET_BINDING_CHANGED"
-        | "TARGET_PERMISSION_REVOKED"
-        | "DISPLAY_TOPOLOGY_CHANGED"
-        | "TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_TARGET_CHANGED",
         "DESCRIPTION_SET" => "REMOTE_DESKTOP_EVENT_DESCRIPTION_SET",
         "ICE_CANDIDATE_ADDED" => "REMOTE_DESKTOP_EVENT_CANDIDATE_ADDED",
         "LOCAL_ICE_CANDIDATE" => "REMOTE_DESKTOP_EVENT_LOCAL_CANDIDATE",
@@ -293,7 +300,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn event_type_proto_name(
 mod tests {
     use serde_json::json;
 
-    use super::{event_type_proto_name, RemoteDesktopEventLog, MAX_EVENTS_PER_SESSION};
+    use super::{
+        event_type_proto_name, RemoteDesktopEventLog, MAX_EVENTS_PER_SESSION,
+        TARGET_CHANGED_EVENT_TYPES,
+    };
     use crate::daemon::plugins::remote_desktop::contract::RemoteDesktopSessionState;
 
     #[test]
@@ -378,6 +388,50 @@ mod tests {
         assert_eq!(
             event_type_proto_name("TARGET_REBIND_FAILED"),
             "REMOTE_DESKTOP_EVENT_TARGET_CHANGED"
+        );
+    }
+
+    #[test]
+    fn spec_target_lifecycle_events_have_explicit_proto_projection() {
+        let expected = [
+            "CAPTURE_TARGET_STALE",
+            "CAPTURE_TARGET_IDENTITY_MISMATCH",
+            "CAPTURE_TARGET_AMBIGUOUS",
+            "DISPLAY_FALLBACK_FORBIDDEN",
+            "SCREEN_CAPTURE_PERMISSION_DENIED",
+            "TARGET_MOVED",
+            "TARGET_RESIZED",
+            "TARGET_TITLE_CHANGED",
+            "TARGET_FOCUSED",
+            "TARGET_BLURRED",
+            "TARGET_HIDDEN",
+            "TARGET_VISIBLE",
+            "TARGET_MINIMIZED",
+            "TARGET_RESTORED",
+            "TARGET_LOST",
+            "TARGET_REBIND_ATTEMPTED",
+            "TARGET_REBOUND",
+            "TARGET_REBIND_FAILED",
+            "TARGET_BINDING_CHANGED",
+            "TARGET_PERMISSION_REVOKED",
+            "DISPLAY_TOPOLOGY_CHANGED",
+        ];
+
+        assert_eq!(TARGET_CHANGED_EVENT_TYPES, expected);
+        for event_type in expected {
+            assert_eq!(
+                event_type_proto_name(event_type),
+                "REMOTE_DESKTOP_EVENT_TARGET_CHANGED",
+                "{event_type} must stay in the SPEC target lifecycle taxonomy"
+            );
+        }
+        assert_eq!(
+            event_type_proto_name("CAPTURE_TARGET_RESOLVED"),
+            "REMOTE_DESKTOP_EVENT_CAPTURE_TARGET_RESOLVED"
+        );
+        assert_eq!(
+            event_type_proto_name("TARGET_BOUND"),
+            "REMOTE_DESKTOP_EVENT_TARGET_BOUND"
         );
     }
 }

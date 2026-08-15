@@ -557,6 +557,30 @@ fn direct_webrtc_target_failure_projection() {
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/event_log.rs" <<'RS'
+const TARGET_CHANGED_EVENT_TYPES: &[&str] = &[
+    "CAPTURE_TARGET_STALE",
+    "CAPTURE_TARGET_IDENTITY_MISMATCH",
+    "CAPTURE_TARGET_AMBIGUOUS",
+    "DISPLAY_FALLBACK_FORBIDDEN",
+    "SCREEN_CAPTURE_PERMISSION_DENIED",
+    "TARGET_MOVED",
+    "TARGET_RESIZED",
+    "TARGET_TITLE_CHANGED",
+    "TARGET_FOCUSED",
+    "TARGET_BLURRED",
+    "TARGET_HIDDEN",
+    "TARGET_VISIBLE",
+    "TARGET_MINIMIZED",
+    "TARGET_RESTORED",
+    "TARGET_LOST",
+    "TARGET_REBIND_ATTEMPTED",
+    "TARGET_REBOUND",
+    "TARGET_REBIND_FAILED",
+    "TARGET_BINDING_CHANGED",
+    "TARGET_PERMISSION_REVOKED",
+    "DISPLAY_TOPOLOGY_CHANGED",
+];
+
 fn event_type_proto_name(event_type: &str) -> &'static str {
     let target_field = |name: &str| payload.get(name).cloned().unwrap_or(Value::Null);
     let consent_epoch = target_field("consent_epoch");
@@ -566,11 +590,16 @@ fn event_type_proto_name(event_type: &str) -> &'static str {
     json!({
         "consent_epoch": Value::Null,
     });
+    if TARGET_CHANGED_EVENT_TYPES.contains(&event_type) {
+        return "REMOTE_DESKTOP_EVENT_TARGET_CHANGED";
+    }
     match event_type {
-        "TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_TARGET_CHANGED",
         _ => "REMOTE_DESKTOP_EVENT_STATE_CHANGED",
     }
 }
+
+#[test]
+fn spec_target_lifecycle_events_have_explicit_proto_projection() {}
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/transport_blocker.rs" <<'RS'
@@ -1569,9 +1598,14 @@ perl -0pi -e 's/assert_eq!\(rebind_failed\["target_identity_epoch"\], json!\(ses
 run_fail 'session aggregate must assert TARGET_REBIND_FAILED top-level target identity epoch'
 
 write_fixture
-perl -0pi -e 's/"TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_TARGET_CHANGED"/"TARGET_REBIND_FAILED" => "REMOTE_DESKTOP_EVENT_STATE_CHANGED"/' \
+perl -0pi -e 's/TARGET_CHANGED_EVENT_TYPES\.contains\(&event_type\)/TARGET_CHANGED_EVENT_TYPES.is_empty()/' \
   "$SANDBOX/plugins/remote-desktop/src/event_log.rs"
-run_fail 'event log must project TARGET_REBIND_FAILED as a canonical target change'
+run_fail 'event log proto projection must consume the centralized target lifecycle taxonomy'
+
+write_fixture
+perl -0pi -e 's/#\[test\]\nfn spec_target_lifecycle_events_have_explicit_proto_projection\(\) \{\}//' \
+  "$SANDBOX/plugins/remote-desktop/src/event_log.rs"
+run_fail 'event log tests must prove every SPEC target lifecycle event has an explicit proto projection'
 
 write_fixture
 perl -0pi -e 's/let consent_epoch = target_field\("consent_epoch"\);//' \

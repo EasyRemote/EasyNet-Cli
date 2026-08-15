@@ -496,8 +496,14 @@ require 'rebind_failed\["target_identity_epoch"\]' "$SESSION" \
   'session aggregate must assert TARGET_REBIND_FAILED top-level target identity epoch'
 require 'rebind_failed\["media_source_epoch"\]' "$SESSION" \
   'session aggregate must assert TARGET_REBIND_FAILED top-level media source epoch'
-require_multiline '/"TARGET_REBIND_FAILED"\s*=>\s*"REMOTE_DESKTOP_EVENT_TARGET_CHANGED"/s' "$EVENT_LOG" \
-  'event log must project TARGET_REBIND_FAILED as a canonical target change'
+require 'const TARGET_CHANGED_EVENT_TYPES' "$EVENT_LOG" \
+  'event log must centralize SPEC target lifecycle taxonomy instead of scattering target-change strings in match arms'
+require 'TARGET_CHANGED_EVENT_TYPES\.contains\(&event_type\)' "$EVENT_LOG" \
+  'event log proto projection must consume the centralized target lifecycle taxonomy'
+require 'spec_target_lifecycle_events_have_explicit_proto_projection' "$EVENT_LOG" \
+  'event log tests must prove every SPEC target lifecycle event has an explicit proto projection'
+require '"TARGET_REBIND_FAILED"' "$EVENT_LOG" \
+  'event log target lifecycle taxonomy must include TARGET_REBIND_FAILED'
 require 'transport_route_state' "$VIEW_TRANSPORT" \
   'transport view must expose host/STUN/TURN/EasyNet relay route state'
 require '"host_candidate"' "$VIEW_TRANSPORT" \
