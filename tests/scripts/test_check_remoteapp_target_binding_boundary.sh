@@ -91,6 +91,47 @@ impl NativeTargetLocator {
     }
 }
 
+impl NativeAppIdentityExpectation {
+    fn evaluate(&self, candidate: NativeAppIdentityCandidate) -> NativeAppIdentityMatch {
+        NativeAppIdentityMatch
+    }
+}
+
+struct NativeAppIdentityMatch;
+
+impl NativeAppIdentityMatch {
+    fn matched(&self) -> bool {
+        true
+    }
+}
+
+struct ResolvedCaptureTargetProof;
+
+impl ResolvedCaptureTargetProof {
+    fn validate_for_binding(&self, binding: &RemoteAppTargetBinding) {
+        binding
+            .native_locator()
+            .app_identity_expectation()
+            .evaluate(self.native_app_identity_candidate())
+            .matched();
+    }
+
+    fn matches_committed_identity(&self, committed: &Self) -> bool {
+        committed
+            .native_app_identity_expectation()
+            .evaluate(self.native_app_identity_candidate())
+            .matched()
+    }
+
+    fn native_app_identity_expectation(&self) -> NativeAppIdentityExpectation {
+        NativeAppIdentityExpectation
+    }
+
+    fn native_app_identity_candidate(&self) -> NativeAppIdentityCandidate {
+        NativeAppIdentityCandidate
+    }
+}
+
 impl ResourceEntryTargetResolver {
     fn resolve_for_session(&self, ability: &'static str, entry: &ResourceEntry, target_kind: RemoteDesktopTargetKind) {
         validate_owner_agent_ura(ability, entry)?;
@@ -157,6 +198,9 @@ mod tests {
 
     #[test]
     fn native_app_identity_expectation_requires_all_declared_identity_fields() {}
+
+    #[test]
+    fn capture_proof_revalidation_uses_native_app_identity_aliases() {}
 }
 RS
 
@@ -527,6 +571,17 @@ if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1
 fi
 
 perl -0pi -e 's/NativeAppIdentityExpectationRemoved/NativeAppIdentityExpectation/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+perl -0pi -e 's/\.evaluate\(self\.native_app_identity_candidate\(\)\)/.manual_compare(self.native_app_identity_candidate())/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted capture proof validation without centralized identity matcher" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/\.manual_compare\(self\.native_app_identity_candidate\(\)\)/.evaluate(self.native_app_identity_candidate())/g' \
   "$SANDBOX/plugins/remote-desktop/src/target.rs"
 
 perl -0pi -e 's/sck_app_identity_match/manual_app_identity_match/g' \

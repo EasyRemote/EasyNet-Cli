@@ -20,6 +20,13 @@ require() {
   rg -q -- "$pattern" "$path" || fail "$message"
 }
 
+require_multiline() {
+  local pattern="$1"
+  local path="$2"
+  local message="$3"
+  perl -0ne "exit(($pattern) ? 0 : 1)" "$path" || fail "$message"
+}
+
 require_count_at_least() {
   local pattern="$1"
   local path="$2"
@@ -285,12 +292,24 @@ require 'struct NativeAppIdentityCandidate\b' \
 require 'fn app_identity_expectation' \
   "$TARGET_DOMAIN" \
   'native target locator must expose a canonical app identity expectation'
+require 'fn native_app_identity_candidate\(&self\)' \
+  "$TARGET_DOMAIN" \
+  'capture proof validation must expose a canonical native app identity candidate'
 require 'native_app_identity_expectation_matches_canonical_bundle_aliases' \
   "$TARGET_DOMAIN" \
   'target domain must test canonical bundle/app identity alias matching'
 require 'native_app_identity_expectation_requires_all_declared_identity_fields' \
   "$TARGET_DOMAIN" \
   'target domain must test complete native app identity matching semantics'
+require 'capture_proof_revalidation_uses_native_app_identity_aliases' \
+  "$TARGET_DOMAIN" \
+  'capture proof revalidation must test canonical native app identity alias matching'
+require_multiline 'm/fn validate_for_binding\(.+?app_identity_expectation\(\)\s*\.evaluate\(self\.native_app_identity_candidate\(\)\)\s*\.matched\(\)/s' \
+  "$TARGET_DOMAIN" \
+  'capture proof validation must consume the centralized native app identity matcher'
+require_multiline 'm/fn matches_committed_identity\(.+?native_app_identity_expectation\(\)\s*\.evaluate\(self\.native_app_identity_candidate\(\)\)\s*\.matched\(\)/s' \
+  "$TARGET_DOMAIN" \
+  'committed proof revalidation must consume the centralized native app identity matcher'
 require 'fn capture_jpeg_for_binding\(' \
   "$SCK_CAPTURE" \
   'ScreenCaptureKit must expose a binding-backed one-shot diagnostic capture adapter'

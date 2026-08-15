@@ -702,43 +702,19 @@ impl ResolvedCaptureTargetProof {
                 ));
             }
         }
-        if let Some(expected) = locator.pid() {
-            if self.pid != Some(expected) {
-                return Err(RemoteAppTargetError::new(
-                    ability,
-                    TargetResolutionError::TargetIdentityMismatch,
-                    format!(
-                        "capture proof pid {:?} does not match binding pid {expected}",
-                        self.pid
-                    ),
-                ));
-            }
-        }
-        if let Some(expected) = locator.bundle_id() {
-            if self.bundle_id.as_deref() != Some(expected) {
-                return Err(RemoteAppTargetError::new(
-                    ability,
-                    TargetResolutionError::TargetIdentityMismatch,
-                    format!(
-                        "capture proof bundle {:?} does not match binding bundle {expected}",
-                        self.bundle_id
-                    ),
-                ));
-            }
-        }
-        if let Some(expected) = locator.app_identity() {
-            let app_identity_matches = self.app_identity.as_deref() == Some(expected)
-                || self.bundle_id.as_deref() == Some(expected);
-            if !app_identity_matches {
-                return Err(RemoteAppTargetError::new(
-                    ability,
-                    TargetResolutionError::TargetIdentityMismatch,
-                    format!(
-                        "capture proof app identity {:?}/{:?} does not match binding app identity {expected}",
-                        self.app_identity, self.bundle_id
-                    ),
-                ));
-            }
+        if !locator
+            .app_identity_expectation()
+            .evaluate(self.native_app_identity_candidate())
+            .matched()
+        {
+            return Err(RemoteAppTargetError::new(
+                ability,
+                TargetResolutionError::TargetIdentityMismatch,
+                format!(
+                    "capture proof native app identity pid={:?}, app_identity={:?}, bundle_id={:?} does not match binding native app identity",
+                    self.pid, self.app_identity, self.bundle_id
+                ),
+            ));
         }
         if binding.target_kind == RemoteDesktopTargetKind::Application {
             let actual = self.app_window_set.as_ref().ok_or_else(|| {
@@ -780,10 +756,27 @@ impl ResolvedCaptureTargetProof {
             && self.target_kind == committed.target_kind
             && self.display_id == committed.display_id
             && self.window_id == committed.window_id
-            && self.pid == committed.pid
-            && self.app_identity == committed.app_identity
-            && self.bundle_id == committed.bundle_id
+            && committed
+                .native_app_identity_expectation()
+                .evaluate(self.native_app_identity_candidate())
+                .matched()
             && self.app_window_set == committed.app_window_set
+    }
+
+    fn native_app_identity_expectation(&self) -> NativeAppIdentityExpectation<'_> {
+        NativeAppIdentityExpectation {
+            expected_pid: self.pid,
+            expected_bundle_id: self.bundle_id.as_deref(),
+            expected_app_identity: self.app_identity.as_deref(),
+        }
+    }
+
+    fn native_app_identity_candidate(&self) -> NativeAppIdentityCandidate<'_> {
+        NativeAppIdentityCandidate::new(
+            self.pid,
+            self.bundle_id.as_deref(),
+            self.app_identity.as_deref(),
+        )
     }
 }
 
@@ -899,6 +892,7 @@ impl NativeTargetLocator {
         self.pid
     }
 
+    #[cfg(test)]
     pub(in crate::daemon::plugins::remote_desktop) fn app_identity(&self) -> Option<&str> {
         self.app_identity.as_deref()
     }
@@ -2423,6 +2417,75 @@ mod tests {
         let err = binding
             .validate_reverified_capture_proof("remote_desktop.set_description", &drifted_pid)
             .expect_err("media path must fail if live target drifts from committed proof");
+        assert_eq!(err.reason(), TargetResolutionError::TargetIdentityMismatch);
+    }
+
+    #[test]
+    fn capture_proof_revalidation_uses_native_app_identity_aliases() {
+        let resolver = ResourceEntryTargetResolver;
+        let mut binding = resolver
+            .resolve_for_session(
+                "remote_desktop.create_session",
+                &entry(
+                    ResourceType::Window,
+                    live_metadata(json!({
+                        "window_id": 7,
+                        "pid": 4242,
+                        "bundle_id": "com.example.Editor",
+                    })),
+                ),
+                "view_only",
+                1,
+            )
+            .expect("window binding");
+
+        let committed_from_app_identity = ResolvedCaptureTargetProof::new(
+            binding.native_locator().capture_backend.clone(),
+            RemoteDesktopTargetKind::Window,
+            None,
+            Some(7),
+            Some(4242),
+            Some("com.example.Editor".to_string()),
+            None,
+            Some((1280, 720)),
+        );
+        binding
+            .commit_capture_proof("remote_desktop.create_session", committed_from_app_identity)
+            .expect("proof may project bundle identity through app_identity");
+
+        let reverified_from_bundle_id = ResolvedCaptureTargetProof::new(
+            binding.native_locator().capture_backend.clone(),
+            RemoteDesktopTargetKind::Window,
+            None,
+            Some(7),
+            Some(4242),
+            None,
+            Some("com.example.Editor".to_string()),
+            Some((1280, 720)),
+        );
+        binding
+            .validate_reverified_capture_proof(
+                "remote_desktop.set_description",
+                &reverified_from_bundle_id,
+            )
+            .expect("same native app identity may arrive through bundle_id on reverify");
+
+        let mismatched_identity = ResolvedCaptureTargetProof::new(
+            binding.native_locator().capture_backend.clone(),
+            RemoteDesktopTargetKind::Window,
+            None,
+            Some(7),
+            Some(4242),
+            None,
+            Some("com.example.Other".to_string()),
+            Some((1280, 720)),
+        );
+        let err = binding
+            .validate_reverified_capture_proof(
+                "remote_desktop.set_description",
+                &mismatched_identity,
+            )
+            .expect_err("different native app identity must still fail closed");
         assert_eq!(err.reason(), TargetResolutionError::TargetIdentityMismatch);
     }
 
