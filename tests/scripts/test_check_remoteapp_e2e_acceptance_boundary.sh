@@ -6,6 +6,7 @@ SCRIPT="$REPO_ROOT/tools/scripts/check-remoteapp-e2e-acceptance-boundary.sh"
 HARNESS="$REPO_ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 PROBE_HARNESS="$REPO_ROOT/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
 SENTINEL_FIXTURE="$REPO_ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+TARGET_FRESHNESS="$REPO_ROOT/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
 CREATE_FAILCLOSED="$REPO_ROOT/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
 PERMISSION_SUBJECT="$REPO_ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 SANDBOX="$(mktemp -d)"
@@ -15,6 +16,7 @@ mkdir -p "$SANDBOX/tools/scripts" "$SANDBOX/docs/design" "$SANDBOX/examples"
 cp "$HARNESS" "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 cp "$PROBE_HARNESS" "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
 cp "$SENTINEL_FIXTURE" "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+cp "$TARGET_FRESHNESS" "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
 cp "$CREATE_FAILCLOSED" "$SANDBOX/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
 cp "$PERMISSION_SUBJECT" "$SANDBOX/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 cp "$REPO_ROOT/examples/easynet-remoteapp-frame-receiver.rs" \
@@ -22,9 +24,11 @@ cp "$REPO_ROOT/examples/easynet-remoteapp-frame-receiver.rs" \
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+chmod +x "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
+| E2E-01 target picker freshness | live refresh returns known target |
 | E2E-02 permission subject correctness | invalid_argument for target Resource subjects |
 | E2E-03 exact window session | decoded stream excludes sentinel |
 | E2E-04 exact application session | decoded stream excludes other apps |
@@ -46,6 +50,8 @@ CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 "$SANDBOX/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh" \
   --self-test >/dev/null
 "$SANDBOX/tools/scripts/host-remoteapp-permission-subject-e2e.sh" \
+  --self-test >/dev/null
+"$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh" \
   --self-test >/dev/null
 
 cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \

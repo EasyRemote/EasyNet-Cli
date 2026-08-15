@@ -5,6 +5,7 @@ ROOT="${CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}"
 SCRIPT="$ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 PROBE="$ROOT/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
 FIXTURE="$ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+TARGET_FRESHNESS="$ROOT/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
 CREATE_FAILCLOSED="$ROOT/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
 PERMISSION_SUBJECT="$ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 RECEIVER="$ROOT/examples/easynet-remoteapp-frame-receiver.rs"
@@ -25,11 +26,14 @@ require() {
 [[ -f "$SCRIPT" ]] || fail "missing host decoded-frame E2E harness"
 [[ -f "$PROBE" ]] || fail "missing bundled host decoded-frame probe"
 [[ -f "$FIXTURE" ]] || fail "missing bundled host sentinel fixture"
+[[ -f "$TARGET_FRESHNESS" ]] || fail "missing host target picker freshness E2E harness"
 [[ -f "$CREATE_FAILCLOSED" ]] || fail "missing host create_session fail-closed E2E harness"
 [[ -f "$PERMISSION_SUBJECT" ]] || fail "missing host permission subject E2E harness"
 [[ -f "$RECEIVER" ]] || fail "missing bundled host decoded-frame receiver"
 [[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
 
+require 'E2E-01 target picker freshness' "$SPEC" \
+  'SPEC must retain target picker freshness acceptance'
 require 'E2E-02 permission subject correctness' "$SPEC" \
   'SPEC must retain permission subject correctness acceptance'
 require 'E2E-03 exact window session' "$SPEC" \
@@ -63,6 +67,25 @@ require 'target_resource_subjects_allowed.*False|target_resource_subjects_allowe
   'host permission subject E2E must prove the permission contract forbids target resources'
 require 'subject_contract_ura' "$PERMISSION_SUBJECT" \
   'host permission subject E2E must prove descriptor and response subject contract URA'
+
+require 'resource\.refresh_remote_targets' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must refresh through resource.refresh_remote_targets'
+require 'runtime_started_at_ms <= fixture_launch_started_at_ms|known target window must be opened after daemon boot' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must prove the known window opens after daemon boot'
+require 'fixture_ready_at_ms <= refresh_started_at_ms|live inventory refresh must run after the known window fixture is ready' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must prove refresh runs after the known window exists'
+require 'selected_from_live_refresh' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must prove selection came from live refresh'
+require 'metadata\.freshness|selected resource metadata\.freshness' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must require selected row freshness metadata'
+require 'freshness\.source.*live_refresh|source.*live_refresh' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must require live_refresh freshness source'
+require 'availability.*available' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must require selected target availability=available'
+require 'resource_ura.*easynet:///' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must require selected Resource URA evidence'
+require 'metadata\.pid.*selected sentinel pid|selected resource metadata\.pid must match selected sentinel pid' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must bind the selected row to the known native sentinel window'
 
 require 'resource\.refresh_remote_targets' "$SCRIPT" \
   'host decoded-frame E2E must prove live refresh inventory was used'
