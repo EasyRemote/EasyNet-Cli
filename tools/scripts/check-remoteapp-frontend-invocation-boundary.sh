@@ -52,8 +52,9 @@ STORE_TEST="$FRONTEND_SRC/store/media-channel-store.test.ts"
 ACCESS_TEST="$FRONTEND_SRC/components/easynet/DeviceMediaAccess.test.tsx"
 WORKSPACE="$FRONTEND_SRC/pages/easynet/DeviceMediaWorkspacePage.tsx"
 PROTOCOL="$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
+PROTOCOL_TEST="$FRONTEND_SRC/lib/api/remote-desktop-protocol.test.ts"
 
-for file in "$INVOCATION" "$STORE" "$ACCESS" "$INVOCATION_TEST" "$STORE_TEST" "$ACCESS_TEST" "$WORKSPACE" "$PROTOCOL"; do
+for file in "$INVOCATION" "$STORE" "$ACCESS" "$INVOCATION_TEST" "$STORE_TEST" "$ACCESS_TEST" "$WORKSPACE" "$PROTOCOL" "$PROTOCOL_TEST"; do
   [[ -f "$file" ]] || fail "missing frontend source ${file#"$FRONTEND_ROOT/"}"
 done
 
@@ -167,6 +168,14 @@ reject 'productionReady: productionGate\?\.ready === true \|\| mediaBackends\.so
   'frontend must not report production online from production_gate or backend availability alone'
 require 'productionReadiness' "$PROTOCOL" \
   'frontend must preserve production_readiness evidence for remote desktop sessions'
+require 'latestTargetDiagnostic' "$PROTOCOL" \
+  'frontend must preserve latest_target_diagnostic evidence for remote desktop sessions'
+require 'targetTracking' "$PROTOCOL" \
+  'frontend must preserve target_tracking evidence for remote desktop sessions'
+require 'frontendAction' "$PROTOCOL" \
+  'frontend must expose target diagnostic frontend_action for recovery UI decisions'
+require 'inputEnabled' "$PROTOCOL" \
+  'frontend must expose target tracking input_enabled so target loss cannot appear interactive'
 
 require 'requires an explicit remote desktop subject' "$INVOCATION_TEST" \
   'frontend invocation tests must cover missing remote desktop subject failures'
@@ -176,6 +185,8 @@ require 'subjectURA: .*streams/display-1' "$INVOCATION_TEST" \
   'frontend invocation tests must prove selected resource subject propagation'
 require 'reports missing remote desktop session subject before projection fallback' "$STORE_TEST" \
   'frontend store tests must prove create_session subject_ura is checked before projection'
+require 'projects target diagnostics and tracking state from the runtime session view' "$PROTOCOL_TEST" \
+  'frontend protocol tests must cover latest target diagnostic and tracking projection'
 require 'keeps base media controls available when remote desktop target refresh fails' "$ACCESS_TEST" \
   'frontend access tests must prove remote target failure does not disable base media'
 

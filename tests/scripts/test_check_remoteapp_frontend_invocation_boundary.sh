@@ -208,9 +208,32 @@ export function remoteDesktopViewFromResult(result: Record<string, unknown> | un
   return {
     productionReady: result?.production_media_ready === true || productionReadiness?.ready === true,
     productionReadiness,
-    productionBlockedReason: stringField(productionGate, 'reason'),
+    productionBlockedReason: productionReadiness?.blockedReason ?? stringField(productionGate, 'reason'),
+    latestTargetDiagnostic: remoteDesktopTargetDiagnosticFromValue(objectField(result, 'latest_target_diagnostic')),
+    targetTracking: remoteDesktopTargetTrackingFromValue(objectField(result, 'target_tracking')),
   }
 }
+
+function remoteDesktopTargetDiagnosticFromValue(value: Record<string, unknown> | undefined) {
+  return {
+    frontendAction: stringField(value, 'frontend_action'),
+  }
+}
+
+function remoteDesktopTargetTrackingFromValue(value: Record<string, unknown> | undefined) {
+  return {
+    inputEnabled: value?.input_enabled === true,
+  }
+}
+TS
+
+cat >"$FRONTEND_SRC/lib/api/remote-desktop-protocol.test.ts" <<'TS'
+it('projects target diagnostics and tracking state from the runtime session view', () => {
+  expect(remoteDesktopViewFromResult({
+    latest_target_diagnostic: { frontend_action: 'refresh_targets' },
+    target_tracking: { input_enabled: false },
+  }).latestTargetDiagnostic.frontendAction).toBe('refresh_targets')
+})
 TS
 
 cat >"$FRONTEND_SRC/store/media-channel-invocation.test.ts" <<'TS'
@@ -327,6 +350,15 @@ if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
 fi
 perl -0pi -e "s/if \\(pc\\.connectionState === 'connected'\\) reportClientMediaState\\(key, 'presenting'\\)/if (pc.connectionState === 'connected') updateWebRtcStatus()/" \
   "$FRONTEND_SRC/store/media-channel-store.ts"
+
+perl -0pi -e "s/    latestTargetDiagnostic: remoteDesktopTargetDiagnosticFromValue\\(objectField\\(result, 'latest_target_diagnostic'\\)\\),\\n    targetTracking: remoteDesktopTargetTrackingFromValue\\(objectField\\(result, 'target_tracking'\\)\\),//" \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
+if CHECK_REMOTEAPP_FRONTEND_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp frontend checker accepted missing target diagnostic/tracking projection" >&2
+  exit 1
+fi
+perl -0pi -e "s/    productionBlockedReason: productionReadiness\\?\\.blockedReason \\?\\? stringField\\(productionGate, 'reason'\\),/    productionBlockedReason: productionReadiness?.blockedReason ?? stringField(productionGate, 'reason'),\\n    latestTargetDiagnostic: remoteDesktopTargetDiagnosticFromValue(objectField(result, 'latest_target_diagnostic')),\\n    targetTracking: remoteDesktopTargetTrackingFromValue(objectField(result, 'target_tracking')),/" \
+  "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
 
 perl -0pi -e 's/productionReady: result\?\.production_media_ready === true \|\| productionReadiness\?\.ready === true/productionReady: productionGate?.ready === true || mediaBackends.some(isRemoteDesktopProductionBackend)/' \
   "$FRONTEND_SRC/lib/api/remote-desktop-protocol.ts"
