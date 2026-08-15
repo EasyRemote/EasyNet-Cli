@@ -28,12 +28,26 @@ impl TargetResolutionError {
     fn frontend_action(self) -> FrontendAction {
         FrontendAction::RefreshTargets
     }
+
+    fn target_event_type(self) -> Option<&'static str> {
+        match self {
+            Self::TargetStale => Some("CAPTURE_TARGET_STALE"),
+            Self::TargetIdentityAmbiguous => Some("CAPTURE_TARGET_AMBIGUOUS"),
+            Self::DisplayFallbackForbidden => Some("DISPLAY_FALLBACK_FORBIDDEN"),
+            Self::TargetPermissionMissing => Some("SCREEN_CAPTURE_PERMISSION_DENIED"),
+            _ => None,
+        }
+    }
 }
 impl RemoteAppTargetError {
     fn to_axon(&self) -> AxonError {
-        AxonError::new()
+        let mut error = AxonError::new()
             .with_context("target_reason", self.reason.as_str())
-            .with_context("frontend_action", self.reason.frontend_action().as_str())
+            .with_context("frontend_action", self.reason.frontend_action().as_str());
+        if let Some(target_event_type) = self.reason.target_event_type() {
+            error = error.with_context("target_event_type", target_event_type);
+        }
+        error
     }
 }
 pub struct ResourceEntryTargetResolver;
@@ -95,6 +109,28 @@ mod tests {
     fn every_target_resolution_reason_has_canonical_frontend_action_and_axon_context() {
         for reason in ALL_TARGET_RESOLUTION_ERRORS {
             assert!(ALL_FRONTEND_ACTIONS.contains(&reason.frontend_action()));
+        }
+    }
+
+    #[test]
+    fn target_resolution_reasons_project_spec_event_taxonomy_for_create_session_failures() {
+        let expected = [
+            (TargetResolutionError::TargetStale, Some("CAPTURE_TARGET_STALE")),
+            (
+                TargetResolutionError::TargetIdentityAmbiguous,
+                Some("CAPTURE_TARGET_AMBIGUOUS"),
+            ),
+            (
+                TargetResolutionError::DisplayFallbackForbidden,
+                Some("DISPLAY_FALLBACK_FORBIDDEN"),
+            ),
+            (
+                TargetResolutionError::TargetPermissionMissing,
+                Some("SCREEN_CAPTURE_PERMISSION_DENIED"),
+            ),
+        ];
+        for (reason, target_event_type) in expected {
+            assert_eq!(reason.target_event_type(), target_event_type);
         }
     }
 
@@ -331,6 +367,39 @@ if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1
 fi
 
 perl -0pi -e 's@app_name title can route production target@app_name/title are diagnostic hints, not production routing identity@' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+perl -0pi -e 's/fn target_event_type/fn legacy_target_event_type/' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted missing target_event_type taxonomy helper" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/fn legacy_target_event_type/fn target_event_type/' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+perl -0pi -e 's/error = error\.with_context\("target_event_type", target_event_type\);/let _ = target_event_type;/' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted target errors without target_event_type Axon context" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/let _ = target_event_type;/error = error.with_context("target_event_type", target_event_type);/' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+perl -0pi -e 's/Self::TargetStale => Some\("CAPTURE_TARGET_STALE"\)/Self::TargetStale => None/' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted missing CAPTURE_TARGET_STALE taxonomy mapping" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/Self::TargetStale => None/Self::TargetStale => Some("CAPTURE_TARGET_STALE")/' \
   "$SANDBOX/plugins/remote-desktop/src/target.rs"
 
 perl -0pi -e 's/fake_factory_receives_session_owned_binding_without_resource_re_resolution/fake_factory_re_resolves_resource_entry/' \

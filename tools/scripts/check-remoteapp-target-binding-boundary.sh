@@ -207,6 +207,9 @@ require 'app_name alone is not production routing identity' \
 require 'fn frontend_action\(self\) -> FrontendAction' \
   "$REMOTE_ROOT/target.rs" \
   'canonical target failures must map to frontend recovery actions in the target domain'
+require 'fn target_event_type' \
+  "$REMOTE_ROOT/target.rs" \
+  'canonical target failures must map to SPEC lifecycle event taxonomy when applicable'
 require 'ALL_TARGET_RESOLUTION_ERRORS' \
   "$REMOTE_ROOT/target.rs" \
   'canonical target failure reasons must be maintained as one explicit table'
@@ -219,9 +222,27 @@ require 'with_context\("target_reason", self\.reason\.as_str\(\)\)' \
 require 'with_context\("frontend_action", self\.reason\.frontend_action\(\)\.as_str\(\)\)' \
   "$REMOTE_ROOT/target.rs" \
   'RemoteAppTargetError must project frontend_action into Axon context'
+require 'with_context\("target_event_type", target_event_type\)' \
+  "$REMOTE_ROOT/target.rs" \
+  'RemoteAppTargetError must project SPEC target_event_type into Axon context when available'
 require 'every_target_resolution_reason_has_canonical_frontend_action_and_axon_context' \
   "$REMOTE_ROOT/target.rs" \
   'target domain must test every canonical target reason projection'
+require 'target_resolution_reasons_project_spec_event_taxonomy_for_create_session_failures' \
+  "$REMOTE_ROOT/target.rs" \
+  'target domain must test create_session failure reasons against SPEC event taxonomy'
+require 'Self::TargetStale => Some\("CAPTURE_TARGET_STALE"\)' \
+  "$REMOTE_ROOT/target.rs" \
+  'target_stale must project CAPTURE_TARGET_STALE for frontend lifecycle classification'
+require 'Self::TargetIdentityAmbiguous => Some\("CAPTURE_TARGET_AMBIGUOUS"\)' \
+  "$REMOTE_ROOT/target.rs" \
+  'target_identity_ambiguous must project CAPTURE_TARGET_AMBIGUOUS for frontend lifecycle classification'
+require 'Self::DisplayFallbackForbidden => Some\("DISPLAY_FALLBACK_FORBIDDEN"\)' \
+  "$REMOTE_ROOT/target.rs" \
+  'display_fallback_forbidden must project DISPLAY_FALLBACK_FORBIDDEN for frontend lifecycle classification'
+require 'Self::TargetPermissionMissing => Some\("SCREEN_CAPTURE_PERMISSION_DENIED"\)' \
+  "$REMOTE_ROOT/target.rs" \
+  'target_permission_missing must project SCREEN_CAPTURE_PERMISSION_DENIED for frontend lifecycle classification'
 require 'downcast_ref::<RemoteAppTargetError>' \
   "$REMOTE_ROOT/registration.rs" \
   'remote desktop registration must preserve typed target failures instead of string parsing'

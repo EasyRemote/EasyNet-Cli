@@ -265,6 +265,35 @@ impl TargetResolutionError {
         }
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn target_event_type(
+        self,
+    ) -> Option<&'static str> {
+        match self {
+            Self::TargetNotFound => Some("TARGET_LOST"),
+            Self::TargetStale => Some("CAPTURE_TARGET_STALE"),
+            Self::TargetIdentityAmbiguous => Some("CAPTURE_TARGET_AMBIGUOUS"),
+            Self::TargetIdentityChanged | Self::TargetIdentityMismatch => {
+                Some("CAPTURE_TARGET_IDENTITY_MISMATCH")
+            }
+            Self::TargetPermissionMissing => Some("SCREEN_CAPTURE_PERMISSION_DENIED"),
+            Self::TargetHidden => Some("TARGET_HIDDEN"),
+            Self::TargetMinimized => Some("TARGET_MINIMIZED"),
+            Self::TargetDisplayUnavailable => Some("DISPLAY_TOPOLOGY_CHANGED"),
+            Self::DisplayFallbackForbidden => Some("DISPLAY_FALLBACK_FORBIDDEN"),
+            Self::UnsupportedCaptureScope
+            | Self::CaptureBackendUnavailable
+            | Self::TargetMetadataIncomplete
+            | Self::TargetMultiDisplayUnsupported
+            | Self::DisplayIdentityMissing
+            | Self::DisplayIdentityMismatch
+            | Self::InputScopeUnsupported
+            | Self::TransportRouteUnavailable
+            | Self::ScreenCaptureKitEnumerationFailed
+            | Self::ScreenCaptureKitFilterFailed
+            | Self::ScreenCaptureKitStreamStartFailed => None,
+        }
+    }
+
     fn axon_projection(self) -> (AxonErrorKind, ErrorCode, ErrorStage, SecurityClass) {
         match self {
             Self::TargetPermissionMissing => (
@@ -370,6 +399,9 @@ impl RemoteAppTargetError {
             .with_context("target_reason", self.reason.as_str())
             .with_context("frontend_action", self.reason.frontend_action().as_str())
             .with_message(self.to_string());
+        if let Some(target_event_type) = self.reason.target_event_type() {
+            error = error.with_context("target_event_type", target_event_type);
+        }
         if !self.ability.is_empty() {
             error = error.with_context("ability", self.ability);
         }
@@ -1839,6 +1871,11 @@ mod tests {
                 Some(reason.frontend_action().as_str()),
                 "{reason_code} must carry its frontend recovery action"
             );
+            assert_eq!(
+                axon.context.get("target_event_type").map(String::as_str),
+                reason.target_event_type(),
+                "{reason_code} must project the matching SPEC target event type only when one exists"
+            );
             assert!(
                 !axon.message.is_empty() && axon.message.contains(reason_code),
                 "{reason_code} must remain visible in the diagnostic message"
@@ -1850,6 +1887,80 @@ mod tests {
             ALL_TARGET_RESOLUTION_ERRORS.len(),
             "canonical target reason table must not contain aliases"
         );
+    }
+
+    #[test]
+    fn target_resolution_reasons_project_spec_event_taxonomy_for_create_session_failures() {
+        let expected = [
+            (TargetResolutionError::TargetNotFound, Some("TARGET_LOST")),
+            (
+                TargetResolutionError::TargetStale,
+                Some("CAPTURE_TARGET_STALE"),
+            ),
+            (
+                TargetResolutionError::TargetIdentityAmbiguous,
+                Some("CAPTURE_TARGET_AMBIGUOUS"),
+            ),
+            (
+                TargetResolutionError::TargetIdentityChanged,
+                Some("CAPTURE_TARGET_IDENTITY_MISMATCH"),
+            ),
+            (
+                TargetResolutionError::TargetIdentityMismatch,
+                Some("CAPTURE_TARGET_IDENTITY_MISMATCH"),
+            ),
+            (
+                TargetResolutionError::TargetPermissionMissing,
+                Some("SCREEN_CAPTURE_PERMISSION_DENIED"),
+            ),
+            (TargetResolutionError::TargetHidden, Some("TARGET_HIDDEN")),
+            (
+                TargetResolutionError::TargetMinimized,
+                Some("TARGET_MINIMIZED"),
+            ),
+            (
+                TargetResolutionError::TargetDisplayUnavailable,
+                Some("DISPLAY_TOPOLOGY_CHANGED"),
+            ),
+            (
+                TargetResolutionError::DisplayFallbackForbidden,
+                Some("DISPLAY_FALLBACK_FORBIDDEN"),
+            ),
+            (TargetResolutionError::UnsupportedCaptureScope, None),
+            (TargetResolutionError::CaptureBackendUnavailable, None),
+            (TargetResolutionError::TargetMetadataIncomplete, None),
+            (TargetResolutionError::TargetMultiDisplayUnsupported, None),
+            (TargetResolutionError::DisplayIdentityMissing, None),
+            (TargetResolutionError::DisplayIdentityMismatch, None),
+            (TargetResolutionError::InputScopeUnsupported, None),
+            (TargetResolutionError::TransportRouteUnavailable, None),
+            (
+                TargetResolutionError::ScreenCaptureKitEnumerationFailed,
+                None,
+            ),
+            (TargetResolutionError::ScreenCaptureKitFilterFailed, None),
+            (
+                TargetResolutionError::ScreenCaptureKitStreamStartFailed,
+                None,
+            ),
+        ];
+
+        assert_eq!(expected.len(), ALL_TARGET_RESOLUTION_ERRORS.len());
+        for (reason, target_event_type) in expected {
+            assert_eq!(reason.target_event_type(), target_event_type);
+            let error = RemoteAppTargetError::new(
+                "remote_desktop.create_session",
+                reason,
+                "synthetic target failure",
+            )
+            .to_axon();
+            assert_eq!(
+                error.context.get("target_event_type").map(String::as_str),
+                target_event_type,
+                "{} must project expected target_event_type",
+                reason.as_str()
+            );
+        }
     }
 
     #[test]
