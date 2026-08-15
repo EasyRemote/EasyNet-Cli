@@ -38,6 +38,10 @@ pub struct TargetTrackerSnapshot {
     pub target_geometry_revision: u64,
 }
 
+const TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS: u64 = 100;
+
+struct TargetLifecycleEventCoalescer;
+
 fn commit_geometry() {
     geometry_event_type();
     "TARGET_PERMISSION_REVOKED";
@@ -68,6 +72,10 @@ fn commit_geometry() {
     }
 }
 
+fn coalesced_lifecycle_event() {
+    payload["coalesced_target_events"] = json!(0);
+}
+
 fn input_blocked_reason() {}
 
 fn target_failure_payload() {}
@@ -84,6 +92,9 @@ fn geometry_event_type() -> &'static str {
 mod tests {
     #[test]
     fn tracker_commits_move_resize_and_lost_without_rebinding() {}
+
+    #[test]
+    fn tracker_coalesces_high_rate_geometry_and_title_events() {}
 
     #[test]
     fn tracker_debounces_single_transient_lost_observation() {
@@ -1984,6 +1995,21 @@ write_fixture
 perl -0pi -e 's/input_reject_diagnostics_are_coalesced_across_interleaved_signatures/input_reject_diagnostics_flush_on_signature_changes/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
 run_fail 'PERF-07 must prove alternating invalid input signatures do not produce one diagnostic per frame'
+
+write_fixture
+perl -0pi -e 's/const TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS: u64 = 100;//' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'move/resize/title event coalescing must be capped at 10Hz per session'
+
+write_fixture
+perl -0pi -e 's/struct TargetLifecycleEventCoalescer;/struct TargetLifecycleEventPerTypeCoalescer;/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'target lifecycle event coalescing must live in the session target state machine domain'
+
+write_fixture
+perl -0pi -e 's/tracker_coalesces_high_rate_geometry_and_title_events/tracker_coalesces_geometry_events_only/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'SPEC max 10Hz move/resize/title coalescing must have alternating-event regression coverage'
 
 write_fixture
 perl -0pi -e 's/"unsupported_input_types": unsupported_input_channel_types_value\(\),/"supported_input_types": unsupported_input_channel_types_value(),/' \

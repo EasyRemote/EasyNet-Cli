@@ -110,6 +110,16 @@ require '"TARGET_MOVED"' "$TARGET_TRACKING" \
   'target tracker must emit TARGET_MOVED'
 require '"TARGET_RESIZED"' "$TARGET_TRACKING" \
   'target tracker must emit TARGET_RESIZED'
+require 'TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS: u64 = 100' "$TARGET_TRACKING" \
+  'move/resize/title event coalescing must be capped at 10Hz per session'
+require 'struct TargetLifecycleEventCoalescer' "$TARGET_TRACKING" \
+  'target lifecycle event coalescing must live in the session target state machine domain'
+require 'fn coalesced_lifecycle_event\(' "$TARGET_TRACKING" \
+  'move/resize/title events must pass through one session-level coalescing boundary'
+require '"coalesced_target_events"' "$TARGET_TRACKING" \
+  'coalesced target lifecycle events must report suppressed event count'
+require 'tracker_coalesces_high_rate_geometry_and_title_events' "$TARGET_TRACKING" \
+  'SPEC max 10Hz move/resize/title coalescing must have alternating-event regression coverage'
 require 'tracker_commits_move_resize_and_lost_without_rebinding' "$TARGET_TRACKING" \
   'E2E-08 must have move/resize/lost tracker regression coverage'
 require 'pointer_policy_consumes_latest_target_tracker_snapshot' "$INPUT" \

@@ -97,6 +97,7 @@ const ALL_TARGET_VISIBILITY_STATES: &[TargetVisibilityState] = &[
 const LOST_DEBOUNCE_REQUIRED_MISSES: u32 = 2;
 const LOST_DEBOUNCE_MS: u64 = 1_000;
 const AUTOMATIC_REBIND_WINDOW_MS: u64 = 30_000;
+const TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS: u64 = 100;
 
 #[derive(Debug, Clone)]
 pub(in crate::daemon::plugins::remote_desktop) struct TargetTrackerSnapshot {
@@ -302,6 +303,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteAppTargetBindingStat
     latest_loss_observed_at_ms: Option<u64>,
     rebind_started_at_ms: Option<u64>,
     rebind_failure_emitted: bool,
+    lifecycle_event_coalescer: TargetLifecycleEventCoalescer,
 }
 
 #[derive(Debug, Clone)]
@@ -311,6 +313,35 @@ struct PendingLostObservation {
     first_observed_at_ms: u64,
     latest_observed_at_ms: u64,
     consecutive_misses: u32,
+}
+
+#[derive(Debug, Clone, Default)]
+struct TargetLifecycleEventCoalescer {
+    last_emitted_at_ms: Option<u64>,
+    suppressed_since_last: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TargetLifecycleEventEmission {
+    suppressed_since_last: u64,
+}
+
+impl TargetLifecycleEventCoalescer {
+    fn observe(&mut self, observed_at_ms: u64) -> Option<TargetLifecycleEventEmission> {
+        if self.last_emitted_at_ms.is_none_or(|last_emitted_at_ms| {
+            observed_at_ms.saturating_sub(last_emitted_at_ms)
+                >= TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS
+        }) {
+            let emission = TargetLifecycleEventEmission {
+                suppressed_since_last: self.suppressed_since_last,
+            };
+            self.last_emitted_at_ms = Some(observed_at_ms);
+            self.suppressed_since_last = 0;
+            return Some(emission);
+        }
+        self.suppressed_since_last = self.suppressed_since_last.saturating_add(1);
+        None
+    }
 }
 
 impl RemoteAppTargetBindingStateMachine {
@@ -324,6 +355,7 @@ impl RemoteAppTargetBindingStateMachine {
             latest_loss_observed_at_ms: None,
             rebind_started_at_ms: None,
             rebind_failure_emitted: false,
+            lifecycle_event_coalescer: TargetLifecycleEventCoalescer::default(),
         }
     }
 
@@ -407,10 +439,11 @@ impl RemoteAppTargetBindingStateMachine {
             "target_geometry_changed",
             observed_at_ms,
         );
-        Some(TargetTrackingEvent {
+        self.coalesced_lifecycle_event(
             event_type,
-            payload: self.event_payload("target_geometry_changed", observed_at_ms, Some(previous)),
-        })
+            self.event_payload("target_geometry_changed", observed_at_ms, Some(previous)),
+            observed_at_ms,
+        )
     }
 
     fn commit_visibility(
@@ -523,10 +556,7 @@ impl RemoteAppTargetBindingStateMachine {
         let mut payload = self.event_payload("target_title_changed", observed_at_ms, None);
         payload["previous_title"] = json!(previous_title);
         payload["title"] = json!(self.snapshot.title);
-        Some(TargetTrackingEvent {
-            event_type: "TARGET_TITLE_CHANGED",
-            payload,
-        })
+        self.coalesced_lifecycle_event("TARGET_TITLE_CHANGED", payload, observed_at_ms)
     }
 
     fn commit_focus(&mut self, focused: bool, observed_at_ms: u64) -> Option<TargetTrackingEvent> {
@@ -903,6 +933,21 @@ impl RemoteAppTargetBindingStateMachine {
         }
     }
 
+    fn coalesced_lifecycle_event(
+        &mut self,
+        event_type: &'static str,
+        mut payload: Value,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEvent> {
+        let emission = self.lifecycle_event_coalescer.observe(observed_at_ms)?;
+        payload["coalesced_target_events"] = json!(emission.suppressed_since_last);
+        payload["coalesce_interval_ms"] = json!(TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS);
+        Some(TargetTrackingEvent {
+            event_type,
+            payload,
+        })
+    }
+
     fn pending_lost_diagnostic(&self, pending: &PendingLostObservation) -> Value {
         target_failure_payload(
             json!({
@@ -1001,6 +1046,8 @@ fn geometry_event_type(previous: &TargetGeometry, next: &TargetGeometry) -> &'st
 #[cfg(test)]
 mod tests {
     use serde_json::{json, Value};
+
+    use super::TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS;
 
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::target::{
@@ -1105,7 +1152,7 @@ mod tests {
                     height: Some(768.0),
                 },
                 target_geometry_revision: 5,
-                observed_at_ms: 20,
+                observed_at_ms: 120,
             })
             .expect("resize commits");
         assert_eq!(resized.event_type(), "TARGET_RESIZED");
@@ -1138,6 +1185,76 @@ mod tests {
             json!("target_lost")
         );
         assert!(tracker.snapshot().pointer_target_value().is_none());
+    }
+
+    #[test]
+    fn tracker_coalesces_high_rate_geometry_and_title_events() {
+        let binding = window_binding();
+        let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding);
+
+        let first = tracker
+            .commit_observation(TargetObservation::GeometryChanged {
+                geometry: TargetGeometry {
+                    x: Some(101.0),
+                    y: Some(201.0),
+                    width: Some(800.0),
+                    height: Some(600.0),
+                },
+                target_geometry_revision: 4,
+                observed_at_ms: 1,
+            })
+            .expect("first high-rate lifecycle event emits immediately");
+        assert_eq!(first.event_type(), "TARGET_MOVED");
+        assert_eq!(first.payload()["coalesced_target_events"], json!(0));
+        assert_eq!(
+            first.payload()["coalesce_interval_ms"],
+            json!(TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS)
+        );
+
+        for observed_at_ms in 2..=100 {
+            let event = if observed_at_ms % 2 == 0 {
+                tracker.commit_observation(TargetObservation::TitleChanged {
+                    title: Some(format!("Cursor {observed_at_ms}")),
+                    observed_at_ms,
+                })
+            } else {
+                tracker.commit_observation(TargetObservation::GeometryChanged {
+                    geometry: TargetGeometry {
+                        x: Some(100.0 + observed_at_ms as f64),
+                        y: Some(200.0 + observed_at_ms as f64),
+                        width: Some(800.0 + observed_at_ms as f64),
+                        height: Some(600.0),
+                    },
+                    target_geometry_revision: observed_at_ms,
+                    observed_at_ms,
+                })
+            };
+            assert!(
+                event.is_none(),
+                "geometry/title lifecycle events must be session-coalesced under 10Hz"
+            );
+        }
+
+        assert_eq!(tracker.snapshot().title(), Some("Cursor 100"));
+        assert_eq!(
+            tracker.snapshot().target_geometry_revision(),
+            99,
+            "suppressed geometry observations still update the committed target snapshot"
+        );
+
+        let sampled = tracker
+            .commit_observation(TargetObservation::TitleChanged {
+                title: Some("Cursor sampled".to_string()),
+                observed_at_ms: 101,
+            })
+            .expect("next event after the coalesce interval emits");
+        assert_eq!(sampled.event_type(), "TARGET_TITLE_CHANGED");
+        assert_eq!(sampled.payload()["coalesced_target_events"], json!(99));
+        assert_eq!(
+            sampled.payload()["coalesce_interval_ms"],
+            json!(TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS)
+        );
+        assert_eq!(tracker.snapshot().title(), Some("Cursor sampled"));
     }
 
     #[test]
