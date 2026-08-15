@@ -67,6 +67,7 @@ SCK="$REMOTE_ROOT/screencapturekit_capture.rs"
 REQUEST="$REMOTE_ROOT/request.rs"
 SESSION_STORE="$REMOTE_ROOT/session_store.rs"
 CREATE_SESSION="$REMOTE_ROOT/handlers/create_session.rs"
+SET_DESCRIPTION="$REMOTE_ROOT/handlers/set_description.rs"
 SESSION_LIFECYCLE="$REMOTE_ROOT/session_lifecycle.rs"
 SESSION_CREATION="$REMOTE_ROOT/session_creation.rs"
 INVOKE_BIDI="$REMOTE_ROOT/invoke_bidi.rs"
@@ -75,7 +76,7 @@ WEBRTC_MEDIA="$REMOTE_ROOT/transport/webrtc_media.rs"
 WEBRTC_NEGOTIATION="$REMOTE_ROOT/transport/webrtc_negotiation.rs"
 TRANSPORT_BLOCKER="$REMOTE_ROOT/transport_blocker.rs"
 
-for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NEGOTIATION" "$TRANSPORT_BLOCKER"; do
+for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SET_DESCRIPTION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NEGOTIATION" "$TRANSPORT_BLOCKER"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -544,6 +545,14 @@ require 'transport_blocked_projects_capture_backend_reason_code' "$SESSION_EVENT
   'session event tests must prove TRANSPORT_BLOCKED publishes capture_backend_unavailable'
 require 'backend_unavailable_maps_to_capture_backend_unavailable' "$TRANSPORT_BLOCKER" \
   'transport blocker tests must prove backend-unavailable canonical mapping'
+reject_multiline '/fn mark_backend_unavailable\((?:(?!fn commit_started_endpoint).)*session\.set_description\(/s' "$WEBRTC_NEGOTIATION" \
+  'transport backend-unavailable gate must not partially commit remote SDP signaling'
+require 'remote_offer_backend_gate_blocks_without_committing_signaling' "$SET_DESCRIPTION" \
+  'set_description tests must prove backend-unavailable gate leaves signaling uncommitted'
+require 'remote_description"\], Value::Null' "$SET_DESCRIPTION" \
+  'backend-unavailable regression must assert remote_description remains empty'
+require 'event\["event_type"\] != json!\("DESCRIPTION_SET"\)' "$SET_DESCRIPTION" \
+  'backend-unavailable regression must assert DESCRIPTION_SET is not emitted'
 require '"host_only_no_nat_or_relay"' "$VIEW_TRANSPORT" \
   'host-only transport degradation must have a typed unavailable reason'
 require '"relay_unavailable"' "$VIEW_TRANSPORT" \

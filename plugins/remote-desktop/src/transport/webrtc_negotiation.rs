@@ -52,7 +52,8 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteOfferNegotiation {
 /// fails, the endpoint is stopped before returning the error.
 ///
 /// Invariant 3: unavailable capture backend is an auditable transport-blocked
-/// session event, not a silent fallback.
+/// session event, not a silent fallback or a partially-committed signaling
+/// description.
 pub(in crate::daemon::plugins::remote_desktop) fn negotiate_remote_offer(
     request: RemoteOfferNegotiation,
 ) -> anyhow::Result<String> {
@@ -178,7 +179,6 @@ fn mark_backend_unavailable(
                 &request.access_args,
                 session,
             )?;
-            session.set_description(&request.side, request.description.clone())?;
             session.mark_transport_blocked(
                 "webrtc_transport_backend_unavailable",
                 MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID,
@@ -244,4 +244,86 @@ fn commit_started_endpoint(
             );
             Ok(())
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use serde_json::{json, Value};
+
+    use super::*;
+    use crate::daemon::persistence::resources::{self, ResourcesFile};
+    use crate::daemon::plugins::remote_desktop::test_support::{
+        create_test_session, env_for, reset_store, seed_display, test_lock, test_plugin,
+    };
+
+    #[test]
+    fn backend_unavailable_gate_does_not_commit_remote_description() {
+        let _lock = test_lock();
+        let plugin = test_plugin();
+        reset_store(&plugin);
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = ResourcesFile::default();
+        let ura = seed_display(&mut file, "remote-desktop-negotiation-backend-gate");
+        resources::save(&file).unwrap();
+
+        let created = create_test_session(
+            Arc::clone(&plugin),
+            env_for(&ura),
+            json!({
+                "session_id": "rd-negotiation-backend-gate",
+                "transport_preferences": ["webrtc"],
+            }),
+        )
+        .unwrap();
+        let token = created["session_token"].as_str().unwrap().to_string();
+        let args = json!({
+            "session_id": "rd-negotiation-backend-gate",
+            "session_token": token,
+            "side": "remote",
+            "description": { "type": "offer", "sdp": "v=0\r\n" }
+        });
+
+        mark_backend_unavailable(
+            &RemoteOfferNegotiation {
+                plugin: Arc::clone(&plugin),
+                access_env: env_for(&ura),
+                access_args: args,
+                session_id: "rd-negotiation-backend-gate".to_string(),
+                side: "remote".to_string(),
+                description: json!({ "type": "offer", "sdp": "v=0\r\n" }),
+                offer_sdp: "v=0\r\n".to_string(),
+            },
+            "rd-negotiation-backend-gate",
+        )
+        .unwrap();
+
+        plugin.session_store().with_sessions(|sessions| {
+            let session = sessions.get("rd-negotiation-backend-gate").unwrap();
+            assert_eq!(
+                session.signaling_view(Value::Null)["remote_description"],
+                Value::Null
+            );
+            assert_eq!(
+                session.signaling_view(Value::Null)["local_description"],
+                Value::Null
+            );
+            assert!(
+                session.events().iter().any(|event| {
+                    event["event_type"] == json!("TRANSPORT_BLOCKED")
+                        && event["payload"]["reason"]
+                            == json!("webrtc_transport_backend_unavailable")
+                }),
+                "backend gate must remain auditable as TRANSPORT_BLOCKED"
+            );
+            assert!(
+                session
+                    .events()
+                    .iter()
+                    .all(|event| event["event_type"] != json!("DESCRIPTION_SET")),
+                "backend gate must not partially commit signaling"
+            );
+        });
+    }
 }

@@ -247,7 +247,7 @@ mod tests {
     // display relay.
     #[cfg(not(target_os = "macos"))]
     #[test]
-    fn remote_offer_is_blocked_when_no_webrtc_transport_backend_exists() {
+    fn remote_offer_backend_gate_blocks_without_committing_signaling() {
         let _lock = test_lock();
         let plugin = test_plugin();
         reset_store(&plugin);
@@ -286,6 +286,7 @@ mod tests {
             signaled["transport"]["unavailable_reason"],
             json!("webrtc_transport_backend_unavailable")
         );
+        assert_eq!(signaled["signaling"]["remote_description"], Value::Null);
         assert_eq!(signaled["signaling"]["local_description"], Value::Null);
         assert!(
             signaled["events"]
@@ -294,6 +295,14 @@ mod tests {
                 .iter()
                 .any(|event| event["event_type"] == json!("TRANSPORT_BLOCKED")),
             "transport block must be auditable: {signaled:?}"
+        );
+        assert!(
+            signaled["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|event| event["event_type"] != json!("DESCRIPTION_SET")),
+            "transport backend gate must not partially commit signaling: {signaled:?}"
         );
     }
 

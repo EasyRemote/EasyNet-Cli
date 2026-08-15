@@ -660,8 +660,30 @@ fn answer(endpoint_config: EndpointConfig) {
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_negotiation.rs" <<'RS'
+fn mark_backend_unavailable() {
+    session.mark_transport_blocked(
+        "webrtc_transport_backend_unavailable",
+        MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID,
+    );
+}
+
 fn commit_started_endpoint(session_id: &str) {
     direct_webrtc_endpoint_ura(session_id);
+}
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/handlers/set_description.rs" <<'RS'
+#[test]
+fn remote_offer_backend_gate_blocks_without_committing_signaling() {
+    assert_eq!(signaled["signaling"]["remote_description"], Value::Null);
+    assert_eq!(signaled["signaling"]["local_description"], Value::Null);
+    assert!(
+        signaled["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|event| event["event_type"] != json!("DESCRIPTION_SET"))
+    );
 }
 RS
 
@@ -1547,6 +1569,26 @@ write_fixture
 perl -0pi -e 's/transport_blocked_projects_capture_backend_reason_code/transport_blocked_lacks_reason_code/' \
   "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
 run_fail 'session event tests must prove TRANSPORT_BLOCKED publishes capture_backend_unavailable'
+
+write_fixture
+perl -0pi -e 's/(fn mark_backend_unavailable\(\) \{\n)/$1    session.set_description("remote", description)?;\n/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_negotiation.rs"
+run_fail 'transport backend-unavailable gate must not partially commit remote SDP signaling'
+
+write_fixture
+perl -0pi -e 's/remote_offer_backend_gate_blocks_without_committing_signaling/remote_offer_backend_gate_only_checks_transport_block/' \
+  "$SANDBOX/plugins/remote-desktop/src/handlers/set_description.rs"
+run_fail 'set_description tests must prove backend-unavailable gate leaves signaling uncommitted'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(signaled\["signaling"\]\["remote_description"\], Value::Null\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/handlers/set_description.rs"
+run_fail 'backend-unavailable regression must assert remote_description remains empty'
+
+write_fixture
+perl -0pi -e 's/\.all\(\|event\| event\["event_type"\] != json!\("DESCRIPTION_SET"\)\)/.any(|event| event["event_type"] == json!("TRANSPORT_BLOCKED"))/' \
+  "$SANDBOX/plugins/remote-desktop/src/handlers/set_description.rs"
+run_fail 'backend-unavailable regression must assert DESCRIPTION_SET is not emitted'
 
 write_fixture
 perl -0pi -e 's/fn transport_route_state/fn transport_summary_without_routes/' \
