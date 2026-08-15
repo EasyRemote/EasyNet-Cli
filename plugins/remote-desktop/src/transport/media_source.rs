@@ -65,6 +65,7 @@ impl RemoteAppMediaSourceFactory for DirectWebRtcMediaSourceFactory {
         binding: &RemoteAppTargetBinding,
         request: MediaStartRequest<'_>,
     ) -> Result<RemoteAppMediaSource, RemoteAppTargetError> {
+        binding.require_capture_proof(ABILITY_SET_DESCRIPTION)?;
         if request.config.backend.production_ready() {
             #[cfg(target_os = "macos")]
             {
@@ -109,7 +110,8 @@ mod tests {
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::media::XCAP_OPENH264_WEBRTC_BACKEND;
     use crate::daemon::plugins::remote_desktop::target::{
-        RemoteAppTargetResolver, ResourceEntryTargetResolver, TargetResolutionError,
+        AppWindowSetProof, RemoteAppTargetResolver, ResolvedCaptureTargetProof,
+        ResourceEntryTargetResolver, TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
 
@@ -142,6 +144,33 @@ mod tests {
             .expect("binding resolves")
     }
 
+    fn commit_test_capture_proof(binding: &mut RemoteAppTargetBinding) {
+        let locator = binding.native_locator();
+        let proof = ResolvedCaptureTargetProof::new(
+            locator.capture_backend(),
+            binding.target_kind(),
+            locator.display_id(),
+            locator.window_id(),
+            locator.pid(),
+            locator.app_identity().map(ToOwned::to_owned),
+            locator.bundle_id().map(ToOwned::to_owned),
+            Some((1280, 720)),
+        );
+        let proof = if binding.target_kind() == RemoteDesktopTargetKind::Application {
+            proof.with_app_window_set(AppWindowSetProof::new(
+                locator.display_id().expect("application display id"),
+                locator.bundle_id().map(ToOwned::to_owned),
+                locator.pid(),
+                vec![7],
+            ))
+        } else {
+            proof
+        };
+        binding
+            .commit_capture_proof("remote_desktop.create_session", proof)
+            .expect("test capture proof commits");
+    }
+
     fn display_baseline_config() -> BuiltinH264Config {
         BuiltinH264Config {
             backend: XCAP_OPENH264_WEBRTC_BACKEND,
@@ -155,6 +184,25 @@ mod tests {
 
     #[test]
     fn display_source_may_use_baseline_when_native_backend_is_not_selected() {
+        let mut binding = binding_for(
+            ResourceType::Display,
+            json!({
+                "backend": "xcap",
+                "display_id": 1,
+            }),
+        );
+        commit_test_capture_proof(&mut binding);
+        let config = display_baseline_config();
+
+        let source = DirectWebRtcMediaSourceFactory
+            .start_from_binding(&binding, MediaStartRequest { config: &config })
+            .expect("display baseline is allowed");
+
+        assert_eq!(source, RemoteAppMediaSource::DisplayBaseline);
+    }
+
+    #[test]
+    fn direct_factory_rejects_uncommitted_target_binding_before_media_selection() {
         let binding = binding_for(
             ResourceType::Display,
             json!({
@@ -164,11 +212,15 @@ mod tests {
         );
         let config = display_baseline_config();
 
-        let source = DirectWebRtcMediaSourceFactory
+        let err = DirectWebRtcMediaSourceFactory
             .start_from_binding(&binding, MediaStartRequest { config: &config })
-            .expect("display baseline is allowed");
+            .expect_err("media source startup requires committed capture proof");
 
-        assert_eq!(source, RemoteAppMediaSource::DisplayBaseline);
+        assert_eq!(
+            err.reason(),
+            TargetResolutionError::TargetMetadataIncomplete
+        );
+        assert_eq!(err.reason().frontend_action().as_str(), "show_unsupported");
     }
 
     #[test]
@@ -240,7 +292,8 @@ mod tests {
                 }),
             ),
         ] {
-            let binding = binding_for(kind, metadata);
+            let mut binding = binding_for(kind, metadata);
+            commit_test_capture_proof(&mut binding);
             let config = display_baseline_config();
 
             let err = DirectWebRtcMediaSourceFactory

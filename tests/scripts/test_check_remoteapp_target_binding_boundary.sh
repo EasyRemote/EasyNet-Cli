@@ -352,6 +352,7 @@ struct DirectWebRtcMediaSourceFactory;
 
 impl RemoteAppMediaSourceFactory for DirectWebRtcMediaSourceFactory {
     fn start_from_binding(binding: Binding) -> Result<RemoteAppMediaSource, RemoteAppTargetError> {
+        binding.require_capture_proof(ABILITY_SET_DESCRIPTION)?;
         if binding.target_kind() == RemoteDesktopTargetKind::Display {
             Ok(RemoteAppMediaSource::DisplayBaseline)
         } else {
@@ -367,6 +368,9 @@ mod tests {
         let seen_binding_id = Some(expected_binding_id);
         assert_eq!(seen_binding_id, Some(expected_binding_id));
     }
+
+    #[test]
+    fn direct_factory_rejects_uncommitted_target_binding_before_media_selection() {}
 }
 RS
 
@@ -558,6 +562,28 @@ if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1
 fi
 
 perl -0pi -e 's/if true/if binding.target_kind\(\) == RemoteDesktopTargetKind::Display/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+perl -0pi -e 's/\n        binding\.require_capture_proof\(ABILITY_SET_DESCRIPTION\)\?;//' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted media source factory without committed capture proof gate" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/fn start_from_binding\(binding: Binding\) -> Result<RemoteAppMediaSource, RemoteAppTargetError> \{\n/fn start_from_binding(binding: Binding) -> Result<RemoteAppMediaSource, RemoteAppTargetError> {\n        binding.require_capture_proof(ABILITY_SET_DESCRIPTION)?;\n/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+perl -0pi -e 's/direct_factory_rejects_uncommitted_target_binding_before_media_selection/direct_factory_allows_uncommitted_target_binding/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted missing uncommitted binding media source test" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/direct_factory_allows_uncommitted_target_binding/direct_factory_rejects_uncommitted_target_binding_before_media_selection/' \
   "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
 
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null

@@ -7,6 +7,7 @@ SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 SCK_CAPTURE="$REMOTE_ROOT/screencapturekit_capture.rs"
 MEDIA="$REMOTE_ROOT/media/mod.rs"
 TARGET_DOMAIN="$REMOTE_ROOT/target.rs"
+MEDIA_SOURCE_FACTORY="$REMOTE_ROOT/transport/media_source.rs"
 
 fail() {
   printf 'check-remoteapp-target-binding-boundary: %s\n' "$1" >&2
@@ -116,6 +117,12 @@ require '!sessions\.contains_key\("rd-weak-window"\)' \
 require 'session\.target_binding\(\)\.clone\(\)' \
   "$REMOTE_ROOT/transport/webrtc_negotiation.rs" \
   'WebRTC negotiation must consume the session-owned target binding'
+require 'binding\.require_capture_proof\(ABILITY_SET_DESCRIPTION\)' \
+  "$MEDIA_SOURCE_FACTORY" \
+  'direct WebRTC media source startup must require a committed capture proof before selecting a media source'
+require 'direct_factory_rejects_uncommitted_target_binding_before_media_selection' \
+  "$MEDIA_SOURCE_FACTORY" \
+  'media source factory must test that uncommitted target bindings cannot start media'
 require 'target_for_binding\(' \
   "$REMOTE_ROOT/transport/webrtc_native_media.rs" \
   'native media must start from RemoteAppTargetBinding'
