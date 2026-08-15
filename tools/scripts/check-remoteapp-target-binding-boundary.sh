@@ -120,6 +120,24 @@ require 'session\.target_binding\(\)\.clone\(\)' \
 require 'binding\.require_capture_proof\(ABILITY_SET_DESCRIPTION\)' \
   "$MEDIA_SOURCE_FACTORY" \
   'direct WebRTC media source startup must require a committed capture proof before selecting a media source'
+require 'validate_available_webrtc_backend\(request\.config\.backend, binding\)\?' \
+  "$MEDIA_SOURCE_FACTORY" \
+  'direct WebRTC media source startup must validate backend availability and transport compatibility at the factory boundary'
+require 'fn validate_available_webrtc_backend\(' \
+  "$MEDIA_SOURCE_FACTORY" \
+  'direct WebRTC media source factory must own backend availability validation'
+require '!backend\.is_available\(\) \|\| !backend\.is_webrtc_transport\(\) \|\| !backend\.transport_ready\(\)' \
+  "$MEDIA_SOURCE_FACTORY" \
+  'direct WebRTC media source factory must reject unavailable or non-WebRTC backend descriptors before media startup'
+require 'validate_native_production_binding\(request\.config\.backend, binding\)\?' \
+  "$MEDIA_SOURCE_FACTORY" \
+  'direct WebRTC production media source startup must validate backend subject/native binding compatibility at the factory boundary'
+require 'fn validate_native_production_binding\(' \
+  "$MEDIA_SOURCE_FACTORY" \
+  'direct WebRTC media source factory must own native production binding validation'
+require '!backend\.supports_subject\(binding\.target_kind\(\)\.resource_type\(\)\)' \
+  "$MEDIA_SOURCE_FACTORY" \
+  'production WebRTC backend descriptors must be revalidated against the committed target binding subject'
 require 'direct_factory_rejects_uncommitted_target_binding_before_media_selection' \
   "$MEDIA_SOURCE_FACTORY" \
   'media source factory must test that uncommitted target bindings cannot start media'

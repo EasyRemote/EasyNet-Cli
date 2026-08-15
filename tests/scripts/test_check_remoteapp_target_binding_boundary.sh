@@ -353,12 +353,30 @@ struct DirectWebRtcMediaSourceFactory;
 impl RemoteAppMediaSourceFactory for DirectWebRtcMediaSourceFactory {
     fn start_from_binding(binding: Binding) -> Result<RemoteAppMediaSource, RemoteAppTargetError> {
         binding.require_capture_proof(ABILITY_SET_DESCRIPTION)?;
+        validate_available_webrtc_backend(request.config.backend, binding)?;
+        if request.config.backend.production_ready() {
+            validate_native_production_binding(request.config.backend, binding)?;
+        }
         if binding.target_kind() == RemoteDesktopTargetKind::Display {
             Ok(RemoteAppMediaSource::DisplayBaseline)
         } else {
             Err(TargetResolutionError::DisplayFallbackForbidden.into())
         }
     }
+}
+
+fn validate_available_webrtc_backend(backend: Backend, binding: Binding) -> Result<(), RemoteAppTargetError> {
+    if !backend.is_available() || !backend.is_webrtc_transport() || !backend.transport_ready() {
+        return Err(TargetResolutionError::CaptureBackendUnavailable.into());
+    }
+    Ok(())
+}
+
+fn validate_native_production_binding(backend: Backend, binding: Binding) -> Result<(), RemoteAppTargetError> {
+    if !backend.supports_subject(binding.target_kind().resource_type()) {
+        return Err(TargetResolutionError::CaptureBackendUnavailable.into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -584,6 +602,50 @@ if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1
 fi
 
 perl -0pi -e 's/direct_factory_allows_uncommitted_target_binding/direct_factory_rejects_uncommitted_target_binding_before_media_selection/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+perl -0pi -e 's/\n        validate_available_webrtc_backend\(request\.config\.backend, binding\)\?;//' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted media source factory without backend availability validation" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/(binding\.require_capture_proof\(ABILITY_SET_DESCRIPTION\)\?;)/$1\n        validate_available_webrtc_backend(request.config.backend, binding)?;/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+perl -0pi -e 's/!backend\.is_available\(\) \|\| !backend\.is_webrtc_transport\(\) \|\| !backend\.transport_ready\(\)/false/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted backend availability helper without availability/transport predicate" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/if false/if !backend.is_available() || !backend.is_webrtc_transport() || !backend.transport_ready()/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+perl -0pi -e 's/\n            validate_native_production_binding\(request\.config\.backend, binding\)\?;//' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted production media source without native binding validation" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/(if request\.config\.backend\.production_ready\(\) \{\n)/$1            validate_native_production_binding(request.config.backend, binding)?;\n/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+perl -0pi -e 's/!backend\.supports_subject\(binding\.target_kind\(\)\.resource_type\(\)\)/false/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted production binding helper without backend subject predicate" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/if false/if !backend.supports_subject(binding.target_kind().resource_type())/' \
   "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
 
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null

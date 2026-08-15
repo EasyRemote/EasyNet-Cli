@@ -13,6 +13,7 @@
 
 use crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION;
 use crate::daemon::plugins::remote_desktop::media::encode::BuiltinH264Config;
+use crate::daemon::plugins::remote_desktop::media::RemoteDesktopMediaBackendDescriptor;
 use crate::daemon::plugins::remote_desktop::target::{
     RemoteAppTargetBinding, RemoteAppTargetError, RemoteDesktopTargetKind, TargetResolutionError,
 };
@@ -66,7 +67,9 @@ impl RemoteAppMediaSourceFactory for DirectWebRtcMediaSourceFactory {
         request: MediaStartRequest<'_>,
     ) -> Result<RemoteAppMediaSource, RemoteAppTargetError> {
         binding.require_capture_proof(ABILITY_SET_DESCRIPTION)?;
+        validate_available_webrtc_backend(request.config.backend, binding)?;
         if request.config.backend.production_ready() {
+            validate_native_production_binding(request.config.backend, binding)?;
             #[cfg(target_os = "macos")]
             {
                 return Ok(RemoteAppMediaSource::NativeProduction);
@@ -97,6 +100,53 @@ impl RemoteAppMediaSourceFactory for DirectWebRtcMediaSourceFactory {
             ),
         ))
     }
+}
+
+fn validate_available_webrtc_backend(
+    backend: RemoteDesktopMediaBackendDescriptor,
+    binding: &RemoteAppTargetBinding,
+) -> Result<(), RemoteAppTargetError> {
+    if !backend.is_available() || !backend.is_webrtc_transport() || !backend.transport_ready() {
+        return Err(RemoteAppTargetError::new(
+            ABILITY_SET_DESCRIPTION,
+            TargetResolutionError::CaptureBackendUnavailable,
+            format!(
+                "direct WebRTC media backend {} is not an available WebRTC transport for {} target binding",
+                backend.backend_id(),
+                binding.target_kind().as_str()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_native_production_binding(
+    backend: RemoteDesktopMediaBackendDescriptor,
+    binding: &RemoteAppTargetBinding,
+) -> Result<(), RemoteAppTargetError> {
+    if !backend.supports_subject(binding.target_kind().resource_type()) {
+        return Err(RemoteAppTargetError::new(
+            ABILITY_SET_DESCRIPTION,
+            TargetResolutionError::CaptureBackendUnavailable,
+            format!(
+                "direct WebRTC media backend {} does not support {} target bindings",
+                backend.backend_id(),
+                binding.target_kind().as_str()
+            ),
+        ));
+    }
+    if binding.supports_native_adapter() {
+        return Ok(());
+    }
+    Err(RemoteAppTargetError::new(
+        ABILITY_SET_DESCRIPTION,
+        TargetResolutionError::CaptureBackendUnavailable,
+        format!(
+            "production WebRTC backend {} cannot resolve the committed {} target binding through the native adapter",
+            backend.backend_id(),
+            binding.target_kind().as_str()
+        ),
+    ))
 }
 
 #[cfg(test)]
