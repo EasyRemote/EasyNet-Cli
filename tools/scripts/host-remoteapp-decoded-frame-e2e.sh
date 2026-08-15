@@ -24,6 +24,7 @@ OUT_DIR="${EASYNET_REMOTEAPP_E2E_OUT_DIR:-}"
 RUN="${EASYNET_HOST_REMOTEAPP_DECODED_FRAME_E2E:-0}"
 SELF_TEST=0
 PROBE_CMD="${EASYNET_REMOTEAPP_FRAME_PROBE_CMD:-}"
+PROBE_CMD_USES_BUNDLED=0
 TARGET_KIND="${EASYNET_REMOTEAPP_E2E_TARGET_KIND:-window}"
 SENTINEL_FIXTURE="${EASYNET_REMOTEAPP_SENTINEL_FIXTURE:-0}"
 SENTINEL_FIXTURE_CMD="${EASYNET_REMOTEAPP_SENTINEL_FIXTURE_CMD:-}"
@@ -78,6 +79,10 @@ Environment:
                         Optional positive process id used by the bundled probe
                         to select an application/window resource by live native
                         identity instead of diagnostic title text.
+  EASYNET_REMOTEAPP_CONTROL_DISCOVERY_JSON
+                        Optional absolute control.json path. Used only by the
+                        bundled EasyNet probe preflight for non-default state
+                        directories.
 
 Probe contract:
   The probe command receives:
@@ -93,6 +98,12 @@ Probe contract:
     - decoded frames excluded unrelated full-display sentinel content
     - scope_audit.scope_widened=false
     - scope_audit.display_fallback_used=false
+
+Bundled probe preflight:
+  When --probe-cmd is omitted, the harness uses the bundled EasyNet probe and
+  fails before launching host sentinel windows unless daemon control discovery
+  publishes daemon_identity. The harness must not synthesize daemon identity
+  for the probe because that would invalidate Invocation.subject evidence.
 
 Exit semantics:
   0  evidence is valid, or script was skipped because not enabled.
@@ -135,6 +146,56 @@ die() {
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
+}
+
+preflight_bundled_probe_runtime() {
+  local control_json="${EASYNET_REMOTEAPP_CONTROL_DISCOVERY_JSON:-}"
+  if [[ -z "$control_json" ]]; then
+    control_json="$(python3 - <<'PY'
+import pathlib
+print(pathlib.Path.home() / ".easynet" / "control.json")
+PY
+)"
+  fi
+
+  python3 - "$control_json" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+if not path.is_absolute():
+    raise SystemExit(
+        f"bundled EasyNet host probe requires an absolute control discovery path: {path}"
+    )
+if not path.exists():
+    raise SystemExit(
+        "bundled EasyNet host probe requires a running daemon: "
+        f"control discovery is missing at {path}"
+    )
+try:
+    discovery = json.loads(path.read_text(encoding="utf-8"))
+except Exception as exc:
+    raise SystemExit(f"bundled EasyNet host probe cannot parse control discovery {path}: {exc}") from exc
+
+identity = discovery.get("daemon_identity")
+if not isinstance(identity, dict):
+    raise SystemExit(
+        "bundled EasyNet host probe requires daemon_identity in control discovery; "
+        "start or restart the daemon before launching host sentinel fixtures"
+    )
+mode = str(identity.get("mode", "")).strip()
+realm = str(identity.get("realm", "")).strip()
+node_id = identity.get("node_id")
+if mode not in {"device", "both", "hub"}:
+    raise SystemExit(f"bundled EasyNet host probe found invalid daemon_identity.mode: {mode!r}")
+if not realm:
+    raise SystemExit("bundled EasyNet host probe found empty daemon_identity.realm")
+if mode in {"device", "both"} and not str(node_id or "").strip():
+    raise SystemExit(
+        "bundled EasyNet host probe found device-primary daemon_identity without node_id"
+    )
+PY
 }
 
 mkdir -p "$OUT_DIR"
@@ -658,6 +719,11 @@ fi
 if [[ -z "$PROBE_CMD" ]]; then
   [[ -x "$BUNDLED_PROBE" ]] || die "missing executable bundled probe: $BUNDLED_PROBE"
   PROBE_CMD="'$BUNDLED_PROBE'"
+  PROBE_CMD_USES_BUNDLED=1
+fi
+
+if [[ "$PROBE_CMD_USES_BUNDLED" == "1" ]]; then
+  preflight_bundled_probe_runtime
 fi
 
 cleanup_sentinel_fixture() {

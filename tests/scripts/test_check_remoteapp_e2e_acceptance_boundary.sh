@@ -345,6 +345,34 @@ PY
   exit 1
 }
 
+FIXTURE_SHOULD_NOT_RUN="$SANDBOX/fixture-should-not-run.sh"
+cat >"$FIXTURE_SHOULD_NOT_RUN" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p "$EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR"
+touch "$EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR/fixture-ran-before-preflight"
+cat >"$EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR/env.sh" <<'ENV'
+export EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB=255,0,0
+export EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB=0,255,0
+export EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL=selected-window-red
+export EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL=unrelated-window-green
+ENV
+SH
+chmod +x "$FIXTURE_SHOULD_NOT_RUN"
+if EASYNET_REMOTEAPP_CONTROL_DISCOVERY_JSON="$SANDBOX/missing-control.json" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+    --run \
+    --sentinel-fixture \
+    --sentinel-fixture-cmd "bash '$FIXTURE_SHOULD_NOT_RUN'" \
+    --out-dir "$SANDBOX/e2e-preflight-out" >/dev/null 2>&1; then
+  echo "remoteapp e2e harness accepted bundled probe without daemon identity preflight" >&2
+  exit 1
+fi
+[[ ! -e "$SANDBOX/e2e-preflight-out/sentinel-fixture/fixture-ran-before-preflight" ]] || {
+  echo "remoteapp e2e harness launched sentinel fixture before bundled probe runtime preflight" >&2
+  exit 1
+}
+
 PROBE_APP="$SANDBOX/fake_probe_application.py"
 cat >"$PROBE_APP" <<'PY'
 import json
@@ -450,7 +478,24 @@ EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID="4243" \
   --probe-cmd "python3 '$PROBE_APP'" \
   --out-dir "$SANDBOX/e2e-app-out" >/dev/null
 
+cat >"$SANDBOX/control.json" <<'JSON'
+{
+  "daemon_identity": {
+    "mode": "device",
+    "realm": "localhost",
+    "node_id": "dev"
+  },
+  "daemon_version": "test",
+  "pid": 1,
+  "supported_ipc_versions": {
+    "min": 1,
+    "max": 1
+  }
+}
+JSON
+
 if EASYNET_HOST_REMOTEAPP_DECODED_FRAME_E2E=1 \
+  EASYNET_REMOTEAPP_CONTROL_DISCOVERY_JSON="$SANDBOX/control.json" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
     --run \
     --out-dir "$SANDBOX/missing-receiver" >/dev/null 2>&1; then
@@ -583,6 +628,7 @@ PY
 
 EASYNET_REMOTEAPP_EASYNET_BIN="$FAKE_EASYNET" \
 EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD="python3 '$FRAME_RECEIVER'" \
+EASYNET_REMOTEAPP_CONTROL_DISCOVERY_JSON="$SANDBOX/control.json" \
 EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB="255,0,0" \
 EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB="0,255,0" \
 EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL="selected-window-red" \

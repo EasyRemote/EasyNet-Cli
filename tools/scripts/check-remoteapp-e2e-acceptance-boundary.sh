@@ -111,6 +111,12 @@ require 'source "\$SENTINEL_FIXTURE_DIR/env\.sh"' "$SCRIPT" \
   'host decoded-frame E2E must source sentinel fixture env before running the probe'
 require 'cleanup\.sh' "$SCRIPT" \
   'host decoded-frame E2E must run fixture cleanup after host probes'
+require 'preflight_bundled_probe_runtime' "$SCRIPT" \
+  'host decoded-frame E2E must preflight bundled EasyNet probe runtime before launching host fixtures'
+require 'EASYNET_REMOTEAPP_CONTROL_DISCOVERY_JSON' "$SCRIPT" \
+  'host decoded-frame E2E must allow explicit control discovery path for bundled probe preflight'
+require 'daemon_identity' "$SCRIPT" \
+  'host decoded-frame E2E bundled probe preflight must require daemon control discovery identity'
 require '\$TIMESTAMP-\$TARGET_KIND-\$\$' "$SCRIPT" \
   'host decoded-frame E2E default report directory must isolate concurrent target-kind runs'
 require 'os\.path\.isfile|decoded_frame_sample.*exist' "$SCRIPT" \
