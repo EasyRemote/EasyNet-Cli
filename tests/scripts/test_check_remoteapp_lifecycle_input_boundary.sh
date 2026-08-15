@@ -68,6 +68,8 @@ fn commit_geometry() {
     }
 }
 
+fn input_blocked_reason() {}
+
 fn target_failure_payload() {}
 
 fn geometry_event_type() -> &'static str {
@@ -102,9 +104,13 @@ mod tests {
     #[test]
     fn display_topology_loss_projects_target_failure_recovery() {
         assert_eq!(topology_changed.payload()["reason_code"], json!("target_display_unavailable"));
+        assert_eq!(topology_changed.payload()["input_blocked_reason"], json!("target_display_unavailable"));
         assert_eq!(hidden.payload()["reason_code"], json!("target_hidden"));
+        assert_eq!(hidden.payload()["input_blocked_reason"], json!("target_hidden"));
         assert_eq!(minimized.payload()["reason_code"], json!("target_minimized"));
+        assert_eq!(minimized.payload()["input_blocked_reason"], json!("target_minimized"));
         assert_eq!(blurred.payload()["reason_code"], json!("target_blurred"));
+        assert_eq!(blurred.payload()["input_blocked_reason"], json!("target_blurred"));
         assert_eq!(hidden.payload()["frontend_action"], json!("retry_session"));
     }
 }
@@ -831,6 +837,11 @@ perl -0pi -e 's/target_loss_pending/target_loss_unblocked/g' \
 run_fail 'pending target loss debounce must block input before committed target loss'
 
 write_fixture
+perl -0pi -e 's/fn input_blocked_reason\(\)/fn input_blocked_reason_regression()/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'target snapshot must derive a single machine-readable input block reason'
+
+write_fixture
 perl -0pi -e 's/tracker_debounces_single_transient_lost_observation/tracker_debounce_does_not_block_input/' \
   "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
 run_fail 'target tracker must test pending-loss debounce input safety'
@@ -876,9 +887,14 @@ perl -0pi -e 's/display_topology_loss_projects_target_failure_recovery/display_t
 run_fail 'display topology loss must have target-domain failure recovery coverage'
 
 write_fixture
-perl -0pi -e 's/json!\("target_display_unavailable"\)/json!("display_topology_changed")/' \
+perl -0pi -e 's/json!\("target_display_unavailable"\)/json!("display_topology_changed")/g' \
   "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
 run_fail 'display topology loss test must assert target_display_unavailable reason code'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(topology_changed\.payload\(\)\["input_blocked_reason"\], json!\("target_display_unavailable"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'display topology loss test must assert input_blocked_reason for frontend recovery'
 
 write_fixture
 perl -0pi -e 's/TargetResolutionError::TargetHidden/TargetVisibilityState::Hidden/' \
@@ -886,9 +902,24 @@ perl -0pi -e 's/TargetResolutionError::TargetHidden/TargetVisibilityState::Hidde
 run_fail 'hidden target visibility must use canonical target_hidden reason'
 
 write_fixture
-perl -0pi -e 's/json!\("target_minimized"\)/json!("target_minimized_regression")/' \
+perl -0pi -e 's/json!\("target_hidden"\)/json!("target_hidden_regression")/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'hidden visibility test must assert target_hidden reason code'
+
+write_fixture
+perl -0pi -e 's/json!\("target_minimized"\)/json!("target_minimized_regression")/g' \
   "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
 run_fail 'minimized visibility test must assert target_minimized reason code'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(hidden\.payload\(\)\["input_blocked_reason"\], json!\("target_hidden"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'hidden visibility test must assert input_blocked_reason for frontend recovery'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(minimized\.payload\(\)\["input_blocked_reason"\], json!\("target_minimized"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'minimized visibility test must assert input_blocked_reason for frontend recovery'
 
 write_fixture
 perl -0pi -e 's/json!\("retry_session"\)/json!("refresh_targets")/' \
@@ -901,9 +932,14 @@ perl -0pi -e 's/FrontendAction::RetrySession/FrontendAction::RefreshTargets/' \
 run_fail 'focus-loss target visibility must use canonical retry_session action'
 
 write_fixture
-perl -0pi -e 's/json!\("target_blurred"\)/json!("target_focused")/' \
+perl -0pi -e 's/json!\("target_blurred"\)/json!("target_focused")/g' \
   "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
 run_fail 'focus loss test must assert target_blurred reason code'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(blurred\.payload\(\)\["input_blocked_reason"\], json!\("target_blurred"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'focus loss test must assert input_blocked_reason for frontend recovery'
 
 write_fixture
 perl -0pi -e 's/if window\.visibility_state != TargetVisibilityState::Visible \{\n        return Some\(TargetObservation::VisibilityChanged \{\n            visibility_state: window\.visibility_state,\n        \}\);\n    \}\n    if snapshot\.title\(\) != window\.title\.as_deref\(\)/if snapshot.title() != window.title.as_deref()/' \

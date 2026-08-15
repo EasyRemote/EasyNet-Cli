@@ -52,10 +52,6 @@ impl TargetBindingPhase {
             Self::Invalidated => "terminate",
         }
     }
-
-    fn input_enabled(self) -> bool {
-        matches!(self, Self::Resolved)
-    }
 }
 
 const ALL_TARGET_BINDING_PHASES: &[TargetBindingPhase] = &[
@@ -113,7 +109,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct TargetTrackerSnapshot {
     visibility_state: TargetVisibilityState,
     title: Option<String>,
     focused: Option<bool>,
-    input_blocked_reason: Option<&'static str>,
+    input_blocked_reason_override: Option<&'static str>,
     available_display_ids: Vec<u64>,
     geometry: TargetGeometry,
     diagnostic: Value,
@@ -133,7 +129,7 @@ impl TargetTrackerSnapshot {
             visibility_state: TargetVisibilityState::Visible,
             title: binding.native_locator().title().map(str::to_string),
             focused: None,
-            input_blocked_reason: None,
+            input_blocked_reason_override: None,
             available_display_ids: binding.native_locator().display_id().into_iter().collect(),
             geometry: binding.geometry().clone(),
             diagnostic: binding.latest_target_diagnostic_value(),
@@ -151,7 +147,7 @@ impl TargetTrackerSnapshot {
             "visibility_state": self.visibility_state.as_str(),
             "title": self.title,
             "focused": self.focused,
-            "input_blocked_reason": self.input_blocked_reason,
+            "input_blocked_reason": self.input_blocked_reason(),
             "available_display_ids": self.available_display_ids,
             "geometry": self.geometry.to_value(),
             "input_enabled": self.input_enabled(),
@@ -181,10 +177,45 @@ impl TargetTrackerSnapshot {
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn input_enabled(&self) -> bool {
-        self.status.input_enabled()
-            && self.visibility_state.input_enabled()
-            && self.focused != Some(false)
-            && self.input_blocked_reason.is_none()
+        self.input_blocked_reason().is_none()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn input_blocked_reason(
+        &self,
+    ) -> Option<&'static str> {
+        if let Some(reason) = self.input_blocked_reason_override {
+            return Some(reason);
+        }
+        if matches!(
+            self.status,
+            TargetBindingPhase::Unresolved
+                | TargetBindingPhase::Lost
+                | TargetBindingPhase::Rebinding
+                | TargetBindingPhase::Invalidated
+        ) {
+            return match self.status {
+                TargetBindingPhase::Unresolved => Some("target_unresolved"),
+                TargetBindingPhase::Lost => Some("target_lost"),
+                TargetBindingPhase::Rebinding => Some("target_rebinding"),
+                TargetBindingPhase::Invalidated => Some("target_invalidated"),
+                TargetBindingPhase::Resolved | TargetBindingPhase::Stale => None,
+            };
+        }
+        if !self.visibility_state.input_enabled() {
+            return match self.visibility_state {
+                TargetVisibilityState::Hidden => Some("target_hidden"),
+                TargetVisibilityState::Minimized => Some("target_minimized"),
+                TargetVisibilityState::Lost => Some("target_lost"),
+                TargetVisibilityState::Visible => None,
+            };
+        }
+        if self.status == TargetBindingPhase::Stale {
+            return Some("target_stale");
+        }
+        if self.focused == Some(false) {
+            return Some("target_blurred");
+        }
+        None
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn target_geometry_revision(&self) -> u64 {
@@ -601,8 +632,12 @@ impl RemoteAppTargetBindingStateMachine {
     ) -> Option<TargetTrackingEvent> {
         available_display_ids.sort_unstable();
         available_display_ids.dedup();
+        let display_unavailable_reason = TargetResolutionError::TargetDisplayUnavailable.as_str();
+        let was_selected_display_unavailable =
+            self.snapshot.input_blocked_reason_override == Some(display_unavailable_reason);
         if self.snapshot.available_display_ids == available_display_ids
-            && (selected_display_available || self.snapshot.status == TargetBindingPhase::Stale)
+            && ((selected_display_available && !was_selected_display_unavailable)
+                || (!selected_display_available && was_selected_display_unavailable))
         {
             return None;
         }
@@ -611,21 +646,34 @@ impl RemoteAppTargetBindingStateMachine {
             available_display_ids,
         );
         if selected_display_available {
-            self.snapshot.status = TargetBindingPhase::Resolved;
+            self.snapshot.status =
+                if self.snapshot.visibility_state == TargetVisibilityState::Visible {
+                    TargetBindingPhase::Resolved
+                } else {
+                    TargetBindingPhase::Stale
+                };
+            if was_selected_display_unavailable {
+                self.snapshot.input_blocked_reason_override = None;
+            }
         } else {
             self.snapshot.status = TargetBindingPhase::Stale;
-            self.snapshot.focused = Some(false);
+            self.snapshot.input_blocked_reason_override = Some(display_unavailable_reason);
         }
+        let diagnostic_reason = if selected_display_available {
+            Value::Null
+        } else {
+            json!(display_unavailable_reason)
+        };
         self.snapshot.diagnostic = self.diagnostic_projection(
             self.snapshot.status.as_str(),
-            json!(TargetResolutionError::TargetDisplayUnavailable.as_str()),
+            diagnostic_reason,
             "display_topology_changed",
             observed_at_ms,
         );
         let reason = if selected_display_available {
             "display_topology_changed"
         } else {
-            TargetResolutionError::TargetDisplayUnavailable.as_str()
+            display_unavailable_reason
         };
         let mut payload = self.event_payload(reason, observed_at_ms, None);
         payload["detail"] = json!("display_topology_changed");
@@ -682,7 +730,7 @@ impl RemoteAppTargetBindingStateMachine {
             && observed_at_ms.saturating_sub(pending_snapshot.first_observed_at_ms)
                 < LOST_DEBOUNCE_MS
         {
-            self.snapshot.input_blocked_reason = Some("target_loss_pending");
+            self.snapshot.input_blocked_reason_override = Some("target_loss_pending");
             self.snapshot.diagnostic = self.pending_lost_diagnostic(&pending_snapshot);
             return None;
         }
@@ -694,7 +742,7 @@ impl RemoteAppTargetBindingStateMachine {
         let previous = self.snapshot.target_geometry_revision;
         self.snapshot.status = TargetBindingPhase::Lost;
         self.snapshot.visibility_state = TargetVisibilityState::Lost;
-        self.snapshot.input_blocked_reason = Some("target_lost");
+        self.snapshot.input_blocked_reason_override = None;
         self.latest_loss_observed_at_ms = Some(observed_at_ms);
         self.snapshot.diagnostic = json!({
             "status": TargetBindingPhase::Lost.as_str(),
@@ -850,8 +898,8 @@ impl RemoteAppTargetBindingStateMachine {
 
     fn clear_pending_lost(&mut self) {
         self.pending_lost = None;
-        if self.snapshot.input_blocked_reason == Some("target_loss_pending") {
-            self.snapshot.input_blocked_reason = None;
+        if self.snapshot.input_blocked_reason_override == Some("target_loss_pending") {
+            self.snapshot.input_blocked_reason_override = None;
         }
     }
 
@@ -900,7 +948,7 @@ impl RemoteAppTargetBindingStateMachine {
             "target_identity_epoch": self.snapshot.target_identity_epoch,
             "target_geometry_revision": self.snapshot.target_geometry_revision,
             "visibility_state": self.snapshot.visibility_state.as_str(),
-            "input_blocked_reason": self.snapshot.input_blocked_reason,
+            "input_blocked_reason": self.snapshot.input_blocked_reason(),
             "recoverability": self.snapshot.status.recoverability(),
             "frontend_action": Value::Null,
             "observed_at_ms": observed_at_ms,
@@ -925,7 +973,7 @@ impl RemoteAppTargetBindingStateMachine {
             "visibility_state": self.snapshot.visibility_state.as_str(),
             "target_status": self.snapshot.status.as_str(),
             "input_enabled": self.snapshot.input_enabled(),
-            "input_blocked_reason": self.snapshot.input_blocked_reason,
+            "input_blocked_reason": self.snapshot.input_blocked_reason(),
             "reason_code": reason_code,
             "recoverability": self.snapshot.status.recoverability(),
             "frontend_action": Value::Null,
@@ -1083,7 +1131,12 @@ mod tests {
         assert_eq!(lost.payload()["frontend_action"], json!("refresh_targets"));
         assert_eq!(lost.payload()["target_status"], json!("lost"));
         assert_eq!(lost.payload()["input_enabled"], json!(false));
+        assert_eq!(lost.payload()["input_blocked_reason"], json!("target_lost"));
         assert_eq!(tracker.snapshot().to_value()["status"], json!("lost"));
+        assert_eq!(
+            tracker.snapshot().to_value()["input_blocked_reason"],
+            json!("target_lost")
+        );
         assert!(tracker.snapshot().pointer_target_value().is_none());
     }
 
@@ -1422,6 +1475,10 @@ mod tests {
         assert_eq!(topology_changed.payload()["target_status"], json!("stale"));
         assert_eq!(topology_changed.payload()["input_enabled"], json!(false));
         assert_eq!(
+            topology_changed.payload()["input_blocked_reason"],
+            json!("target_display_unavailable")
+        );
+        assert_eq!(
             topology_changed.payload()["selected_display_available"],
             json!(false)
         );
@@ -1431,6 +1488,33 @@ mod tests {
         );
         assert_eq!(tracker.snapshot().to_value()["status"], json!("stale"));
         assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(false));
+        assert_eq!(
+            tracker.snapshot().to_value()["input_blocked_reason"],
+            json!("target_display_unavailable")
+        );
+
+        let topology_restored = tracker
+            .commit_observation(TargetObservation::DisplayTopologyChanged {
+                available_display_ids: vec![42, 99],
+                selected_display_available: true,
+                observed_at_ms: 40,
+            })
+            .expect("selected display recovery emits topology event even when display ids match");
+
+        assert_eq!(topology_restored.event_type(), "DISPLAY_TOPOLOGY_CHANGED");
+        assert_eq!(
+            topology_restored.payload()["reason_code"],
+            json!("display_topology_changed")
+        );
+        assert_eq!(topology_restored.payload()["input_enabled"], json!(true));
+        assert_eq!(
+            topology_restored.payload()["input_blocked_reason"],
+            Value::Null
+        );
+        assert_eq!(
+            tracker.snapshot().to_value()["input_blocked_reason"],
+            Value::Null
+        );
     }
 
     #[test]
@@ -1458,6 +1542,10 @@ mod tests {
         );
         assert_eq!(minimized.payload()["input_enabled"], json!(false));
         assert_eq!(
+            minimized.payload()["input_blocked_reason"],
+            json!("target_minimized")
+        );
+        assert_eq!(
             tracker.snapshot().latest_diagnostic()["frontend_action"],
             json!("retry_session")
         );
@@ -1467,6 +1555,10 @@ mod tests {
         );
 
         assert_eq!(tracker.snapshot().to_value()["status"], json!("stale"));
+        assert_eq!(
+            tracker.snapshot().to_value()["input_blocked_reason"],
+            json!("target_minimized")
+        );
         assert!(tracker.snapshot().pointer_target_value().is_none());
 
         let hidden = tracker
@@ -1482,6 +1574,10 @@ mod tests {
         assert_eq!(hidden.payload()["failure_domain"], json!("target"));
         assert_eq!(hidden.payload()["frontend_action"], json!("retry_session"));
         assert_eq!(hidden.payload()["input_enabled"], json!(false));
+        assert_eq!(
+            hidden.payload()["input_blocked_reason"],
+            json!("target_hidden")
+        );
     }
 
     #[test]
@@ -1503,8 +1599,16 @@ mod tests {
         assert_eq!(blurred.payload()["failure_domain"], json!("target"));
         assert_eq!(blurred.payload()["frontend_action"], json!("retry_session"));
         assert_eq!(blurred.payload()["input_enabled"], json!(false));
+        assert_eq!(
+            blurred.payload()["input_blocked_reason"],
+            json!("target_blurred")
+        );
         assert_eq!(tracker.snapshot().to_value()["focused"], json!(false));
         assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(false));
+        assert_eq!(
+            tracker.snapshot().to_value()["input_blocked_reason"],
+            json!("target_blurred")
+        );
         assert_eq!(
             tracker.snapshot().latest_diagnostic()["failure_domain"],
             json!("target")
@@ -1524,8 +1628,13 @@ mod tests {
 
         assert_eq!(focused.event_type(), "TARGET_FOCUSED");
         assert_eq!(focused.payload()["frontend_action"], Value::Null);
+        assert_eq!(focused.payload()["input_blocked_reason"], Value::Null);
         assert_eq!(tracker.snapshot().to_value()["focused"], json!(true));
         assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(true));
+        assert_eq!(
+            tracker.snapshot().to_value()["input_blocked_reason"],
+            Value::Null
+        );
         assert!(tracker.snapshot().pointer_target_value().is_some());
     }
 }

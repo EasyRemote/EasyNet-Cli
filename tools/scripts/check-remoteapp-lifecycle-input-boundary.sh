@@ -172,6 +172,8 @@ require 'target_tracking_events_include_active_transport_epoch_at_session_bounda
   'E2E-08 must prove target lifecycle events carry the active transport epoch'
 require 'input_blocked_reason' "$TARGET_TRACKING" \
   'target snapshot must expose explicit input block reason'
+require 'fn input_blocked_reason\(' "$TARGET_TRACKING" \
+  'target snapshot must derive a single machine-readable input block reason'
 require 'target_loss_pending' "$TARGET_TRACKING" \
   'pending target loss debounce must block input before committed target loss'
 require 'tracker_debounces_single_transient_lost_observation' "$TARGET_TRACKING" \
@@ -274,6 +276,8 @@ require_multiline 'm/TargetResolutionError::TargetDisplayUnavailable\s*\.fronten
   'selected display loss must use canonical target-display-unavailable frontend action'
 require 'json!\("target_display_unavailable"\)' "$TARGET_TRACKING" \
   'display topology loss test must assert target_display_unavailable reason code'
+require 'topology_changed\.payload\(\)\["input_blocked_reason"\]' "$TARGET_TRACKING" \
+  'display topology loss test must assert input_blocked_reason for frontend recovery'
 require 'TargetResolutionError::TargetHidden' "$TARGET_TRACKING" \
   'hidden target visibility must use canonical target_hidden reason'
 require 'TargetResolutionError::TargetMinimized' "$TARGET_TRACKING" \
@@ -282,6 +286,10 @@ require 'json!\("target_hidden"\)' "$TARGET_TRACKING" \
   'hidden visibility test must assert target_hidden reason code'
 require 'json!\("target_minimized"\)' "$TARGET_TRACKING" \
   'minimized visibility test must assert target_minimized reason code'
+require 'hidden\.payload\(\)\["input_blocked_reason"\]' "$TARGET_TRACKING" \
+  'hidden visibility test must assert input_blocked_reason for frontend recovery'
+require 'minimized\.payload\(\)\["input_blocked_reason"\]' "$TARGET_TRACKING" \
+  'minimized visibility test must assert input_blocked_reason for frontend recovery'
 require 'json!\("retry_session"\)' "$TARGET_TRACKING" \
   'hidden/minimized visibility tests must assert canonical retry_session action'
 require 'FrontendAction::RetrySession' "$TARGET_TRACKING" \
@@ -290,6 +298,8 @@ require 'TARGET_BLURRED' "$TARGET_TRACKING" \
   'focus loss must emit TARGET_BLURRED'
 require 'json!\("target_blurred"\)' "$TARGET_TRACKING" \
   'focus loss test must assert target_blurred reason code'
+require 'blurred\.payload\(\)\["input_blocked_reason"\]' "$TARGET_TRACKING" \
+  'focus loss test must assert input_blocked_reason for frontend recovery'
 require '"TARGET_REBIND_FAILED"' "$TARGET_TRACKING" \
   'post-loss target observations must emit an explicit rebind failure when no Rebinding policy exists'
 require 'explicit_rebind_required' "$TARGET_TRACKING" \
