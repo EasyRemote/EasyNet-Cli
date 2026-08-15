@@ -142,6 +142,10 @@ impl RemoteDesktopMediaBackendDescriptor {
         self.supported_subjects.contains(&subject)
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn supported_subjects_value(self) -> Value {
+        json!(self.supported_subjects)
+    }
+
     pub fn effective_fps(self, requested_fps: u32) -> u32 {
         requested_fps
             .min(self.max_capture_fps)

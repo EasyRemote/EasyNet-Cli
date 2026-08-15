@@ -117,8 +117,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
     } else {
         "xcap.avcapture_screen_input"
     };
+    let production_target_subjects = production_backend.supported_subjects_value();
+    let capture_target_models = json!([
+        "display_surface",
+        "window_surface",
+        "display_scoped_application_window_set"
+    ]);
     let reason = if production_ready {
-        "native ScreenCaptureKit/VideoToolbox WebRTC backend is available for display capture"
+        "native ScreenCaptureKit/VideoToolbox WebRTC backend is available for display/window/application target capture"
     } else {
         "current builtin backend is capped by xcap macOS recorder; 144Hz requires the ScreenCaptureKit/VideoToolbox plugin backend"
     };
@@ -170,6 +176,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
         "metadata": {
             "production_media_endpoint": "direct_webrtc_h264",
             "diagnostic_media_endpoint": "builtin_openh264_annexb",
+            "production_target_subjects": production_target_subjects,
+            "capture_target_models": capture_target_models,
             "display_capture_source": display_capture_source,
             "display_capture_api": display_capture_api,
             "webrtc_endpoint": "device_side_peer_connection",
@@ -213,6 +221,27 @@ mod tests {
             capabilities["unsupported_capabilities"][1]["future_abilities"][2],
             json!("remote_desktop.file_transfer.send")
         );
+    }
+
+    #[test]
+    fn device_capabilities_project_native_target_subject_matrix() {
+        let capabilities = device_capabilities_view();
+
+        assert_eq!(
+            capabilities["metadata"]["production_target_subjects"],
+            json!(["display", "window", "application"])
+        );
+        assert_eq!(
+            capabilities["metadata"]["capture_target_models"],
+            json!([
+                "display_surface",
+                "window_surface",
+                "display_scoped_application_window_set"
+            ])
+        );
+        assert!(capabilities["metadata"]["reason"]
+            .as_str()
+            .is_some_and(|message| message.contains("display/window/application")));
     }
 }
 

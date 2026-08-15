@@ -769,5 +769,17 @@ require '"remote_desktop\.file_transfer\.send"' "$VIEW_DEVICE" \
   'device capabilities must point file transfer to future split abilities instead of datachannel support'
 require 'device_capabilities_report_clipboard_and_file_transfer_unsupported' "$VIEW_DEVICE" \
   'device capability tests must prove clipboard/file transfer are reported unsupported'
+require 'production_backend\.supported_subjects_value\(\)' "$VIEW_DEVICE" \
+  'device capabilities must project production target subjects from the backend descriptor'
+require '"production_target_subjects": production_target_subjects' "$VIEW_DEVICE" \
+  'device capabilities must expose the native production backend display/window/application subject matrix'
+require '"display_scoped_application_window_set"' "$VIEW_DEVICE" \
+  'device capabilities must expose the application target model instead of flattening applications to display capture'
+require 'display/window/application target capture' "$VIEW_DEVICE" \
+  'device capabilities must describe native ScreenCaptureKit as targeted display/window/application capture'
+reject 'available for display capture' "$VIEW_DEVICE" \
+  'device capabilities must not describe the native targeted backend as display-only'
+require 'device_capabilities_project_native_target_subject_matrix' "$VIEW_DEVICE" \
+  'device capability tests must prove the native target subject matrix is projected'
 
 printf 'check-remoteapp-lifecycle-input-boundary: ok\n'

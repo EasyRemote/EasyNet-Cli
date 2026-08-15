@@ -703,6 +703,7 @@ RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/view_device.rs" <<'RS'
 fn device_capabilities_view() {
+    let production_target_subjects = production_backend.supported_subjects_value();
     json!({
         "unsupported_input_types": unsupported_input_channel_types_value(),
         "unsupported_capabilities": [
@@ -715,6 +716,15 @@ fn device_capabilities_view() {
                 "future_abilities": ["remote_desktop.file_transfer.send"]
             }
         ],
+        "metadata": {
+            "production_target_subjects": production_target_subjects,
+            "capture_target_models": [
+                "display_surface",
+                "window_surface",
+                "display_scoped_application_window_set"
+            ],
+            "reason": "native ScreenCaptureKit/VideoToolbox WebRTC backend is available for display/window/application target capture"
+        },
     });
 }
 
@@ -722,6 +732,9 @@ fn device_capabilities_view() {
 mod tests {
     #[test]
     fn device_capabilities_report_clipboard_and_file_transfer_unsupported() {}
+
+    #[test]
+    fn device_capabilities_project_native_target_subject_matrix() {}
 }
 RS
 
@@ -1723,6 +1736,31 @@ write_fixture
 perl -0pi -e 's/"unsupported_capabilities":/"enabled_capabilities":/' \
   "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
 run_fail 'device capabilities must report unsupported rich-input capabilities'
+
+write_fixture
+perl -0pi -e 's/production_backend\.supported_subjects_value\(\)/json!(["display"])/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must project production target subjects from the backend descriptor'
+
+write_fixture
+perl -0pi -e 's/"production_target_subjects": production_target_subjects,//' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must expose the native production backend display/window/application subject matrix'
+
+write_fixture
+perl -0pi -e 's/"display_scoped_application_window_set"/"application"/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must expose the application target model instead of flattening applications to display capture'
+
+write_fixture
+perl -0pi -e 's#display/window/application target capture#display capture#' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capabilities must describe native ScreenCaptureKit as targeted display/window/application capture'
+
+write_fixture
+perl -0pi -e 's/device_capabilities_project_native_target_subject_matrix/device_capabilities_hide_native_target_subject_matrix/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_device.rs"
+run_fail 'device capability tests must prove the native target subject matrix is projected'
 
 write_fixture
 perl -0pi -e 's/unsupported_input_channel_types_value\(\);//' \
