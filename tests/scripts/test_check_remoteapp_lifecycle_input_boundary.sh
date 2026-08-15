@@ -841,6 +841,13 @@ fn record_rejection() {
     );
 }
 
+struct InputRejectSignature;
+struct PendingInputReject;
+
+struct InputRejectCoalescer {
+    pending: BTreeMap<InputRejectSignature, PendingInputReject>,
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -898,6 +905,9 @@ mod tests {
     fn maps_application_pointer_through_primary_window_bounds() {
         assert!(!input_policy_allows(&policy, "pointer"));
     }
+
+    #[test]
+    fn input_reject_diagnostics_are_coalesced_across_interleaved_signatures() {}
 }
 RS
 
@@ -1964,6 +1974,16 @@ write_fixture
 perl -0pi -e 's/Some\("input_scope_unsupported"\)/Some("input_disabled")/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
 run_fail 'view-only key/pointer rejection must report input_scope_unsupported'
+
+write_fixture
+perl -0pi -e 's/BTreeMap<InputRejectSignature, PendingInputReject>/Option<PendingInputReject>/' \
+  "$SANDBOX/plugins/remote-desktop/src/input.rs"
+run_fail 'input rejection coalescing must aggregate by signature instead of a single pending rejection'
+
+write_fixture
+perl -0pi -e 's/input_reject_diagnostics_are_coalesced_across_interleaved_signatures/input_reject_diagnostics_flush_on_signature_changes/' \
+  "$SANDBOX/plugins/remote-desktop/src/input.rs"
+run_fail 'PERF-07 must prove alternating invalid input signatures do not produce one diagnostic per frame'
 
 write_fixture
 perl -0pi -e 's/"unsupported_input_types": unsupported_input_channel_types_value\(\),/"supported_input_types": unsupported_input_channel_types_value(),/' \

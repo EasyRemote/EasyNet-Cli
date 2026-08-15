@@ -787,6 +787,10 @@ require_multiline 'm/fn input_policy_reject_reason\(.+?input_scope == Some\(Inpu
   'view-only key/pointer rejection must report input_scope_unsupported'
 require_multiline 'm/InputRejectSample::new\(\s*outcome\.reason\.unwrap_or\("input_injection_failed"\),\s*rejected_count/s' "$INPUT" \
   'WebRTC input rejection diagnostics must use the policy-enforced apply outcome'
+require 'BTreeMap<InputRejectSignature, PendingInputReject>' "$INPUT" \
+  'input rejection coalescing must aggregate by signature instead of a single pending rejection'
+require 'input_reject_diagnostics_are_coalesced_across_interleaved_signatures' "$INPUT" \
+  'PERF-07 must prove alternating invalid input signatures do not produce one diagnostic per frame'
 require 'fn current_session_input_policy\(' "$INPUT" \
   'input readiness must be centralized at the session aggregate boundary'
 require 'InputTransportGuard::DirectWebRtc\(epoch\)' "$INPUT" \

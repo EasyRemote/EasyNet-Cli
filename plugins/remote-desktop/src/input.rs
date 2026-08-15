@@ -10,6 +10,7 @@
 // - EasyNet/Hub must never relay high-frequency pointer or keyboard events
 //   through Invocation once a direct media/control channel is negotiated.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -484,24 +485,17 @@ fn input_activation_reject_reason(policy: &Value) -> Option<&'static str> {
 
 #[derive(Debug, Default)]
 struct InputRejectCoalescer {
-    pending: Option<PendingInputReject>,
+    pending: BTreeMap<InputRejectSignature, PendingInputReject>,
 }
 
 impl InputRejectCoalescer {
     fn observe(&mut self, sample: InputRejectSample) -> Vec<Value> {
         let mut events = Vec::new();
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| pending.signature != sample.signature)
-        {
-            if let Some(payload) = self.flush() {
-                events.push(payload);
-            }
-        }
+        let signature = sample.signature.clone();
         let pending = self
             .pending
-            .get_or_insert_with(|| PendingInputReject::new(sample.clone()));
+            .entry(signature)
+            .or_insert_with(|| PendingInputReject::new(sample.clone()));
         pending.observe(sample);
         if pending.observed_total == 1 {
             events.push(pending.payload("first"));
@@ -521,16 +515,16 @@ impl InputRejectCoalescer {
         events
     }
 
-    fn flush(&mut self) -> Option<Value> {
-        let pending = self.pending.take()?;
-        if pending.observed_total <= pending.emitted_total {
-            return None;
-        }
-        Some(pending.payload("flush"))
+    fn flush(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.pending)
+            .into_values()
+            .filter(|pending| pending.observed_total > pending.emitted_total)
+            .map(|pending| pending.payload("flush"))
+            .collect()
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct InputRejectSignature {
     reason: String,
     kind: Option<String>,
@@ -658,7 +652,7 @@ fn flush_input_rejections(
     session_id: &str,
     epoch: TransportEpoch,
 ) {
-    if let Some(payload) = coalescer.flush() {
+    for payload in coalescer.flush() {
         record_input_channel_event(sessions, session_id, epoch, "INPUT_FRAME_REJECTED", payload);
     }
 }
@@ -1244,7 +1238,7 @@ mod tests {
                 ),
             );
         }
-        if let Some(payload) = coalescer.flush() {
+        for payload in coalescer.flush() {
             emitted.push(payload);
         }
 
@@ -1313,13 +1307,73 @@ mod tests {
             ),
         );
 
-        assert_eq!(emitted.len(), 3);
+        emitted.extend(coalescer.flush());
+
+        assert_eq!(
+            emitted.len(),
+            3,
+            "flush should summarize only signatures with suppressed rejects"
+        );
         assert_eq!(emitted[0]["diagnostic_sample"], json!("first"));
-        assert_eq!(emitted[1]["diagnostic_sample"], json!("flush"));
-        assert_eq!(emitted[1]["reason"], json!("input_policy_denied"));
-        assert_eq!(emitted[1]["coalesced_rejections"], json!(4));
-        assert_eq!(emitted[2]["diagnostic_sample"], json!("first"));
-        assert_eq!(emitted[2]["reason"], json!("target_input_not_ready"));
+        assert_eq!(emitted[1]["diagnostic_sample"], json!("first"));
+        assert_eq!(emitted[1]["reason"], json!("target_input_not_ready"));
+        assert!(emitted.iter().any(|event| {
+            event["diagnostic_sample"] == json!("flush")
+                && event["reason"] == json!("input_policy_denied")
+                && event["coalesced_rejections"] == json!(4)
+        }));
+    }
+
+    #[test]
+    fn input_reject_diagnostics_are_coalesced_across_interleaved_signatures() {
+        const REJECT_STORM: u64 = 10_000;
+        let mut coalescer = InputRejectCoalescer::default();
+        let mut emitted = Vec::new();
+
+        for rejected_count in 1..=REJECT_STORM {
+            let sample = if rejected_count % 2 == 0 {
+                InputRejectSample::new("input_policy_denied", rejected_count)
+                    .kind("pointer")
+                    .action("move")
+            } else {
+                InputRejectSample::new("target_input_not_ready", rejected_count)
+                    .kind("key")
+                    .action("down")
+            };
+            emitted.extend(coalescer.observe(sample));
+        }
+        emitted.extend(coalescer.flush());
+
+        let pointer_events = emitted
+            .iter()
+            .filter(|event| event["kind"] == json!("pointer"))
+            .count() as u64;
+        let key_events = emitted
+            .iter()
+            .filter(|event| event["kind"] == json!("key"))
+            .count() as u64;
+        assert!(
+            pointer_events <= MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE + 1,
+            "interleaved pointer rejects must stay bounded by sample cap plus flush"
+        );
+        assert!(
+            key_events <= MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE + 1,
+            "interleaved key rejects must stay bounded by sample cap plus flush"
+        );
+        assert!(
+            emitted.len() as u64 <= (MAX_INPUT_REJECTION_DIAGNOSTIC_SAMPLES_PER_SIGNATURE + 1) * 2,
+            "alternating rejected frame signatures must not produce one diagnostic per frame"
+        );
+        assert!(emitted.iter().any(|event| {
+            event["reason"] == json!("input_policy_denied")
+                && event["diagnostic_sample"] == json!("flush")
+                && event["coalesced_rejections"] == json!(REJECT_STORM / 2)
+        }));
+        assert!(emitted.iter().any(|event| {
+            event["reason"] == json!("target_input_not_ready")
+                && event["diagnostic_sample"] == json!("flush")
+                && event["coalesced_rejections"] == json!(REJECT_STORM / 2)
+        }));
     }
 
     #[test]
