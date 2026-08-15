@@ -52,6 +52,7 @@ pub(crate) mod target_tracking;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub(crate) mod transport;
+pub(crate) mod transport_blocker;
 #[cfg(target_os = "macos")]
 pub(crate) mod videotoolbox_encoder;
 pub(crate) mod view;

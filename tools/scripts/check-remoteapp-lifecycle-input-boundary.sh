@@ -73,8 +73,9 @@ INVOKE_BIDI="$REMOTE_ROOT/invoke_bidi.rs"
 WEBRTC_ENDPOINT="$REMOTE_ROOT/transport/webrtc_endpoint.rs"
 WEBRTC_MEDIA="$REMOTE_ROOT/transport/webrtc_media.rs"
 WEBRTC_NEGOTIATION="$REMOTE_ROOT/transport/webrtc_negotiation.rs"
+TRANSPORT_BLOCKER="$REMOTE_ROOT/transport_blocker.rs"
 
-for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NEGOTIATION"; do
+for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NEGOTIATION" "$TRANSPORT_BLOCKER"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -411,8 +412,8 @@ require '"display_fallback_used": self\.scope_audit\.display_fallback_used' "$TA
   'TARGET_BOUND payload must project display fallback from the committed binding audit'
 require 'target_bound\["payload"\]\["display_fallback_used"\]' "$SESSION" \
   'production readiness test must assert TARGET_BOUND fallback projection'
-require 'REASON_TRANSPORT_ROUTE_UNAVAILABLE' "$VIEW_TRANSPORT" \
-  'transport route degradation must expose the SPEC canonical transport_route_unavailable reason code'
+require 'TargetResolutionError::TransportRouteUnavailable' "$VIEW_TRANSPORT" \
+  'transport route degradation must expose the SPEC canonical transport_route_unavailable reason code from the shared taxonomy'
 require_multiline '/fn summary\([\s\S]*?"message": self\.message,\s*"reason_code": self\.reason_code\.clone\(\)/s' "$VIEW_TRANSPORT" \
   'public transport summary must project canonical route degradation reason_code'
 require_multiline '/"metadata": \{[\s\S]*?"input_channel_label": INPUT_DATA_CHANNEL_LABEL,\s*"reason_code": self\.reason_code\.clone\(\)/s' "$VIEW_TRANSPORT" \
@@ -421,6 +422,26 @@ require 'fn transport_reason_code\(' "$VIEW_TRANSPORT" \
   'transport route reason_code derivation must be centralized in the transport view projection'
 require 'fn transport_route_failed\(' "$VIEW_TRANSPORT" \
   'transport route failed predicate must be explicit instead of treating every WebRTC error as a route failure'
+require 'struct RemoteDesktopTransportBlocker' "$TRANSPORT_BLOCKER" \
+  'non-route WebRTC blockers must use one canonical transport blocker taxonomy helper'
+require 'from_webrtc_error' "$TRANSPORT_BLOCKER" \
+  'transport blocker helper must classify deterministic WebRTC blocker reasons'
+require 'TargetResolutionError::CaptureBackendUnavailable' "$TRANSPORT_BLOCKER" \
+  'backend-unavailable WebRTC blockers must map to the SPEC capture_backend_unavailable reason code'
+require 'TargetResolutionError::ScreenCaptureKitStreamStartFailed' "$TRANSPORT_BLOCKER" \
+  'native media pipeline failures must map to the SPEC ScreenCaptureKit stream-start reason code'
+require 'RemoteDesktopTransportBlocker::from_webrtc_error' "$VIEW_TRANSPORT" \
+  'transport readiness reason_code must reuse the shared non-route blocker taxonomy helper'
+require 'RemoteDesktopTransportBlocker::from_webrtc_error' "$SESSION_EVENTS" \
+  'TRANSPORT_BLOCKED events must reuse the shared non-route blocker taxonomy helper'
+require '"reason_code": blocker\.map\(RemoteDesktopTransportBlocker::reason_code_str\)' "$SESSION_EVENTS" \
+  'TRANSPORT_BLOCKED events must project canonical blocker reason_code'
+require '"frontend_action": blocker' "$SESSION_EVENTS" \
+  'TRANSPORT_BLOCKED events must project frontend recovery action'
+require 'transport_blocked_projects_capture_backend_reason_code' "$SESSION_EVENTS" \
+  'session event tests must prove TRANSPORT_BLOCKED publishes capture_backend_unavailable'
+require 'backend_unavailable_maps_to_capture_backend_unavailable' "$TRANSPORT_BLOCKER" \
+  'transport blocker tests must prove backend-unavailable canonical mapping'
 require '"host_only_no_nat_or_relay"' "$VIEW_TRANSPORT" \
   'host-only transport degradation must have a typed unavailable reason'
 require '"relay_unavailable"' "$VIEW_TRANSPORT" \

@@ -11,8 +11,8 @@ use crate::daemon::plugins::remote_desktop::constants::{
 };
 use crate::daemon::plugins::remote_desktop::input::INPUT_DATA_CHANNEL_LABEL;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
-
-const REASON_TRANSPORT_ROUTE_UNAVAILABLE: &str = "transport_route_unavailable";
+use crate::daemon::plugins::remote_desktop::target::TargetResolutionError;
+use crate::daemon::plugins::remote_desktop::transport_blocker::RemoteDesktopTransportBlocker;
 
 /// Transport view facts derived from one session row.
 ///
@@ -270,11 +270,16 @@ fn transport_reason_code(
 ) -> Value {
     if session.media_transport_ready() {
         Value::Null
+    } else if let Some(blocker) = session
+        .webrtc_error()
+        .and_then(RemoteDesktopTransportBlocker::from_webrtc_error)
+    {
+        json!(blocker.reason_code_str())
     } else if route_state.failed
         || route_state.host_only()
         || (route_state.has_candidate() && !route_state.relay_ready())
     {
-        json!(REASON_TRANSPORT_ROUTE_UNAVAILABLE)
+        json!(TargetResolutionError::TransportRouteUnavailable.as_str())
     } else {
         Value::Null
     }
@@ -547,7 +552,7 @@ mod tests {
 
         assert_eq!(summary["route_state"]["failed"], json!(false));
         assert_eq!(summary["route_state"]["route_class"], json!("none"));
-        assert_eq!(summary["reason_code"], Value::Null);
+        assert_eq!(summary["reason_code"], json!("capture_backend_unavailable"));
         assert_eq!(
             summary["unavailable_reason"],
             json!("native_media_plugin_required")

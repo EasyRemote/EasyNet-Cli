@@ -11,6 +11,7 @@ use crate::daemon::plugins::remote_desktop::constants::{TRANSPORT_INVOKE_BIDI, T
 use crate::daemon::plugins::remote_desktop::target::{
     FrontendAction, RemoteAppTargetBinding, TargetResolutionError,
 };
+use crate::daemon::plugins::remote_desktop::transport_blocker::RemoteDesktopTransportBlocker;
 
 type RemoteDesktopEventProjection = (&'static str, Value);
 
@@ -190,11 +191,18 @@ pub(in crate::daemon::plugins::remote_desktop) fn transport_blocked(
     reason: &str,
     required_backend: &str,
 ) -> RemoteDesktopEventProjection {
+    let blocker = RemoteDesktopTransportBlocker::from_webrtc_error(reason);
     (
         "TRANSPORT_BLOCKED",
         json!({
             "transport_kind": TRANSPORT_WEBRTC,
             "reason": reason,
+            "reason_code": blocker.map(RemoteDesktopTransportBlocker::reason_code_str),
+            "recoverability": blocker.map(RemoteDesktopTransportBlocker::recoverability),
+            "failure_domain": blocker.map(RemoteDesktopTransportBlocker::failure_domain),
+            "frontend_action": blocker
+                .map(RemoteDesktopTransportBlocker::frontend_action)
+                .map(|action| action.as_str()),
             "required_backend": required_backend,
         }),
     )
@@ -394,8 +402,9 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
 
     use super::{
-        media_source_lost, preview_transport_connected, webrtc_failed_with_context,
-        webrtc_sender_ready, webrtc_transport_failure_context, WebRtcFailureEventKind,
+        media_source_lost, preview_transport_connected, transport_blocked,
+        webrtc_failed_with_context, webrtc_sender_ready, webrtc_transport_failure_context,
+        WebRtcFailureEventKind,
     };
 
     #[test]
@@ -495,5 +504,23 @@ mod tests {
         assert_eq!(payload["transport_kind"], json!("webrtc"));
         assert_eq!(payload["media_transport_ready"], json!(false));
         assert_eq!(payload["transport_epoch"], json!(9));
+    }
+
+    #[test]
+    fn transport_blocked_projects_capture_backend_reason_code() {
+        let (event_type, payload) =
+            transport_blocked("webrtc_transport_backend_unavailable", "native");
+
+        assert_eq!(event_type, "TRANSPORT_BLOCKED");
+        assert_eq!(
+            payload["reason"],
+            json!("webrtc_transport_backend_unavailable")
+        );
+        assert_eq!(payload["reason_code"], json!("capture_backend_unavailable"));
+        assert_eq!(payload["recoverability"], json!("unsupported"));
+        assert_eq!(payload["failure_domain"], json!("runtime"));
+        assert_eq!(payload["frontend_action"], json!("show_unsupported"));
+        assert_eq!(payload["transport_kind"], json!("webrtc"));
+        assert_eq!(payload["required_backend"], json!("native"));
     }
 }

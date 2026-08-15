@@ -355,6 +355,18 @@ fn media_source_lost(binding: &RemoteAppTargetBinding) {
     });
 }
 
+fn transport_blocked() {
+    let blocker = RemoteDesktopTransportBlocker::from_webrtc_error(reason);
+    json!({
+        "reason_code": blocker.map(RemoteDesktopTransportBlocker::reason_code_str),
+        "frontend_action": blocker
+            .map(RemoteDesktopTransportBlocker::frontend_action)
+            .map(|action| action.as_str()),
+    });
+}
+
+#[test]
+fn transport_blocked_projects_capture_backend_reason_code() {}
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_media.rs" <<'RS'
@@ -370,6 +382,20 @@ fn event_type_proto_name(event_type: &str) -> &'static str {
         _ => "REMOTE_DESKTOP_EVENT_STATE_CHANGED",
     }
 }
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/transport_blocker.rs" <<'RS'
+struct RemoteDesktopTransportBlocker;
+
+impl RemoteDesktopTransportBlocker {
+    fn from_webrtc_error() {
+        TargetResolutionError::CaptureBackendUnavailable;
+        TargetResolutionError::ScreenCaptureKitStreamStartFailed;
+    }
+}
+
+#[test]
+fn backend_unavailable_maps_to_capture_backend_unavailable() {}
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/view_transport.rs" <<'RS'
@@ -391,8 +417,9 @@ fn transport_route_state() {
         "production_ready": session.production_media_ready(),
     });
     fn transport_reason_code() {
-        REASON_TRANSPORT_ROUTE_UNAVAILABLE;
+        TargetResolutionError::TransportRouteUnavailable;
         "transport_route_unavailable";
+        RemoteDesktopTransportBlocker::from_webrtc_error;
     }
     fn transport_route_failed() {}
     "host_only_no_nat_or_relay";
@@ -1100,14 +1127,39 @@ perl -0pi -e 's/"binding_id": binding\.binding_id\(\),//' \
 run_fail 'MEDIA_SOURCE_LOST payload must carry binding id'
 
 write_fixture
+perl -0pi -e 's/TargetResolutionError::CaptureBackendUnavailable/TargetResolutionError::TransportRouteUnavailable/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport_blocker.rs"
+run_fail 'backend-unavailable WebRTC blockers must map to the SPEC capture_backend_unavailable reason code'
+
+write_fixture
+perl -0pi -e 's/RemoteDesktopTransportBlocker::from_webrtc_error/legacy_transport_reason_from_string/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'transport readiness reason_code must reuse the shared non-route blocker taxonomy helper'
+
+write_fixture
+perl -0pi -e 's/RemoteDesktopTransportBlocker::from_webrtc_error/legacy_transport_reason_from_string/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'TRANSPORT_BLOCKED events must reuse the shared non-route blocker taxonomy helper'
+
+write_fixture
+perl -0pi -e 's/"reason_code": blocker\.map\(RemoteDesktopTransportBlocker::reason_code_str\),//' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'TRANSPORT_BLOCKED events must project canonical blocker reason_code'
+
+write_fixture
+perl -0pi -e 's/transport_blocked_projects_capture_backend_reason_code/transport_blocked_lacks_reason_code/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'session event tests must prove TRANSPORT_BLOCKED publishes capture_backend_unavailable'
+
+write_fixture
 perl -0pi -e 's/fn transport_route_state/fn transport_summary_without_routes/' \
   "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
 run_fail 'transport view must expose host/STUN/TURN/EasyNet relay route state'
 
 write_fixture
-perl -0pi -e 's/REASON_TRANSPORT_ROUTE_UNAVAILABLE/REMOTE_DESKTOP_TRANSPORT_ROUTE_DETAIL/' \
+perl -0pi -e 's/TargetResolutionError::TransportRouteUnavailable/TargetResolutionError::CaptureBackendUnavailable/' \
   "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
-run_fail 'transport route degradation must expose the SPEC canonical transport_route_unavailable reason code'
+run_fail 'transport route degradation must expose the SPEC canonical transport_route_unavailable reason code from the shared taxonomy'
 
 write_fixture
 perl -0pi -e 's/"message": self\.message,\s*"reason_code": self\.reason_code\.clone\(\),/"message": self.message,/' \
