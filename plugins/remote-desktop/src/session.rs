@@ -403,7 +403,12 @@ impl RemoteDesktopSession {
         };
         let permission_revoked =
             matches!(&observation, TargetObservation::PermissionRevoked { .. });
+        let input_was_enabled = self.target.snapshot().input_enabled();
         let Some(event) = self.target.commit_observation(observation) else {
+            if input_was_enabled && !self.target.snapshot().input_enabled() {
+                self.lifecycle.deactivate_input_for_target_block();
+                self.touch();
+            }
             return None;
         };
         let mut media_loss = None;
@@ -1263,6 +1268,60 @@ mod tests {
         assert_eq!(blurred["state"], json!("connected"));
         assert_eq!(blurred["transport_epoch"], json!(epoch.value()));
         assert_eq!(blurred["payload"]["focused"], json!(false));
+    }
+
+    #[test]
+    fn pending_target_loss_deactivates_input_before_media_loss_debounce() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-input-pending-loss",
+            "easynet:///r/acme/resource/window.test",
+            vec!["webrtc".into()],
+        ));
+        let epoch = TransportEpoch::new(23);
+
+        session.begin_webrtc_negotiation(epoch);
+        session
+            .mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-input-pending-loss"));
+        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.activate_input_for_transport_epoch(epoch));
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::InputActive
+        );
+
+        let media_loss = session.record_target_observation(TargetObservation::Lost {
+            reason: TargetResolutionError::TargetNotFound,
+            detail: "single transient miss".into(),
+            observed_at_ms: 200,
+        });
+
+        assert!(
+            media_loss.is_none(),
+            "first target miss remains debounced for media-source loss"
+        );
+        assert_eq!(session.state(), RemoteDesktopState::Connected);
+        assert!(session.media_transport_ready());
+        assert!(session.client_media_ready());
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::MediaActive
+        );
+        assert_eq!(session.target_tracking_state()["status"], json!("resolved"));
+        assert_eq!(
+            session.target_tracking_state()["input_enabled"],
+            json!(false)
+        );
+        assert_eq!(
+            session.target_tracking_state()["input_blocked_reason"],
+            json!("target_loss_pending")
+        );
+        assert!(
+            session
+                .events()
+                .into_iter()
+                .all(|event| event["event_type"] != json!("TARGET_LOST")),
+            "pending loss must not emit committed TARGET_LOST before debounce"
+        );
     }
 
     #[test]

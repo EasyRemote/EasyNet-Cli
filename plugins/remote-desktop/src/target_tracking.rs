@@ -113,6 +113,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct TargetTrackerSnapshot {
     visibility_state: TargetVisibilityState,
     title: Option<String>,
     focused: Option<bool>,
+    input_blocked_reason: Option<&'static str>,
     available_display_ids: Vec<u64>,
     geometry: TargetGeometry,
     diagnostic: Value,
@@ -132,6 +133,7 @@ impl TargetTrackerSnapshot {
             visibility_state: TargetVisibilityState::Visible,
             title: binding.native_locator().title().map(str::to_string),
             focused: None,
+            input_blocked_reason: None,
             available_display_ids: binding.native_locator().display_id().into_iter().collect(),
             geometry: binding.geometry().clone(),
             diagnostic: binding.latest_target_diagnostic_value(),
@@ -149,6 +151,7 @@ impl TargetTrackerSnapshot {
             "visibility_state": self.visibility_state.as_str(),
             "title": self.title,
             "focused": self.focused,
+            "input_blocked_reason": self.input_blocked_reason,
             "available_display_ids": self.available_display_ids,
             "geometry": self.geometry.to_value(),
             "input_enabled": self.input_enabled(),
@@ -181,6 +184,7 @@ impl TargetTrackerSnapshot {
         self.status.input_enabled()
             && self.visibility_state.input_enabled()
             && self.focused != Some(false)
+            && self.input_blocked_reason.is_none()
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn target_geometry_revision(&self) -> u64 {
@@ -678,6 +682,7 @@ impl RemoteAppTargetBindingStateMachine {
             && observed_at_ms.saturating_sub(pending_snapshot.first_observed_at_ms)
                 < LOST_DEBOUNCE_MS
         {
+            self.snapshot.input_blocked_reason = Some("target_loss_pending");
             self.snapshot.diagnostic = self.pending_lost_diagnostic(&pending_snapshot);
             return None;
         }
@@ -689,6 +694,7 @@ impl RemoteAppTargetBindingStateMachine {
         let previous = self.snapshot.target_geometry_revision;
         self.snapshot.status = TargetBindingPhase::Lost;
         self.snapshot.visibility_state = TargetVisibilityState::Lost;
+        self.snapshot.input_blocked_reason = Some("target_lost");
         self.latest_loss_observed_at_ms = Some(observed_at_ms);
         self.snapshot.diagnostic = json!({
             "status": TargetBindingPhase::Lost.as_str(),
@@ -844,31 +850,37 @@ impl RemoteAppTargetBindingStateMachine {
 
     fn clear_pending_lost(&mut self) {
         self.pending_lost = None;
+        if self.snapshot.input_blocked_reason == Some("target_loss_pending") {
+            self.snapshot.input_blocked_reason = None;
+        }
     }
 
     fn pending_lost_diagnostic(&self, pending: &PendingLostObservation) -> Value {
-        json!({
-            "status": self.snapshot.status.as_str(),
-            "reason": pending.reason.as_str(),
-            "detail": pending.detail,
-            "subject_ura": self.binding.subject_ura(),
-            "binding_id": self.snapshot.binding_id,
-            "binding_epoch": self.snapshot.binding_epoch,
-            "target_identity_epoch": self.snapshot.target_identity_epoch,
-            "target_geometry_revision": self.snapshot.target_geometry_revision,
-            "visibility_state": self.snapshot.visibility_state.as_str(),
-            "recoverability": self.snapshot.status.recoverability(),
-            "frontend_action": pending.reason.frontend_action().as_str(),
-            "lost_debounce": {
-                "state": "pending",
-                "required_misses": LOST_DEBOUNCE_REQUIRED_MISSES,
-                "required_elapsed_ms": LOST_DEBOUNCE_MS,
-                "first_observed_at_ms": pending.first_observed_at_ms,
-                "latest_observed_at_ms": pending.latest_observed_at_ms,
-                "consecutive_misses": pending.consecutive_misses,
-            },
-            "observed_at_ms": pending.latest_observed_at_ms,
-        })
+        target_failure_payload(
+            json!({
+                "status": self.snapshot.status.as_str(),
+                "reason": pending.reason.as_str(),
+                "detail": pending.detail,
+                "subject_ura": self.binding.subject_ura(),
+                "binding_id": self.snapshot.binding_id,
+                "binding_epoch": self.snapshot.binding_epoch,
+                "target_identity_epoch": self.snapshot.target_identity_epoch,
+                "target_geometry_revision": self.snapshot.target_geometry_revision,
+                "visibility_state": self.snapshot.visibility_state.as_str(),
+                "input_blocked_reason": "target_loss_pending",
+                "recoverability": "debounce_pending",
+                "lost_debounce": {
+                    "state": "pending",
+                    "required_misses": LOST_DEBOUNCE_REQUIRED_MISSES,
+                    "required_elapsed_ms": LOST_DEBOUNCE_MS,
+                    "first_observed_at_ms": pending.first_observed_at_ms,
+                    "latest_observed_at_ms": pending.latest_observed_at_ms,
+                    "consecutive_misses": pending.consecutive_misses,
+                },
+                "observed_at_ms": pending.latest_observed_at_ms,
+            }),
+            pending.reason.frontend_action().as_str(),
+        )
     }
 
     fn diagnostic_projection(
@@ -888,6 +900,7 @@ impl RemoteAppTargetBindingStateMachine {
             "target_identity_epoch": self.snapshot.target_identity_epoch,
             "target_geometry_revision": self.snapshot.target_geometry_revision,
             "visibility_state": self.snapshot.visibility_state.as_str(),
+            "input_blocked_reason": self.snapshot.input_blocked_reason,
             "recoverability": self.snapshot.status.recoverability(),
             "frontend_action": Value::Null,
             "observed_at_ms": observed_at_ms,
@@ -912,6 +925,7 @@ impl RemoteAppTargetBindingStateMachine {
             "visibility_state": self.snapshot.visibility_state.as_str(),
             "target_status": self.snapshot.status.as_str(),
             "input_enabled": self.snapshot.input_enabled(),
+            "input_blocked_reason": self.snapshot.input_blocked_reason,
             "reason_code": reason_code,
             "recoverability": self.snapshot.status.recoverability(),
             "frontend_action": Value::Null,
@@ -1086,6 +1100,24 @@ mod tests {
             })
             .is_none());
         assert_eq!(tracker.snapshot().to_value()["status"], json!("resolved"));
+        assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(false));
+        assert_eq!(
+            tracker.snapshot().to_value()["input_blocked_reason"],
+            json!("target_loss_pending")
+        );
+        assert!(tracker.snapshot().pointer_target_value().is_none());
+        assert_eq!(
+            tracker.snapshot().latest_diagnostic()["failure_domain"],
+            json!("target")
+        );
+        assert_eq!(
+            tracker.snapshot().latest_diagnostic()["input_enabled"],
+            json!(false)
+        );
+        assert_eq!(
+            tracker.snapshot().latest_diagnostic()["input_blocked_reason"],
+            json!("target_loss_pending")
+        );
         assert_eq!(
             tracker.snapshot().latest_diagnostic()["lost_debounce"]["state"],
             json!("pending")
@@ -1104,6 +1136,13 @@ mod tests {
             })
             .expect("recovered geometry commits");
 
+        assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(true));
+        assert_eq!(
+            tracker.snapshot().to_value()["input_blocked_reason"],
+            Value::Null
+        );
+        assert!(tracker.snapshot().pointer_target_value().is_some());
+
         assert!(tracker
             .commit_observation(TargetObservation::Lost {
                 reason: TargetResolutionError::TargetNotFound,
@@ -1112,6 +1151,11 @@ mod tests {
             })
             .is_none());
         assert_eq!(tracker.snapshot().to_value()["status"], json!("resolved"));
+        assert_eq!(
+            tracker.snapshot().to_value()["input_blocked_reason"],
+            json!("target_loss_pending")
+        );
+        assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(false));
     }
 
     #[test]

@@ -43,6 +43,8 @@ fn commit_geometry() {
     "TARGET_PERMISSION_REVOKED";
     "target_title_after_loss";
     "target_focus_after_loss";
+    "target_loss_pending";
+    input_blocked_reason;
     payload["failure_domain"] = json!("target");
     target_failure_payload();
     FrontendAction::RetrySession;
@@ -82,6 +84,12 @@ mod tests {
     fn tracker_commits_move_resize_and_lost_without_rebinding() {}
 
     #[test]
+    fn tracker_debounces_single_transient_lost_observation() {
+        assert_eq!(tracker.snapshot().to_value()["input_enabled"], json!(false));
+        assert_eq!(tracker.snapshot().to_value()["input_blocked_reason"], json!("target_loss_pending"));
+    }
+
+    #[test]
     fn tracker_reports_rebind_failure_after_target_loss_without_policy() {
         assert_eq!(rebind_attempted.payload()["failure_domain"], json!("target"));
         assert_eq!(rebind_failed.payload()["failure_domain"], json!("target"));
@@ -117,6 +125,10 @@ fn record_target_observation() {
         TargetObservation::PermissionRevoked { .. } => Some(TargetResolutionError::TargetPermissionMissing),
         _ => None,
     };
+    let input_was_enabled = self.target.snapshot().input_enabled();
+    if input_was_enabled && !self.target.snapshot().input_enabled() {
+        self.lifecycle.deactivate_input_for_target_block();
+    }
     if target_loss_reason.is_some() {
         self.consent.revoke();
         self.lifecycle.suspend();
@@ -172,6 +184,13 @@ mod tests {
     fn target_tracking_events_include_active_transport_epoch_at_session_boundary() {
         assert_eq!(target_event["transport_epoch"], json!(epoch.value()));
         assert_eq!(target_event["payload"]["transport_epoch"], json!(epoch.value()));
+    }
+
+    #[test]
+    fn pending_target_loss_deactivates_input_before_media_loss_debounce() {
+        assert!(media_loss.is_none());
+        assert_eq!(session.lifecycle_phase(), RemoteDesktopSessionPhase::MediaActive);
+        assert_eq!(session.target_tracking_state()["input_blocked_reason"], json!("target_loss_pending"));
     }
 
     #[test]
@@ -805,6 +824,21 @@ write_fixture
 perl -0pi -e 's/tracker_commits_move_resize_and_lost_without_rebinding/tracker_misses_regression/' \
   "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
 run_fail 'E2E-08 must have move/resize/lost tracker regression coverage'
+
+write_fixture
+perl -0pi -e 's/target_loss_pending/target_loss_unblocked/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'pending target loss debounce must block input before committed target loss'
+
+write_fixture
+perl -0pi -e 's/tracker_debounces_single_transient_lost_observation/tracker_debounce_does_not_block_input/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'target tracker must test pending-loss debounce input safety'
+
+write_fixture
+perl -0pi -e 's/pending_target_loss_deactivates_input_before_media_loss_debounce/pending_target_loss_keeps_input_active/' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate must deactivate input during target-loss debounce before media loss commits'
 
 write_fixture
 perl -0pi -e 's/payload\["transport_epoch"\] = self\.transport\.active_epoch\(\);//' \

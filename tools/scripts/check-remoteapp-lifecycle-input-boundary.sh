@@ -170,6 +170,14 @@ require 'self\.push_target_tracking_event\(event\)' "$SESSION" \
   'record_target_observation must write target events through the session aggregate projection boundary'
 require 'target_tracking_events_include_active_transport_epoch_at_session_boundary' "$SESSION" \
   'E2E-08 must prove target lifecycle events carry the active transport epoch'
+require 'input_blocked_reason' "$TARGET_TRACKING" \
+  'target snapshot must expose explicit input block reason'
+require 'target_loss_pending' "$TARGET_TRACKING" \
+  'pending target loss debounce must block input before committed target loss'
+require 'tracker_debounces_single_transient_lost_observation' "$TARGET_TRACKING" \
+  'target tracker must test pending-loss debounce input safety'
+require 'pending_target_loss_deactivates_input_before_media_loss_debounce' "$SESSION" \
+  'session aggregate must deactivate input during target-loss debounce before media loss commits'
 
 # E2E-09: target loss is not transport failure. The session aggregate must
 # degrade the media source, disable input, and project MEDIA_SOURCE_LOST with
