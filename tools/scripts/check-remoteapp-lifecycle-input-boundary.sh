@@ -61,14 +61,18 @@ VIEW_TRANSPORT="$REMOTE_ROOT/view_transport.rs"
 VIEW="$REMOTE_ROOT/view.rs"
 INPUT="$REMOTE_ROOT/input.rs"
 TARGET="$REMOTE_ROOT/target.rs"
+CONSTANTS="$REMOTE_ROOT/constants.rs"
 SCK="$REMOTE_ROOT/screencapturekit_capture.rs"
 REQUEST="$REMOTE_ROOT/request.rs"
+SESSION_STORE="$REMOTE_ROOT/session_store.rs"
 CREATE_SESSION="$REMOTE_ROOT/handlers/create_session.rs"
 SESSION_LIFECYCLE="$REMOTE_ROOT/session_lifecycle.rs"
 SESSION_CREATION="$REMOTE_ROOT/session_creation.rs"
 INVOKE_BIDI="$REMOTE_ROOT/invoke_bidi.rs"
+WEBRTC_ENDPOINT="$REMOTE_ROOT/transport/webrtc_endpoint.rs"
+WEBRTC_NEGOTIATION="$REMOTE_ROOT/transport/webrtc_negotiation.rs"
 
-for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$INPUT" "$TARGET" "$SCK" "$REQUEST" "$CREATE_SESSION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI"; do
+for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$INPUT" "$TARGET" "$CONSTANTS" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_NEGOTIATION"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -313,6 +317,29 @@ require 'srflx_without_relay_reports_typed_relay_unavailable_reason' "$VIEW_TRAN
   'transport tests must prove STUN-only candidates expose relay-unavailable degradation'
 require 'relay_ready' "$SPEC" \
   'SPEC must name relay_ready as the aggregate any-relay state instead of overloading TURN relay'
+
+# Public transport evidence must remain in the EasyNet URA model. WebRTC is a
+# transport kind/carrier, not a routable scheme, and tests must not preserve
+# fake endpoint schemes that would teach callers to treat endpoint_ura as a raw
+# transport address.
+require 'fn direct_webrtc_endpoint_ura\(session_id: &str\) -> String' "$CONSTANTS" \
+  'direct WebRTC endpoint evidence must be generated through one canonical URA helper'
+require 'easynet:///r/local/resource/remote-desktop-session\.' "$CONSTANTS" \
+  'direct WebRTC endpoint helper must publish a session resource URA'
+require 'hex::encode\(session_id\.as_bytes\(\)\)' "$CONSTANTS" \
+  'direct WebRTC endpoint helper must encode raw session ids before inserting them into URA path segments'
+require 'direct_webrtc_endpoint_ura\(session_id\)' "$SESSION_STORE" \
+  'session store media-ready projection must use the canonical direct WebRTC endpoint URA helper'
+require 'direct_webrtc_endpoint_ura\(&endpoint_config\.session_id\)' "$WEBRTC_ENDPOINT" \
+  'direct WebRTC answer payload must expose canonical endpoint_ura evidence'
+require 'direct_webrtc_endpoint_ura\(session_id\)' "$WEBRTC_NEGOTIATION" \
+  'negotiation commit must persist the same canonical endpoint_ura evidence as the answer payload'
+require 'direct_webrtc_endpoint_ura\(session\.session_id\(\)\)' "$VIEW_TRANSPORT" \
+  'public transport view must derive endpoint_ura from the canonical direct WebRTC endpoint helper'
+reject 'webrtc://direct/|easynet-rd://|ura://endpoint' "$REMOTE_ROOT" \
+  'remote desktop endpoint_ura evidence must be EasyNet URA only'
+reject '"endpoint_ura": "ability:' "$REMOTE_ROOT" \
+  'diagnostic ability names must not be projected through endpoint_ura'
 
 # Consent is a session aggregate sub-state, not an immutable profile field. The
 # current public grant remains visible for audit, but input/media gates must read

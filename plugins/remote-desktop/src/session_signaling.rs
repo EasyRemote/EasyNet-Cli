@@ -353,7 +353,7 @@ mod tests {
     use serde_json::json;
 
     use crate::daemon::plugins::remote_desktop::constants::{
-        MAX_LOCAL_ICE_CANDIDATES, MAX_REMOTE_ICE_CANDIDATES,
+        direct_webrtc_endpoint_ura, MAX_LOCAL_ICE_CANDIDATES, MAX_REMOTE_ICE_CANDIDATES,
     };
 
     use super::RemoteDesktopSignalingState;
@@ -366,7 +366,7 @@ mod tests {
             json!({ "type": "answer", "sdp": "v=0" }),
             "native",
             true,
-            "ura://endpoint".to_string(),
+            direct_webrtc_endpoint_ura("signaling-answer"),
         );
 
         assert_eq!(
@@ -379,7 +379,7 @@ mod tests {
                 "codec": "h264",
                 "profile": "baseline",
                 "transport": "webrtc",
-                "endpoint": "ura://endpoint",
+                "endpoint": direct_webrtc_endpoint_ura("signaling-answer"),
                 "backend_id": "native",
                 "production_ready": true,
             }))

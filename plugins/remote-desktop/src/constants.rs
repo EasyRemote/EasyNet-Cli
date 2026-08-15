@@ -57,10 +57,33 @@ pub(crate) const DIAGNOSTIC_RELAY_TARGET_BITRATE_KBPS: u32 = 24_000;
 pub(crate) const DEFAULT_VIDEO_STREAM_BITRATE_KBPS: u32 = DIAGNOSTIC_RELAY_TARGET_BITRATE_KBPS;
 pub(crate) const ATTACH_ENCODING_ANNEXB_H264: &str = "annexb_h264";
 pub(crate) const ATTACH_ENCODING_JPEG_BINARY: &str = "jpeg_binary";
-pub(crate) const DIRECT_WEBRTC_ENDPOINT_PREFIX: &str = "webrtc://direct/";
+const DIRECT_WEBRTC_ENDPOINT_PREFIX: &str = "easynet:///r/local/resource/remote-desktop-session.";
+
+pub(crate) fn direct_webrtc_endpoint_ura(session_id: &str) -> String {
+    format!(
+        "{DIRECT_WEBRTC_ENDPOINT_PREFIX}{}/transport/webrtc",
+        hex::encode(session_id.as_bytes())
+    )
+}
 pub(crate) const NATIVE_MIN_BITRATE_KBPS: u32 = 4_000;
 pub(crate) const NATIVE_MAX_BITRATE_KBPS: u32 = 250_000;
 pub(crate) const MAX_SIGNALING_DESCRIPTION_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_ICE_CANDIDATE_BYTES: usize = 4 * 1024;
 pub(crate) const MAX_REMOTE_ICE_CANDIDATES: usize = 64;
 pub(crate) const MAX_LOCAL_ICE_CANDIDATES: usize = 64;
+
+#[cfg(test)]
+mod tests {
+    use super::direct_webrtc_endpoint_ura;
+
+    #[test]
+    fn direct_webrtc_endpoint_ura_encodes_session_id_as_easynet_ura() {
+        let endpoint_ura = direct_webrtc_endpoint_ura("rd/session:1");
+
+        assert_eq!(
+            endpoint_ura,
+            "easynet:///r/local/resource/remote-desktop-session.72642f73657373696f6e3a31/transport/webrtc"
+        );
+        assert!(!endpoint_ura.contains("rd/session:1"));
+    }
+}

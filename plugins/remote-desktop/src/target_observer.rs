@@ -837,6 +837,7 @@ mod tests {
         ObservedWindow, SharedHostTargetSnapshotProvider, SnapshotBackedTargetObservationProvider,
     };
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
+    use crate::daemon::plugins::remote_desktop::constants::direct_webrtc_endpoint_ura;
     use crate::daemon::plugins::remote_desktop::session::{
         RemoteDesktopSession, RemoteDesktopState,
     };
@@ -1145,7 +1146,7 @@ mod tests {
             vec!["webrtc".into()],
         ));
         session.begin_webrtc_negotiation(epoch);
-        session.mark_webrtc_media_sending(epoch, "easynet-rd://rd-lost-observation".to_string());
+        session.mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-lost-observation"));
         store.with_sessions(|sessions| {
             sessions.insert("rd-lost-observation".to_string(), session);
         });
@@ -1188,7 +1189,7 @@ mod tests {
             true,
             "easynet:///r/acme/ability/remote-desktop.transport".into(),
         );
-        session.mark_webrtc_media_sending(epoch, "easynet-rd://rd-window-reappear".to_string());
+        session.mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-window-reappear"));
         assert!(
             session.production_media_ready(),
             "fixture starts with production media online before target loss"

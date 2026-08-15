@@ -357,6 +357,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_failed_with_context(
 mod tests {
     use serde_json::json;
 
+    use crate::daemon::plugins::remote_desktop::constants::direct_webrtc_endpoint_ura;
     use crate::daemon::plugins::remote_desktop::target::TargetResolutionError;
     use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
 
@@ -368,7 +369,7 @@ mod tests {
     #[test]
     fn remote_desktop_event_payloads_keep_transport_kind_explicit() {
         let (_, preview_payload) = preview_transport_connected();
-        let (_, webrtc_payload) = webrtc_sender_ready("easynet-rd://session".to_string(), 1);
+        let (_, webrtc_payload) = webrtc_sender_ready(direct_webrtc_endpoint_ura("session"), 1);
 
         assert_eq!(preview_payload["transport_kind"], json!("invoke_bidi"));
         assert_eq!(webrtc_payload["transport_kind"], json!("webrtc"));

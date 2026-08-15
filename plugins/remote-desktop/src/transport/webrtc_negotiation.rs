@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::daemon::plugins::remote_desktop::constants::{
-    ABILITY_SET_DESCRIPTION, DIRECT_WEBRTC_ENDPOINT_PREFIX, REASON_SESSION_NOT_FOUND,
+    direct_webrtc_endpoint_ura, ABILITY_SET_DESCRIPTION, REASON_SESSION_NOT_FOUND,
 };
 use crate::daemon::plugins::remote_desktop::input::input_policy_for_binding;
 use crate::daemon::plugins::remote_desktop::media::{
@@ -240,7 +240,7 @@ fn commit_started_endpoint(
                 answer,
                 backend_id,
                 production_ready,
-                format!("{DIRECT_WEBRTC_ENDPOINT_PREFIX}{session_id}"),
+                direct_webrtc_endpoint_ura(session_id),
             );
             Ok(())
         })

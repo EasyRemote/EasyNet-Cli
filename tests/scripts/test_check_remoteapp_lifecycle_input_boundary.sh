@@ -8,11 +8,13 @@ trap 'rm -rf "$SANDBOX"' EXIT
 
 mkdir -p "$SANDBOX/docs/design"
 mkdir -p "$SANDBOX/plugins/remote-desktop/src/handlers"
+mkdir -p "$SANDBOX/plugins/remote-desktop/src/transport"
 
 write_fixture() {
   rm -rf "$SANDBOX/docs" "$SANDBOX/plugins"
   mkdir -p "$SANDBOX/docs/design"
   mkdir -p "$SANDBOX/plugins/remote-desktop/src/handlers"
+  mkdir -p "$SANDBOX/plugins/remote-desktop/src/transport"
 
   cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
 | E2E-08 move/resize tracking | move and resize events advance target geometry revision and input consumes that revision |
@@ -21,6 +23,15 @@ write_fixture() {
 | E2E-11 view-only input safety | app/window sessions remain view-only without a focus-safe input validator |
 relay_ready
 MD
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/constants.rs" <<'RS'
+fn direct_webrtc_endpoint_ura(session_id: &str) -> String {
+    format!(
+        "easynet:///r/local/resource/remote-desktop-session.{}/transport/webrtc",
+        hex::encode(session_id.as_bytes())
+    )
+}
+RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/target_tracking.rs" <<'RS'
 pub struct TargetTrackerSnapshot {
@@ -291,6 +302,10 @@ fn transport_route_state() {
     "relay_unavailable";
 }
 
+fn direct_endpoint_ura(session: &RemoteDesktopSession) {
+    direct_webrtc_endpoint_ura(session.session_id());
+}
+
 #[test]
 fn host_only_candidates_are_not_reported_as_nat_or_relay_ready() {}
 
@@ -299,6 +314,26 @@ fn easynet_relay_does_not_imply_turn_relay() {}
 
 #[test]
 fn srflx_without_relay_reports_typed_relay_unavailable_reason() {}
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/session_store.rs" <<'RS'
+fn mark_direct_webrtc_media_ready(session_id: &str) {
+    direct_webrtc_endpoint_ura(session_id);
+}
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_endpoint.rs" <<'RS'
+fn answer(endpoint_config: EndpointConfig) {
+    json!({
+        "endpoint_ura": direct_webrtc_endpoint_ura(&endpoint_config.session_id),
+    });
+}
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_negotiation.rs" <<'RS'
+fn commit_started_endpoint(session_id: &str) {
+    direct_webrtc_endpoint_ura(session_id);
+}
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/view.rs" <<'RS'
@@ -646,6 +681,16 @@ run_fail() {
 
 write_fixture
 run_ok
+
+write_fixture
+perl -0pi -e 's/direct_webrtc_endpoint_ura\(session\.session_id\(\)\)/legacy_endpoint(session.session_id())/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'public transport view must derive endpoint_ura from the canonical direct WebRTC endpoint helper'
+
+write_fixture
+perl -0pi -e 's#"relay_unavailable";#"relay_unavailable"; "webrtc://direct/legacy";#' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'remote desktop endpoint_ura evidence must be EasyNet URA only'
 
 write_fixture
 perl -0pi -e 's/tracker_commits_move_resize_and_lost_without_rebinding/tracker_misses_regression/' \

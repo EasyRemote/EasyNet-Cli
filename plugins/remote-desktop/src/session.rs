@@ -907,6 +907,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn now_ms() -> u64 {
 mod tests {
     use serde_json::json;
 
+    use crate::daemon::plugins::remote_desktop::constants::direct_webrtc_endpoint_ura;
     use crate::daemon::plugins::remote_desktop::session::{
         RemoteDesktopSession, RemoteDesktopState,
     };
@@ -991,8 +992,10 @@ mod tests {
         ));
         let epoch = TransportEpoch::new(23);
         session.begin_webrtc_negotiation(epoch);
-        session
-            .mark_webrtc_media_sending(epoch, "easynet-rd://rd-target-transport-epoch".to_string());
+        session.mark_webrtc_media_sending(
+            epoch,
+            direct_webrtc_endpoint_ura("rd-target-transport-epoch"),
+        );
 
         session.record_target_observation(TargetObservation::GeometryChanged {
             geometry: TargetGeometry {
@@ -1036,7 +1039,8 @@ mod tests {
         ));
         let epoch = TransportEpoch::new(7);
         session.begin_webrtc_negotiation(epoch);
-        session.mark_webrtc_media_sending(epoch, "easynet-rd://rd-target-media-lost".to_string());
+        session
+            .mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-target-media-lost"));
         assert_eq!(
             session.transport_state()["primary"],
             json!("device_sending")
@@ -1135,7 +1139,8 @@ mod tests {
 
         assert!(!session.activate_input_for_transport_epoch(epoch));
         session.begin_webrtc_negotiation(epoch);
-        session.mark_webrtc_media_sending(epoch, "easynet-rd://rd-input-active-gate".into());
+        session
+            .mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-input-active-gate"));
         assert_eq!(
             session.lifecycle_phase(),
             RemoteDesktopSessionPhase::MediaActive
@@ -1167,7 +1172,8 @@ mod tests {
         let epoch = TransportEpoch::new(13);
 
         session.begin_webrtc_negotiation(epoch);
-        session.mark_webrtc_media_sending(epoch, "easynet-rd://rd-input-target-gate".into());
+        session
+            .mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-input-target-gate"));
         assert!(session.report_client_media_state(epoch, "presenting"));
         assert_eq!(
             session.lifecycle_phase(),
@@ -1203,7 +1209,7 @@ mod tests {
         let epoch = TransportEpoch::new(19);
 
         session.begin_webrtc_negotiation(epoch);
-        session.mark_webrtc_media_sending(epoch, "easynet-rd://rd-input-focus-loss".into());
+        session.mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura("rd-input-focus-loss"));
         assert!(session.report_client_media_state(epoch, "presenting"));
         assert!(session.activate_input_for_transport_epoch(epoch));
         assert_eq!(
@@ -1253,7 +1259,10 @@ mod tests {
 
         assert_eq!(session.consent_phase(), RemoteDesktopConsentPhase::Active);
         session.begin_webrtc_negotiation(epoch);
-        session.mark_webrtc_media_sending(epoch, "easynet-rd://rd-consent-revoked-gate".into());
+        session.mark_webrtc_media_sending(
+            epoch,
+            direct_webrtc_endpoint_ura("rd-consent-revoked-gate"),
+        );
         assert!(session.report_client_media_state(epoch, "presenting"));
         assert!(session.activate_input_for_transport_epoch(epoch));
         assert_eq!(
@@ -1326,7 +1335,10 @@ mod tests {
             true,
             "easynet:///r/acme/ability/remote-desktop.transport".into(),
         );
-        session.mark_webrtc_media_sending(epoch, "easynet-rd://rd-production-scope-gate".into());
+        session.mark_webrtc_media_sending(
+            epoch,
+            direct_webrtc_endpoint_ura("rd-production-scope-gate"),
+        );
 
         assert!(session.production_codec_negotiated());
         assert!(session.media_transport_ready());
@@ -1376,7 +1388,7 @@ mod tests {
         session.begin_webrtc_negotiation(epoch);
         session.mark_webrtc_media_sending(
             epoch,
-            "easynet-rd://rd-target-loss-late-client-state".to_string(),
+            direct_webrtc_endpoint_ura("rd-target-loss-late-client-state"),
         );
 
         session.record_target_observation(TargetObservation::Lost {
@@ -1424,7 +1436,10 @@ mod tests {
             true,
             "easynet:///r/acme/ability/remote-desktop.transport".into(),
         );
-        session.mark_webrtc_media_sending(epoch, "easynet-rd://rd-target-rebind-failed".into());
+        session.mark_webrtc_media_sending(
+            epoch,
+            direct_webrtc_endpoint_ura("rd-target-rebind-failed"),
+        );
         assert!(session.production_media_ready());
 
         session.record_target_observation(TargetObservation::Lost {

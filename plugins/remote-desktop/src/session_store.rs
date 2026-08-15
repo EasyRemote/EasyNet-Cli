@@ -11,7 +11,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use serde_json::Value;
 
-use crate::daemon::plugins::remote_desktop::constants::DIRECT_WEBRTC_ENDPOINT_PREFIX;
+use crate::daemon::plugins::remote_desktop::constants::direct_webrtc_endpoint_ura;
 use crate::daemon::plugins::remote_desktop::sdp::ice_candidate_text;
 use crate::daemon::plugins::remote_desktop::session::{
     RemoteDesktopSession, TargetMediaSourceLost,
@@ -132,10 +132,7 @@ impl RemoteDesktopSessionStore {
         let Some(session) = sessions.get_mut(session_id) else {
             return;
         };
-        session.mark_webrtc_media_sending(
-            epoch,
-            format!("{DIRECT_WEBRTC_ENDPOINT_PREFIX}{session_id}"),
-        );
+        session.mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura(session_id));
     }
 
     /// Mark the input plane active for a direct WebRTC epoch after policy and

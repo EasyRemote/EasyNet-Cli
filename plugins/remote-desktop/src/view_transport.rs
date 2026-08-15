@@ -7,8 +7,7 @@
 use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::constants::{
-    DIRECT_WEBRTC_ENDPOINT_PREFIX, TRANSPORT_INVOKE_BIDI, TRANSPORT_PREVIEW_STREAM,
-    TRANSPORT_WEBRTC,
+    direct_webrtc_endpoint_ura, TRANSPORT_INVOKE_BIDI, TRANSPORT_PREVIEW_STREAM, TRANSPORT_WEBRTC,
 };
 use crate::daemon::plugins::remote_desktop::input::INPUT_DATA_CHANNEL_LABEL;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
@@ -104,7 +103,7 @@ impl RemoteDesktopTransportView {
                 "transport": TRANSPORT_PREVIEW_STREAM,
                 "transport_proto": "REMOTE_DESKTOP_TRANSPORT_PREVIEW_STREAM",
                 "ready": false,
-                "endpoint_ura": "ability:screen.subscribe",
+                "endpoint_ura": null,
                 "metadata": {
                     "role": "debug_preview",
                     "diagnostic_only": "true",
@@ -247,10 +246,7 @@ fn candidate_mentions_easynet(candidate: &Value) -> bool {
 
 fn direct_endpoint_ura(session: &RemoteDesktopSession) -> Value {
     if session.local_description().is_some() {
-        json!(format!(
-            "{DIRECT_WEBRTC_ENDPOINT_PREFIX}{}",
-            session.session_id()
-        ))
+        json!(direct_webrtc_endpoint_ura(session.session_id()))
     } else {
         Value::Null
     }
@@ -302,7 +298,9 @@ mod tests {
     use serde_json::json;
 
     use super::RemoteDesktopTransportView;
-    use crate::daemon::plugins::remote_desktop::constants::TRANSPORT_WEBRTC;
+    use crate::daemon::plugins::remote_desktop::constants::{
+        direct_webrtc_endpoint_ura, TRANSPORT_WEBRTC,
+    };
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
     use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
@@ -320,7 +318,7 @@ mod tests {
             json!({ "type": "answer", "sdp": "v=0" }),
             "native",
             true,
-            "webrtc://direct/rd-first-frame-pending".to_string(),
+            direct_webrtc_endpoint_ura("rd-first-frame-pending"),
         );
         session.record_webrtc_diagnostic(
             "PEER_CONNECTION_STATE_CHANGED",
@@ -351,7 +349,7 @@ mod tests {
             json!({ "type": "answer", "sdp": "v=0" }),
             "native",
             true,
-            "webrtc://direct/rd-host-only-route".to_string(),
+            direct_webrtc_endpoint_ura("rd-host-only-route"),
         );
         session
             .record_local_ice_candidate(json!({
@@ -391,7 +389,7 @@ mod tests {
             json!({ "type": "answer", "sdp": "v=0" }),
             "native",
             true,
-            "webrtc://direct/rd-srflx-only-route".to_string(),
+            direct_webrtc_endpoint_ura("rd-srflx-only-route"),
         );
         session
             .record_local_ice_candidate(json!({

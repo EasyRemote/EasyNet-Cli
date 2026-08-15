@@ -47,8 +47,8 @@ use webrtc::runtime::{channel, default_runtime};
 
 use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenCaptureOptions;
 use crate::daemon::plugins::remote_desktop::constants::{
-    ABILITY_SET_DESCRIPTION, DIRECT_WEBRTC_ENDPOINT_PREFIX,
-    DIRECT_WEBRTC_H264_PREFERRED_PAYLOAD_TYPE, REASON_RESOURCE_TYPE_MISMATCH, TRANSPORT_WEBRTC,
+    direct_webrtc_endpoint_ura, ABILITY_SET_DESCRIPTION, DIRECT_WEBRTC_H264_PREFERRED_PAYLOAD_TYPE,
+    REASON_RESOURCE_TYPE_MISMATCH, TRANSPORT_WEBRTC,
 };
 use crate::daemon::plugins::remote_desktop::media::encode::build_direct_webrtc_h264_config_for_binding;
 use crate::daemon::plugins::remote_desktop::network::direct_webrtc_udp_addrs;
@@ -286,7 +286,7 @@ async fn create_direct_webrtc_endpoint(
         "type": "answer",
         "sdp": answer_sdp,
         "transport": TRANSPORT_WEBRTC,
-        "endpoint_ura": format!("{DIRECT_WEBRTC_ENDPOINT_PREFIX}{}", endpoint_config.session_id),
+        "endpoint_ura": direct_webrtc_endpoint_ura(&endpoint_config.session_id),
         "codec": "h264",
         "carrier": "rtp_srtp",
     });
