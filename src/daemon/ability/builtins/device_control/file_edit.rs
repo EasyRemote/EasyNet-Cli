@@ -118,13 +118,22 @@ pub const PROFILE_VERSION: &str =
 /// content). Caller gets FileTooLarge rather than a long stall.
 pub const MAX_EDIT_FILE_SIZE: u64 = 1024 * 1024 * 1024;
 
-pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner("fs.edit", OwnerKind::locomotion_system(), Arc::new(handler));
+pub fn register(
+    reg: &mut AxonAbilityCatalog,
+    filesystem: filesystem::FilesystemResourceProvider,
+) -> Result<()> {
+    super::files::require_catalog_filesystem_owner(reg, &filesystem)?;
+    reg.register_rpc_with_owner(
+        "fs.edit",
+        OwnerKind::locomotion_system(),
+        Arc::new(move |args| handler(args, &filesystem)),
+    );
+    Ok(())
 }
 
-fn handler(args: Value) -> Result<Value> {
+fn handler(args: Value, filesystem: &filesystem::FilesystemResourceProvider) -> Result<Value> {
     let resolved_path =
-        filesystem::resolve_filesystem_path(&args, FilesystemResourceCapability::Write)?;
+        filesystem.resolve_filesystem_path(&args, FilesystemResourceCapability::Write)?;
     let path = resolved_path.local_path;
     let path_label = resolved_path.display_path;
     let old_string = args
@@ -493,11 +502,23 @@ mod tests {
     }
 
     fn edit_ref(path: &Path) -> Value {
-        crate::daemon::resources::files::resource_ref_for_local_path(
-            path,
-            crate::daemon::resources::files::FilesystemResourceCapability::Write,
+        test_filesystem()
+            .resource_ref_for_local_path(
+                path,
+                crate::daemon::resources::files::FilesystemResourceCapability::Write,
+            )
+            .unwrap()
+    }
+
+    fn test_filesystem() -> crate::daemon::resources::files::FilesystemResourceProvider {
+        crate::daemon::resources::files::FilesystemResourceProvider::for_device(
+            "easynet:///r/acme/device/dev-a",
         )
         .unwrap()
+    }
+
+    fn handler(args: Value) -> Result<Value> {
+        super::handler(args, &test_filesystem())
     }
 
     // ─── exactly-once happy path ───────────────────────────
@@ -775,11 +796,12 @@ mod tests {
         let dir = temp_dir();
         let path = dir.join("a.txt");
         write_file(&path, "old");
-        let resource_ref = crate::daemon::resources::files::resource_ref_for_local_path(
-            &path,
-            crate::daemon::resources::files::FilesystemResourceCapability::Read,
-        )
-        .unwrap();
+        let resource_ref = test_filesystem()
+            .resource_ref_for_local_path(
+                &path,
+                crate::daemon::resources::files::FilesystemResourceCapability::Read,
+            )
+            .unwrap();
         let err = handler(json!({
             "resource_ref": resource_ref,
             "old_string": "old",

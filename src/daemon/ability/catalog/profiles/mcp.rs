@@ -1,9 +1,9 @@
 //! mcp profile — RFC-001 §1 [P6].
 //!
-//! Per restatement-mapping decision P6: a single mcp-profile Agent
+//! Per restatement-mapping decision P6: a single device-sponsored MCP SystemAgent
 //! advertises BOTH inbound and outbound MCP — `mcp.bridge.*` (incoming
 //! MCP tools/list + tools/call) and `mcp.client.*` (outgoing MCP calls
-//! to external servers). They share one Agent identity projection rather
+//! to external servers). They share one device-local identity projection rather
 //! than splitting into two profiles.
 //!
 //! This is the ONLY place MCP awareness is permitted in the CLI per
@@ -13,7 +13,7 @@
 //! Descriptor projection
 //! ---------------------
 //! MCP descriptors are generated from the dispatch registry entries whose
-//! projection class is `OwnerKind::Agent(DEFAULT_MCP_AGENT_ID)`. This file does
+//! projection class is `OwnerKind::mcp_integration_system()`. This file does
 //! not infer ownership from ability name prefixes.
 //!
 //! What this file provides today
@@ -51,11 +51,9 @@ pub fn descriptors_for(
     use crate::daemon::ability::descriptors::Visibility;
     use crate::daemon::ability::dispatch::OwnerKind;
 
-    super::system_descriptors_for_owner(
-        owner_ura,
-        OwnerKind::Agent(super::DEFAULT_MCP_AGENT_ID.to_string()),
-        |_| Visibility::Scoped,
-    )
+    super::system_descriptors_for_owner(owner_ura, OwnerKind::mcp_integration_system(), |_| {
+        Visibility::Scoped
+    })
 }
 
 /// Project an AbilityDescriptor into the JSON-Schema shape MCP
@@ -248,9 +246,15 @@ fn owner_label_for_descriptor(
 fn parsed_owner_label(owner_ura: &str) -> Option<String> {
     let parsed = crate::core::ura::parse_ura(owner_ura).ok()?;
     match parsed.kind {
-        crate::core::ura::URAKind::Agent => parsed
-            .agent_ids()
-            .map(|(user_id, agent_id)| format!("user/{user_id} agent/{agent_id}")),
+        crate::core::ura::URAKind::Agent => {
+            if let Some((device_id, agent_id)) = parsed.device_agent_ids() {
+                Some(format!("device/{device_id} system-agent/{agent_id}"))
+            } else {
+                parsed
+                    .agent_ids()
+                    .map(|(user_id, agent_id)| format!("user/{user_id} agent/{agent_id}"))
+            }
+        }
         crate::core::ura::URAKind::Ability => match parsed.ability()?.owner {
             crate::core::ura::AbilityOwner::Agent { user_id, agent_id } => {
                 Some(format!("user/{user_id} agent/{agent_id}"))
@@ -259,6 +263,10 @@ fn parsed_owner_label(owner_ura: &str) -> Option<String> {
                 device_id,
                 agent_id,
             } => Some(format!("device/{device_id} system-agent/{agent_id}")),
+            crate::core::ura::AbilityOwner::Service {
+                principal_id,
+                service_id,
+            } => Some(format!("user/{principal_id} service/{service_id}")),
             crate::core::ura::AbilityOwner::Device { device_id } => {
                 Some(format!("device/{device_id}"))
             }
@@ -267,6 +275,9 @@ fn parsed_owner_label(owner_ura: &str) -> Option<String> {
         crate::core::ura::URAKind::User => {
             parsed.user_id().map(|user_id| format!("user/{user_id}"))
         }
+        crate::core::ura::URAKind::Service => parsed
+            .service_ids()
+            .map(|(principal_id, service_id)| format!("user/{principal_id} service/{service_id}")),
         crate::core::ura::URAKind::Device => parsed
             .device_id()
             .map(|device_id| format!("device/{device_id}")),
@@ -729,7 +740,7 @@ impl<I: LocalInvoker> InvokeMcpProvider<I> {
     ) -> Self {
         let descriptors = descriptors
             .into_iter()
-            .filter(|descriptor| descriptor_is_mcp_callable(descriptor))
+            .filter(descriptor_is_mcp_callable)
             .collect::<Vec<_>>();
         let routes = McpToolRouteTable::from_descriptors(&descriptors);
         Self {
@@ -951,7 +962,7 @@ mod tests {
     use crate::daemon::ability::descriptors::{AbilityDescriptor, AdmissionAction, Visibility};
     use std::cell::{Cell, RefCell};
 
-    const TEST_DEVICE_OWNER: &str = "easynet:///r/acme/device/01DEV";
+    const TEST_SYSTEM_AGENT_OWNER: &str = "easynet:///r/acme/agent/device.01DEV.plugin-management";
     const TEST_AGENT_OWNER: &str = "easynet:///r/acme/agent/test-user.claude";
 
     #[test]
@@ -973,7 +984,7 @@ mod tests {
     fn d(name: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(
             name,
-            "easynet:///r/acme/device/01DEV",
+            TEST_SYSTEM_AGENT_OWNER,
             Visibility::Scoped,
             AdmissionAction::Invoke,
         )
@@ -1017,7 +1028,7 @@ mod tests {
         // not label catalog rows as free unless descriptors declare
         // that metadata explicitly.
         assert!(spec["description"].as_str().unwrap().starts_with(
-            "[EasyNet ability: agent.list | owner: device/01DEV | cost: unknown (cost not declared)] "
+            "[EasyNet ability: agent.list | owner: device/01DEV system-agent/plugin-management | cost: unknown (cost not declared)] "
         ));
         assert!(spec["description"]
             .as_str()
@@ -1060,7 +1071,7 @@ mod tests {
         // description (which Claude Code's tool list rejects).
         let desc = AbilityDescriptor::new(
             "a.b",
-            TEST_DEVICE_OWNER,
+            TEST_SYSTEM_AGENT_OWNER,
             Visibility::Public,
             AdmissionAction::Invoke,
         )
@@ -1075,7 +1086,7 @@ mod tests {
     fn tool_spec_falls_back_to_object_schema_when_input_is_null() {
         let mut desc = AbilityDescriptor::new(
             "a.b",
-            TEST_DEVICE_OWNER,
+            TEST_SYSTEM_AGENT_OWNER,
             Visibility::Public,
             AdmissionAction::Invoke,
         )
@@ -1610,7 +1621,7 @@ mod tests {
 
         let descs = vec![AbilityDescriptor::new(
             "observe.health",
-            "easynet:///r/acme/device/01DEV",
+            TEST_SYSTEM_AGENT_OWNER,
             Visibility::Public,
             AdmissionAction::Invoke,
         )
@@ -1678,7 +1689,7 @@ mod tests {
             },
             vec![AbilityDescriptor::new(
                 "observe.health",
-                "easynet:///r/acme/device/01DEV",
+                TEST_SYSTEM_AGENT_OWNER,
                 Visibility::Public,
                 AdmissionAction::Invoke,
             )
@@ -1724,7 +1735,7 @@ mod tests {
             },
             vec![AbilityDescriptor::new(
                 "observe.health",
-                "easynet:///r/acme/device/01DEV",
+                TEST_SYSTEM_AGENT_OWNER,
                 Visibility::Public,
                 AdmissionAction::Invoke,
             )

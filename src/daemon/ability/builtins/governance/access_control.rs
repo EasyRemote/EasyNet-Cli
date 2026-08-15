@@ -234,6 +234,7 @@ fn check_handler(args: Value, stores: &AccessControlStoreRegistry) -> anyhow::Re
         principal_id,
         token_id: request.token_id,
         token_class: request.token_class,
+        device_invocation_purpose: None,
         callee_ura: request.callee_ura,
         subject_ura: request.subject_ura,
         ability_ura: request.ability_ura,
@@ -1662,20 +1663,20 @@ mod tests {
             )
             .expect("put record");
 
-        let callee_ura = "easynet:///r/test/device/dev-a";
+        let host_device_ura = "easynet:///r/test/device/dev-a";
         let mut catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
                 None,
             ),
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
-                callee_ura,
+                host_device_ura,
             )
             .expect("Device authority context"),
         );
         catalog.register_rpc_with_spec(
             "terminal.create",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::terminal_system(),
             registry_manifest(
                 "terminal.create",
                 "Admission explain descriptor fixture.",

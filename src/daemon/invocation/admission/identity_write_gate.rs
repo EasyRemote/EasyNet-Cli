@@ -76,7 +76,7 @@ impl IdentityWriteGate {
         match intent.role() {
             TrustAnchorRole::Device => {
                 if caller.local_self || self.is_local_backend_or_hub(caller_ura, caller.role) {
-                    Ok(())
+                    self.authorize_device_owner_binding(caller_envelope, intent)
                 } else {
                     Err(self.permission_denied_register(caller_ura, caller.role, intent))
                 }
@@ -175,6 +175,57 @@ impl IdentityWriteGate {
         crate::core::ura::hub_ura(&self.daemon_realm) == caller_ura
     }
 
+    fn authorize_device_owner_binding(
+        &self,
+        caller_envelope: Option<&Envelope>,
+        intent: &RegisterPubkeyIntent,
+    ) -> Result<(), Status> {
+        let owner_ura = intent
+            .principal_owner_ura()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                Status::permission_denied(
+                    "identity.register_pubkey: realm identity adapter Device registration requires principal_owner_ura",
+                )
+            })?;
+        let owner = crate::core::ura::parse_ura(owner_ura).map_err(|error| {
+            Status::invalid_argument(format!(
+                "identity.register_pubkey: principal_owner_ura must be canonical: {error}"
+            ))
+        })?;
+        if owner.kind != crate::core::ura::URAKind::User || owner.realm != self.daemon_realm {
+            return Err(Status::permission_denied(
+                "identity.register_pubkey: Device owner must be a same-realm User",
+            ));
+        }
+        let owner_user_id = owner.user_id().ok_or_else(|| {
+            Status::invalid_argument(
+                "identity.register_pubkey: principal_owner_ura must include a User id",
+            )
+        })?;
+        let expected_subject = crate::core::ura::resource_dot_ura(
+            &self.daemon_realm,
+            &format!("user.{owner_user_id}"),
+            "invoke/identity.register_pubkey",
+        );
+        let actual_subject = caller_envelope
+            .and_then(|envelope| envelope.subject.as_ref())
+            .map(|subject| subject.ura.trim())
+            .filter(|subject| !subject.is_empty())
+            .ok_or_else(|| {
+                Status::invalid_argument(
+                    "identity.register_pubkey: realm identity adapter subject is required",
+                )
+            })?;
+        if actual_subject != expected_subject {
+            return Err(Status::permission_denied(format!(
+                "identity.register_pubkey: principal_owner_ura `{owner_ura}` does not match admitted adapter subject `{actual_subject}`"
+            )));
+        }
+        Ok(())
+    }
+
     fn permission_denied_register(
         &self,
         caller_ura: &str,
@@ -243,12 +294,20 @@ fn role_label(role: TrustAnchorRole) -> &'static str {
 mod tests {
     use super::*;
     use crate::daemon::invocation::admission::revoke_user_pubkey::RevokeUserPubkeyIntent;
-    use axon_sdk::pb::axon::v1::AgentIdentity;
+    use axon_sdk::pb::axon::v1::{AgentIdentity, SubjectIdentity};
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
 
     fn intent(principal_ura: &str, role: TrustAnchorRole) -> RegisterPubkeyIntent {
         RegisterPubkeyIntent::for_test(principal_ura.to_string(), role)
+    }
+
+    fn device_intent(principal_ura: &str, owner_ura: &str) -> RegisterPubkeyIntent {
+        RegisterPubkeyIntent::for_test_with_owner(
+            principal_ura.to_string(),
+            TrustAnchorRole::Device,
+            owner_ura.to_string(),
+        )
     }
 
     fn revoke_intent(user_ura: &str) -> RevokeUserPubkeyIntent {
@@ -263,6 +322,19 @@ mod tests {
             }),
             ..Envelope::default()
         }
+    }
+
+    fn identity_adapter_envelope(caller_ura: &str, owner_user_id: &str) -> Envelope {
+        let mut envelope = envelope(caller_ura);
+        envelope.subject = Some(SubjectIdentity {
+            ura: crate::core::ura::resource_dot_ura(
+                "local",
+                &format!("user.{owner_user_id}"),
+                "invoke/identity.register_pubkey",
+            ),
+            profile: "axon-strict-v2".to_string(),
+        });
+        envelope
     }
 
     fn anchor_entry(
@@ -349,13 +421,13 @@ mod tests {
     fn local_backend_can_register_device_and_user_rows() {
         let backend_ura = crate::core::ura::hub_ura("local");
         let gate = gate(vec![anchor_entry(&backend_ura, TrustAnchorRole::Backend)]);
-        let env = envelope(&backend_ura);
+        let env = identity_adapter_envelope(&backend_ura, "user-1");
 
         gate.authorize_register_pubkey(
             Some(&env),
-            &intent(
-                "easynet:///r/user-realm/device/dev-1",
-                TrustAnchorRole::Device,
+            &device_intent(
+                "easynet:///r/local/device/dev-1",
+                "easynet:///r/local/user/user-1",
             ),
             None,
         )
@@ -366,6 +438,29 @@ mod tests {
             None,
         )
         .expect("backend product auth registers user keys");
+    }
+
+    #[test]
+    fn realm_identity_adapter_rejects_owner_argument_different_from_admitted_subject() {
+        let backend_ura = crate::core::ura::hub_ura("local");
+        let gate = gate(vec![anchor_entry(&backend_ura, TrustAnchorRole::Backend)]);
+        let env = identity_adapter_envelope(&backend_ura, "alice");
+
+        let error = gate
+            .authorize_register_pubkey(
+                Some(&env),
+                &device_intent(
+                    "easynet:///r/local/device/dev-1",
+                    "easynet:///r/local/user/bob",
+                ),
+                None,
+            )
+            .expect_err("admitted User A subject must not bind Device to User B");
+
+        assert_eq!(error.code(), tonic::Code::PermissionDenied);
+        assert!(error
+            .message()
+            .contains("does not match admitted adapter subject"));
     }
 
     #[test]

@@ -1023,7 +1023,7 @@ mod tests {
         let response = PagesHealthResponse::new(
             "ready",
             true,
-            "easynet:///r/example/agent/alice.pages",
+            "easynet:///r/example/service/alice.pages",
             "easynet:///r/example/resource/alice.pages",
             1,
             vec![
@@ -1047,7 +1047,10 @@ mod tests {
 
         assert_eq!(wire["state"], "ready");
         assert_eq!(wire["ready"], true);
-        assert_eq!(wire["owner_ura"], "easynet:///r/example/agent/alice.pages");
+        assert_eq!(
+            wire["owner_ura"],
+            "easynet:///r/example/service/alice.pages"
+        );
         assert_eq!(
             wire["surface_ref"],
             "easynet:///r/example/resource/alice.pages"
@@ -1084,7 +1087,7 @@ mod tests {
         let response_error = serde_json::from_value::<PagesHealthResponse>(json!({
             "state": "ready",
             "ready": true,
-            "owner_ura": "easynet:///r/example/agent/alice.pages",
+            "owner_ura": "easynet:///r/example/service/alice.pages",
             "surface_ref": "easynet:///r/example/resource/alice.pages",
             "page_count": 1,
             "checks": [],

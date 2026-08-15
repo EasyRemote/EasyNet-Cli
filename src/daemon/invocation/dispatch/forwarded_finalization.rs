@@ -357,6 +357,20 @@ impl ForwardedFinalizationVerifier {
         .map_err(forwarded_finalization_error)?;
         ForwardedFinalizedInvocation::from_verified(&self.binding, verified)
     }
+
+    /// Close a streamed/bidi lifecycle and prove that the carrier's terminal
+    /// result is exactly the payload signed into the terminal checkpoint.
+    pub(crate) fn finalize_with_carrier_result(
+        &mut self,
+        admission_on_terminal: Option<WireInvocationReceipt>,
+        terminal: WireInvocationReceipt,
+        carrier_payload: Vec<u8>,
+        carrier_result_content_type: String,
+    ) -> Result<ForwardedFinalizedInvocation, Status> {
+        let mut finalized = self.finalize(admission_on_terminal, terminal)?;
+        finalized.bind_carrier_result(carrier_payload, carrier_result_content_type)?;
+        Ok(finalized)
+    }
 }
 
 fn verify_wire_receipt(

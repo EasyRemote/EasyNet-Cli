@@ -173,6 +173,7 @@ fn make_service_with_presence_and_heartbeat(
         cell,
         test_admission_daemon_ura_for_route_owner(TEST_HUB_URA),
     )
+    .with_transport_boundary(AdmissionTransportBoundary::LocalOnlyIpc)
     .with_access_control_stores(access_control_stores)
     .with_ability_catalog(Arc::clone(&local_ability_catalog));
     let mut service = DaemonInvocationService::new(presence, admission)
@@ -264,6 +265,7 @@ fn make_unregistered_service_for_route_owner_and_runtime_trust(
     );
     let admission_daemon_ura = test_admission_daemon_ura_for_route_owner(route_owner_ura);
     let admission = AdmissionFacade::with_trust_anchor_cell(cell.clone(), admission_daemon_ura)
+        .with_transport_boundary(AdmissionTransportBoundary::LocalOnlyIpc)
         .with_access_control_stores(access_control_stores)
         .with_ability_catalog(Arc::clone(&local_ability_catalog));
     let signer_realm = crate::core::ura::parse_ura(route_owner_ura)

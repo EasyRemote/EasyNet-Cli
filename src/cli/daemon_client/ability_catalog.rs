@@ -122,7 +122,10 @@ mod tests {
 
     #[test]
     fn abilities_from_value_requires_descriptor_bound_ref() {
-        let mut row = catalog_row("er.add", "easynet:///r/acme/device/dev");
+        let mut row = catalog_row(
+            "er.add",
+            "easynet:///r/acme/agent/device.dev.runtime-introspection",
+        );
         row.as_object_mut()
             .expect("catalog row object")
             .remove("descriptor_ref");
@@ -140,7 +143,10 @@ mod tests {
 
     #[test]
     fn abilities_from_value_preserves_daemon_descriptor_ref() {
-        let row = catalog_row("er.add", "easynet:///r/acme/device/dev");
+        let row = catalog_row(
+            "er.add",
+            "easynet:///r/acme/agent/device.dev.runtime-introspection",
+        );
         let descriptor_ref = row["descriptor_ref"].as_str().unwrap().to_string();
         let value = serde_json::json!({ "abilities": [row] });
 
@@ -152,8 +158,12 @@ mod tests {
 
     #[test]
     fn abilities_from_value_rejects_name_derived_owner_repair() {
-        let mut row = catalog_row("er.add", "easynet:///r/acme/device/dev");
-        row["owner_ura"] = Value::String("easynet:///r/acme/device/other".to_string());
+        let mut row = catalog_row(
+            "er.add",
+            "easynet:///r/acme/agent/device.dev.runtime-introspection",
+        );
+        row["owner_ura"] =
+            Value::String("easynet:///r/acme/agent/device.other.runtime-introspection".to_string());
         let value = serde_json::json!({ "abilities": [row] });
 
         let err = AbilityCatalogueClient::abilities_from_value(&value)

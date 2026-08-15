@@ -10,6 +10,7 @@ pub mod child_invocation_builder;
 pub mod decision;
 #[cfg(feature = "axon-pb")]
 pub(crate) mod device_caller;
+pub(crate) mod device_caller_types;
 #[cfg(feature = "axon-pb")]
 pub mod device_trust_sync;
 #[cfg(feature = "axon-pb")]
@@ -23,6 +24,8 @@ pub(crate) mod hosted_agent_publication;
 pub(crate) mod identity_write_gate;
 #[cfg(feature = "axon-pb")]
 pub mod list_user_pubkeys;
+#[cfg(feature = "axon-pb")]
+pub(crate) mod local_device_resource_authority;
 #[cfg(feature = "axon-pb")]
 pub(crate) mod owner_projection_publication;
 pub mod owner_resolution;

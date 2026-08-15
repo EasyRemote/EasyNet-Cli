@@ -56,7 +56,10 @@ PY
 [[ -n "$invoke_body" ]] \
     || fail "Pages CLI must route all ability calls through invoke_pages_ability"
 
-grep -q 'let target = ability.local_target(&identity.realm)?;' <<<"$invoke_body" \
+grep -q 'let execution_host_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;' <<<"$invoke_body" \
+    || fail "invoke_pages_ability must derive the local daemon Device execution host"
+
+grep -q 'let target = ability.local_target(&execution_host_ura)?;' <<<"$invoke_body" \
     || fail "invoke_pages_ability must derive the typed LocalAbilityTarget from PagesAbility"
 
 grep -q 'SystemInvocationTargetIssuer::local_target_root(&target, args, CallMode::Rpc)?' <<<"$invoke_body" \

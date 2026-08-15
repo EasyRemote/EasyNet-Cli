@@ -321,6 +321,18 @@ impl AbilityCatalogStore {
         }
     }
 
+    /// Return the full live stored row for a specific owner.
+    pub(crate) fn projection_for_owner_at(
+        &self,
+        owner_ura: &str,
+        now_unix_ms: i64,
+    ) -> Option<OwnerAbilityProjectionRow> {
+        self.inner
+            .get(owner_ura)
+            .filter(|entry| entry.is_live_at(now_unix_ms))
+            .map(|entry| entry.clone())
+    }
+
     /// Return the full stored row for tests.
     #[cfg(test)]
     pub(crate) fn projection_for_owner(

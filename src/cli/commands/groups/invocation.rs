@@ -1336,7 +1336,12 @@ mod tests {
 
     #[test]
     fn show_record_json_reports_usage_attestation() {
+        let ability_ura = "easynet:///r/test/ability/system-agent.callee.locomotion.fs.read";
+        let descriptor_ref = format!("{ability_ura}@1.0.0#{}!read", "a".repeat(64));
         let record = test_record_builder("fs.read", "completed")
+            .descriptor_ref(descriptor_ref.clone())
+            .admission_action("read")
+            .safe_read(true)
             .usage(axon_sdk::invocation::axiom::InvocationUsage {
                 tokens_in: 11,
                 tokens_out: 7,
@@ -1353,6 +1358,11 @@ mod tests {
         let value = show_record_json(&record).expect("json projection");
         assert_eq!(value["usage"]["tokens_in"], 11);
         assert_eq!(value["usage"]["tokens_out"], 7);
+        assert_eq!(value["ability_name"], "fs.read");
+        assert_eq!(value["ability_ura"], ability_ura);
+        assert_eq!(value["descriptor_ref"], descriptor_ref);
+        assert_eq!(value["admission_action"], "read");
+        assert_eq!(value["safe_read"], true);
         assert_eq!(value["ledger_reported_receipt_chain_verified"], true);
         assert_eq!(value["cli_receipt_chain_verification"], "not_performed");
     }

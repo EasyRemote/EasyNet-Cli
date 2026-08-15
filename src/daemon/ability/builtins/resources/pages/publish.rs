@@ -132,7 +132,7 @@ pub fn handle_publish(
     // Register per-project fetch/API abilities into the live
     // daemon-hosted Axon runtime so Hub remote/session dispatch
     // can find them without any legacy resolver path.
-    super::register_project_abilities(registry.as_ref(), realm, owner_user_id, user, project_id)
+    super::register_project_abilities(registry.as_ref(), owner_user_id, user, project_id)
         .context("register pages project abilities")?;
 
     let project_ura =
@@ -175,13 +175,10 @@ mod tests {
     use crate::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
     use serde_json::json;
 
-    fn pages_registry(realm: &str, user: &str) -> Arc<AxonAbilityCatalog> {
+    fn pages_registry(realm: &str, _user: &str) -> Arc<AxonAbilityCatalog> {
         let device_ura = crate::core::ura::device_ura(realm, "pages-publish-test-device");
-        let pages_agent = super::super::management_agent_ura(realm, user);
         let authority_context = AbilityAuthorityContext::for_device_authority_root(device_ura)
-            .expect("Pages publish test Device authority")
-            .with_declared_agent_authority_root(pages_agent)
-            .expect("Pages publish test Agent authority");
+            .expect("Pages publish test Device authority");
         Arc::new(AxonAbilityCatalog::new_with_runtime_and_authority_context(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
@@ -209,6 +206,7 @@ mod tests {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let realm = "easynet.run";
         let user = "pages-publish-projection-user";
+        let owner_user_id = "pages-publish-owner";
         let project_id = "docs-publish";
         clear_registry_for_user(user);
         let folder = tempfile::tempdir().expect("temp pages publish root");
@@ -216,7 +214,7 @@ mod tests {
             .expect("write test page");
 
         let published = handle_publish(
-            user,
+            owner_user_id,
             user,
             8787,
             realm,

@@ -800,6 +800,15 @@ fn keyring_management_description_for(name: &str) -> Option<&'static str> {
 }
 
 pub fn try_description_for_owned(name: &str) -> anyhow::Result<String> {
+    if name == plugin_lifecycle_ability::COMPANION_STATUS_ABILITY {
+        return Ok(plugin_lifecycle_ability::companion_status_description().to_string());
+    }
+    if name == plugin_lifecycle_ability::COMPANION_RECONCILE_ABILITY {
+        return Ok(plugin_lifecycle_ability::companion_reconcile_description().to_string());
+    }
+    if super::try_system_ability_descriptor_path(name).is_ok_and(|path| path.is_file()) {
+        return Ok(super::system_manifest::canonical_registration_contract(name)?.description);
+    }
     if let Some(description) = crate::daemon::plugins::try_builtin_description_for_owned(name)? {
         return Ok(description);
     }
@@ -837,6 +846,18 @@ impl CatalogSchemaProjection {
     }
 
     fn try_declared_input_schema(name: &str) -> anyhow::Result<Option<serde_json::Value>> {
+        if matches!(
+            name,
+            plugin_lifecycle_ability::COMPANION_STATUS_ABILITY
+                | plugin_lifecycle_ability::COMPANION_RECONCILE_ABILITY
+        ) {
+            return Ok(Some(plugin_lifecycle_ability::companion_input_schema()));
+        }
+        if super::try_system_ability_descriptor_path(name).is_ok_and(|path| path.is_file()) {
+            return Ok(Some(
+                super::system_manifest::canonical_registration_contract(name)?.input_schema,
+            ));
+        }
         if let Some(schema) = crate::daemon::plugins::try_builtin_input_schema_for(name)? {
             return Ok(Some(schema));
         }
@@ -1188,16 +1209,6 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         return Some(AbilityLayer::Operational);
     }
 
-    if let Some(layer) = crate::daemon::plugins::ability_layer_for(name) {
-        return Some(match layer {
-            crate::daemon::plugins::PluginAbilityLayer::Introspection => {
-                AbilityLayer::Introspection
-            }
-            crate::daemon::plugins::PluginAbilityLayer::Control => AbilityLayer::Control,
-            crate::daemon::plugins::PluginAbilityLayer::Observation => AbilityLayer::Observation,
-            crate::daemon::plugins::PluginAbilityLayer::Operational => AbilityLayer::Operational,
-        });
-    }
     if let Some(layer) = daemon_invocation_contracts::contract_layer(name) {
         return Some(match layer {
             daemon_invocation_contracts::DaemonInvocationContractLayer::Introspection => {
@@ -1211,8 +1222,11 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
             }
         });
     }
+    if super::runtime_admin_contracts::contains(name) {
+        return Some(AbilityLayer::Operational);
+    }
 
-    match name {
+    let canonical_layer = match name {
         // ── Introspection ───────────────────────────────────
         governance_names::META_DESCRIBE
         | governance_names::META_LIST_ABILITIES
@@ -1233,6 +1247,9 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         // belongs with the introspection-layer reads.
         | integration_names::MCP_CLIENT_LIST
         | integration_names::A2A_BRIDGE_LIST_SKILLS
+        // Daemon-local aggregate discovery front door. It fans in directory
+        // snapshots and does not mutate agent or federation state.
+        | agent_names::DISCOVER
         | agent_names::AGENT_LIST
         | governance_names::INVOCATION_HISTORY_LIST
         | governance_names::INVOCATION_HISTORY_GET
@@ -1476,7 +1493,24 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
             Some(AbilityLayer::Operational)
         }
         _ => None,
+    };
+    if canonical_layer.is_some() {
+        return canonical_layer;
     }
+
+    // Plugin state is runtime-owned and may resolve through a user-selected
+    // package root. Consult it only after every canonical daemon contract has
+    // been classified from static control-plane facts. Otherwise constructing
+    // the deterministic system registry merely to answer an ownership query
+    // reads `$HOME/.easynet/plugins`, coupling descriptor identity to ambient
+    // process state and making pure route projection race with unrelated
+    // environment-isolation tests.
+    crate::daemon::plugins::ability_layer_for(name).map(|layer| match layer {
+        crate::daemon::plugins::PluginAbilityLayer::Introspection => AbilityLayer::Introspection,
+        crate::daemon::plugins::PluginAbilityLayer::Control => AbilityLayer::Control,
+        crate::daemon::plugins::PluginAbilityLayer::Observation => AbilityLayer::Observation,
+        crate::daemon::plugins::PluginAbilityLayer::Operational => AbilityLayer::Operational,
+    })
 }
 
 #[cfg(test)]

@@ -24,14 +24,22 @@
 
 use crate::core::ura::{parse_ura, URAKind};
 use crate::daemon::invocation::admission::decision::AccessAction;
+pub(crate) use crate::daemon::invocation::admission::device_caller_types::{
+    DeviceCallerPurpose, VerifiedDeviceInvocationPurpose,
+};
+use sha2::{Digest as _, Sha256};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DeviceCallerPurpose {
-    Bootstrap,
-    Pairing,
-    PublicationCustody,
-    Liveness,
-    SessionControl,
+impl VerifiedDeviceInvocationPurpose {
+    #[must_use]
+    pub(crate) fn supports_public_ability(self, public_ability: &str) -> bool {
+        device_caller_rule_for_purpose(public_ability, self.purpose).is_some()
+    }
+
+    #[must_use]
+    pub(crate) fn matches_scope(self, scope: DeviceInvocationPurposeScope<'_>) -> bool {
+        device_caller_rule_for_purpose(scope.public_ability, self.purpose).is_some()
+            && self.invocation_binding == device_invocation_binding(scope)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,12 +47,30 @@ enum DeviceCallerPolicyAdmission {
     None,
     AuthoritySelf { action: AccessAction },
     AuthorityOwnerProjection { action: AccessAction },
+    AuthorityHostedAgentRetraction { action: AccessAction },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeviceCallerCalleeGeometry {
+    SelectedAuthority,
+    DeviceSelfOrSelectedAuthority,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeviceCallerSubjectGeometry {
+    SameRealm,
+    DeviceSelf,
+    OwnerProjection,
+    HostedAgent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DeviceCallerRule {
     public_ability: &'static str,
     purpose: DeviceCallerPurpose,
+    action: AccessAction,
+    callee_geometry: DeviceCallerCalleeGeometry,
+    subject_geometry: DeviceCallerSubjectGeometry,
     policy_admission: DeviceCallerPolicyAdmission,
 }
 
@@ -53,11 +79,19 @@ const DEVICE_CALLER_RULES: &[DeviceCallerRule] = &[
         public_ability:
             crate::daemon::ability::conformance::ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
         purpose: DeviceCallerPurpose::Bootstrap,
+        action: AccessAction::Manage,
+        // Runtime bootstrap is an Authority-owned, descriptor-bound ability.
+        // The Device is the self subject, never the execution callee.
+        callee_geometry: DeviceCallerCalleeGeometry::SelectedAuthority,
+        subject_geometry: DeviceCallerSubjectGeometry::DeviceSelf,
         policy_admission: DeviceCallerPolicyAdmission::None,
     },
     DeviceCallerRule {
         public_ability: crate::daemon::ability::conformance::ABILITY_IDENTITY_REGISTER_PUBKEY,
         purpose: DeviceCallerPurpose::Pairing,
+        action: AccessAction::Manage,
+        callee_geometry: DeviceCallerCalleeGeometry::SelectedAuthority,
+        subject_geometry: DeviceCallerSubjectGeometry::SameRealm,
         policy_admission: DeviceCallerPolicyAdmission::None,
     },
     DeviceCallerRule {
@@ -69,16 +103,25 @@ const DEVICE_CALLER_RULES: &[DeviceCallerRule] = &[
         // the earlier caller-kind classifier.
         public_ability: crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
         purpose: DeviceCallerPurpose::Pairing,
+        action: AccessAction::Read,
+        callee_geometry: DeviceCallerCalleeGeometry::SelectedAuthority,
+        subject_geometry: DeviceCallerSubjectGeometry::SameRealm,
         policy_admission: DeviceCallerPolicyAdmission::None,
     },
     DeviceCallerRule {
         public_ability: crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_AGENT,
         purpose: DeviceCallerPurpose::PublicationCustody,
+        action: AccessAction::Manage,
+        callee_geometry: DeviceCallerCalleeGeometry::SelectedAuthority,
+        subject_geometry: DeviceCallerSubjectGeometry::HostedAgent,
         policy_admission: DeviceCallerPolicyAdmission::None,
     },
     DeviceCallerRule {
         public_ability: crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
         purpose: DeviceCallerPurpose::PublicationCustody,
+        action: AccessAction::Manage,
+        callee_geometry: DeviceCallerCalleeGeometry::SelectedAuthority,
+        subject_geometry: DeviceCallerSubjectGeometry::OwnerProjection,
         policy_admission: DeviceCallerPolicyAdmission::AuthorityOwnerProjection {
             action: AccessAction::Manage,
         },
@@ -86,7 +129,10 @@ const DEVICE_CALLER_RULES: &[DeviceCallerRule] = &[
     DeviceCallerRule {
         public_ability:
             crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_HEARTBEAT,
-        purpose: DeviceCallerPurpose::Liveness,
+        purpose: DeviceCallerPurpose::AbilityCatalogDiff,
+        action: AccessAction::Manage,
+        callee_geometry: DeviceCallerCalleeGeometry::SelectedAuthority,
+        subject_geometry: DeviceCallerSubjectGeometry::DeviceSelf,
         // BootstrapAuthorityVerifier validates that every refreshed owner is
         // exactly the caller Device before PolicyEngine sees an authority
         // proof. No generic policy exception is needed here.
@@ -94,9 +140,32 @@ const DEVICE_CALLER_RULES: &[DeviceCallerRule] = &[
     },
     DeviceCallerRule {
         public_ability: crate::daemon::ability::conformance::ABILITY_SESSION_OPEN,
-        purpose: DeviceCallerPurpose::SessionControl,
+        purpose: DeviceCallerPurpose::DeviceSelfSession,
+        action: AccessAction::Stream,
+        callee_geometry: DeviceCallerCalleeGeometry::DeviceSelfOrSelectedAuthority,
+        subject_geometry: DeviceCallerSubjectGeometry::DeviceSelf,
         policy_admission: DeviceCallerPolicyAdmission::AuthoritySelf {
             action: AccessAction::Stream,
+        },
+    },
+    DeviceCallerRule {
+        public_ability: crate::daemon::ability::conformance::ABILITY_FEDERATION_REVOKE,
+        purpose: DeviceCallerPurpose::LifecycleSelfRevoke,
+        action: AccessAction::Manage,
+        callee_geometry: DeviceCallerCalleeGeometry::SelectedAuthority,
+        subject_geometry: DeviceCallerSubjectGeometry::DeviceSelf,
+        policy_admission: DeviceCallerPolicyAdmission::AuthoritySelf {
+            action: AccessAction::Manage,
+        },
+    },
+    DeviceCallerRule {
+        public_ability: crate::daemon::ability::conformance::ABILITY_FEDERATION_REVOKE,
+        purpose: DeviceCallerPurpose::HostedAgentRetraction,
+        action: AccessAction::Manage,
+        callee_geometry: DeviceCallerCalleeGeometry::SelectedAuthority,
+        subject_geometry: DeviceCallerSubjectGeometry::HostedAgent,
+        policy_admission: DeviceCallerPolicyAdmission::AuthorityHostedAgentRetraction {
+            action: AccessAction::Manage,
         },
     },
 ];
@@ -104,7 +173,7 @@ const DEVICE_CALLER_RULES: &[DeviceCallerRule] = &[
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CallerKindAdmission {
     NonDevice,
-    Device(DeviceCallerPurpose),
+    Device,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +181,15 @@ pub(crate) enum DeviceCallerAdmissionError {
     InvalidCallerUra(String),
     NonActorCaller { kind: URAKind },
     DeviceCallerNotAllowed { public_ability: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DeviceInvocationPurposeVerificationError {
+    Caller(DeviceCallerAdmissionError),
+    GeometryDenied {
+        public_ability: String,
+        reason: &'static str,
+    },
 }
 
 pub(crate) fn classify_public_invocation_caller(
@@ -131,9 +209,11 @@ pub(crate) fn classify_public_invocation_caller_kind(
     public_ability: &str,
 ) -> Result<CallerKindAdmission, DeviceCallerAdmissionError> {
     match caller_kind {
-        URAKind::User | URAKind::Agent | URAKind::Authority => Ok(CallerKindAdmission::NonDevice),
-        URAKind::Device => public_device_caller_purpose(public_ability)
-            .map(CallerKindAdmission::Device)
+        URAKind::User | URAKind::Service | URAKind::Agent | URAKind::Authority => {
+            Ok(CallerKindAdmission::NonDevice)
+        }
+        URAKind::Device => device_caller_ability_allowed(public_ability)
+            .then_some(CallerKindAdmission::Device)
             .ok_or_else(|| DeviceCallerAdmissionError::DeviceCallerNotAllowed {
                 public_ability: public_ability.to_string(),
             }),
@@ -143,15 +223,146 @@ pub(crate) fn classify_public_invocation_caller_kind(
     }
 }
 
-pub(crate) fn public_device_caller_purpose(public_ability: &str) -> Option<DeviceCallerPurpose> {
-    device_caller_rule(public_ability).map(|rule| rule.purpose)
-}
-
-fn device_caller_rule(public_ability: &str) -> Option<&'static DeviceCallerRule> {
+fn device_caller_ability_allowed(public_ability: &str) -> bool {
     let public_ability = public_ability.trim();
     DEVICE_CALLER_RULES
         .iter()
-        .find(|rule| rule.public_ability == public_ability)
+        .any(|rule| rule.public_ability == public_ability)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DeviceInvocationPurposeScope<'a> {
+    pub(crate) caller_ura: &'a str,
+    pub(crate) callee_ura: &'a str,
+    pub(crate) subject_ura: &'a str,
+    pub(crate) public_ability: &'a str,
+    pub(crate) daemon_ura: Option<&'a str>,
+    pub(crate) action: AccessAction,
+}
+
+/// Verify the complete signed tuple before minting the opaque purpose proof.
+/// This is intentionally stricter than the FFI-facing kind classifier above:
+/// classification says a Device may have such a purpose; this function proves
+/// that this invocation has it.
+pub(crate) fn verify_device_invocation_purpose(
+    scope: DeviceInvocationPurposeScope<'_>,
+) -> Result<VerifiedDeviceInvocationPurpose, DeviceInvocationPurposeVerificationError> {
+    let caller = parse_ura(scope.caller_ura).map_err(|error| {
+        DeviceInvocationPurposeVerificationError::Caller(
+            DeviceCallerAdmissionError::InvalidCallerUra(format!(
+                "caller_ura `{}` is invalid: {error}",
+                scope.caller_ura
+            )),
+        )
+    })?;
+    if caller.kind != URAKind::Device || caller.device_id().is_none() {
+        return Err(DeviceInvocationPurposeVerificationError::Caller(
+            DeviceCallerAdmissionError::NonActorCaller { kind: caller.kind },
+        ));
+    }
+    if !device_caller_ability_allowed(scope.public_ability) {
+        return Err(DeviceInvocationPurposeVerificationError::Caller(
+            DeviceCallerAdmissionError::DeviceCallerNotAllowed {
+                public_ability: scope.public_ability.to_string(),
+            },
+        ));
+    }
+    let rules = DEVICE_CALLER_RULES.iter().filter(|rule| {
+        rule.public_ability == scope.public_ability.trim() && rule.action == scope.action
+    });
+    let mut has_action_match = false;
+    let callee = parse_ura(scope.callee_ura).map_err(|_| {
+        DeviceInvocationPurposeVerificationError::GeometryDenied {
+            public_ability: scope.public_ability.to_string(),
+            reason: "callee is not canonical",
+        }
+    })?;
+    let subject = parse_ura(scope.subject_ura).map_err(|_| {
+        DeviceInvocationPurposeVerificationError::GeometryDenied {
+            public_ability: scope.public_ability.to_string(),
+            reason: "subject is not canonical",
+        }
+    })?;
+    let rule = rules
+        .inspect(|_| has_action_match = true)
+        .find(|rule| device_rule_geometry_matches(rule, scope, &caller, &callee, &subject))
+        .ok_or_else(
+            || DeviceInvocationPurposeVerificationError::GeometryDenied {
+                public_ability: scope.public_ability.to_string(),
+                reason: if has_action_match {
+                    "invocation geometry does not match an admitted Device purpose"
+                } else {
+                    "admission action does not match the Device purpose"
+                },
+            },
+        )?;
+    Ok(VerifiedDeviceInvocationPurpose {
+        purpose: rule.purpose,
+        invocation_binding: device_invocation_binding(scope),
+    })
+}
+
+fn device_rule_geometry_matches(
+    rule: &DeviceCallerRule,
+    scope: DeviceInvocationPurposeScope<'_>,
+    caller: &crate::core::ura::ParsedURA,
+    callee: &crate::core::ura::ParsedURA,
+    subject: &crate::core::ura::ParsedURA,
+) -> bool {
+    let selected_authority = callee.kind == URAKind::Authority
+        && callee.realm == caller.realm
+        && !scope
+            .daemon_ura
+            .is_some_and(|daemon| daemon != scope.callee_ura);
+    let device_self = callee.kind == URAKind::Device
+        && scope.callee_ura == scope.caller_ura
+        && callee.realm == caller.realm;
+    let callee_matches = match rule.callee_geometry {
+        DeviceCallerCalleeGeometry::SelectedAuthority => selected_authority,
+        DeviceCallerCalleeGeometry::DeviceSelfOrSelectedAuthority => {
+            device_self || selected_authority
+        }
+    };
+    let subject_matches = subject.realm == caller.realm
+        && match rule.subject_geometry {
+            DeviceCallerSubjectGeometry::SameRealm => true,
+            DeviceCallerSubjectGeometry::DeviceSelf => scope.subject_ura == scope.caller_ura,
+            DeviceCallerSubjectGeometry::OwnerProjection => {
+                matches!(
+                    subject.kind,
+                    URAKind::Device | URAKind::Agent | URAKind::Service
+                )
+            }
+            DeviceCallerSubjectGeometry::HostedAgent => subject.kind == URAKind::Agent,
+        };
+    callee_matches && subject_matches
+}
+
+fn device_caller_rule_for_purpose(
+    public_ability: &str,
+    purpose: DeviceCallerPurpose,
+) -> Option<&'static DeviceCallerRule> {
+    let public_ability = public_ability.trim();
+    DEVICE_CALLER_RULES
+        .iter()
+        .find(|rule| rule.public_ability == public_ability && rule.purpose == purpose)
+}
+
+fn device_invocation_binding(scope: DeviceInvocationPurposeScope<'_>) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"easynet.device.invocation-purpose\0");
+    for value in [
+        scope.caller_ura,
+        scope.callee_ura,
+        scope.subject_ura,
+        scope.public_ability,
+        scope.daemon_ura.unwrap_or_default(),
+        scope.action.as_str(),
+    ] {
+        hash.update((value.len() as u64).to_be_bytes());
+        hash.update(value.as_bytes());
+    }
+    hash.finalize().into()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -166,7 +377,7 @@ pub(crate) struct DeviceCallerPolicyScope<'a> {
 
 pub(crate) fn admitted_device_policy_purpose(
     scope: DeviceCallerPolicyScope<'_>,
-) -> Option<DeviceCallerPurpose> {
+) -> Option<VerifiedDeviceInvocationPurpose> {
     let Some(daemon_ura) = scope.daemon_ura else {
         return None;
     };
@@ -205,14 +416,39 @@ pub(crate) fn admitted_device_policy_purpose(
                 }
                 action
             }
+            DeviceCallerPolicyAdmission::AuthorityHostedAgentRetraction { action } => {
+                if !hosted_agent_retraction_geometry(scope.caller_ura, scope.subject_ura) {
+                    return None;
+                }
+                action
+            }
         };
         if scope.action != action {
             return None;
         }
         let expected_ability =
             crate::core::ura::owner_ability_ura(scope.callee_ura, rule.public_ability)?;
-        (scope.ability_ura == expected_ability).then_some(rule.purpose)
+        (scope.ability_ura == expected_ability).then(|| VerifiedDeviceInvocationPurpose {
+            purpose: rule.purpose,
+            invocation_binding: device_invocation_binding(DeviceInvocationPurposeScope {
+                caller_ura: scope.caller_ura,
+                callee_ura: scope.callee_ura,
+                subject_ura: scope.subject_ura,
+                public_ability: rule.public_ability,
+                daemon_ura: scope.daemon_ura,
+                action: scope.action,
+            }),
+        })
     })
+}
+
+fn hosted_agent_retraction_geometry(caller_ura: &str, subject_ura: &str) -> bool {
+    let (Ok(caller), Ok(subject)) = (parse_ura(caller_ura), parse_ura(subject_ura)) else {
+        return false;
+    };
+    caller.kind == URAKind::Device
+        && subject.kind == URAKind::Agent
+        && subject.realm == caller.realm
 }
 
 pub(crate) fn admits_owner_projection_publication_host(
@@ -259,7 +495,7 @@ fn owner_projection_publication_host_geometry(
         URAKind::Device => owner_ura == caller_ura,
         // Agent ownership is checked against the trust-anchor owner binding by
         // OwnerProjectionPublicationAuthority after this custody geometry check.
-        URAKind::Agent => true,
+        URAKind::Agent | URAKind::Service => true,
         // Authority self-publication is handled by the Authority caller path,
         // not by Device publication custody.
         URAKind::Authority => false,
@@ -272,51 +508,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classifies_public_device_caller_purposes() {
-        assert_eq!(
-            public_device_caller_purpose(
-                crate::daemon::ability::conformance::ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY
-            ),
-            Some(DeviceCallerPurpose::Bootstrap)
-        );
-        assert_eq!(
-            public_device_caller_purpose(
-                crate::daemon::ability::conformance::ABILITY_IDENTITY_REGISTER_PUBKEY
-            ),
-            Some(DeviceCallerPurpose::Pairing)
-        );
-        assert_eq!(
-            public_device_caller_purpose(
-                crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY
-            ),
-            Some(DeviceCallerPurpose::Pairing)
-        );
-        assert_eq!(
-            public_device_caller_purpose(crate::daemon::ability::conformance::ABILITY_SESSION_OPEN),
-            Some(DeviceCallerPurpose::SessionControl)
-        );
-        assert_eq!(
-            public_device_caller_purpose(
-                crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_AGENT
-            ),
-            Some(DeviceCallerPurpose::PublicationCustody)
-        );
-        assert_eq!(
-            public_device_caller_purpose(
-                crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES
-            ),
-            Some(DeviceCallerPurpose::PublicationCustody)
-        );
-        assert_eq!(
-            public_device_caller_purpose(
-                crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_HEARTBEAT
-            ),
-            Some(DeviceCallerPurpose::Liveness)
-        );
-        assert_eq!(public_device_caller_purpose("ability.publish"), None);
-        assert_eq!(public_device_caller_purpose("ability.deploy"), None);
-        assert_eq!(public_device_caller_purpose("ability.uninstall"), None);
-        assert_eq!(public_device_caller_purpose("observe.health"), None);
+    fn classifies_public_device_caller_ability_surface() {
+        for ability in [
+            crate::daemon::ability::conformance::ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
+            crate::daemon::ability::conformance::ABILITY_IDENTITY_REGISTER_PUBKEY,
+            crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
+            crate::daemon::ability::conformance::ABILITY_SESSION_OPEN,
+            crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_AGENT,
+            crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+            crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_HEARTBEAT,
+            crate::daemon::ability::conformance::ABILITY_FEDERATION_REVOKE,
+        ] {
+            assert!(device_caller_ability_allowed(ability), "{ability}");
+        }
+        for ability in [
+            "ability.publish",
+            "ability.deploy",
+            "ability.uninstall",
+            "observe.health",
+        ] {
+            assert!(!device_caller_ability_allowed(ability), "{ability}");
+        }
     }
 
     #[test]
@@ -363,28 +575,46 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            admitted_device_policy_purpose(DeviceCallerPolicyScope {
-                caller_ura: device,
-                callee_ura: authority,
-                subject_ura: device,
-                ability_ura: &ability_ura,
-                daemon_ura: Some(authority),
-                action: AccessAction::Manage,
-            }),
-            Some(DeviceCallerPurpose::PublicationCustody)
-        );
-        assert_eq!(
-            admitted_device_policy_purpose(DeviceCallerPolicyScope {
+        assert!(admitted_device_policy_purpose(DeviceCallerPolicyScope {
+            caller_ura: device,
+            callee_ura: authority,
+            subject_ura: device,
+            ability_ura: &ability_ura,
+            daemon_ura: Some(authority),
+            action: AccessAction::Manage,
+        })
+        .is_some_and(|purpose| purpose.is(DeviceCallerPurpose::PublicationCustody)));
+        assert!(admitted_device_policy_purpose(DeviceCallerPolicyScope {
                 caller_ura: device,
                 callee_ura: authority,
                 subject_ura: "easynet:///r/test/agent/alice.worker",
                 ability_ura: &ability_ura,
                 daemon_ura: Some(authority),
                 action: AccessAction::Manage,
+            })
+            .is_some_and(|purpose| purpose.is(DeviceCallerPurpose::PublicationCustody)),
+            "Device custody must carry a hosted Agent's owner projection without becoming its owner");
+        assert!(admitted_device_policy_purpose(DeviceCallerPolicyScope {
+                caller_ura: device,
+                callee_ura: authority,
+                subject_ura: "easynet:///r/test/service/alice.pages",
+                ability_ura: &ability_ura,
+                daemon_ura: Some(authority),
+                action: AccessAction::Manage,
+            })
+            .is_some_and(|purpose| purpose.is(DeviceCallerPurpose::PublicationCustody)),
+            "Device custody must carry a hosted Service's owner projection without becoming its owner");
+        assert_eq!(
+            admitted_device_policy_purpose(DeviceCallerPolicyScope {
+                caller_ura: device,
+                callee_ura: authority,
+                subject_ura: "easynet:///r/test/user/alice",
+                ability_ura: &ability_ura,
+                daemon_ura: Some(authority),
+                action: AccessAction::Manage,
             }),
-            Some(DeviceCallerPurpose::PublicationCustody),
-            "Device custody must carry a hosted Agent's owner projection without becoming its owner"
+            None,
+            "User principals are not executable owner projections"
         );
         assert_eq!(
             admitted_device_policy_purpose(DeviceCallerPolicyScope {
@@ -400,15 +630,130 @@ mod tests {
     }
 
     #[test]
-    fn admits_owner_projection_publication_with_agent_subject_geometry() {
+    fn advertise_abilities_publication_purpose_accepts_service_owner_projection_subject() {
+        let authority = "easynet:///r/test/authority";
+        let device = "easynet:///r/test/device/dev-1";
+        let service = "easynet:///r/test/service/alice.pages";
+        let proof = verify_device_invocation_purpose(DeviceInvocationPurposeScope {
+            caller_ura: device,
+            callee_ura: authority,
+            subject_ura: service,
+            public_ability:
+                crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+            daemon_ura: Some(authority),
+            action: AccessAction::Manage,
+        })
+        .expect("Service owner projection is an explicit Device publication-custody purpose");
+
+        assert!(proof.is(DeviceCallerPurpose::PublicationCustody));
+    }
+
+    #[test]
+    fn lifecycle_revoke_proof_requires_exact_device_self_geometry() {
+        let device = "easynet:///r/test/device/dev-1";
+        let authority = "easynet:///r/test/authority";
+        let scope = |subject_ura| DeviceInvocationPurposeScope {
+            caller_ura: device,
+            callee_ura: authority,
+            subject_ura,
+            public_ability: crate::daemon::ability::conformance::ABILITY_FEDERATION_REVOKE,
+            daemon_ura: Some(authority),
+            action: AccessAction::Manage,
+        };
+
+        let proof = verify_device_invocation_purpose(scope(device)).unwrap();
+        assert!(proof.is(DeviceCallerPurpose::LifecycleSelfRevoke));
+        let hosted =
+            verify_device_invocation_purpose(scope("easynet:///r/test/agent/alice.worker"))
+                .expect("same-realm Agent is an explicit hosted-Agent retraction purpose");
+        assert!(hosted.is(DeviceCallerPurpose::HostedAgentRetraction));
+        for denied in [
+            "easynet:///r/test/user/alice",
+            "easynet:///r/test/authority",
+            "easynet:///r/test/device/other",
+            "easynet:///r/other/agent/alice.worker",
+        ] {
+            assert!(
+                verify_device_invocation_purpose(scope(denied)).is_err(),
+                "{denied}"
+            );
+        }
+        assert!(
+            verify_device_invocation_purpose(DeviceInvocationPurposeScope {
+                action: AccessAction::Stream,
+                ..scope(device)
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn bootstrap_self_identity_requires_selected_authority_and_device_self_subject() {
+        let device = "easynet:///r/test/device/dev-1";
+        let authority = "easynet:///r/test/authority";
+        let scope = |callee_ura, subject_ura| DeviceInvocationPurposeScope {
+            caller_ura: device,
+            callee_ura,
+            subject_ura,
+            public_ability:
+                crate::daemon::ability::conformance::ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
+            daemon_ura: Some(authority),
+            action: AccessAction::Manage,
+        };
+
+        let proof = verify_device_invocation_purpose(scope(authority, device))
+            .expect("Authority-owned runtime bootstrap has exact Device self geometry");
+        assert!(proof.is(DeviceCallerPurpose::Bootstrap));
+        assert!(verify_device_invocation_purpose(scope(device, device)).is_err());
+        assert!(verify_device_invocation_purpose(scope(
+            authority,
+            "easynet:///r/test/device/other",
+        ))
+        .is_err());
+        assert!(
+            verify_device_invocation_purpose(scope("easynet:///r/other/authority", device,))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn verified_purpose_is_bound_to_the_selected_ability() {
+        let device = "easynet:///r/test/device/dev-1";
+        let authority = "easynet:///r/test/authority";
+        let session = verify_device_invocation_purpose(DeviceInvocationPurposeScope {
+            caller_ura: device,
+            callee_ura: authority,
+            subject_ura: device,
+            public_ability: crate::daemon::ability::conformance::ABILITY_SESSION_OPEN,
+            daemon_ura: Some(authority),
+            action: AccessAction::Stream,
+        })
+        .unwrap();
+
+        assert!(session.is(DeviceCallerPurpose::DeviceSelfSession));
+        assert!(!session.is(DeviceCallerPurpose::PublicationCustody));
+        assert!(!session.is(DeviceCallerPurpose::AbilityCatalogDiff));
+        assert!(!session.is(DeviceCallerPurpose::LifecycleSelfRevoke));
+        assert!(!session.carries_pairing_token_scope());
+    }
+
+    #[test]
+    fn admits_owner_projection_publication_with_executable_owner_subject_geometry() {
         let authority = "easynet:///r/test/authority";
         let device = "easynet:///r/test/device/dev-1";
         let agent = "easynet:///r/test/agent/u.chat";
+        let service = "easynet:///r/test/service/u.pages";
 
         assert!(admits_owner_projection_publication_host(
             device,
             authority,
             agent,
+            Some(authority),
+        ));
+        assert!(admits_owner_projection_publication_host(
+            device,
+            authority,
+            service,
             Some(authority),
         ));
         assert!(admits_owner_projection_publication_host(

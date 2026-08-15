@@ -54,6 +54,15 @@ func TestProjectAbilityDescriptorReadsSummaryNameHintsAndSchema(t *testing.T) {
 		"input_schema": map[string]any{
 			"type": "object",
 		},
+		"scope_subjects": map[string]any{
+			"kind":   "only_ura_kinds",
+			"values": []any{"resource"},
+		},
+		"scope_agents": map[string]any{
+			"kind":   "only_matching",
+			"values": []any{"easynet:///r/localhost/agent/alice.operator"},
+		},
+		"denied_agents": []any{"easynet:///r/localhost/agent/mallory.blocked"},
 	})
 
 	if projection.Name != "agent.list" {
@@ -67,6 +76,12 @@ func TestProjectAbilityDescriptorReadsSummaryNameHintsAndSchema(t *testing.T) {
 	}
 	if projection.InputSchema["type"] != "object" {
 		t.Fatalf("input schema = %#v", projection.InputSchema)
+	}
+	if projection.ScopeSubjects["kind"] != "only_ura_kinds" || projection.ScopeAgents["kind"] != "only_matching" {
+		t.Fatalf("descriptor scopes not projected: subjects=%#v agents=%#v", projection.ScopeSubjects, projection.ScopeAgents)
+	}
+	if len(projection.DeniedAgents) != 1 || projection.DeniedAgents[0] != "easynet:///r/localhost/agent/mallory.blocked" {
+		t.Fatalf("denied agents = %#v", projection.DeniedAgents)
 	}
 }
 
@@ -144,6 +159,9 @@ func TestRuntimeAbilityDescriptorProviderListsRuntimeDescriptors(t *testing.T) {
 			"class":"runtime",
 			"receipt_semantics":{"kind":"terminal"},
 			"visibility":"public",
+			"scope_subjects":{"kind":"only_ura_kinds","values":["resource"]},
+			"scope_agents":{"kind":"only_matching","values":["easynet:///r/example/agent/alice.operator"]},
+			"denied_agents":["easynet:///r/example/agent/mallory.blocked"],
 			"description":"Resolve names",
 			"source":"kernel:built-in",
 			"hints":{"read_only":true,"idempotent":true},
@@ -204,8 +222,62 @@ func TestRuntimeAbilityDescriptorProviderListsRuntimeDescriptors(t *testing.T) {
 		!got.Hints.ReadOnly ||
 		got.SchemaSummary["input"] == nil ||
 		got.InputSchema["type"] != "object" ||
+		got.ScopeSubjects["kind"] != "only_ura_kinds" ||
+		got.ScopeAgents["kind"] != "only_matching" ||
+		len(got.DeniedAgents) != 1 ||
+		got.DeniedAgents[0] != "easynet:///r/example/agent/mallory.blocked" ||
 		got.Metadata["stable"] != "true" {
 		t.Fatalf("descriptor projection lost runtime facts: %#v", got)
+	}
+}
+
+func TestRuntimeAbilityDescriptorProviderRejectsMalformedConstraintFacts(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		constraints string
+		want        string
+	}{
+		{
+			name:        "missing subject scope",
+			constraints: `"scope_agents":{"kind":"any"},"denied_agents":[]`,
+			want:        "field scope_subjects must be an object",
+		},
+		{
+			name:        "caller scope is not an object",
+			constraints: `"scope_subjects":{"kind":"any"},"scope_agents":"any","denied_agents":[]`,
+			want:        "field scope_agents must be an object",
+		},
+		{
+			name:        "deny set is not strings",
+			constraints: `"scope_subjects":{"kind":"any"},"scope_agents":{"kind":"any"},"denied_agents":[42]`,
+			want:        "field denied_agents must be an array of strings",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
+				body := `{"abilities":[{
+					"name":"observe.health",
+					"ability_ura":"easynet:///r/example/ability/authority.observe.health",
+					"descriptor_ref":"easynet:///r/example/ability/authority.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+					"owner_ura":"easynet:///r/example/authority",
+					"descriptor_version":"1.0.0",
+					"schema_hash":"sha256:abc",
+					"descriptor_hash":"sha256:def",
+					"call_mode":"rpc",
+					"visibility":"public",
+					` + test.constraints + `
+				}]}`
+				return runtimeAbilityResultJSON(true, body, "", false), nil
+			}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
+			runtime, _ := NewRuntimeClient(transport)
+			ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+			provider, _ := NewRuntimeAbilityDescriptorProvider(ability)
+
+			_, err := provider.List(context.Background(), AbilityDescriptorListRequest{Call: runtimeAbilityTestContext()})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("constraint error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -309,7 +381,13 @@ func TestRuntimeAbilityDescriptorProviderRejectsLegacyVersionAlias(t *testing.T)
 			"owner_ura":"easynet:///r/example/authority",
 			"version":"1.0.0",
 			"descriptor_version":"2.0.0",
-			"call_mode":"rpc"
+			"schema_hash":"sha256:abc",
+			"descriptor_hash":"sha256:def",
+			"call_mode":"rpc",
+			"visibility":"public",
+			"scope_subjects":{"kind":"any"},
+			"scope_agents":{"kind":"any"},
+			"denied_agents":[]
 		}]}`, "", false), nil
 	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
 	runtime, _ := NewRuntimeClient(transport)
@@ -330,8 +408,8 @@ func TestRuntimeAbilityDescriptorProviderRejectsLegacyVersionAlias(t *testing.T)
 func TestRuntimeAbilityDescriptorProviderGetRejectsAmbiguousDescriptors(t *testing.T) {
 	transport := RuntimeTransportFunc{InvokeFunc: func(_ context.Context, _ []byte) ([]byte, error) {
 		return runtimeAbilityResultJSON(true, `{"abilities":[
-			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/authority.observe.health","descriptor_ref":"easynet:///r/example/ability/authority.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!rpc","owner_ura":"easynet:///r/example/authority","descriptor_version":"1.0.0","call_mode":"rpc"},
-			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/authority.observe.health","descriptor_ref":"easynet:///r/example/ability/authority.observe.health@2.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc","owner_ura":"easynet:///r/example/authority","descriptor_version":"2.0.0","call_mode":"rpc"}
+			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/authority.observe.health","descriptor_ref":"easynet:///r/example/ability/authority.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!rpc","owner_ura":"easynet:///r/example/authority","descriptor_version":"1.0.0","schema_hash":"sha256:abc","descriptor_hash":"sha256:def","call_mode":"rpc","visibility":"public","scope_subjects":{"kind":"any"},"scope_agents":{"kind":"any"},"denied_agents":[]},
+			{"name":"observe.health","ability_ura":"easynet:///r/example/ability/authority.observe.health","descriptor_ref":"easynet:///r/example/ability/authority.observe.health@2.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!rpc","owner_ura":"easynet:///r/example/authority","descriptor_version":"2.0.0","schema_hash":"sha256:ghi","descriptor_hash":"sha256:jkl","call_mode":"rpc","visibility":"public","scope_subjects":{"kind":"any"},"scope_agents":{"kind":"any"},"denied_agents":[]}
 		]}`, "", false), nil
 	}, ResolveDescriptorRefFunc: testResolveDescriptorRef(t)}
 	runtime, _ := NewRuntimeClient(transport)

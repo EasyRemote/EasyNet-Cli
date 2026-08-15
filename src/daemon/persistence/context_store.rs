@@ -653,6 +653,14 @@ pub fn record_capture(record: CaptureRecord<'_>) -> anyhow::Result<CaptureEntry>
     if !safe_path_segment(ext) {
         anyhow::bail!("record_capture: extension {ext:?} is not a safe file suffix");
     }
+    let device_identity = crate::core::ura::parse_ura(device)
+        .map_err(|error| anyhow::anyhow!("record_capture: device URA is invalid: {error}"))?;
+    if device_identity.kind != crate::core::ura::URAKind::Device {
+        anyhow::bail!(
+            "record_capture: storage owner must be a Device URA, got {}",
+            device_identity.kind
+        );
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now();
     // Timestamp prefix keeps `ls` of the folder chronologically sorted

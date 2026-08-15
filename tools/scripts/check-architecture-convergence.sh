@@ -1273,15 +1273,27 @@ if ffi_invocation.exists():
             "FFI public invocation must not unconditionally allow Device caller; Device is substrate/custody, not an ordinary actor",
         )
 
+device_caller_types = cli_root / "src/daemon/invocation/admission/device_caller_types.rs"
 device_caller_classifier = cli_root / "src/daemon/invocation/admission/device_caller.rs"
 policy_gate = cli_root / "src/daemon/invocation/admission/policy_gate.rs"
-if device_caller_classifier.exists():
-    text = source(device_caller_classifier)
-    raw_text = device_caller_classifier.read_text(encoding="utf-8", errors="replace")
+if device_caller_types.exists():
+    types_text = source(device_caller_types)
     for token, detail in (
         (
             "pub(crate) enum DeviceCallerPurpose",
             "Device caller exceptions must be represented by a typed purpose enum",
+        ),
+        (
+            "pub(crate) struct VerifiedDeviceInvocationPurpose",
+            "Device caller classifier must expose an opaque verified-purpose proof type",
+        ),
+        (
+            "pub(in crate::daemon::invocation::admission) purpose",
+            "verified Device-caller purpose construction must remain scoped to admission",
+        ),
+        (
+            "pub(in crate::daemon::invocation::admission) invocation_binding",
+            "verified Device-caller purpose proof must bind the exact invocation geometry",
         ),
         (
             "Bootstrap",
@@ -1296,19 +1308,38 @@ if device_caller_classifier.exists():
             "Device caller classifier must name publication custody as a Device-caller purpose",
         ),
         (
-            "Liveness",
+            "AbilityCatalogDiff",
             "Device caller classifier must name heartbeat liveness as a bounded Device-caller purpose",
         ),
         (
-            "SessionControl",
+            "DeviceSelfSession",
             "Device caller classifier must name session control as a Device-caller purpose",
         ),
+    ):
+        if token not in types_text:
+            add("R134_DEVICE_CALLER_CLASSIFIER", device_caller_types, 1, detail)
+else:
+    add(
+        "R134_DEVICE_CALLER_CLASSIFIER",
+        cli_root / "src/daemon/invocation/admission",
+        1,
+        "daemon admission must own an always-on Device-caller purpose vocabulary module",
+    )
+
+if device_caller_classifier.exists():
+    text = source(device_caller_classifier)
+    raw_text = device_caller_classifier.read_text(encoding="utf-8", errors="replace")
+    for token, detail in (
         (
             "classify_public_invocation_caller_kind(",
             "public invocation caller validation must use the shared Device-caller classifier",
         ),
         (
-            "public_device_caller_purpose(",
+            "admission::device_caller_types",
+            "Device caller classifier must reuse the always-on policy vocabulary instead of redefining purpose types",
+        ),
+        (
+            "verify_device_invocation_purpose(",
             "Device-caller ability exceptions must live in the shared classifier, not FFI",
         ),
         (
@@ -1358,7 +1389,7 @@ if device_caller_classifier.exists():
             )
     for token, detail in (
         (
-            "classifies_public_device_caller_purposes",
+            "classifies_public_device_caller_ability_surface",
             "classifier tests must prove all named Device-caller purposes",
         ),
         (
@@ -1762,26 +1793,17 @@ if python_cabi.exists():
 
 # Rule 31: file-resource ownership has one authority split. Host filesystem
 # abilities keep the legacy local `fs.*` public names but are owned by the
-# device-sponsored locomotion SystemAgent; user blob resources are owner-local
-# `files.*` abilities owned and executed by the daemon-native
-# `agent/<user-id>.files` runtime owner. The OpenAI facade may project
-# `openai.files.*`, but must invoke the files surface through that explicit
-# authority root instead of reviving `<user>.files.get`-style dispatch names.
+# device-sponsored locomotion SystemAgent; daemon-local blob resources are
+# owner-local `files.*` abilities owned by the sponsoring Device's Files
+# SystemAgent. User-scoped Resource URAs remain unchanged. The OpenAI facade
+# resolves the committed Files owner instead of rebuilding a hosted Agent URA.
 files_store = cli_root / "src/daemon/ability/builtins/resources/files_store/mod.rs"
 if files_store.exists():
     text = source(files_store)
     for token, detail in (
         (
-            'agent_ura(realm, user, "files")',
-            "Files resource surface must declare an explicit daemon-native files executor root",
-        ),
-        (
-            'OwnerKind::Agent("files".to_string())',
-            "files.put/get/list must be hosted-Agent resource abilities, not Device system abilities",
-        ),
-        (
-            "ControlPlaneImplementation::native_daemon()",
-            "files.put/get/list must be bound to the daemon-native implementation root",
+            "OwnerKind::files_system()",
+            "files.put/get/list must be owned by the Device-sponsored Files SystemAgent",
         ),
         (
             '"files.put"',
@@ -1806,6 +1828,15 @@ if files_store.exists():
             line_number(text, match.start()),
             "user blob files must not be registered as Device-owned system abilities",
         )
+    for retired in ('OwnerKind::Agent("files".to_string())', "management_agent_ura"):
+        pos = text.find(retired)
+        if pos >= 0:
+            add(
+                "R31_FILE_RESOURCE_OWNERSHIP_FORK",
+                files_store,
+                line_number(text, pos),
+                "Files must not revive a shared user-hosted Agent executor",
+            )
 
 device_files = cli_root / "src/daemon/ability/builtins/device_control/files.rs"
 if device_files.exists():
@@ -1841,15 +1872,15 @@ if openai_compat.exists():
     for method, required_tokens in (
         (
             "handle_file_upload_with_context",
-            ("files_store::management_agent_ura", '"files.put"', "invoke_user_owned_rpc"),
+            ("OwnerKind::files_system()", '"files.put"', "invoke_resource_service_rpc"),
         ),
         (
             "handle_file_retrieve_with_context",
-            ("files_store::management_agent_ura", '"files.get"', "invoke_user_owned_rpc"),
+            ("OwnerKind::files_system()", '"files.get"', "invoke_resource_service_rpc"),
         ),
         (
             "deref_to_data_url",
-            ("files_store::management_agent_ura", '"files.get"', "invoke_user_owned_rpc"),
+            ("OwnerKind::files_system()", '"files.get"', "invoke_resource_service_rpc"),
         ),
     ):
         body = rust_method_body(text, method)
@@ -1911,23 +1942,14 @@ if openai_compat.exists():
 catalog_build = cli_root / "src/daemon/ability/catalog/build.rs"
 if catalog_build.exists():
     text = source(catalog_build)
-    body = rust_method_body(text, "declare_daemon_native_agent_authorities")
-    if body is None:
+    retired = text.find("declare_daemon_native_agent_authorities")
+    if retired >= 0:
         add(
             "R31_FILE_RESOURCE_OWNERSHIP_FORK",
             catalog_build,
-            1,
-            "catalog assembly must declare daemon-native resource executor authorities",
+            line_number(text, retired),
+            "daemon-native services must use SystemAgent authority, not declared hosted-Agent roots",
         )
-    else:
-        offset, method_body = body
-        if "files::management_agent_ura(realm, user)" not in method_body:
-            add(
-                "R31_FILE_RESOURCE_OWNERSHIP_FORK",
-                catalog_build,
-                line_number(text, offset),
-                "catalog assembly must declare the Files executor authority before registration",
-            )
 
 
 # Rule 8: public FFI error JSON must not expose migration/legacy state.
@@ -5883,10 +5905,6 @@ if agent_aggregate.exists():
             "hosted identity snapshot must expose descriptor identity projection",
         ),
         (
-            "fn mcp_agent_ura(&self) -> Option<&str>",
-            "Agent aggregate projection must own MCP profile owner lookup",
-        ),
-        (
             "fn llm_agent_uras(&self) -> &[(String, String)]",
             "Agent aggregate projection must own hosted LLM owner enumeration",
         ),
@@ -5914,10 +5932,6 @@ if host_descriptor_catalog.exists():
         (
             r"projection\s*\.\s*host_device_ura\s*\(",
             "host descriptor catalog must read host device owner through the aggregate projection",
-        ),
-        (
-            r"projection\s*\.\s*mcp_agent_ura\s*\(",
-            "host descriptor catalog must read MCP owner through the aggregate projection",
         ),
         (
             r"projection\s*\.\s*llm_agent_uras\s*\(",
@@ -7956,11 +7970,11 @@ for path, surface in (
             f"{surface} selected-route dispatch must pass live catalog and call mode into RuntimeBoundAbility",
         )
 
-# Rule 62: hosted-agent session prelude has one incarnation generation source.
-# Same-URA Agent recreation is fenced by the durable owner projection cursor.
-# The identity advertisement (`federation.advertise_agent`) and the ability
-# projection (`federation.advertise_abilities`) must consume that cursor-backed
-# generation instead of reviving a local constant in the boot/session path.
+# Rule 62: hosted-Agent session publication has one Hub-owned generation.
+# The Device persists an opaque incarnation before transport, the Hub returns
+# the generation assignment, and only the exact activated assignment may
+# produce an ability projection. Device code must never send or mint a local
+# generation in `federation.advertise_agent`.
 session_prelude = cli_root / "src/daemon/invocation/bidi/session_initiator/prelude.rs"
 if session_prelude.exists():
     text = source(session_prelude)
@@ -7977,16 +7991,20 @@ if session_prelude.exists():
         _, body = advertise_entry
         for token, detail in (
             (
-                "HostedAgentPreludePublicationPlan::prepare",
-                "hosted-agent prelude must prepare the owner cursor before identity advertisement",
+                "HostedAgentPublicationPlan::begin",
+                "hosted-agent prelude must persist an incarnation plan before identity advertisement",
             ),
             (
-                "plan.generation()",
-                "identity advertisement must use the prepared owner cursor generation",
+                "plan.identity_payload_bytes()?",
+                "identity advertisement must carry the persisted incarnation rather than a Device-owned generation",
             ),
             (
-                "advertise_hosted_agent_abilities(&mut advertise_ctx, entry, &plan)",
-                "ability projection must consume the same prepared publication plan",
+                "let active = plan.activate(assignment)?;",
+                "ability projection must activate the exact Hub generation assignment",
+            ),
+            (
+                "advertise_hosted_agent_abilities(&mut advertise_ctx, entry, &active)",
+                "ability projection must consume the activated publication plan",
             ),
         ):
             if token not in body:
@@ -8006,23 +8024,40 @@ if session_prelude.exists():
         )
     else:
         offset, body = advertise_agent
-        if re.search(r'"generation"\s*:\s*1\b', body):
+        if "generation:" in body or re.search(r'"generation"\s*:', body):
             add(
                 "R62_HOSTED_AGENT_PRELUDE_GENERATION_FORK",
                 session_prelude,
                 line_number(production_text, offset),
-                "hosted-agent identity advertisement must not hard-code generation 1",
+                "hosted-agent identity advertisement must not accept or serialize a Device-owned generation",
             )
-    if not re.search(
-        r"fn\s+send_advertise_agent_prelude\s*\([^)]*generation\s*:\s*u64",
-        production_text,
-        re.S,
-    ):
+        for token, detail in (
+            (
+                "signed_prelude_request(signer, agent_ura, \"federation.advertise_agent\", arguments)",
+                "hosted-agent identity transport must consume the plan's incarnation payload",
+            ),
+            (
+                "Ok(receipt.assignment)",
+                "hosted-agent identity transport must return a typed Hub assignment",
+            ),
+            (
+                "receipt.assignment.validate()",
+                "hosted-agent identity transport must validate the Hub assignment",
+            ),
+        ):
+            if token not in body:
+                add(
+                    "R62_HOSTED_AGENT_PRELUDE_GENERATION_FORK",
+                    session_prelude,
+                    line_number(production_text, offset),
+                    detail,
+                )
+    if "HostedAgentGenerationAssignment" not in production_text:
         add(
             "R62_HOSTED_AGENT_PRELUDE_GENERATION_FORK",
             session_prelude,
             1,
-            "hosted-agent identity serializer must receive generation as an explicit typed parameter",
+            "hosted-agent prelude must consume a typed Hub generation assignment",
         )
 
 # Rule 63: manifest-bound EAL exec has a real run-level timeout. The
@@ -9582,6 +9617,14 @@ if authority_metadata.exists():
                 )
         for required in ("x-runtime-delegation", "x-runtime-session-authority"):
             for path, text in zip(authority_key_sources, texts):
+                if (
+                    path == authority_metadata
+                    and required == "x-runtime-delegation"
+                    and "RUNTIME_DELEGATION_METADATA_KEY" in text
+                ):
+                    # Daemon admission deliberately imports the canonical
+                    # runtime constant instead of duplicating its wire value.
+                    continue
                 if required not in text:
                     add(
                         "R93_RUNTIME_AUTHORITY_METADATA_KEY_NEUTRALITY",
@@ -13146,8 +13189,8 @@ if policy_gate.exists():
             "policy gate must derive logical principal facts from TrustedCallerPath inside policy, not from persisted TrustAnchorRole",
         ),
         (
-            "trusted_path != TrustedCallerPath::DeviceCustody",
-            "Device self policy rules must match DeviceCustody path, not the broader TrustAnchorRole::Device label",
+            "TrustedCallerPath::DeviceCustody(path_purpose)",
+            "Device policy rules must destructure the exact verified DeviceCustody purpose, not a broad Device label",
         ),
     ):
         if token not in text:
@@ -13470,7 +13513,7 @@ if admission_facade.exists():
             "federated caller classification must reject non-actor URA kinds",
         ),
         (
-            "DEVICE_CALLER_PURPOSE_DENIED",
+            "DEVICE_CALLER_PURPOSE_UNVERIFIED",
             "federated Device caller classification must be guarded by public ability purpose",
         ),
     ):
@@ -13527,7 +13570,7 @@ if admission_facade.exists() and policy_gate.exists():
     )
     for token, detail in (
         (
-            "trusted_path_for_caller(caller_ura, trust_anchor.as_ref(), &input.ability)",
+            "&input.ability,\n                device_purpose,",
             "runtime admission must pass the selected public ability into trust-path classification",
         ),
         (
@@ -13539,11 +13582,11 @@ if admission_facade.exists() and policy_gate.exists():
             add("R151_DEVICE_CALLER_PURPOSE_TRUST_PATH", admission_facade, 1, detail)
     for token, detail in (
         (
-            "require_device_caller_purpose(caller_ura, public_ability)?;",
+            "require_device_caller_purpose(",
             "TrustedCallerPath must validate DeviceCustody through DeviceCallerPurpose before policy",
         ),
         (
-            "DEVICE_CALLER_PURPOSE_DENIED",
+            "DEVICE_CALLER_PURPOSE_UNVERIFIED",
             "invocation-aware federated Device classification must reject ordinary public abilities",
         ),
         (
@@ -13559,7 +13602,7 @@ if admission_facade.exists() and policy_gate.exists():
             "policy tests must prove federated Device callers require public ability purpose",
         ),
         (
-            "DEVICE_CALLER_PURPOSE_DENIED",
+            "DEVICE_CALLER_PURPOSE_UNVERIFIED",
             "policy tests must prove ordinary public abilities reject Device callers before policy",
         ),
     ):
@@ -13683,7 +13726,9 @@ if admission_facade.exists() and policy_gate.exists():
     else:
         start, body = owner_fact_body
         device_owner_start = body.find("Some(AbilityOwner::Device")
-        device_owner_end = body.find("Some(AbilityOwner::SystemAgent", device_owner_start)
+        device_owner_end = body.find("Some(AbilityOwner::Service", device_owner_start)
+        if device_owner_end == -1:
+            device_owner_end = body.find("Some(AbilityOwner::SystemAgent", device_owner_start)
         if device_owner_start == -1:
             add(
                 "R151_DEVICE_CALLER_PURPOSE_TRUST_PATH",
@@ -13735,8 +13780,8 @@ if bootstrap_authority.exists():
             "user bootstrap authority must branch on TrustedCallerPath::User",
         ),
         (
-            "trusted_path != TrustedCallerPath::DeviceCustody",
-            "device bootstrap authority must require the exact DeviceCustody path",
+            "let TrustedCallerPath::DeviceCustody(device_purpose) = trusted_path",
+            "device bootstrap authority must require and carry the exact verified DeviceCustody purpose",
         ),
         (
             "hosted_agent_custody_path_does_not_inherit_device_bootstrap_authority",
@@ -14387,8 +14432,12 @@ if filesystem_resource_ref.exists():
     text = source(filesystem_resource_ref)
     for token, detail in (
         (
-            "let local_owner_ura = crate::daemon::identity::local_invocation::local_device_ura()",
-            "filesystem ResourceRef resolution must derive this daemon's local Device owner",
+            "pub struct FilesystemResourceProvider",
+            "filesystem ResourceRef operations must be owned by an explicit Device provider",
+        ),
+        (
+            "FilesystemResourceProvider::for_device",
+            "filesystem ResourceRef call sites must validate an explicit Device authority",
         ),
         (
             "reference.owner_ura != local_owner_ura",
@@ -14405,6 +14454,15 @@ if filesystem_resource_ref.exists():
     ):
         if token not in text:
             add("R159_FILESYSTEM_RESOURCE_REF_LOCAL_OWNER", filesystem_resource_ref, 1, detail)
+    forbidden_ambient_owner = "identity::local_invocation::local_device_ura"
+    offset = text.find(forbidden_ambient_owner)
+    if offset != -1:
+        add(
+            "R159_FILESYSTEM_RESOURCE_REF_LOCAL_OWNER",
+            filesystem_resource_ref,
+            line_number(text, offset),
+            "filesystem ResourceRef domain must not recover Device authority from ambient process identity",
+        )
 if ability_deploy_target.exists():
     text = source(ability_deploy_target)
     raw_text = ability_deploy_target.read_text(encoding="utf-8", errors="replace")
@@ -16128,8 +16186,8 @@ if route_resolver_rs.exists():
             "route selectors must quarantine Device-owned abilities as legacy projections",
         ),
         (
-            "Device-owned ability selectors are migration read-models only",
-            "all route data sources must reject Device-owned public ability selectors before dispatch",
+            "Device-owned Ability URAs and descriptor refs are migration read-models only",
+            "route data sources must reject explicit Device-owned selectors while allowing Device placement plus a public ability to resolve through the registry",
         ),
         (
             "system_agent_ability_online_resolves_final_local_execution_route",
@@ -16637,7 +16695,7 @@ if mcp_reflective_registry.exists():
             "R127_MCP_HOSTED_AGENT_ONTOLOGY",
             mcp_reflective_registry,
             line_number(text, offset),
-            "MCP reflective descriptors must reject direct Device owners; MCP owner must be hosted Agent or Authority",
+            "MCP reflective descriptors must reject direct Device owners; MCP owner must be MCP SystemAgent, explicit hosted Agent, or Authority",
         )
     if "Device cannot own MCP reflective descriptors" not in text:
         add(
@@ -16653,12 +16711,12 @@ if mcp_reflective_registry.exists():
             1,
             "MCP reflective owner classifier must fail closed for User Principal owner URAs",
         )
-    if "System Agents cannot own MCP reflective descriptors" not in text:
+    if "not the MCP integration SystemAgent" not in text:
         add(
             "R127_MCP_HOSTED_AGENT_ONTOLOGY",
             mcp_reflective_registry,
             1,
-            "MCP reflective owner classifier must fail closed for device-sponsored SystemAgent owner URAs",
+            "MCP reflective owner classifier must admit only the exact MCP integration SystemAgent",
         )
     if '"authority".to_string()' not in text:
         add(
@@ -16699,25 +16757,25 @@ for path in (mcp_bridge, mcp_client):
                     "R127_MCP_HOSTED_AGENT_ONTOLOGY",
                     path,
                     line_number(text, offset),
-                    "MCP bridge/client abilities must be owned by the hosted MCP Agent, not direct Device",
+                    "MCP bridge/client abilities must be owned by the MCP integration SystemAgent, not direct Device",
                 )
             search_from = offset + len(token)
-    if "register_rpc_with_owner" in text and "DEFAULT_MCP_AGENT_ID" in text and "OwnerKind::Agent" not in text:
+    if "register_rpc_with_owner" in text and "OwnerKind::mcp_integration_system()" not in text:
         add(
             "R127_MCP_HOSTED_AGENT_ONTOLOGY",
             path,
             1,
-            "MCP bridge/client registration must use OwnerKind::Agent(DEFAULT_MCP_AGENT_ID)",
+            "MCP bridge/client registration must use OwnerKind::mcp_integration_system()",
         )
 mcp_profile = cli_root / "src/daemon/ability/catalog/profiles/mcp.rs"
 if mcp_profile.exists():
     text = source(mcp_profile)
-    if "OwnerKind::Agent(super::DEFAULT_MCP_AGENT_ID.to_string())" not in text:
+    if "OwnerKind::mcp_integration_system()" not in text:
         add(
             "R127_MCP_HOSTED_AGENT_ONTOLOGY",
             mcp_profile,
             1,
-            "MCP profile descriptors must project the hosted MCP Agent owner",
+            "MCP profile descriptors must project the MCP integration SystemAgent owner",
         )
 conformance_rs = cli_root / "src/daemon/ability/conformance.rs"
 if conformance_rs.exists():
@@ -16731,16 +16789,16 @@ if conformance_rs.exists():
             "MCP conformance domain must be hosted MCP Agent, not DeviceBridge",
         )
     for token in (
-        "McpHostedAgent",
-        'local_rpc!("mcp.bridge.list_tools", McpHostedAgent)',
-        'local_rpc!("mcp.client.call", McpHostedAgent)',
+        "McpIntegrationSystemAgent",
+        'local_rpc!("mcp.bridge.list_tools", McpIntegrationSystemAgent)',
+        'local_rpc!("mcp.client.call", McpIntegrationSystemAgent)',
     ):
         if token not in text:
             add(
                 "R127_MCP_HOSTED_AGENT_ONTOLOGY",
                 conformance_rs,
                 1,
-                "MCP conformance baseline must classify bridge/client rows as McpHostedAgent",
+                "MCP conformance baseline must classify bridge/client rows as McpIntegrationSystemAgent",
             )
 
 account_agent_patterns = (
@@ -16804,8 +16862,8 @@ if ontology_doc.exists():
             "ontology must define Authority separately from execution substrate",
         ),
         (
-            r"Ordinary public Invocation callees are \textbf{Agent, System Agent,",
-            "ontology must name ordinary public callees as Agent/SystemAgent/Authority, not Device",
+            "Service, or Authority} identities advertising governed AbilityDescriptors.",
+            "ontology must name ordinary public callees as Agent/SystemAgent/Service/Authority, not Device",
         ),
         (
             "Device selector to choose the execution host",
@@ -17081,37 +17139,28 @@ if pages_mod_rs.exists():
     raw_text = pages_mod_rs.read_text(encoding="utf-8", errors="replace")
     for token, detail in (
         (
-            "handle_health(&owner_user_id, &user, &realm, args)",
-            "pages.health must pass immutable owner_user_id separately from display user slug",
+            "pub(crate) fn pages_service_owner(owner_user_id: &str) -> OwnerKind",
+            "Pages abilities must centralize the principal-scoped Pages Service owner projection",
         ),
         (
-            "fn pages_authority_scope(realm: &str, owner_user_id: &str)",
-            "Pages authority scope must name the hosted-Agent segment as owner_user_id",
+            "handle_health(&owner_ura, &user, &realm, args)",
+            "pages.health must report the committed Pages Service owner",
         ),
         (
-            "pub(crate) fn management_agent_ura(realm: &str, owner_user_id: &str) -> String",
-            "Pages management Agent URA constructor must name the owner segment explicitly",
-        ),
-        (
-            "it is not a User URA and is distinct from the display user slug",
-            "Pages management Agent docs must confine owner_user_id to a segment distinct from URL/storage slug and User URA",
+            "runtime_binding_facts_for_mode",
+            "Pages health owner must come from the committed descriptor binding",
         ),
     ):
         if token not in raw_text:
             add("R150_PAGES_OWNER_SEGMENT_BOUNDARY", pages_mod_rs, 1, detail)
     for token, detail in (
         (
-            "Execution host for the user-scoped Pages management family",
-            "Pages management_agent_ura returns owner/callee URA, not execution host",
+            "OwnerKind::pages_system()",
+            "Pages abilities must use the principal-scoped Pages Service, not the retired Pages SystemAgent",
         ),
-        (
-            "fn pages_authority_scope(realm: &str, user: &str)",
-            "Pages authority scope must not name the owner segment as display user",
-        ),
-        (
-            "pub(crate) fn management_agent_ura(realm: &str, user: &str)",
-            "Pages management Agent URA constructor must not name the owner segment as display user",
-        ),
+        ("pages_authority_scope", "Pages must not declare a shared hosted-Agent authority scope"),
+        ("management_agent_ura", "Pages must not reconstruct a shared user-hosted Agent URA"),
+        ('OwnerKind::Agent("pages"', "Pages must not use a hosted User Agent owner"),
     ):
         offset = text.find(token)
         if offset != -1:
@@ -17126,16 +17175,12 @@ if pages_health_rs.exists():
     raw_text = pages_health_rs.read_text(encoding="utf-8", errors="replace")
     for token, detail in (
         (
-            "pub fn handle_health(\n    owner_user_id: &str,\n    user: &str,",
-            "pages.health must receive owner_user_id and display user as separate parameters",
+            "pub fn handle_health(\n    owner_ura: &str,\n    user: &str,",
+            "pages.health must receive the committed execution owner separately from display user",
         ),
         (
-            "let owner_ura = super::management_agent_ura(realm, owner_user_id);",
-            "pages.health owner_ura must use immutable owner_user_id, not display user slug",
-        ),
-        (
-            "health-aggregate-owner.pages",
-            "pages health tests must prove owner_ura uses owner_user_id when display user differs",
+            "owner_ura.to_string()",
+            "pages.health must return the supplied committed SystemAgent owner",
         ),
     ):
         if token not in raw_text:
@@ -17626,8 +17671,8 @@ if ability_descriptor_surface.exists():
             "AbilityDescriptor docs must name the device-sponsored SystemAgent public callee model",
         ),
         (
-            "DeviceProfileProjection",
-            "AbilityDescriptor docs must name direct Device inventory as a bounded migration projection",
+            "never an AbilityDescriptor owner/callee",
+            "AbilityDescriptor docs must state that Device is never a descriptor owner/callee",
         ),
     ):
         if required not in raw_text:
@@ -18944,12 +18989,20 @@ if ability_deploy_target.exists():
     if "pub fn for_device_sponsored_system_ability" in text:
         for token, detail in (
             (
-                "descriptor_public_ability_name(&callee_ura, &dispatch_name)",
-                "local SystemAgent target construction must preserve a public namespace that equals its owner id",
+                "descriptor_public_ability_name(&callee_ura, &public_ability)",
+                "local SystemAgent target construction must derive the Ability URA from the public descriptor name",
+            ),
+            (
+                "for_device_sponsored_system_ability_with_dispatch",
+                "local SystemAgent target construction must preserve the split between public descriptor name and daemon-local dispatch key",
             ),
             (
                 "local_terminal_target_preserves_namespace_when_owner_has_same_id",
                 "local target tests must prove terminal owner/ability URA boundaries remain invertible",
+            ),
+            (
+                "local_service_target_can_separate_public_descriptor_from_dispatch_key",
+                "local target tests must prove Service descriptor identity can differ from daemon-local dispatch key",
             ),
         ):
             if token not in text:
@@ -19068,6 +19121,28 @@ if desktop_identity.exists() and "creator_caller_ura: Option<String>" in source(
     add("R164_REMOTE_DESKTOP_REQUIRED_AUTHORITY", desktop_identity, 1, "remote desktop creator caller must be structurally required")
 if desktop_consent.exists() and "approval_receipt: Option<RemoteDesktopConsentReceipt>" in source(desktop_consent):
     add("R164_REMOTE_DESKTOP_REQUIRED_AUTHORITY", desktop_consent, 1, "remote desktop consent receipt must be structurally required")
+
+# Rule 165: the retired CLI-private execution sidecar must stay absent. Local
+# and remote calls share the daemon invocation adapter -> Axon LocalRuntime
+# path; reintroducing a second socket would restore split execution ownership.
+retired_runtime_dispatch = cli_root / "src/services/control/runtime_dispatch.rs"
+if retired_runtime_dispatch.exists():
+    add(
+        "R165_SINGLE_RUNTIME_EXECUTION_PATH",
+        retired_runtime_dispatch,
+        1,
+        "runtime-dispatch sidecar is retired; execution must enter Axon LocalRuntime through the canonical daemon invocation path",
+    )
+for path in production_files(cli_root / "src"):
+    text = source(path)
+    offset = text.find("runtime-dispatch.sock")
+    if offset != -1:
+        add(
+            "R165_SINGLE_RUNTIME_EXECUTION_PATH",
+            path,
+            line_number(text, offset),
+            "production code must not bind or depend on the retired runtime-dispatch socket",
+        )
 
 
 if violations:

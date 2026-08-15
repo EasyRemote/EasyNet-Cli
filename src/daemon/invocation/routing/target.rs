@@ -77,22 +77,37 @@ impl LocalAbilityTarget {
         callee_ura: impl Into<String>,
     ) -> anyhow::Result<Self> {
         let dispatch_name = dispatch_name.into();
+        Self::new_with_public_ability(dispatch_name.clone(), callee_ura, dispatch_name)
+    }
+
+    /// Build from already-resolved protocol identities when the public
+    /// descriptor name differs from the daemon-local handler key.
+    pub fn new_with_public_ability(
+        dispatch_name: impl Into<String>,
+        callee_ura: impl Into<String>,
+        public_ability: impl Into<String>,
+    ) -> anyhow::Result<Self> {
+        let dispatch_name = dispatch_name.into();
         let callee_ura = callee_ura.into();
+        let public_ability = public_ability.into();
         if dispatch_name.trim().is_empty() {
             anyhow::bail!("local ability target dispatch_name must not be empty");
         }
         if callee_ura.trim().is_empty() {
             anyhow::bail!("local ability target callee_ura must not be empty");
         }
+        if public_ability.trim().is_empty() {
+            anyhow::bail!("local ability target public_ability must not be empty");
+        }
         crate::core::ura::parse_ura(&callee_ura).map_err(|error| {
             anyhow::anyhow!("local ability target callee_ura is invalid: {error}")
         })?;
         let public_name =
-            crate::core::ura::descriptor_public_ability_name(&callee_ura, &dispatch_name);
+            crate::core::ura::descriptor_public_ability_name(&callee_ura, &public_ability);
         let ability_ura = crate::core::ura::owner_ability_ura(&callee_ura, &public_name)
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "local ability target cannot derive Ability URA for callee `{callee_ura}` and dispatch `{dispatch_name}`"
+                    "local ability target cannot derive Ability URA for callee `{callee_ura}` and public ability `{public_ability}`"
                 )
             })?;
         Ok(Self {
@@ -109,6 +124,24 @@ impl LocalAbilityTarget {
         execution_host_device_ura: &str,
     ) -> anyhow::Result<Self> {
         let public_ability = public_ability.into();
+        Self::for_device_sponsored_system_ability_with_dispatch(
+            public_ability.clone(),
+            public_ability,
+            execution_host_device_ura,
+        )
+    }
+
+    /// Project a Device execution host to the declared SystemAgent owner of
+    /// `public_ability`, while preserving a distinct daemon-local dispatch
+    /// key for legacy handlers whose committed descriptor name is canonicalized
+    /// by their manifest.
+    pub fn for_device_sponsored_system_ability_with_dispatch(
+        public_ability: impl Into<String>,
+        dispatch_name: impl Into<String>,
+        execution_host_device_ura: &str,
+    ) -> anyhow::Result<Self> {
+        let public_ability = public_ability.into();
+        let dispatch_name = dispatch_name.into();
         let host = crate::core::ura::parse_ura(execution_host_device_ura).map_err(|error| {
             anyhow::anyhow!("local system ability execution host is invalid: {error}")
         })?;
@@ -128,7 +161,7 @@ impl LocalAbilityTarget {
         })?;
         let callee_ura =
             crate::core::ura::device_agent_ura(&host.realm, device_id, owner.system_agent_id());
-        Self::new(public_ability, callee_ura)
+        Self::new_with_public_ability(dispatch_name, callee_ura, public_ability)
     }
 
     /// Canonical Ability URA selected by the descriptor/control-plane route.
@@ -1294,6 +1327,26 @@ mod tests {
         assert_eq!(
             target.ability_ura(),
             "easynet:///r/acme/ability/system-agent.dev-a.terminal.terminal.create"
+        );
+    }
+
+    #[test]
+    fn local_service_target_can_separate_public_descriptor_from_dispatch_key() {
+        let target = LocalAbilityTarget::new_with_public_ability(
+            "project_list",
+            "easynet:///r/acme/service/user-a.pages",
+            "project_list",
+        )
+        .expect("pages list Service target");
+
+        assert_eq!(target.dispatch_name(), "project_list");
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/service/user-a.pages"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/service.user-a.pages.project_list"
         );
     }
 

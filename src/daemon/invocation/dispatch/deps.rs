@@ -31,7 +31,9 @@ use crate::daemon::federation::client::FederationClient;
 use crate::daemon::federation::directory::SharedFederatedDirectoryView;
 use crate::daemon::federation::peers::SharedFederatedPeers;
 use crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore;
-use crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore;
+use crate::daemon::federation::read_model::advertised_agents::{
+    AdvertisedAgentStore, HostedAgentLifecycleCoordinator,
+};
 use crate::daemon::identity::self_identity::CanonicalSigner;
 use crate::daemon::invocation::admission::device_trust_sync::DeviceTrustSync;
 use crate::daemon::invocation::admission::principal_lifecycle::PrincipalLifecycleContext;
@@ -59,6 +61,9 @@ pub(crate) struct DirectoryPlane {
     /// `federation.advertise_abilities`, projected through
     /// `federation.resolve(include_abilities=true)`.
     pub(crate) ability_catalog: Arc<AbilityCatalogStore>,
+    /// Single writer boundary for hosted-Agent identity, projection, and
+    /// revoke lifecycle transitions.
+    pub(crate) hosted_agent_lifecycle: Arc<HostedAgentLifecycleCoordinator>,
     /// Live daemon ability control plane. Local resolver publication and route
     /// admission capture one immutable snapshot from this same aggregate.
     pub(crate) local_ability_catalog: Option<Arc<AxonAbilityCatalog>>,

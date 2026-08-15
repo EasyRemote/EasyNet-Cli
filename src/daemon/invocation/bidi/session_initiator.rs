@@ -96,6 +96,7 @@ use crate::daemon::identity::self_identity::{CanonicalSigner, SelfIdentityError}
 mod connection_state;
 mod envelope;
 mod frame_loop;
+mod frame_scheduler;
 mod heartbeat;
 mod prelude;
 mod supervisor;
@@ -916,6 +917,9 @@ pub enum SessionError {
         reason: &'static str,
     },
 
+    #[error("hub `{endpoint}` session inbound scheduler rejected a frame: {reason}")]
+    DownFrameSchedulerSaturated { endpoint: String, reason: String },
+
     #[error(
         "hub `{endpoint}` sent no down-stream activity for {:?}; forcing reconnect",
         timeout
@@ -1042,8 +1046,8 @@ mod tests {
 
     #[test]
     fn owner_projection_uses_only_committed_descriptors() {
-        let owner = "easynet:///r/acme/agent/alice.pages";
-        let other_owner = "easynet:///r/acme/device/dev-1";
+        let owner = "easynet:///r/acme/service/alice.pages";
+        let other_owner = "easynet:///r/acme/agent/device.dev-1.skill-management";
         let committed = vec![
             AbilityDescriptor::new(
                 "project_list",
@@ -1063,7 +1067,7 @@ mod tests {
                 crate::daemon::ability::descriptors::Visibility::Scoped,
                 crate::daemon::ability::descriptors::AdmissionAction::Invoke,
             )
-            .expect("device descriptor"),
+            .expect("SystemAgent descriptor"),
         ];
         let descriptors = committed_owner_ability_descriptors(&committed, owner, Some("dev-1"));
         let by_public: std::collections::BTreeMap<_, _> = descriptors
@@ -1072,7 +1076,7 @@ mod tests {
             .collect();
         assert_eq!(
             by_public.get("project_list").cloned().flatten().as_deref(),
-            Some("easynet:///r/acme/ability/alice.pages.project_list"),
+            Some("easynet:///r/acme/ability/service.alice.pages.project_list"),
         );
         assert_eq!(descriptors.len(), 1);
         let schema = &descriptors[0].schema_summary.input;
@@ -1131,7 +1135,8 @@ mod tests {
 
     #[test]
     fn live_catalog_inventory_refreshes_after_dynamic_control_plane_commit() {
-        let owner_ura = "easynet:///r/acme/device/node-a";
+        let host_device_ura = "easynet:///r/acme/device/node-a";
+        let owner_ura = "easynet:///r/acme/agent/device.node-a.runtime-introspection";
         let catalog = Arc::new(
             crate::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
                 crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
@@ -1139,7 +1144,7 @@ mod tests {
                     None,
                 ),
                 crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
-                    owner_ura,
+                    host_device_ura,
                 )
                 .expect("test device authority context"),
             ),
@@ -1159,7 +1164,7 @@ mod tests {
         catalog
             .hot_register_rpc_with_spec(
                 "session.inventory.dynamic",
-                crate::daemon::ability::dispatch::OwnerKind::DeviceProfileProjection,
+                crate::daemon::ability::dispatch::OwnerKind::runtime_introspection_system(),
                 crate::daemon::ability::manifest::AbilityManifest::new(
                     "dynamic",
                     "Dynamic inventory regression descriptor.",
@@ -1231,15 +1236,14 @@ mod tests {
         Response::new(InvokeResponse::default())
     }
 
-    fn seed_session_credentials() {
+    fn seed_device_only_session_credentials() {
         crate::daemon::persistence::config::save_credentials(
             &crate::daemon::persistence::config::Credentials {
                 node_id: "n1".to_string(),
-                credential_token: "token".to_string(),
+                credential_token: String::new(),
                 hub_endpoint: "http://127.0.0.1:1".to_string(),
                 realm: "realm".to_string(),
-                username: Some("dev".to_string()),
-                user_id: Some("user-dev".to_string()),
+                join_receipt_hash: Some("a".repeat(64)),
                 ..Default::default()
             },
         )
@@ -1607,15 +1611,62 @@ mod tests {
                 )?
                 .to_string();
             let is_resolve_key = function_name == "federation.resolve_key";
+            let result = match function_name.as_str() {
+                "federation.join" => serde_json::to_vec(&serde_json::json!({
+                    "membership_ura": body.get("membership_ura").and_then(Value::as_str)
+                        .ok_or_else(|| Status::invalid_argument("join membership_ura missing"))?,
+                    "realm": body.get("realm").and_then(Value::as_str)
+                        .ok_or_else(|| Status::invalid_argument("join realm missing"))?,
+                    "join_receipt_hash": "test-join-receipt",
+                    "authority_published_abilities": [],
+                    "authority_abilities_revision": 0,
+                    "advertise_contract": {
+                        "allowed_owner_prefixes": ["device."],
+                        "allows_hosted_agents": true
+                    }
+                }))
+                .expect("serialize recording Hub join receipt"),
+                "federation.advertise_agent" => serde_json::to_vec(&serde_json::json!({
+                    "ack": true,
+                    "assignment": {
+                        "agent_ura": body.get("agent_ura").and_then(Value::as_str)
+                            .ok_or_else(|| Status::invalid_argument("advertise_agent agent_ura missing"))?,
+                        "host_device_ura": caller_ura,
+                        "incarnation_id": body.get("incarnation_id").and_then(Value::as_str)
+                            .ok_or_else(|| Status::invalid_argument("advertise_agent incarnation_id missing"))?,
+                        "generation": 1
+                    }
+                }))
+                .expect("serialize recording Hub assignment receipt"),
+                "federation.advertise_abilities" => {
+                    let count = body
+                        .get("ability_summaries")
+                        .and_then(Value::as_array)
+                        .ok_or_else(|| {
+                            Status::invalid_argument(
+                                "advertise_abilities ability_summaries missing",
+                            )
+                        })?
+                        .len();
+                    serde_json::to_vec(&serde_json::json!({"ack": true, "count": count}))
+                        .expect("serialize recording Hub ability receipt")
+                }
+                _ if is_resolve_key => br#"{"public_keys_b64":[]}"#.to_vec(),
+                _ => Vec::new(),
+            };
             self.invokes.lock().await.push((function_name, body));
             if is_resolve_key {
                 return Ok(Response::new(InvokeResponse {
-                    result: br#"{"public_keys_b64":[]}"#.to_vec(),
+                    result,
                     result_content_type: "application/json".to_string(),
                     ..InvokeResponse::default()
                 }));
             }
-            Ok(Response::new(InvokeResponse::default()))
+            Ok(Response::new(InvokeResponse {
+                result,
+                result_content_type: "application/json".to_string(),
+                ..InvokeResponse::default()
+            }))
         }
 
         async fn invoke_stream(
@@ -2091,7 +2142,7 @@ mod tests {
     #[tokio::test]
     async fn clean_close_reports_uptime_and_frame_count_stats() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        seed_session_credentials();
+        seed_device_only_session_credentials();
         let ability_descriptors = paired_session_ability_descriptors();
         // Device-side fingerprint contract for hub-side close
         // diagnosis (incident 2026-06-11: hub logs lost, device
@@ -2142,7 +2193,7 @@ mod tests {
     #[tokio::test]
     async fn clean_close_projects_connection_suspect_when_carrier_drops() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        seed_session_credentials();
+        seed_device_only_session_credentials();
         let (addr, _server) = spawn_clean_close_session_hub().await;
         let sink = Arc::new(InMemorySessionConnectionStateSink::default());
         let sink_port: Arc<dyn SessionConnectionStateSink> = sink.clone();
@@ -2239,7 +2290,8 @@ mod tests {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_silent_session_hub_with_prelude(true).await;
-        let owner = "easynet:///r/realm/device/n1";
+        let host = "easynet:///r/realm/device/n1";
+        let owner = "easynet:///r/realm/agent/device.n1.agent-management";
         let descriptors = vec![crate::daemon::ability::descriptors::AbilityDescriptor::new(
             "agent.start",
             owner,
@@ -2251,7 +2303,7 @@ mod tests {
         let result = dial_and_run_session_with_liveness_timeout(
             SessionDialAttempt {
                 hub_endpoint: format!("http://{addr}"),
-                signer: TestSessionSigner::random(owner),
+                signer: TestSessionSigner::random(host),
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
@@ -2510,7 +2562,11 @@ mod tests {
         let descriptors = vec![
             AbilityDescriptor::new(
                 "agent.start",
-                device_ura,
+                crate::core::ura::device_agent_ura(
+                    "realm",
+                    "n1",
+                    crate::daemon::ability::names::agents::AGENT_MANAGEMENT_SYSTEM_AGENT_ID,
+                ),
                 crate::daemon::ability::descriptors::Visibility::Scoped,
                 crate::daemon::ability::descriptors::AdmissionAction::Invoke,
             )
@@ -2538,6 +2594,9 @@ mod tests {
             .expect("committed Files descriptor"),
         ];
         let signer = TestSessionSigner::random(device_ura);
+        let paired_user_signer = PairedUserTrustSigner::fixed(TestSessionSigner::random(
+            "easynet:///r/realm/user/user-dev",
+        ));
         let expected_public_key_hex = hex::encode(
             signer
                 .signing_public_key()
@@ -2551,7 +2610,8 @@ mod tests {
                 hub_ca_pem_path: None,
                 dispatcher,
                 escalation_outbox: None,
-                preludes: SessionPreludeInputs::new(&descriptors, authority_store()),
+                preludes: SessionPreludeInputs::new(&descriptors, authority_store())
+                    .with_paired_user_signer(paired_user_signer),
                 liveness_timeout: Duration::from_millis(80),
                 initial_admission: None,
                 user_trust_sync: None, // not exercised here
@@ -2600,9 +2660,18 @@ mod tests {
             Some(device_ura)
         );
         assert_eq!(
-            agent_advertise.1.get("generation").and_then(Value::as_u64),
+            agent_advertise
+                .1
+                .get("incarnation_id")
+                .and_then(Value::as_str)
+                .map(str::len),
+            Some(32),
+            "Device identity advertisement must carry its durable incarnation key"
+        );
+        assert_eq!(
             agent_projection.1.get("generation").and_then(Value::as_u64),
-            "hosted-agent identity and ability projection must publish one cursor generation"
+            Some(1),
+            "ability projection must use the Hub-assigned generation"
         );
         let summaries = agent_projection
             .1
@@ -2816,7 +2885,7 @@ mod tests {
     #[tokio::test]
     async fn supervisor_reconnects_when_hub_starts_after_cli_daemon() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        seed_session_credentials();
+        seed_device_only_session_credentials();
         // Regression guard for the product-lifecycle split: a
         // device-mode daemon may be locally running while the Hub is
         // down. The session supervisor must keep running after the
@@ -2871,7 +2940,7 @@ mod tests {
     #[tokio::test]
     async fn supervisor_reports_initial_admission_after_bidi_opens() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        seed_session_credentials();
+        seed_device_only_session_credentials();
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_silent_session_hub().await;
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
@@ -2908,7 +2977,7 @@ mod tests {
     #[tokio::test]
     async fn silent_hub_triggers_liveness_timeout_reconnect_error() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        seed_session_credentials();
+        seed_device_only_session_credentials();
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_silent_session_hub().await;
         let ability_descriptors = paired_session_ability_descriptors();
@@ -2942,7 +3011,7 @@ mod tests {
     #[tokio::test]
     async fn established_session_without_heartbeat_ack_triggers_liveness_timeout() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        seed_session_credentials();
+        seed_device_only_session_credentials();
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_established_then_silent_session_hub().await;
         let ability_descriptors = paired_session_ability_descriptors();
@@ -2973,7 +3042,7 @@ mod tests {
     #[tokio::test]
     async fn out_of_sequence_down_frame_returns_protocol_error() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        seed_session_credentials();
+        seed_device_only_session_credentials();
         let dispatcher = Arc::new(RecordingDispatcher::default());
         let (addr, _server) = spawn_out_of_sequence_session_hub().await;
         let ability_descriptors = paired_session_ability_descriptors();

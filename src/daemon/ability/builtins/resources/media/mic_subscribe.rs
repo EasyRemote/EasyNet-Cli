@@ -54,6 +54,7 @@ use crate::daemon::ability::builtins::resources::media::{self, ABILITY_MIC_SUBSC
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
 use crate::daemon::persistence::resources::{ResourceEntry, ResourceType};
+use crate::daemon::resources::context::device_scope::ContextDeviceScope;
 
 pub const REASON_SUBJECT_REQUIRED: &str = resource_subject::REASON_SUBJECT_REQUIRED;
 pub const REASON_SUBJECT_IN_ARGS: &str = resource_subject::REASON_SUBJECT_IN_ARGS;
@@ -353,10 +354,11 @@ fn handler(
             allowed_label: "mic",
         },
     )?;
+    let device_scope = ContextDeviceScope::from_execution_actor(env.callee())?;
     let rx = backend.open(&entry)?;
     Ok(StreamSource::Live(tee_recording(
         rx,
-        env.callee().to_string(),
+        device_scope.as_str().to_string(),
     )?))
 }
 
@@ -520,7 +522,7 @@ mod tests {
             file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 kind: ResourceType::Mic,
                 binding: ResourceBinding::LocalDevice,
                 hardware_id,
@@ -639,7 +641,7 @@ mod tests {
             &mut file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 kind: ResourceType::Camera, // wrong type
                 binding: ResourceBinding::LocalDevice,
                 hardware_id: "h-cam-not-mic",

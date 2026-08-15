@@ -289,8 +289,11 @@ async fn main() -> anyhow::Result<()> {
     if media_resource_bootstrap_enabled() {
         match config::load_credentials() {
             Ok(creds) => {
-                let owner_agent =
-                    easynet_cli::core::ura::device_ura(creds.realm_str(), &creds.node_id);
+                let owner_agent = easynet_cli::core::ura::device_agent_ura(
+                    creds.realm_str(),
+                    &creds.node_id,
+                    easynet_cli::daemon::ability::names::resources::MEDIA_SYSTEM_AGENT_ID,
+                );
                 match easynet_cli::daemon::ability::builtins::resources::media::resource_bootstrap::seed_default_device_resources(
                     creds.realm_str(),
                     &owner_agent,
@@ -415,11 +418,6 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     };
-    let authority_context =
-        easynet_cli::daemon::ability::catalog::declare_daemon_native_agent_authorities(
-            authority_context,
-            &pages_identity,
-        )?;
     let mut receipt_authority_config =
         easynet_cli::daemon::axon_bridge::runtime_factory::ProductionReceiptAuthorityConfig::new(
             receipt_owner_uras,
@@ -481,15 +479,15 @@ async fn main() -> anyhow::Result<()> {
     );
     let built_registry = ability_catalog::build_registry_for_daemon_result(
         ability_catalog::RegistryDaemonBuildConfig {
-            services: ability_catalog::RegistryBuildServices::new(
+            services: ability_catalog::RegistryBuildServices::new_with_access_control_stores(
                 kernel.session_service(),
                 kernel.permission_service(),
                 kernel.discuss_service(),
                 kernel.schedule_service(),
                 kernel.loop_service(),
+                Arc::clone(&access_control_stores),
             )
-            .with_discover_federation_resolver(Arc::clone(&discover_federation_resolver))
-            .with_access_control_stores(Arc::clone(&access_control_stores)),
+            .with_discover_federation_resolver(Arc::clone(&discover_federation_resolver)),
             invocation_ledger: invocation_ledger.clone(),
             loaders: None,
             pages_identity,

@@ -835,9 +835,14 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let records = ledger.list_all().unwrap();
         assert_eq!(records.len(), 1);
+        let descriptor_ref = format!("{ability_ura}@{}", wire_test_descriptor_binding());
+        assert_eq!(records[0].ability_name, "test.echo");
+        assert_eq!(records[0].ability_ura, ability_ura);
+        assert_eq!(records[0].descriptor_ref, descriptor_ref);
+        assert_eq!(records[0].admission_action, "invoke");
         assert_eq!(
-            records[0].ability_name,
-            format!("{ability_ura}@{}", wire_test_descriptor_binding())
+            records[0].safe_read, false,
+            "invoke admission must not be projected as a safe read"
         );
         assert_eq!(records[0].state, "completed");
         assert_eq!(records[0].caller_ura, "easynet:///r/t/agent/u.alice");
@@ -1251,10 +1256,12 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let records = ledger.list_all().unwrap();
         assert_eq!(records.len(), 1);
-        assert_eq!(
-            records[0].ability_name,
-            format!("{ability_ura}@{}", wire_test_descriptor_binding())
-        );
+        let descriptor_ref = format!("{ability_ura}@{}", wire_test_descriptor_binding());
+        assert_eq!(records[0].ability_name, "demo.daemon_internal");
+        assert_eq!(records[0].ability_ura, ability_ura);
+        assert_eq!(records[0].descriptor_ref, descriptor_ref);
+        assert_eq!(records[0].admission_action, "invoke");
+        assert!(!records[0].safe_read);
         assert_eq!(records[0].state, "completed");
         assert_eq!(
             outcome.invocation_id.as_deref(),

@@ -49,8 +49,17 @@
 //!              ability.deploy, and ability.uninstall control abilities
 //!              advertised by the device-sponsored ability-management
 //!              SystemAgent.
+//!   service:<user>.pages — daemon-hosted Pages registry and project handlers
+//!              advertised by the principal-scoped Pages Service. Page
+//!              resource identity remains user-scoped; execution remains
+//!              bound to the hosting Device through the descriptor host facts.
+//!   system-agent:files — daemon-local blob-store abilities advertised by the
+//!              sponsoring Device's Files SystemAgent.
 //!   system-agent:openai-compat — openai.* compatibility adapter abilities
 //!              advertised by the device-sponsored openai-compat SystemAgent.
+//!   system-agent:remote-desktop — remote_desktop.* product abilities
+//!              advertised by the device-sponsored remote-desktop SystemAgent;
+//!              plugin-management owns plugin lifecycle, not this product API.
 //!   system-agent:a2a-integration — a2a.bridge.* and a2a.client.send_task
 //!              adapter abilities advertised by the device-sponsored
 //!              a2a-integration SystemAgent.
@@ -75,9 +84,6 @@ pub mod bootstrap;
 pub mod device;
 pub mod llm;
 pub mod mcp;
-
-/// Hosted Agent id for the default MCP profile.
-pub const DEFAULT_MCP_AGENT_ID: &str = "mcp-default";
 
 struct SystemAgentDescriptorProjection {
     system_agent_id: &'static str,
@@ -115,6 +121,10 @@ const SYSTEM_AGENT_DESCRIPTOR_PROJECTIONS: &[SystemAgentDescriptorProjection] = 
         owner: crate::daemon::ability::dispatch::OwnerKind::context_system,
     },
     SystemAgentDescriptorProjection {
+        system_agent_id: crate::daemon::ability::names::resources::FILES_SYSTEM_AGENT_ID,
+        owner: crate::daemon::ability::dispatch::OwnerKind::files_system,
+    },
+    SystemAgentDescriptorProjection {
         system_agent_id: crate::daemon::ability::names::resources::MEDIA_SYSTEM_AGENT_ID,
         owner: crate::daemon::ability::dispatch::OwnerKind::media_system,
     },
@@ -122,6 +132,16 @@ const SYSTEM_AGENT_DESCRIPTOR_PROJECTIONS: &[SystemAgentDescriptorProjection] = 
         system_agent_id:
             crate::daemon::ability::names::integrations::PLUGIN_MANAGEMENT_SYSTEM_AGENT_ID,
         owner: crate::daemon::ability::dispatch::OwnerKind::plugin_management_system,
+    },
+    SystemAgentDescriptorProjection {
+        system_agent_id:
+            crate::daemon::ability::names::integrations::REMOTE_DESKTOP_SYSTEM_AGENT_ID,
+        owner: crate::daemon::ability::dispatch::OwnerKind::remote_desktop_system,
+    },
+    SystemAgentDescriptorProjection {
+        system_agent_id:
+            crate::daemon::ability::names::integrations::MCP_INTEGRATION_SYSTEM_AGENT_ID,
+        owner: crate::daemon::ability::dispatch::OwnerKind::mcp_integration_system,
     },
     SystemAgentDescriptorProjection {
         system_agent_id: crate::daemon::ability::names::automation::AUTOMATION_SYSTEM_AGENT_ID,
@@ -226,16 +246,13 @@ pub fn load_host_descriptors() -> Vec<crate::daemon::ability::descriptors::Abili
     if AbilityDescriptor::validate_owner_ura(host_ura).is_err() {
         return Vec::new();
     }
-    let mcp_ura = projection
-        .mcp_agent_ura()
-        .filter(|owner| AbilityDescriptor::validate_owner_ura(owner).is_ok());
     let llm_uras: Vec<(String, String)> = projection
         .llm_agent_uras()
         .iter()
         .filter(|(_, agent_ura)| AbilityDescriptor::validate_owner_ura(agent_ura).is_ok())
         .cloned()
         .collect();
-    all_descriptors_for_host(host_ura, mcp_ura, &llm_uras)
+    all_descriptors_for_host(host_ura, &llm_uras)
 }
 
 /// Aggregate every profile's descriptors into one list, anchored to
@@ -247,7 +264,6 @@ pub fn load_host_descriptors() -> Vec<crate::daemon::ability::descriptors::Abili
 /// `local-agents.json` (P3.4 / P4.7).
 pub fn all_descriptors_for_host(
     device_ura: &str,
-    mcp_ura: Option<&str>,
     llm_uras: &[(String, String)], // (sub_agent_name, ura)
 ) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
     let llm_catalog = if llm_uras.is_empty() {
@@ -258,9 +274,6 @@ pub fn all_descriptors_for_host(
     let mut out = Vec::new();
     out.extend(device::descriptors_for(device_ura));
     out.extend(system_agent_descriptor_projections_for_device(device_ura));
-    if let Some(ura) = mcp_ura {
-        out.extend(mcp::descriptors_for(ura));
-    }
     for (_name, ura) in llm_uras {
         let catalog = llm_catalog
             .as_ref()
@@ -316,7 +329,7 @@ mod tests {
         // (not the legacy v1 `agent/01DEV` placeholder). Production
         // mints this via `crate::core::ura::device_ura` (start.rs:623).
         let device_ura = "easynet:///r/acme/device/4065c47a-ec6f-4330-87a5-0d69787709b8";
-        let all = all_descriptors_for_host(device_ura, None, &[]);
+        let all = all_descriptors_for_host(device_ura, &[]);
         assert!(!all.is_empty());
         assert!(all.iter().any(|d| {
             d.name == crate::daemon::ability::names::device_control::FS_READ
@@ -409,7 +422,7 @@ mod tests {
         let device_ura = "easynet:///r/acme/device/4065c47a-ec6f-4330-87a5-0d69787709b8";
         let descriptor_transfer_ura = "easynet:///r/acme/agent/device.4065c47a-ec6f-4330-87a5-0d69787709b8.descriptor-transfer";
         let consent_system_agent_ura = "easynet:///r/acme/agent/device.4065c47a-ec6f-4330-87a5-0d69787709b8.consent-management";
-        let all = all_descriptors_for_host(device_ura, None, &[]);
+        let all = all_descriptors_for_host(device_ura, &[]);
         let owners: std::collections::HashSet<&str> =
             all.iter().map(|d| d.owner_ura.as_str()).collect();
         assert!(!owners.contains(device_ura));

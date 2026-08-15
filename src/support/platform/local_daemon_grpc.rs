@@ -1515,6 +1515,7 @@ impl axon_sdk::invocation::KeyResolver for CanonicalRuntimeReceiptResolver {
 struct SubmittedInvocationProjection {
     envelope: axon_sdk::pb::axon::v1::Envelope,
     function_name: String,
+    arguments_json: serde_json::Value,
     input_hash: [u8; 32],
 }
 
@@ -1528,6 +1529,9 @@ impl SubmittedInvocationProjection {
             .envelope
             .clone()
             .ok_or_else(|| anyhow::anyhow!("{ability}: invoke request omitted its envelope"))?;
+        let arguments_json = serde_json::from_slice(&request.arguments).map_err(|error| {
+            anyhow::anyhow!("{ability}: submitted invocation args are not JSON: {error}")
+        })?;
         Ok(Self {
             envelope,
             function_name:
@@ -1536,6 +1540,7 @@ impl SubmittedInvocationProjection {
                     request.target.as_ref(),
                 )?
                 .to_string(),
+            arguments_json,
             input_hash: axon_sdk::invocation::sha256(&request.arguments),
         })
     }
@@ -2190,6 +2195,7 @@ fn invoke_local_daemon_ability_with_invocation_meta_inner(
         "submitted_callee_ura": submitted_callee_ura,
         "submitted_subject_ura": submitted_subject_ura,
         "ability": function_name,
+        "args": submitted.arguments_json,
         "nonce": nonce_hex,
         "causal_context": { "parents": causal_parents },
         "receipt": terminal.receipt,
@@ -2587,6 +2593,40 @@ mod tests {
             Duration::from_secs(5),
         )
         .is_err());
+    }
+
+    #[test]
+    fn submitted_invocation_projection_preserves_json_args_bound_by_input_hash() {
+        let tuple_plan = LocalDaemonSystemTuplePlan::targeted_root_for_subject(
+            "job.run",
+            serde_json::json!({
+                "job": 1,
+                "mode": "view_only",
+                "consent_ticket": "ticket-1"
+            }),
+            "easynet:///r/acme/device/edge-1",
+            "easynet:///r/acme/resource/user.jobs/job-1",
+            Duration::from_secs(5),
+        )
+        .expect("tuple plan");
+        let invocation = local_daemon_system_invocation_from_tuple_plan(tuple_plan)
+            .expect("local system invocation");
+        let request = invocation.invoke_request().expect("invoke request");
+        let submitted =
+            SubmittedInvocationProjection::from_request(&request, "job.run").expect("submitted");
+
+        assert_eq!(
+            submitted.arguments_json,
+            serde_json::json!({
+                "job": 1,
+                "mode": "view_only",
+                "consent_ticket": "ticket-1"
+            })
+        );
+        assert_eq!(
+            submitted.input_hash,
+            axon_sdk::invocation::sha256(&request.arguments)
+        );
     }
 
     fn completed_receipt_response_fixture(

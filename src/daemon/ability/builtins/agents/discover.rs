@@ -1336,6 +1336,12 @@ pub fn manifest() -> AbilityManifest {
         .and_then(|manifest| {
             manifest.with_exposure(crate::daemon::ability::manifest::AbilityExposure::Task)
         })
+        .and_then(|manifest| {
+            manifest.with_subject_contract(
+                crate::daemon::ability::manifest::AbilitySubjectContractKind::AuthenticatedUser,
+                None,
+            )
+        })
         .expect("discover ability manifest is static and validated by tests")
 }
 
@@ -1395,7 +1401,10 @@ mod tests {
     fn test_authority() -> crate::daemon::ability::dispatch::AbilityAuthorityContext {
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
             TEST_DEVICE_URA,
-            [crate::core::ura::agent_ura("test", "local", "claude")],
+            [
+                crate::core::ura::agent_ura("test", "local", "claude"),
+                crate::core::ura::agent_ura("test", "local", "userx"),
+            ],
         )
         .expect("discover fixture hosted Agent authority")
     }
@@ -1720,7 +1729,7 @@ mod tests {
     }
 
     #[test]
-    fn device_scope_includes_live_device_owned_easyremote_ability() {
+    fn device_scope_includes_live_system_agent_owned_easyremote_ability() {
         let inference =
             AbilityManifest::new("ai_inference", "Run local AI inference", obj_schema())
                 .unwrap()
@@ -1739,7 +1748,7 @@ mod tests {
         let mut catalog = AxonAbilityCatalog::new_metadata_only_with_authority_context(authority);
         catalog.register_stream_with_spec(
             "er.ai_inference",
-            crate::daemon::ability::dispatch::OwnerKind::DeviceProfileProjection,
+            crate::daemon::ability::dispatch::OwnerKind::plugin_management_system(),
             inference,
             Arc::new(|_| anyhow::bail!("stream execution is outside discovery test scope")),
         );
@@ -1932,10 +1941,11 @@ mod tests {
         // the provider delegation exercises the same LocalRuntime boundary as
         // daemon dispatch.
         let mut reg = runtime_test_catalog();
-        reg.register_rpc_with_owner_and_action(
+        reg.register_rpc_with_spec_and_action(
             "userx.discover",
-            crate::daemon::ability::dispatch::OwnerKind::DeviceProfileProjection,
+            crate::daemon::ability::dispatch::OwnerKind::Agent("userx".to_string()),
             crate::daemon::ability::descriptors::AdmissionAction::Read,
+            manifest(),
             provider_handler,
         );
         let handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
@@ -1977,10 +1987,11 @@ mod tests {
     #[test]
     fn provider_target_is_descriptor_bound_with_explicit_subject() {
         let mut reg = metadata_test_catalog();
-        reg.register_rpc_with_owner_and_action(
+        reg.register_rpc_with_spec_and_action(
             "userx.discover",
-            crate::daemon::ability::dispatch::OwnerKind::DeviceProfileProjection,
+            crate::daemon::ability::dispatch::OwnerKind::Agent("userx".to_string()),
             crate::daemon::ability::descriptors::AdmissionAction::Read,
+            manifest(),
             Arc::new(|_args| Ok(json!({"candidates": []}))),
         );
         let mut agents = AgentRegistry::default();

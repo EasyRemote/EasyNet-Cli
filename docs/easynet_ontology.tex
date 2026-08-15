@@ -565,8 +565,8 @@ session:
 \toprule
 \textbf{Network first-class actor/interface} & \textbf{Host-local, not first-class actor} \\
 \midrule
-Agent and System Agent (routable callees) & Device (physical substrate,
-hardware, credentials) \\
+Agent, System Agent, and Service (routable callees) & Device (physical
+substrate, hardware, credentials) \\
 Authority (realm governance actor) & Axon runtime (the protocol/runtime
 process) \\
 AbilityDescriptor (governed callable interface) & MCP server (local stdio process for AI
@@ -576,10 +576,10 @@ clients) \\
 \end{center}
 
 \derived{} Ordinary public Invocation callees are \textbf{Agent, System Agent,
-or Authority} identities advertising governed AbilityDescriptors. Devices exist
-as execution host, sponsor, key custodian, and possible receipt attestor. A
-Device may appear in bounded bootstrap, pairing, publication-custody, or
-session-control caller paths enumerated by the shared
+Service, or Authority} identities advertising governed AbilityDescriptors.
+Devices exist as execution host, sponsor, key custodian, and possible receipt
+attestor. A Device may appear in bounded bootstrap, pairing,
+publication-custody, or session-control caller paths enumerated by the shared
 \texttt{DeviceCallerPurpose} classifier, but it is not an ordinary public
 callee.
 

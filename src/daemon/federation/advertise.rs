@@ -3,58 +3,75 @@
 //! Transport and session lifecycle are owned by `session_initiator`. This
 //! module only encodes persisted owner-projection facts for that transport.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::daemon::federation::hosted_agent_publication::HostedAgentIncarnationId;
 use crate::daemon::federation::read_model::owner_projection::{
     AbilityProjectionSummary, OwnerProjectionPublication,
 };
 
-#[derive(Debug, Serialize)]
-struct AdvertiseAgentArgs<'a> {
-    agent_ura: &'a str,
-    generation: u64,
-    signing_authority: HostedSigningAuthorityArgs<'a>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    host_node_id: Option<&'a str>,
+/// Hub acknowledgement for one complete owner-projection replacement.
+///
+/// Transport success is not publication success: the Hub may return a valid
+/// response with `ack=false`, and an acknowledged response must account for
+/// the exact complete set sent by the Device (including zero for tombstones).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AdvertiseAbilitiesResponse {
+    pub(crate) ack: bool,
+    pub(crate) count: usize,
+}
+
+/// Decode and validate the terminal Hub receipt for
+/// `federation.advertise_abilities`.
+///
+/// Every outbound publication path uses this function so reconnect, prelude,
+/// hot start, and removal tombstones share one acceptance rule.
+pub(crate) fn decode_advertise_abilities_response(
+    result_bytes: &[u8],
+    expected_count: usize,
+) -> Result<AdvertiseAbilitiesResponse, String> {
+    let response: AdvertiseAbilitiesResponse = serde_json::from_slice(result_bytes)
+        .map_err(|error| format!("decode federation.advertise_abilities response: {error}"))?;
+    if !response.ack {
+        return Err(format!(
+            "Hub rejected federation.advertise_abilities publication (accepted_count={}, expected_count={expected_count})",
+            response.count
+        ));
+    }
+    if response.count != expected_count {
+        return Err(format!(
+            "Hub acknowledged federation.advertise_abilities with count mismatch (accepted_count={}, expected_count={expected_count})",
+            response.count
+        ));
+    }
+    Ok(response)
 }
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum HostedSigningAuthorityArgs<'a> {
-    HostedBy { host_ura: &'a str },
+struct AdvertiseAgentArgs<'a> {
+    agent_ura: &'a str,
+    incarnation_id: &'a HostedAgentIncarnationId,
 }
 
 pub(crate) fn advertise_agent_payload(
     agent_ura: &str,
-    host_device_ura: &str,
-    generation: u64,
-    host_node_id: Option<&str>,
+    incarnation_id: &HostedAgentIncarnationId,
 ) -> Result<Value, String> {
     serde_json::to_value(AdvertiseAgentArgs {
         agent_ura,
-        generation,
-        signing_authority: HostedSigningAuthorityArgs::HostedBy {
-            host_ura: host_device_ura,
-        },
-        host_node_id,
+        incarnation_id,
     })
     .map_err(|error| format!("encode advertise_agent args: {error}"))
 }
 
 pub(crate) fn advertise_agent_payload_bytes(
     agent_ura: &str,
-    host_device_ura: &str,
-    generation: u64,
-    host_node_id: Option<&str>,
+    incarnation_id: &HostedAgentIncarnationId,
 ) -> Result<Vec<u8>, String> {
-    serde_json::to_vec(&advertise_agent_payload(
-        agent_ura,
-        host_device_ura,
-        generation,
-        host_node_id,
-    )?)
-    .map_err(|error| format!("serialize advertise_agent args: {error}"))
+    serde_json::to_vec(&advertise_agent_payload(agent_ura, incarnation_id)?)
+        .map_err(|error| format!("serialize advertise_agent args: {error}"))
 }
 
 #[derive(Debug, Serialize)]
@@ -94,26 +111,50 @@ mod tests {
     };
 
     #[test]
-    fn advertise_agent_payload_carries_hosted_identity_fields() {
-        let payload = advertise_agent_payload(
-            "easynet:///r/localhost/agent/dev.pages",
-            "easynet:///r/localhost/device/dev-1",
-            11,
-            Some("dev-1"),
-        )
-        .expect("hosted agent advertise payload");
+    fn advertise_abilities_response_requires_positive_ack() {
+        let error = decode_advertise_abilities_response(br#"{"ack":false,"count":0}"#, 0)
+            .expect_err("negative acknowledgement must fail publication");
+
+        assert!(error.contains("Hub rejected"), "{error}");
+    }
+
+    #[test]
+    fn advertise_abilities_response_requires_exact_accepted_count() {
+        let error = decode_advertise_abilities_response(br#"{"ack":true,"count":1}"#, 2)
+            .expect_err("partial acknowledgement must fail publication");
+
+        assert!(error.contains("count mismatch"), "{error}");
+        assert!(error.contains("accepted_count=1"), "{error}");
+        assert!(error.contains("expected_count=2"), "{error}");
+    }
+
+    #[test]
+    fn advertise_abilities_response_accepts_exact_tombstone_count() {
+        let response = decode_advertise_abilities_response(br#"{"ack":true,"count":0}"#, 0)
+            .expect("zero-count tombstone acknowledgement");
+
+        assert_eq!(
+            response,
+            AdvertiseAbilitiesResponse {
+                ack: true,
+                count: 0
+            }
+        );
+    }
+
+    #[test]
+    fn advertise_agent_payload_carries_only_hub_registration_command_fields() {
+        let incarnation_id = HostedAgentIncarnationId::parse("1".repeat(32)).unwrap();
+        let payload =
+            advertise_agent_payload("easynet:///r/localhost/agent/dev.worker", &incarnation_id)
+                .expect("hosted agent advertise payload");
 
         assert_eq!(
             payload["agent_ura"],
-            "easynet:///r/localhost/agent/dev.pages"
+            "easynet:///r/localhost/agent/dev.worker"
         );
-        assert_eq!(payload["generation"], 11);
-        assert_eq!(payload["signing_authority"]["kind"], "hosted_by");
-        assert_eq!(
-            payload["signing_authority"]["host_ura"],
-            "easynet:///r/localhost/device/dev-1"
-        );
-        assert_eq!(payload["host_node_id"], "dev-1");
+        assert_eq!(payload["incarnation_id"], "1".repeat(32));
+        assert_eq!(payload.as_object().unwrap().len(), 2);
     }
 
     #[test]

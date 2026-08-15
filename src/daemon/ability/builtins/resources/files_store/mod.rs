@@ -49,11 +49,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::daemon::ability::descriptors::AdmissionAction;
-use crate::daemon::ability::dispatch::{
-    AxonAbilityCatalog, ControlPlaneImplementation, LocalRpcHandler, OwnerKind,
-};
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler, OwnerKind};
 use crate::daemon::ability::manifest::AbilityManifest;
-use crate::daemon::ability::AuthorityScope;
 use serde_json::{json, Value};
 
 /// Installation parameters for the Files reference system. Mirror
@@ -135,36 +132,14 @@ fn list_input_schema() -> Value {
     })
 }
 
-fn files_authority_scope(realm: &str, user: &str) -> AuthorityScope {
-    AuthorityScope::new("agent:files", management_agent_ura(realm, user))
-        .expect("Files authority scope is well-formed")
-}
-
-/// Execution host for the user-scoped content-addressed Files family.
-///
-/// Runtime ownership is the daemon-native `files` Agent. The `user` segment is
-/// the immutable user id that scopes the hosted Agent URA.
-pub(crate) fn management_agent_ura(realm: &str, user: &str) -> String {
-    crate::core::ura::agent_ura(realm, user, "files")
-}
-
 fn register_files_rpc(
     reg: &mut AxonAbilityCatalog,
     ability: &'static str,
     owner: OwnerKind,
-    authority_scope: AuthorityScope,
     manifest: AbilityManifest,
     handler: LocalRpcHandler,
 ) {
-    reg.register_rpc_with_spec_impl_and_authority_scope(
-        ability,
-        owner,
-        authority_scope,
-        manifest,
-        handler,
-        ControlPlaneImplementation::native_daemon(),
-    )
-    .expect("files_store authority scope must be declared before registration")
+    reg.register_rpc_with_spec(ability, owner, manifest, handler)
 }
 
 /// Wire the Files reference system into the registry. Called
@@ -183,8 +158,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
             return;
         }
     };
-    let owner = OwnerKind::Agent("files".to_string());
-    let authority_scope = files_authority_scope(&config.realm, &config.user);
+    let owner = OwnerKind::files_system();
 
     let user = config.user.clone();
     let realm = config.realm.clone();
@@ -195,7 +169,6 @@ pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
         reg,
         "files.put",
         owner.clone(),
-        authority_scope.clone(),
         files_manifest(
             "put",
             "Write a content-addressed file blob for the user account.",
@@ -212,7 +185,6 @@ pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
         reg,
         "files.get",
         owner.clone(),
-        authority_scope.clone(),
         files_manifest(
             "get",
             "Read a content-addressed file blob for the user account.",
@@ -231,7 +203,6 @@ pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
         reg,
         "files.list",
         owner,
-        authority_scope,
         files_manifest(
             "list",
             "List content-addressed file blobs for the user account.",

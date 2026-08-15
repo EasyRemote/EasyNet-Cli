@@ -117,7 +117,7 @@ fn invoke_agent_command_fixture(
     let meta_catalog_handle = Arc::clone(&dispatch_handle);
     catalog.register_rpc_with_owner(
         "meta.list_abilities",
-        crate::daemon::ability::dispatch::OwnerKind::DeviceProfileProjection,
+        crate::daemon::ability::dispatch::OwnerKind::runtime_introspection_system(),
         Arc::new(move |args: serde_json::Value| {
             let owner_ura = args
                 .get("agent_ura")

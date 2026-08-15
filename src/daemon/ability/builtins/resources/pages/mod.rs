@@ -31,19 +31,17 @@ use std::sync::Arc;
 
 use anyhow::Context;
 
-use crate::daemon::ability::authority::AuthorityScope;
-use crate::daemon::ability::dispatch::{
-    AxonAbilityCatalog, ControlPlaneImplementation, LocalRpcHandler, OwnerKind,
-};
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler, OwnerKind};
 
 pub use identity::{PagesIdentity, PagesUserRootIdentity};
 
 /// Installation parameters for the Pages reference system.
 ///
 /// `user` is the product-facing slug used in URLs and local project storage.
-/// `owner_user_id` is the immutable runtime owner segment used by canonical
-/// Agent URAs and Hub admission. Keeping them separate prevents display names
-/// from entering the runtime authority model.
+/// `owner_user_id` is the immutable product principal id used by Pages state,
+/// admission, and the principal-scoped Pages Service owner. The Device still
+/// hosts the directory handles and hot-registration implementation; it is not
+/// the public Pages callee.
 #[derive(Debug, Clone)]
 pub struct PagesConfig {
     pub user: String,
@@ -120,7 +118,7 @@ pub fn register(
         Ok(_) => {}
         Err(err) => return Err(err).context("restore published Pages projects"),
     }
-    register_restored_project_abilities(reg, &config.realm, &config.owner_user_id, &config.user)
+    register_restored_project_abilities(reg, &config.owner_user_id, &config.user)
         .context("register restored Pages project abilities")?;
     Ok(())
 }
@@ -130,12 +128,7 @@ fn register_management_abilities(
     config: &PagesConfig,
     dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) {
-    // Pages runtime abilities are owned by the canonical daemon-native Pages
-    // Agent. Product resources and URLs remain user/display-user scoped, but
-    // descriptor-bound invocation has no raw User owner branch; admission must
-    // resolve the same hosted-Agent owner that appears on the wire.
-    let owner = OwnerKind::Agent("pages".to_string());
-    let authority_scope = pages_authority_scope(&config.realm, &config.owner_user_id);
+    let owner = pages_service_owner(&config.owner_user_id);
 
     let user = config.user.clone();
     let owner_user_id = config.owner_user_id.clone();
@@ -153,7 +146,6 @@ fn register_management_abilities(
         reg,
         "pages.publish",
         owner.clone(),
-        authority_scope.clone(),
         manifest_for_verb("pages.publish"),
         publish_handler,
     );
@@ -170,7 +162,6 @@ fn register_management_abilities(
         reg,
         "pages.unpublish",
         owner.clone(),
-        authority_scope.clone(),
         manifest_for_verb("pages.unpublish"),
         unpublish_handler,
     );
@@ -183,9 +174,8 @@ fn register_management_abilities(
     });
     register_management_rpc(
         reg,
-        "pages.project_list",
+        "project_list",
         owner.clone(),
-        authority_scope.clone(),
         manifest_for_verb("project_list"),
         list_handler,
     );
@@ -199,61 +189,41 @@ fn register_management_abilities(
         reg,
         "pages.get",
         owner.clone(),
-        authority_scope.clone(),
         manifest_for_verb("pages.get"),
         get_handler,
     );
 
     let user = config.user.clone();
-    let owner_user_id = config.owner_user_id.clone();
     let realm = config.realm.clone();
+    let health_handle = Arc::clone(&dispatch_handle);
     let health_handler: LocalRpcHandler = Arc::new(move |args| {
-        list_get_unpublish::handle_health(&owner_user_id, &user, &realm, args)
+        let registry = health_handle
+            .get()
+            .ok_or_else(|| anyhow::anyhow!("pages registry handle not initialised"))?;
+        let owner_ura = registry
+            .runtime_binding_facts_for_mode("pages.health", crate::daemon::ability::CallMode::Rpc)
+            .map_err(|error| anyhow::anyhow!("resolve pages.health owner: {error}"))?
+            .ok_or_else(|| anyhow::anyhow!("pages.health owner is not registered"))?
+            .authority_root;
+        list_get_unpublish::handle_health(&owner_ura, &user, &realm, args)
     });
     register_management_rpc(
         reg,
         "pages.health",
         owner,
-        authority_scope,
         manifest_for_verb("pages.health"),
         health_handler,
     );
-}
-
-fn pages_authority_scope(realm: &str, owner_user_id: &str) -> AuthorityScope {
-    AuthorityScope::new("agent:pages", management_agent_ura(realm, owner_user_id))
-        .expect("Pages authority scope is well-formed")
-}
-
-/// Owner/callee for the user-scoped Pages management family.
-///
-/// Runtime ownership is the daemon-native `pages` Agent. The `owner_user_id`
-/// segment is the immutable product user id that scopes the hosted Agent URA;
-/// it is not a User URA and is distinct from the display user slug used by URLs
-/// and local project storage.
-pub(crate) fn management_agent_ura(realm: &str, owner_user_id: &str) -> String {
-    crate::core::ura::agent_ura(realm, owner_user_id, "pages")
 }
 
 fn register_management_rpc(
     reg: &mut AxonAbilityCatalog,
     ability: &'static str,
     owner: OwnerKind,
-    authority_scope: AuthorityScope,
     manifest: crate::daemon::ability::manifest::AbilityManifest,
     handler: LocalRpcHandler,
 ) {
-    reg.register_rpc_with_spec_impl_and_authority_scope(
-        ability,
-        owner,
-        authority_scope,
-        manifest,
-        handler,
-        ControlPlaneImplementation::native_daemon(),
-    )
-    .unwrap_or_else(|error| {
-        panic!("static pages management registration failed for {ability:?}: {error}")
-    });
+    reg.register_rpc_with_spec(ability, owner, manifest, handler);
 }
 
 /// Build the `AbilityManifest` for a `pages.<verb>` from the shared
@@ -382,26 +352,19 @@ pub(crate) fn pages_verb_tail(relative_name: &str) -> &str {
 
 pub(crate) fn register_project_abilities(
     reg: &AxonAbilityCatalog,
-    realm: &str,
     owner_user_id: &str,
     user: &str,
     project_id: &str,
 ) -> anyhow::Result<usize> {
-    let authority_scope = pages_authority_scope(realm, owner_user_id);
-    fetch::register_fetch_ability(
-        reg,
-        owner_user_id,
-        user,
-        project_id,
-        authority_scope.clone(),
-    )?;
-    Ok(1 + api::register_api_abilities_for_project(
-        reg,
-        owner_user_id,
-        user,
-        project_id,
-        authority_scope,
-    )?)
+    fetch::register_fetch_ability(reg, owner_user_id, user, project_id)?;
+    Ok(1 + api::register_api_abilities_for_project(reg, owner_user_id, user, project_id)?)
+}
+
+pub(crate) fn pages_service_owner(owner_user_id: &str) -> OwnerKind {
+    OwnerKind::Service {
+        principal_id: owner_user_id.to_string(),
+        service_id: "pages".to_string(),
+    }
 }
 
 pub(crate) fn registered_project_ability_names(
@@ -436,7 +399,6 @@ pub(crate) fn unregister_project_abilities(
 
 fn register_restored_project_abilities(
     reg: &AxonAbilityCatalog,
-    realm: &str,
     owner_user_id: &str,
     user: &str,
 ) -> anyhow::Result<usize> {
@@ -450,7 +412,7 @@ fn register_restored_project_abilities(
     project_ids.sort();
     let mut registered = 0;
     for project_id in project_ids {
-        registered += register_project_abilities(reg, realm, owner_user_id, user, &project_id)
+        registered += register_project_abilities(reg, owner_user_id, user, &project_id)
             .with_context(|| format!("register restored Pages project {user}/{project_id}"))?;
     }
     Ok(registered)

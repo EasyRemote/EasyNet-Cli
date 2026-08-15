@@ -41,7 +41,8 @@ use self::backpressure::{bidi_callback_backpressure_frame, stream_callback_backp
 use crate::daemon::ability::AbilityCatalogQuery;
 #[cfg(feature = "axon-pb")]
 use crate::daemon::axon_bridge::runtime_descriptor_provider::{
-    DescriptorResolutionError, RuntimeDescriptorCatalogReader, RuntimeDescriptorResolutionProvider,
+    DescriptorCatalogReadContext, DescriptorResolutionError, RuntimeDescriptorCatalogReader,
+    RuntimeDescriptorResolutionProvider,
 };
 #[cfg(feature = "axon-pb")]
 use crate::ffi::client::handle::{binding_for_handle, lib_runtime, ClientSessionBinding};
@@ -2138,9 +2139,9 @@ enum AttachedDescriptorCatalogRoute {
 
 #[cfg(feature = "axon-pb")]
 fn attached_descriptor_catalog_route(
-    session: &crate::ffi::client::handle::ClientSession,
     runtime_owner_ura: &str,
     catalog_execution_target_ura: &str,
+    context: &DescriptorCatalogReadContext,
 ) -> Result<AttachedDescriptorCatalogRoute, DescriptorResolutionError> {
     if catalog_execution_target_ura == runtime_owner_ura {
         let catalog_owner_ura = crate::daemon::ability::catalog::ownership::execution_target_owner_ura_for_public_ability(
@@ -2163,15 +2164,192 @@ fn attached_descriptor_catalog_route(
             "build remote runtime descriptor catalogue target: {error}"
         ))
     })?;
-    let caller_ura = RuntimeSessionCallerAuthority::from_session(session)
-        .map_err(DescriptorResolutionError::runtime_attachment_unavailable)?
-        .paired_user_ura
+    let caller_ura = context
+        .caller_ura()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             DescriptorResolutionError::runtime_attachment_unavailable(
-                "remote descriptor catalogue reads require a paired User caller",
+                "remote descriptor catalogue reads require an explicit accountable caller",
+            )
+        })?
+        .to_string();
+    Ok(AttachedDescriptorCatalogRoute::RemoteRuntime { target, caller_ura })
+}
+
+#[cfg(feature = "axon-pb")]
+fn admit_remote_descriptor_catalog_caller(
+    session: &crate::ffi::client::handle::ClientSession,
+    runtime_owner_ura: &str,
+    caller_ura: &str,
+    context: &DescriptorCatalogReadContext,
+    query: &AbilityCatalogQuery,
+    signer: &dyn crate::daemon::identity::self_identity::CanonicalSigner,
+) -> Result<(), DescriptorResolutionError> {
+    let session_authority = RuntimeSessionCallerAuthority::from_session(session)
+        .map_err(DescriptorResolutionError::runtime_attachment_unavailable)?;
+    if session_authority.paired_user_ura.as_deref() == Some(caller_ura) {
+        return Ok(());
+    }
+
+    let caller = crate::core::ura::parse_ura(caller_ura).map_err(|error| {
+        DescriptorResolutionError::runtime_attachment_unavailable(format!(
+            "remote descriptor catalogue caller is not canonical: {error}"
+        ))
+    })?;
+    if caller.kind != crate::core::ura::URAKind::Authority {
+        return Err(DescriptorResolutionError::runtime_attachment_unavailable(format!(
+            "remote descriptor catalogue caller `{caller_ura}` is neither the paired User nor an accountable realm Authority"
+        )));
+    }
+    if caller_ura == runtime_owner_ura {
+        return Ok(());
+    }
+
+    let raw_authority = context.session_authority().ok_or_else(|| {
+        DescriptorResolutionError::runtime_attachment_unavailable(
+            "remote descriptor catalogue reads by a non-attached Authority require the exact SessionAuthority from the descriptor request",
+        )
+    })?;
+    let wire =
+        crate::daemon::invocation::admission::authority_metadata::decode_session_authority_wire(
+            raw_authority,
+        )
+        .map_err(|error| {
+            DescriptorResolutionError::runtime_attachment_unavailable(format!(
+                "remote descriptor catalogue SessionAuthority is invalid: {error}"
+            ))
+        })?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| {
+            DescriptorResolutionError::runtime_attachment_unavailable(format!(
+                "read descriptor catalogue authority clock: {error}"
+            ))
+        })?
+        .as_millis()
+        .try_into()
+        .map_err(|_| {
+            DescriptorResolutionError::runtime_attachment_unavailable(
+                "descriptor catalogue authority clock exceeds i64",
             )
         })?;
-    Ok(AttachedDescriptorCatalogRoute::RemoteRuntime { target, caller_ura })
+    crate::daemon::invocation::admission::authority_metadata::validate_session_authority_payload_shape(
+        &wire.payload,
+        Some(now_ms),
+    )
+    .map_err(|error| {
+        DescriptorResolutionError::runtime_attachment_unavailable(format!(
+            "remote descriptor catalogue SessionAuthority shape is invalid: {error}"
+        ))
+    })?;
+    let callee_ura = context.callee_ura().unwrap_or_default();
+    let subject_ura = context.subject_ura().unwrap_or_default();
+    if wire.payload.issuer_ura != caller_ura
+        || wire.payload.callee_ura != callee_ura
+        || wire.payload.subject_ura != subject_ura
+        || !crate::daemon::invocation::admission::authority_metadata::authority_audience_admits(
+            &wire.payload.audience,
+            callee_ura,
+        )
+    {
+        return Err(DescriptorResolutionError::runtime_attachment_unavailable(
+            "remote descriptor catalogue SessionAuthority does not bind the descriptor request caller/callee/subject tuple",
+        ));
+    }
+    let public_ability = query
+        .ability_ura()
+        .and_then(|ability_ura| crate::core::ura::AbilitySelector::parse(ability_ura).ok())
+        .map(|selector| selector.public_name().to_string())
+        .ok_or_else(|| {
+            DescriptorResolutionError::runtime_attachment_unavailable(
+                "remote descriptor catalogue query has no canonical ability selector",
+            )
+        })?;
+    if !wire
+        .payload
+        .allowed_actions
+        .iter()
+        .any(|action| action.trim() == "read")
+        || !wire
+            .payload
+            .scopes
+            .iter()
+            .any(|scope| scope.trim() == public_ability)
+        || !wire
+            .payload
+            .allowed_followup_abilities
+            .iter()
+            .any(|ability| ability.trim() == public_ability)
+    {
+        return Err(DescriptorResolutionError::runtime_attachment_unavailable(format!(
+            "remote descriptor catalogue SessionAuthority does not admit read ability `{public_ability}`"
+        )));
+    }
+    use base64::Engine as _;
+    use ed25519_dalek::Verifier as _;
+    let canonical = crate::daemon::invocation::admission::authority_metadata::canonical_authority_payload_bytes(
+        &wire.payload,
+    )
+    .map_err(|error| {
+        DescriptorResolutionError::runtime_attachment_unavailable(format!(
+            "canonicalize remote descriptor catalogue SessionAuthority: {error}"
+        ))
+    })?;
+    let signature_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&wire.signature)
+        .map_err(|error| {
+            DescriptorResolutionError::runtime_attachment_unavailable(format!(
+                "decode remote descriptor catalogue SessionAuthority signature: {error}"
+            ))
+        })?;
+    let signature = ed25519_dalek::Signature::from_slice(&signature_bytes).map_err(|error| {
+        DescriptorResolutionError::runtime_attachment_unavailable(format!(
+            "parse remote descriptor catalogue SessionAuthority signature: {error}"
+        ))
+    })?;
+    let public_key = signer.signing_public_key().map_err(|error| {
+        DescriptorResolutionError::runtime_attachment_unavailable(format!(
+            "read remote descriptor catalogue Authority public key: {error}"
+        ))
+    })?;
+    public_key.verify(&canonical, &signature).map_err(|_| {
+        DescriptorResolutionError::runtime_attachment_unavailable(
+            "remote descriptor catalogue SessionAuthority signature does not verify against the accountable caller",
+        )
+    })
+}
+
+#[cfg(feature = "axon-pb")]
+fn catalog_execution_target_ura(
+    runtime_owner_ura: &str,
+    query: &AbilityCatalogQuery,
+) -> Result<String, DescriptorResolutionError> {
+    let Some(owner_ura) = query.owner_ura() else {
+        return Ok(runtime_owner_ura.to_string());
+    };
+    let system_agent_host =
+        crate::daemon::ability::catalog::ownership::execution_host_ura_for_device_sponsored_system_agent(
+            owner_ura,
+        )
+        .map_err(|error| {
+            DescriptorResolutionError::runtime_attachment_unavailable(format!(
+                "project descriptor SystemAgent owner execution host: {error}"
+            ))
+        })?;
+    if let Some(host) = system_agent_host {
+        return Ok(host);
+    }
+    crate::daemon::ability::catalog::ownership::execution_host_ura_for_device_sponsored_owner(
+        owner_ura,
+        runtime_owner_ura,
+    )
+    .map_err(|error| {
+        DescriptorResolutionError::runtime_attachment_unavailable(format!(
+            "project descriptor owner execution host: {error}"
+        ))
+    })
+    .map(|host| host.unwrap_or_else(|| runtime_owner_ura.to_string()))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2180,24 +2358,13 @@ impl RuntimeDescriptorCatalogReader for AttachedDaemonDescriptorCatalogReader<'_
         &self,
         runtime_owner_ura: &str,
         query: &AbilityCatalogQuery,
+        context: &DescriptorCatalogReadContext,
     ) -> Result<serde_json::Value, DescriptorResolutionError> {
-        let catalog_execution_target_ura = query
-            .owner_ura()
-            .map(
-                crate::daemon::ability::catalog::ownership::execution_host_ura_for_device_sponsored_system_agent,
-            )
-            .transpose()
-            .map_err(|error| {
-                DescriptorResolutionError::runtime_attachment_unavailable(format!(
-                    "project descriptor owner execution host: {error}"
-                ))
-            })?
-            .flatten()
-            .unwrap_or_else(|| runtime_owner_ura.to_string());
+        let catalog_execution_target_ura = catalog_execution_target_ura(runtime_owner_ura, query)?;
         let route = attached_descriptor_catalog_route(
-            self.session,
             runtime_owner_ura,
             &catalog_execution_target_ura,
+            context,
         )?;
         let endpoint = invocation_endpoint_for_session(self.session).map_err(|error| {
             DescriptorResolutionError::runtime_attachment_unavailable(format!(
@@ -2236,9 +2403,17 @@ impl RuntimeDescriptorCatalogReader for AttachedDaemonDescriptorCatalogReader<'_
                 )
                 .map_err(|error| {
                     DescriptorResolutionError::runtime_attachment_unavailable(format!(
-                        "load paired User descriptor catalogue signer: {error}"
+                        "load accountable descriptor catalogue caller signer: {error}"
                     ))
                 })?;
+                admit_remote_descriptor_catalog_caller(
+                    self.session,
+                    runtime_owner_ura,
+                    &caller_ura,
+                    context,
+                    query,
+                    signer.as_ref(),
+                )?;
                 crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_with_signer_at_endpoint(
                     request,
                     signer,
@@ -6222,7 +6397,9 @@ fn validate_public_invocation_caller_ura(
 fn validate_public_invocation_callee_ura(value: &str) -> Result<(), InvocationJsonError> {
     let parsed = validate_public_tuple_ura("callee_ura", value)?;
     match parsed.kind {
-        crate::core::ura::URAKind::Agent | crate::core::ura::URAKind::Authority => Ok(()),
+        crate::core::ura::URAKind::Agent
+        | crate::core::ura::URAKind::Service
+        | crate::core::ura::URAKind::Authority => Ok(()),
         crate::core::ura::URAKind::Device => Err(InvocationJsonError::InvalidInvocationRole {
             field: "callee_ura",
             reason:
@@ -7229,6 +7406,7 @@ mod tests {
             &self,
             _runtime_owner_ura: &str,
             query: &AbilityCatalogQuery,
+            _context: &crate::daemon::axon_bridge::runtime_descriptor_provider::DescriptorCatalogReadContext,
         ) -> Result<serde_json::Value, DescriptorResolutionError> {
             let abilities = self
                 .entries
@@ -7874,6 +8052,106 @@ mod tests {
             })
             .to_string(),
         )
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn remote_descriptor_catalog_authority_requires_exact_signed_session_proof() {
+        use base64::Engine as _;
+        use ed25519_dalek::Signer as _;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_path =
+            write_runtime_discovery(dir.path(), "device", "example", Some("local-device"));
+        let session = crate::ffi::client::handle::ClientSession::with_control_path_only(
+            control_path.display().to_string(),
+            Some(dir.path().join("daemon.sock").display().to_string()),
+        );
+        let runtime_owner_ura = crate::core::ura::device_ura("example", "local-device");
+        let caller_ura = crate::core::ura::hub_ura("example");
+        let subject_ura =
+            "easynet:///r/example/resource/user.alice/invoke/namespace.resolve".to_string();
+        let ability_ura = crate::core::ura::owner_ability_ura(&caller_ura, "namespace.resolve")
+            .expect("namespace.resolve Ability URA");
+        let now = now_ms();
+        let payload =
+            crate::daemon::invocation::admission::authority_metadata::SessionAuthorityPayload {
+                issuer_ura: caller_ura.clone(),
+                session_id: "realm-directory-read-adapter-test-1".to_string(),
+                session_owner_user_id: "alice".to_string(),
+                creator_principal_id: caller_ura.clone(),
+                callee_ura: caller_ura.clone(),
+                subject_ura: subject_ura.clone(),
+                audience: caller_ura.clone(),
+                scopes: vec!["namespace.resolve".to_string()],
+                allowed_actions: vec!["read".to_string()],
+                allowed_followup_abilities: vec!["namespace.resolve".to_string()],
+                issued_at_ms: now,
+                expires_at_ms: now + 60_000,
+            };
+        let canonical = crate::daemon::invocation::admission::authority_metadata::canonical_authority_payload_bytes(&payload)
+            .expect("canonical SessionAuthority payload");
+        let seed = [0x5a; 32];
+        let signature = ed25519_dalek::SigningKey::from_bytes(&seed).sign(&canonical);
+        let raw_authority = base64::engine::general_purpose::STANDARD.encode(
+            serde_json::to_vec(&serde_json::json!({
+                "payload": payload,
+                "signature": base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
+            }))
+            .expect("SessionAuthority wire"),
+        );
+        let request = serde_json::json!({
+            "caller_ura": caller_ura,
+            "callee_ura": caller_ura,
+            "subject_ura": subject_ura,
+            "authority_metadata": {
+                crate::daemon::invocation::admission::authority_metadata::SESSION_AUTHORITY_METADATA_KEY: raw_authority,
+            },
+        });
+        let context = DescriptorCatalogReadContext::from_request(
+            request.as_object().expect("descriptor request object"),
+            &caller_ura,
+        );
+        let query = AbilityCatalogQuery::exact(&caller_ura, &ability_ura, Some("1.0.0"));
+        let signer = crate::daemon::identity::self_identity::TestCanonicalSigner::new(
+            caller_ura.clone(),
+            seed,
+        );
+
+        admit_remote_descriptor_catalog_caller(
+            &session,
+            &runtime_owner_ura,
+            &caller_ura,
+            &context,
+            &query,
+            &signer,
+        )
+        .expect("exact Authority SessionAuthority admits descriptor catalogue read");
+
+        let mismatched_request = serde_json::json!({
+            "caller_ura": caller_ura,
+            "callee_ura": caller_ura,
+            "subject_ura": "easynet:///r/example/resource/user.bob/invoke/namespace.resolve",
+            "authority_metadata": {
+                crate::daemon::invocation::admission::authority_metadata::SESSION_AUTHORITY_METADATA_KEY: raw_authority,
+            },
+        });
+        let mismatched_context = DescriptorCatalogReadContext::from_request(
+            mismatched_request
+                .as_object()
+                .expect("mismatched descriptor request object"),
+            &caller_ura,
+        );
+        let error = admit_remote_descriptor_catalog_caller(
+            &session,
+            &runtime_owner_ura,
+            &caller_ura,
+            &mismatched_context,
+            &query,
+            &signer,
+        )
+        .expect_err("SessionAuthority subject mismatch must fail closed");
+        assert!(error.to_string().contains("does not bind"), "{error}");
     }
 
     fn write_runtime_discovery(

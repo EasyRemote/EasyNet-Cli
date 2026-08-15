@@ -1,7 +1,7 @@
 //! File: `src/daemon/persistence/agent_lifecycle.rs`
 //! Description: Durable coordination for hosted-Agent lifecycle mutations.
 //!
-//! Protocol responsibility: persist local purge transaction progress, the
+//! Protocol responsibility: persist local hosted-Agent retraction progress, the
 //! identity-fencing publication outbox, finite retry state, and delivery
 //! claims. This module performs no network I/O.
 //!
@@ -21,12 +21,13 @@
 //! mutex with the repository's OS advisory file lock so threads and separate
 //! daemon/CLI processes share one serialization boundary.
 //!
-//! Destructive purge additionally persists [`AgentPurgeJournal`] before the
-//! root is renamed. The application layer advances the journal through a
-//! reversible local phase, persists `Committed`, finishes identity-bound local
-//! deletion, then hands publication to a separate durable outbox. A committed
-//! journal is never compensated, and an unavailable publisher never retains a
-//! quarantine.
+//! Both `agent.stop` and `agent.purge` persist a
+//! [`HostedAgentRetractionJournal`] before the first local mutation. The
+//! application layer advances one explicit state machine through a reversible
+//! local phase and a committed remote-retirement handoff. Purge additionally
+//! quarantines and deletes the registered root; stop preserves it. A committed
+//! journal is never compensated and is cleared only after its exact tombstone
+//! and revoke command have been handed to the durable outbox.
 
 use std::fs;
 use std::path::PathBuf;
@@ -39,8 +40,8 @@ use super::config::{self, WritePermissions};
 use super::file_lock::ExclusiveFileLock;
 use super::local_agents::LocalAgentsFile;
 
-const JOURNAL_FILE_NAME: &str = "agent-lifecycle-purge.json";
-const JOURNAL_SCHEMA_VERSION: u32 = 4;
+const JOURNAL_FILE_NAME: &str = "hosted-agent-retraction.json";
+const JOURNAL_SCHEMA_VERSION: u32 = 6;
 const PUBLICATION_OUTBOX_FILE_NAME: &str = "agent-purge-publication-outbox.json";
 const PUBLICATION_OUTBOX_SCHEMA_VERSION: u32 = 4;
 pub(crate) const PUBLICATION_MAX_ATTEMPTS_PER_STAGE: u32 = 5;
@@ -90,7 +91,7 @@ impl AgentLifecycleMutationGuard {
             .get_or_init(|| Mutex::new(()))
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let process_guard = ExclusiveFileLock::acquire_for_data_path(&journal_path())?;
+        let process_guard = ExclusiveFileLock::acquire_for_data_path(&retraction_journal_path())?;
         Ok(Self {
             _thread_guard: thread_guard,
             _process_guard: process_guard,
@@ -100,7 +101,7 @@ impl AgentLifecycleMutationGuard {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum AgentPurgeStage {
+pub(crate) enum HostedAgentRetractionStage {
     Prepared,
     Quarantined,
     RuntimeSynchronized,
@@ -109,17 +110,42 @@ pub(crate) enum AgentPurgeStage {
     AuthorityCommitted,
     Committed,
     Finalized,
+    AssignmentPending,
     TombstonePrepared,
     OutboxEnqueued,
 }
 
-impl AgentPurgeStage {
+impl HostedAgentRetractionStage {
     pub(crate) fn is_committed(self) -> bool {
         matches!(
             self,
-            Self::Committed | Self::Finalized | Self::TombstonePrepared | Self::OutboxEnqueued
+            Self::Committed
+                | Self::Finalized
+                | Self::AssignmentPending
+                | Self::TombstonePrepared
+                | Self::OutboxEnqueued
         )
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum HostedAgentRetractionMode {
+    Stop,
+    Purge,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "effect", rename_all = "snake_case")]
+pub(crate) enum HostedAgentRetractionLocalEffect {
+    PreserveRoot {
+        registered_root: Option<PathBuf>,
+    },
+    DeleteRoot {
+        root_path: PathBuf,
+        quarantine_path: PathBuf,
+        root_identity: Option<AgentRootIdentity>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -240,10 +266,15 @@ pub(crate) struct AgentPurgePublication {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum AgentPurgePublicationPlan {
+pub(crate) enum HostedAgentRetractionPublicationPlan {
     Undetermined,
+    AssignmentPending {
+        host_device_ura: String,
+        incarnation_id:
+            crate::daemon::federation::hosted_agent_publication::HostedAgentIncarnationId,
+    },
     NotRequired {
-        reason: AgentPurgeNoPublicationReason,
+        reason: HostedAgentRetractionNoPublicationReason,
     },
     Required {
         publication: AgentPurgePublication,
@@ -252,32 +283,31 @@ pub(crate) enum AgentPurgePublicationPlan {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum AgentPurgeNoPublicationReason {
+pub(crate) enum HostedAgentRetractionNoPublicationReason {
     NoActiveOwnerProjection,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct AgentPurgeJournal {
+pub(crate) struct HostedAgentRetractionJournal {
     pub schema_version: u32,
     pub transaction_id: String,
-    pub stage: AgentPurgeStage,
+    pub mode: HostedAgentRetractionMode,
+    pub stage: HostedAgentRetractionStage,
     pub name: String,
     pub agent_ura: String,
-    pub root_path: PathBuf,
-    pub quarantine_path: PathBuf,
-    pub root_identity: Option<AgentRootIdentity>,
-    pub publication_plan: AgentPurgePublicationPlan,
+    pub local_effect: HostedAgentRetractionLocalEffect,
+    pub publication_plan: HostedAgentRetractionPublicationPlan,
     pub removed_entry: AgentEntry,
     pub original_registry: AgentRegistry,
     pub original_local_agents: LocalAgentsFile,
 }
 
-impl AgentPurgeJournal {
+impl HostedAgentRetractionJournal {
     #[expect(
         clippy::too_many_arguments,
         reason = "a purge journal atomically snapshots every recovery-critical pre-mutation fact"
     )]
-    pub(crate) fn new(
+    pub(crate) fn new_purge(
         transaction_id: String,
         name: String,
         agent_ura: String,
@@ -290,62 +320,229 @@ impl AgentPurgeJournal {
         Self {
             schema_version: JOURNAL_SCHEMA_VERSION,
             transaction_id,
-            stage: AgentPurgeStage::Prepared,
+            mode: HostedAgentRetractionMode::Purge,
+            stage: HostedAgentRetractionStage::Prepared,
             name,
             agent_ura,
-            root_path,
-            quarantine_path,
-            root_identity: None,
-            publication_plan: AgentPurgePublicationPlan::Undetermined,
+            local_effect: HostedAgentRetractionLocalEffect::DeleteRoot {
+                root_path,
+                quarantine_path,
+                root_identity: None,
+            },
+            publication_plan: HostedAgentRetractionPublicationPlan::Undetermined,
             removed_entry,
             original_registry,
             original_local_agents,
         }
     }
 
-    pub(crate) fn advance(&mut self, stage: AgentPurgeStage) -> anyhow::Result<()> {
+    pub(crate) fn new_stop(
+        transaction_id: String,
+        name: String,
+        agent_ura: String,
+        removed_entry: AgentEntry,
+        original_registry: AgentRegistry,
+        original_local_agents: LocalAgentsFile,
+    ) -> Self {
+        Self {
+            schema_version: JOURNAL_SCHEMA_VERSION,
+            transaction_id,
+            mode: HostedAgentRetractionMode::Stop,
+            stage: HostedAgentRetractionStage::Prepared,
+            name,
+            agent_ura,
+            local_effect: HostedAgentRetractionLocalEffect::PreserveRoot {
+                registered_root: removed_entry.root_path.clone(),
+            },
+            publication_plan: HostedAgentRetractionPublicationPlan::Undetermined,
+            removed_entry,
+            original_registry,
+            original_local_agents,
+        }
+    }
+
+    pub(crate) fn advance(&mut self, stage: HostedAgentRetractionStage) -> anyhow::Result<()> {
         let valid = matches!(
-            (self.stage, stage),
-            (AgentPurgeStage::Prepared, AgentPurgeStage::Quarantined)
-                | (
-                    AgentPurgeStage::Quarantined,
-                    AgentPurgeStage::RuntimeSynchronized
-                )
-                | (
-                    AgentPurgeStage::RuntimeSynchronized,
-                    AgentPurgeStage::RegistryPersisted
-                )
-                | (
-                    AgentPurgeStage::RegistryPersisted,
-                    AgentPurgeStage::IdentityPersisted
-                )
-                | (
-                    AgentPurgeStage::IdentityPersisted,
-                    AgentPurgeStage::AuthorityCommitted
-                )
-                | (
-                    AgentPurgeStage::AuthorityCommitted,
-                    AgentPurgeStage::Committed
-                )
-                | (AgentPurgeStage::Committed, AgentPurgeStage::Finalized)
-                | (
-                    AgentPurgeStage::Finalized,
-                    AgentPurgeStage::TombstonePrepared
-                )
-                | (
-                    AgentPurgeStage::TombstonePrepared,
-                    AgentPurgeStage::OutboxEnqueued
-                )
+            (self.mode, self.stage, stage),
+            (
+                HostedAgentRetractionMode::Purge,
+                HostedAgentRetractionStage::Prepared,
+                HostedAgentRetractionStage::Quarantined
+            ) | (
+                HostedAgentRetractionMode::Purge,
+                HostedAgentRetractionStage::Quarantined,
+                HostedAgentRetractionStage::RuntimeSynchronized
+            ) | (
+                HostedAgentRetractionMode::Stop,
+                HostedAgentRetractionStage::Prepared,
+                HostedAgentRetractionStage::RuntimeSynchronized
+            ) | (
+                _,
+                HostedAgentRetractionStage::RuntimeSynchronized,
+                HostedAgentRetractionStage::RegistryPersisted
+            ) | (
+                _,
+                HostedAgentRetractionStage::RegistryPersisted,
+                HostedAgentRetractionStage::IdentityPersisted
+            ) | (
+                _,
+                HostedAgentRetractionStage::IdentityPersisted,
+                HostedAgentRetractionStage::AuthorityCommitted
+            ) | (
+                _,
+                HostedAgentRetractionStage::AuthorityCommitted,
+                HostedAgentRetractionStage::Committed
+            ) | (
+                _,
+                HostedAgentRetractionStage::Committed,
+                HostedAgentRetractionStage::Finalized
+            ) | (
+                _,
+                HostedAgentRetractionStage::Finalized,
+                HostedAgentRetractionStage::AssignmentPending
+            ) | (
+                _,
+                HostedAgentRetractionStage::AssignmentPending,
+                HostedAgentRetractionStage::TombstonePrepared
+            ) | (
+                _,
+                HostedAgentRetractionStage::Finalized,
+                HostedAgentRetractionStage::TombstonePrepared
+            ) | (
+                _,
+                HostedAgentRetractionStage::TombstonePrepared,
+                HostedAgentRetractionStage::OutboxEnqueued
+            )
         );
         if !valid {
             anyhow::bail!(
-                "invalid Agent purge journal transition {:?} -> {:?}",
+                "invalid hosted-Agent {:?} retraction transition {:?} -> {:?}",
+                self.mode,
                 self.stage,
                 stage
             );
         }
         self.stage = stage;
-        save_purge_journal(self)
+        save_retraction_journal(self)
+    }
+
+    pub(crate) fn validate(&self) -> anyhow::Result<()> {
+        if self.schema_version != JOURNAL_SCHEMA_VERSION
+            || self.transaction_id.trim().is_empty()
+            || self.name.trim().is_empty()
+            || self.agent_ura.trim().is_empty()
+        {
+            anyhow::bail!("hosted-Agent retraction journal identity is incomplete");
+        }
+        match (&self.mode, &self.local_effect) {
+            (
+                HostedAgentRetractionMode::Stop,
+                HostedAgentRetractionLocalEffect::PreserveRoot { .. },
+            ) => {
+                if self.stage == HostedAgentRetractionStage::Quarantined {
+                    anyhow::bail!("hosted-Agent stop cannot enter the quarantined stage");
+                }
+            }
+            (
+                HostedAgentRetractionMode::Purge,
+                HostedAgentRetractionLocalEffect::DeleteRoot {
+                    root_path,
+                    quarantine_path,
+                    ..
+                },
+            ) if !root_path.as_os_str().is_empty()
+                && !quarantine_path.as_os_str().is_empty()
+                && root_path != quarantine_path => {}
+            _ => anyhow::bail!("hosted-Agent retraction mode contradicts its local effect"),
+        }
+        if matches!(
+            self.stage,
+            HostedAgentRetractionStage::AssignmentPending
+                | HostedAgentRetractionStage::TombstonePrepared
+                | HostedAgentRetractionStage::OutboxEnqueued
+        ) && matches!(
+            self.publication_plan,
+            HostedAgentRetractionPublicationPlan::Undetermined
+        ) {
+            anyhow::bail!(
+                "hosted-Agent retraction publication plan is undetermined after preparation"
+            );
+        }
+        match (&self.stage, &self.publication_plan) {
+            (
+                HostedAgentRetractionStage::AssignmentPending,
+                HostedAgentRetractionPublicationPlan::AssignmentPending {
+                    host_device_ura, ..
+                },
+            ) if !host_device_ura.trim().is_empty() => {}
+            (HostedAgentRetractionStage::AssignmentPending, _) => {
+                anyhow::bail!(
+                    "hosted-Agent retraction AssignmentPending stage has no exact registration intent"
+                );
+            }
+            (
+                HostedAgentRetractionStage::TombstonePrepared
+                | HostedAgentRetractionStage::OutboxEnqueued,
+                HostedAgentRetractionPublicationPlan::AssignmentPending { .. },
+            ) => {
+                anyhow::bail!(
+                    "hosted-Agent retraction retained AssignmentPending plan after assignment"
+                );
+            }
+            _ => {}
+        }
+        if let HostedAgentRetractionPublicationPlan::Required { publication } =
+            &self.publication_plan
+        {
+            if publication.host_device_ura.trim().is_empty()
+                || publication.generation == 0
+                || publication.projection_revision == 0
+                || publication.projection_digest.trim().is_empty()
+                || publication.tombstone_payload.is_empty()
+            {
+                anyhow::bail!("hosted-Agent retraction publication proof is incomplete");
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn purge_root(
+        &self,
+    ) -> anyhow::Result<(&PathBuf, &PathBuf, Option<&AgentRootIdentity>)> {
+        match &self.local_effect {
+            HostedAgentRetractionLocalEffect::DeleteRoot {
+                root_path,
+                quarantine_path,
+                root_identity,
+            } => Ok((root_path, quarantine_path, root_identity.as_ref())),
+            HostedAgentRetractionLocalEffect::PreserveRoot { .. } => {
+                anyhow::bail!("hosted-Agent stop has no destructive root effect")
+            }
+        }
+    }
+
+    pub(crate) fn purge_root_mut(
+        &mut self,
+    ) -> anyhow::Result<(&mut PathBuf, &mut PathBuf, &mut Option<AgentRootIdentity>)> {
+        match &mut self.local_effect {
+            HostedAgentRetractionLocalEffect::DeleteRoot {
+                root_path,
+                quarantine_path,
+                root_identity,
+            } => Ok((root_path, quarantine_path, root_identity)),
+            HostedAgentRetractionLocalEffect::PreserveRoot { .. } => {
+                anyhow::bail!("hosted-Agent stop has no destructive root effect")
+            }
+        }
+    }
+
+    pub(crate) fn preserved_root(&self) -> Option<&PathBuf> {
+        match &self.local_effect {
+            HostedAgentRetractionLocalEffect::PreserveRoot { registered_root } => {
+                registered_root.as_ref()
+            }
+            HostedAgentRetractionLocalEffect::DeleteRoot { .. } => None,
+        }
     }
 }
 
@@ -544,6 +741,7 @@ pub(crate) struct AgentPurgePublicationEntry {
     pub transaction_id: String,
     pub name: String,
     pub agent_ura: String,
+    pub reason: String,
     pub publication: AgentPurgePublication,
     pub stage: AgentPurgePublicationStage,
     pub retry: AgentPurgePublicationRetry,
@@ -551,6 +749,27 @@ pub(crate) struct AgentPurgePublicationEntry {
 }
 
 impl AgentPurgePublicationEntry {
+    pub(crate) fn pending(
+        transaction_id: String,
+        name: String,
+        agent_ura: String,
+        reason: String,
+        publication: AgentPurgePublication,
+    ) -> anyhow::Result<Self> {
+        let entry = Self {
+            transaction_id,
+            name,
+            agent_ura,
+            reason,
+            publication,
+            stage: AgentPurgePublicationStage::TombstonePending,
+            retry: AgentPurgePublicationRetry::default(),
+            next_delivery_fence: 1,
+        };
+        validate_publication_entry(&entry)?;
+        Ok(entry)
+    }
+
     pub(crate) fn claim(
         &mut self,
         drain_epoch: u64,
@@ -722,6 +941,7 @@ impl AgentPurgePublicationOutbox {
             if entry.transaction_id.trim().is_empty()
                 || entry.name.trim().is_empty()
                 || entry.agent_ura.trim().is_empty()
+                || !matches!(entry.reason.as_str(), "agent.stop" | "agent.purge")
             {
                 anyhow::bail!("Agent purge publication outbox contains an empty identity");
             }
@@ -924,45 +1144,59 @@ fn validate_publication_entry(entry: &AgentPurgePublicationEntry) -> anyhow::Res
     Ok(())
 }
 
-pub(crate) fn journal_path() -> PathBuf {
+pub(crate) fn retraction_journal_path() -> PathBuf {
     config::state_dir().join(JOURNAL_FILE_NAME)
 }
 
-pub(crate) fn load_purge_journal() -> anyhow::Result<Option<AgentPurgeJournal>> {
-    let path = journal_path();
+pub(crate) fn load_retraction_journal() -> anyhow::Result<Option<HostedAgentRetractionJournal>> {
+    let path = retraction_journal_path();
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(anyhow::anyhow!(
-                "read Agent purge journal {}: {error}",
+                "read hosted-Agent retraction journal {}: {error}",
                 path.display()
             ));
         }
     };
-    let journal: AgentPurgeJournal = serde_json::from_slice(&bytes).map_err(|error| {
-        anyhow::anyhow!("parse Agent purge journal {}: {error}", path.display())
+    parse_current_retraction_journal(&path, &bytes).map(Some)
+}
+
+fn parse_current_retraction_journal(
+    path: &std::path::Path,
+    bytes: &[u8],
+) -> anyhow::Result<HostedAgentRetractionJournal> {
+    let journal: HostedAgentRetractionJournal = serde_json::from_slice(bytes).map_err(|error| {
+        anyhow::anyhow!(
+            "parse hosted-Agent retraction journal {}: {error}",
+            path.display()
+        )
     })?;
     if journal.schema_version != JOURNAL_SCHEMA_VERSION {
         anyhow::bail!(
-            "unsupported Agent purge journal schema {} at {}; expected {}",
+            "unsupported hosted-Agent retraction journal schema {} at {}; expected {}",
             journal.schema_version,
             path.display(),
             JOURNAL_SCHEMA_VERSION
         );
     }
-    Ok(Some(journal))
+    journal.validate()?;
+    Ok(journal)
 }
 
-pub(crate) fn save_purge_journal(journal: &AgentPurgeJournal) -> anyhow::Result<()> {
-    let path = journal_path();
+pub(crate) fn save_retraction_journal(
+    journal: &HostedAgentRetractionJournal,
+) -> anyhow::Result<()> {
+    journal.validate()?;
+    let path = retraction_journal_path();
     let bytes = serde_json::to_vec_pretty(journal)?;
     config::atomic_write_with_permissions(&path, &bytes, WritePermissions::OwnerReadWrite)
         .map_err(|error| anyhow::anyhow!("persist Agent purge journal {}: {error}", path.display()))
 }
 
-pub(crate) fn clear_purge_journal() -> anyhow::Result<()> {
-    let path = journal_path();
+pub(crate) fn clear_retraction_journal() -> anyhow::Result<()> {
+    let path = retraction_journal_path();
     match fs::remove_file(&path) {
         Ok(()) => config::sync_parent_dir(&path)
             .map_err(|error| anyhow::anyhow!("sync Agent purge journal removal: {error:#}")),
@@ -999,15 +1233,7 @@ pub(crate) fn update_publication_outbox<T>(
     let _process_guard = ExclusiveFileLock::acquire_for_data_path(&path)?;
     let mut outbox = load_publication_outbox_unlocked(&path)?;
     let output = mutate(&mut outbox)?;
-    outbox.validate()?;
-    let bytes = serde_json::to_vec_pretty(&outbox)?;
-    config::atomic_write_with_permissions(&path, &bytes, WritePermissions::OwnerReadWrite)
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "persist Agent purge publication outbox {}: {error}",
-                path.display()
-            )
-        })?;
+    save_publication_outbox_unlocked(&path, &outbox)?;
     Ok(output)
 }
 
@@ -1095,7 +1321,26 @@ fn load_publication_outbox_unlocked(
             ));
         }
     };
-    let outbox: AgentPurgePublicationOutbox = serde_json::from_slice(&bytes).map_err(|error| {
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+        anyhow::anyhow!(
+            "parse Agent purge publication outbox {}: {error}",
+            path.display()
+        )
+    })?;
+    let schema_version = value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            anyhow::anyhow!("Agent purge publication outbox is missing schema_version")
+        })?;
+    if schema_version != u64::from(PUBLICATION_OUTBOX_SCHEMA_VERSION) {
+        anyhow::bail!(
+            "unsupported Agent purge publication outbox schema {}; expected {}",
+            schema_version,
+            PUBLICATION_OUTBOX_SCHEMA_VERSION
+        );
+    }
+    let outbox: AgentPurgePublicationOutbox = serde_json::from_value(value).map_err(|error| {
         anyhow::anyhow!(
             "parse Agent purge publication outbox {}: {error}",
             path.display()
@@ -1103,6 +1348,22 @@ fn load_publication_outbox_unlocked(
     })?;
     outbox.validate()?;
     Ok(outbox)
+}
+
+fn save_publication_outbox_unlocked(
+    path: &std::path::Path,
+    outbox: &AgentPurgePublicationOutbox,
+) -> anyhow::Result<()> {
+    outbox.validate()?;
+    let bytes = serde_json::to_vec_pretty(outbox)?;
+    config::atomic_write_with_permissions(path, &bytes, WritePermissions::OwnerReadWrite).map_err(
+        |error| {
+            anyhow::anyhow!(
+                "persist Agent purge publication outbox {}: {error}",
+                path.display()
+            )
+        },
+    )
 }
 
 #[cfg(test)]
@@ -1158,6 +1419,7 @@ mod tests {
             transaction_id: transaction_id.to_string(),
             name: name.to_string(),
             agent_ura: crate::core::ura::agent_ura("test", "alice", name),
+            reason: "agent.purge".to_string(),
             publication: AgentPurgePublication {
                 host_device_ura: "easynet:///r/test/device/host".to_string(),
                 generation: 1,
@@ -1298,6 +1560,36 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_outbox_schema_fails_without_mutating_the_file() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let path = publication_outbox_path();
+        fs::create_dir_all(path.parent().expect("outbox has a state directory")).unwrap();
+        let bytes =
+            br#"{"schema_version":3,"next_drain_epoch":1,"entries":[],"reconciliation_audit":[]}"#;
+        config::atomic_write_with_permissions(&path, bytes, WritePermissions::OwnerReadWrite)
+            .unwrap();
+
+        assert!(load_publication_outbox().is_err());
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn schema_four_publication_outbox_is_current_and_boot_loadable() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let path = publication_outbox_path();
+        fs::create_dir_all(path.parent().expect("outbox has a state directory")).unwrap();
+        let bytes =
+            br#"{"schema_version":4,"next_drain_epoch":1,"entries":[],"reconciliation_audit":[]}"#;
+        config::atomic_write_with_permissions(&path, bytes, WritePermissions::OwnerReadWrite)
+            .unwrap();
+
+        let outbox = load_publication_outbox().expect("schema 4 is the current outbox schema");
+        assert_eq!(outbox.schema_version, PUBLICATION_OUTBOX_SCHEMA_VERSION);
+        assert!(outbox.entries.is_empty());
+        assert!(outbox.reconciliation_audit.is_empty());
+    }
+
+    #[test]
     fn lifecycle_lock_child_process() {
         if std::env::var_os(CHILD_ENV).is_none() {
             return;
@@ -1328,7 +1620,7 @@ mod tests {
         }
         assert!(ready.exists(), "child did not publish lock acquisition");
         assert!(
-            ExclusiveFileLock::try_acquire_for_data_path(&journal_path())
+            ExclusiveFileLock::try_acquire_for_data_path(&retraction_journal_path())
                 .unwrap()
                 .is_none(),
             "second process must not enter lifecycle mutation while child holds lock"
@@ -1336,7 +1628,7 @@ mod tests {
 
         assert!(child.wait().expect("wait for lock child").success());
         assert!(
-            ExclusiveFileLock::try_acquire_for_data_path(&journal_path())
+            ExclusiveFileLock::try_acquire_for_data_path(&retraction_journal_path())
                 .unwrap()
                 .is_some(),
             "lock must be released when the owning process exits"

@@ -803,8 +803,14 @@ func TestRuntimeAbilityClientRejectsNoncanonicalCausalContextBeforeDescriptorRes
 }
 
 func TestRuntimeAbilityClientMaterializesTypedAuthorityIntoCanonicalDraft(t *testing.T) {
+	var descriptorRequest RuntimeDescriptorRefRequest
 	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
-		ResolveDescriptorRefFunc: testResolveDescriptorRef(t),
+		ResolveDescriptorRefFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(requestJSON, &descriptorRequest); err != nil {
+				return nil, err
+			}
+			return testResolveDescriptorRef(t)(ctx, requestJSON)
+		},
 	})
 	if err != nil {
 		t.Fatalf("NewRuntimeClient: %v", err)
@@ -824,6 +830,9 @@ func TestRuntimeAbilityClientMaterializesTypedAuthorityIntoCanonicalDraft(t *tes
 	metadata := draft.Metadata()
 	if metadata[SessionAuthorityMetadataKey] == "" {
 		t.Fatalf("typed authority was not materialized: %#v", metadata)
+	}
+	if descriptorRequest.AuthorityMetadata[SessionAuthorityMetadataKey] != metadata[SessionAuthorityMetadataKey] {
+		t.Fatalf("descriptor resolution did not receive the exact SessionAuthority: %#v", descriptorRequest.AuthorityMetadata)
 	}
 	if _, present := call.Metadata[SessionAuthorityMetadataKey]; present {
 		t.Fatalf("typed authority mutated caller metadata: %#v", call.Metadata)

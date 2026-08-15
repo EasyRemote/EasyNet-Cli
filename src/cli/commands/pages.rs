@@ -26,15 +26,15 @@ use crate::daemon::ability::builtins::resources::pages::{PagesIdentity, PagesUse
 use crate::daemon::invocation::routing::target::{CallMode, SystemInvocationTargetIssuer};
 use crate::support::platform::local_invoke::{LocalAbilityTarget, LocalDaemonSystemAbilityIssuer};
 
-/// User-owned Pages ability verbs exposed by the local daemon.
+/// Pages Service ability verbs exposed by the local daemon.
 ///
 /// What this is: the one CLI-side projection from the human `pages`
 /// commands to daemon-local Pages ability keys.
 ///
-/// What this is not: it is not an Axon `/ability/` URA builder. Axon
-/// currently treats User URAs as owners of resources and agents, not
-/// direct Ability publishers, so the Pages runtime still registers
-/// user-owned abilities as local daemon registry keys.
+/// What this is not: it is not an Axon `/ability/` URA builder. The
+/// principal-scoped Pages Service owns the public descriptor; this CLI
+/// selector keeps the public descriptor name separate from the daemon-local
+/// registry key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PagesAbilityVerb {
     Publish,
@@ -54,41 +54,50 @@ impl PagesAbilityVerb {
     }
 }
 
-/// Typed local selector for user-scoped Pages abilities.
+/// Typed local selector for principal-scoped Pages Service abilities.
 ///
-/// Invariant 1: `user` is non-empty and comes from the daemon's
-/// paired identity or `EASYNET_PAGES_USER` dev override.
+/// Invariant 1: `owner_user_id` is non-empty and comes from the daemon's
+/// paired identity.
 ///
-/// Invariant 2: `local_registry_ability` is the only place in the CLI
-/// facade that selects the owner-local `pages.<verb>` registry key.
+/// Invariant 2: `local_registry_ability` is the only place in the CLI facade
+/// that selects the daemon-local Pages registry key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PagesAbility {
-    user: String,
+    owner_user_id: String,
     verb: PagesAbilityVerb,
 }
 
 impl PagesAbility {
-    fn for_user(user: &str, verb: PagesAbilityVerb) -> anyhow::Result<Self> {
-        let user = user.trim();
-        if user.is_empty() {
-            anyhow::bail!("pages ability selector requires a non-empty user identity");
+    fn for_owner_user(owner_user_id: &str, verb: PagesAbilityVerb) -> anyhow::Result<Self> {
+        let owner_user_id = owner_user_id.trim();
+        if owner_user_id.is_empty() {
+            anyhow::bail!("pages ability selector requires a non-empty owner user identity");
         }
         Ok(Self {
-            user: user.to_string(),
+            owner_user_id: owner_user_id.to_string(),
             verb,
         })
     }
 
     fn local_registry_ability(&self) -> String {
         match self.verb {
-            PagesAbilityVerb::List => "pages.project_list".to_string(),
+            PagesAbilityVerb::List => "project_list".to_string(),
             _ => self.verb.public_name().to_string(),
         }
     }
 
-    fn local_target(&self, realm: &str) -> anyhow::Result<LocalAbilityTarget> {
-        let callee = crate::core::ura::agent_ura(realm, &self.user, "pages");
-        LocalAbilityTarget::new(self.local_registry_ability(), callee)
+    fn local_target(&self, execution_host_device_ura: &str) -> anyhow::Result<LocalAbilityTarget> {
+        let host = crate::core::ura::parse_ura(execution_host_device_ura)
+            .map_err(|error| anyhow::anyhow!("pages execution host URA is invalid: {error}"))?;
+        if host.kind != crate::core::ura::URAKind::Device {
+            anyhow::bail!("pages execution host must be a Device URA");
+        }
+        let callee_ura = crate::core::ura::service_ura(&host.realm, &self.owner_user_id, "pages");
+        LocalAbilityTarget::new_with_public_ability(
+            self.local_registry_ability(),
+            callee_ura,
+            self.verb.public_name(),
+        )
     }
 }
 
@@ -193,12 +202,9 @@ fn current_pages_user_root_identity() -> anyhow::Result<PagesUserRootIdentity> {
         })
 }
 
-fn invoke_pages_ability(
-    identity: &PagesUserRootIdentity,
-    ability: &PagesAbility,
-    args: Value,
-) -> anyhow::Result<Value> {
-    let target = ability.local_target(&identity.realm)?;
+fn invoke_pages_ability(ability: &PagesAbility, args: Value) -> anyhow::Result<Value> {
+    let execution_host_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
+    let target = ability.local_target(&execution_host_ura)?;
     let invocation = SystemInvocationTargetIssuer::local_target_root(&target, args, CallMode::Rpc)?;
     LocalDaemonSystemAbilityIssuer::invoke_issued_target_root_timeout(
         &invocation,
@@ -208,13 +214,13 @@ fn invoke_pages_ability(
 
 fn run_create(a: CreateArgs) -> anyhow::Result<()> {
     let identity = current_pages_user_root_identity()?;
-    let ability = PagesAbility::for_user(&identity.user, PagesAbilityVerb::Publish)?;
+    let ability = PagesAbility::for_owner_user(&identity.owner_user_id, PagesAbilityVerb::Publish)?;
     let args_v = json!({
         "folder":     a.folder,
         "project_id": a.project_id,
         "visibility": a.visibility,
     });
-    let result = invoke_pages_ability(&identity, &ability, args_v)
+    let result = invoke_pages_ability(&ability, args_v)
         .map_err(|e| anyhow::anyhow!("pages create failed: {e}"))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -236,8 +242,8 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
 
 fn run_list(a: ListArgs) -> anyhow::Result<()> {
     let identity = current_pages_user_root_identity()?;
-    let ability = PagesAbility::for_user(&identity.user, PagesAbilityVerb::List)?;
-    let result = invoke_pages_ability(&identity, &ability, json!({}))
+    let ability = PagesAbility::for_owner_user(&identity.owner_user_id, PagesAbilityVerb::List)?;
+    let result = invoke_pages_ability(&ability, json!({}))
         .map_err(|e| anyhow::anyhow!("pages list failed: {e}"))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -271,9 +277,9 @@ fn run_list(a: ListArgs) -> anyhow::Result<()> {
 
 fn run_show(a: ShowArgs) -> anyhow::Result<()> {
     let identity = current_pages_user_root_identity()?;
-    let ability = PagesAbility::for_user(&identity.user, PagesAbilityVerb::Get)?;
+    let ability = PagesAbility::for_owner_user(&identity.owner_user_id, PagesAbilityVerb::Get)?;
     let args_v = json!({ "project_id": a.project_id });
-    let result = invoke_pages_ability(&identity, &ability, args_v)
+    let result = invoke_pages_ability(&ability, args_v)
         .map_err(|e| anyhow::anyhow!("pages show failed: {e}"))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
@@ -345,9 +351,10 @@ fn run_delete(a: DeleteArgs) -> anyhow::Result<()> {
         );
     }
     let identity = current_pages_user_root_identity()?;
-    let ability = PagesAbility::for_user(&identity.user, PagesAbilityVerb::Unpublish)?;
+    let ability =
+        PagesAbility::for_owner_user(&identity.owner_user_id, PagesAbilityVerb::Unpublish)?;
     let args_v = json!({ "project_id": a.project_id });
-    let result = invoke_pages_ability(&identity, &ability, args_v)
+    let result = invoke_pages_ability(&ability, args_v)
         .map_err(|e| anyhow::anyhow!("pages delete failed: {e}"))?;
     let removed = result
         .get("removed")
@@ -363,9 +370,9 @@ fn run_delete(a: DeleteArgs) -> anyhow::Result<()> {
 
 fn run_url(a: UrlArgs) -> anyhow::Result<()> {
     let identity = current_pages_user_root_identity()?;
-    let ability = PagesAbility::for_user(&identity.user, PagesAbilityVerb::Get)?;
+    let ability = PagesAbility::for_owner_user(&identity.owner_user_id, PagesAbilityVerb::Get)?;
     let args_v = json!({ "project_id": a.project_id });
-    let result = invoke_pages_ability(&identity, &ability, args_v)
+    let result = invoke_pages_ability(&ability, args_v)
         .map_err(|e| anyhow::anyhow!("pages url failed: {e}"))?;
     let url = result
         .get("url_root")
@@ -399,29 +406,35 @@ mod tests {
 
     #[test]
     fn pages_ability_projects_to_local_registry_key() {
-        let ability =
-            PagesAbility::for_user("alice", PagesAbilityVerb::Publish).expect("pages ability");
+        let ability = PagesAbility::for_owner_user("user-a", PagesAbilityVerb::Publish)
+            .expect("pages ability");
         assert_eq!(ability.local_registry_ability(), "pages.publish");
     }
 
     #[test]
-    fn pages_ability_targets_pages_agent_callee() {
+    fn pages_ability_targets_principal_scoped_pages_service() {
         let ability =
-            PagesAbility::for_user("alice", PagesAbilityVerb::List).expect("pages ability");
-        let target = ability.local_target("localhost").expect("local target");
+            PagesAbility::for_owner_user("user-a", PagesAbilityVerb::List).expect("pages ability");
+        let target = ability
+            .local_target("easynet:///r/localhost/device/dev-1")
+            .expect("local target");
 
-        assert_eq!(target.dispatch_name(), "pages.project_list");
+        assert_eq!(target.dispatch_name(), "project_list");
         assert_eq!(
             target.callee_ura(),
-            "easynet:///r/localhost/agent/alice.pages"
+            "easynet:///r/localhost/service/user-a.pages"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/localhost/ability/service.user-a.pages.project_list"
         );
     }
 
     #[test]
-    fn pages_ability_rejects_empty_user() {
-        let err = PagesAbility::for_user("   ", PagesAbilityVerb::List)
+    fn pages_ability_rejects_empty_owner_user() {
+        let err = PagesAbility::for_owner_user("   ", PagesAbilityVerb::List)
             .expect_err("empty user must fail");
-        assert!(format!("{err}").contains("non-empty user"));
+        assert!(format!("{err}").contains("non-empty owner user"));
     }
 
     #[test]
@@ -432,6 +445,7 @@ mod tests {
         let identity = current_pages_user_root_identity().expect("pages identity");
 
         assert_eq!(identity.user, "alice");
+        assert_eq!(identity.owner_user_id, "user-a");
         assert_eq!(identity.realm, "localhost");
     }
 

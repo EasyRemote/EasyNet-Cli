@@ -97,6 +97,7 @@ pub mod commands;
 pub(crate) mod daemon_client;
 pub(crate) mod mcp;
 pub mod presentation;
+pub(crate) mod source_highlighting;
 pub use commands::{discover, invocation_watch, mission_runs, receipt_verification, teach};
 
 use clap::builder::styling::{AnsiColor, Effects, Style, Styles};

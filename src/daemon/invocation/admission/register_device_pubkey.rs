@@ -143,6 +143,7 @@ impl RegisterPubkeyRequest {
 pub(crate) struct RegisterPubkeyIntent {
     principal_ura: String,
     role: TrustAnchorRole,
+    principal_owner_ura: Option<String>,
 }
 
 impl RegisterPubkeyIntent {
@@ -154,11 +155,29 @@ impl RegisterPubkeyIntent {
         self.role
     }
 
+    pub(crate) fn principal_owner_ura(&self) -> Option<&str> {
+        self.principal_owner_ura.as_deref()
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(principal_ura: String, role: TrustAnchorRole) -> Self {
         Self {
             principal_ura,
             role,
+            principal_owner_ura: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_with_owner(
+        principal_ura: String,
+        role: TrustAnchorRole,
+        principal_owner_ura: String,
+    ) -> Self {
+        Self {
+            principal_ura,
+            role,
+            principal_owner_ura: Some(principal_owner_ura),
         }
     }
 }
@@ -322,6 +341,7 @@ pub(crate) fn parse_register_pubkey_intent(
     Ok(RegisterPubkeyIntent {
         principal_ura: args.principal_ura,
         role,
+        principal_owner_ura: args.principal_owner_ura,
     })
 }
 

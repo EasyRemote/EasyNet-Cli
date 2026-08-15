@@ -11,13 +11,12 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use axon_sdk::invocation::{BidiInputFrame, BidiInputSender};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde_json::Value;
-#[cfg(test)]
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -175,9 +174,8 @@ fn local_bidi_wire_kind_for(
 
 #[derive(Clone)]
 struct ActiveRemoteBidi {
-    ability: String,
-    wire_kind: LocalBidiWireKind,
-    sender: BidiInputSender,
+    ingress: mpsc::Sender<PendingRemoteBidiInput>,
+    half_closed: bool,
 }
 
 struct PendingRemoteBidiInput {
@@ -192,7 +190,8 @@ enum RemoteBidiSession {
     /// bounded here and are not delivered to the handler until admission is
     /// sent upstream.
     Opening {
-        buffered: VecDeque<PendingRemoteBidiInput>,
+        ingress: mpsc::Sender<PendingRemoteBidiInput>,
+        half_closed: bool,
     },
     /// Admission has been published and the Axon handler input channel is live.
     Active(ActiveRemoteBidi),
@@ -242,13 +241,21 @@ impl Drop for CarrierStreamRegistration {
     }
 }
 
-const REMOTE_BIDI_OPENING_INPUT_CAPACITY: usize = 32;
+const REMOTE_BIDI_INPUT_CAPACITY: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BidiOutputProjection {
     call_id: u64,
     payload: Vec<u8>,
     failure: Option<SessionFailure>,
+    disposition: BidiOutputDisposition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BidiOutputDisposition {
+    Data,
+    Completion,
+    Failure,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -307,6 +314,19 @@ fn canonical_carrier_control_failure(
             retryable: false,
             ..Default::default()
         }),
+        ..Default::default()
+    }
+}
+
+fn canonical_carrier_invocation_failure(
+    call_id: u64,
+    error: &axon_sdk::invocation::AxonError,
+) -> axon_sdk::pb::axon::v1::DispatchResult {
+    axon_sdk::pb::axon::v1::DispatchResult {
+        call_id,
+        payload: Vec::new(),
+        terminal: false,
+        failure: Some(axon_sdk::invocation::wire::error_to_wire(error)),
         ..Default::default()
     }
 }
@@ -567,16 +587,7 @@ impl LocalAxonSessionDispatcher {
         let failure = outcome
             .error
             .as_ref()
-            .map(|e| axon_sdk::pb::axon::v1::Error {
-                code: if e.reason.is_empty() {
-                    "INVOCATION_FAILED".to_string()
-                } else {
-                    e.reason.clone()
-                },
-                message: e.to_string(),
-                retryable: false,
-                ..Default::default()
-            });
+            .map(axon_sdk::invocation::wire::error_to_wire);
         let (admission_receipt, terminal_receipt) = unary_checkpoints_to_session_wire(&outcome)?;
         let reply = PbDispatchResult {
             call_id,
@@ -642,22 +653,25 @@ impl LocalAxonSessionDispatcher {
                 .await;
             }
         };
-        if let Err(error) = self.insert_remote_bidi_opening(outbound.scope_id(), call_id, &ability)
+        let input_rx = match self.insert_remote_bidi_opening(outbound.scope_id(), call_id, &ability)
         {
-            return Self::send_bidi_control_failure(
-                outbound,
-                call_id,
-                "BIDI_SESSION_CONFLICT",
-                error.to_string(),
-            )
-            .await;
-        }
+            Ok(input_rx) => input_rx,
+            Err(error) => {
+                return Self::send_bidi_control_failure(
+                    outbound,
+                    call_id,
+                    "BIDI_SESSION_CONFLICT",
+                    error.to_string(),
+                )
+                .await;
+            }
+        };
 
         let dispatcher = self.clone();
         let outbound = outbound.clone();
         tokio::spawn(async move {
             if let Err(error) = dispatcher
-                .handle_canonical_carrier_bidi_open(call_id, ability, request, &outbound)
+                .handle_canonical_carrier_bidi_open(call_id, ability, request, input_rx, &outbound)
                 .await
             {
                 dispatcher.remove_remote_bidi_session(outbound.scope_id(), call_id);
@@ -697,11 +711,7 @@ impl LocalAxonSessionDispatcher {
             {
                 Ok(handle) => handle,
                 Err(err) => {
-                    let reply = canonical_carrier_control_failure(
-                        call_id,
-                        "STREAM_OPEN_FAILED",
-                        err.to_string(),
-                    );
+                    let reply = canonical_carrier_invocation_failure(call_id, &err);
                     outbound
                         .send_payload(UpPayload::DispatchResult(reply))
                         .await
@@ -1073,7 +1083,9 @@ impl LocalAxonSessionDispatcher {
         };
         if !matches!(
             parsed.kind,
-            crate::core::ura::URAKind::Device | crate::core::ura::URAKind::User
+            crate::core::ura::URAKind::Device
+                | crate::core::ura::URAKind::User
+                | crate::core::ura::URAKind::Authority
         ) {
             return Ok(());
         }
@@ -1218,6 +1230,7 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload: raw,
                     failure: None,
+                    disposition: BidiOutputDisposition::Data,
                 }))
             }
             Some("complete") => {
@@ -1230,6 +1243,7 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload,
                     failure: None,
+                    disposition: BidiOutputDisposition::Completion,
                 }))
             }
             Some("error") => {
@@ -1243,6 +1257,7 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload,
                     failure: Some(error.failure()),
+                    disposition: BidiOutputDisposition::Failure,
                 }))
             }
             Some("warn") => Ok(None),
@@ -1269,12 +1284,14 @@ impl LocalAxonSessionDispatcher {
                     call_id,
                     payload: raw,
                     failure: None,
+                    disposition: BidiOutputDisposition::Data,
                 }))
             }
             Some("exit") => Ok(Some(BidiOutputProjection {
                 call_id,
                 payload: Vec::new(),
                 failure: None,
+                disposition: BidiOutputDisposition::Data,
             })),
             Some("warn") => Ok(None),
             Some(other) => Err(SessionDispatchError::Other(format!(
@@ -1317,6 +1334,11 @@ impl LocalAxonSessionDispatcher {
                 call_id,
                 payload,
                 failure,
+                disposition: if frame_type == Some("error") {
+                    BidiOutputDisposition::Failure
+                } else {
+                    BidiOutputDisposition::Data
+                },
             }));
         }
         Self::map_remote_file_transfer_output(call_id, value)
@@ -1329,6 +1351,7 @@ impl LocalAxonSessionDispatcher {
         call_id: u64,
         ability: String,
         request: axon_sdk::pb::axon::v1::InvokeRequest,
+        input_rx: mpsc::Receiver<PendingRemoteBidiInput>,
         outbound: &SessionUpSender,
     ) -> Result<(), SessionDispatchError> {
         crate::op_event!(
@@ -1511,14 +1534,12 @@ impl LocalAxonSessionDispatcher {
             {
                 Ok(handle) => handle,
                 Err(err) => {
-                    return self
-                        .fail_remote_bidi_opening(
-                            outbound,
-                            call_id,
-                            "BIDI_OPEN_REJECTED",
-                            format!("session.open: remote bidi open failed: {err}"),
-                        )
-                        .await;
+                    self.remove_remote_bidi_session(outbound.scope_id(), call_id);
+                    return Self::send_canonical_carrier_dispatch_result(
+                        outbound,
+                        canonical_carrier_invocation_failure(call_id, &err),
+                    )
+                    .await;
                 }
             };
         crate::op_event!(
@@ -1548,6 +1569,7 @@ impl LocalAxonSessionDispatcher {
             &ability,
             wire_kind,
             handle,
+            input_rx,
             outbound,
             lifecycle_envelope,
         )
@@ -1667,7 +1689,7 @@ impl LocalAxonSessionDispatcher {
         scope_id: u64,
         call_id: u64,
         ability: &str,
-    ) -> Result<(), SessionDispatchError> {
+    ) -> Result<mpsc::Receiver<PendingRemoteBidiInput>, SessionDispatchError> {
         let mut guard = match self.carrier_sessions.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
@@ -1682,10 +1704,12 @@ impl LocalAxonSessionDispatcher {
                 "remote bidi scope_id={scope_id} call_id={call_id} already exists"
             )));
         }
+        let (ingress, input_rx) = mpsc::channel(REMOTE_BIDI_INPUT_CAPACITY);
         session.bidi.insert(
             call_id,
             RemoteBidiSession::Opening {
-                buffered: VecDeque::new(),
+                ingress,
+                half_closed: false,
             },
         );
         crate::op_event!(
@@ -1695,7 +1719,7 @@ impl LocalAxonSessionDispatcher {
             call_id = call_id,
             ability = ability,
         );
-        Ok(())
+        Ok(input_rx)
     }
 
     fn remove_remote_bidi_session(&self, scope_id: u64, call_id: u64) {
@@ -1751,9 +1775,10 @@ impl LocalAxonSessionDispatcher {
 
     /// Bind an admitted local bidi handle to `call_id` and enter the Active
     /// phase. Admission is a delivery barrier: `BidiInput` may be observed
-    /// while the call is Opening, but it is only buffered there. No input is
-    /// delivered to the handler until the canonical admission proof has been
-    /// published upstream. This preserves the lifecycle order
+    /// while the call is Opening, but it remains in the bounded ingress queue.
+    /// A full queue backpressures the session transport; no frame is discarded.
+    /// No input is delivered to the handler until the canonical admission proof
+    /// has been published upstream. This preserves the lifecycle order
     /// `Opening -> Admitted -> Active -> Terminal` even when the peer queues
     /// input immediately after its open frame.
     async fn register_remote_bidi(
@@ -1762,6 +1787,7 @@ impl LocalAxonSessionDispatcher {
         ability: &str,
         wire_kind: LocalBidiWireKind,
         handle: axon_sdk::invocation::BidiInvocationHandle,
+        mut input_rx: mpsc::Receiver<PendingRemoteBidiInput>,
         outbound: &SessionUpSender,
         lifecycle_envelope: axon_sdk::invocation::DescriptorBoundEnvelope,
     ) -> Result<(), SessionDispatchError> {
@@ -1833,11 +1859,6 @@ impl LocalAxonSessionDispatcher {
             ability = ability,
         );
 
-        let active = ActiveRemoteBidi {
-            ability: ability.to_string(),
-            wire_kind,
-            sender: handler_in_tx,
-        };
         let key = CarrierCallKey {
             scope_id: outbound.scope_id(),
             call_id,
@@ -1848,32 +1869,35 @@ impl LocalAxonSessionDispatcher {
                 Err(poisoned) => poisoned.into_inner(),
             };
             match guard.sessions.get_mut(&key.scope_id) {
-                Some(session) => match session.bidi.get_mut(&call_id) {
-                    Some(RemoteBidiSession::Opening { buffered, .. }) => {
-                        let buffered = std::mem::take(buffered);
+                Some(session) => match session.bidi.get(&call_id) {
+                    Some(RemoteBidiSession::Opening {
+                        ingress,
+                        half_closed,
+                    }) => {
+                        let active = ActiveRemoteBidi {
+                            ingress: ingress.clone(),
+                            half_closed: *half_closed,
+                        };
                         session
                             .bidi
-                            .insert(call_id, RemoteBidiSession::Active(active.clone()));
+                            .insert(call_id, RemoteBidiSession::Active(active));
                         crate::op_event!(
                             component = local_session_dispatcher,
                             kind = remote_bidi_opening_promoted_active,
                             scope_id = key.scope_id,
                             call_id = call_id,
                             ability = ability,
-                            buffered_frames = buffered.len(),
                         );
-                        Ok(buffered)
+                        Ok(())
                     }
                     Some(RemoteBidiSession::Active(_)) => Err(format!(
                         "remote bidi scope_id={} call_id={call_id} was already active",
                         key.scope_id
                     )),
-                    None => {
-                        session
-                            .bidi
-                            .insert(call_id, RemoteBidiSession::Active(active.clone()));
-                        Ok(VecDeque::new())
-                    }
+                    None => Err(format!(
+                        "remote bidi scope_id={} call_id={call_id} no longer owns its opening",
+                        key.scope_id
+                    )),
                 },
                 None => Err(format!(
                     "carrier scope_id={} ended during bidi open",
@@ -1881,33 +1905,42 @@ impl LocalAxonSessionDispatcher {
                 )),
             }
         };
-        let buffered = match transition {
-            Ok(buffered) => buffered,
-            Err(message) => {
-                return Self::send_bidi_control_failure(
-                    outbound,
-                    call_id,
-                    "BIDI_SESSION_CONFLICT",
-                    message,
-                )
-                .await;
-            }
-        };
-
-        for pending in buffered {
-            let eof = pending.eof;
-            self.send_remote_bidi_input_to_active(
-                call_id,
-                active.clone(),
-                pending.payload,
-                eof,
+        if let Err(message) = transition {
+            return Self::send_bidi_control_failure(
                 outbound,
+                call_id,
+                "BIDI_SESSION_CONFLICT",
+                message,
             )
-            .await?;
-            if eof {
-                break;
-            }
+            .await;
         }
+
+        let dispatcher_for_input = self.clone();
+        let outbound_for_input = outbound.clone();
+        let ability_for_input = ability.to_string();
+        tokio::spawn(async move {
+            while let Some(pending) = input_rx.recv().await {
+                let eof = pending.eof;
+                if dispatcher_for_input
+                    .send_remote_bidi_input_to_handler(
+                        call_id,
+                        &ability_for_input,
+                        wire_kind,
+                        &handler_in_tx,
+                        pending.payload,
+                        eof,
+                        &outbound_for_input,
+                    )
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                if eof {
+                    break;
+                }
+            }
+        });
 
         let sessions = Arc::clone(&self.carrier_sessions);
         let outbound = outbound.clone();
@@ -1973,6 +2006,7 @@ impl LocalAxonSessionDispatcher {
                         call_id,
                         payload: frame.payload,
                         failure: None,
+                        disposition: BidiOutputDisposition::Data,
                     })
                 } else {
                     match serde_json::from_slice::<Value>(&frame.payload) {
@@ -2040,6 +2074,13 @@ impl LocalAxonSessionDispatcher {
                 let Some(mapped) = mapped else {
                     continue;
                 };
+                if mapped.disposition == BidiOutputDisposition::Completion {
+                    // Axon follows the result-bearing ability frame with the
+                    // signed terminal checkpoint. Completion belongs only to
+                    // that checkpoint; emitting it here would duplicate
+                    // terminal metadata as ordinary stream bytes.
+                    continue;
+                }
                 if LocalAxonSessionDispatcher::send_bidi_progress(&outbound, mapped)
                     .await
                     .is_err()
@@ -2077,13 +2118,10 @@ impl LocalAxonSessionDispatcher {
         outbound: &SessionUpSender,
     ) -> Result<(), SessionDispatchError> {
         enum InputRoute {
-            Active(ActiveRemoteBidi),
-            Buffered,
-            Overflow,
+            Ingress(mpsc::Sender<PendingRemoteBidiInput>),
             Missing,
         }
 
-        let mut payload = Some(payload);
         let key = CarrierCallKey {
             scope_id: outbound.scope_id(),
             call_id,
@@ -2095,45 +2133,33 @@ impl LocalAxonSessionDispatcher {
             };
             match guard.sessions.get_mut(&key.scope_id) {
                 Some(session) => match session.bidi.get_mut(&call_id) {
-                    Some(RemoteBidiSession::Active(active)) => {
-                        let active = active.clone();
+                    Some(RemoteBidiSession::Active(active)) if !active.half_closed => {
+                        let ingress = active.ingress.clone();
                         if eof {
-                            session.bidi.remove(&call_id);
+                            active.half_closed = true;
                         }
-                        InputRoute::Active(active)
+                        InputRoute::Ingress(ingress)
                     }
-                    Some(RemoteBidiSession::Opening { buffered, .. }) => {
-                        if buffered.len() >= REMOTE_BIDI_OPENING_INPUT_CAPACITY {
-                            session.bidi.remove(&call_id);
-                            InputRoute::Overflow
-                        } else {
-                            buffered.push_back(PendingRemoteBidiInput {
-                                payload: payload.take().expect("payload buffered once"),
-                                eof,
-                            });
-                            InputRoute::Buffered
+                    Some(RemoteBidiSession::Opening {
+                        ingress,
+                        half_closed,
+                    }) if !*half_closed => {
+                        let ingress = ingress.clone();
+                        if eof {
+                            *half_closed = true;
                         }
+                        InputRoute::Ingress(ingress)
                     }
+                    Some(RemoteBidiSession::Active(_))
+                    | Some(RemoteBidiSession::Opening { .. }) => InputRoute::Missing,
                     None => InputRoute::Missing,
                 },
                 None => InputRoute::Missing,
             }
         };
 
-        let active = match route {
-            InputRoute::Active(active) => active,
-            InputRoute::Buffered => return Ok(()),
-            InputRoute::Overflow => {
-                return Self::send_bidi_control_failure(
-                    outbound,
-                    call_id,
-                    "BIDI_OPENING_INPUT_OVERFLOW",
-                    format!(
-                        "remote bidi call_id={call_id} exceeded bounded opening input capacity"
-                    ),
-                )
-                .await;
-            }
+        let ingress = match route {
+            InputRoute::Ingress(ingress) => ingress,
             InputRoute::Missing => {
                 if eof {
                     let stream_cancel = {
@@ -2161,20 +2187,22 @@ impl LocalAxonSessionDispatcher {
             }
         };
 
-        self.send_remote_bidi_input_to_active(
-            call_id,
-            active,
-            payload.expect("active route retains payload"),
-            eof,
-            outbound,
-        )
-        .await
+        ingress
+            .send(PendingRemoteBidiInput { payload, eof })
+            .await
+            .map_err(|_| {
+                SessionDispatchError::Other(format!(
+                    "remote bidi call_id={call_id} ingress closed before delivery"
+                ))
+            })
     }
 
-    async fn send_remote_bidi_input_to_active(
+    async fn send_remote_bidi_input_to_handler(
         &self,
         call_id: u64,
-        active: ActiveRemoteBidi,
+        ability: &str,
+        wire_kind: LocalBidiWireKind,
+        sender: &BidiInputSender,
         payload: Vec<u8>,
         eof: bool,
         outbound: &SessionUpSender,
@@ -2189,17 +2217,16 @@ impl LocalAxonSessionDispatcher {
             serde_json::from_slice::<Value>(&payload).map_err(|err| {
                 SessionDispatchError::Other(format!(
                     "decode {:?} remote bidi handler input for {}: {err}",
-                    active.wire_kind, active.ability
+                    wire_kind, ability
                 ))
             })?;
-            active
-                .sender
+            sender
                 .send(BidiInputFrame::new(payload).with_content_type("application/json"))
                 .await
                 .map(|_| ())
         };
         if eof {
-            let _ = active.sender.close_input().await;
+            let _ = sender.close_input().await;
         }
         if send_result.is_err() {
             if eof {
@@ -2524,6 +2551,59 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         assert!(registry.sessions[&51].bidi.contains_key(&3));
         assert!(registry.sessions[&52].bidi.contains_key(&3));
+    }
+
+    #[tokio::test]
+    async fn opening_bidi_ingress_backpressures_without_dropping_ten_mibibytes() {
+        const CHUNK_BYTES: usize = 64 * 1024;
+        const SOURCE_BYTES: usize = 10 * 1024 * 1024;
+
+        let dispatcher = LocalAxonSessionDispatcher::new(Default::default());
+        let (tx, _rx) = mpsc::channel::<InvokeBidiUp>(2);
+        let outbound = start_test_carrier(&dispatcher, tx);
+        let mut ingress_rx = dispatcher
+            .insert_remote_bidi_opening(outbound.scope_id(), 61, "file.transfer")
+            .expect("opening owns one bounded ingress");
+        let source = (0..SOURCE_BYTES)
+            .map(|index| ((index * 31 + 7) % 251) as u8)
+            .collect::<Vec<_>>();
+
+        let producer_source = source.clone();
+        let producer_dispatcher = dispatcher.clone();
+        let producer_outbound = outbound.clone();
+        let producer = tokio::spawn(async move {
+            for chunk in producer_source.chunks(CHUNK_BYTES) {
+                producer_dispatcher
+                    .forward_remote_bidi_input(61, chunk.to_vec(), false, &producer_outbound)
+                    .await
+                    .expect("every data frame enters the lossless ingress");
+            }
+            producer_dispatcher
+                .forward_remote_bidi_input(61, Vec::new(), true, &producer_outbound)
+                .await
+                .expect("EOF follows all data frames");
+        });
+
+        while ingress_rx.len() < REMOTE_BIDI_INPUT_CAPACITY {
+            tokio::task::yield_now().await;
+        }
+        tokio::task::yield_now().await;
+        assert!(
+            !producer.is_finished(),
+            "the 33rd frame must backpressure instead of deleting the call or dropping bytes"
+        );
+
+        let mut received = Vec::with_capacity(SOURCE_BYTES);
+        while let Some(frame) = ingress_rx.recv().await {
+            received.extend_from_slice(&frame.payload);
+            if frame.eof {
+                break;
+            }
+        }
+        producer.await.expect("producer task completes after drain");
+
+        assert_eq!(received.len(), SOURCE_BYTES);
+        assert_eq!(received, source);
     }
 
     #[tokio::test]
@@ -3112,10 +3192,13 @@ mod tests {
             crate::daemon::invocation::bidi::state::presence::CANONICAL_SESSION_CARRIER_VERSION,
         );
 
-        let resource_ref = crate::daemon::resources::files::resource_ref_for_local_path_owned_by(
+        let resource_ref = crate::daemon::resources::files::FilesystemResourceProvider::for_device(
+            TEST_DEVICE_URA,
+        )
+        .expect("test filesystem Device authority")
+        .resource_ref_for_local_path(
             &target,
             crate::daemon::resources::files::FilesystemResourceCapability::Write,
-            TEST_DEVICE_URA,
         )
         .expect("local fs ResourceRef");
         let subject_ura = resource_ref["resource_ura"]
@@ -3188,30 +3271,22 @@ mod tests {
             axon_sdk::invocation::InvocationState::Admitted.to_wire_i32()
         );
 
-        let progress = tokio::time::timeout(Duration::from_secs(3), rx.recv())
+        let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
             .await
             .expect("upload completion within 3s")
             .expect("upload completion produced");
-        let progress = match progress.payload {
+        let result = match reply.payload {
             Some(UpPayload::DispatchResult(r)) => r,
             other => panic!("expected completion DispatchResult, got: {other:?}"),
         };
-        assert_eq!(progress.call_id, 77);
-        assert!(!progress.terminal, "completion payload precedes terminal receipt");
-        let completion: serde_json::Value =
-            serde_json::from_slice(&progress.payload).expect("upload completion payload");
-        assert_eq!(completion["type"], "complete", "{completion}");
-
-        let reply = tokio::time::timeout(Duration::from_secs(3), rx.recv())
-            .await
-            .expect("terminal reply within 3s")
-            .expect("reply produced");
-        let result = match reply.payload {
-            Some(UpPayload::DispatchResult(r)) => r,
-            other => panic!("expected proto DispatchResult on a canonical session, got: {other:?}"),
-        };
         assert_eq!(result.call_id, 77);
-        assert!(result.terminal, "upload reply must be terminal");
+        assert!(
+            result.terminal,
+            "completion is the canonical terminal result: {result:?}"
+        );
+        let completion: serde_json::Value =
+            serde_json::from_slice(&result.payload).expect("upload completion payload");
+        assert_eq!(completion["type"], "complete", "{completion}");
         assert!(
             result.failure.is_none(),
             "upload must succeed: {:?}",
@@ -3224,6 +3299,10 @@ mod tests {
             receipt.state,
             axon_sdk::invocation::InvocationState::Completed.to_wire_i32(),
             "receipt must record the terminal state"
+        );
+        assert_eq!(
+            receipt.payload, result.payload,
+            "terminal carrier payload must be the signed receipt payload"
         );
         assert!(
             lifecycle_cancellations.contains_invocation_id(&receipt.invocation_id),
@@ -3852,7 +3931,11 @@ mod tests {
         let session_tx = start_test_carrier(&disp, tx);
 
         let args = serde_json::json!({
-            "resource_ref": crate::daemon::resources::files::resource_ref_for_local_path(
+            "resource_ref": crate::daemon::resources::files::FilesystemResourceProvider::for_device(
+                crate::core::ura::device_ura("t", "d1"),
+            )
+            .expect("test filesystem Device authority")
+            .resource_ref_for_local_path(
                 &target,
                 crate::daemon::resources::files::FilesystemResourceCapability::Read,
             )

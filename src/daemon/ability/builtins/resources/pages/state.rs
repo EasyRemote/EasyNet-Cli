@@ -250,13 +250,10 @@ mod tests {
     use crate::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
     use serde_json::json;
 
-    fn pages_registry(realm: &str, user: &str) -> Arc<AxonAbilityCatalog> {
+    fn pages_registry(realm: &str, _user: &str) -> Arc<AxonAbilityCatalog> {
         let device_ura = crate::core::ura::device_ura(realm, "pages-test-device");
-        let pages_agent = super::super::management_agent_ura(realm, user);
         let authority_context = AbilityAuthorityContext::for_device_authority_root(device_ura)
-            .expect("Pages test Device authority")
-            .with_declared_agent_authority_root(pages_agent)
-            .expect("Pages test Agent authority");
+            .expect("Pages test Device authority");
         Arc::new(AxonAbilityCatalog::new_with_runtime_and_authority_context(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
                 crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),

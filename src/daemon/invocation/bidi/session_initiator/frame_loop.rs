@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Channel;
 
+use super::frame_scheduler::{SessionDownFrameScheduler, SessionFrameScheduleError};
 use super::heartbeat::SessionUpHeartbeatTask;
 use super::supervisor::{DeviceSessionPhase, SessionPhaseTracker};
 use super::{
@@ -98,6 +99,7 @@ pub(super) async fn run_live_session<D: SessionFrameDispatcher>(
     );
     let mut expected_down_sequence = 0_u64;
     let mut session_contract_established = false;
+    let inbound = SessionDownFrameScheduler::spawn(Arc::clone(&dispatcher), outbound_tx.clone());
 
     loop {
         let frame_result = tokio::select! {
@@ -142,14 +144,23 @@ pub(super) async fn run_live_session<D: SessionFrameDispatcher>(
                         outbox.set(outbound_tx.clone());
                     }
                 }
-                if let Err(err) = dispatcher.handle_down(frame, &outbound_tx).await {
-                    let err_msg = format!("{err}");
-                    crate::op_event!(
-                        component = session,
-                        kind = frame_dispatch_error,
-                        error = err_msg,
-                        message = "continuing",
-                    );
+                match inbound.route(frame).await {
+                    Ok(()) => {}
+                    Err(SessionFrameScheduleError::Dispatch(err)) => {
+                        let err_msg = format!("{err}");
+                        crate::op_event!(
+                            component = session,
+                            kind = frame_dispatch_error,
+                            error = err_msg,
+                            message = "continuing",
+                        );
+                    }
+                    Err(error) => {
+                        return Err(SessionError::DownFrameSchedulerSaturated {
+                            endpoint: hub_endpoint,
+                            reason: error.to_string(),
+                        });
+                    }
                 }
             }
             Err(status) => {

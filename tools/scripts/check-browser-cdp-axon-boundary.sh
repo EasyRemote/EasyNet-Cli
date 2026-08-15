@@ -56,7 +56,10 @@ descriptor_count="$(find "$ABILITY_DIR" -maxdepth 1 -name 'browser.*.ability.tom
   || fail "browser package must own exactly 6 descriptors, found $descriptor_count"
 
 for descriptor in "$ABILITY_DIR"/browser.*.ability.toml; do
-  require_fixed 'schema_version = "2"' "$descriptor"
+  require_fixed 'schema_version = "3"' "$descriptor"
+  require_fixed 'exposure = "operator"' "$descriptor"
+  require_fixed 'dedicated_surface = "browser"' "$descriptor"
+  require_fixed 'subject_contract_kind = "dedicated-surface"' "$descriptor"
   require_fixed 'capability_state = "provider_backed"' "$descriptor"
   if [[ "$(basename "$descriptor")" != "browser.open_session.ability.toml" ]]; then
     require_fixed 'scope_subjects_uras = ["resource"]' "$descriptor"
@@ -67,6 +70,7 @@ require_fixed 'bidi_wire_kind = "json_frames"' "$PLUGIN/plugin.toml"
 
 require_fixed 'CallMode::Bidi' "$PLUGIN/src/registration.rs"
 require_fixed 'PluginBidiWireKind::JsonFrames' "$PLUGIN/src/registration.rs"
+require_fixed 'BuiltinPluginFrontendContract::OPERATOR_BROWSER' "$PLUGIN/src/registration.rs"
 require_fixed 'BidiSource' "$PLUGIN/src/handlers.rs"
 require_fixed 'BidiOutputFrame' "$PLUGIN/src/handlers.rs"
 require_fixed '"transport": "axon_invoke_bidi"' "$PLUGIN/src/handlers.rs"

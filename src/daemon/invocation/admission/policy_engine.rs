@@ -7,6 +7,7 @@ use super::decision::{
     AccessAction, OwnerResolution, PolicyDecision, PolicyDecisionOutcome, PolicyDecisionReason,
     PrincipalKind, TokenClass,
 };
+use super::device_caller_types::{DeviceCallerPurpose, VerifiedDeviceInvocationPurpose};
 use super::grant_matcher::{
     GrantMatchInput, PermissionEffect, PermissionGrant, PermissionGrantMatcher,
 };
@@ -20,6 +21,8 @@ pub enum SystemPolicyRuleMatch {
     RealmAuthorityPublicRead,
     DevicePublicationCustodyManage,
     DeviceSelfSessionStream,
+    DeviceLifecycleSelfRevokeManage,
+    DeviceHostedAgentRetractionManage,
     RemoteOwnerForward,
 }
 
@@ -33,6 +36,10 @@ impl SystemPolicyRuleMatch {
             Self::RealmAuthorityPublicRead => "system.realm_authority.public_read",
             Self::DevicePublicationCustodyManage => "system.device.publication_custody_manage",
             Self::DeviceSelfSessionStream => "system.device.self_session_stream",
+            Self::DeviceLifecycleSelfRevokeManage => "system.device.lifecycle_self_revoke_manage",
+            Self::DeviceHostedAgentRetractionManage => {
+                "system.device.hosted_agent_retraction_manage"
+            }
             Self::RemoteOwnerForward => "system.federation.remote_owner_forward",
         }
     }
@@ -43,13 +50,31 @@ impl SystemPolicyRuleMatch {
                 (input.action == AccessAction::Read && input.safe_read)
                     .then_some(PolicyDecisionReason::HubTokenReadAllow)
             }
-            Self::AuthoritySelfManage | Self::DevicePublicationCustodyManage => (input.action
-                == AccessAction::Manage)
+            Self::AuthoritySelfManage => (input.action == AccessAction::Manage)
                 .then_some(PolicyDecisionReason::SystemRuleAllow),
-            Self::AuthoritySelfStream
-            | Self::AuthorityPeerDirectoryStream
-            | Self::DeviceSelfSessionStream => (input.action == AccessAction::Stream)
+            Self::DevicePublicationCustodyManage => (input.action == AccessAction::Manage
+                && input
+                    .device_invocation_purpose
+                    .is_some_and(|purpose| purpose.is(DeviceCallerPurpose::PublicationCustody)))
+            .then_some(PolicyDecisionReason::SystemRuleAllow),
+            Self::DeviceLifecycleSelfRevokeManage => (input.action == AccessAction::Manage
+                && input
+                    .device_invocation_purpose
+                    .is_some_and(|purpose| purpose.is(DeviceCallerPurpose::LifecycleSelfRevoke)))
+            .then_some(PolicyDecisionReason::SystemRuleAllow),
+            Self::DeviceHostedAgentRetractionManage => (input.action == AccessAction::Manage
+                && input
+                    .device_invocation_purpose
+                    .is_some_and(|purpose| purpose.is(DeviceCallerPurpose::HostedAgentRetraction)))
+            .then_some(PolicyDecisionReason::SystemRuleAllow),
+            Self::AuthoritySelfStream | Self::AuthorityPeerDirectoryStream => (input.action
+                == AccessAction::Stream)
                 .then_some(PolicyDecisionReason::SystemRuleAllow),
+            Self::DeviceSelfSessionStream => (input.action == AccessAction::Stream
+                && input
+                    .device_invocation_purpose
+                    .is_some_and(|purpose| purpose.is(DeviceCallerPurpose::DeviceSelfSession)))
+            .then_some(PolicyDecisionReason::SystemRuleAllow),
             Self::RemoteOwnerForward => Some(PolicyDecisionReason::FederationForwardAllow),
         }
     }
@@ -64,6 +89,7 @@ pub struct PolicyInput {
     pub principal_id: String,
     pub token_id: Option<String>,
     pub token_class: Option<TokenClass>,
+    pub(crate) device_invocation_purpose: Option<VerifiedDeviceInvocationPurpose>,
     pub callee_ura: String,
     pub subject_ura: String,
     pub ability_ura: String,
@@ -98,7 +124,7 @@ impl PolicyEngine {
 
         if let Some(owner_user_ura) = owner_user_ura.as_deref() {
             let grant_input = GrantMatchInput {
-                owner_user_ura: owner_user_ura,
+                owner_user_ura,
                 principal_kind: input.principal_kind,
                 principal_id: &input.principal_id,
                 token_id: input.token_id.as_deref(),
@@ -320,6 +346,7 @@ mod tests {
             principal_id: "token-principal".to_string(),
             token_id: Some("token-1".to_string()),
             token_class: Some(TokenClass::HubLink),
+            device_invocation_purpose: None,
             callee_ura: "easynet:///r/test/device/dev".to_string(),
             subject_ura: "easynet:///r/test/device/dev".to_string(),
             ability_ura: "easynet:///r/test/ability/device.meta.list_resources".to_string(),

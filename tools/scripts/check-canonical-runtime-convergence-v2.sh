@@ -141,6 +141,7 @@ check_local_runtime_stream_chunk_projection_contract() {
 
   "$PYTHON_BIN" - "$stream" <<'PY'
 import re
+import re
 import sys
 from pathlib import Path
 
@@ -1942,17 +1943,20 @@ check_advertise_agent_ingress_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local wrappers="$cli_root/src/daemon/invocation/dispatch/federation_wrappers.rs"
   local client_contract="$cli_root/src/daemon/federation/client/ability_contract.rs"
+  local descriptor="$cli_root/ability-descriptors/system/federation/federation.advertise_agent.ability.toml"
   [[ -f "$wrappers" ]] || return 0
   [[ -f "$client_contract" ]] || return 0
+  [[ -f "$descriptor" ]] || return 0
 
-  "$PYTHON_BIN" - "$wrappers" "$client_contract" <<'PY'
+  "$PYTHON_BIN" - "$wrappers" "$client_contract" "$descriptor" <<'PY'
 import re
 import sys
 from pathlib import Path
 
-wrappers_path, client_contract_path = map(Path, sys.argv[1:])
+wrappers_path, client_contract_path, descriptor_path = map(Path, sys.argv[1:])
 text = wrappers_path.read_text()
 client_contract = client_contract_path.read_text()
+descriptor = descriptor_path.read_text()
 match = re.search(
     r"#\[derive\([^\]]*Deserialize[^\]]*\)\]\s*"
     r"#\[serde\(deny_unknown_fields\)\]\s*"
@@ -1963,33 +1967,41 @@ match = re.search(
 if match is None:
     raise SystemExit("advertise_agent_request_not_strict")
 body = match.group("body")
-if "pub signing_authority: AdvertiseSigningAuthorityRequest" not in body:
-    raise SystemExit("advertise_agent_signing_authority_not_required")
-if "host_ura: Option" in body or re.search(r"\bpub\s+host_ura\b", body):
-    raise SystemExit("advertise_agent_retired_host_ura_field")
-if "self.host_ura" in text:
-    raise SystemExit("advertise_agent_host_ura_fallback")
+request_fields = re.findall(r"\bpub\s+(\w+)\s*:", body)
+if request_fields != ["agent_ura", "incarnation_id"]:
+    raise SystemExit(f"advertise_agent_request_not_exact:{request_fields}")
+if "HostedAgentIncarnationId" not in body:
+    raise SystemExit("advertise_agent_request_not_using_incarnation_value_object")
 response = re.search(r"pub struct AdvertiseAgentResponse\s*\{(?P<body>.*?)\n\}", text, re.DOTALL)
 if response is None:
     raise SystemExit("advertise_agent_response_missing")
 response_body = response.group("body")
-if "pub ack: bool" not in response_body:
-    raise SystemExit("advertise_agent_response_ack_missing")
-if "replaced_prior" in response_body:
-    raise SystemExit("advertise_agent_response_retired_replaced_prior")
+response_fields = re.findall(r"\bpub\s+(\w+)\s*:", response_body)
+if response_fields != ["ack", "assignment"] or "HostedAgentGenerationAssignment" not in response_body:
+    raise SystemExit(f"advertise_agent_response_not_exact:{response_fields}")
 receipt = re.search(r"pub struct AdvertiseAgentReceipt\s*\{(?P<body>.*?)\n\}", client_contract, re.DOTALL)
 if receipt is None:
     raise SystemExit("advertise_agent_receipt_missing")
 receipt_body = receipt.group("body")
-if "pub ack: bool" not in receipt_body:
-    raise SystemExit("advertise_agent_receipt_ack_missing")
-if "replaced_prior" in receipt_body:
-    raise SystemExit("advertise_agent_receipt_retired_replaced_prior")
-if '"replaced_prior"' not in client_contract:
-    raise SystemExit("advertise_agent_receipt_missing_retired_replaced_prior_negative_test")
+receipt_fields = re.findall(r"\bpub\s+(\w+)\s*:", receipt_body)
+if receipt_fields != ["ack", "assignment"] or "HostedAgentGenerationAssignment" not in receipt_body:
+    raise SystemExit(f"advertise_agent_receipt_not_exact:{receipt_fields}")
+args = re.search(r"pub struct AdvertiseAgentArgs\s*\{(?P<body>.*?)\n\}", client_contract, re.DOTALL)
+if args is None:
+    raise SystemExit("advertise_agent_args_missing")
+args_fields = re.findall(r"\bpub\s+(\w+)\s*:", args.group("body"))
+if args_fields != ["agent_ura", "incarnation_id"]:
+    raise SystemExit(f"advertise_agent_args_not_exact:{args_fields}")
+if 'descriptor_version = "2.0.0"' not in descriptor:
+    raise SystemExit("advertise_agent_descriptor_version_not_bumped")
+if 'required = ["agent_ura", "incarnation_id"]' not in descriptor or "additionalProperties = false" not in descriptor:
+    raise SystemExit("advertise_agent_descriptor_input_not_closed")
+if r'\"required\":[\"ack\",\"assignment\"]' not in descriptor or r'\"additionalProperties\":false' not in descriptor:
+    raise SystemExit("advertise_agent_descriptor_output_not_closed")
 for test in (
-    "advertise_agent_request_rejects_retired_top_level_host_ura",
-    "advertise_agent_request_requires_signing_authority",
+    "advertise_agent_request_is_exactly_agent_and_incarnation",
+    "advertise_agent_request_requires_strict_incarnation_id",
+    "advertise_agent_response_is_closed_and_reuses_the_assignment_value_object",
     "advertise_agent_receipt_rejects_retired_fields",
 ):
     if test not in text and test not in client_contract:
@@ -6006,6 +6018,7 @@ check_sdk_go_python_history_public_route_cutover_contract() {
   local py_receipt_test="$cli_root/sdk/python/tests/test_receipt.py"
 
   "$PYTHON_BIN" - "$go_runtime" "$go_governance" "$go_receipt" "$go_descriptor" "$go_test" "$go_descriptor_test" "$go_receipt_test" "$py_runtime" "$py_governance" "$py_ability_invocation" "$py_receipt" "$py_descriptor" "$py_test" "$py_ability_invocation_test" "$py_descriptor_test" "$py_receipt_test" <<'PY'
+import re
 import sys
 from pathlib import Path
 
@@ -6032,7 +6045,6 @@ for required in (
     "descriptorProvider  string",
     "descriptorProvider:  runtimeReceiptHistoryProvider",
     "descriptorProvider:  runtimeAbilityDescriptorProvider",
-    "Provider:   policy.descriptorProvider",
     "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider",
     "func (c *RuntimeAbilityClient) invokeGovernanceRead(",
     "func (c *RuntimeAbilityClient) invokeCatalogueRead(",
@@ -6092,7 +6104,7 @@ if '"meta.list_resources"' not in go_test:
     raise SystemExit("sdk_history_public_route_cutover:go_resource_catalogue_read_test_missing")
 if 'seen["subject_ura"] != "easynet:///r/example/resource/user.alice/runtime-state/read"' not in go_descriptor_test:
     raise SystemExit("sdk_history_public_route_cutover:go_catalogue_subject_test_missing")
-if 'Provider:   policy.descriptorProvider' not in go_runtime:
+if not re.search(r"Provider:\s*policy\.descriptorProvider", go_runtime):
     raise SystemExit("sdk_history_public_route_cutover:go_descriptor_provider_not_forwarded")
 if '"ability_descriptor"' not in go_descriptor_test:
     raise SystemExit("sdk_history_public_route_cutover:go_descriptor_provider_test_missing")
@@ -13323,13 +13335,16 @@ PY
 check_filesystem_resource_owner_contract() {
   local cli_root="${1:-${CLI_ROOT:-$ROOT}}"
   local files="$cli_root/src/daemon/resources/files/mod.rs"
+  local catalog_build="$cli_root/src/daemon/ability/catalog/build.rs"
   [[ -f "$files" ]] || fail "filesystem ResourceRef source is missing: $files"
+  [[ -f "$catalog_build" ]] || fail "ability catalog build source is missing: $catalog_build"
 
-  "$PYTHON_BIN" - "$files" <<'PY'
+  "$PYTHON_BIN" - "$files" "$catalog_build" <<'PY'
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
+catalog_build = Path(sys.argv[2]).read_text(encoding="utf-8")
 
 if "pub fn resource_ref_for_local_path(" not in text:
     raise SystemExit("filesystem_resource_owner:local_factory_missing")
@@ -13359,12 +13374,13 @@ for retired in (
     if retired in body:
         raise SystemExit(f"filesystem_resource_owner:default_local_fallback_retired:{retired}")
 
-for required in (
-    "crate::daemon::identity::local_invocation::local_device_ura()",
-    "resource_ref: local device owner unavailable",
+for forbidden in (
+    "identity::local_invocation::local_device_ura",
+    "load_credentials()",
+    "load_credentials_optional()",
 ):
-    if required not in local_body:
-        raise SystemExit(f"filesystem_resource_owner:local_owner_resolution_missing:{required}")
+    if forbidden in body:
+        raise SystemExit(f"filesystem_resource_owner:resource_domain_ambient_owner:{forbidden}")
 
 for required in (
     "parsed_owner.kind != crate::core::ura::URAKind::Device",
@@ -13372,10 +13388,18 @@ for required in (
     if required not in owned_body:
         raise SystemExit(f"filesystem_resource_owner:canonical_owner_projection_missing:{required}")
 
+for required in (
+    "hosted_device_authority_root()",
+    "FilesystemResourceProvider::for_device",
+    "construct Device filesystem resource provider",
+):
+    if required not in catalog_build:
+        raise SystemExit(f"filesystem_resource_owner:catalog_owner_injection_missing:{required}")
+
 for required_test in (
-    "resource_ref_for_local_path_rejects_missing_local_device_identity",
-    "resource_ref_for_local_path_binds_credentials_backed_device_owner",
-    "provision_local_device_credentials",
+    "filesystem_provider_rejects_non_device_authority",
+    "resource_ref_for_local_path_binds_explicit_device_owner",
+    "foreign_device_resource_ref_rejects_before_local_path_resolution",
 ):
     if required_test not in text:
         raise SystemExit(f"filesystem_resource_owner:test_missing:{required_test}")
@@ -15268,7 +15292,7 @@ if '"runtime_committed_descriptor_catalog"' not in resolve_body:
 compact_resolve = re.sub(r"\s+", "", resolve_body)
 if "AbilityCatalogQuery::exact(callee_ura,&ability_ura,descriptor_version)" not in compact_resolve:
     raise SystemExit("ffi_descriptor_runtime_owner:committed_catalog_query_not_callee_bound")
-if "runtime_live_descriptor_catalog_entries(catalog_reader,&runtime_owner_ura,&query)?" not in compact_resolve:
+if "runtime_live_descriptor_catalog_entries(catalog_reader,&runtime_owner_ura,&query,&read_context,)?" not in compact_resolve:
     raise SystemExit("ffi_descriptor_runtime_owner:committed_catalog_reader_missing")
 for required in (
     "trait RuntimeDescriptorCatalogReader",
@@ -15461,7 +15485,7 @@ if '"runtime_committed_descriptor_catalog"' not in provider_production:
 for required in (
     "trait RuntimeDescriptorCatalogReader",
     "AbilityCatalogQuery::exact(callee_ura, &ability_ura, descriptor_version)",
-    "runtime_live_descriptor_catalog_entries(catalog_reader, &runtime_owner_ura, &query)?",
+    "runtime_live_descriptor_catalog_entries(\n        catalog_reader,\n        &runtime_owner_ura,\n        &query,\n        &read_context,\n    )?",
 ):
     if required not in provider_production:
         raise SystemExit(f"ffi_descriptor_probe_not_found_vocabulary:committed_catalog_reader_missing:{required}")
@@ -25404,7 +25428,7 @@ EOF
   printf '%s\n' \
     '#[derive(Debug, Clone, Deserialize)]' \
     'pub struct AdvertiseAgentRequest {' \
-    '  pub signing_authority: Option<AdvertiseSigningAuthorityRequest>,' \
+    '  pub agent_ura: String,' \
     '  pub host_ura: Option<String>,' \
     '}' \
     'pub struct AdvertiseAgentResponse { pub ack: bool, pub replaced_prior: bool }' \
@@ -25413,7 +25437,14 @@ EOF
   printf '%s\n' \
     'pub struct AdvertiseAgentReceipt { pub ack: bool, pub replaced_prior: bool }' \
     'fn advertise_agent_receipt_rejects_retired_fields() {}' \
+    'pub struct AdvertiseAgentArgs { pub agent_ura: String, pub generation: u64 }' \
     > "$tmp/advertise-agent-legacy/src/daemon/federation/client/ability_contract.rs"
+  mkdir -p "$tmp/advertise-agent-legacy/ability-descriptors/system/federation"
+  printf '%s\n' \
+    'descriptor_version = "1.0.0"' \
+    'required = ["agent_ura"]' \
+    'additionalProperties = true' \
+    > "$tmp/advertise-agent-legacy/ability-descriptors/system/federation/federation.advertise_agent.ability.toml"
   if ( check_advertise_agent_ingress_contract "$tmp/advertise-agent-legacy" ) >/dev/null 2>&1; then
     fail "self-test expected advertise_agent retired host_ura ingress gate to fail"
   fi

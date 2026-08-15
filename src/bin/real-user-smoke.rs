@@ -57,7 +57,7 @@ use easynet_cli::daemon::invocation::routing::target::{
     CallMode, InvocationTarget, SystemInvocationTargetIssuer,
 };
 use easynet_cli::daemon::resources::files::{
-    resource_ref_for_local_path, FilesystemResourceCapability,
+    FilesystemResourceCapability, FilesystemResourceProvider,
 };
 use easynet_cli::support::async_bridge::{run_blocking, SyncBridgeRuntimePolicy};
 
@@ -312,11 +312,16 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&scratch)?;
     let out = scratch.join("greeting.txt");
     let _ = std::fs::remove_file(&out);
+    let credentials = easynet_cli::daemon::persistence::config::load_credentials()?;
+    let filesystem = FilesystemResourceProvider::for_device(easynet_cli::core::ura::device_ura(
+        &credentials.realm,
+        &credentials.node_id,
+    ))?;
 
     let resp = d().execute_rpc(target(
         "fs.write",
         json!({
-            "resource_ref": resource_ref_for_local_path(
+            "resource_ref": filesystem.resource_ref_for_local_path(
                 &out,
                 FilesystemResourceCapability::Write,
             )?,
@@ -335,7 +340,7 @@ fn main() -> anyhow::Result<()> {
     let read_resp = d().execute_rpc(target(
         "fs.read",
         json!({
-            "resource_ref": resource_ref_for_local_path(
+            "resource_ref": filesystem.resource_ref_for_local_path(
                 &out,
                 FilesystemResourceCapability::Read,
             )?,

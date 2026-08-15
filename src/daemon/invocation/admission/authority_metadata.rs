@@ -23,8 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::daemon::ability::canonical_json_bytes;
 
-pub(crate) const DELEGATION_METADATA_KEY: &str =
-    crate::daemon::ability::RUNTIME_DELEGATION_METADATA_KEY;
+pub(crate) const DELEGATION_METADATA_KEY: &str = "x-runtime-delegation";
 pub(crate) const SESSION_AUTHORITY_METADATA_KEY: &str = "x-runtime-session-authority";
 pub(crate) const REASON_AUTHORITY_FORMAT_INVALID: &str = "AUTHORITY_FORMAT_INVALID";
 pub(crate) const REASON_AUTHORITY_EXPIRED: &str = "AUTHORITY_EXPIRED";
@@ -842,6 +841,18 @@ fn unix_epoch_millis(now: SystemTime) -> Result<i64, AuthorityMetadataError> {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn runtime_authority_metadata_keys_match_public_projection_constants() {
+        assert_eq!(
+            DELEGATION_METADATA_KEY,
+            crate::daemon::ability::RUNTIME_DELEGATION_METADATA_KEY
+        );
+        assert_eq!(
+            SESSION_AUTHORITY_METADATA_KEY,
+            "x-runtime-session-authority"
+        );
+    }
 
     fn session_payload() -> SessionAuthorityPayload {
         let now_ms = SystemTime::now()

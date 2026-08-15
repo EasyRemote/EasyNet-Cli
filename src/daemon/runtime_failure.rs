@@ -108,12 +108,6 @@ impl<'a> RuntimeFailureFacts<'a> {
         }
     }
 
-    pub(crate) fn is_admission_denial_message(message: &str) -> bool {
-        canonical_code_from_message_prefix(message).is_some_and(|code| {
-            RuntimeFailureFacts::new(code, "").classify() == RuntimeFailureKind::AdmissionDenied
-        })
-    }
-
     pub(crate) fn is_caller_signer_unavailable_message(message: &str) -> bool {
         canonical_code_from_message_prefix(message).is_some_and(|code| {
             RuntimeFailureFacts::new(code, "").classify()
@@ -160,7 +154,10 @@ impl<'a> RuntimeFailureFacts<'a> {
                 ))
             || matches!(
                 code,
-                "ABILITY_FORBIDDEN" | "ABILITY_ROLE_RESTRICTED" | "ABILITY_REALM_RESTRICTED"
+                "ABILITY_DISABLED"
+                    | "ABILITY_FORBIDDEN"
+                    | "ABILITY_ROLE_RESTRICTED"
+                    | "ABILITY_REALM_RESTRICTED"
             )
     }
 }

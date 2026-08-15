@@ -46,6 +46,7 @@ use crate::daemon::ability::dispatch::{
     AxonAbilityCatalog, EnvelopeContext, OwnerKind, StreamSource,
 };
 use crate::daemon::persistence::context_store;
+use crate::daemon::resources::context::device_scope::ContextDeviceScope;
 
 pub const ABILITY_CLIPBOARD_LIST: &str =
     crate::daemon::ability::names::resources::CONTEXT_CLIPBOARD_LIST;
@@ -157,18 +158,19 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 /// distinct folder list so the Context page can render the per-device
 /// directory level from one call.
 fn captures_list_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Value> {
+    let device_scope = ContextDeviceScope::from_execution_actor(env.callee())?;
     let limit = args
         .get("limit")
         .and_then(Value::as_u64)
         .unwrap_or(100)
         .max(1) as usize;
     let ability = args.get("ability").and_then(Value::as_str);
-    let entries: Vec<Value> = context_store::list_captures(env.callee(), ability, limit)?
+    let entries: Vec<Value> = context_store::list_captures(device_scope.as_str(), ability, limit)?
         .iter()
         .map(|e| serde_json::to_value(e).unwrap_or(Value::Null))
         .collect();
     Ok(json!({
-        "abilities": context_store::list_capture_abilities(env.callee())?,
+        "abilities": context_store::list_capture_abilities(device_scope.as_str())?,
         "entries": entries,
     }))
 }
@@ -177,15 +179,17 @@ fn captures_list_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Va
 /// through `context.captures.read`, whose finite stream preserves transport
 /// and receipt bounds for large recordings.
 fn captures_get_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Value> {
+    let device_scope = ContextDeviceScope::from_execution_actor(env.callee())?;
     let id = require_str(&args, "id", "context.captures.get")?;
-    let (_, entry) = context_store::capture_abs_path(env.callee(), &id)?
+    let (_, entry) = context_store::capture_abs_path(device_scope.as_str(), &id)?
         .ok_or_else(|| anyhow::anyhow!("context.captures.get: no capture {id}"))?;
     Ok(serde_json::to_value(entry)?)
 }
 
 fn captures_read_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<StreamSource> {
+    let device_scope = ContextDeviceScope::from_execution_actor(env.callee())?;
     let id = require_str(&args, "id", ABILITY_CAPTURES_READ)?;
-    let (path, entry) = context_store::capture_abs_path(env.callee(), &id)?
+    let (path, entry) = context_store::capture_abs_path(device_scope.as_str(), &id)?
         .ok_or_else(|| anyhow::anyhow!("{ABILITY_CAPTURES_READ}: no capture {id}"))?;
     let file = std::fs::File::open(&path)
         .map_err(|error| anyhow::anyhow!("{ABILITY_CAPTURES_READ}: open capture {id}: {error}"))?;
@@ -324,6 +328,7 @@ fn clipboard_remove_handler(args: Value) -> anyhow::Result<Value> {
 }
 
 fn catalog_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Value> {
+    let device_scope = ContextDeviceScope::from_execution_actor(env.callee())?;
     let limit = args
         .get("limit")
         .and_then(Value::as_u64)
@@ -367,7 +372,7 @@ fn catalog_handler(env: EnvelopeContext, args: Value) -> anyhow::Result<Value> {
             },
         }));
     }
-    for capture in context_store::list_captures(env.callee(), None, limit)? {
+    for capture in context_store::list_captures(device_scope.as_str(), None, limit)? {
         items.push(json!({
             "id": format!("capture:{}", capture.id),
             "kind": "capture",
@@ -914,5 +919,36 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("size changed"));
+    }
+
+    #[test]
+    fn captures_list_projects_context_system_agent_to_its_sponsoring_device() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        let device_ura = "easynet:///r/localhost/device/d1";
+        let capture = context_store::record_capture(context_store::CaptureRecord {
+            device: device_ura,
+            ability: "screen.snapshot",
+            ext: "jpg",
+            bytes: b"jpeg",
+            content_type: "image/jpeg",
+            width: Some(2),
+            height: Some(2),
+            duration_ms: None,
+            preview: "Screenshot 2x2".into(),
+        })
+        .expect("seed Device-owned capture");
+        let context_agent = crate::core::ura::device_agent_ura(
+            "localhost",
+            "d1",
+            crate::daemon::ability::names::resources::CONTEXT_SYSTEM_AGENT_ID,
+        );
+
+        let listed = captures_list_handler(
+            envelope(ABILITY_CAPTURES_LIST, &context_agent),
+            json!({"limit": 10}),
+        )
+        .expect("Context SystemAgent resolves its sponsoring Device scope");
+
+        assert_eq!(listed["entries"][0]["id"], capture.id);
     }
 }

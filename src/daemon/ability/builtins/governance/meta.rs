@@ -1113,18 +1113,19 @@ mod tests {
     }
 
     #[test]
-    fn list_abilities_accepts_service_owner_scope_from_committed_catalog() {
+    fn list_abilities_accepts_pages_service_owner_scope_from_committed_catalog() {
         use std::sync::OnceLock;
 
         let device_ura = crate::core::ura::device_ura("pages-scope", "dev-1");
-        let owner_user_id = "user-alice";
-        let pages_service_ura =
-            crate::core::ura::service_ura("pages-scope", owner_user_id, "pages");
+        let pages_service_ura = crate::core::ura::service_ura("pages-scope", "user-alice", "pages");
         let live_registry = metadata_test_catalog_for_device(&device_ura);
         live_registry
             .hot_register_rpc_with_spec(
                 "project_list",
-                OwnerKind::pages_service(owner_user_id),
+                OwnerKind::Service {
+                    principal_id: "user-alice".to_string(),
+                    service_id: "pages".to_string(),
+                },
                 crate::daemon::ability::manifest::AbilityManifest::new(
                     "project_list",
                     "List published Pages projects.",
@@ -1137,7 +1138,7 @@ mod tests {
                 .expect("valid Pages project_list manifest"),
                 Arc::new(|_args| Ok(json!({ "projects": [] }))),
             )
-            .expect("register Service-owned Pages project_list");
+            .expect("register Pages Service project_list");
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         handle
             .set(Arc::new(live_registry))
@@ -1152,12 +1153,12 @@ mod tests {
                 "owner_ura": pages_service_ura
             }),
         )
-        .expect("Service owner_ura must be a valid meta.list_abilities scope");
+        .expect("Pages Service owner_ura must be a valid meta.list_abilities scope");
         let abilities = resp["abilities"].as_array().expect("ability rows");
         assert_eq!(
             abilities.len(),
             1,
-            "Service owner scope must return only Pages Service rows: {resp}"
+            "Pages Service owner scope must return only Pages rows: {resp}"
         );
         assert_eq!(abilities[0]["owner_ura"], pages_service_ura);
         assert_eq!(abilities[0]["name"], "project_list");

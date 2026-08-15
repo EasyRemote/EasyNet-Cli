@@ -242,11 +242,67 @@ impl RuntimeDescriptorProviderKind {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct DescriptorCatalogReadContext {
+    caller_ura: Option<String>,
+    callee_ura: Option<String>,
+    subject_ura: Option<String>,
+    session_authority: Option<String>,
+}
+
+impl DescriptorCatalogReadContext {
+    pub(crate) fn from_request(object: &serde_json::Map<String, Value>, callee_ura: &str) -> Self {
+        let authority_metadata = object.get("authority_metadata").and_then(Value::as_object);
+        Self {
+            caller_ura: object
+                .get("caller_ura")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+            callee_ura: Some(callee_ura.to_string()),
+            subject_ura: object
+                .get("subject_ura")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+            session_authority: authority_metadata
+                .and_then(|metadata| {
+                    metadata.get(
+                        crate::daemon::invocation::admission::authority_metadata::SESSION_AUTHORITY_METADATA_KEY,
+                    )
+                })
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string),
+        }
+    }
+
+    pub(crate) fn caller_ura(&self) -> Option<&str> {
+        self.caller_ura.as_deref()
+    }
+
+    pub(crate) fn callee_ura(&self) -> Option<&str> {
+        self.callee_ura.as_deref()
+    }
+
+    pub(crate) fn subject_ura(&self) -> Option<&str> {
+        self.subject_ura.as_deref()
+    }
+
+    pub(crate) fn session_authority(&self) -> Option<&str> {
+        self.session_authority.as_deref()
+    }
+}
+
 pub(crate) trait RuntimeDescriptorCatalogReader {
     fn read_catalog(
         &self,
         runtime_owner_ura: &str,
         query: &AbilityCatalogQuery,
+        context: &DescriptorCatalogReadContext,
     ) -> Result<Value, DescriptorResolutionError>;
 }
 
@@ -271,6 +327,7 @@ impl RuntimeDescriptorResolutionProvider {
                     catalog_reader,
                     &owner_ura,
                     &AbilityCatalogQuery::all_realm(),
+                    &DescriptorCatalogReadContext::default(),
                 );
                 let (entries, diagnostics) = match catalog {
                     Ok(entries) => (entries, Vec::new()),
@@ -429,8 +486,9 @@ fn runtime_live_descriptor_catalog_entries(
     catalog_reader: &dyn RuntimeDescriptorCatalogReader,
     runtime_owner_ura: &str,
     query: &AbilityCatalogQuery,
+    context: &DescriptorCatalogReadContext,
 ) -> Result<Vec<Value>, DescriptorResolutionError> {
-    let payload = catalog_reader.read_catalog(runtime_owner_ura, query)?;
+    let payload = catalog_reader.read_catalog(runtime_owner_ura, query, context)?;
     let entries = payload
         .get("abilities")
         .and_then(Value::as_array)
@@ -562,8 +620,13 @@ fn runtime_resolve_descriptor_ref_json(
     let runtime_owner_ura =
         runtime_owner_ura().map_err(DescriptorResolutionError::runtime_attachment_unavailable)?;
     let query = AbilityCatalogQuery::exact(callee_ura, &ability_ura, descriptor_version);
-    let catalog =
-        runtime_live_descriptor_catalog_entries(catalog_reader, &runtime_owner_ura, &query)?;
+    let read_context = DescriptorCatalogReadContext::from_request(object, callee_ura);
+    let catalog = runtime_live_descriptor_catalog_entries(
+        catalog_reader,
+        &runtime_owner_ura,
+        &query,
+        &read_context,
+    )?;
     let source = if provider.is_explicit() {
         provider.source()
     } else {
@@ -636,12 +699,14 @@ fn runtime_system_descriptor_catalog_entries(
         crate::daemon::ability::dispatch::OwnerKind::RealmAuthority
     ) {
         crate::daemon::ability::catalog::build_system_registry_for_authority_owner(owner_ura)?
-    } else if owner == crate::daemon::ability::dispatch::OwnerKind::plugin_management_system() {
+    } else if owner == crate::daemon::ability::dispatch::OwnerKind::plugin_management_system()
+        || owner == crate::daemon::ability::dispatch::OwnerKind::remote_desktop_system()
+    {
         // Builtin plugin descriptors are contributed by the canonical plugin
-        // registry and owned by the plugin-management SystemAgent. Loading the
-        // full registry here keeps descriptor-ref tests aligned with the
-        // runtime catalog without projecting plugin abilities back onto the
-        // Device execution host.
+        // registry and then published under the package's declared public
+        // SystemAgent owner. Loading the full registry here keeps descriptor-ref
+        // tests aligned with the runtime catalog without projecting plugin
+        // abilities back onto the Device execution host.
         crate::daemon::ability::catalog::build_registry()
     } else {
         crate::daemon::ability::catalog::build_system_registry()
@@ -823,6 +888,7 @@ mod tests {
             &self,
             _runtime_owner_ura: &str,
             query: &AbilityCatalogQuery,
+            _context: &DescriptorCatalogReadContext,
         ) -> Result<Value, DescriptorResolutionError> {
             let abilities = self
                 .entries
@@ -851,6 +917,7 @@ mod tests {
             &self,
             _runtime_owner_ura: &str,
             _query: &AbilityCatalogQuery,
+            _context: &DescriptorCatalogReadContext,
         ) -> Result<Value, DescriptorResolutionError> {
             Ok(serde_json::json!({ "abilities": self.entries }))
         }
@@ -1131,14 +1198,14 @@ mod tests {
     #[cfg(feature = "remote-desktop")]
     fn runtime_descriptor_resolver_resolves_every_remote_desktop_system_agent_descriptor() {
         let device_ura = crate::core::ura::device_ura("localhost", "local-runtime-node");
-        let plugin_management_ura = crate::core::ura::device_agent_ura(
+        let remote_desktop_ura = crate::core::ura::device_agent_ura(
             "localhost",
             "local-runtime-node",
-            crate::daemon::ability::names::integrations::PLUGIN_MANAGEMENT_SYSTEM_AGENT_ID,
+            crate::daemon::ability::names::integrations::REMOTE_DESKTOP_SYSTEM_AGENT_ID,
         );
         let reader = CommittedCatalogReader::new(
-            runtime_system_descriptor_catalog_entries(&plugin_management_ura)
-                .expect("plugin-management descriptor catalog"),
+            runtime_system_descriptor_catalog_entries(&remote_desktop_ura)
+                .expect("remote-desktop descriptor catalog"),
         );
         for (ability, call_mode, action) in [
             ("remote_desktop.add_ice_candidate", "rpc", "manage"),
@@ -1153,11 +1220,11 @@ mod tests {
             ("remote_desktop.show_session", "rpc", "read"),
             ("remote_desktop.watch_events", "stream", "stream"),
         ] {
-            let ability_ura = crate::core::ura::owner_ability_ura(&plugin_management_ura, ability)
-                .expect("plugin-management remote_desktop ability URA");
+            let ability_ura = crate::core::ura::owner_ability_ura(&remote_desktop_ura, ability)
+                .expect("remote-desktop remote_desktop ability URA");
             let resolved = RuntimeDescriptorResolutionProvider::resolve_json(
                 &serde_json::json!({
-                    "callee_ura": plugin_management_ura.as_str(),
+                    "callee_ura": remote_desktop_ura.as_str(),
                     "caller_ura": "easynet:///r/localhost/user/operator",
                     "subject_ura": "easynet:///r/localhost/resource/remote-desktop-session",
                     "ability": ability,
@@ -1168,11 +1235,11 @@ mod tests {
                 &reader,
             )
             .unwrap_or_else(|error| {
-                panic!("plugin-management {ability} descriptor must resolve: {error}")
+                panic!("remote-desktop {ability} descriptor must resolve: {error}")
             });
 
             assert_eq!(resolved["ability_ura"], ability_ura, "{ability}");
-            assert_eq!(resolved["owner_ura"], plugin_management_ura, "{ability}");
+            assert_eq!(resolved["owner_ura"], remote_desktop_ura, "{ability}");
             assert_eq!(resolved["name"], ability, "{ability}");
             assert_eq!(resolved["call_mode"], call_mode, "{ability}");
             assert_eq!(

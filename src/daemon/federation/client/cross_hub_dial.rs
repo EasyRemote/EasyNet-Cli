@@ -199,10 +199,13 @@ pub enum FederationClientError {
     /// peer's reject reason verbatim (e.g.
     /// `AXON_CALLER_SIGNATURE_INVALID` from cross-realm
     /// admission).
-    #[error("federation peer `{endpoint}` returned: {status}")]
+    #[error(
+        "federation peer `{endpoint}` returned: code={status_code:?} message={status_message}"
+    )]
     InnerInvokeFailed {
         endpoint: HubEndpoint,
-        status: String,
+        status_code: tonic::Code,
+        status_message: String,
     },
 
     /// Circuit-breaker open — the peer has had ≥ 3 consecutive
@@ -668,7 +671,8 @@ impl FederationClient for CrossHubDialer {
                 );
                 Err(FederationClientError::InnerInvokeFailed {
                     endpoint: target_hub_endpoint.clone(),
-                    status: format!("code={:?} message={}", status.code(), status.message()),
+                    status_code: status.code(),
+                    status_message: status.message().to_string(),
                 })
             }
             Err(_elapsed) => {
@@ -765,7 +769,8 @@ impl FederationClient for CrossHubDialer {
                 );
                 Err(FederationClientError::InnerInvokeFailed {
                     endpoint: target_hub_endpoint.clone(),
-                    status: format!("code={:?} message={}", status.code(), status.message()),
+                    status_code: status.code(),
+                    status_message: status.message().to_string(),
                 })
             }
             Err(_elapsed) => {
@@ -907,7 +912,8 @@ mod tests {
                 )
                 .map_err(|status| FederationClientError::InnerInvokeFailed {
                     endpoint: target_hub_endpoint.clone(),
-                    status: status.message().to_string(),
+                    status_code: status.code(),
+                    status_message: status.message().to_string(),
                 })?
                 .to_string();
             let key = (target_hub_endpoint.clone(), function_name);

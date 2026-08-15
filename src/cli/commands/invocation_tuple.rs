@@ -51,7 +51,7 @@ impl AbilityInvocationRef {
     #[cfg(feature = "axon-pb")]
     pub(crate) fn remote_target_for_mode(
         &self,
-        execution_target_ura: &str,
+        route_target: &crate::daemon::invocation::routing::route_target::RemoteAbilityRouteTarget,
         call_mode: crate::daemon::ability::CallMode,
     ) -> anyhow::Result<
         crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget,
@@ -59,13 +59,13 @@ impl AbilityInvocationRef {
         match self.descriptor_ref() {
             Some(descriptor_ref) => {
                 crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::from_descriptor_ref(
-                    execution_target_ura,
+                    route_target.as_str(),
                     descriptor_ref,
                 )
             }
             None => {
                 crate::daemon::invocation::routing::remote_invoke::RemoteAbilityInvocationTarget::from_ability_ura_for_mode(
-                    execution_target_ura,
+                    route_target.as_str(),
                     self.selector.ability_ura(),
                     call_mode,
                 )

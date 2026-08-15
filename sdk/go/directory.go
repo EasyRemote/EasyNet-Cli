@@ -54,6 +54,7 @@ type DirectoryResolution struct {
 	OwnerURA        string            `json:"owner_ura,omitempty"`
 	AbilityURA      string            `json:"ability_ura,omitempty"`
 	RouteURA        string            `json:"route_ura,omitempty"`
+	DescriptorRef   string            `json:"descriptor_ref,omitempty"`
 	NextHop         map[string]any    `json:"next_hop,omitempty"`
 	SelectedRoute   map[string]any    `json:"selected_route,omitempty"`
 	RouteCandidates []map[string]any  `json:"route_candidates,omitempty"`
@@ -417,6 +418,7 @@ func ProjectDirectoryResolution(output map[string]any) (DirectoryResolution, err
 		OwnerURA:        directoryText(output, "owner_ura"),
 		AbilityURA:      directoryText(output, "ability_ura"),
 		RouteURA:        directoryText(output, "route_ura"),
+		DescriptorRef:   directoryText(output, "descriptor_ref"),
 		NextHop:         nextHop,
 		SelectedRoute:   selectedRoute,
 		RouteCandidates: routeCandidates,

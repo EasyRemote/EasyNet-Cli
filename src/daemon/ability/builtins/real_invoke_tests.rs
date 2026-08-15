@@ -99,8 +99,55 @@ fn fs_ref(
     path: &std::path::Path,
     capability: crate::daemon::resources::files::FilesystemResourceCapability,
 ) -> Value {
-    crate::daemon::resources::files::resource_ref_for_local_path(path, capability)
+    snapshot_filesystem_provider()
+        .resource_ref_for_local_path(path, capability)
         .expect("local fs ResourceRef")
+}
+
+fn snapshot_filesystem_provider() -> crate::daemon::resources::files::FilesystemResourceProvider {
+    crate::daemon::resources::files::FilesystemResourceProvider::for_device(
+        crate::core::ura::device_ura(crate::core::ura::REALM_EASYNET, "ability-catalog-snapshot"),
+    )
+    .expect("snapshot filesystem Device authority")
+}
+
+fn authority_fixture_filesystem_provider(
+) -> crate::daemon::resources::files::FilesystemResourceProvider {
+    crate::daemon::resources::files::FilesystemResourceProvider::for_device(
+        authority_fixture_device_ura(),
+    )
+    .expect("real-invoke filesystem Device authority")
+}
+
+/// Owns both ends of the file-transfer authorization boundary used by the
+/// real-invocation tests. ResourceRefs must be minted by the same explicit
+/// Device provider that the dispatcher uses to resolve them.
+struct RealFileTransferFixture {
+    dispatcher: Arc<AxonAbilityCatalog>,
+    filesystem: crate::daemon::resources::files::FilesystemResourceProvider,
+}
+
+impl RealFileTransferFixture {
+    fn new() -> Self {
+        let filesystem = authority_fixture_filesystem_provider();
+        let mut catalog = runtime_attached_catalog();
+        file_transfer_ability::register(&mut catalog, filesystem.clone())
+            .expect("register file-transfer fixture");
+        Self {
+            dispatcher: dispatcher_for(Arc::new(catalog)),
+            filesystem,
+        }
+    }
+
+    fn resource_ref(
+        &self,
+        path: &std::path::Path,
+        capability: crate::daemon::resources::files::FilesystemResourceCapability,
+    ) -> Value {
+        self.filesystem
+            .resource_ref_for_local_path(path, capability)
+            .expect("file-transfer fixture ResourceRef")
+    }
 }
 
 fn authority_fixture_device_ura() -> String {
@@ -162,13 +209,6 @@ fn runtime_attached_catalog_for_realm(realm: &str) -> AxonAbilityCatalog {
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
             crate::core::ura::device_ura(realm, "real-invoke-device"),
         )
-        .and_then(|context| {
-            context.with_declared_agent_authority_root(
-                crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
-                    realm, "test",
-                ),
-            )
-        })
         .expect("build realm-specific real-invoke authority context");
     AxonAbilityCatalog::new_with_runtime_and_authority_context(
         canonical_test_runtime(),
@@ -3288,10 +3328,7 @@ async fn real_device_terminal_attach_returns_a_bidi_source() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
     use base64::Engine;
-    let _g = provision_joined_device_home();
-    let mut reg = runtime_attached_catalog();
-    file_transfer_ability::register(&mut reg);
-    let d = dispatcher_for(Arc::new(reg));
+    let fixture = RealFileTransferFixture::new();
 
     let path = std::env::temp_dir().join(format!(
         "easynet-real-ft-{}-{}.bin",
@@ -3306,11 +3343,14 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
         "fs.transfer",
         json!({
             "mode": "upload",
-            "resource_ref": fs_ref(&path, crate::daemon::resources::files::FilesystemResourceCapability::Write),
+            "resource_ref": fixture.resource_ref(&path, crate::daemon::resources::files::FilesystemResourceCapability::Write),
         }),
     );
     t.call_mode = CallMode::Bidi;
-    let bidi = d.execute_bidi(t).expect("file_transfer bidi");
+    let bidi = fixture
+        .dispatcher
+        .execute_bidi(t)
+        .expect("file_transfer bidi");
 
     let bytes = b"real-invoke-device-file-transfer";
     let chunk_b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
@@ -3344,10 +3384,7 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
     use base64::Engine;
-    let _g = provision_joined_device_home();
-    let mut reg = runtime_attached_catalog();
-    file_transfer_ability::register(&mut reg);
-    let d = dispatcher_for(Arc::new(reg));
+    let fixture = RealFileTransferFixture::new();
 
     let path = std::env::temp_dir().join(format!(
         "easynet-real-ft-download-{}-{}.bin",
@@ -3364,11 +3401,14 @@ async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
         "fs.transfer",
         json!({
             "mode": "download",
-            "resource_ref": fs_ref(&path, crate::daemon::resources::files::FilesystemResourceCapability::Read),
+            "resource_ref": fixture.resource_ref(&path, crate::daemon::resources::files::FilesystemResourceCapability::Read),
         }),
     );
     t.call_mode = CallMode::Bidi;
-    let bidi = d.execute_bidi(t).expect("file_transfer bidi");
+    let bidi = fixture
+        .dispatcher
+        .execute_bidi(t)
+        .expect("file_transfer bidi");
 
     let mut from = bidi.from_client;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
@@ -3432,7 +3472,7 @@ fn seed_real_invoke_display_resource(hardware_id: &str) -> String {
         &mut file,
         crate::daemon::persistence::resources::ResourceUpsert {
             realm: "acme",
-            owner_agent: "easynet:///r/acme/device/real-invoke",
+            owner_agent: "easynet:///r/acme/agent/device.real-invoke.media",
             kind: crate::daemon::persistence::resources::ResourceType::Display,
             binding: crate::daemon::persistence::resources::ResourceBinding::LocalDevice,
             hardware_id,
@@ -4081,10 +4121,11 @@ fn real_device_openai_files_upload_retrieve_delete_round_trip() {
             realm: "default".to_string(),
         },
     );
-    let files_owner =
-        crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
-            "default", "test",
-        );
+    let files_owner = crate::core::ura::device_agent_ura(
+        "default",
+        "real-invoke-device",
+        crate::daemon::ability::names::resources::FILES_SYSTEM_AGENT_ID,
+    );
     assert!(
         reg.control_plane_record_for_authority_mode(
             &files_owner,
@@ -4334,7 +4375,10 @@ fn real_context_captures_record_list_get_and_stream_read() {
     // back through both abilities.
     let entry = crate::daemon::persistence::context_store::record_capture(
         crate::daemon::persistence::context_store::CaptureRecord {
-            device: &authority_fixture_context_system_agent_ura(),
+            device: &crate::core::ura::device_ura(
+                crate::core::ura::REALM_EASYNET,
+                "ability-catalog-snapshot",
+            ),
             ability: "screen.snapshot",
             ext: "jpg",
             bytes: b"\xff\xd8jpegbytes",

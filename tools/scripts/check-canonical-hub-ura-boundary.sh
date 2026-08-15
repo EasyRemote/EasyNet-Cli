@@ -95,18 +95,18 @@ reject_grep 'easynet:///r/localhost/hub' src/core/ura/mod.rs \
 reject_grep 'hub       easynet:///r/<realm>/hub' src/core/ura/mod.rs \
     "CLI URA facade docs must not advertise /hub as canonical wire identity"
 
-require_grep 'crate::core::identity::RuntimeIdentityUra::parse(trimmed)' src/daemon/invocation/routing/remote_invoke.rs \
-    "parse_node_ura must enter through the canonical RuntimeIdentityUra value object"
-require_grep 'URAKind::Authority => Ok(identity.into_string())' src/daemon/invocation/routing/remote_invoke.rs \
-    "parse_node_ura must classify canonical Authority URAs as product Hub targets"
-if python3 - "$ROOT/src/daemon/invocation/routing/remote_invoke.rs" <<'PY'
+require_grep 'RuntimeIdentityUra::parse(trimmed)' src/daemon/invocation/routing/route_target.rs \
+    "remote target parsers must enter through the canonical RuntimeIdentityUra value object"
+require_grep 'URAKind::Agent | URAKind::Service | URAKind::Authority =>' src/daemon/invocation/routing/route_target.rs \
+    "ability route targets must classify canonical Authority URAs as exact callees"
+if python3 - "$ROOT/src/daemon/invocation/routing/route_target.rs" <<'PY'
 import re
 import sys
 from pathlib import Path
 
 text = Path(sys.argv[1]).read_text(encoding="utf-8")
 match = re.search(
-    r"pub fn parse_node_ura\(node: &str\).*?^}",
+    r"impl RemoteAbilityRouteTarget \{.*?^}",
     text,
     flags=re.M | re.S,
 )
@@ -120,18 +120,16 @@ PY
 then
     :
 else
-    fail "parse_node_ura must not bypass RuntimeIdentityUra with direct parse_ura"
+    fail "RemoteAbilityRouteTarget must not bypass RuntimeIdentityUra with direct parse_ura"
 fi
-require_grep 'whose canonical protocol identity is `easynet:///r/<realm>/authority`' src/daemon/invocation/routing/remote_invoke.rs \
-    "parse_node_ura docs must state the canonical /authority identity"
-require_grep 'fn parse_node_ura_accepts_protocol_hub_identity()' src/daemon/invocation/routing/remote_invoke.rs \
-    "parse_node_ura tests must cover product Hub targets"
-require_grep 'fn parse_node_ura_rejects_hub_with_tail()' src/daemon/invocation/routing/remote_invoke.rs \
-    "parse_node_ura tests must reject Authority URAs with tail"
-require_grep 'parse_node_ura("easynet:///r/realm/authority/extra")' src/daemon/invocation/routing/remote_invoke.rs \
-    "parse_node_ura negative fixture must pin Authority tail rejection"
-reject_grep 'parse_node_ura("easynet:///r/realm/hub' src/daemon/invocation/routing/remote_invoke.rs \
-    "parse_node_ura tests must not accept or pin /hub wire identity"
+require_grep 'Authority inputs are exact callees' src/daemon/invocation/routing/route_target.rs \
+    "route target docs must state Authority is an exact callable identity"
+require_grep 'fn ability_route_target_accepts_device_placement_and_exact_actor_callees()' src/daemon/invocation/routing/route_target.rs \
+    "route target tests must cover exact Authority callees"
+require_grep 'parse_device_placement_ura("easynet:///r/realm/authority/extra")' src/daemon/invocation/routing/route_target.rs \
+    "Device placement negative fixture must pin Authority tail rejection"
+reject_grep 'RemoteAbilityRouteTarget::parse("easynet:///r/realm/hub' src/daemon/invocation/routing/route_target.rs \
+    "route target tests must not accept or pin /hub wire identity"
 require_grep 'assert!(facade.is_federated_caller("easynet:///r/peer-realm/authority"));' \
     src/daemon/invocation/admission/admission_facade.rs \
     "admission facade must accept canonical Authority callers as product Hub callers"

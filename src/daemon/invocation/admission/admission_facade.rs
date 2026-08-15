@@ -41,7 +41,7 @@ use axon_sdk::invocation::{
 
 use crate::core::ura::{parse_ura, AbilitySelector, URAKind};
 use crate::daemon::ability::catalog::daemon_invocation_contracts::admission_action_for;
-use crate::daemon::ability::names::{federation, governance, resources};
+use crate::daemon::ability::names::{federation, governance};
 use crate::daemon::ability::{
     HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
@@ -73,6 +73,10 @@ use crate::daemon::invocation::admission::grant_matcher::{
 };
 use crate::daemon::invocation::admission::hosted_agent_publication::HostedAgentPublication;
 use crate::daemon::invocation::admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
+use crate::daemon::invocation::admission::local_device_resource_authority::{
+    authorize_user_session_device_resource, LocalDeviceResourceAuthorityDecision,
+    UserSessionDeviceResourceTuple,
+};
 use crate::daemon::invocation::admission::policy_gate::{
     ability_ura_for, principal_for, AdmissionPolicyContext, AdmissionPolicyGate,
     PrincipalProjection, TrustedCallerPath, VerifiedAuthorityPeerDirectoryStream,
@@ -3032,6 +3036,19 @@ fn verify_delegation_issuer_authorized(
                 callee_ura_required(envelope)?,
                 &payload.subject_ura,
             )?;
+            if let Some(sponsor_device_ura) =
+                delegation_subject_device_sponsor_ura(&payload.subject_ura)?
+            {
+                if payload.issuer_ura == sponsor_device_ura
+                    || payload.issuer_ura == payload.subject_ura
+                {
+                    return Ok(());
+                }
+                return Err(Status::permission_denied(format!(
+                    "{REASON_AUTHORITY_ISSUER_DENIED}: delegation issuer `{}` is not the sponsoring Device `{sponsor_device_ura}` or exact SystemAgent `{}` for subject `{}`",
+                    payload.issuer_ura, payload.subject_ura, payload.subject_ura
+                )));
+            }
             let owner_user_ura = delegation_subject_owner_user_ura(&payload.subject_ura)?;
             let issuer_user_ura = canonical_user_issuer_ura(&payload.issuer_ura)?;
             if issuer_user_ura != owner_user_ura {
@@ -3043,6 +3060,17 @@ fn verify_delegation_issuer_authorized(
             Ok(())
         }
     }
+}
+
+fn delegation_subject_device_sponsor_ura(subject_ura: &str) -> Result<Option<String>, Status> {
+    let subject = parse_authority_runtime_ura("subject_ura", subject_ura)?;
+    let Some((device_id, _system_agent_id)) = subject.device_agent_ids() else {
+        return Ok(None);
+    };
+    Ok(Some(crate::core::ura::device_ura(
+        &subject.realm,
+        device_id,
+    )))
 }
 
 fn verify_session_issuer_authorized(
@@ -3078,17 +3106,35 @@ fn verify_session_issuer_authorized(
                 }
                 return verify_realm_authority_adapter(payload, envelope, ability, action);
             }
-            if matches!(
-                authority_metadata::authority_subject_kind(&payload.subject_ura),
-                AuthoritySubjectKind::Agent | AuthoritySubjectKind::Resource
-            ) {
-                if user_session_authority_admits_local_device_resource(
-                    payload, envelope, ability, action,
-                )? {
-                    return Ok(());
-                }
+            let issuer_user_ura = canonical_user_issuer_ura(&payload.issuer_ura)?;
+            if payload.creator_principal_id != issuer_user_ura {
                 return Err(Status::permission_denied(format!(
-                    "{REASON_AUTHORITY_ISSUER_DENIED}: User-issued SessionAuthority cannot authorize Agent- or non-User-owned Resource subjects"
+                    "{REASON_AUTHORITY_ISSUER_DENIED}: session creator `{}` must equal canonical issuer `{issuer_user_ura}`",
+                    payload.creator_principal_id
+                )));
+            }
+            let subject_kind = authority_metadata::authority_subject_kind(&payload.subject_ura);
+            if subject_kind == AuthoritySubjectKind::Resource {
+                return match authorize_user_session_device_resource(
+                    UserSessionDeviceResourceTuple {
+                        issuer_ura: &payload.issuer_ura,
+                        caller_ura: caller_ura_required(envelope)?,
+                        session_owner_user_id: &payload.session_owner_user_id,
+                        callee_ura: callee_ura_required(envelope)?,
+                        subject_ura: &payload.subject_ura,
+                    },
+                ) {
+                    LocalDeviceResourceAuthorityDecision::Authorized => Ok(()),
+                    LocalDeviceResourceAuthorityDecision::Denied(reason) => {
+                        Err(Status::permission_denied(format!(
+                            "{REASON_AUTHORITY_ISSUER_DENIED}: User-issued SessionAuthority cannot authorize Device Resource: {reason}"
+                        )))
+                    }
+                };
+            }
+            if subject_kind == AuthoritySubjectKind::Agent {
+                return Err(Status::permission_denied(format!(
+                    "{REASON_AUTHORITY_ISSUER_DENIED}: User-issued SessionAuthority cannot authorize Agent subjects"
                 )));
             }
             verify_user_session_authority_tuple(
@@ -3098,17 +3144,10 @@ fn verify_session_issuer_authorized(
                 &payload.subject_ura,
             )?;
             let owner_user_ura = session_owner_user_ura(payload)?;
-            let issuer_user_ura = canonical_user_issuer_ura(&payload.issuer_ura)?;
             if issuer_user_ura != owner_user_ura {
                 return Err(Status::permission_denied(format!(
                     "{REASON_AUTHORITY_ISSUER_DENIED}: session issuer `{}` is not the owner `{owner_user_ura}` for session `{}`",
                     payload.issuer_ura, payload.session_id
-                )));
-            }
-            if payload.creator_principal_id != issuer_user_ura {
-                return Err(Status::permission_denied(format!(
-                    "{REASON_AUTHORITY_ISSUER_DENIED}: session creator `{}` must equal canonical issuer `{issuer_user_ura}`",
-                    payload.creator_principal_id
                 )));
             }
             Ok(())
@@ -3464,102 +3503,6 @@ fn verify_realm_scoped_authority_tuple(
         }
     }
     Ok(())
-}
-
-/// Admit a User-issued SessionAuthority for this daemon's own media resources.
-///
-/// Local media handlers require the concrete resource URA as Invocation
-/// subject, e.g. `resource/device.<node>/streams/display.<id>`. That subject
-/// is not User-owned, so it cannot be admitted by the generic user-resource
-/// session rule. The missing policy edge is the pairing fact: the device
-/// daemon can prove locally that the signing User is the paired owner of this
-/// exact Device, and that the callee is the matching device-sponsored
-/// SystemAgent. No cross-device or cross-user resource authority is inferred.
-fn user_session_authority_admits_local_device_resource(
-    payload: &SessionAuthorityPayload,
-    envelope: &Envelope,
-    ability: &str,
-    action: AccessAction,
-) -> Result<bool, Status> {
-    let issuer = parse_authority_runtime_ura("issuer_ura", &payload.issuer_ura)?;
-    let caller = parse_authority_runtime_ura("caller_ura", caller_ura_required(envelope)?)?;
-    let callee = parse_authority_runtime_ura("callee_ura", callee_ura_required(envelope)?)?;
-    let subject = parse_authority_runtime_ura("subject_ura", &payload.subject_ura)?;
-
-    if issuer.kind != URAKind::User || caller.kind != URAKind::User {
-        return Ok(false);
-    }
-    let Some(issuer_user_id) = issuer.user_id() else {
-        return Ok(false);
-    };
-    if caller.user_id() != Some(issuer_user_id) || caller.realm != issuer.realm {
-        return Ok(false);
-    }
-    if subject.kind != URAKind::Resource || callee.kind != URAKind::Agent {
-        return Ok(false);
-    }
-    let Some(subject_device_id) = subject
-        .resource_owner_id()
-        .and_then(|owner| owner.strip_prefix("device."))
-    else {
-        return Ok(false);
-    };
-    if subject
-        .resource_path()
-        .is_none_or(|path| !path.starts_with("streams/"))
-    {
-        return Ok(false);
-    }
-    let Some((callee_device_id, agent_id)) = callee.device_agent_ids() else {
-        return Ok(false);
-    };
-    if callee_device_id != subject_device_id {
-        return Ok(false);
-    }
-    if agent_id != resources::MEDIA_SYSTEM_AGENT_ID
-        || !local_device_media_resource_authority_action_matches(ability, action)
-    {
-        return Ok(false);
-    }
-    let local_device_ura = match crate::daemon::identity::local_invocation::local_device_ura() {
-        Ok(value) => value,
-        Err(_) => return Ok(false),
-    };
-    let local_device = parse_authority_runtime_ura("local_device_ura", &local_device_ura)?;
-    if local_device.kind != URAKind::Device
-        || local_device.realm != issuer.realm
-        || local_device.device_id() != Some(subject_device_id)
-    {
-        return Ok(false);
-    }
-    let credentials = match crate::daemon::persistence::config::load_credentials_optional() {
-        Ok(Some(value)) => value,
-        Ok(None) | Err(_) => return Ok(false),
-    };
-    let paired_user_id = match credentials.user_id() {
-        Ok(value) => value.trim(),
-        Err(_) => return Ok(false),
-    };
-    Ok(credentials.realm.trim() == issuer.realm
-        && paired_user_id == issuer_user_id
-        && payload.session_owner_user_id.trim() == issuer_user_id)
-}
-
-fn local_device_media_resource_authority_action_matches(
-    ability: &str,
-    action: AccessAction,
-) -> bool {
-    match ability.trim() {
-        resources::MEDIA_MIC_SUBSCRIBE
-        | resources::MEDIA_CAMERA_SUBSCRIBE
-        | resources::MEDIA_CAMERA_RECORD_START
-        | resources::MEDIA_CAMERA_RECORD_STOP
-        | resources::MEDIA_SCREEN_SUBSCRIBE => action.as_str() == "stream",
-        resources::MEDIA_CAMERA_SNAPSHOT | resources::MEDIA_SCREEN_SNAPSHOT => {
-            action.as_str() == "read"
-        }
-        _ => false,
-    }
 }
 
 /// Verify the realm geometry of a User-issued SessionAuthority.
@@ -4915,6 +4858,45 @@ mod tests {
     }
 
     #[test]
+    fn realm_trust_delegation_allows_sponsor_device_for_device_sponsored_system_agent_subject() {
+        let now_ms = current_unix_ms();
+        let issuer = "easynet:///r/example/device/dev-a";
+        let caller = issuer;
+        let callee = "easynet:///r/example/authority";
+        let subject = crate::core::ura::device_agent_ura("example", "dev-a", "remote-desktop");
+        let signing_key = SigningKey::from_bytes(&[0x48; 32]);
+        let payload = DelegationPayload {
+            issuer_ura: issuer.to_string(),
+            subject_ura: subject.clone(),
+            caller_ura: caller.to_string(),
+            audience: callee.to_string(),
+            scopes: vec![
+                crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES
+                    .to_string(),
+            ],
+            issued_at_ms: now_ms - 1_000,
+            expires_at_ms: now_ms + 60_000,
+        };
+        let metadata = signed_delegation_metadata(payload, &signing_key);
+        let envelope = authority_wire_envelope(Some(caller), Some(callee), Some(&subject));
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+
+        let authority = verify_authority_metadata_with_issuer_key(
+            &envelope,
+            crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+            AccessAction::Manage,
+            Some(&metadata),
+            now_ms,
+            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+            &resolver,
+        )
+        .expect("sponsor Device delegation over its SystemAgent subject must verify")
+        .expect("delegation authority must project");
+
+        assert_eq!(authority.binding.form(), "delegated");
+    }
+
+    #[test]
     fn realm_trust_delegation_rejects_user_issuer_for_device_owned_ability_subject() {
         assert_realm_trust_delegation_rejects_alice_subject(
             "easynet:///r/example/ability/device.dev-a.observe.health",
@@ -4936,7 +4918,7 @@ mod tests {
     fn realm_trust_session_rejects_user_issuer_for_other_owner() {
         let now_ms = current_unix_ms();
         let issuer = "easynet:///r/example/user/mallory";
-        let callee = "easynet:///r/example/agent/service.worker";
+        let callee = &crate::core::ura::device_agent_ura("example", "dev-a", "worker");
         let subject = "easynet:///r/example/resource/user.alice/session/session-1";
         let signing_key = SigningKey::from_bytes(&[0x43; 32]);
         let request = authority_metadata::SessionAuthorityRequest {
@@ -4970,7 +4952,7 @@ mod tests {
             "Mallory must not self-issue Alice session authority",
         );
 
-        assert_eq!(err.code(), Code::PermissionDenied);
+        assert_eq!(err.code(), Code::PermissionDenied, "{err}");
         assert!(
             err.message().contains(REASON_AUTHORITY_ISSUER_DENIED),
             "{err}"
@@ -4981,7 +4963,7 @@ mod tests {
     fn realm_trust_session_rejects_same_user_id_from_different_realm() {
         let now_ms = current_unix_ms();
         let issuer = "easynet:///r/realm-a/user/alice";
-        let callee = "easynet:///r/realm-a/agent/service.worker";
+        let callee = &crate::core::ura::device_agent_ura("realm-a", "dev-a", "worker");
         let subject = "easynet:///r/realm-b/resource/user.alice/session/session-1";
         let signing_key = SigningKey::from_bytes(&[0x44; 32]);
         let request = authority_metadata::SessionAuthorityRequest {
@@ -5015,7 +4997,7 @@ mod tests {
             "same user id from another Realm must not authorize session",
         );
 
-        assert_eq!(err.code(), Code::PermissionDenied);
+        assert_eq!(err.code(), Code::PermissionDenied, "{err}");
         assert!(
             err.message().contains(REASON_AUTHORITY_ISSUER_DENIED),
             "{err}"
@@ -5023,7 +5005,7 @@ mod tests {
     }
 
     #[test]
-    fn realm_trust_session_allows_paired_user_for_local_device_stream_resource() {
+    fn realm_trust_session_allows_paired_user_for_exact_local_device_resource() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         crate::daemon::persistence::config::save_credentials(
             &crate::daemon::persistence::config::Credentials {
@@ -5044,85 +5026,31 @@ mod tests {
 
         let now_ms = current_unix_ms();
         let issuer = "easynet:///r/example/user/alice";
-        let callee = &crate::core::ura::device_agent_ura("example", "dev-a", "media");
         let subject =
             &crate::core::ura::resource_dot_ura("example", "device.dev-a", "streams/display.01");
         let signing_key = SigningKey::from_bytes(&[0x4d; 32]);
-        let request = authority_metadata::SessionAuthorityRequest {
-            issuer_ura: issuer.to_string(),
-            session_id: "invoke-0102030405060708090a0b0c0d0e0f10".to_string(),
-            session_owner_user_id: "alice".to_string(),
-            creator_principal_id: issuer.to_string(),
-            callee_ura: callee.to_string(),
-            subject_ura: subject.to_string(),
-            audience: callee.to_string(),
-            scopes: vec!["screen.snapshot".to_string()],
-            allowed_actions: vec!["read".to_string()],
-            allowed_followup_abilities: vec!["screen.snapshot".to_string()],
-            issued_at_ms: now_ms - 1_000,
-            expires_at_ms: now_ms + 60_000,
-        };
-        let metadata = signed_session_metadata(request, &signing_key);
-        let envelope = authority_wire_envelope(Some(issuer), Some(callee), Some(subject));
         let resolver = issuer_key_resolver(issuer, &signing_key);
-
-        verify_authority_metadata_with_issuer_key(
-            &envelope,
-            "screen.snapshot",
-            AccessAction::Read,
-            Some(&metadata),
-            now_ms,
-            RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
-            &resolver,
-        )
-        .expect("paired user may authorize this device's stream resource");
-    }
-
-    #[test]
-    fn realm_trust_session_rejects_local_device_resource_for_non_media_agent_or_ability() {
-        let _home = crate::cli::commands::test_support::HomeGuard::new();
-        crate::daemon::persistence::config::save_credentials(
-            &crate::daemon::persistence::config::Credentials {
-                node_id: "dev-a".into(),
-                credential_token: "token".into(),
-                hub_endpoint: "https://hub.example".into(),
-                realm: "example".into(),
-                deploy_signature: String::new(),
-                hub_api_base: None,
-                username: Some("alice".into()),
-                user_id: Some("alice".into()),
-                hub_pubkey_b64: None,
-                hub_tls_ca_pem_b64: None,
-                join_receipt_hash: None,
-            },
-        )
-        .expect("save paired credentials");
-
-        let now_ms = current_unix_ms();
-        let issuer = "easynet:///r/example/user/alice";
-        let subject =
-            &crate::core::ura::resource_dot_ura("example", "device.dev-a", "streams/display.01");
-        let signing_key = SigningKey::from_bytes(&[0x4e; 32]);
-        let resolver = issuer_key_resolver(issuer, &signing_key);
-        for (callee, ability, action, label, session_suffix) in [
-            (
-                crate::core::ura::device_agent_ura("example", "dev-a", "context-management"),
-                "screen.snapshot",
-                AccessAction::Read,
-                "non-media SystemAgent",
-                "non-media-agent",
-            ),
+        for (callee, ability, action, session_id) in [
             (
                 crate::core::ura::device_agent_ura("example", "dev-a", "media"),
-                "fs.read",
+                "screen.snapshot",
                 AccessAction::Read,
-                "non-media ability",
-                "non-media-ability",
+                "invoke-media-resource",
+            ),
+            (
+                crate::core::ura::device_agent_ura(
+                    "example",
+                    "dev-a",
+                    crate::daemon::ability::names::integrations::PLUGIN_MANAGEMENT_SYSTEM_AGENT_ID,
+                ),
+                "remote_desktop.grant_consent",
+                AccessAction::Manage,
+                "invoke-remote-desktop-consent",
             ),
         ] {
             let request = authority_metadata::SessionAuthorityRequest {
                 issuer_ura: issuer.to_string(),
-                session_id: format!("invoke-{session_suffix}"),
+                session_id: session_id.to_string(),
                 session_owner_user_id: "alice".to_string(),
                 creator_principal_id: issuer.to_string(),
                 callee_ura: callee.clone(),
@@ -5136,6 +5064,106 @@ mod tests {
             };
             let metadata = signed_session_metadata(request, &signing_key);
             let envelope = authority_wire_envelope(Some(issuer), Some(&callee), Some(subject));
+
+            verify_authority_metadata_with_issuer_key(
+                &envelope,
+                ability,
+                action,
+                Some(&metadata),
+                now_ms,
+                RuntimeAuthorityIssuerPolicy::RealmTrustAnchor,
+                &resolver,
+            )
+            .unwrap_or_else(|error| {
+                panic!("paired user must authorize {ability} on this Device Resource: {error}")
+            });
+        }
+    }
+
+    #[test]
+    fn realm_trust_session_rejects_inexact_local_device_resource_ownership_tuples() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "dev-a".into(),
+                credential_token: "token".into(),
+                hub_endpoint: "https://hub.example".into(),
+                realm: "example".into(),
+                deploy_signature: String::new(),
+                hub_api_base: None,
+                username: Some("alice".into()),
+                user_id: Some("alice".into()),
+                hub_pubkey_b64: None,
+                hub_tls_ca_pem_b64: None,
+                join_receipt_hash: None,
+            },
+        )
+        .expect("save paired credentials");
+
+        let now_ms = current_unix_ms();
+        let issuer = "easynet:///r/example/user/alice";
+        let signing_key = SigningKey::from_bytes(&[0x4e; 32]);
+        let resolver = issuer_key_resolver(issuer, &signing_key);
+        for (callee, subject, session_owner_user_id, creator_principal_id, label, session_suffix) in [
+            (
+                crate::core::ura::device_agent_ura("example", "dev-b", "plugin-management"),
+                crate::core::ura::resource_dot_ura("example", "device.dev-a", "streams/display.01"),
+                "alice",
+                issuer,
+                "callee sponsored by another Device",
+                "foreign-callee-device",
+            ),
+            (
+                "easynet:///r/example/agent/service.remote-desktop".to_string(),
+                crate::core::ura::resource_dot_ura("example", "device.dev-a", "streams/display.01"),
+                "alice",
+                issuer,
+                "hosted Agent callee",
+                "hosted-agent",
+            ),
+            (
+                crate::core::ura::device_agent_ura("example", "dev-a", "plugin-management"),
+                crate::core::ura::resource_dot_ura("example", "device.dev-b", "streams/display.01"),
+                "alice",
+                issuer,
+                "Resource owned by another Device",
+                "foreign-resource-device",
+            ),
+            (
+                crate::core::ura::device_agent_ura("example", "dev-a", "plugin-management"),
+                crate::core::ura::resource_dot_ura("example", "device.dev-a", "streams/display.01"),
+                "mallory",
+                issuer,
+                "session owned by another User",
+                "foreign-session-owner",
+            ),
+            (
+                crate::core::ura::device_agent_ura("example", "dev-a", "plugin-management"),
+                crate::core::ura::resource_dot_ura("example", "device.dev-a", "streams/display.01"),
+                "alice",
+                "easynet:///r/example/user/mallory",
+                "session created by another principal",
+                "foreign-creator",
+            ),
+        ] {
+            let ability = "remote_desktop.grant_consent";
+            let action = AccessAction::Manage;
+            let request = authority_metadata::SessionAuthorityRequest {
+                issuer_ura: issuer.to_string(),
+                session_id: format!("invoke-{session_suffix}"),
+                session_owner_user_id: session_owner_user_id.to_string(),
+                creator_principal_id: creator_principal_id.to_string(),
+                callee_ura: callee.clone(),
+                subject_ura: subject.clone(),
+                audience: callee.clone(),
+                scopes: vec![ability.to_string()],
+                allowed_actions: vec![action.as_str().to_string()],
+                allowed_followup_abilities: vec![ability.to_string()],
+                issued_at_ms: now_ms - 1_000,
+                expires_at_ms: now_ms + 60_000,
+            };
+            let metadata = signed_session_metadata(request, &signing_key);
+            let envelope = authority_wire_envelope(Some(issuer), Some(&callee), Some(&subject));
             let err = require_authority_metadata_error(
                 verify_authority_metadata_with_issuer_key(
                     &envelope,
@@ -6312,7 +6340,7 @@ mod tests {
     #[test]
     fn session_authority_binding_requires_explicit_envelope_subject() {
         let caller_ura = "easynet:///r/policy/authority";
-        let callee_ura = "easynet:///r/policy/agent/service.worker";
+        let callee_ura = &crate::core::ura::device_agent_ura("policy", "dev-a", "worker");
         let payload = SessionAuthorityPayload {
             issuer_ura: caller_ura.to_string(),
             session_id: "session-42".to_string(),

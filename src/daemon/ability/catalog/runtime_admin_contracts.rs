@@ -11,6 +11,18 @@ use crate::daemon::ability::conformance::{
 use crate::daemon::ability::descriptors::ReceiptSemantics;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, ControlPlaneImplementation, OwnerKind};
 
+/// Whether `name` is a canonical runtime-admin descriptor contract.
+///
+/// Runtime-admin rows are static Axon control-plane facts. Catalogue metadata
+/// must be able to classify them without consulting the installed plugin
+/// store, because plugin state is neither their owner nor their implementation.
+pub(crate) fn contains(name: &str) -> bool {
+    matches!(
+        name,
+        ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY | ABILITY_SESSION_OPEN
+    )
+}
+
 pub(crate) fn register(reg: &mut AxonAbilityCatalog) -> anyhow::Result<()> {
     let implementation = ControlPlaneImplementation::native_daemon();
     for ability in HubBaseline::required_abilities()

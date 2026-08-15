@@ -1,65 +1,22 @@
 //! Device profile — RFC-001 §1.
 //!
-//! Migration projection for remaining direct Device-owned daemon-local
-//! descriptors. This is not a target architecture Agent identity. The physical
-//! Device hosts resources and the daemon; migrated device-native callable
+//! Empty migration cursor for retired direct Device-owned daemon-local rows.
+//! This is not an actor identity and cannot emit `AbilityDescriptor` values.
+//! The physical Device hosts resources and the daemon; device-native callable
 //! surfaces are emitted by named device-sponsored SystemAgent profiles.
 //!
-//! Default-on; one per `easynet-daemon` instance. It advertises the local
-//! host's remaining bootstrap/self-maintenance compatibility surface that has
-//! not yet moved to a named device-sponsored SystemAgent. The current target
-//! inventory is empty.
+//! The empty cursor may remain for migration/high-water bookkeeping. Its live
+//! descriptor inventory is unconditionally empty.
 //!
 //! Per RFC §A4: "device" is an implementation profile, NOT a protocol type.
 //! The projection has no `kind` field on the wire.
 //!
-//! Descriptor projection
-//! ---------------------
-//! The dispatch registry stores an `OwnerKind` for every ability at
-//! registration time. Device profile descriptors are generated from entries
-//! whose authority/projection class is exactly `OwnerKind::DeviceProfileProjection`; migrated
-//! device-sponsored SystemAgent families are emitted by their own profile
-//! projection and this module does not infer ownership from ability name
-//! prefixes.
-
-/// Build AbilityDescriptors for every system ability the registry flags as
-/// still advertised through the direct Device-owner projection, with the
-/// visibility + scope defaults from RFC plan §18.
-///
-/// Wire shape — for each name in the registry whose owner is
-/// `OwnerKind::DeviceProfileProjection`:
-///   * observe.*  → PUBLIC
-///   * everything else (session/device/admin/meta/etc.) → SCOPED with
-///     scope_subjects/scope_agents = Any (P4.1 default).
-///     P4.7 narrows the SCOPED axes to the host operator URA on
-///     daemon boot.
-///
-/// `owner_ura` is the canonical host Device URA persisted in
-/// `local-agents.json`. Caller passes it in so this module stays pure
-/// (no daemon-state coupling).
+/// Return the intentionally empty live inventory for the retired Device
+/// projection. Device-sponsored callable behavior belongs to SystemAgents.
 pub fn descriptors_for(
-    owner_ura: &str,
+    _owner_ura: &str,
 ) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
-    use crate::daemon::ability::descriptors::Visibility;
-    use crate::daemon::ability::dispatch::OwnerKind;
-
-    let mut out = Vec::new();
-    for descriptor in crate::daemon::ability::catalog::published_system_abilities_for_owner(
-        OwnerKind::DeviceProfileProjection,
-    ) {
-        let visibility = if descriptor.name.starts_with("observe.") {
-            Visibility::Public
-        } else {
-            Visibility::Scoped
-        };
-        let descriptor = descriptor
-            .rebind_owner_ura(owner_ura)
-            .expect("registry-derived descriptor accepts canonical device owner")
-            .with_visibility(visibility)
-            .with_source("kernel:built-in");
-        out.push(descriptor);
-    }
-    out
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -129,6 +86,8 @@ mod tests {
             crate::daemon::ability::names::resources::CONTEXT_FAVORITES_REMOVE,
             crate::daemon::ability::names::resources::CONTEXT_CAPTURES_LIST,
             crate::daemon::ability::names::resources::CONTEXT_CAPTURES_GET,
+            crate::daemon::ability::names::resources::RESOURCE_REFRESH_REMOTE_TARGETS,
+            crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS,
             crate::daemon::ability::names::integrations::PLUGIN_RELOAD,
             crate::daemon::ability::names::integrations::PLUGIN_STATUS,
             crate::daemon::ability::names::integrations::PLUGIN_ACTIVATE_REALTIME,
@@ -272,6 +231,16 @@ mod tests {
                 .iter()
                 .all(|d| d.name != crate::daemon::ability::names::resources::META_LIST_RESOURCES),
             "meta.list_resources is owned by runtime-introspection, not direct Device"
+        );
+        assert!(
+            descriptors.iter().all(|d| d.name
+                != crate::daemon::ability::names::resources::RESOURCE_REFRESH_REMOTE_TARGETS),
+            "resource.refresh_remote_targets is owned by media SystemAgent, not direct Device"
+        );
+        assert!(
+            descriptors.iter().all(|d| d.name
+                != crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS),
+            "resource.watch_remote_targets is owned by media SystemAgent, not direct Device"
         );
     }
 

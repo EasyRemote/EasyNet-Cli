@@ -29,7 +29,7 @@ use serde_json::{json, Value};
 
 use crate::daemon::ability::builtins::governance::api_key;
 use crate::daemon::ability::builtins::resources::pages::PagesIdentity;
-use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler};
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler, OwnerKind};
 use crate::daemon::ability::names::integrations::{
     OPENAI_CHAT_COMPLETIONS, OPENAI_FILES_DELETE, OPENAI_FILES_RETRIEVE, OPENAI_FILES_UPLOAD,
     OPENAI_LIST_MODELS,
@@ -103,7 +103,7 @@ impl OpenAICompatRuntime {
     }
 
     pub(crate) fn handle_chat_completions(&self, args: Value) -> anyhow::Result<Value> {
-        handle_chat_completions_with_handle(&self.dispatch_handle, args)
+        handle_chat_completions_with_context(&self.dispatch_handle, self.identity.as_ref(), args)
     }
 
     pub(crate) fn handle_list_models(&self, args: Value) -> anyhow::Result<Value> {
@@ -305,8 +305,9 @@ pub fn handle_chat_completions(args: Value) -> anyhow::Result<Value> {
     runtime.handle_chat_completions(args)
 }
 
-fn handle_chat_completions_with_handle(
+fn handle_chat_completions_with_context(
     dispatch_handle: &Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+    identity: Option<&OpenAICompatIdentity>,
     args: Value,
 ) -> anyhow::Result<Value> {
     // Unwrap optional auth + request envelope.
@@ -352,7 +353,7 @@ fn handle_chat_completions_with_handle(
     // resolution. RFC-006-C extension: agent inputs may carry
     // EasyNet resource references; the adapter is the single
     // place that turns them into bytes.
-    deref_easynet_uras_in_messages(&mut messages, dispatch_handle);
+    deref_easynet_uras_in_messages(&mut messages, dispatch_handle, identity);
 
     let target = resolve_model_to_ability_and_owner(&model_str)?;
     if !is_chat_base(&target.local_dispatch_key) {
@@ -617,13 +618,9 @@ fn handle_file_upload_with_context(
 
     let registry = registry_from_handle(dispatch_handle, "openai.files.upload")?;
     let files_subject = crate::core::ura::resource_dot_ura(&realm, &format!("{user}.files"), "");
-    let files_authority_root =
-        crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
-            &realm, &user,
-        );
-    let stored = invoke_user_owned_rpc(
+    let stored = invoke_resource_service_rpc(
         registry.as_ref(),
-        &files_authority_root,
+        OwnerKind::files_system(),
         "files.put",
         files_subject,
         store_args,
@@ -672,13 +669,9 @@ fn handle_file_retrieve_with_context(
     let file_subject = crate::daemon::ability::builtins::resources::files_store::state::blob_ura(
         &realm, &user, file_id,
     );
-    let files_authority_root =
-        crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
-            &realm, &user,
-        );
-    let stored = invoke_user_owned_rpc(
+    let stored = invoke_resource_service_rpc(
         registry.as_ref(),
-        &files_authority_root,
+        OwnerKind::files_system(),
         "files.get",
         file_subject,
         json!({ "sha256": file_id }),
@@ -766,9 +759,9 @@ fn registry_from_handle(
         .ok_or_else(|| anyhow::anyhow!("{context} handle empty"))
 }
 
-fn invoke_user_owned_rpc(
+fn invoke_resource_service_rpc(
     registry: &AxonAbilityCatalog,
-    authority_root: &str,
+    expected_owner: OwnerKind,
     ability: impl Into<String>,
     subject_ura: impl Into<String>,
     args: Value,
@@ -776,10 +769,13 @@ fn invoke_user_owned_rpc(
     let ability = ability.into();
     let subject_ura = subject_ura.into();
     crate::core::ura::parse_ura(&subject_ura)
-        .map_err(|err| anyhow::anyhow!("user-owned ability subject is not a valid URA: {err}"))?;
+        .map_err(|err| anyhow::anyhow!("resource-service subject is not a valid URA: {err}"))?;
+    let authority_root = registry.authority_root_for_owner(&expected_owner)?;
     let handler = registry
-        .resolve_rpc_for_authority(authority_root, &ability)?
-        .ok_or_else(|| anyhow::anyhow!("user-owned ability {ability:?} has no RPC handler"))?;
+        .resolve_rpc_for_authority(&authority_root, &ability)?
+        .ok_or_else(|| {
+            anyhow::anyhow!("resource-service ability {ability:?} has no RPC handler")
+        })?;
     handler(args)
 }
 
@@ -870,6 +866,7 @@ fn project_model_id_with_identity(
 fn deref_easynet_uras_in_messages(
     messages: &mut [Value],
     dispatch_handle: &Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+    identity: Option<&OpenAICompatIdentity>,
 ) {
     for msg in messages.iter_mut() {
         let Some(content) = msg.get_mut("content") else {
@@ -885,7 +882,9 @@ fn deref_easynet_uras_in_messages(
                     if let Some(url) = nested.get_mut("url") {
                         if let Some(s) = url.as_str() {
                             if crate::core::ura::parse_ura(s).is_ok() {
-                                if let Ok(data_url) = deref_to_data_url(s, dispatch_handle) {
+                                if let Ok(data_url) =
+                                    deref_to_data_url(s, dispatch_handle, identity)
+                                {
                                     *url = Value::String(data_url);
                                 }
                             }
@@ -899,7 +898,9 @@ fn deref_easynet_uras_in_messages(
                     if let Some(url) = file.get_mut(*url_key) {
                         if let Some(s) = url.as_str() {
                             if crate::core::ura::parse_ura(s).is_ok() {
-                                if let Ok(data_url) = deref_to_data_url(s, dispatch_handle) {
+                                if let Ok(data_url) =
+                                    deref_to_data_url(s, dispatch_handle, identity)
+                                {
                                     *url = Value::String(data_url);
                                 }
                             }
@@ -917,6 +918,7 @@ fn deref_easynet_uras_in_messages(
 fn deref_to_data_url(
     ura: &str,
     dispatch_handle: &Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
+    identity: Option<&OpenAICompatIdentity>,
 ) -> anyhow::Result<String> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
@@ -933,37 +935,42 @@ fn deref_to_data_url(
         .resource_owner_id()
         .ok_or_else(|| anyhow::anyhow!("deref `{ura}`: missing resource owner"))?;
     let path = parsed.resource_path().unwrap_or_default().to_string();
-    let (authority_root, ability, args) = match id_part.split_once('.') {
-        Some((user, "files")) => (
-            crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
-                &parsed.realm,
-                user,
-            ),
+    let (expected_owner, ability, args) = match id_part.split_once('.') {
+        Some((_user, "files")) => (
+            OwnerKind::files_system(),
             "files.get".to_string(),
             json!({ "ura": ura, "path": path }),
         ),
-        Some((user, project)) => {
+        Some((resource_user, project)) => {
             // Pages-shape: `<user>.<project>.page.fetch` with
-            // `path` arg.
+            // `path` arg. The resource owner segment is the public
+            // URL/storage slug; the callable owner is the immutable
+            // principal-scoped Pages Service from boot identity.
+            let owner_user_id = identity
+                .and_then(|identity| identity.user.as_deref())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Pages resource deref requires paired user identity")
+                })?;
+            let pages_owner = OwnerKind::Service {
+                principal_id: owner_user_id.to_string(),
+                service_id: "pages".to_string(),
+            };
             let mut pf_path = path.to_string();
             if !pf_path.starts_with('/') {
                 pf_path = format!("/{pf_path}");
             }
             (
-                crate::daemon::ability::builtins::resources::pages::management_agent_ura(
-                    &parsed.realm,
-                    user,
-                ),
-                format!("{id_part}.page.fetch"),
+                pages_owner,
+                format!("{resource_user}.{project}.page.fetch"),
                 json!({ "path": pf_path, "project_id": project }),
             )
         }
         None => anyhow::bail!("deref `{ura}`: owner segment lacks dot"),
     };
     let registry = registry_from_handle(dispatch_handle, "deref")?;
-    let resp = invoke_user_owned_rpc(
+    let resp = invoke_resource_service_rpc(
         registry.as_ref(),
-        &authority_root,
+        expected_owner,
         ability.clone(),
         ura.to_string(),
         args,
@@ -989,8 +996,7 @@ fn deref_to_data_url(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::ability::dispatch::{ControlPlaneImplementation, OwnerKind};
-    use crate::daemon::ability::AuthorityScope;
+    use crate::daemon::ability::dispatch::OwnerKind;
 
     fn ok_handler() -> LocalRpcHandler {
         Arc::new(|_| Ok(json!({"reply":"ok"})))
@@ -1024,33 +1030,20 @@ mod tests {
         );
     }
 
-    fn files_test_scope(realm: &str, user: &str) -> AuthorityScope {
-        AuthorityScope::new(
-            "agent:files",
-            crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
-                realm, user,
-            ),
-        )
-        .expect("test Files authority scope")
-    }
-
     fn register_test_files_rpc(
         reg: &mut AxonAbilityCatalog,
-        realm: &str,
-        user: &str,
+        _realm: &str,
+        _user: &str,
         ability: &'static str,
         admission_action: &str,
         handler: LocalRpcHandler,
     ) {
-        reg.register_rpc_with_spec_impl_and_authority_scope(
+        reg.register_rpc_with_spec(
             ability,
-            OwnerKind::Agent("files".to_string()),
-            files_test_scope(realm, user),
+            OwnerKind::files_system(),
             test_manifest(ability, admission_action),
             handler,
-            ControlPlaneImplementation::native_daemon(),
         )
-        .expect("test Files executor authority must be declared")
     }
 
     const TEST_DEVICE_URA: &str = "easynet:///r/easynet.run/device/openai-test-device";
@@ -1082,13 +1075,6 @@ mod tests {
             crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
                 crate::core::ura::device_ura(realm, "openai-test-device"),
             )
-            .and_then(|context| {
-                context.with_declared_agent_authority_root(
-                    crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
-                        realm, "alice",
-                    ),
-                )
-            })
             .expect("OpenAI test authority context");
         AxonAbilityCatalog::new_with_runtime_and_authority_context(
             crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
@@ -1265,7 +1251,7 @@ mod tests {
     }
 
     #[test]
-    fn user_owned_rpc_dispatch_uses_exact_authority_handler() {
+    fn resource_service_rpc_dispatch_uses_exact_system_agent_handler() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut reg = executable_test_catalog("example");
         register_test_files_rpc(
@@ -1274,34 +1260,31 @@ mod tests {
             "alice",
             "files.put",
             "invoke",
-            Arc::new(|_args: Value| Ok(json!({"owner": "user"}))) as LocalRpcHandler,
+            Arc::new(|_args: Value| Ok(json!({"owner": "files-system-agent"}))) as LocalRpcHandler,
         );
         register_test_rpc(
             &mut reg,
             "files.put",
-            OwnerKind::DeviceProfileProjection,
+            OwnerKind::plugin_management_system(),
             "invoke",
-            Arc::new(|_args: Value| Ok(json!({"owner": "device"}))) as LocalRpcHandler,
+            Arc::new(|_args: Value| Ok(json!({"owner": "system-agent"}))) as LocalRpcHandler,
         );
 
         assert!(
             reg.resolve_rpc("files.put").is_none(),
             "bare ability-name resolution must fail closed across authority roots"
         );
-        let files_authority =
-            crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
-                "example", "alice",
-            );
-        let got = invoke_user_owned_rpc(
+        let files_subject = crate::core::ura::resource_dot_ura("example", "alice.files", "/test");
+        let got = invoke_resource_service_rpc(
             &reg,
-            &files_authority,
+            OwnerKind::files_system(),
             "files.put",
-            files_authority.clone(),
+            files_subject,
             json!({}),
         )
-        .expect("user-owned OpenAI compatibility dispatch must use the exact User authority key");
+        .expect("OpenAI compatibility dispatch must use the Files SystemAgent authority key");
 
-        assert_eq!(got, json!({"owner": "user"}));
+        assert_eq!(got, json!({"owner": "files-system-agent"}));
     }
 
     #[test]
@@ -1309,8 +1292,8 @@ mod tests {
         let mut reg = metadata_test_catalog();
         register_test_rpc(
             &mut reg,
-            "device.llm.chat",
-            OwnerKind::DeviceProfileProjection,
+            "authority.llm.chat",
+            OwnerKind::RealmAuthority,
             "invoke",
             ok_handler(),
         );
@@ -1320,7 +1303,7 @@ mod tests {
         };
 
         assert_eq!(
-            project_model_id_with_identity(&reg, "device.llm.chat", Some(&identity)),
+            project_model_id_with_identity(&reg, "authority.llm.chat", Some(&identity)),
             None
         );
     }
@@ -1468,7 +1451,7 @@ mod tests {
             "example", "alice", FILE_SHA,
         );
 
-        let got = deref_to_data_url(&ura, &handle).expect("files URA should dereference");
+        let got = deref_to_data_url(&ura, &handle, None).expect("files URA should dereference");
 
         assert_eq!(got, "data:text/plain;base64,aGk=");
     }

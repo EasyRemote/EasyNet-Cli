@@ -16,6 +16,11 @@ pub const CONTEXT_CAPTURES_READ: &str = "context.captures.read";
 /// clipboard, mapped folders, favorites, and captured artifacts.
 pub const CONTEXT_SYSTEM_AGENT_ID: &str = "context-management";
 
+/// Device-sponsored SystemAgent id for the daemon-local content-addressed
+/// Files store. File resource identities remain user-scoped; execution
+/// ownership is unique to the Device that holds the blob root.
+pub const FILES_SYSTEM_AGENT_ID: &str = "files";
+
 pub const MEDIA_MIC_SUBSCRIBE: &str = "mic.subscribe";
 pub const MEDIA_CAMERA_SUBSCRIBE: &str = "camera.subscribe";
 pub const MEDIA_CAMERA_SNAPSHOT: &str = "camera.snapshot";

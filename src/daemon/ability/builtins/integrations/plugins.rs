@@ -135,6 +135,24 @@ pub fn companion_reconcile_description() -> &'static str {
     "Reconcile one local desktop companion plugin against desired state and boot policy."
 }
 
+pub fn companion_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["package_id"],
+        "properties": {
+            "package_id": {
+                "type": "string",
+                "minLength": 1
+            },
+            "package_version": {
+                "type": "string",
+                "minLength": 1
+            }
+        }
+    })
+}
+
 fn reload_plugins(
     args: Value,
     registry: &SharedPluginRegistryCell,

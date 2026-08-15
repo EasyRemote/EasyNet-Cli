@@ -29,10 +29,6 @@ pub(crate) fn status_from_remote_failure(
     Status::new(code, format!("{context}: {detail}"))
 }
 
-pub(crate) fn is_admission_denial_message(message: &str) -> bool {
-    RuntimeFailureFacts::is_admission_denial_message(message)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,6 +47,20 @@ mod tests {
         let status = status_from_remote_failure("remote Invoke", "ignored", Some(&failure));
         assert_eq!(status.code(), Code::PermissionDenied);
         assert!(status.message().contains("AUTHORITY_SUBJECT_MISMATCH"));
+    }
+
+    #[test]
+    fn preserves_remote_hosted_agent_readiness_as_permission_denied() {
+        let failure = failure(
+            "ABILITY_DISABLED",
+            "HOSTED_AGENT_NOT_PUBLISHED: Assigned is not executable",
+        );
+
+        let status = status_from_remote_failure("remote Invoke", "ignored", Some(&failure));
+
+        assert_eq!(status.code(), Code::PermissionDenied);
+        assert!(status.message().contains("ABILITY_DISABLED"));
+        assert!(status.message().contains("HOSTED_AGENT_NOT_PUBLISHED"));
     }
 
     #[test]

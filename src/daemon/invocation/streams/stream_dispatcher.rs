@@ -147,10 +147,11 @@ impl StreamDispatcher {
         let call_mode = selection.call_mode();
         let selected_route = match selection.into_dispatch() {
             CanonicalRouteDispatch::Local(route) => route,
-            CanonicalRouteDispatch::Peer(route) => {
+            CanonicalRouteDispatch::Peer(route) | CanonicalRouteDispatch::UpstreamHub(route) => {
                 return Err(Status::unimplemented(format!(
                     "InvokeStream selected canonical peer route to hub `{}` for `{}`, but the \
-                     generic cross-realm server-stream carrier is unsupported",
+                     generic cross-realm server-stream carrier is unsupported; Device mode does \
+                     not own a peer dialer",
                     route.hub_ura, route.query_name,
                 )));
             }

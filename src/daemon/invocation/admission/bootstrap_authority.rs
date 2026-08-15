@@ -88,7 +88,21 @@ impl BootstrapAuthorityVerifier {
             );
         }
 
-        if trusted_path != TrustedCallerPath::DeviceCustody || !is_device_ura(caller_ura) {
+        let TrustedCallerPath::DeviceCustody(device_purpose) = trusted_path else {
+            return BootstrapAuthorityDecision::NotApplicable;
+        };
+        if !is_device_ura(caller_ura)
+            || !device_purpose.matches_scope(
+                crate::daemon::invocation::admission::device_caller::DeviceInvocationPurposeScope {
+                    caller_ura,
+                    callee_ura,
+                    subject_ura,
+                    public_ability: ability,
+                    daemon_ura,
+                    action,
+                },
+            )
+        {
             return BootstrapAuthorityDecision::NotApplicable;
         }
 
@@ -536,6 +550,29 @@ mod tests {
         .expect("anchor")
     }
 
+    fn device_path(
+        caller_ura: &str,
+        callee_ura: &str,
+        subject_ura: &str,
+        ability: &str,
+        action: AccessAction,
+        daemon_ura: Option<&str>,
+    ) -> TrustedCallerPath {
+        let purpose =
+            crate::daemon::invocation::admission::device_caller::verify_device_invocation_purpose(
+                crate::daemon::invocation::admission::device_caller::DeviceInvocationPurposeScope {
+                    caller_ura,
+                    callee_ura,
+                    subject_ura,
+                    public_ability: ability,
+                    daemon_ura,
+                    action,
+                },
+            )
+            .expect("test Device invocation purpose");
+        TrustedCallerPath::DeviceCustody(purpose)
+    }
+
     #[test]
     fn paired_device_can_publish_own_owner_projection() {
         let args = serde_json::to_vec(&serde_json::json!({
@@ -559,7 +596,14 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedCallerPath::DeviceCustody,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/device/dev-1",
+                ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -588,7 +632,14 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedCallerPath::DeviceCustody,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/device/dev-1",
+                ABILITY_FEDERATION_ADVERTISE_ABILITIES,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -607,7 +658,14 @@ mod tests {
             AccessAction::Stream,
             &[],
             &anchor(),
-            TrustedCallerPath::DeviceCustody,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/device/dev-1",
+                device_control::SESSION_OPEN,
+                AccessAction::Stream,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -635,21 +693,18 @@ mod tests {
 
     #[test]
     fn paired_device_cannot_open_session_for_other_device() {
-        let got = BootstrapAuthorityVerifier::verify(
-            &envelope(
-                "easynet:///r/test/device/dev-1",
-                "easynet:///r/test/device/other",
-                "easynet:///r/test/device/dev-1",
-            ),
-            device_control::SESSION_OPEN,
-            AccessAction::Stream,
-            &[],
-            &anchor(),
-            TrustedCallerPath::DeviceCustody,
-            Some("easynet:///r/test/authority"),
-        );
-
-        assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
+        let got =
+            crate::daemon::invocation::admission::device_caller::verify_device_invocation_purpose(
+                crate::daemon::invocation::admission::device_caller::DeviceInvocationPurposeScope {
+                    caller_ura: "easynet:///r/test/device/dev-1",
+                    callee_ura: "easynet:///r/test/device/other",
+                    subject_ura: "easynet:///r/test/device/dev-1",
+                    public_ability: device_control::SESSION_OPEN,
+                    daemon_ura: Some("easynet:///r/test/authority"),
+                    action: AccessAction::Stream,
+                },
+            );
+        assert!(got.is_err());
     }
 
     #[test]
@@ -670,11 +725,49 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedCallerPath::DeviceCustody,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/device/dev-1",
+                ABILITY_FEDERATION_HEARTBEAT,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
+    }
+
+    #[test]
+    fn session_purpose_cannot_be_reused_as_heartbeat_bootstrap_authority() {
+        let caller = "easynet:///r/test/device/dev-1";
+        let authority = "easynet:///r/test/authority";
+        let args = serde_json::to_vec(&serde_json::json!({
+            "since_abilities_revision": 0,
+            "refresh_owner_uras": [caller],
+        }))
+        .expect("args");
+        let session_path = device_path(
+            caller,
+            authority,
+            caller,
+            device_control::SESSION_OPEN,
+            AccessAction::Stream,
+            Some(authority),
+        );
+
+        let got = BootstrapAuthorityVerifier::verify(
+            &envelope(caller, authority, caller),
+            ABILITY_FEDERATION_HEARTBEAT,
+            AccessAction::Manage,
+            &args,
+            &anchor(),
+            session_path,
+            Some(authority),
+        );
+
+        assert_eq!(got, BootstrapAuthorityDecision::NotApplicable);
     }
 
     #[test]
@@ -695,7 +788,14 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedCallerPath::DeviceCustody,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/device/dev-1",
+                ABILITY_FEDERATION_HEARTBEAT,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -706,10 +806,8 @@ mod tests {
     fn device_without_owner_binding_has_no_bootstrap_authority() {
         let _home = HomeGuard::new();
         let args = serde_json::to_vec(&serde_json::json!({
-            "membership_ura": "easynet:///r/test/device/dev-1",
-            "agent_ura": "easynet:///r/test/device/dev-1",
-            "public_key_hex": "00",
-            "realm": "test",
+            "since_abilities_revision": 0,
+            "refresh_owner_uras": [],
         }))
         .expect("args");
 
@@ -719,11 +817,18 @@ mod tests {
                 "easynet:///r/test/authority",
                 "easynet:///r/test/device/dev-1",
             ),
-            ABILITY_FEDERATION_JOIN,
+            ABILITY_FEDERATION_HEARTBEAT,
             AccessAction::Manage,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedCallerPath::DeviceCustody,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/device/dev-1",
+                ABILITY_FEDERATION_HEARTBEAT,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -737,10 +842,8 @@ mod tests {
         std::fs::write(state_dir().join("credentials.json"), b"{")
             .expect("write malformed credentials");
         let args = serde_json::to_vec(&serde_json::json!({
-            "membership_ura": "easynet:///r/test/device/dev-1",
-            "agent_ura": "easynet:///r/test/device/dev-1",
-            "public_key_hex": "00",
-            "realm": "test",
+            "since_abilities_revision": 0,
+            "refresh_owner_uras": [],
         }))
         .expect("args");
 
@@ -750,11 +853,18 @@ mod tests {
                 "easynet:///r/test/authority",
                 "easynet:///r/test/device/dev-1",
             ),
-            ABILITY_FEDERATION_JOIN,
+            ABILITY_FEDERATION_HEARTBEAT,
             AccessAction::Manage,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedCallerPath::DeviceCustody,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                "easynet:///r/test/device/dev-1",
+                ABILITY_FEDERATION_HEARTBEAT,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -792,7 +902,14 @@ mod tests {
             AccessAction::Read,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedCallerPath::DeviceCustody,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+                ABILITY_FEDERATION_RESOLVE_KEY,
+                AccessAction::Read,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -822,7 +939,14 @@ mod tests {
             AccessAction::Read,
             &args,
             &RealmTrustAnchor::default(),
-            TrustedCallerPath::DeviceCustody,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+                ABILITY_FEDERATION_RESOLVE_KEY,
+                AccessAction::Read,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -851,7 +975,14 @@ mod tests {
             AccessAction::Read,
             &args,
             &anchor(),
-            TrustedCallerPath::DeviceCustody,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+                ABILITY_FEDERATION_RESOLVE_KEY,
+                AccessAction::Read,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -880,7 +1011,14 @@ mod tests {
             AccessAction::Read,
             &args,
             &anchor(),
-            TrustedCallerPath::DeviceCustody,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+                ABILITY_FEDERATION_RESOLVE_KEY,
+                AccessAction::Read,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -1033,7 +1171,14 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedCallerPath::DeviceCustody,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+                ABILITY_IDENTITY_REGISTER_PUBKEY,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
         assert!(matches!(got, BootstrapAuthorityDecision::Verified { .. }));
@@ -1055,7 +1200,14 @@ mod tests {
             AccessAction::Manage,
             &other_args,
             &anchor(),
-            TrustedCallerPath::DeviceCustody,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+                ABILITY_IDENTITY_REGISTER_PUBKEY,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
         assert_eq!(rejected, BootstrapAuthorityDecision::NotApplicable);
@@ -1086,7 +1238,14 @@ mod tests {
             AccessAction::Manage,
             &args,
             &anchor(),
-            TrustedCallerPath::DeviceCustody,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+                ABILITY_IDENTITY_REGISTER_PUBKEY,
+                AccessAction::Manage,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 
@@ -1115,7 +1274,14 @@ mod tests {
             AccessAction::Read,
             &args,
             &anchor(),
-            TrustedCallerPath::DeviceCustody,
+            device_path(
+                "easynet:///r/test/device/dev-1",
+                "easynet:///r/test/authority",
+                &subject,
+                ABILITY_FEDERATION_RESOLVE_KEY,
+                AccessAction::Read,
+                Some("easynet:///r/test/authority"),
+            ),
             Some("easynet:///r/test/authority"),
         );
 

@@ -58,6 +58,7 @@ pub mod context_store;
 pub mod daemon_config;
 pub(crate) mod federation_revoke;
 pub(crate) mod file_lock;
+pub(crate) mod hosted_agent_publications;
 pub(crate) mod local_agents;
 pub(crate) mod owner_projections;
 /// Local resources registry — `~/.easynet/resources.json`. Maps a

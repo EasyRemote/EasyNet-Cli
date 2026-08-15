@@ -152,8 +152,38 @@ func TestSessionAuthorityBindsCanonicalSubject(t *testing.T) {
 	value = authorityMetadataFixture(t, payload, []byte("session-signature"))
 
 	_, err = NewSessionAuthorityFromMetadata(value)
-	if err == nil || !strings.Contains(err.Error(), "session authority subject_ura must be a canonical user or session subject") {
+	if err == nil || !strings.Contains(err.Error(), "session authority resource has an invalid User owner") {
 		t.Fatalf("dotted owner subject error = %v", err)
+	}
+
+	payload = sessionAuthorityPayloadFixture()
+	payload["subject_ura"] = "easynet:///r/example/resource/user.alice/invoke/principal.lifecycle.get"
+	payload["allowed_followup_abilities"] = []string{"principal.lifecycle.get"}
+	value = authorityMetadataFixture(t, payload, []byte("session-signature"))
+	if _, err = NewSessionAuthorityFromMetadata(value); err != nil {
+		t.Fatalf("descriptor-bound subject rejected: %v", err)
+	}
+
+	payload["allowed_followup_abilities"] = []string{"principal.lifecycle.create"}
+	value = authorityMetadataFixture(t, payload, []byte("session-signature"))
+	_, err = NewSessionAuthorityFromMetadata(value)
+	if err == nil || !strings.Contains(err.Error(), "descriptor-bound subject ability must be an exact allowed follow-up ability") {
+		t.Fatalf("descriptor-bound ability mismatch error = %v", err)
+	}
+
+	for label, subjectURA := range map[string]string{
+		"pages resource":     "easynet:///r/example/resource/alice.portfolio/index.html",
+		"agent resource":     "easynet:///r/example/resource/agent.alice.pages/skill/render",
+		"device resource":    "easynet:///r/example/resource/device.dev-a/streams/display-1",
+		"user-owned Agent":   "easynet:///r/example/agent/alice.helper",
+		"device SystemAgent": "easynet:///r/example/agent/device.dev-a.runtime",
+	} {
+		payload = sessionAuthorityPayloadFixture()
+		payload["subject_ura"] = subjectURA
+		value = authorityMetadataFixture(t, payload, []byte("session-signature"))
+		if _, err = NewSessionAuthorityFromMetadata(value); err != nil {
+			t.Fatalf("%s exact subject rejected: %v", label, err)
+		}
 	}
 
 	client, err := NewAuthorityClient(&memoryAuthorityTransport{sessionJSON: []byte(`{"metadata":{}}`)})
@@ -174,7 +204,7 @@ func TestSessionAuthorityBindsCanonicalSubject(t *testing.T) {
 		IssuedAtMS:               1000,
 		ExpiresAtMS:              2000,
 	})
-	if err == nil || !strings.Contains(err.Error(), "session authority subject_ura must be a canonical user or session subject") {
+	if err == nil || !strings.Contains(err.Error(), "session authority subject_ura must be a canonical User, Agent, or Resource") {
 		t.Fatalf("non-session subject error = %v", err)
 	}
 }

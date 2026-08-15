@@ -364,36 +364,36 @@ pub(crate) fn catalog_owner_kind_for_wire(
             "descriptor-bound ability owner `{owner_ura}` is not a valid URA: {err}"
         ))
     })?;
-    match parsed.kind {
-        crate::core::ura::URAKind::Device => {
+    match crate::core::ura::ability_owner_from_identity(&parsed) {
+        Some(crate::core::ura::AbilityOwner::Device { .. }) => {
             Ok(crate::daemon::ability::dispatch::OwnerKind::DeviceProfileProjection)
         }
-        crate::core::ura::URAKind::Authority => {
+        Some(crate::core::ura::AbilityOwner::Authority) => {
             Ok(crate::daemon::ability::dispatch::OwnerKind::RealmAuthority)
         }
-        crate::core::ura::URAKind::Agent => {
-            if let Some((_, agent_id)) = parsed.device_agent_ids() {
-                if !crate::daemon::ability::catalog::profiles::is_declared_daemon_native_system_agent_id(
-                    agent_id,
-                ) {
-                    return Err(AxonError::invalid_argument(format!(
-                        "descriptor-bound ability owner `{owner_ura}` is a device-scoped Agent that is not a declared daemon-native SystemAgent"
-                    )));
-                }
-                return Ok(crate::daemon::ability::dispatch::OwnerKind::SystemAgent(
-                    agent_id.to_string(),
-                ));
-            }
-            let Some((_, agent_id)) = parsed.agent_ids() else {
+        Some(crate::core::ura::AbilityOwner::SystemAgent { agent_id, .. }) => {
+            if !crate::daemon::ability::catalog::profiles::is_declared_daemon_native_system_agent_id(
+                &agent_id,
+            ) {
                 return Err(AxonError::invalid_argument(format!(
-                    "descriptor-bound ability owner `{owner_ura}` is an Agent URA without agent id"
+                    "descriptor-bound ability owner `{owner_ura}` is a device-scoped Agent that is not a declared daemon-native SystemAgent"
                 )));
-            };
-            Ok(crate::daemon::ability::dispatch::OwnerKind::Agent(
-                agent_id.to_string(),
+            }
+            Ok(crate::daemon::ability::dispatch::OwnerKind::SystemAgent(
+                agent_id,
             ))
         }
-        _ => Err(AxonError::invalid_argument(format!(
+        Some(crate::core::ura::AbilityOwner::Agent { agent_id, .. }) => {
+            Ok(crate::daemon::ability::dispatch::OwnerKind::Agent(agent_id))
+        }
+        Some(crate::core::ura::AbilityOwner::Service {
+            principal_id,
+            service_id,
+        }) => Ok(crate::daemon::ability::dispatch::OwnerKind::Service {
+            principal_id,
+            service_id,
+        }),
+        None => Err(AxonError::invalid_argument(format!(
             "descriptor-bound ability owner `{owner_ura}` is not a catalog owner"
         ))),
     }
@@ -599,13 +599,25 @@ mod tests {
 
     #[test]
     fn bare_agent_prefixed_name_projects_to_owner_local_ability_ura() {
-        let callee = crate::core::ura::agent_ura("localhost", "dev", "pages");
-        let ability_ura = ability_ura_for_wire(&callee, "project_list")
+        let callee = crate::core::ura::agent_ura("localhost", "dev", "worker");
+        let ability_ura = ability_ura_for_wire(&callee, "task.list")
             .expect("agent-owned registry key should project to public ability URA");
 
         assert_eq!(
             ability_ura,
-            "easynet:///r/localhost/ability/dev.pages.project_list"
+            "easynet:///r/localhost/ability/dev.worker.task.list"
+        );
+    }
+
+    #[test]
+    fn bare_service_prefixed_name_projects_to_owner_local_ability_ura() {
+        let callee = crate::core::ura::service_ura("localhost", "dev", "pages");
+        let ability_ura = ability_ura_for_wire(&callee, "project_list")
+            .expect("service-owned registry key should project to public ability URA");
+
+        assert_eq!(
+            ability_ura,
+            "easynet:///r/localhost/ability/service.dev.pages.project_list"
         );
     }
 
@@ -620,6 +632,35 @@ mod tests {
             error
                 .reason
                 .contains("not a declared daemon-native SystemAgent"),
+            "{}",
+            error.reason
+        );
+    }
+
+    #[test]
+    fn catalog_owner_accepts_service_identity() {
+        let owner = crate::core::ura::service_ura("acme", "user-alice", "pages");
+
+        let kind = catalog_owner_kind_for_wire(&owner).expect("Service is a catalog owner");
+
+        assert_eq!(
+            kind,
+            crate::daemon::ability::dispatch::OwnerKind::Service {
+                principal_id: "user-alice".to_string(),
+                service_id: "pages".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn catalog_owner_rejects_user_identity() {
+        let owner = crate::core::ura::user_ura("acme", "user-alice");
+
+        let error = catalog_owner_kind_for_wire(&owner)
+            .expect_err("User principal must not become an executable catalog owner");
+
+        assert!(
+            error.reason.contains("not a catalog owner"),
             "{}",
             error.reason
         );

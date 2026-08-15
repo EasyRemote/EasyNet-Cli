@@ -386,7 +386,11 @@ async fn dispatch_local_rpc_selected_route_runs_runtime_when_registered() {
         1,
         "Axon-routed unary call must land exactly one ledger row"
     );
-    assert_eq!(records[0].ability_name, descriptor_ref);
+    assert_eq!(records[0].ability_name, "demo.unary_via_axon");
+    assert_eq!(records[0].ability_ura, runtime_ability);
+    assert_eq!(records[0].descriptor_ref, descriptor_ref);
+    assert_eq!(records[0].admission_action, "invoke");
+    assert!(!records[0].safe_read);
     assert_eq!(records[0].state, "completed");
     assert_eq!(
         records[0].caller_ura, external_caller,
@@ -644,15 +648,11 @@ async fn dispatch_local_rpc_selected_route_accepts_unsigned_local_system_request
         1,
         "local-system dispatch must still be a single Axon-owned ledger row"
     );
-    assert_eq!(
-        records[0].ability_name,
-        catalog_test_descriptor_ref(
-            svc.directory.local_ability_catalog.as_ref().unwrap(),
-            &system_agent_ura,
-            "demo.local_system_unsigned",
-            crate::daemon::ability::CallMode::Rpc,
-        )
-    );
+    assert_eq!(records[0].ability_name, "demo.local_system_unsigned");
+    assert_eq!(records[0].ability_ura, runtime_ability);
+    assert_eq!(records[0].descriptor_ref, descriptor_ref);
+    assert_eq!(records[0].admission_action, "invoke");
+    assert!(!records[0].safe_read);
     assert_eq!(
         records[0].caller_ura,
         crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
@@ -1081,6 +1081,11 @@ async fn selected_route_binding_rejects_removed_control_plane_record_even_with_r
             _,
         ) => {
             panic!("test route should not dispatch through HubSession")
+        }
+        crate::daemon::invocation::routing::route_resolver::CanonicalRouteDispatch::UpstreamHub(
+            _,
+        ) => {
+            panic!("test route should not dispatch through the upstream Hub")
         }
     };
     let catalog = svc

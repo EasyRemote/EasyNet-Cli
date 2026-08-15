@@ -13,6 +13,8 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::daemon::identity::self_identity::CanonicalSigner;
+
 use super::descriptors::{
     canonical_json_bytes, is_valid_ability_name, is_valid_descriptor_version,
     AbilityControlPlaneKey, CallMode,
@@ -24,6 +26,138 @@ const DEFAULT_INVOKE_POLICY_REF: &str = "ability_access_policy";
 pub const HOSTED_AGENT_DELEGATION_METADATA_KEY: &str = "x-easynet-hosted-agent-delegation";
 pub const HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY: &str =
     "x-easynet-hosted-agent-delegation-request";
+pub const RUNTIME_DELEGATION_METADATA_KEY: &str = "x-runtime-delegation";
+
+/// Canonical delegated-authority claims shared by the Rust issuer and runtime
+/// admission decoder.
+///
+/// This is the Rust counterpart of the public Go/Python SDK delegation DTO.
+/// It owns wire shape only; admission remains responsible for deciding
+/// whether the issuer is allowed to delegate for the requested subject.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegationAuthorityClaims {
+    pub(crate) issuer_ura: String,
+    pub(crate) subject_ura: String,
+    pub(crate) caller_ura: String,
+    pub(crate) audience: String,
+    pub(crate) scopes: Vec<String>,
+    pub(crate) issued_at_ms: i64,
+    pub(crate) expires_at_ms: i64,
+}
+
+impl DelegationAuthorityClaims {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        issuer_ura: impl Into<String>,
+        subject_ura: impl Into<String>,
+        caller_ura: impl Into<String>,
+        audience: impl Into<String>,
+        scopes: impl IntoIterator<Item = impl Into<String>>,
+        issued_at_ms: i64,
+        expires_at_ms: i64,
+    ) -> anyhow::Result<Self> {
+        let claims = Self {
+            issuer_ura: issuer_ura.into(),
+            subject_ura: subject_ura.into(),
+            caller_ura: caller_ura.into(),
+            audience: audience.into(),
+            scopes: scopes.into_iter().map(Into::into).collect(),
+            issued_at_ms,
+            expires_at_ms,
+        };
+        claims.validate_shape()?;
+        Ok(claims)
+    }
+
+    pub fn issuer_ura(&self) -> &str {
+        &self.issuer_ura
+    }
+
+    pub fn subject_ura(&self) -> &str {
+        &self.subject_ura
+    }
+
+    pub fn caller_ura(&self) -> &str {
+        &self.caller_ura
+    }
+
+    pub fn audience(&self) -> &str {
+        &self.audience
+    }
+
+    pub fn scopes(&self) -> &[String] {
+        &self.scopes
+    }
+
+    pub fn issued_at_ms(&self) -> i64 {
+        self.issued_at_ms
+    }
+
+    pub fn expires_at_ms(&self) -> i64 {
+        self.expires_at_ms
+    }
+
+    pub fn canonical_payload_bytes(&self) -> Vec<u8> {
+        canonical_json_bytes(
+            &serde_json::to_value(self).expect("delegation claims serialization is infallible"),
+        )
+    }
+
+    /// Sign and encode the exact metadata value accepted by runtime
+    /// admission. The signer is owner-bound, so an issuer cannot accidentally
+    /// be signed with another principal's key.
+    pub async fn signed_metadata_value(
+        &self,
+        signer: &dyn CanonicalSigner,
+    ) -> anyhow::Result<String> {
+        self.validate_shape()?;
+        if signer.owner_ura() != self.issuer_ura {
+            anyhow::bail!(
+                "delegation signer `{}` does not match issuer `{}`",
+                signer.owner_ura(),
+                self.issuer_ura
+            );
+        }
+        let signature = signer
+            .sign_canonical(&self.canonical_payload_bytes())
+            .await?;
+        let wire = json!({
+            "payload": self,
+            "signature": BASE64_STANDARD.encode(signature.to_bytes()),
+        });
+        Ok(BASE64_STANDARD.encode(serde_json::to_vec(&wire)?))
+    }
+
+    pub(crate) fn validate_shape(&self) -> anyhow::Result<()> {
+        let scalar_fields = [
+            ("issuer_ura", self.issuer_ura.as_str()),
+            ("subject_ura", self.subject_ura.as_str()),
+            ("caller_ura", self.caller_ura.as_str()),
+            ("audience", self.audience.as_str()),
+        ];
+        for (name, value) in scalar_fields {
+            if value.is_empty() || value != value.trim() {
+                anyhow::bail!("delegation {name} must be non-empty and trimmed");
+            }
+            crate::core::ura::parse_ura(value).map_err(|error| {
+                anyhow::anyhow!("delegation {name} must be a canonical URA: {error}")
+            })?;
+        }
+        if self.scopes.is_empty()
+            || self
+                .scopes
+                .iter()
+                .any(|scope| scope.is_empty() || scope != scope.trim())
+        {
+            anyhow::bail!("delegation scopes must contain at least one non-empty trimmed selector");
+        }
+        if self.issued_at_ms < 0 || self.expires_at_ms <= self.issued_at_ms {
+            anyhow::bail!("delegation expiry must be later than its non-negative issue time");
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthorityPredicate {
@@ -768,11 +902,13 @@ mod tests {
     use super::*;
 
     const LOCAL_DEVICE_URA: &str = "easynet:///r/default/device/local";
+    const LOCAL_SYSTEM_AGENT_URA: &str =
+        "easynet:///r/default/agent/device.local.runtime-introspection";
 
     fn descriptor(name: &str) -> crate::daemon::ability::descriptors::AbilityDescriptor {
         crate::daemon::ability::descriptors::AbilityDescriptor::new(
             name,
-            LOCAL_DEVICE_URA,
+            LOCAL_SYSTEM_AGENT_URA,
             crate::daemon::ability::descriptors::Visibility::Scoped,
             crate::daemon::ability::descriptors::AdmissionAction::Invoke,
         )

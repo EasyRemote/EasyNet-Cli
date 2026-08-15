@@ -297,9 +297,8 @@ impl AccessControlStoreRegistry {
         }
     }
 
-    #[cfg(test)]
     #[must_use]
-    pub(crate) fn ephemeral() -> Self {
+    pub(crate) fn transient() -> Self {
         use std::sync::atomic::{AtomicU64, Ordering};
 
         static NEXT_ROOT: AtomicU64 = AtomicU64::new(1);
@@ -315,6 +314,12 @@ impl AccessControlStoreRegistry {
             },
             stores: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn ephemeral() -> Self {
+        Self::transient()
     }
 
     /// Execute one transaction against an owner's canonical in-process store.

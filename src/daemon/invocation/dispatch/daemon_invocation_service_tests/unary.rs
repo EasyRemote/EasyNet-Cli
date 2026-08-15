@@ -520,7 +520,8 @@ async fn invoke_dispatches_federation_advertise_agent() {
         &callee_ura,
     );
     let agent_ura = "easynet:///r/realm/agent/dev.anthropic";
-    let arguments = br#"{"agent_ura":"easynet:///r/realm/agent/dev.anthropic","generation":1,"signing_authority":{"kind":"hosted_by","host_ura":"easynet:///r/realm/device/test-daemon"},"host_node_id":"test-daemon"}"#;
+    let incarnation_id = "11111111111111111111111111111111";
+    let arguments = br#"{"agent_ura":"easynet:///r/realm/agent/dev.anthropic","incarnation_id":"11111111111111111111111111111111"}"#;
     let request = Request::new(InvokeRequest {
         envelope: Some(signed_test_envelope(
             caller_ura,
@@ -557,6 +558,10 @@ async fn invoke_dispatches_federation_advertise_agent() {
     let resp = svc.invoke(request).await.expect("dispatch returns Ok");
     let body: federation_wrappers::AdvertiseAgentResponse = parse_response_body(resp);
     assert!(body.ack);
+    assert_eq!(body.assignment.agent_ura, agent_ura);
+    assert_eq!(body.assignment.host_device_ura, caller_ura);
+    assert_eq!(body.assignment.incarnation_id.as_str(), incarnation_id);
+    assert_eq!(body.assignment.generation, 1);
 }
 
 #[tokio::test]
@@ -710,9 +715,12 @@ async fn invoke_dispatches_namespace_resolve_to_typed_answer() {
 
 #[tokio::test]
 async fn namespace_resolve_cross_realm_route_returns_peer_hub_delegation() {
-    let remote_owner = crate::core::ura::device_ura("remote-realm", "remote-device");
-    let ability_ura =
-        crate::core::ura::owner_ability_ura(&remote_owner, "observe.health").expect("ability ura");
+    let remote_device = crate::core::ura::device_ura("remote-realm", "remote-device");
+    let remote_owner = crate::core::ura::device_agent_ura(
+        "remote-realm",
+        "remote-device",
+        crate::daemon::ability::names::governance::RUNTIME_HEALTH_SYSTEM_AGENT_ID,
+    );
     let svc = register_test_daemon_routes(
         make_unregistered_service_for_route_owner(TEST_DAEMON_URA)
             .with_session_realm("local-realm")
@@ -727,8 +735,9 @@ async fn namespace_resolve_cross_realm_route_returns_peer_hub_delegation() {
         .invoke(invoke_request(
             ABILITY_NAMESPACE_RESOLVE,
             &serde_json::json!({
-                "query_name": ability_ura,
+                "query_name": remote_device,
                 "qtype": "RESOLVE_TYPE_ROUTE",
+                "ability_name": "observe.health",
             })
             .to_string(),
         ))
@@ -1539,9 +1548,9 @@ async fn identity_revoke_user_pubkey_rejects_device_caller_before_write() {
         "device caller must not revoke user trust row",
     );
     assert!(
-        error.message.contains("DEVICE_CALLER_PURPOSE_DENIED")
-            && error.message.contains("identity.revoke_user_pubkey"),
-        "rejection should identify the Device-caller purpose boundary before mutation; got: {}",
+        error.message.contains("identity.revoke_user_pubkey")
+            && error.message.contains("DEVICE_CALLER_PURPOSE_DENIED"),
+        "Device caller classification should reject the ordinary identity write before mutation; got: {}",
         error.message
     );
     assert!(
@@ -2926,18 +2935,26 @@ async fn invoke_dispatches_federation_resolve_key_returns_not_found_when_ura_unk
 }
 
 #[tokio::test]
-async fn invoke_dispatches_federation_revoke() {
+async fn invoke_rejects_federation_revoke_when_subject_differs_from_target() {
     let svc = make_service();
-    let resp = svc
+    let body = svc
         .invoke(invoke_request(
             ABILITY_FEDERATION_REVOKE,
             r#"{"agent_ura":"easynet:///r/realm/device/missing"}"#,
         ))
         .await
-        .expect("dispatch returns Ok");
-    let body: federation_wrappers::RevokeResponse = parse_response_body(resp);
-    assert!(body.ack);
-    assert!(!body.was_active);
+        .expect("canonical execution failure remains in-band")
+        .into_inner();
+    assert_eq!(
+        body.state,
+        axon_sdk::invocation::InvocationState::Failed.to_wire_i32()
+    );
+    let error = body.error.expect("failed revoke returns structured error");
+    assert!(
+        error.message.contains("envelope subject must equal"),
+        "unexpected confused-deputy rejection: {}",
+        error.message
+    );
 }
 
 #[tokio::test]

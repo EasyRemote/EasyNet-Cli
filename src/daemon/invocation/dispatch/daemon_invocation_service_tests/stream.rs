@@ -1008,6 +1008,7 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
 async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
     use crate::daemon::persistence::config::{save_credentials, Credentials};
     use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
 
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     save_credentials(&Credentials {
@@ -1032,7 +1033,14 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
             )
             .expect("test daemon URA is a valid device authority root"),
         );
-    crate::daemon::ability::builtins::device_control::file_transfer::register(&mut catalog);
+    let filesystem =
+        crate::daemon::resources::files::FilesystemResourceProvider::for_device(TEST_DAEMON_URA)
+            .expect("test filesystem Device authority");
+    crate::daemon::ability::builtins::device_control::file_transfer::register(
+        &mut catalog,
+        filesystem.clone(),
+    )
+    .expect("register file-transfer fixture");
 
     let path = std::env::temp_dir().join(format!(
         "easynet-external-signed-bidi-download-{}-{}.bin",
@@ -1047,10 +1055,9 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
 
     let args = serde_json::to_vec(&serde_json::json!({
         "mode": "download",
-        "resource_ref": crate::daemon::resources::files::resource_ref_for_local_path_owned_by(
+        "resource_ref": filesystem.resource_ref_for_local_path(
             &path,
             crate::daemon::resources::files::FilesystemResourceCapability::Read,
-            TEST_DAEMON_URA,
         )
         .expect("local fs ResourceRef"),
     }))
@@ -1061,11 +1068,55 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
         crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER,
         crate::daemon::ability::CallMode::Bidi,
     );
+    let authority_subject_ura = crate::core::ura::resource_dot_ura(
+        "test-realm",
+        "user.test-user",
+        &format!(
+            "invoke/{}",
+            crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER
+        ),
+    );
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("test clock")
+        .as_millis() as i64;
+    let authority = crate::daemon::invocation::admission::authority_metadata::CanonicalSessionAuthorityIssuer::issue(
+        crate::daemon::invocation::admission::authority_metadata::SessionAuthorityRequest {
+            issuer_ura: TEST_DISCOVER_USER_URA.to_string(),
+            session_id: "session-bidi-file-transfer".to_string(),
+            session_owner_user_id: "test-user".to_string(),
+            creator_principal_id: TEST_DISCOVER_USER_URA.to_string(),
+            callee_ura: file_transfer_callee_ura.clone(),
+            subject_ura: authority_subject_ura.clone(),
+            audience: file_transfer_callee_ura.clone(),
+            scopes: vec![crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER.to_string()],
+            allowed_actions: vec![
+                axon_sdk::invocation::admission_action_from_descriptor_ref(
+                    &file_transfer_descriptor_ref,
+                )
+                .expect("file-transfer descriptor action")
+                .to_string(),
+            ],
+            allowed_followup_abilities: vec![crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER.to_string()],
+            issued_at_ms: now_ms - 1_000,
+            expires_at_ms: now_ms + 60_000,
+        },
+        TEST_DISCOVER_USER_URA,
+        |canonical| {
+            Ok::<_, std::convert::Infallible>(
+                test_discover_user_signing_key()
+                    .sign(canonical)
+                    .to_bytes()
+                    .to_vec(),
+            )
+        },
+    )
+    .expect("issue exact User descriptor-bound file-transfer authority");
     let open = EnvelopeOpen {
         envelope: Some(signed_test_envelope_with_descriptor_ref(
             TEST_DISCOVER_USER_URA,
             &file_transfer_callee_ura,
-            &file_transfer_callee_ura,
+            &authority_subject_ura,
             file_transfer_descriptor_ref.clone(),
             &args,
             &test_discover_user_signing_key(),
@@ -1079,6 +1130,7 @@ async fn external_signed_bidi_file_transfer_download_emits_business_frames() {
         ),
         initial_args: args,
         args_content_type: "application/json".to_string(),
+        metadata: authority.into_map(),
         ..EnvelopeOpen::default()
     };
     let descriptor_ref =
@@ -1238,6 +1290,10 @@ async fn invoke_stream_rejects_governance_catalogue_route_before_presence_forwar
 
 #[tokio::test]
 async fn invoke_stream_unknown_function_returns_resolver_negative() {
+    // Route resolution snapshots the persisted hosted-Agent projection. Keep
+    // this negative isolated from tests that deliberately install malformed
+    // projections under a temporary HOME.
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
     let svc = make_service();
     match svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {

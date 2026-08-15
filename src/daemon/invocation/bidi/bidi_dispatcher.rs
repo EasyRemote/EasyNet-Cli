@@ -484,10 +484,11 @@ impl BidiDispatcher {
         let call_mode = selection.call_mode();
         let selected_route = match selection.into_dispatch() {
             CanonicalRouteDispatch::Local(route) => route,
-            CanonicalRouteDispatch::Peer(route) => {
+            CanonicalRouteDispatch::Peer(route) | CanonicalRouteDispatch::UpstreamHub(route) => {
                 return Err(Status::unimplemented(format!(
                     "InvokeBidi selected canonical peer route to hub `{}` for `{}`, but \
-                     the generic cross-realm bidi carrier is unsupported",
+                     the generic cross-realm bidi carrier is unsupported; Device mode does not \
+                     own a peer dialer",
                     route.hub_ura, route.query_name,
                 )));
             }
@@ -621,29 +622,6 @@ fn hub_session_bidi_status(error: SessionRequestError) -> Status {
     }
 }
 
-async fn forward_terminal_bidi_payload(
-    down_tx: &tokio::sync::mpsc::Sender<Result<InvokeBidiDown, Status>>,
-    finalization: &mut ForwardedFinalizationVerifier,
-    stdout_stream_id: u32,
-    payload: Vec<u8>,
-) -> Result<(), Status> {
-    if payload.is_empty() {
-        return Ok(());
-    }
-    finalization.observe_data()?;
-    down_tx
-        .send(Ok(InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
-                stream_id: stdout_stream_id,
-                data: payload,
-                ..BinaryChunk::default()
-            })),
-            ..InvokeBidiDown::default()
-        }))
-        .await
-        .map_err(|_| Status::cancelled("remote bidi response receiver closed"))
-}
-
 impl BidiDispatcher {
     async fn dispatch_hub_session_bidi(
         &self,
@@ -750,26 +728,21 @@ impl BidiDispatcher {
                         );
                         let DispatchResult {
                             payload,
+                            result_content_type,
                             error,
                             failure,
                             admission_receipt,
                             terminal_receipt,
                             ..
                         } = *result;
-                        if let Err(status) = forward_terminal_bidi_payload(
-                            &down_tx_for_results,
-                            &mut finalization,
-                            stdout_stream_id,
-                            payload,
-                        )
-                        .await
-                        {
-                            let _ = down_tx_for_results.send(Err(status)).await;
-                            break;
-                        }
                         let frame = match terminal_receipt {
                             Some(terminal_receipt) => finalization
-                                .finalize(admission_receipt, terminal_receipt)
+                                .finalize_with_carrier_result(
+                                    admission_receipt,
+                                    terminal_receipt,
+                                    payload,
+                                    result_content_type,
+                                )
                                 .map(|finalized| InvokeBidiDown {
                                     payload: Some(DownPayload::Receipt(finalized.terminal_receipt)),
                                     ..InvokeBidiDown::default()
@@ -1004,6 +977,7 @@ impl BidiDispatcher {
                         );
                         let DispatchResult {
                             payload,
+                            result_content_type,
                             error,
                             failure,
                             request_id: _,
@@ -1011,20 +985,14 @@ impl BidiDispatcher {
                             terminal_receipt,
                             ..
                         } = *result;
-                        if let Err(status) = forward_terminal_bidi_payload(
-                            &down_tx_for_results,
-                            &mut finalization,
-                            stdout_stream_id,
-                            payload,
-                        )
-                        .await
-                        {
-                            let _ = down_tx_for_results.send(Err(status)).await;
-                            break;
-                        }
                         let frame = match terminal_receipt {
                             Some(terminal_receipt) => finalization
-                                .finalize(admission_receipt, terminal_receipt)
+                                .finalize_with_carrier_result(
+                                    admission_receipt,
+                                    terminal_receipt,
+                                    payload,
+                                    result_content_type,
+                                )
                                 .map(|finalized| InvokeBidiDown {
                                     payload: Some(DownPayload::Receipt(finalized.terminal_receipt)),
                                     ..InvokeBidiDown::default()
@@ -2349,10 +2317,11 @@ impl BidiDispatcher {
         let call_mode = selection.call_mode();
         let selected_route = match selection.into_dispatch() {
             CanonicalRouteDispatch::Local(route) => route,
-            CanonicalRouteDispatch::Peer(route) => {
+            CanonicalRouteDispatch::Peer(route) | CanonicalRouteDispatch::UpstreamHub(route) => {
                 return Err(Status::unimplemented(format!(
                     "reverse InvokeBidi selected canonical peer route to hub `{}` for `{}`, but \
-                     the generic cross-realm bidi carrier is unsupported",
+                     the generic cross-realm bidi carrier is unsupported; Device mode does not \
+                     own a peer dialer",
                     route.hub_ura, route.query_name,
                 )));
             }

@@ -2443,7 +2443,7 @@ mod tests {
             .is_some());
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test(start_paused = true)]
     async fn consume_with_idle_timeout_resets_on_each_received_frame() {
         // Frames arrive every 30ms; idle timeout is 50ms. The
         // reset-on-receive contract means the timeout never
@@ -2456,8 +2456,9 @@ mod tests {
         client.on_dial_ok();
         let cell = SharedFederatedDirectoryView::default();
 
-        // 5 frames at 30ms cadence = 150ms total runtime; idle
-        // timeout 50ms only trips if the reset is broken.
+        // The paused Tokio clock advances to the next scheduled deadline, so
+        // host load cannot turn a 30ms virtual cadence into a false 50ms idle
+        // timeout. Five frames span 150ms in total; only a broken reset trips.
         // First frame must be Snapshot per FSM contract; the
         // remaining four are Heartbeats which exercise the
         // reset-on-receive without changing the view.

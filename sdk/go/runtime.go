@@ -98,12 +98,13 @@ type governanceReadTransport interface {
 
 // RuntimeDescriptorRefRequest selects one runtime-owned ability descriptor.
 type RuntimeDescriptorRefRequest struct {
-	CalleeURA  string `json:"callee_ura"`
-	Ability    string `json:"ability"`
-	CallMode   string `json:"call_mode"`
-	CallerURA  string `json:"caller_ura,omitempty"`
-	SubjectURA string `json:"subject_ura,omitempty"`
-	Provider   string `json:"provider,omitempty"`
+	CalleeURA         string            `json:"callee_ura"`
+	Ability           string            `json:"ability"`
+	CallMode          string            `json:"call_mode"`
+	CallerURA         string            `json:"caller_ura,omitempty"`
+	SubjectURA        string            `json:"subject_ura,omitempty"`
+	AuthorityMetadata map[string]string `json:"authority_metadata,omitempty"`
+	Provider          string            `json:"provider,omitempty"`
 }
 
 // RuntimeTransportFunc adapts functions into a RuntimeTransport.

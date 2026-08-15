@@ -610,22 +610,47 @@ fn invoke_api_key_manage(
 RS
 
 cat >"$SB/src/cli/commands/groups/ability.rs" <<'RS'
-use crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer;
-
-struct UninstallArgs;
+struct UninstallArgs {
+    ability_ura: String,
+}
 
 fn run_uninstall(args: UninstallArgs) -> anyhow::Result<serde_json::Value> {
-    let payload = ability_uninstall_payload(&args)?;
-    let result = invoke_ability_uninstall(payload)?;
-    Ok(result)
+    let target_ura = "easynet:///r/acme/device/dev-a".to_string();
+    let identity = crate::support::platform::remote_device::PairedInvocationIdentity::load(
+        "ability uninstall",
+    )?;
+    crate::cli::daemon_client::remote_system_ability::invoke_target_ability_uninstall(
+        &target_ura,
+        identity.caller_user_ura(),
+        &args.ability_ura,
+        None,
+    )
+}
+RS
+
+cat >"$SB/src/cli/daemon_client/remote_system_ability.rs" <<'RS'
+fn read_runtime_catalogue() -> anyhow::Result<serde_json::Value> {
+    crate::support::platform::local_invoke::LocalRuntimeCatalogueReadIssuer::list_abilities(
+        serde_json::json!({}),
+    )
 }
 
-fn invoke_ability_uninstall(args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-    LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity("ability.uninstall", args)
-}
-
-fn ability_uninstall_payload(_args: &UninstallArgs) -> anyhow::Result<serde_json::Value> {
-    Ok(serde_json::json!({}))
+fn invoke_target_ability_uninstall(
+    target_ura: &str,
+    caller_ura: &str,
+    ability_ura: &str,
+) -> anyhow::Result<serde_json::Value> {
+    let target_call = target_ura;
+    let args = serde_json::json!({});
+    let timeout = std::time::Duration::from_secs(30);
+    let request = RemoteUserActionInvocationIssuer::caller_declared_root_plan(
+        &target_call,
+        caller_ura,
+        ability_ura,
+        args,
+        timeout,
+    )?;
+    Ok(serde_json::json!({"request": request}))
 }
 RS
 

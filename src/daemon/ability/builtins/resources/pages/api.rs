@@ -52,8 +52,7 @@ use serde_json::{json, Value};
 use super::sandbox::open_beneath;
 use super::state::PUBLISHED_PROJECTS;
 use crate::core::ura::AbilitySelector;
-use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
-use crate::daemon::ability::AuthorityScope;
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::invocation::routing::target::CallMode;
 use crate::daemon::resources::projection::PagesApiResponse;
 
@@ -351,13 +350,12 @@ pub(crate) fn api_ability_names_for_project(
 
 pub(crate) fn register_api_abilities_for_project(
     registry: &AxonAbilityCatalog,
-    _owner_user_id: &str,
+    owner_user_id: &str,
     user: &str,
     project_id: &str,
-    authority_scope: AuthorityScope,
 ) -> anyhow::Result<usize> {
     let names = api_ability_names_for_project(user, project_id)?;
-    let owner = OwnerKind::Agent("pages".to_string());
+    let owner = super::pages_service_owner(owner_user_id);
     for name in &names {
         let Some(verb) = name.rsplit_once(".api.").map(|(_prefix, verb)| verb) else {
             continue;
@@ -365,10 +363,9 @@ pub(crate) fn register_api_abilities_for_project(
         let user = user.to_string();
         let project_id = project_id.to_string();
         let verb = verb.to_string();
-        registry.hot_register_rpc_with_spec_and_authority_scope(
+        registry.hot_register_rpc_with_spec(
             name.clone(),
             owner.clone(),
-            authority_scope.clone(),
             api_ability_manifest(&verb),
             Arc::new(move |args| handle_api(&user, &project_id, &verb, args)),
         )?;

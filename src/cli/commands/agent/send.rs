@@ -403,8 +403,10 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // otherwise print raw text so piping into other tools stays clean.
     if console::Term::stdout().is_term() {
         let skin = build_markdown_skin();
-        let compact = compact_markdown(&reply_text);
-        skin.print_text(&compact);
+        let compact = crate::cli::source_highlighting::compact_markdown(&reply_text);
+        let stdout = std::io::stdout();
+        let mut stdout = stdout.lock();
+        crate::cli::source_highlighting::write_markdown(&mut stdout, &skin, &compact)?;
     } else {
         println!("{}", reply_text);
     }
@@ -537,28 +539,6 @@ fn build_markdown_skin() -> termimad::MadSkin {
     skin.table.compound_style.set_fg(Color::DarkGrey);
 
     skin
-}
-
-/// Collapse consecutive blank lines down to a single blank line and strip
-/// leading/trailing blanks, so the rendered output stays compact without
-/// fighting termimad's layout engine.
-fn compact_markdown(src: &str) -> String {
-    let mut out = String::with_capacity(src.len());
-    let mut prev_blank = true; // treat start-of-doc as already-blank
-    for line in src.lines() {
-        let is_blank = line.trim().is_empty();
-        if is_blank && prev_blank {
-            continue; // skip duplicate blank lines
-        }
-        out.push_str(line);
-        out.push('\n');
-        prev_blank = is_blank;
-    }
-    // Trim trailing blank line.
-    while out.ends_with("\n\n") {
-        out.pop();
-    }
-    out
 }
 
 #[cfg(test)]

@@ -895,14 +895,15 @@ async fn attach_owner_projection_authority(
     device_signer: &dyn CanonicalSigner,
     authority: PreludeOwnerProjectionAuthority<'_>,
 ) -> Result<(), tonic::Status> {
-    let PreludeOwnerProjectionAuthority::UserDelegation(user_signer) = authority else {
-        return Ok(());
+    let issuer_signer = match authority {
+        PreludeOwnerProjectionAuthority::SponsorDevice => device_signer,
+        PreludeOwnerProjectionAuthority::UserDelegation(user_signer) => user_signer,
     };
     let now_ms = i64::try_from(crate::daemon::invocation::admission::runtime_trust::now_unix_ms())
         .map_err(|_| tonic::Status::internal("runtime clock exceeded signed delegation range"))?;
     let hub_ura = session_hub_ura(device_signer.owner_ura())?;
     let claims = crate::daemon::ability::DelegationAuthorityClaims::new(
-        user_signer.owner_ura(),
+        issuer_signer.owner_ura(),
         owner_ura,
         device_signer.owner_ura(),
         &hub_ura,
@@ -916,7 +917,7 @@ async fn attach_owner_projection_authority(
         ))
     })?;
     let metadata = claims
-        .signed_metadata_value(user_signer)
+        .signed_metadata_value(issuer_signer)
         .await
         .map_err(|error| {
             tonic::Status::failed_precondition(format!(
@@ -2117,6 +2118,41 @@ mod tests {
         assert_eq!(wire.payload.issuer_ura(), user_ura);
         assert_eq!(wire.payload.caller_ura(), device_ura);
         assert_eq!(wire.payload.subject_ura(), agent_ura);
+        assert_eq!(wire.payload.audience(), "easynet:///r/realm/authority");
+        assert_eq!(
+            wire.payload.scopes(),
+            [crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES]
+        );
+    }
+
+    #[tokio::test]
+    async fn system_agent_projection_carries_sponsor_device_delegation() {
+        let device_ura = "easynet:///r/realm/device/device-dev";
+        let system_agent_ura = "easynet:///r/realm/agent/device.device-dev.remote-desktop";
+        let device_signer = TestCanonicalSigner::new(device_ura, [0x42; 32]);
+        let mut request = InvokeRequest::default();
+
+        attach_owner_projection_authority(
+            &mut request,
+            system_agent_ura,
+            &device_signer,
+            PreludeOwnerProjectionAuthority::SponsorDevice,
+        )
+        .await
+        .expect("SystemAgent projection sponsor-device delegation");
+
+        let raw = request
+            .metadata
+            .get(crate::daemon::ability::RUNTIME_DELEGATION_METADATA_KEY)
+            .expect("signed sponsor-device runtime delegation metadata");
+        let wire =
+            crate::daemon::invocation::admission::authority_metadata::decode_delegation_authority_wire(
+                raw,
+            )
+            .expect("canonical delegation wire");
+        assert_eq!(wire.payload.issuer_ura(), device_ura);
+        assert_eq!(wire.payload.caller_ura(), device_ura);
+        assert_eq!(wire.payload.subject_ura(), system_agent_ura);
         assert_eq!(wire.payload.audience(), "easynet:///r/realm/authority");
         assert_eq!(
             wire.payload.scopes(),

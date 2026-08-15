@@ -114,24 +114,21 @@ struct Fixture {
 fn registry_for_pages_owner(
     runtime: Arc<LocalRuntime>,
     realm: &str,
-    user: &str,
+    _user: &str,
 ) -> AxonAbilityCatalog {
-    let pages_agent = ura::agent_ura(realm, user, "pages");
     let authority_context = AbilityAuthorityContext::for_combined_authority_roots(ura::device_ura(
         realm,
         "pages-test-device",
     ))
-    .expect("Pages test Device authority context")
-    .with_declared_agent_authority_root(pages_agent)
-    .expect("Pages execution Agent must be explicitly hosted by the test daemon");
+    .expect("Pages test Device authority context");
     AxonAbilityCatalog::new_with_runtime_and_authority_context(runtime, authority_context)
 }
 
 fn configured_local_runtime(realm: &str, user: &str) -> Arc<LocalRuntime> {
-    let pages_agent = ura::agent_ura(realm, user, "pages");
+    let pages_service = ura::service_ura(realm, user, "pages");
     easynet_cli::daemon::axon_bridge::runtime_factory::build_local_runtime_with_receipt_provider(
         runtime_fixture::rejecting_key_resolver(),
-        Arc::new(PagesCanonicalReceiptProvider::for_owner(pages_agent)),
+        Arc::new(PagesCanonicalReceiptProvider::for_owner(pages_service)),
     )
 }
 
@@ -602,7 +599,7 @@ fn u14_pages_management_abilities_are_in_local_runtime() {
     let user = "alice-runtime";
     let runtime = configured_local_runtime("easynet.run", user);
     let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
-    let pages_agent = ura::agent_ura("easynet.run", user, "pages");
+    let pages_service = ura::service_ura("easynet.run", user, "pages");
     let mut reg = registry_for_pages_owner(Arc::clone(&runtime), "easynet.run", user);
 
     pages::register(
@@ -619,32 +616,34 @@ fn u14_pages_management_abilities_are_in_local_runtime() {
     let reg = Arc::new(reg);
     assert!(handle.set(Arc::clone(&reg)).is_ok());
 
-    // Backend routes `project_list` through the synthetic hosted agent
-    // `agent/<user>.pages`. The local dispatch key stays owner-qualified, but
-    // the control-plane authority root must be the pages agent, not the
-    // user's product account or any synthesized account-as-agent fallback.
-    let ability = ura::local_dispatch_ability_key(&pages_agent, "project_list");
-    assert_eq!(ability, "pages.project_list");
-    assert!(reg.has_rpc(&ability));
+    // Backend routes the local `project_list` handler through the
+    // principal-scoped Pages Service. The local dispatch key remains the
+    // handler key; the public descriptor name is canonicalized as
+    // `pages.project_list` under the Pages Service owner.
+    let ability = "project_list";
+    assert!(reg.has_rpc(ability));
     let facts = reg
-        .runtime_binding_facts_for_mode(&ability, easynet_cli::daemon::ability::CallMode::Rpc)
+        .runtime_binding_facts_for_mode(ability, easynet_cli::daemon::ability::CallMode::Rpc)
         .expect("runtime facts lookup")
         .expect("project_list runtime facts");
-    assert_eq!(facts.authority_owner_projection, "agent:pages");
-    assert_eq!(facts.authority_root, pages_agent);
-    let public_name = ura::owner_local_ability_name(&facts.authority_root, "project_list");
+    assert_eq!(
+        facts.authority_owner_projection,
+        "service:alice-runtime.pages"
+    );
+    assert_eq!(facts.authority_root, pages_service);
+    let public_name = ura::descriptor_public_ability_name(&facts.authority_root, ability);
     let runtime_ability = ura::owner_ability_ura(&facts.authority_root, &public_name)
         .expect("project_list runtime ability URA");
     assert_eq!(
         runtime_ability,
-        "easynet:///r/easynet.run/ability/alice-runtime.pages.project_list"
+        "easynet:///r/easynet.run/ability/service.alice-runtime.pages.project_list"
     );
     assert!(
         futures::executor::block_on(runtime.has_ability(&runtime_ability)),
         "project_list must be installed in Axon LocalRuntime under the same canonical ability URA the carrier dispatch path probes"
     );
     let resp = reg
-        .invoke_rpc_target_json(local_rpc_target(&ability, json!({})))
+        .invoke_rpc_target_json(local_rpc_target(ability, json!({})))
         .expect("project_list should invoke through LocalRuntime");
     assert_eq!(resp["projects"].as_array().map(Vec::len), Some(0));
 }

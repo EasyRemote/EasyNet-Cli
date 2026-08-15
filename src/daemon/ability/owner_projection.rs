@@ -10,7 +10,8 @@
 // `OwnerProjection` is not a protocol principal and not an execution host. It is
 // the daemon-local string grammar that labels which owner plane a governed
 // AbilityDescriptor belongs to: DeviceProfileProjection migration facts,
-// realm Authority, device-sponsored SystemAgent, hosted Agent, or plugin
+// realm Authority, principal-scoped Service, device-sponsored SystemAgent,
+// hosted Agent, or plugin
 // implementation plane.
 //
 // Implementation Approach
@@ -30,12 +31,14 @@ use crate::daemon::ability::AbilityControlPlaneError;
 /// Canonical owner-plane marker grammar for an `AuthorityScope`.
 ///
 /// The owner projection is a runtime-plane label, never a product deployment
-/// mode. It has exactly five shapes: two bare planes (`device`, `authority`)
-/// and three `<plane>:<id>` planes (`system-agent`, `agent`, `plugin`).
+/// mode. It has exactly six shapes: two bare planes (`device`, `authority`)
+/// and four `<plane>:<id>` planes (`service`, `system-agent`, `agent`,
+/// `plugin`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum OwnerProjection {
     Device,
     RealmAuthority,
+    Service(String),
     SystemAgent(String),
     Agent(String),
     Plugin(String),
@@ -59,6 +62,7 @@ impl OwnerProjection {
                 }
                 let id = id.to_string();
                 match plane {
+                    "service" => Ok(Self::Service(id)),
                     "system-agent" => Ok(Self::SystemAgent(id)),
                     "agent" => Ok(Self::Agent(id)),
                     "plugin" => Ok(Self::Plugin(id)),
@@ -73,6 +77,7 @@ impl OwnerProjection {
         match self {
             Self::Device => "device".to_string(),
             Self::RealmAuthority => "authority".to_string(),
+            Self::Service(id) => format!("service:{id}"),
             Self::SystemAgent(id) => format!("system-agent:{id}"),
             Self::Agent(id) => format!("agent:{id}"),
             Self::Plugin(id) => format!("plugin:{id}"),
@@ -102,6 +107,7 @@ mod tests {
         for marker in [
             "device",
             "authority",
+            "service:user-1.pages",
             "system-agent:agent-management",
             "agent:codex",
             "plugin:remote-desktop",

@@ -12,6 +12,10 @@ pub const MCP_BRIDGE_CALL_TOOL: &str = "mcp.bridge.call_tool";
 pub const MCP_CLIENT_LIST: &str = "mcp.client.list";
 pub const MCP_CLIENT_CALL: &str = "mcp.client.call";
 
+/// Device-sponsored SystemAgent id for inbound/outbound MCP edge adaptation
+/// and reflected tools backed by MCP processes configured on this Device.
+pub const MCP_INTEGRATION_SYSTEM_AGENT_ID: &str = "mcp-integration";
+
 pub const OPENAI_CHAT_COMPLETIONS: &str = "openai.chat_completions";
 pub const OPENAI_LIST_MODELS: &str = "openai.list_models";
 pub const OPENAI_FILES_UPLOAD: &str = "openai.files.upload";
@@ -29,3 +33,9 @@ pub const PLUGIN_STATUS: &str = "plugin.status";
 pub const PLUGIN_ACTIVATE_REALTIME: &str = "plugin.activate_realtime";
 pub const PLUGIN_COMPANION_STATUS: &str = "plugin.companion_status";
 pub const PLUGIN_COMPANION_RECONCILE: &str = "plugin.companion_reconcile";
+
+/// Device-sponsored SystemAgent id for the remote desktop product surface.
+/// The remote desktop plugin contributes AbilityImpls; public
+/// `remote_desktop.*` descriptors are owned by this SystemAgent, not by
+/// plugin-management.
+pub const REMOTE_DESKTOP_SYSTEM_AGENT_ID: &str = "remote-desktop";

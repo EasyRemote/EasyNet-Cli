@@ -326,6 +326,10 @@ func addressingComponents(parts ParsedURA) map[string]any {
 			components["user_id"] = parts.UserID
 		}
 		components["agent_id"] = parts.AgentID
+	case URAKindService:
+		components["owner_kind"] = "service"
+		components["principal_id"] = parts.UserID
+		components["service_id"] = parts.ServiceID
 	case URAKindAbility:
 		publicName := parts.AbilityID
 		components["owner_ura"] = ownerURAFromAbilityParts(parts)
@@ -346,6 +350,8 @@ func ownerURAFromAbilityParts(parts ParsedURA) string {
 	switch parts.AbilityOwner.Kind {
 	case AbilityOwnerAgent:
 		return AgentURA(parts.Realm, parts.AbilityOwner.UserID, parts.AbilityOwner.AgentID)
+	case AbilityOwnerService:
+		return ServiceURA(parts.Realm, parts.AbilityOwner.UserID, parts.AbilityOwner.ServiceID)
 	case abilityOwnerSystemAgent:
 		return DeviceAgentURA(parts.Realm, parts.AbilityOwner.OwnerID, parts.AbilityOwner.AgentID)
 	case abilityOwnerDevice:
@@ -374,6 +380,8 @@ func canonicalOwnerResourceURA(ownerURA string, path string) (string, error) {
 		} else {
 			ownerID = "agent." + parts.UserID + "." + parts.AgentID
 		}
+	case URAKindService:
+		ownerID = "service." + parts.UserID + "." + parts.ServiceID
 	case URAKindAuthority:
 		ownerID = "authority"
 	default:

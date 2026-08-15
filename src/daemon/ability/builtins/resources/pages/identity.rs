@@ -3,24 +3,22 @@
 //
 // Resolved once at daemon boot and fed explicitly into registry assembly.
 
-/// Identity + configuration the registry build needs to mint
-/// user-scoped ability families (pages, files, api_key). The display
-/// user slug and the canonical owner id are deliberately separate:
-/// Pages URLs/storage may use a stable user-facing slug, while runtime
-/// Agent owner URAs must use the immutable product user id that Hub
-/// admission binds to the caller Device owner. Production callers
-/// (`bin/easynet-daemon.rs`, supervisor reboots) read
-/// EASYNET_PAGES_USER + credentials.json once at boot and pass the
-/// resolved value here. Missing credentials is the unpaired daemon
-/// state; malformed credentials is unavailable boot identity state and
-/// fails before registry assembly.
+/// Identity + configuration the registry build needs to mint Pages resources
+/// and service-owned ability descriptors. The display user slug and immutable
+/// product principal id are deliberately separate: Pages URLs/storage may use a
+/// stable user-facing slug, while the public callable surface is owned by the
+/// principal-scoped Pages Service. Production callers
+/// (`bin/easynet-daemon.rs`, supervisor reboots) read EASYNET_PAGES_USER +
+/// credentials.json once at boot and pass the resolved value here. Missing
+/// credentials is the unpaired daemon state; malformed credentials is
+/// unavailable boot identity state and fails before registry assembly.
 #[derive(Debug, Clone, Default)]
 pub struct PagesIdentity {
     /// User-facing slug for Pages URLs/storage and legacy product display.
     /// This is not a canonical runtime owner id.
     pub user: Option<String>,
-    /// Immutable product user id used in canonical runtime owner URAs such as
-    /// `agent/<owner_user_id>.pages` and `agent/<owner_user_id>.files`.
+    /// Immutable product user id used for Pages state/admission and the
+    /// public `service/<owner_user_id>.pages` descriptor owner.
     /// `None` means "this daemon isn't paired yet" — the user-scoped families
     /// are skipped.
     pub owner_user_id: Option<String>,

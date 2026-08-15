@@ -218,8 +218,8 @@ fn build_registry_publishes_canonical_descriptors_for_device_media_and_remote_de
         if ability.starts_with("remote_desktop.") {
             assert_eq!(
                 row.owner,
-                crate::daemon::ability::dispatch::OwnerKind::plugin_management_system(),
-                "{ability} must be catalogued under plugin-management SystemAgent owner"
+                crate::daemon::ability::dispatch::OwnerKind::remote_desktop_system(),
+                "{ability} must be catalogued under remote-desktop SystemAgent owner"
             );
             let parsed_owner = crate::core::ura::parse_ura(&row.descriptor.owner_ura)
                 .unwrap_or_else(|error| panic!("{ability} owner_ura must be canonical: {error}"));
@@ -228,8 +228,8 @@ fn build_registry_publishes_canonical_descriptors_for_device_media_and_remote_de
             });
             assert_eq!(
                 system_agent_id,
-                crate::daemon::ability::names::integrations::PLUGIN_MANAGEMENT_SYSTEM_AGENT_ID,
-                "{ability} must be published through plugin-management, not direct Device ownership"
+                crate::daemon::ability::names::integrations::REMOTE_DESKTOP_SYSTEM_AGENT_ID,
+                "{ability} must be published through remote-desktop, not plugin-management or direct Device ownership"
             );
         }
     }
@@ -1130,12 +1130,12 @@ fn unqualified_voice_repository_is_rejected_before_registry_assembly() {
 }
 
 #[test]
-fn pages_management_is_owned_by_the_declared_pages_agent() {
+fn pages_management_is_owned_by_principal_scoped_pages_service() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let agents = AgentRegistry::default();
     let device_ura = crate::core::ura::device_ura("pages-owner", "dev-1");
     let owner_user_id = "user-alice";
-    let pages_agent = crate::core::ura::agent_ura("pages-owner", owner_user_id, "pages");
+    let pages_service = crate::core::ura::service_ura("pages-owner", owner_user_id, "pages");
     let authority_context =
         crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
             device_ura,
@@ -1154,18 +1154,20 @@ fn pages_management_is_owned_by_the_declared_pages_agent() {
         .catalog;
     let record = registry
         .control_plane_record_for_authority_mode(
-            &pages_agent,
+            &pages_service,
             "pages.publish",
             crate::daemon::ability::CallMode::Rpc,
         )
         .expect("Pages control-plane lookup")
-        .expect("Pages publish must be registered under its declared execution Agent");
-    assert_eq!(record.authority().scope().owner_projection(), "agent:pages");
-    assert_eq!(record.authority().scope().authority_root(), pages_agent);
+        .expect("Pages publish must be registered under its declared Pages Service");
+    assert_eq!(
+        record.authority().scope().owner_projection(),
+        "service:user-alice.pages"
+    );
+    assert_eq!(record.authority().scope().authority_root(), pages_service);
 
     crate::daemon::ability::builtins::resources::pages::register_project_abilities(
         &registry,
-        "pages-owner",
         owner_user_id,
         "alice",
         "portfolio",
@@ -1173,20 +1175,77 @@ fn pages_management_is_owned_by_the_declared_pages_agent() {
     .expect("register dynamic Pages project abilities");
     let fetch_record = registry
         .control_plane_record_for_authority_mode(
-            &pages_agent,
+            &pages_service,
             "alice.portfolio.page.fetch",
             crate::daemon::ability::CallMode::Rpc,
         )
         .expect("dynamic Pages control-plane lookup")
-        .expect("page.fetch must use the same declared Pages execution Agent");
+        .expect("page.fetch must use the same declared Pages Service");
     assert_eq!(
         fetch_record.authority().scope().owner_projection(),
-        "agent:pages"
+        "service:user-alice.pages"
     );
     assert_eq!(
         fetch_record.authority().scope().authority_root(),
-        pages_agent
+        pages_service
     );
+}
+
+#[test]
+fn same_user_on_two_devices_shares_pages_service_and_gets_distinct_device_local_owners() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+
+    let owners_for = |device_id: &str| {
+        let agents = AgentRegistry::default();
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                crate::core::ura::device_ura("multi-device", device_id),
+            )
+            .unwrap();
+        let mut config = registry_config_for_agents_with_authority(&agents, authority_context);
+        config.pages_identity = crate::daemon::ability::builtins::resources::pages::PagesIdentity {
+            user: Some("alice".to_string()),
+            owner_user_id: Some("same-user-id".to_string()),
+            realm: Some("multi-device".to_string()),
+            listener_port: Some(8787),
+        };
+        let registry = build_registry_with_services_result(config).unwrap().catalog;
+        ["pages.publish", "files.put", "mcp.bridge.list_tools"].map(|ability| {
+            registry
+                .runtime_binding_facts_for_mode(ability, crate::daemon::ability::CallMode::Rpc)
+                .unwrap()
+                .unwrap()
+                .authority_root
+        })
+    };
+
+    let linux = owners_for("dev-linux");
+    let macos = owners_for("dev-macos-sim");
+
+    assert_eq!(
+        linux,
+        [
+            "easynet:///r/multi-device/service/same-user-id.pages",
+            "easynet:///r/multi-device/agent/device.dev-linux.files",
+            "easynet:///r/multi-device/agent/device.dev-linux.mcp-integration",
+        ]
+    );
+    assert_eq!(
+        macos,
+        [
+            "easynet:///r/multi-device/service/same-user-id.pages",
+            "easynet:///r/multi-device/agent/device.dev-macos-sim.files",
+            "easynet:///r/multi-device/agent/device.dev-macos-sim.mcp-integration",
+        ]
+    );
+    assert_eq!(
+        linux[0], macos[0],
+        "Pages is the principal-scoped Service surface shared by the user's devices"
+    );
+    assert!(linux[1..]
+        .iter()
+        .zip(macos[1..].iter())
+        .all(|(left, right)| left != right));
 }
 
 #[test]
@@ -1327,10 +1386,12 @@ fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
                     && row.owner == crate::daemon::ability::dispatch::OwnerKind::RealmAuthority
                     && row.descriptor.owner_ura == hub_ura
                     && row.descriptor.call_mode() == crate::daemon::ability::CallMode::Bidi
+                    && row.descriptor.metadata.get("exposure").map(String::as_str)
+                        == Some("internal")
             })
             .count(),
         1,
-        "RealmAuthority registry must retain exactly one Authority-owned session.open descriptor"
+        "RealmAuthority registry must retain exactly one internal Authority-owned session.open descriptor"
     );
     let exclusions = registry.static_authority_exclusion_snapshot();
     assert!(

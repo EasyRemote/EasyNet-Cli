@@ -447,9 +447,12 @@ struct AbilityBundle {
 }
 
 impl AbilityBundle {
-    fn from_resource_ref(args: &Value) -> anyhow::Result<Self> {
+    fn from_resource_ref(
+        args: &Value,
+        filesystem: &filesystem::FilesystemResourceProvider,
+    ) -> anyhow::Result<Self> {
         let resolved =
-            filesystem::resolve_filesystem_path(args, FilesystemResourceCapability::Read)?;
+            filesystem.resolve_filesystem_path(args, FilesystemResourceCapability::Read)?;
         let path = resolved.local_path;
         let display_path = resolved.display_path;
         let (manifest_path, raw_manifest_bytes) = if path.is_dir() {
@@ -601,6 +604,7 @@ fn deploy_ability_handler_with_clock(
         .ok_or_else(|| anyhow::anyhow!("ability.deploy: `target_ura` is required"))?;
     let local = local_identity()?;
     let host_device_ura = crate::core::ura::device_ura(&local.tenant_id, &local.node_id);
+    let filesystem = filesystem::FilesystemResourceProvider::for_device(host_device_ura.clone())?;
     let deployed_owner_ura = crate::core::ura::device_agent_ura(
         &local.tenant_id,
         &local.node_id,
@@ -614,7 +618,7 @@ fn deploy_ability_handler_with_clock(
         .require_local_mutation("ability.deploy")?;
 
     // ── manifest materialization ────────────────────────────────────
-    let bundle = AbilityBundle::from_resource_ref(&args)?;
+    let bundle = AbilityBundle::from_resource_ref(&args, &filesystem)?;
     let key = bundle.wire_key();
     let ability_ura = crate::core::ura::owner_ability_ura(&deployed_owner_ura, &key)
         .ok_or_else(|| anyhow::anyhow!("ability.deploy: cannot derive ability_ura"))?;
@@ -856,6 +860,10 @@ mod tests {
 
     const TEST_DEVICE_URA: &str = "easynet:///r/test/device/local";
 
+    fn filesystem_provider() -> filesystem::FilesystemResourceProvider {
+        filesystem::FilesystemResourceProvider::for_device(TEST_DEVICE_URA).unwrap()
+    }
+
     fn metadata_test_catalog() -> AxonAbilityCatalog {
         AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
     }
@@ -1065,9 +1073,9 @@ mod tests {
     fn deploy_ability_local_validates_manifest() {
         let _home = provision_local_device_credentials();
         let dir = tempfile::tempdir().unwrap();
-        let resource_ref =
-            filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
-                .unwrap();
+        let resource_ref = filesystem_provider()
+            .resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
+            .unwrap();
         let err = deploy_ability_handler(
             admitted_user_env(),
             json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
@@ -1092,9 +1100,9 @@ mod tests {
                 "exec":{"kind":"shell","argv":["echo","hi"]}}"#,
         )
         .unwrap();
-        let resource_ref =
-            filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
-                .unwrap();
+        let resource_ref = filesystem_provider()
+            .resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
+            .unwrap();
         let err = deploy_ability_handler(
             admitted_user_env(),
             json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
@@ -1134,9 +1142,9 @@ mod tests {
                 "exec":{"kind":"shell","argv":["echo","hi"]}}"#,
         )
         .unwrap();
-        let resource_ref =
-            filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
-                .unwrap();
+        let resource_ref = filesystem_provider()
+            .resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
+            .unwrap();
         let err = deploy_ability_handler(
             admitted_user_env(),
             json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
@@ -1160,9 +1168,9 @@ mod tests {
                 "exec":{"kind":"shell","argv":["echo","hi"]}}"#,
         )
         .unwrap();
-        let resource_ref =
-            filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
-                .unwrap();
+        let resource_ref = filesystem_provider()
+            .resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
+            .unwrap();
         let err = deploy_ability_handler(
             admitted_user_env(),
             json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
@@ -1212,14 +1220,15 @@ mod tests {
                 .unwrap();
             archive.finish().unwrap();
         }
-        let resource_ref = filesystem::resource_ref_for_local_path(
-            &archive_path,
-            FilesystemResourceCapability::Read,
-        )
-        .unwrap();
+        let resource_ref = filesystem_provider()
+            .resource_ref_for_local_path(&archive_path, FilesystemResourceCapability::Read)
+            .unwrap();
 
-        let bundle = AbilityBundle::from_resource_ref(&json!({ "resource_ref": resource_ref }))
-            .expect("tar.gz ability bundle should parse root ability.json");
+        let bundle = AbilityBundle::from_resource_ref(
+            &json!({ "resource_ref": resource_ref }),
+            &filesystem_provider(),
+        )
+        .expect("tar.gz ability bundle should parse root ability.json");
 
         assert_eq!(bundle.public_name, "weather");
         assert_eq!(bundle.namespace.as_str(), "er");
@@ -1247,14 +1256,15 @@ mod tests {
                 .unwrap();
             archive.finish().unwrap();
         }
-        let resource_ref = filesystem::resource_ref_for_local_path(
-            &archive_path,
-            FilesystemResourceCapability::Read,
-        )
-        .unwrap();
+        let resource_ref = filesystem_provider()
+            .resource_ref_for_local_path(&archive_path, FilesystemResourceCapability::Read)
+            .unwrap();
 
-        let err = AbilityBundle::from_resource_ref(&json!({ "resource_ref": resource_ref }))
-            .expect_err("nested ability.json must not be accepted as root bundle manifest");
+        let err = AbilityBundle::from_resource_ref(
+            &json!({ "resource_ref": resource_ref }),
+            &filesystem_provider(),
+        )
+        .expect_err("nested ability.json must not be accepted as root bundle manifest");
 
         assert!(
             err.to_string().contains("root ability.json"),
@@ -1274,9 +1284,9 @@ mod tests {
                 "exec":{"kind":"shell","argv":["echo","hi"]}}"#,
         )
         .unwrap();
-        let resource_ref =
-            filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
-                .unwrap();
+        let resource_ref = filesystem_provider()
+            .resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
+            .unwrap();
         let err = deploy_ability_handler(
             admitted_user_env(),
             json!({ "resource_ref": resource_ref, "target_ura": TEST_DEVICE_URA }),
@@ -1334,9 +1344,9 @@ mod tests {
                 "exec":{"kind":"host_stream","host_socket":"/tmp/er-host.sock","function":"er.weather"}}"#,
         )
         .unwrap();
-        let resource_ref =
-            filesystem::resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
-                .unwrap();
+        let resource_ref = filesystem_provider()
+            .resource_ref_for_local_path(dir.path(), FilesystemResourceCapability::Read)
+            .unwrap();
         let store_path = dir.path().join("ability-deployments.json");
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let dir_path = dir.path().to_path_buf();

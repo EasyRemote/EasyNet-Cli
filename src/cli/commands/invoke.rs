@@ -59,12 +59,10 @@ pub struct InvokeArgs {
     /// remote origin-caller proof generation to bind a known descriptor
     /// version.
     pub ability_ura: String,
-    /// Pin the invocation to a remote node: a canonical Device URA
-    /// (`easynet:///r/<realm>/device/<node_id>`) or Authority URA
-    /// (`easynet:///r/<realm>/authority`). The call routes through the
-    /// local daemon's canonical `Invocation::Invoke` RPC — the
-    /// cross-device main channel. Builds without canonical remote invocation
-    /// transport reject the flag with a re-build hint. Omit to dispatch locally.
+    /// Route through a Device placement locator, or pin the exact
+    /// Agent/SystemAgent/Service/Authority callee returned by the ability catalogue.
+    /// Exact callees must own the selected Ability URA. Builds without canonical
+    /// remote invocation transport reject the flag. Omit to dispatch locally.
     #[arg(long, short = 'n', value_name = "URA")]
     pub node: Option<String>,
     /// JSON object passed to the ability as its arguments — for
@@ -123,16 +121,23 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
     // `Invocation::Invoke` RPC via the descriptor-bound remote invoke helper.
     // Builds without `axon-pb` fail with the same canonical unsupported
     // transport error used by stream and bidi ingress.
-    let node_ura: Option<String> = match invoke_args.node.as_deref().map(str::trim) {
+    let route_target: Option<
+        crate::daemon::invocation::routing::route_target::RemoteAbilityRouteTarget,
+    > = match invoke_args.node.as_deref().map(str::trim) {
         None => None,
         Some("") => bail!(
             "--node was given but empty; omit the flag to dispatch locally, \
-             or pass a real `easynet:///r/<tenant>/device/<node>` URA"
+             or pass a Device placement or exact Agent/SystemAgent/Service/Authority callee URA"
         ),
         Some(node) => {
             #[cfg(feature = "axon-pb")]
             {
-                Some(crate::daemon::invocation::routing::remote_invoke::parse_node_ura(node)?)
+                Some(
+                    crate::daemon::invocation::routing::route_target::RemoteAbilityRouteTarget::parse(
+                        node,
+                        ability_selector,
+                    )?,
+                )
             }
             #[cfg(not(feature = "axon-pb"))]
             {
@@ -155,14 +160,14 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
     // Cross-hub dispatch when `--node` is set; local dispatch
     // otherwise. Both paths surface the same unwrap-or-raw result
     // shape so a script piping to `jq` doesn't have to branch.
-    let (result, fulfilled_label) = match node_ura.as_deref() {
+    let (result, fulfilled_label) = match route_target.as_ref() {
         #[cfg(feature = "axon-pb")]
-        Some(target) => {
+        Some(route_target) => {
             let identity = crate::support::platform::remote_device::PairedInvocationIdentity::load(
                 "remote ability invoke",
             )?;
             let target_call = ability_ref
-                .remote_target_for_mode(target, crate::daemon::ability::CallMode::Rpc)?;
+                .remote_target_for_mode(route_target, crate::daemon::ability::CallMode::Rpc)?;
             let surface = "remote ability invoke with --node";
             let subject = required_subject(invoke_args.subject.as_deref(), surface)?.to_string();
             let invocation_nonce = required_nonce_hex(invoke_args.nonce_hex.as_deref(), surface)?;
@@ -183,10 +188,13 @@ pub fn run(invoke_args: InvokeArgs) -> anyhow::Result<()> {
             .into_request()?;
             let value =
                 crate::daemon::invocation::routing::remote_invoke::invoke_remote_target(request)?;
-            (value, format!("canonical Invoke target={target}"))
+            (
+                value,
+                format!("canonical Invoke target={}", route_target.as_str()),
+            )
         }
         // The `not(axon-pb)` arm of `--node` already returned above;
-        // this match is reachable only via `node_ura == None`.
+        // this match is reachable only via `route_target == None`.
         #[cfg(not(feature = "axon-pb"))]
         Some(_) => unreachable!("--node unsupported return handled before dispatch"),
         None => {
@@ -326,13 +334,13 @@ mod tests {
         });
         let err = res.expect_err("must reject non-canonical --node");
         let msg = format!("{err}");
-        // axon-pb on: parse_node_ura error mentions canonical URA
-        // shape. axon-pb off: the canonical unsupported transport error
+        // axon-pb on: the typed route-target parser reports the accepted
+        // placement/exact-callee forms. axon-pb off: the canonical unsupported transport error
         // mentions `--node`. Both are operator-actionable and neither
         // preserves the retired not-wired path.
         assert!(
             (msg.contains("--node") && msg.contains("unsupported"))
-                || msg.contains("canonical Axon Device or Authority URA"),
+                || msg.contains("canonical Device placement or exact callable"),
             "error must surface a canonical --node error, got: {msg}"
         );
         assert!(

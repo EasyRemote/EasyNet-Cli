@@ -48,7 +48,6 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::daemon::ability::catalog::profiles::DEFAULT_MCP_AGENT_ID;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::execution::mcp::McpClientService;
@@ -60,7 +59,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<McpClientService>) {
     let svc_for_list = Arc::clone(&svc);
     reg.register_rpc_with_owner(
         ABILITY_LIST,
-        OwnerKind::Agent(DEFAULT_MCP_AGENT_ID.to_string()),
+        OwnerKind::mcp_integration_system(),
         Arc::new(move |args: Value| {
             let svc = Arc::clone(&svc_for_list);
             // The ability-dispatch path is sync but McpClientService
@@ -73,7 +72,7 @@ pub fn register(reg: &mut AxonAbilityCatalog, svc: Arc<McpClientService>) {
     );
     reg.register_rpc_with_owner(
         ABILITY_CALL,
-        OwnerKind::Agent(DEFAULT_MCP_AGENT_ID.to_string()),
+        OwnerKind::mcp_integration_system(),
         Arc::new(move |args: Value| {
             let svc = Arc::clone(&svc);
             block_on_async(async move { call_handler(&svc, args).await })
@@ -245,15 +244,10 @@ mod tests {
 
     const TEST_DEVICE_URA: &str = "easynet:///r/test/device/mcp-client";
 
-    fn test_mcp_agent_ura() -> String {
-        crate::core::ura::agent_ura("test", "test-user", DEFAULT_MCP_AGENT_ID)
-    }
-
     fn metadata_test_catalog() -> AxonAbilityCatalog {
         let authority_context =
-            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
                 TEST_DEVICE_URA,
-                vec![test_mcp_agent_ura()],
             )
             .expect("MCP client fixture authority context");
         AxonAbilityCatalog::new_metadata_only_with_authority_context(authority_context)

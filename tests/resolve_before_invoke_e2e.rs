@@ -384,62 +384,15 @@ fn remote_health_projection_summary(daemon: &TestDaemon, public_name: &str) -> s
         REMOTE_RUNTIME_HEALTH_SYSTEM_AGENT_URA,
         public_name,
     );
-    let ability_ura = easynet_cli::core::ura::owner_ability_ura(
+    easynet_cli::daemon::federation::read_model::owner_projection::
+        canonical_summary_values_from_descriptors(
         REMOTE_RUNTIME_HEALTH_SYSTEM_AGENT_URA,
-        public_name,
+        &[descriptor],
     )
-    .expect("runtime-health SystemAgent ability URA");
-    let descriptor_version = descriptor.version.clone();
-    let descriptor_revision = descriptor.descriptor_hash_prefixed();
-    let schema_hash = descriptor.schema_hash_prefixed();
-    let policy_hash = descriptor.access_policy_hash_prefixed();
-    let description = descriptor.description.clone();
-    let admission_action = descriptor.admission_action().as_str();
-    let flags = json!({
-        "read_only": true,
-        "destructive": false,
-        "idempotent": true,
-        "streaming_only": false,
-        "bidi_only": false
-    });
-    let receipt_semantics = json!({
-        "kind": "operational"
-    });
-    let mode_geometry = json!([{
-        "call_mode": "rpc",
-        "descriptor_version": descriptor_version,
-        "descriptor_revision": descriptor_revision,
-        "admission_action": admission_action,
-        "schema_hash": schema_hash,
-        "policy_ref": policy_hash,
-        "policy_hash": policy_hash,
-        "description": description,
-        "receipt_semantics": receipt_semantics,
-        "input_fields": [],
-        "flags": flags,
-        "tags": ["class:unary", "mode:rpc"]
-    }]);
-    let callable_summary = json!({
-        "public_name": public_name,
-        "description": description,
-        "call_mode": "rpc",
-        "receipt_semantics": receipt_semantics,
-        "input_fields": [],
-        "flags": flags,
-        "mode_geometry": mode_geometry
-    });
-    json!({
-        "ability_ura": ability_ura,
-        "owner_ura": REMOTE_RUNTIME_HEALTH_SYSTEM_AGENT_URA,
-        "namespace": public_name.split_once('.').map(|(namespace, _)| namespace).unwrap_or(""),
-        "local_name": public_name.split_once('.').map(|(_, local_name)| local_name).unwrap_or(public_name),
-        "descriptor_revision": descriptor_revision,
-        "schema_hash": schema_hash,
-        "policy_ref": policy_hash,
-        "route_summary_ref": format!("route-ref::{ability_ura}"),
-        "tags": ["class:unary", "mode:rpc"],
-        "callable_summary": callable_summary
-    })
+    .expect("runtime-health descriptor must project through canonical publication contract")
+    .into_iter()
+    .next()
+    .expect("one runtime-health descriptor produces one projection summary")
 }
 
 fn seed_remote_health_projection(daemon: &TestDaemon) {

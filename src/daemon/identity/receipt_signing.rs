@@ -312,6 +312,14 @@ impl KeyServiceReceiptAuthorityProvider {
         self.device_hosted_authority(callee, device, None).await
     }
 
+    async fn service_authority(
+        &self,
+        callee: &AgentIdentity,
+        device: &AgentIdentity,
+    ) -> Result<Arc<dyn ReceiptSigningAuthority>, AxonError> {
+        self.device_hosted_authority(callee, device, None).await
+    }
+
     fn system_agent_sponsor_device(
         &self,
         system_agent_ura: &str,
@@ -331,6 +339,27 @@ impl KeyServiceReceiptAuthorityProvider {
             ));
         }
         Ok(Some(device))
+    }
+
+    fn service_sponsor_device(
+        &self,
+        service_ura: &str,
+    ) -> Result<Option<AgentIdentity>, AxonError> {
+        let Some(device) = self.hosted_agent_device.as_ref() else {
+            return Ok(None);
+        };
+        let parsed = crate::core::ura::parse_ura(service_ura).map_err(|error| {
+            AxonError::invalid_argument(format!("daemon_receipt_service_invalid:{error}"))
+        })?;
+        let device_realm = crate::core::ura::realm_from_ura(&device.ura)
+            .ok_or_else(|| AxonError::internal("daemon_service_sponsor_device_realm_missing"))?;
+        if parsed.kind != crate::core::ura::URAKind::Service || parsed.realm != device_realm {
+            return Ok(None);
+        }
+        if !self.signer_capabilities.contains_key(&device.ura) {
+            return Err(AxonError::internal("daemon_service_sponsor_signer_missing"));
+        }
+        Ok(Some(device.clone()))
     }
 }
 
@@ -367,6 +396,14 @@ impl CanonicalReceiptProvider for KeyServiceReceiptAuthorityProvider {
                 ));
             }
             return self.system_agent_authority(callee, &device).await;
+        }
+        if let Some(device) = self.service_sponsor_device(&callee.ura)? {
+            if callee.profile != UraProfile::StrictV2 {
+                return Err(AxonError::permission_denied(
+                    "daemon_receipt_callee_profile_mismatch",
+                ));
+            }
+            return self.service_authority(callee, &device).await;
         }
         let inventory = self.hosted_agent_inventory.as_ref().ok_or_else(|| {
             AxonError::permission_denied("daemon_receipt_callee_not_owned")
@@ -414,6 +451,24 @@ impl InvocationSigningAuthorityProvider for KeyServiceReceiptAuthorityProvider {
                 .cloned()
                 .ok_or_else(|| {
                     AxonError::permission_denied("daemon_invocation_system_agent_signer_missing")
+                })?;
+            let caller = strict_identity(caller_ura)?;
+            let verifying_key = signer
+                .signing_public_key()
+                .map_err(receipt_identity_error)?;
+            return Ok(Some(Arc::new(KeyServiceInvocationAuthority {
+                caller,
+                key_id_hint: key_id_hint(signer.owner_ura(), &verifying_key),
+                signer_capability: signer,
+                hosted_lease: None,
+            })));
+        } else if let Some(device) = self.service_sponsor_device(caller_ura)? {
+            let signer = self
+                .signer_capabilities
+                .get(&device.ura)
+                .cloned()
+                .ok_or_else(|| {
+                    AxonError::permission_denied("daemon_invocation_service_signer_missing")
                 })?;
             let caller = strict_identity(caller_ura)?;
             let verifying_key = signer
@@ -591,6 +646,15 @@ impl InvocationVerificationKeyProvider for KeyServiceReceiptAuthorityProvider {
                 .ok_or_else(|| {
                     AxonError::internal("daemon_invocation_system_agent_signer_missing")
                 })?
+                .signing_public_key()
+                .map(Some)
+                .map_err(receipt_identity_error);
+        }
+        if let Some(device) = self.service_sponsor_device(caller_ura)? {
+            return self
+                .signer_capabilities
+                .get(&device.ura)
+                .ok_or_else(|| AxonError::internal("daemon_invocation_service_signer_missing"))?
                 .signing_public_key()
                 .map(Some)
                 .map_err(receipt_identity_error);
@@ -805,6 +869,72 @@ mod tests {
             .unwrap()
             .expect("SystemAgent invocation authority resolves through sponsor Device");
         assert_eq!(authority.owner_identity().ura, system_agent_ura);
+    }
+
+    #[tokio::test]
+    async fn service_receipt_and_invocation_signing_use_sponsor_device() {
+        let provider = test_device_provider();
+        let service_ura = "easynet:///r/acme/service/alice.pages";
+        let device_ura = "easynet:///r/acme/device/edge-01";
+        let callee = strict_identity(service_ura).unwrap();
+
+        let receipt_authority =
+            CanonicalReceiptProvider::resolve_signing_authority(&provider, &callee)
+                .await
+                .unwrap();
+        let signer_key = provider
+            .resolve_invocation_verifying_key(device_ura)
+            .unwrap()
+            .expect("sponsor Device verification key");
+
+        assert_eq!(receipt_authority.callee_identity(), &callee);
+        assert_eq!(receipt_authority.signer_identity().ura, device_ura);
+        assert_eq!(receipt_authority.verifying_key(), signer_key);
+        axon_sdk::invocation::verify_host_attestation(
+            service_ura,
+            device_ura,
+            receipt_authority.host_attestation(),
+            &signer_key,
+        )
+        .unwrap();
+
+        let service_key = provider
+            .resolve_invocation_verifying_key(service_ura)
+            .unwrap()
+            .expect("Service verification key resolves through sponsor Device");
+        assert_eq!(service_key, signer_key);
+
+        let invocation_authority =
+            InvocationSigningAuthorityProvider::resolve(&provider, service_ura)
+                .await
+                .unwrap()
+                .expect("Service invocation authority resolves through sponsor Device");
+        assert_eq!(invocation_authority.owner_identity().ura, service_ura);
+    }
+
+    #[tokio::test]
+    async fn foreign_realm_service_does_not_inherit_local_device_key() {
+        let provider = test_device_provider();
+        let foreign_service = strict_identity("easynet:///r/other/service/alice.pages").unwrap();
+
+        let receipt_error =
+            match CanonicalReceiptProvider::resolve_signing_authority(&provider, &foreign_service)
+                .await
+            {
+                Ok(_) => panic!("foreign Service must not receive local Device receipt authority"),
+                Err(error) => error,
+            };
+        assert_eq!(receipt_error.reason, "daemon_receipt_callee_not_owned");
+        assert!(
+            InvocationSigningAuthorityProvider::resolve(&provider, &foreign_service.ura)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(provider
+            .resolve_invocation_verifying_key(&foreign_service.ura)
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

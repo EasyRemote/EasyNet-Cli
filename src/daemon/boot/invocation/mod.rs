@@ -75,8 +75,10 @@ use anyhow::Context as _;
 
 use crate::daemon::axon_bridge::hot_agent_registrar::{
     HotAgentAdvertiseOutcome, HotAgentAdvertiseRequest, HotAgentAdvertiser,
-    HotAgentProjectionRequest, HotAgentRevokeRequest,
+    HotAgentAssignmentOutcome, HotAgentAssignmentRequest, HotAgentProjectionRequest,
+    HotAgentRevokeRequest,
 };
+use crate::daemon::federation::advertise::decode_advertise_abilities_response;
 use crate::daemon::invocation::bidi::session_wire::{RequestOutcome, SessionRequestError};
 
 use crate::daemon::invocation::admission::admission_facade::{
@@ -90,6 +92,8 @@ use crate::daemon::invocation::admission::principal_lifecycle::{
 };
 
 const BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT: Duration = Duration::from_secs(5);
+const DYNAMIC_PUBLICATION_RETRY_INITIAL: Duration = Duration::from_millis(500);
+const DYNAMIC_PUBLICATION_RETRY_MAX: Duration = Duration::from_secs(30);
 use crate::daemon::invocation::admission::runtime_trust::RuntimeTrustContext;
 use crate::daemon::invocation::admission::usage_quota::SharedUsageQuotaGate;
 use crate::daemon::invocation::bidi::session_initiator::{
@@ -289,6 +293,62 @@ impl InvocationModeCapabilities {
     }
 }
 
+fn hydrate_hub_hosted_agent_inventory(
+    hub_realm: &str,
+    trust_anchor_path: &Path,
+    trust_anchor_cell: &SharedTrustAnchor,
+    inventory: Vec<crate::daemon::persistence::federation_revoke::HostedAgentInventoryRecord>,
+) -> anyhow::Result<
+    Vec<crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentRecord>,
+> {
+    use crate::daemon::federation::hosted_agent_inventory_hydration::HostedAgentInventoryHydrationPlan;
+
+    let snapshot = trust_anchor_cell.snapshot();
+    let plan = HostedAgentInventoryHydrationPlan::prove(
+        hub_realm,
+        inventory.clone(),
+        snapshot.as_ref(),
+        crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
+    )
+    .context("prove durable Hub hosted-Agent inventory ownership")?;
+
+    if !plan.missing_owner_bindings().is_empty() {
+        let runtime_trust = RuntimeTrustContext {
+            daemon_realm: hub_realm.to_string(),
+            trust_anchor_path: trust_anchor_path.to_path_buf(),
+            cell: trust_anchor_cell.clone(),
+        };
+        for owner in plan.missing_owner_bindings() {
+            runtime_trust
+                .bind_principal_owner(owner.clone())
+                .map_err(|status| {
+                    anyhow::anyhow!(
+                        "repair hosted Agent owner binding `{}` during Hub hydration: code={:?}, message={}",
+                        owner.principal_ura,
+                        status.code(),
+                        status.message()
+                    )
+                })?;
+        }
+    }
+
+    // Re-prove against the published trust cell. No directory row is returned
+    // until every repair is durable and visible to the admission read model.
+    let repaired_snapshot = trust_anchor_cell.snapshot();
+    let records = HostedAgentInventoryHydrationPlan::prove(
+        hub_realm,
+        inventory,
+        repaired_snapshot.as_ref(),
+        crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
+    )
+    .context("verify repaired Hub hosted-Agent inventory ownership")?
+    .into_inventory()?
+    .into_iter()
+    .map(Into::into)
+    .collect::<Vec<_>>();
+    Ok(records)
+}
+
 /// Bring the daemon Invocation transport online inside the
 /// `easynet-daemon` process.
 ///
@@ -379,6 +439,26 @@ pub struct InvocationTransportDependencies {
     >,
 }
 
+fn install_hosted_realm_runtime_admin(
+    runtime: &Arc<axon_sdk::invocation::LocalRuntime>,
+    catalog: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
+    provider: Arc<crate::daemon::axon_bridge::runtime_admin::RuntimeBootstrapIdentityProvider>,
+) -> anyhow::Result<Option<crate::daemon::axon_bridge::runtime_admin::RuntimeAdminRegistration>> {
+    let Some(authority_ura) = catalog.hosted_realm_authority_root() else {
+        return Ok(None);
+    };
+    futures::executor::block_on(
+        crate::daemon::axon_bridge::runtime_admin::register_runtime_bootstrap_identity_ability(
+            runtime,
+            catalog,
+            authority_ura,
+            provider,
+        ),
+    )
+    .with_context(|| format!("install required Realm Authority runtime admin on {authority_ura}"))
+    .map(Some)
+}
+
 pub fn start_daemon_invocation_transport(
     dependencies: InvocationTransportDependencies,
 ) -> anyhow::Result<InvocationTransportReady> {
@@ -458,10 +538,24 @@ pub fn start_daemon_invocation_transport(
     let advertised_agents = Arc::new(
         crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore::new(),
     );
-    crate::daemon::persistence::federation_revoke::recover_prepared_revokes()
-        .context("recover prepared Hub hosted-Agent revokes")?;
-    for record in crate::daemon::persistence::federation_revoke::active_inventory()? {
-        advertised_agents.upsert(record.into());
+    if capabilities.hub_runtime {
+        crate::daemon::persistence::federation_revoke::recover_prepared_revokes()
+            .context("recover prepared Hub hosted-Agent revokes")?;
+        let hydrated_inventory = hydrate_hub_hosted_agent_inventory(
+            config.realm(),
+            &trust_anchor_path,
+            &trust_anchor_cell,
+            crate::daemon::persistence::federation_revoke::active_inventory()?,
+        )?;
+        for record in hydrated_inventory {
+            let agent_ura = record.agent_ura.clone();
+            let stored = advertised_agents.upsert(record);
+            if !stored.is_stored() {
+                anyhow::bail!(
+                    "hydrate Hub hosted-Agent directory row `{agent_ura}` failed: {stored:?}"
+                );
+            }
+        }
     }
     let ability_catalog = Arc::new(
         crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new(),
@@ -659,24 +753,11 @@ pub fn start_daemon_invocation_transport(
         &local_runtime,
         resolved_ledger.clone(),
     );
-    let hub_ura = crate::core::ura::hub_ura(config.realm());
-    if let Err(err) = futures::executor::block_on(
-        crate::daemon::axon_bridge::runtime_admin::register_runtime_bootstrap_identity_ability(
-            &local_runtime,
-            local_ability_catalog.as_ref(),
-            &hub_ura,
-            runtime_admission_key_resolver.bootstrap_identity_provider(),
-        ),
-    ) {
-        let err_msg = err.to_string();
-        crate::op_event!(
-            component = daemon_invocation,
-            kind = axon_local_runtime_admin_install_failed,
-            level = "warn",
-            error = err_msg,
-            message = "failed to register CLI-owned descriptor-bound runtime.bootstrap_self_identity ability",
-        );
-    }
+    install_hosted_realm_runtime_admin(
+        &local_runtime,
+        local_ability_catalog.as_ref(),
+        runtime_admission_key_resolver.bootstrap_identity_provider(),
+    )?;
 
     // The ability-catalog assembly owns registrar construction and runtime
     // attachment. Transport boot only verifies that the completed object is
@@ -776,7 +857,7 @@ pub fn start_daemon_invocation_transport(
                 Arc::clone(&handle),
                 identity.caller_ura.clone(),
                 Arc::clone(&connection_state_sink),
-            );
+            )?;
         }
         register_purge_recovery_on_outbox_ready(&outbox, Arc::clone(&hot_agent_registrar_cell));
         service = service.with_session_escalation(Arc::clone(&handle));
@@ -791,6 +872,7 @@ pub fn start_daemon_invocation_transport(
                 trust_anchor_path.clone(),
                 trust_anchor_cell.clone(),
                 Arc::clone(&handle),
+                federation_runtime.resolver().hub_attested_caller_keys(),
             ),
         );
         service = service.with_device_trust_sync(Arc::clone(&device_trust_sync));
@@ -835,7 +917,15 @@ pub fn start_daemon_invocation_transport(
         );
     }
 
-    spawn_uds_listener(&config, service.clone())?;
+    // The base service is fail-closed for embedders. This is the only listener
+    // that may opt into local-self admission: its platform transport already
+    // authenticates the local peer (same euid on Unix, same SID on Windows).
+    spawn_uds_listener(
+        &config,
+        service
+            .clone()
+            .with_transport_boundary(AdmissionTransportBoundary::LocalOnlyIpc),
+    )?;
 
     // Hub-mode TCP+TLS — PR-10 commit 1/N: real listener.
     // `DaemonConfig` already enforces invariant 2 (TCP requires
@@ -847,7 +937,7 @@ pub fn start_daemon_invocation_transport(
         if let Some(listen_tcp) = config.listen_tcp() {
             // The TCP+TLS socket is off-box reachable, so its admission gate
             // must never accept local self callers. The UDS listener above
-            // keeps the default local-only IPC boundary.
+            // opts into its local-only IPC boundary explicitly.
             spawn_tcp_tls_listener(
                 &config,
                 listen_tcp,
@@ -937,7 +1027,7 @@ pub(crate) fn register_purge_recovery_on_outbox_ready(
     outbox.register_ready_hook(Arc::new(move || {
         let hot_agent_registrar_cell = Arc::clone(&hot_agent_registrar_cell);
         tokio::task::spawn_blocking(move || {
-            match crate::daemon::ability::builtins::agents::lifecycle::recover_pending_purge_on_boot(
+            match crate::daemon::ability::builtins::agents::lifecycle::recover_pending_purge_on_session_ready(
                 hot_agent_registrar_cell.as_ref(),
             ) {
                 Ok(true) => crate::op_event!(
@@ -967,16 +1057,20 @@ fn register_local_runtime_federation_republisher(
     connection_state_sink: Arc<
         dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
     >,
-) {
+) -> anyhow::Result<()> {
     let republisher = Arc::new(LocalRuntimeFederationRepublisher::new(
         Arc::clone(&catalog),
         escalation,
         host_device_ura,
         connection_state_sink,
     ));
-    let schedule: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-        republisher.schedule();
+    let prepare = Arc::new({
+        let republisher = Arc::clone(&republisher);
+        move |affected_owner_uras: &[String]| {
+            republisher.prepare_catalog_commit(affected_owner_uras)
+        }
     });
+    let schedule: Arc<dyn Fn() + Send + Sync> = Arc::new(move || republisher.schedule());
     // Baseline owner/hosted-agent projection publication is owned by the
     // session prelude and runs before every `session.open` attempt. Do not also
     // schedule a baseline publish from `SharedSessionOutbox::set`: that creates
@@ -986,7 +1080,7 @@ fn register_local_runtime_federation_republisher(
     // intentionally dynamic-only: live ability mutations still publish
     // immediately over the current session, while reconnect/bootstrap recovery
     // remains prelude-owned.
-    catalog.register_dynamic_publication_hook(Arc::clone(&schedule));
+    catalog.register_dynamic_publication_participant(prepare, Arc::clone(&schedule))
 }
 
 struct LocalRuntimeFederationRepublisher {
@@ -1002,6 +1096,21 @@ struct LocalRuntimeFederationRepublisher {
 struct LocalRuntimeFederationRepublisherState {
     running: bool,
     dirty: bool,
+}
+
+impl LocalRuntimeFederationRepublisherState {
+    fn begin_pass(&mut self) -> bool {
+        if !self.dirty {
+            self.running = false;
+            return false;
+        }
+        self.dirty = false;
+        true
+    }
+
+    fn retain_failed_pass(&mut self) {
+        self.dirty = true;
+    }
 }
 
 impl LocalRuntimeFederationRepublisher {
@@ -1047,29 +1156,88 @@ impl LocalRuntimeFederationRepublisher {
         });
     }
 
+    /// Prepare the durable readiness participant before the shared catalog is
+    /// mutated. Network publication is scheduled only by the post-commit hook.
+    fn prepare_catalog_commit(&self, affected_owner_uras: &[String]) -> anyhow::Result<()> {
+        let hosted_agents = affected_owner_uras
+            .iter()
+            .filter(|owner_ura| {
+                crate::core::ura::parse_ura(owner_ura)
+                    .ok()
+                    .is_some_and(|owner| {
+                        owner.kind == crate::core::ura::URAKind::Agent
+                            && owner.agent_ids().is_some()
+                            && owner.device_agent_ids().is_none()
+                    })
+            })
+            .collect::<Vec<_>>();
+        if hosted_agents.is_empty() {
+            return Ok(());
+        }
+        let epoch = crate::daemon::persistence::hosted_agent_publications::fence_catalog_commit(
+            &self.host_device_ura,
+            hosted_agents.iter().map(|owner_ura| owner_ura.as_str()),
+            hosted_publication_now_unix_ms(),
+        )?;
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = hosted_agent_catalog_commit_fenced,
+            host_device_ura = self.host_device_ura.as_str(),
+            catalog_epoch = epoch,
+            hosted_agent_count = hosted_agents.len(),
+        );
+        Ok(())
+    }
+
     async fn run(self: Arc<Self>) {
+        let mut retry_delay = DYNAMIC_PUBLICATION_RETRY_INITIAL;
         loop {
             {
                 let mut state = self
                     .state
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                if !state.dirty {
-                    state.running = false;
+                if !state.begin_pass() {
                     return;
                 }
-                state.dirty = false;
             }
 
-            publish_local_runtime_federation(
+            let converged = publish_local_runtime_federation(
                 Arc::clone(&self.catalog),
                 Arc::clone(&self.escalation),
                 self.host_device_ura.clone(),
                 Arc::clone(&self.connection_state_sink),
             )
             .await;
+            if converged {
+                retry_delay = DYNAMIC_PUBLICATION_RETRY_INITIAL;
+                continue;
+            }
+
+            // A failed pass is itself unresolved committed work. Keep the
+            // coalesced worker dirty so the next loop cannot exit merely
+            // because no additional catalog mutation arrived meanwhile.
+            self.state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .retain_failed_pass();
+
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = local_runtime_federation_publish_retry_scheduled,
+                level = "warn",
+                host_device_ura = self.host_device_ura.as_str(),
+                retry_delay_ms = retry_delay.as_millis(),
+                message = "committed local federation state remains pending and will retry from a fresh catalog snapshot",
+            );
+            tokio::time::sleep(retry_delay).await;
+            retry_delay = next_dynamic_publication_retry_delay(retry_delay);
         }
     }
+}
+
+fn next_dynamic_publication_retry_delay(current: Duration) -> Duration {
+    current.saturating_mul(2).min(DYNAMIC_PUBLICATION_RETRY_MAX)
 }
 
 async fn publish_local_runtime_federation(
@@ -1079,10 +1247,61 @@ async fn publish_local_runtime_federation(
     connection_state_sink: Arc<
         dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
     >,
-) {
+) -> bool {
     let snapshot =
         crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::capture(catalog.as_ref());
-    publish_owner_projection_from_snapshot(
+    let mut hosted_agent_uras = snapshot
+        .hosted_agent_owner_uras()
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let durable_hosted_intents =
+        match crate::daemon::persistence::hosted_agent_publications::live_agent_uras_for_host(
+            &host_device_ura,
+        ) {
+            Ok(intents) => intents,
+            Err(error) => {
+                let error = error.to_string();
+                crate::op_event!(
+                    component = daemon_invocation,
+                    kind = hosted_agent_intent_union_failed,
+                    level = "error",
+                    host_device_ura = host_device_ura.as_str(),
+                    error = error.as_str(),
+                );
+                return false;
+            }
+        };
+    hosted_agent_uras.extend(durable_hosted_intents);
+    // Materialize every captured hosted owner before the first await. A later
+    // catalog commit can then always advance its durable desired epoch, even
+    // while Device/SystemAgent projections are still in flight.
+    let hosted_catalog_epochs = hosted_agent_uras
+        .iter()
+        .cloned()
+        .map(|agent_ura| {
+            crate::daemon::persistence::hosted_agent_publications::catalog_epoch_for_plan(
+                &agent_ura,
+                &host_device_ura,
+                hosted_publication_now_unix_ms(),
+            )
+            .map(|epoch| (agent_ura, epoch))
+        })
+        .collect::<Result<std::collections::BTreeMap<_, _>, _>>();
+    let hosted_catalog_epochs = match hosted_catalog_epochs {
+        Ok(epochs) => epochs,
+        Err(error) => {
+            let error = error.to_string();
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = hosted_agent_catalog_capture_fence_failed,
+                level = "error",
+                host_device_ura = host_device_ura.as_str(),
+                error = error.as_str(),
+            );
+            return false;
+        }
+    };
+    let mut converged = publish_owner_projection_from_snapshot(
         &snapshot,
         Arc::clone(&escalation),
         &host_device_ura,
@@ -1092,31 +1311,42 @@ async fn publish_local_runtime_federation(
     .await;
 
     for system_agent_ura in snapshot.system_agent_owner_uras() {
-        publish_owner_projection_from_snapshot(
+        if !publish_owner_projection_from_snapshot(
             &snapshot,
             Arc::clone(&escalation),
             &system_agent_ura,
             &host_device_ura,
             Arc::clone(&connection_state_sink),
         )
-        .await;
+        .await
+        {
+            converged = false;
+        }
     }
 
-    for agent_ura in snapshot.hosted_agent_owner_uras() {
-        publish_hosted_agent_from_snapshot(
+    for agent_ura in hosted_agent_uras {
+        let Some(catalog_epoch) = hosted_catalog_epochs.get(&agent_ura).copied() else {
+            converged = false;
+            continue;
+        };
+        if !publish_hosted_agent_from_snapshot(
             &snapshot,
             Arc::clone(&escalation),
             &agent_ura,
             &host_device_ura,
+            catalog_epoch,
             Arc::clone(&connection_state_sink),
         )
-        .await;
+        .await
+        {
+            converged = false;
+        }
     }
+    converged
 }
 
 struct PreparedOwnerProjectionAdvertisement {
     owner_ura: String,
-    generation: u64,
     ability_count: usize,
     abilities_args: Vec<u8>,
 }
@@ -1138,8 +1368,7 @@ fn prepare_owner_projection_advertisement(
         .map_err(|error| format!("serialize advertise_abilities args: {error}"))?;
     Ok(PreparedOwnerProjectionAdvertisement {
         owner_ura: owner_ura.to_string(),
-        generation: projection.generation,
-        ability_count: descriptors.len(),
+        ability_count: projection.ability_count(),
         abilities_args,
     })
 }
@@ -1152,7 +1381,7 @@ async fn publish_owner_projection_from_snapshot(
     connection_state_sink: Arc<
         dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
     >,
-) {
+) -> bool {
     let prepared =
         match prepare_owner_projection_advertisement(snapshot, owner_ura, host_device_ura) {
             Ok(prepared) => prepared,
@@ -1164,7 +1393,7 @@ async fn publish_owner_projection_from_snapshot(
                     host_device_ura = host_device_ura,
                     error = error.as_str(),
                 );
-                return;
+                return false;
             }
         };
     match escalation
@@ -1176,11 +1405,8 @@ async fn publish_owner_projection_from_snapshot(
         .await
     {
         crate::daemon::invocation::bidi::session_wire::RequestOutcome::Ok { result_bytes } => {
-            match serde_json::from_slice::<
-                crate::daemon::invocation::dispatch::federation_wrappers::AdvertiseAbilitiesResponse,
-            >(&result_bytes)
-            {
-                Ok(response) if response.ack => {
+            match decode_advertise_abilities_response(&result_bytes, prepared.ability_count) {
+                Ok(_) => {
                     crate::op_event!(
                         component = daemon_invocation,
                         kind = local_runtime_owner_projection_published,
@@ -1190,25 +1416,17 @@ async fn publish_owner_projection_from_snapshot(
                     project_local_runtime_federation_published_connection_state(
                         connection_state_sink.as_ref(),
                     );
+                    true
                 }
-                Ok(response) => {
+                Err(error) => {
                     crate::op_event!(
                         component = daemon_invocation,
                         kind = local_runtime_owner_projection_rejected,
                         owner_ura = prepared.owner_ura.as_str(),
                         ability_count = prepared.ability_count,
-                        accepted_count = response.count,
-                    );
-                }
-                Err(error) => {
-                    let error = error.to_string();
-                    crate::op_event!(
-                        component = daemon_invocation,
-                        kind = local_runtime_owner_projection_response_decode_failed,
-                        owner_ura = prepared.owner_ura.as_str(),
-                        ability_count = prepared.ability_count,
                         error = error.as_str(),
                     );
+                    false
                 }
             }
         }
@@ -1221,6 +1439,7 @@ async fn publish_owner_projection_from_snapshot(
                 ability_count = prepared.ability_count,
                 error = error.as_str(),
             );
+            false
         }
     }
 }
@@ -1230,46 +1449,47 @@ async fn publish_hosted_agent_from_snapshot(
     escalation: Arc<crate::daemon::invocation::bidi::session_escalation::SessionEscalationHandle>,
     agent_ura: &str,
     host_device_ura: &str,
+    catalog_epoch: u64,
     connection_state_sink: Arc<
         dyn crate::daemon::invocation::bidi::session_initiator::SessionConnectionStateSink,
     >,
-) {
-    let prepared =
-        match prepare_owner_projection_advertisement(snapshot, agent_ura, host_device_ura) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                crate::op_event!(
-                    component = daemon_invocation,
-                    kind = local_runtime_hosted_agent_projection_prepare_failed,
-                    agent_ura = agent_ura,
-                    host_device_ura = host_device_ura,
-                    error = error.as_str(),
-                );
-                return;
-            }
-        };
+) -> bool {
     let host_node_id = host_node_id_from_device_ura(host_device_ura);
-    let advertise_agent_args =
-        match crate::daemon::federation::advertise::advertise_agent_payload_bytes(
+    let descriptors = snapshot.owner_descriptors(agent_ura);
+    let plan =
+        match crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin_at_catalog_epoch(
             agent_ura,
             host_device_ura,
-            prepared.generation,
             host_node_id.as_deref(),
+            &descriptors,
+            Some(catalog_epoch),
         ) {
-            Ok(args) => args,
+            Ok(plan) => plan,
             Err(error) => {
                 crate::op_event!(
                     component = daemon_invocation,
-                    kind = local_runtime_hosted_agent_payload_failed,
+                    kind = local_runtime_hosted_agent_registration_prepare_failed,
                     agent_ura = agent_ura,
                     host_device_ura = host_device_ura,
                     error = error.as_str(),
                 );
-                return;
+                return false;
             }
         };
+    let advertise_agent_args = match plan.identity_payload_bytes() {
+        Ok(args) => args,
+        Err(error) => {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = local_runtime_hosted_agent_payload_failed,
+                agent_ura = agent_ura,
+                error = error.as_str(),
+            );
+            return false;
+        }
+    };
 
-    match escalation
+    let assignment = match escalation
         .escalate_with_timeout(
             "federation.advertise_agent".to_string(),
             advertise_agent_args,
@@ -1277,65 +1497,103 @@ async fn publish_hosted_agent_from_snapshot(
         )
         .await
     {
-        crate::daemon::invocation::bidi::session_wire::RequestOutcome::Ok { .. } => {}
+        crate::daemon::invocation::bidi::session_wire::RequestOutcome::Ok { result_bytes } => {
+            match serde_json::from_slice::<
+                crate::daemon::invocation::dispatch::federation_wrappers::AdvertiseAgentResponse,
+            >(&result_bytes)
+            {
+                Ok(response) if response.ack => response.assignment,
+                Ok(_) => {
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = local_runtime_hosted_agent_identity_publish_rejected,
+                        agent_ura = agent_ura,
+                    );
+                    return false;
+                }
+                Err(error) => {
+                    let error = error.to_string();
+                    crate::op_event!(
+                        component = daemon_invocation,
+                        kind = local_runtime_hosted_agent_assignment_decode_failed,
+                        agent_ura = agent_ura,
+                        error = error.as_str(),
+                    );
+                    return false;
+                }
+            }
+        }
         crate::daemon::invocation::bidi::session_wire::RequestOutcome::Err { error } => {
             let error = format!("{error:?}");
             crate::op_event!(
                 component = daemon_invocation,
                 kind = local_runtime_hosted_agent_identity_publish_failed,
                 agent_ura = agent_ura,
-                generation = prepared.generation,
                 error = error.as_str(),
             );
-            return;
+            return false;
         }
-    }
+    };
+    let active = match plan.activate(assignment) {
+        Ok(active) => active,
+        Err(error) => {
+            crate::op_event!(
+                component = daemon_invocation,
+                kind = local_runtime_hosted_agent_assignment_bind_failed,
+                agent_ura = agent_ura,
+                error = error.as_str(),
+            );
+            return false;
+        }
+    };
+    let published_agent_ura = active.assignment.agent_ura.clone();
+    let published_generation = active.assignment.generation;
+    let published_ability_count = active.ability_count;
+    let abilities_payload = active.abilities_payload.clone();
 
     match escalation
         .escalate_with_timeout(
             "federation.advertise_abilities".to_string(),
-            prepared.abilities_args,
+            abilities_payload,
             BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT,
         )
         .await
     {
         crate::daemon::invocation::bidi::session_wire::RequestOutcome::Ok { result_bytes } => {
-            match serde_json::from_slice::<
-                crate::daemon::invocation::dispatch::federation_wrappers::AdvertiseAbilitiesResponse,
-            >(&result_bytes)
-            {
-                Ok(response) if response.ack => {
+            match decode_advertise_abilities_response(&result_bytes, published_ability_count) {
+                Ok(_) => {
+                    if let Err(error) = active.mark_published() {
+                        crate::op_event!(
+                            component = daemon_invocation,
+                            kind = local_runtime_hosted_agent_published_state_commit_failed,
+                            agent_ura = published_agent_ura.as_str(),
+                            generation = published_generation,
+                            error = error.as_str(),
+                        );
+                        return false;
+                    }
                     crate::op_event!(
                         component = daemon_invocation,
                         kind = local_runtime_hosted_agent_published,
-                        agent_ura = prepared.owner_ura.as_str(),
-                        generation = prepared.generation,
-                        ability_count = prepared.ability_count,
+                        agent_ura = published_agent_ura.as_str(),
+                        generation = published_generation,
+                        ability_count = published_ability_count,
                     );
                     project_local_runtime_federation_published_connection_state(
                         connection_state_sink.as_ref(),
                     );
+                    true
                 }
-                Ok(response) => {
+                Err(error) => {
                     crate::op_event!(
                         component = daemon_invocation,
                         kind = local_runtime_hosted_agent_projection_rejected,
-                        agent_ura = prepared.owner_ura.as_str(),
-                        generation = prepared.generation,
-                        ability_count = prepared.ability_count,
-                        accepted_count = response.count,
-                    );
-                }
-                Err(error) => {
-                    let error = error.to_string();
-                    crate::op_event!(
-                        component = daemon_invocation,
-                        kind = local_runtime_hosted_agent_projection_response_decode_failed,
-                        agent_ura = prepared.owner_ura.as_str(),
-                        generation = prepared.generation,
-                        ability_count = prepared.ability_count,
+                        agent_ura = published_agent_ura.as_str(),
+                        generation = published_generation,
+                        ability_count = published_ability_count,
                         error = error.as_str(),
                     );
+                    false
                 }
             }
         }
@@ -1344,13 +1602,21 @@ async fn publish_hosted_agent_from_snapshot(
             crate::op_event!(
                 component = daemon_invocation,
                 kind = local_runtime_hosted_agent_projection_publish_failed,
-                agent_ura = prepared.owner_ura.as_str(),
-                generation = prepared.generation,
-                ability_count = prepared.ability_count,
+                agent_ura = published_agent_ura.as_str(),
+                generation = published_generation,
+                ability_count = published_ability_count,
                 error = error.as_str(),
             );
+            false
         }
     }
+}
+
+fn hosted_publication_now_unix_ms() -> u64 {
+    let duration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX - 1)
 }
 
 fn host_node_id_from_device_ura(host_device_ura: &str) -> Option<String> {
@@ -1494,61 +1760,100 @@ impl SessionHotAgentAdvertiser {
 }
 
 impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
-    fn advertise_hosted_agent(
-        &self,
-        request: HotAgentAdvertiseRequest,
-    ) -> HotAgentAdvertiseOutcome {
-        let args = match crate::daemon::federation::advertise::advertise_agent_payload_bytes(
-            &request.agent_ura,
-            &self.caller_ura,
-            request.generation,
-            self.host_node_id.as_deref(),
-        ) {
+    fn assign_hosted_agent(&self, request: HotAgentAssignmentRequest) -> HotAgentAssignmentOutcome {
+        if request.plan.host_device_ura() != self.caller_ura {
+            return HotAgentAssignmentOutcome::Failed(
+                "hosted Agent assignment plan belongs to another Device".to_string(),
+            );
+        }
+        let args = match request.plan.identity_payload_bytes() {
             Ok(args) => args,
-            Err(err) => {
-                return HotAgentAdvertiseOutcome::failed(format!(
-                    "encode federation.advertise_agent args: {err}"
-                ));
-            }
+            Err(error) => return HotAgentAssignmentOutcome::Failed(error),
         };
-        // ISS-002: carry the abilities advertise alongside the identity
-        // advertise so a hot ability add/remove reaches the hub on the
-        // same `session.open` escalation, immediately — not at the
-        // next heartbeat. Identity is advertised first (the abilities
-        // projection references the agent record); the abilities
-        // advertise is best-effort and reported via the outcome error.
-        let abilities_payload = request.abilities_payload;
         let escalation = Arc::clone(&self.escalation);
-        let outcome = match crate::support::async_bridge::try_run_blocking(
+        let outcome = crate::support::async_bridge::try_run_blocking(
             async move {
-                let agent_outcome = escalation
+                match escalation
                     .escalate_with_timeout(
                         "federation.advertise_agent".to_string(),
                         args,
                         BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT,
                     )
-                    .await;
-                // Only advertise abilities if the identity advertise landed —
-                // an abilities projection for an unknown agent is rejected.
-                // `escalate_with_timeout` builds the hub ability URA from the
-                // ability name + session realm, so no resource URA is needed.
-                if matches!(agent_outcome, RequestOutcome::Ok { .. }) {
-                    if let Some(payload) = abilities_payload {
-                        let abilities_outcome = escalation
-                            .escalate_with_timeout(
-                                "federation.advertise_abilities".to_string(),
-                                payload,
-                                BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT,
-                            )
-                            .await;
-                        if let RequestOutcome::Err { error } = abilities_outcome {
-                            // Identity is up; abilities will reconcile on the
-                            // next heartbeat refresh. Surface the soft error.
-                            return RequestOutcome::Err { error };
+                    .await
+                {
+                    RequestOutcome::Ok { result_bytes } => {
+                        let response: crate::daemon::invocation::dispatch::federation_wrappers::AdvertiseAgentResponse =
+                            serde_json::from_slice(&result_bytes).map_err(|error| {
+                                format!("decode Hub generation assignment: {error}")
+                            })?;
+                        if !response.ack {
+                            return Err(
+                                "Hub rejected hosted Agent generation assignment".to_string()
+                            );
                         }
+                        response.assignment.validate()?;
+                        Ok(response.assignment)
                     }
+                    RequestOutcome::Err { error } => Err(render_session_request_error(&error)),
                 }
-                agent_outcome
+            },
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
+            "hot federation.advertise_agent assignment",
+        );
+        match outcome {
+            Ok(Ok(assignment)) => HotAgentAssignmentOutcome::Assigned(assignment),
+            Ok(Err(error)) | Err(error) => HotAgentAssignmentOutcome::Failed(error),
+        }
+    }
+
+    fn advertise_hosted_agent(
+        &self,
+        request: HotAgentAdvertiseRequest,
+    ) -> HotAgentAdvertiseOutcome {
+        let plan = match crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
+            &request.agent_ura,
+            &self.caller_ura,
+            self.host_node_id.as_deref(),
+            &request.descriptors,
+        ) {
+            Ok(plan) => plan,
+            Err(err) => {
+                return HotAgentAdvertiseOutcome::failed(format!(
+                    "prepare hosted Agent publication: {err}"
+                ));
+            }
+        };
+        let assignment = match self.assign_hosted_agent(HotAgentAssignmentRequest {
+            plan: plan.assignment_plan().clone(),
+        }) {
+            HotAgentAssignmentOutcome::Assigned(assignment) => assignment,
+            HotAgentAssignmentOutcome::Failed(error) => {
+                return HotAgentAdvertiseOutcome::failed(error)
+            }
+        };
+        let active = match plan.activate(assignment) {
+            Ok(active) => active,
+            Err(error) => return HotAgentAdvertiseOutcome::failed(error),
+        };
+        let expected_count = active.ability_count;
+        let abilities_payload = active.abilities_payload.clone();
+        let escalation = Arc::clone(&self.escalation);
+        let outcome = match crate::support::async_bridge::try_run_blocking(
+            async move {
+                match escalation
+                    .escalate_with_timeout(
+                        "federation.advertise_abilities".to_string(),
+                        abilities_payload,
+                        BACKGROUND_PUBLICATION_ESCALATION_TIMEOUT,
+                    )
+                    .await
+                {
+                    RequestOutcome::Ok { result_bytes } => {
+                        decode_advertise_abilities_response(&result_bytes, expected_count)
+                            .map(|_| ())
+                    }
+                    RequestOutcome::Err { error } => Err(render_session_request_error(&error)),
+                }
             },
             crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
             "hot federation.advertise_agent",
@@ -1557,10 +1862,11 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
             Err(error) => return HotAgentAdvertiseOutcome::failed(error),
         };
         match outcome {
-            RequestOutcome::Ok { .. } => HotAgentAdvertiseOutcome::succeeded(),
-            RequestOutcome::Err { error } => {
-                HotAgentAdvertiseOutcome::failed(render_session_request_error(&error))
-            }
+            Ok(_) => match active.mark_published() {
+                Ok(()) => HotAgentAdvertiseOutcome::succeeded(),
+                Err(error) => HotAgentAdvertiseOutcome::failed(error),
+            },
+            Err(error) => HotAgentAdvertiseOutcome::failed(error),
         }
     }
 
@@ -1570,6 +1876,7 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
     ) -> HotAgentAdvertiseOutcome {
         let escalation = Arc::clone(&self.escalation);
         let payload = request.abilities_payload;
+        let expected_count = request.expected_ability_count;
         let outcome = match crate::support::async_bridge::try_run_blocking(
             async move {
                 escalation
@@ -1587,7 +1894,12 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
             Err(error) => return HotAgentAdvertiseOutcome::failed(error),
         };
         match outcome {
-            RequestOutcome::Ok { .. } => HotAgentAdvertiseOutcome::succeeded(),
+            RequestOutcome::Ok { result_bytes } => {
+                match decode_advertise_abilities_response(&result_bytes, expected_count) {
+                    Ok(_) => HotAgentAdvertiseOutcome::succeeded(),
+                    Err(error) => HotAgentAdvertiseOutcome::failed(error),
+                }
+            }
             RequestOutcome::Err { error } => {
                 HotAgentAdvertiseOutcome::failed(render_session_request_error(&error))
             }
@@ -1600,16 +1912,15 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
         // request is routed over the existing session as ReverseDispatchCall
         // and its terminal receipt is verified by the normal dispatch path.
         let agent_ura = request.agent_ura;
-        let body = serde_json::json!({
-            "agent_ura": agent_ura,
-            "target_ura": agent_ura,
-            "generation": request.generation,
-            "reason": request.reason,
-            "purge_transaction_id": request.purge_transaction_id,
-            "authority_ura": request.authority_ura,
-            "protocol_version": request.protocol_version,
-            "delivery_fence": request.delivery_fence,
-        });
+        let body = crate::daemon::invocation::dispatch::federation_wrappers::RevokeRequest {
+            agent_ura: agent_ura.clone(),
+            generation: Some(request.generation),
+            reason: Some(request.reason),
+            purge_transaction_id: request.purge_transaction_id,
+            authority_ura: Some(request.authority_ura),
+            protocol_version: Some(request.protocol_version),
+            delivery_fence: Some(request.delivery_fence),
+        };
         let args = match serde_json::to_vec(&body) {
             Ok(args) => args,
             Err(err) => {
@@ -1623,7 +1934,7 @@ impl HotAgentAdvertiser for SessionHotAgentAdvertiser {
             args,
             &self.caller_ura,
         ) {
-            Ok(()) => HotAgentAdvertiseOutcome::succeeded(),
+            Ok(_) => HotAgentAdvertiseOutcome::succeeded(),
             Err(error) => HotAgentAdvertiseOutcome::failed(error.to_string()),
         }
     }
@@ -2068,7 +2379,9 @@ mod tests {
     use crate::daemon::invocation::bidi::session_initiator::{
         SessionConnectionStateChange, SessionConnectionStateSink,
     };
-    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole, TrustedAgent};
+    use crate::daemon::trust::anchor::{
+        RealmTrustAnchor, TrustAnchorRole, TrustedAgent, TrustedPrincipalOwner,
+    };
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
     use ed25519_dalek::SigningKey;
 
@@ -2079,6 +2392,121 @@ mod tests {
     fn test_daemon_identity(owner_ura: &str) -> DaemonIdentity {
         DaemonIdentity::bind(owner_ura.to_string(), test_signer(owner_ura, [0x33; 32]))
             .expect("bind test daemon identity")
+    }
+
+    fn hydration_owner(principal_ura: &str, owner_user_id: &str) -> TrustedPrincipalOwner {
+        TrustedPrincipalOwner {
+            principal_ura: principal_ura.to_string(),
+            owner_user_id: owner_user_id.to_string(),
+            owner_ura: crate::core::ura::user_ura("realm", owner_user_id),
+            added_at_unix_ms: 1,
+        }
+    }
+
+    fn hydration_inventory(
+        owner_user_id: &str,
+    ) -> crate::daemon::persistence::federation_revoke::HostedAgentInventoryRecord {
+        let host_ura = crate::core::ura::device_ura("realm", "device-1");
+        crate::daemon::persistence::federation_revoke::HostedAgentInventoryRecord {
+            agent_ura: crate::core::ura::agent_ura("realm", owner_user_id, "worker"),
+            incarnation_id:
+                crate::daemon::federation::hosted_agent_publication::HostedAgentIncarnationId::parse(
+                    "a".repeat(32),
+                )
+                .expect("incarnation id"),
+            generation: 1,
+            public_key_hex: String::new(),
+            host_node_id: Some("device-1".to_string()),
+            signing_authority:
+                crate::daemon::persistence::federation_revoke::DurableSigningAuthority::HostedBy {
+                    host_ura,
+                },
+            lifecycle:
+                crate::daemon::persistence::federation_revoke::InventoryLifecycle::Active,
+        }
+    }
+
+    fn hydration_anchor(
+        owners: Vec<TrustedPrincipalOwner>,
+    ) -> (tempfile::TempDir, PathBuf, SharedTrustAnchor) {
+        let directory = tempfile::tempdir().expect("hydration trust directory");
+        let path = directory.path().join("realm-trust.toml");
+        let anchor =
+            RealmTrustAnchor::from_parts_with_principal_owners(Vec::new(), owners, Vec::new())
+                .expect("hydration trust anchor");
+        anchor.save(&path).expect("persist hydration anchor");
+        let cell = SharedTrustAnchor::new(Arc::new(anchor));
+        (directory, path, cell)
+    }
+
+    #[test]
+    fn hub_hydration_repairs_crash_window_missing_agent_owner_binding_before_exposure() {
+        let host_ura = crate::core::ura::device_ura("realm", "device-1");
+        let record = hydration_inventory("alice");
+        let agent_ura = record.agent_ura.clone();
+        let (_directory, path, cell) = hydration_anchor(vec![hydration_owner(&host_ura, "alice")]);
+
+        let hydrated =
+            hydrate_hub_hosted_agent_inventory("realm", &path, &cell, vec![record.clone()])
+                .expect("repair crash-window owner binding");
+
+        assert_eq!(hydrated.len(), 1);
+        assert_eq!(hydrated[0].agent_ura, agent_ura);
+        let repaired = cell
+            .snapshot()
+            .lookup_principal_owner(&record.agent_ura)
+            .cloned()
+            .expect("published repaired binding");
+        assert_eq!(repaired.owner_user_id, "alice");
+        assert_eq!(
+            repaired.owner_ura,
+            crate::core::ura::user_ura("realm", "alice")
+        );
+        let persisted = RealmTrustAnchor::try_load_strict(&path).expect("reload repaired anchor");
+        assert_eq!(
+            persisted
+                .lookup_principal_owner(&record.agent_ura)
+                .map(|owner| owner.owner_user_id.as_str()),
+            Some("alice")
+        );
+    }
+
+    #[test]
+    fn hub_hydration_rejects_inventory_when_host_device_owner_is_missing() {
+        let record = hydration_inventory("alice");
+        let (_directory, path, cell) = hydration_anchor(Vec::new());
+
+        let error = hydrate_hub_hosted_agent_inventory("realm", &path, &cell, vec![record])
+            .expect_err("unowned host Device cannot expose durable Agent inventory");
+
+        assert!(format!("{error:#}").contains("no authoritative owner binding"));
+    }
+
+    #[test]
+    fn hub_hydration_rejects_host_owned_by_a_different_user() {
+        let host_ura = crate::core::ura::device_ura("realm", "device-1");
+        let record = hydration_inventory("alice");
+        let (_directory, path, cell) = hydration_anchor(vec![hydration_owner(&host_ura, "bob")]);
+
+        let error = hydrate_hub_hosted_agent_inventory("realm", &path, &cell, vec![record])
+            .expect_err("cross-User host custody cannot hydrate Agent inventory");
+
+        assert!(format!("{error:#}").contains("not owned by Agent URA User"));
+    }
+
+    #[test]
+    fn hub_hydration_rejects_conflicting_existing_agent_owner_binding() {
+        let host_ura = crate::core::ura::device_ura("realm", "device-1");
+        let record = hydration_inventory("alice");
+        let (_directory, path, cell) = hydration_anchor(vec![
+            hydration_owner(&host_ura, "alice"),
+            hydration_owner(&record.agent_ura, "bob"),
+        ]);
+
+        let error = hydrate_hub_hosted_agent_inventory("realm", &path, &cell, vec![record])
+            .expect_err("conflicting Agent owner fact must fail Hub boot");
+
+        assert!(format!("{error:#}").contains("owner binding conflicts"));
     }
 
     #[derive(Default)]
@@ -2112,34 +2540,90 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_publication_retry_backoff_is_bounded() {
+        let mut delay = DYNAMIC_PUBLICATION_RETRY_INITIAL;
+        assert_eq!(delay, Duration::from_millis(500));
+        for _ in 0..16 {
+            let next = next_dynamic_publication_retry_delay(delay);
+            assert!(next >= delay);
+            assert!(next <= DYNAMIC_PUBLICATION_RETRY_MAX);
+            delay = next;
+        }
+        assert_eq!(delay, DYNAMIC_PUBLICATION_RETRY_MAX);
+        assert_eq!(
+            next_dynamic_publication_retry_delay(delay),
+            DYNAMIC_PUBLICATION_RETRY_MAX
+        );
+    }
+
+    #[test]
+    fn failed_dynamic_publication_pass_remains_dirty_without_new_catalog_input() {
+        let mut state = LocalRuntimeFederationRepublisherState {
+            running: true,
+            dirty: true,
+        };
+
+        assert!(state.begin_pass());
+        assert!(!state.dirty);
+        state.retain_failed_pass();
+
+        assert!(
+            state.begin_pass(),
+            "a failed committed publication must drive its own retry"
+        );
+        assert!(state.running);
+    }
+
+    #[test]
     fn hosted_agent_republish_plan_binds_identity_and_projection_to_one_generation() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let host_device_ura = crate::core::ura::device_ura("localhost", "device-1");
         let agent_ura = crate::core::ura::agent_ura("localhost", "dev", "pages");
+        crate::daemon::persistence::local_agents::save_test_llm_publication_owner(
+            &host_device_ura,
+            &agent_ura,
+        )
+        .expect("persist explicit local publication ownership");
         let snapshot =
             crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::from_owner_public_names(
                 &agent_ura,
                 &["project_list"],
             );
 
-        let prepared =
-            prepare_owner_projection_advertisement(&snapshot, &agent_ura, &host_device_ura)
-                .expect("hosted agent projection advertisement");
-        let projection: serde_json::Value =
-            serde_json::from_slice(&prepared.abilities_args).expect("projection payload is JSON");
+        let descriptors = snapshot.owner_descriptors(&agent_ura);
+        let plan =
+            crate::daemon::federation::hosted_agent_publication::HostedAgentPublicationPlan::begin(
+                &agent_ura,
+                &host_device_ura,
+                Some("device-1"),
+                &descriptors,
+            )
+            .expect("hosted agent publication plan");
+        let projection: serde_json::Value = {
+            let assignment = crate::daemon::federation::hosted_agent_publication::HostedAgentGenerationAssignment {
+                    agent_ura: agent_ura.clone(),
+                    host_device_ura: host_device_ura.clone(),
+                    incarnation_id: plan.incarnation_id().clone(),
+                    generation: 9,
+                };
+            let active = plan.activate(assignment).expect("bind Hub assignment");
+            serde_json::from_slice(&active.abilities_payload).expect("projection payload is JSON")
+        };
+        let record = crate::daemon::persistence::hosted_agent_publications::record_for(&agent_ura)
+            .unwrap()
+            .unwrap();
         let identity = crate::daemon::federation::advertise::advertise_agent_payload(
             &agent_ura,
-            &host_device_ura,
-            prepared.generation,
-            Some("device-1"),
+            record.incarnation_id(),
         )
         .expect("identity payload is JSON");
 
         assert_eq!(projection["owner_ura"], agent_ura);
         assert_eq!(projection["host_device_ura"], host_device_ura);
-        assert_eq!(projection["generation"], identity["generation"]);
+        assert_eq!(projection["generation"], 9);
         assert_eq!(identity["agent_ura"], agent_ura);
-        assert_eq!(identity["signing_authority"]["host_ura"], host_device_ura);
+        assert_eq!(identity["incarnation_id"], record.incarnation_id().as_str());
+        assert_eq!(identity.as_object().unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -2162,6 +2646,109 @@ mod tests {
         // Hub mode has no outbound device session, so dropping its empty
         // supervisor handle is a no-op.
         drop(SessionShutdown::none());
+    }
+
+    fn test_runtime_admin_installation(
+        authority_context: crate::daemon::ability::dispatch::AbilityAuthorityContext,
+    ) -> anyhow::Result<Option<crate::daemon::axon_bridge::runtime_admin::RuntimeAdminRegistration>>
+    {
+        let catalog =
+            crate::daemon::ability::catalog::build_registry_snapshot_with_authority_context(
+                authority_context,
+            )?;
+        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
+        install_hosted_realm_runtime_admin(
+            &runtime,
+            catalog.as_ref(),
+            Arc::new(
+                crate::daemon::axon_bridge::runtime_admin::RuntimeBootstrapIdentityProvider::default(
+                ),
+            ),
+        )
+    }
+
+    #[test]
+    fn runtime_admin_installation_follows_catalog_authority_mode() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let device_ura = crate::core::ura::device_ura("runtime-admin-mode", "device-a");
+        let hub_ura = crate::core::ura::hub_ura("runtime-admin-mode");
+
+        let device_only = test_runtime_admin_installation(
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                &device_ura,
+            )
+            .expect("Device authority context"),
+        )
+        .expect("Device-only runtime admin decision");
+        assert!(
+            device_only.is_none(),
+            "Device-only runtime must not install a Realm Authority handler"
+        );
+
+        for authority_context in [
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
+                &hub_ura,
+            )
+            .expect("Hub authority context"),
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+                &device_ura,
+            )
+            .expect("combined authority context"),
+        ] {
+            let installed = test_runtime_admin_installation(authority_context)
+                .expect("Hub-hosting runtime admin installation")
+                .expect("Hub and Both modes must install runtime admin");
+            assert_eq!(
+                installed.runtime_key,
+                crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+                    &hub_ura,
+                    crate::daemon::ability::conformance::ABILITY_RUNTIME_BOOTSTRAP_SELF_IDENTITY,
+                )
+                .expect("Realm Authority runtime-admin key"),
+                "runtime admin key must remain Realm Authority-owned"
+            );
+        }
+    }
+
+    #[test]
+    fn hosted_realm_runtime_admin_missing_descriptor_fails_closed() {
+        let hub_ura = crate::core::ura::hub_ura("runtime-admin-missing");
+        let catalog =
+            crate::daemon::ability::dispatch::AxonAbilityCatalog::new_metadata_only_with_authority_context(
+                crate::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
+                    &hub_ura,
+                )
+                .expect("Hub authority context"),
+            );
+        let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
+
+        let error = install_hosted_realm_runtime_admin(
+            &runtime,
+            &catalog,
+            Arc::new(
+                crate::daemon::axon_bridge::runtime_admin::RuntimeBootstrapIdentityProvider::default(
+                ),
+            ),
+        )
+        .expect_err("Hub-hosting runtime must fail boot when runtime-admin descriptor is absent");
+
+        assert!(
+            error
+                .to_string()
+                .contains("install required Realm Authority runtime admin"),
+            "failure must preserve the boot ownership boundary: {error:#}"
+        );
+        assert!(
+            format!("{error:#}")
+                .contains("runtime-admin descriptor missing for `runtime.bootstrap_self_identity`"),
+            "failure must preserve the descriptor root cause: {error:#}"
+        );
     }
 
     use super::*;

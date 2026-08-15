@@ -220,17 +220,11 @@ fn send_task_handler(
 
     #[cfg(feature = "axon-pb")]
     {
-        let target_ura =
-            match crate::daemon::invocation::routing::remote_invoke::parse_node_ura(&target_node) {
-                Ok(ura) => ura,
-                Err(e) => return Ok(error_response(&format!("parse target_node_ura: {e}"))),
-            };
-
         if let Some(message) = local_daemon_transport_error() {
             return Ok(error_response(&message));
         }
         let target_call = match resolve_a2a_target(
-            &target_ura,
+            &target_node,
             &agent_name,
             &skill_name,
             federation_resolver,
@@ -448,19 +442,17 @@ pub fn send_task_input_schema() -> Value {
 }
 
 fn target_node_field(args: &Value) -> Result<String, String> {
+    use crate::core::identity::RuntimeIdentityUra;
+    use crate::core::ura::URAKind;
+
     let target = required_nonempty_string(args, "target_node_ura")?;
-    let trimmed = target.trim();
-    let identity = crate::core::identity::RuntimeIdentityUra::parse(trimmed).map_err(|error| {
-        format!(
-            "`target_node_ura` must be a canonical Device or Authority URA, got {trimmed:?}: {error}"
-        )
+    let identity = RuntimeIdentityUra::parse(&target).map_err(|error| {
+        format!("parse `target_node_ura`: expected canonical Device or Authority URA: {error}")
     })?;
     match identity.kind() {
-        crate::core::ura::URAKind::Device | crate::core::ura::URAKind::Authority => {
-            Ok(identity.into_string())
-        }
+        URAKind::Device | URAKind::Authority => Ok(identity.into_string()),
         other => Err(format!(
-            "`target_node_ura` must identify a Device or Authority, got kind={other}"
+            "parse `target_node_ura`: expected canonical Device or Authority URA, got kind={other}"
         )),
     }
 }
@@ -748,6 +740,30 @@ mod tests {
         assert!(
             !msg.contains("daemon not running"),
             "bare node id must not reach transport after local-realm synthesis: {msg}"
+        );
+    }
+
+    #[test]
+    fn send_task_accepts_authority_target_ura_at_ingress() {
+        let resp = send_task_handler(
+            json!({
+                "target_node_ura": "easynet:///r/acme/authority",
+                "agent_name": "claude",
+                "skill_name": "chat",
+            }),
+            &root_env(),
+            &detached_resolver(),
+        )
+        .expect("validation response");
+
+        assert_eq!(resp["ok"], false);
+        let message = resp["error"].as_str().expect("validation error");
+        assert!(
+            message.contains("daemon")
+                || message.contains("federation")
+                || message.contains("credentials")
+                || message.contains("axon-pb"),
+            "Authority target must pass canonical target ingress and fail only at downstream transport/config in this unit test: {message}"
         );
     }
 

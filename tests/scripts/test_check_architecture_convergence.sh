@@ -495,10 +495,8 @@ fn load_host_descriptors() -> Vec<AbilityDescriptor> {
     let snapshot = AgentAggregateRepository::load_hosted_identity_snapshot().unwrap();
     let projection = snapshot.host_descriptor_identity_projection();
     let device = projection.host_device_ura();
-    let consent = projection.consent_agent_ura();
-    let mcp = projection.mcp_agent_ura();
     let llm = projection.llm_agent_uras();
-    all_descriptors_for_host(device.unwrap(), consent, mcp, llm)
+    all_descriptors_for_host(device.unwrap(), llm)
 }
 
 fn all_descriptors_for_host(device_ura: &str) -> Vec<AbilityDescriptor> {
@@ -911,22 +909,12 @@ impl AgentRegisteredRuntimeProjection {
 
 struct AgentHostDescriptorIdentityProjection {
     host_device_ura: Option<String>,
-    consent_agent_ura: Option<String>,
-    mcp_agent_ura: Option<String>,
     llm_agent_uras: Vec<(String, String)>,
 }
 
 impl AgentHostDescriptorIdentityProjection {
     fn host_device_ura(&self) -> Option<&str> {
         self.host_device_ura.as_deref()
-    }
-
-    fn consent_agent_ura(&self) -> Option<&str> {
-        self.consent_agent_ura.as_deref()
-    }
-
-    fn mcp_agent_ura(&self) -> Option<&str> {
-        self.mcp_agent_ura.as_deref()
     }
 
     fn llm_agent_uras(&self) -> &[(String, String)] {
@@ -941,8 +929,6 @@ impl AgentHostedIdentitySnapshot {
     fn host_descriptor_identity_projection(&self) -> AgentHostDescriptorIdentityProjection {
         AgentHostDescriptorIdentityProjection {
             host_device_ura: Some("easynet:///r/acme/device/dev-1".to_string()),
-            consent_agent_ura: Some("easynet:///r/acme/agent/user.consent".to_string()),
-            mcp_agent_ura: Some("easynet:///r/acme/agent/user.mcp".to_string()),
             llm_agent_uras: vec![
                 ("claude".to_string(), "easynet:///r/acme/agent/user.claude".to_string()),
             ],
@@ -1670,7 +1656,7 @@ impl CostMetadataProjection {
 }
 
 fn mcp_owner_kind() -> OwnerKind {
-    OwnerKind::Agent(super::DEFAULT_MCP_AGENT_ID.to_string())
+    OwnerKind::mcp_integration_system()
 }
 
 #[test]
@@ -2119,23 +2105,6 @@ fn build_registry(shared_stores: RegistrySharedStores, hosts_hub_authority: bool
     };
 }
 
-fn declare_daemon_native_agent_authorities(
-    mut authority_context: AbilityAuthorityContext,
-    identity: &PagesIdentity,
-) -> anyhow::Result<AbilityAuthorityContext> {
-    let Some(user) = identity.user.as_deref() else {
-        return Ok(authority_context);
-    };
-    let realm = identity.realm.as_deref().unwrap_or(crate::core::ura::REALM_EASYNET);
-    let declared_roots = [
-        ("Pages", pages::management_agent_ura(realm, user)),
-        ("Files", files::management_agent_ura(realm, user)),
-    ];
-    for (_executor, authority_root) in declared_roots {
-        authority_context = authority_context.with_declared_agent_authority_root(authority_root)?;
-    }
-    Ok(authority_context)
-}
 EOF
   cat >"$CLI/sdk/python/easynet_sdk/_receipt_projection.py" <<'EOF'
 def reject_retired_top_level_receipt_alias(raw: object, stage: str) -> None:
@@ -2152,33 +2121,26 @@ fn register(reg: &mut AxonAbilityCatalog) {
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/resources/files_store/mod.rs" <<'EOF'
-pub(crate) fn management_agent_ura(realm: &str, user: &str) -> String {
-    crate::core::ura::agent_ura(realm, user, "files")
-}
-
 fn register_files_rpc(
     reg: &mut AxonAbilityCatalog,
     ability: &'static str,
     owner: OwnerKind,
-    authority_scope: AuthorityScope,
     manifest: AbilityManifest,
     handler: LocalRpcHandler,
 ) {
-    reg.register_rpc_with_spec_impl_and_authority_scope(
+    reg.register_rpc_with_spec(
         ability,
         owner,
-        authority_scope,
         manifest,
         handler,
-        ControlPlaneImplementation::native_daemon(),
     );
 }
 
 pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
-    let owner = OwnerKind::Agent("files".to_string());
-    register_files_rpc(reg, "files.put", owner.clone(), scope(), manifest(), put_handler);
-    register_files_rpc(reg, "files.get", owner.clone(), scope(), manifest(), get_handler);
-    register_files_rpc(reg, "files.list", owner, scope(), manifest(), list_handler);
+    let owner = OwnerKind::files_system();
+    register_files_rpc(reg, "files.put", owner.clone(), manifest(), put_handler);
+    register_files_rpc(reg, "files.get", owner.clone(), manifest(), get_handler);
+    register_files_rpc(reg, "files.list", owner, manifest(), list_handler);
 }
 EOF
   cat >"$CLI/src/daemon/ability/builtins/integrations/openai_compat.rs" <<'EOF'
@@ -2187,13 +2149,9 @@ fn handle_file_upload_with_context(
     identity: Option<&OpenAICompatIdentity>,
     args: Value,
 ) -> anyhow::Result<Value> {
-    let files_authority_root =
-        crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
-            &realm, &user,
-        );
-    invoke_user_owned_rpc(
+    invoke_resource_service_rpc(
         registry.as_ref(),
-        &files_authority_root,
+        OwnerKind::files_system(),
         "files.put",
         files_subject,
         store_args,
@@ -2209,13 +2167,9 @@ fn handle_file_retrieve_with_context(
     identity: Option<&OpenAICompatIdentity>,
     args: Value,
 ) -> anyhow::Result<Value> {
-    let files_authority_root =
-        crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
-            &realm, &user,
-        );
-    invoke_user_owned_rpc(
+    invoke_resource_service_rpc(
         registry.as_ref(),
-        &files_authority_root,
+        OwnerKind::files_system(),
         "files.get",
         file_subject,
         json!({ "sha256": file_id }),
@@ -2226,15 +2180,12 @@ fn deref_to_data_url(
     ura: &str,
     dispatch_handle: &Arc<OnceLock<Arc<AxonAbilityCatalog>>>,
 ) -> anyhow::Result<String> {
-    let (authority_root, ability, args) = (
-        crate::daemon::ability::builtins::resources::files_store::management_agent_ura(
-            &parsed.realm,
-            user,
-        ),
+    let (owner, ability, args) = (
+        OwnerKind::files_system(),
         "files.get".to_string(),
         json!({ "ura": ura, "path": path }),
     );
-    invoke_user_owned_rpc(registry.as_ref(), &authority_root, ability, subject, args)
+    invoke_resource_service_rpc(registry.as_ref(), owner, ability, subject, args)
 }
 EOF
   cat >>"$CLI/src/daemon/ability/builtins/resources/voice.rs" <<'EOF'
@@ -3212,9 +3163,10 @@ impl BootstrapAuthorityVerifier {
         if trusted_path == TrustedCallerPath::User {
             return;
         }
-        if trusted_path != TrustedCallerPath::DeviceCustody {
+        let TrustedCallerPath::DeviceCustody(device_purpose) = trusted_path else {
             return;
-        }
+        };
+        let _ = device_purpose;
         local_device_owner_fact(caller_ura);
     }
 }
@@ -3798,6 +3750,7 @@ EOF
 			    src/daemon/invocation/admission/authority_proof.rs \
 			    src/daemon/invocation/admission/policy_gate.rs \
 			    src/daemon/invocation/admission/policy_gate_tests.rs \
+			    src/daemon/invocation/admission/device_caller_types.rs \
 			    src/daemon/invocation/admission/device_caller.rs \
 		    src/daemon/invocation/admission/hosted_agent_delegation.rs \
 		    src/daemon/invocation/admission/decision.rs \

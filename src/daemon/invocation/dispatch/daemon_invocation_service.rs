@@ -641,6 +641,9 @@ impl DaemonInvocationService {
                 ability_catalog: Arc::new(
                     crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore::new(),
                 ),
+                hosted_agent_lifecycle: Arc::new(
+                    crate::daemon::federation::read_model::advertised_agents::HostedAgentLifecycleCoordinator::new(),
+                ),
                 local_ability_catalog: None,
                 federated_directory:
                     crate::daemon::federation::directory::SharedFederatedDirectoryView::default(),

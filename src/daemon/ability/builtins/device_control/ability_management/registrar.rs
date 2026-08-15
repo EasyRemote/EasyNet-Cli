@@ -100,6 +100,23 @@ pub struct AbilityDeploymentInstall {
 
 const MIN_BINDING_LEASE_MS: u64 = 1_000;
 const MAX_BINDING_LEASE_MS: u64 = 300_000;
+const BINDING_LEASE_RETRY_BASE_DELAY: Duration = Duration::from_millis(50);
+const BINDING_LEASE_RETRY_MAX_DELAY: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BindingLeaseGeneration(u64);
+
+struct BindingLeaseRetryPolicy;
+
+impl BindingLeaseRetryPolicy {
+    fn delay_after_failure(failure_count: u32) -> Duration {
+        let exponent = failure_count.saturating_sub(1).min(31);
+        let multiplier = 1_u32 << exponent;
+        BINDING_LEASE_RETRY_BASE_DELAY
+            .saturating_mul(multiplier)
+            .min(BINDING_LEASE_RETRY_MAX_DELAY)
+    }
+}
 
 impl AbilityDeploymentInstall {
     pub fn new(
@@ -498,7 +515,7 @@ pub struct AbilityDeploymentRegistrar {
     control_plane_catalog: OnceLock<Weak<AxonAbilityCatalog>>,
     store: AbilityDeploymentStore,
     lifecycle: tokio::sync::Mutex<()>,
-    active_leases: Mutex<HashMap<String, u64>>,
+    active_leases: Mutex<HashMap<String, BindingLeaseGeneration>>,
     next_lease_generation: AtomicU64,
     #[cfg(test)]
     fail_next_runtime_replace: AtomicBool,
@@ -645,28 +662,84 @@ impl AbilityDeploymentRegistrar {
                 .remove(install_id);
             return;
         };
-        let generation = self.next_lease_generation.fetch_add(1, Ordering::Relaxed);
+        let generation =
+            BindingLeaseGeneration(self.next_lease_generation.fetch_add(1, Ordering::Relaxed));
         self.active_leases
             .lock()
             .expect("ability deployment lease mutex poisoned")
             .insert(install_id.to_string(), generation);
 
+        self.spawn_binding_lease_supervisor(
+            install_id.to_string(),
+            generation,
+            Duration::from_millis(binding_lease_ms),
+        );
+    }
+
+    fn spawn_binding_lease_supervisor(
+        self: &Arc<Self>,
+        install_id: String,
+        generation: BindingLeaseGeneration,
+        initial_delay: Duration,
+    ) {
         let registrar = Arc::downgrade(self);
-        let install_id = install_id.to_string();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(binding_lease_ms)).await;
-            let Some(registrar) = registrar.upgrade() else {
-                return;
-            };
-            if let Err(error) = registrar
-                .expire_binding_lease(&install_id, generation)
-                .await
-            {
-                eprintln!(
-                    "[ability-deployment] failed to expire implementation binding {install_id}: {error:#}"
-                );
+            let mut delay = initial_delay;
+            let mut failure_count = 0_u32;
+            loop {
+                tokio::time::sleep(delay).await;
+                let Some(registrar) = registrar.upgrade() else {
+                    return;
+                };
+                match registrar
+                    .expire_binding_lease(&install_id, generation)
+                    .await
+                {
+                    Ok(()) => return,
+                    Err(error) => {
+                        if !registrar.binding_lease_generation_is_current(&install_id, generation) {
+                            return;
+                        }
+                        failure_count = failure_count.saturating_add(1);
+                        delay = BindingLeaseRetryPolicy::delay_after_failure(failure_count);
+                        eprintln!(
+                            "[ability-deployment] failed to expire implementation binding \
+                             {install_id} generation {} (attempt {failure_count}); retrying in \
+                             {}ms: {error:#}",
+                            generation.0,
+                            delay.as_millis()
+                        );
+                    }
+                }
             }
         });
+    }
+
+    fn binding_lease_generation_is_current(
+        &self,
+        install_id: &str,
+        generation: BindingLeaseGeneration,
+    ) -> bool {
+        self.active_leases
+            .lock()
+            .expect("ability deployment lease mutex poisoned")
+            .get(install_id)
+            .copied()
+            == Some(generation)
+    }
+
+    fn complete_binding_lease_generation(
+        &self,
+        install_id: &str,
+        generation: BindingLeaseGeneration,
+    ) {
+        let mut leases = self
+            .active_leases
+            .lock()
+            .expect("ability deployment lease mutex poisoned");
+        if leases.get(install_id).copied() == Some(generation) {
+            leases.remove(install_id);
+        }
     }
 
     fn cancel_binding_leases(&self, install_ids: &[String]) {
@@ -679,17 +752,14 @@ impl AbilityDeploymentRegistrar {
         }
     }
 
-    async fn expire_binding_lease(&self, install_id: &str, generation: u64) -> anyhow::Result<()> {
+    async fn expire_binding_lease(
+        &self,
+        install_id: &str,
+        generation: BindingLeaseGeneration,
+    ) -> anyhow::Result<()> {
         let _lifecycle = self.lifecycle.lock().await;
-        {
-            let mut leases = self
-                .active_leases
-                .lock()
-                .expect("ability deployment lease mutex poisoned");
-            if leases.get(install_id).copied() != Some(generation) {
-                return Ok(());
-            }
-            leases.remove(install_id);
+        if !self.binding_lease_generation_is_current(install_id, generation) {
+            return Ok(());
         }
 
         let Some(row) = self
@@ -698,24 +768,54 @@ impl AbilityDeploymentRegistrar {
             .into_iter()
             .find(|row| row.install_id() == install_id)
         else {
+            self.complete_binding_lease_generation(install_id, generation);
             return Ok(());
         };
         if row.binding_lease_ms().is_none() {
+            self.complete_binding_lease_generation(install_id, generation);
             return Ok(());
         }
 
         let runtime = self.runtime()?.clone();
         let catalog = self.control_plane_catalog("ability deployment binding lease expiry")?;
         let control_plane_keys = Self::control_plane_removal_keys(std::slice::from_ref(&row))?;
+        let affected_owners = control_plane_keys
+            .iter()
+            .map(|key| key.authority_root().to_string())
+            .collect::<Vec<_>>();
+        catalog.prepare_dynamic_publication(&affected_owners)?;
+        if !self.binding_lease_generation_is_current(install_id, generation) {
+            return Ok(());
+        }
         let _ = runtime.unregister_ability(row.ability_ura()).await;
-        for key in control_plane_keys {
+        if runtime.has_ability(row.ability_ura()).await {
+            anyhow::bail!(
+                "ability deployment binding lease expiry left runtime route {} advertised",
+                row.ability_ura()
+            );
+        }
+        for key in &control_plane_keys {
             catalog.remove_control_plane_record_for_authority_mode(
                 key.authority_root(),
                 key.public_name(),
                 key.call_mode(),
             );
+            if catalog
+                .control_plane_record_for_authority_mode(
+                    key.authority_root(),
+                    key.public_name(),
+                    key.call_mode(),
+                )?
+                .is_some()
+            {
+                anyhow::bail!(
+                    "ability deployment binding lease expiry left control-plane record {} advertised",
+                    key.label()
+                );
+            }
         }
-        catalog.notify_dynamic_publication_hooks();
+        self.complete_binding_lease_generation(install_id, generation);
+        catalog.notify_dynamic_publication_committed();
         Ok(())
     }
 
@@ -770,6 +870,7 @@ impl AbilityDeploymentRegistrar {
             self.configure_binding_lease(record.install_id(), install.binding_lease_ms());
             return Ok(InstallState::Active);
         }
+        catalog.prepare_dynamic_publication(&[control_plane_key.authority_root().to_string()])?;
         let overwritten =
             self.store
                 .stage_install_record(record.clone())
@@ -901,7 +1002,13 @@ impl AbilityDeploymentRegistrar {
             ));
         }
         control_plane_txn.commit();
-        catalog.notify_dynamic_publication_hooks();
+        catalog.notify_dynamic_publication_committed();
+        self.cancel_binding_leases(
+            &overwritten
+                .iter()
+                .map(|row| row.install_id().to_string())
+                .collect::<Vec<_>>(),
+        );
         self.configure_binding_lease(record.install_id(), install.binding_lease_ms());
         Ok(state)
     }
@@ -955,6 +1062,16 @@ impl AbilityDeploymentRegistrar {
                     );
             }
         };
+        let affected_owners = control_plane_removals
+            .iter()
+            .map(|key| key.authority_root().to_string())
+            .collect::<Vec<_>>();
+        if let Err(error) = catalog.prepare_dynamic_publication(&affected_owners) {
+            self.store.restore_records(transaction.removed.clone())?;
+            return Err(error.context(
+                "ability.uninstall: durable publication fence failed before live mutation",
+            ));
+        }
         let mut runtime_still_advertised = Vec::new();
         let mut control_plane_still_advertised = Vec::new();
         let mut runtime_keys = transaction
@@ -1039,7 +1156,7 @@ impl AbilityDeploymentRegistrar {
         }
         transaction.advance(AbilityDeploymentUninstallStep::StoreCommitted);
         self.cancel_binding_leases(&transaction.install_ids);
-        catalog.notify_dynamic_publication_hooks();
+        catalog.notify_dynamic_publication_committed();
 
         Ok(transaction.outcome())
     }
@@ -2154,12 +2271,17 @@ mod tests {
         let store = AbilityDeploymentStore::open_at(dir.path().join("ability-deployments.json"));
         let (registrar, _, catalog) = wired_registrar(store);
         let notifications = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        catalog.register_dynamic_publication_hook(Arc::new({
-            let notifications = Arc::clone(&notifications);
-            move || {
-                notifications.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
-        }));
+        catalog
+            .register_dynamic_publication_participant(
+                Arc::new(|_| Ok(())),
+                Arc::new({
+                    let notifications = Arc::clone(&notifications);
+                    move || {
+                        notifications.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }),
+            )
+            .unwrap();
 
         let install = host_stream_install(dir.path(), "/tmp/er-host.sock");
         let ability_ura = install.ability_ura().to_string();
@@ -2607,6 +2729,220 @@ mod tests {
         assert_eq!(rows[0].binding_lease_ms(), Some(MIN_BINDING_LEASE_MS));
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn leased_binding_expiry_retries_publication_prepare_and_converges() {
+        let dir = tempfile::tempdir().unwrap();
+        let store_path = dir.path().join("ability-deployments.json");
+        let (registrar, runtime, catalog) =
+            wired_registrar(AbilityDeploymentStore::open_at(store_path.clone()));
+        let fail_next_prepare = Arc::new(AtomicBool::new(true));
+        let prepare_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let committed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        registrar
+            .install(
+                host_stream_install(dir.path(), "/tmp/leased-host.sock")
+                    .with_binding_lease_ms(Some(MIN_BINDING_LEASE_MS))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let install_id = AbilityDeploymentStore::open_at(store_path.clone())
+            .load()
+            .unwrap()[0]
+            .install_id()
+            .to_string();
+        catalog
+            .register_dynamic_publication_participant(
+                Arc::new({
+                    let fail_next_prepare = Arc::clone(&fail_next_prepare);
+                    let prepare_attempts = Arc::clone(&prepare_attempts);
+                    move |_| {
+                        prepare_attempts.fetch_add(1, Ordering::SeqCst);
+                        if fail_next_prepare.swap(false, Ordering::SeqCst) {
+                            anyhow::bail!("injected transient publication prepare failure");
+                        }
+                        Ok(())
+                    }
+                }),
+                Arc::new({
+                    let committed = Arc::clone(&committed);
+                    move || {
+                        committed.fetch_add(1, Ordering::SeqCst);
+                    }
+                }),
+            )
+            .unwrap();
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(MIN_BINDING_LEASE_MS)).await;
+        tokio::task::yield_now().await;
+
+        assert_eq!(prepare_attempts.load(Ordering::SeqCst), 1);
+        assert!(runtime.has_ability(er_generate_runtime_key()).await);
+        assert!(stream_control_plane_record(&catalog).ability() == "er.generate");
+        assert_eq!(
+            AbilityDeploymentStore::open_at(store_path.clone())
+                .load()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(registrar
+            .active_leases
+            .lock()
+            .unwrap()
+            .contains_key(&install_id));
+
+        tokio::time::advance(BINDING_LEASE_RETRY_BASE_DELAY).await;
+        tokio::task::yield_now().await;
+
+        assert_eq!(prepare_attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(committed.load(Ordering::SeqCst), 1);
+        assert!(!runtime.has_ability(er_generate_runtime_key()).await);
+        assert!(catalog
+            .control_plane_record_for_mode("er.generate", DescriptorCallMode::Stream)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            AbilityDeploymentStore::open_at(store_path)
+                .load()
+                .unwrap()
+                .len(),
+            1,
+            "expiry preserves the durable descriptor"
+        );
+        assert!(!registrar
+            .active_leases
+            .lock()
+            .unwrap()
+            .contains_key(&install_id));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn renewed_generation_cancels_the_failed_expiry_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let (registrar, runtime, catalog) = wired_registrar(AbilityDeploymentStore::open_at(
+            dir.path().join("ability-deployments.json"),
+        ));
+        let lease_install = || {
+            host_stream_install(dir.path(), "/tmp/leased-host.sock")
+                .with_binding_lease_ms(Some(MIN_BINDING_LEASE_MS))
+                .unwrap()
+        };
+        registrar.install(lease_install()).await.unwrap();
+        let install_id = registrar.store.load().unwrap()[0].install_id().to_string();
+        let reject_prepare = Arc::new(AtomicBool::new(true));
+        let prepare_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        catalog
+            .register_dynamic_publication_participant(
+                Arc::new({
+                    let reject_prepare = Arc::clone(&reject_prepare);
+                    let prepare_attempts = Arc::clone(&prepare_attempts);
+                    move |_| {
+                        prepare_attempts.fetch_add(1, Ordering::SeqCst);
+                        if reject_prepare.load(Ordering::SeqCst) {
+                            anyhow::bail!("injected publication prepare outage");
+                        }
+                        Ok(())
+                    }
+                }),
+                Arc::new(|| {}),
+            )
+            .unwrap();
+        let first_generation = registrar.active_leases.lock().unwrap()[&install_id];
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(MIN_BINDING_LEASE_MS)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(prepare_attempts.load(Ordering::SeqCst), 1);
+
+        reject_prepare.store(false, Ordering::SeqCst);
+        registrar.install(lease_install()).await.unwrap();
+        let renewed_generation = registrar.active_leases.lock().unwrap()[&install_id];
+        assert_ne!(first_generation, renewed_generation);
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(BINDING_LEASE_RETRY_BASE_DELAY).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            prepare_attempts.load(Ordering::SeqCst),
+            1,
+            "the stale retry must exit before publication prepare"
+        );
+        assert!(runtime.has_ability(er_generate_runtime_key()).await);
+
+        tokio::time::advance(
+            Duration::from_millis(MIN_BINDING_LEASE_MS) - BINDING_LEASE_RETRY_BASE_DELAY,
+        )
+        .await;
+        tokio::task::yield_now().await;
+        assert!(!runtime.has_ability(er_generate_runtime_key()).await);
+        assert_eq!(prepare_attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn uninstall_cancels_the_failed_expiry_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let (registrar, runtime, catalog) = wired_registrar(AbilityDeploymentStore::open_at(
+            dir.path().join("ability-deployments.json"),
+        ));
+        let install = host_stream_install(dir.path(), "/tmp/leased-host.sock")
+            .with_binding_lease_ms(Some(MIN_BINDING_LEASE_MS))
+            .unwrap();
+        let ability_ura = install.ability_ura().to_string();
+        registrar.install(install).await.unwrap();
+        let install_id = registrar.store.load().unwrap()[0].install_id().to_string();
+        let reject_prepare = Arc::new(AtomicBool::new(true));
+        let prepare_attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        catalog
+            .register_dynamic_publication_participant(
+                Arc::new({
+                    let reject_prepare = Arc::clone(&reject_prepare);
+                    let prepare_attempts = Arc::clone(&prepare_attempts);
+                    move |_| {
+                        prepare_attempts.fetch_add(1, Ordering::SeqCst);
+                        if reject_prepare.load(Ordering::SeqCst) {
+                            anyhow::bail!("injected publication prepare outage");
+                        }
+                        Ok(())
+                    }
+                }),
+                Arc::new(|| {}),
+            )
+            .unwrap();
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_millis(MIN_BINDING_LEASE_MS)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(prepare_attempts.load(Ordering::SeqCst), 1);
+
+        reject_prepare.store(false, Ordering::SeqCst);
+        registrar
+            .uninstall(AbilityDeploymentUninstall {
+                ability_ura,
+                install_id: Some(install_id.clone()),
+            })
+            .await
+            .unwrap();
+        let attempts_after_uninstall = prepare_attempts.load(Ordering::SeqCst);
+        assert!(!registrar
+            .active_leases
+            .lock()
+            .unwrap()
+            .contains_key(&install_id));
+
+        tokio::time::advance(BINDING_LEASE_RETRY_MAX_DELAY).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            prepare_attempts.load(Ordering::SeqCst),
+            attempts_after_uninstall,
+            "the uninstalled generation must not retry publication prepare"
+        );
+        assert!(!runtime.has_ability(er_generate_runtime_key()).await);
+        assert!(registrar.store.load().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn redeploy_renews_lease_generation_without_premature_expiry() {
         let dir = tempfile::tempdir().unwrap();
@@ -2633,7 +2969,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn boot_replay_keeps_leased_implementation_inactive_until_host_renews() {
+    async fn boot_replay_keeps_overdue_leased_implementation_inactive_without_retry() {
         let dir = tempfile::tempdir().unwrap();
         let store_path = dir.path().join("ability-deployments.json");
         {
@@ -2658,6 +2994,7 @@ mod tests {
         assert_eq!(report.outcomes[0].status, ReplayOutcomeStatus::LeasePending);
         assert!(!runtime.has_ability(er_generate_runtime_key()).await);
         assert!(catalog.authority_ability_catalog_snapshot().is_empty());
+        assert!(replayed.active_leases.lock().unwrap().is_empty());
     }
 
     #[test]

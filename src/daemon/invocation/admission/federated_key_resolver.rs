@@ -76,6 +76,173 @@ use axon_sdk::pb::axon::v1::InvokeRequest;
 /// [`FederatedKeyResolver::with_cache_ttl`] for tests.
 pub const DEFAULT_FEDERATED_RESOLVE_CACHE_TTL: Duration = Duration::from_secs(300);
 
+/// Destination-device projection of external User/Authority keys attested by
+/// the Device's authenticated upstream Hub. This is deliberately separate
+/// from `RealmTrustAnchor`: the destination realm does not own a federated
+/// principal's key lifecycle and therefore must not persist that key as local
+/// authority.
+const DEFAULT_HUB_ATTESTED_KEY_TTL: Duration = Duration::from_secs(300);
+const MAX_HUB_ATTESTED_CALLERS: usize = 1_024;
+
+#[derive(Clone)]
+struct HubAttestedKey {
+    key: VerifyingKey,
+    expires_at: Instant,
+}
+
+#[derive(Clone)]
+pub(crate) struct SharedHubAttestedCallerKeys {
+    inner: Arc<Mutex<HashMap<String, Vec<HubAttestedKey>>>>,
+    ttl: Duration,
+}
+
+impl Default for SharedHubAttestedCallerKeys {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SharedHubAttestedCallerKeys {
+    #[must_use]
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+            ttl: DEFAULT_HUB_ATTESTED_KEY_TTL,
+        }
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_ttl(ttl: Duration) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+            ttl,
+        }
+    }
+
+    /// Admit exactly the external principal key pinned by the forwarded signed
+    /// envelope. The upstream Hub may return the User's complete active
+    /// keyset, but this Device caches only the presented key whose membership
+    /// the response proved. That keeps each trust decision request-scoped.
+    pub(crate) fn attest_external_caller_key(
+        &self,
+        caller_ura: &str,
+        presented_pubkey_b64: &str,
+        public_keys_b64: &[String],
+    ) -> anyhow::Result<()> {
+        let caller = parse_ura(caller_ura)
+            .map_err(|error| anyhow::anyhow!("hub_attested_caller_ura_invalid:{error}"))?;
+        if !matches!(caller.kind, URAKind::User | URAKind::Authority) {
+            anyhow::bail!("hub_attested_caller_must_be_user_or_authority");
+        }
+        let presented = Self::decode_key(presented_pubkey_b64)
+            .map_err(|error| anyhow::anyhow!("hub_attested_presented_key_invalid:{error}"))?;
+        if public_keys_b64.len() > axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA {
+            anyhow::bail!(
+                "hub_attested_keyset_exceeds_limit:{}>{}",
+                public_keys_b64.len(),
+                axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA,
+            );
+        }
+        let mut response_contains_presented = false;
+        for (index, encoded) in public_keys_b64.iter().enumerate() {
+            let key = Self::decode_key(encoded)
+                .map_err(|error| anyhow::anyhow!("hub_attested_keyset[{index}]_invalid:{error}"))?;
+            response_contains_presented |= key == presented;
+        }
+        if !response_contains_presented {
+            anyhow::bail!("hub_attested_keyset_missing_presented_key");
+        }
+
+        let now = Instant::now();
+        let mut guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        Self::prune_expired(&mut guard, now);
+        if !guard.contains_key(caller_ura) && guard.len() >= MAX_HUB_ATTESTED_CALLERS {
+            let evict = guard
+                .iter()
+                .filter_map(|(caller, keys)| {
+                    keys.iter()
+                        .map(|entry| entry.expires_at)
+                        .min()
+                        .map(|deadline| (caller.clone(), deadline))
+                })
+                .min_by_key(|(_, deadline)| *deadline)
+                .map(|(caller, _)| caller);
+            if let Some(evict) = evict {
+                guard.remove(&evict);
+            }
+        }
+        let keys = guard.entry(caller_ura.to_string()).or_default();
+        keys.retain(|entry| entry.key != presented);
+        if keys.len() >= axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA {
+            if let Some((oldest, _)) = keys
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, entry)| entry.expires_at)
+            {
+                keys.remove(oldest);
+            }
+        }
+        keys.push(HubAttestedKey {
+            key: presented,
+            expires_at: now + self.ttl,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn contains(&self, caller_ura: &str, key_b64: &str) -> bool {
+        let Ok(key) = Self::decode_key(key_b64) else {
+            return false;
+        };
+        self.resolve_all(caller_ura)
+            .is_some_and(|keys| keys.contains(&key))
+    }
+
+    /// Whether the authenticated upstream Hub currently attests at least one
+    /// live invocation key for this exact caller.
+    ///
+    /// This is intentionally a projection-only query: policy classification
+    /// must consume the evidence already established for the signed carrier,
+    /// never start a second federation lookup or infer trust from the caller's
+    /// realm text alone.
+    fn contains_caller(&self, caller_ura: &str) -> bool {
+        self.resolve_all(caller_ura).is_some()
+    }
+
+    fn resolve_all(&self, caller_ura: &str) -> Option<Vec<VerifyingKey>> {
+        let now = Instant::now();
+        let mut guard = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        Self::prune_expired(&mut guard, now);
+        guard
+            .get(caller_ura)
+            .map(|entries| entries.iter().map(|entry| entry.key).collect::<Vec<_>>())
+    }
+
+    fn prune_expired(entries: &mut HashMap<String, Vec<HubAttestedKey>>, now: Instant) {
+        entries.retain(|_, keys| {
+            keys.retain(|entry| entry.expires_at > now);
+            !keys.is_empty()
+        });
+    }
+
+    fn decode_key(encoded: &str) -> Result<VerifyingKey, String> {
+        let raw = BASE64_STANDARD
+            .decode(encoded)
+            .map_err(|error| format!("base64_decode_failed:{error}"))?;
+        let bytes: [u8; 32] = raw
+            .as_slice()
+            .try_into()
+            .map_err(|_| format!("wrong_length:{}", raw.len()))?;
+        VerifyingKey::from_bytes(&bytes).map_err(|error| format!("ed25519_parse_failed:{error}"))
+    }
+}
+
 /// Per-entry record in the federated-resolve cache. Stores the
 /// resolved verifying key plus the deadline after which the
 /// entry is considered stale.
@@ -172,6 +339,7 @@ pub struct FederatedKeyResolver {
     /// the path is known. Runtime key admission and `federation.resolve_key`
     /// therefore consume the same PrincipalLifecycle aggregate.
     principal_lifecycle: Arc<RwLock<Option<PrincipalLifecycleReader>>>,
+    hub_attested_caller_keys: SharedHubAttestedCallerKeys,
 }
 
 enum LocalKeyResolutionError {
@@ -202,6 +370,7 @@ impl FederatedKeyResolver {
             cache_ttl: DEFAULT_FEDERATED_RESOLVE_CACHE_TTL,
             hub_signer: None,
             principal_lifecycle: Arc::new(RwLock::new(None)),
+            hub_attested_caller_keys: SharedHubAttestedCallerKeys::new(),
         }
     }
 
@@ -264,6 +433,19 @@ impl FederatedKeyResolver {
                 *poisoned.into_inner() = Some(reader);
             }
         }
+    }
+
+    #[must_use]
+    pub(crate) fn hub_attested_caller_keys(&self) -> SharedHubAttestedCallerKeys {
+        self.hub_attested_caller_keys.clone()
+    }
+
+    /// Return true only while this resolver holds a live, request-pinned key
+    /// attestation for the exact external caller from the authenticated
+    /// upstream Hub.
+    #[must_use]
+    pub(crate) fn has_hub_attested_caller(&self, caller_ura: &str) -> bool {
+        self.hub_attested_caller_keys.contains_caller(caller_ura)
     }
 
     /// Drop every cached entry. Re-exported on the resolver for
@@ -386,6 +568,13 @@ impl FederatedKeyResolver {
         if let Some(key) = self.resolve_principal_lifecycle_local_key(caller_ura)? {
             return Ok(key);
         }
+        if let Some(key) = self
+            .hub_attested_caller_keys
+            .resolve_all(caller_ura)
+            .and_then(|keys| keys.into_iter().next())
+        {
+            return Ok(key);
+        }
         Err(LocalKeyResolutionError::Missing)
     }
 
@@ -397,6 +586,9 @@ impl FederatedKeyResolver {
             return self.resolve_local(caller_ura).map(|key| vec![key]);
         }
         if !self.is_same_realm_user(caller_ura) {
+            if let Some(keys) = self.hub_attested_caller_keys.resolve_all(caller_ura) {
+                return Ok(keys);
+            }
             return self.resolve_local(caller_ura).map(|key| vec![key]);
         }
 
@@ -814,6 +1006,47 @@ mod tests {
         let signing = SigningKey::from_bytes(&[1u8; 32]);
         let pk_bytes = signing.verifying_key().to_bytes();
         (signing, BASE64_STANDARD.encode(pk_bytes))
+    }
+
+    #[test]
+    fn hub_attested_projection_requires_exact_presented_caller_key() {
+        let projection = SharedHubAttestedCallerKeys::new();
+        let (_, presented) = ed25519_pubkey_b64();
+        let other = BASE64_STANDARD.encode(
+            SigningKey::from_bytes(&[0x54; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        let user_ura = "easynet:///r/peer-realm/user/alice";
+
+        let error = projection
+            .attest_external_caller_key(user_ura, &presented, &[other])
+            .expect_err("un-pinned Hub response must fail closed");
+
+        assert!(error
+            .to_string()
+            .contains("hub_attested_keyset_missing_presented_key"));
+        assert!(!projection.contains(user_ura, &presented));
+    }
+
+    #[test]
+    fn hub_attested_projection_expires_without_persisting_authority() {
+        let projection = SharedHubAttestedCallerKeys::with_ttl(Duration::ZERO);
+        let (_, presented) = ed25519_pubkey_b64();
+        let user_ura = "easynet:///r/peer-realm/user/alice";
+
+        projection
+            .attest_external_caller_key(user_ura, &presented, std::slice::from_ref(&presented))
+            .expect("exact Hub attestation is accepted");
+
+        assert!(
+            projection.resolve_all(user_ura).is_none(),
+            "zero-TTL evidence must be unavailable to Axon admission"
+        );
+        assert!(
+            !projection.contains_caller(user_ura),
+            "expired evidence must also be unavailable to policy classification"
+        );
     }
 
     fn local_entry(ura: &str, pk_b64: &str) -> TrustedAgent {

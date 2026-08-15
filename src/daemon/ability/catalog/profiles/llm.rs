@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn catalog_snapshot_projects_to_multiple_llm_owners_without_mutating_source() {
-        let source_owner = "easynet:///r/acme/device/catalog";
+        let source_owner = "easynet:///r/acme/agent/device.catalog.runtime-introspection";
         let descriptor = |name: &str, description: &str| {
             AbilityDescriptor::new(
                 name,

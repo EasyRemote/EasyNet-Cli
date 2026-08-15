@@ -3992,10 +3992,10 @@ mod tests {
         );
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(
             &plugin_owner,
-            &["browser.open_session", "remote_desktop.create_session"],
+            &["plugin.demo.open_session", "plugin.demo.create_session"],
         );
 
-        for ability in ["browser.open_session", "remote_desktop.create_session"] {
+        for ability in ["plugin.demo.open_session", "plugin.demo.create_session"] {
             assert!(
                 executable_route_selector_from_query(&device_ura, ability, None).is_err(),
                 "{ability} must not be inferred when the deterministic registry omits it"

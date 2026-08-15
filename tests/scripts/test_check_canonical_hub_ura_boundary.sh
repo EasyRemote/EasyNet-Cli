@@ -32,6 +32,7 @@ make_sandbox() {
         "$sandbox/axon"
     cp "$REPO_ROOT/src/core/ura/mod.rs" "$sandbox/src/core/ura/mod.rs"
     cp "$REPO_ROOT/src/daemon/invocation/routing/remote_invoke.rs" "$sandbox/src/daemon/invocation/routing/remote_invoke.rs"
+    cp "$REPO_ROOT/src/daemon/invocation/routing/route_target.rs" "$sandbox/src/daemon/invocation/routing/route_target.rs"
     cp "$REPO_ROOT/src/daemon/invocation/admission/admission_facade.rs" "$sandbox/src/daemon/invocation/admission/admission_facade.rs"
     cp "$REPO_ROOT/src/daemon/invocation/dispatch/daemon_invocation_service.rs" "$sandbox/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
     cp "$REPO_ROOT/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs" "$sandbox/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs"
@@ -69,14 +70,33 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "Axon Hub generation should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's#whose canonical protocol identity is `easynet:///r/<realm>/authority`#whose canonical protocol identity is `easynet:///r/<realm>/hub`#' "$SB/src/daemon/invocation/routing/remote_invoke.rs"
+perl -0pi -e 's#Authority inputs are exact callees#Hub inputs are exact callees#' "$SB/src/daemon/invocation/routing/route_target.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "stale parse_node_ura /hub docs should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "stale route target /hub docs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's#crate::core::identity::RuntimeIdentityUra::parse\(trimmed\)#crate::core::ura::parse_ura(trimmed)#' "$SB/src/daemon/invocation/routing/remote_invoke.rs"
+python3 - "$SB/src/daemon/invocation/routing/route_target.rs" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+match = re.search(r"impl RemoteAbilityRouteTarget \{.*?^}", text, flags=re.M | re.S)
+if not match:
+    raise SystemExit("RemoteAbilityRouteTarget impl not found")
+body, replacements = re.subn(
+    r"RuntimeIdentityUra::parse\(trimmed\)",
+    "crate::core::ura::parse_ura(trimmed)",
+    match.group(0),
+    count=1,
+)
+if replacements != 1:
+    raise SystemExit("typed route parser RuntimeIdentityUra call not found")
+path.write_text(text[:match.start()] + body + text[match.end():], encoding="utf-8")
+PY
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"

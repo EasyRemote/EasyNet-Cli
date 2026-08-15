@@ -50,6 +50,17 @@ func TestPreparedInvocationDecodesSigningMaterialFixture(t *testing.T) {
 	if prepared.SigningMaterial().DescriptorRef() != prepared.DescriptorRef() {
 		t.Fatalf("descriptor ref mismatch")
 	}
+	material := prepared.SigningMaterial()
+	if material.CallerURA() != "easynet:///r/example/agent/alice.sdk" ||
+		material.CalleeURA() != "easynet:///r/example/agent/device.dev-a.runtime-health" ||
+		material.SubjectURA() != "easynet:///r/example/device/dev-a" {
+		t.Fatalf("signing identity URAs = (%q, %q, %q)", material.CallerURA(), material.CalleeURA(), material.SubjectURA())
+	}
+	if material.CallerProfile() != "axon-strict-v2" ||
+		material.CalleeProfile() != "axon-strict-v2" ||
+		material.SubjectProfile() != "axon-strict-v2" {
+		t.Fatalf("signing identity profiles = (%q, %q, %q)", material.CallerProfile(), material.CalleeProfile(), material.SubjectProfile())
+	}
 }
 
 func TestPreparedInvocationRejectsMissingPreparedDescriptorRef(t *testing.T) {

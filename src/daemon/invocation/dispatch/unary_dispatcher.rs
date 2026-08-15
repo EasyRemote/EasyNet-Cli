@@ -95,9 +95,7 @@ use crate::daemon::invocation::dispatch::invocation_wire::{
     function_name_from_invocation_target, parse_json_args, status_from_axon_invoke_error,
     FEDERATION_RESULT_CONTENT_TYPE,
 };
-use crate::daemon::invocation::dispatch::remote_failure::{
-    is_admission_denial_message, status_from_remote_failure,
-};
+use crate::daemon::invocation::dispatch::remote_failure::status_from_remote_failure;
 use crate::daemon::invocation::routing::route_resolver::{
     CanonicalRouteDispatch, CanonicalRouteSelection, DelegatedInvokeRoute, SelectedInvokeRoute,
 };
@@ -466,9 +464,13 @@ impl DaemonUnaryRouteProvider {
             DaemonUnaryRoute::FederationAdvertiseAgent => self
                 .dispatcher
                 .dispatch_federation_advertise_agent(arguments, Some(&envelope)),
-            DaemonUnaryRoute::FederationAdvertiseAbilities => self
-                .dispatcher
-                .dispatch_federation_advertise_abilities(arguments, Some(&envelope)),
+            DaemonUnaryRoute::FederationAdvertiseAbilities => {
+                self.dispatcher.dispatch_federation_advertise_abilities(
+                    arguments,
+                    Some(&envelope),
+                    Some(context.authority_binding()),
+                )
+            }
             DaemonUnaryRoute::FederationHeartbeat => {
                 self.dispatcher.dispatch_federation_heartbeat(arguments)
             }
@@ -691,32 +693,54 @@ impl UnaryDispatcher {
         request: &federation_wrappers::AdvertiseAgentRequest,
         publication: HostedAgentPublication,
     ) -> Result<Vec<u8>, Status> {
+        let _transition = self
+            .directory
+            .hosted_agent_lifecycle
+            .begin()
+            .map_err(|error| Status::unavailable(error.to_string()))?;
         let ctx = self.identity.runtime_trust.as_ref().ok_or_else(|| {
             Status::failed_precondition(
                 "federation.advertise_agent: this hub was booted without the trust-write surface",
             )
         })?;
+        // Durable host custody is the transaction fence. Persist it before
+        // exposing either the owner binding or the in-memory route. If the
+        // following trust write fails, retry is idempotent and projections
+        // remain fail-closed because the binding/read model is still absent.
+        let command = publication.registration_command(request);
+        let registration =
+            federation_wrappers::register_advertised_agent(command).map_err(|error| {
+                Status::failed_precondition(format!(
+                    "federation.advertise_agent durable inventory failed: {error:#}"
+                ))
+            })?;
         RuntimeTrust::new(&ctx.daemon_realm, &ctx.trust_anchor_path, &ctx.cell)
             .bind_principal_owner(publication.into_owner_binding(
                 crate::daemon::invocation::admission::runtime_trust::now_unix_ms(),
             ))?;
-        let response = federation_wrappers::handle_advertise_agent(
-            request,
-            Some(self.directory.advertised_agents.as_ref()),
-        )
-        .map_err(|error| {
-            Status::failed_precondition(format!(
-                "federation.advertise_agent durable inventory failed: {error:#}"
-            ))
-        })?;
-        encode_json_payload(&response)
+        let stored = self
+            .directory
+            .advertised_agents
+            .upsert(registration.record.clone().into());
+        if !stored.is_stored() {
+            return Err(Status::aborted(format!(
+                "federation.advertise_agent read-model commit rejected after durable commit: {stored:?}"
+            )));
+        }
+        encode_json_payload(&federation_wrappers::advertise_agent_response(registration))
     }
 
     pub(crate) fn dispatch_federation_advertise_abilities(
         &self,
         arguments: &[u8],
         envelope: Option<&Envelope>,
+        authority_binding: Option<&axon_sdk::invocation::AuthorityBinding>,
     ) -> Result<Vec<u8>, Status> {
+        let _transition = self
+            .directory
+            .hosted_agent_lifecycle
+            .begin()
+            .map_err(|error| Status::unavailable(error.to_string()))?;
         let request: federation_wrappers::AdvertiseAbilitiesRequest = parse_json_args(arguments)?;
         let envelope = envelope.ok_or_else(|| {
             Status::invalid_argument("federation.advertise_abilities: envelope is required")
@@ -728,6 +752,7 @@ impl UnaryDispatcher {
             self.directory.advertised_agents.as_ref(),
             trust_anchor.as_ref(),
             self.admission.daemon_ura(),
+            authority_binding,
         )
         .map_err(|err| {
             Status::permission_denied(format!(
@@ -742,6 +767,11 @@ impl UnaryDispatcher {
         arguments: &[u8],
         caller_device_ura: &str,
     ) -> Result<Vec<u8>, Status> {
+        let _transition = self
+            .directory
+            .hosted_agent_lifecycle
+            .begin()
+            .map_err(|error| Status::unavailable(error.to_string()))?;
         let request: federation_wrappers::AdvertiseAbilitiesRequest = parse_json_args(arguments)?;
         let hub_ura = self.admission.daemon_ura().ok_or_else(|| {
             Status::failed_precondition(
@@ -879,6 +909,13 @@ impl UnaryDispatcher {
             CanonicalRouteDispatch::HubSession(route) => {
                 return (
                     self.dispatch_hub_session_canonical_invoke(request, &route)
+                        .await,
+                    false,
+                )
+            }
+            CanonicalRouteDispatch::UpstreamHub(route) => {
+                return (
+                    self.dispatch_upstream_hub_canonical_invoke(request, &route)
                         .await,
                     false,
                 )
@@ -1783,16 +1820,35 @@ impl UnaryDispatcher {
         caller_envelope: Option<&Envelope>,
         arguments: &[u8],
     ) -> Result<Vec<u8>, Status> {
+        let _transition = self
+            .directory
+            .hosted_agent_lifecycle
+            .begin()
+            .map_err(|error| Status::unavailable(error.to_string()))?;
+        let envelope = caller_envelope
+            .ok_or_else(|| Status::invalid_argument("federation.revoke requires an envelope"))?;
         let request: federation_wrappers::RevokeRequest = parse_json_args(arguments)?;
-        let caller_ura = caller_envelope
-            .and_then(|envelope| envelope.caller.as_ref())
+        let subject_ura = envelope
+            .subject
+            .as_ref()
+            .map(|subject| subject.ura.trim())
+            .filter(|subject| !subject.is_empty())
+            .ok_or_else(|| {
+                Status::invalid_argument("federation.revoke requires an envelope subject")
+            })?;
+        let intent = request
+            .bind_to_subject(subject_ura)
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+        let caller_ura = envelope
+            .caller
+            .as_ref()
             .map(|caller| caller.ura.trim())
             .filter(|caller| !caller.is_empty());
         let presence_mode = caller_ura
             .map(federation_wrappers::RevokePresenceMode::defer_current_caller)
             .unwrap_or(federation_wrappers::RevokePresenceMode::Immediate);
         let response = federation_wrappers::handle_revoke_with_presence_mode(
-            &request,
+            &intent,
             &self.directory.presence,
             Some(self.directory.advertised_agents.as_ref()),
             self.directory.ability_catalog.as_ref(),
@@ -1994,7 +2050,7 @@ impl UnaryDispatcher {
                 Ok(Response::new(finalized.into_response()))
             }
             Err(err) => {
-                if let Some(status) = target_admission_denial_status(&err) {
+                if let Some(status) = target_peer_status(&err) {
                     return Err(status);
                 }
                 Err(Status::unavailable(format!(
@@ -2009,14 +2065,6 @@ impl UnaryDispatcher {
         request: &InvokeRequest,
         route: &SelectedInvokeRoute,
     ) -> Result<Response<InvokeResponse>, Status> {
-        require_complete_signed_remote_request(request)?;
-        let Some(handle) = self.sessions.escalation.as_ref() else {
-            return Err(Status::failed_precondition(
-                "remote Invoke selected HubSession route but session escalation is not configured",
-            ));
-        };
-        let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
-        let receipt_resolver = self.admission.receipt_key_resolver();
         crate::op_event!(
             component = daemon_invocation,
             kind = canonical_invoke_hub_session_selected_route,
@@ -2024,13 +2072,55 @@ impl UnaryDispatcher {
             execution_host_ura = route.execution_host_ura.as_str(),
             route_ura = route.route_ura.as_str(),
         );
+        self.forward_canonical_invoke_through_upstream_hub(
+            request,
+            "remote Invoke HubSession dispatch",
+        )
+        .await
+    }
+
+    /// Forward the caller's original signed invocation to the authenticated
+    /// upstream Hub. A Device never turns a Hub DELEGATION answer into a peer
+    /// dial: peer topology and federation credentials remain Hub-owned.
+    async fn dispatch_upstream_hub_canonical_invoke(
+        &self,
+        request: &InvokeRequest,
+        route: &DelegatedInvokeRoute,
+    ) -> Result<Response<InvokeResponse>, Status> {
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = canonical_invoke_upstream_hub_peer_delegation,
+            callee_ura = route.owner_ura.as_str(),
+            peer_realm = route.realm.as_str(),
+            peer_hub_ura = route.hub_ura.as_str(),
+        );
+        self.forward_canonical_invoke_through_upstream_hub(
+            request,
+            "remote Invoke upstream-Hub peer delegation",
+        )
+        .await
+    }
+
+    async fn forward_canonical_invoke_through_upstream_hub(
+        &self,
+        request: &InvokeRequest,
+        context: &'static str,
+    ) -> Result<Response<InvokeResponse>, Status> {
+        require_complete_signed_remote_request(request)?;
+        let Some(handle) = self.sessions.escalation.as_ref() else {
+            return Err(Status::failed_precondition(format!(
+                "{context}: authenticated upstream session is not configured"
+            )));
+        };
+        let forwarded_binding = ForwardedInvocationBinding::from_request(request)?;
+        let receipt_resolver = self.admission.receipt_key_resolver();
         match handle.escalate_invoke(request.clone()).await {
             Ok(response) => {
                 ensure_forwarded_response_receipt_signer_keys(
                     receipt_resolver.as_ref(),
                     self.sessions.device_trust_sync.as_ref(),
                     &response,
-                    "remote Invoke HubSession dispatch",
+                    context,
                 )
                 .await?;
                 let finalized = ForwardedFinalizedInvocation::verify_response(
@@ -2046,12 +2136,12 @@ impl UnaryDispatcher {
             Err(SessionRequestError::PermissionDenied { reason }) => {
                 Err(Status::permission_denied(reason))
             }
-            Err(SessionRequestError::UpstreamFailure { reason }) => Err(Status::unavailable(
-                format!("remote Invoke HubSession dispatch failed: {reason}"),
-            )),
-            Err(SessionRequestError::UpstreamTimeout) => Err(Status::deadline_exceeded(
-                "remote Invoke HubSession dispatch timed out",
-            )),
+            Err(SessionRequestError::UpstreamFailure { reason }) => {
+                Err(Status::unavailable(format!("{context} failed: {reason}")))
+            }
+            Err(SessionRequestError::UpstreamTimeout) => {
+                Err(Status::deadline_exceeded(format!("{context} timed out")))
+            }
         }
     }
 
@@ -2234,18 +2324,16 @@ pub(crate) fn require_complete_signed_remote_request(
     Ok(())
 }
 
-fn target_admission_denial_status(error: &FederationClientError) -> Option<Status> {
-    let FederationClientError::InnerInvokeFailed { status, .. } = error else {
+fn target_peer_status(error: &FederationClientError) -> Option<Status> {
+    let FederationClientError::InnerInvokeFailed {
+        status_code,
+        status_message,
+        ..
+    } = error
+    else {
         return None;
     };
-    if !is_admission_denial_message(status) {
-        return None;
-    }
-    if status.contains("code=InvalidArgument") {
-        Some(Status::invalid_argument(status.clone()))
-    } else {
-        Some(Status::permission_denied(status.clone()))
-    }
+    Some(Status::new(*status_code, status_message.clone()))
 }
 
 fn sorted_non_empty_urls(urls: Vec<String>) -> Vec<String> {
@@ -2424,5 +2512,39 @@ fn non_empty_json_string(value: &str) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+#[cfg(test)]
+mod peer_status_tests {
+    use super::*;
+    use tonic::Code;
+
+    #[test]
+    fn peer_authorization_status_is_not_reclassified_as_offline() {
+        let peer_error = FederationClientError::InnerInvokeFailed {
+            endpoint: "https://hub-b.example:50443".to_string(),
+            status_code: Code::PermissionDenied,
+            status_message: "AUTHORITY_ISSUER_DENIED: forged issuer".to_string(),
+        };
+
+        let status = target_peer_status(&peer_error).expect("typed peer status");
+
+        assert_eq!(status.code(), Code::PermissionDenied);
+        assert_eq!(status.message(), "AUTHORITY_ISSUER_DENIED: forged issuer");
+    }
+
+    #[test]
+    fn peer_status_projection_preserves_non_authorization_code() {
+        let peer_error = FederationClientError::InnerInvokeFailed {
+            endpoint: "https://hub-b.example:50443".to_string(),
+            status_code: Code::InvalidArgument,
+            status_message: "REQUEST_PAYLOAD_INVALID: schema mismatch".to_string(),
+        };
+
+        let status = target_peer_status(&peer_error).expect("typed peer status");
+
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert_eq!(status.message(), "REQUEST_PAYLOAD_INVALID: schema mismatch");
     }
 }

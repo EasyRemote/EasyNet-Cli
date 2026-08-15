@@ -1493,19 +1493,6 @@ impl OwnerKind {
         )
     }
 
-    pub(crate) fn pages_system() -> Self {
-        Self::SystemAgent(
-            crate::daemon::ability::names::resources::PAGES_SYSTEM_AGENT_ID.to_string(),
-        )
-    }
-
-    pub(crate) fn pages_service(owner_user_id: impl Into<String>) -> Self {
-        Self::Service {
-            principal_id: owner_user_id.into(),
-            service_id: crate::daemon::ability::names::resources::PAGES_SYSTEM_AGENT_ID.to_string(),
-        }
-    }
-
     pub(crate) fn files_system() -> Self {
         Self::SystemAgent(
             crate::daemon::ability::names::resources::FILES_SYSTEM_AGENT_ID.to_string(),
@@ -1522,6 +1509,12 @@ impl OwnerKind {
         Self::SystemAgent(
             crate::daemon::ability::names::integrations::PLUGIN_MANAGEMENT_SYSTEM_AGENT_ID
                 .to_string(),
+        )
+    }
+
+    pub(crate) fn remote_desktop_system() -> Self {
+        Self::SystemAgent(
+            crate::daemon::ability::names::integrations::REMOTE_DESKTOP_SYSTEM_AGENT_ID.to_string(),
         )
     }
 

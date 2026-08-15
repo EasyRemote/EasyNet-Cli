@@ -6,4 +6,5 @@ pub mod hub_resolver;
 pub(crate) mod remote_invoke;
 #[cfg(feature = "axon-pb")]
 pub mod route_resolver;
+pub(crate) mod route_target;
 pub mod target;

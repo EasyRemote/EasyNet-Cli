@@ -274,13 +274,18 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 	if err != nil {
 		return InvocationDraft{}, err
 	}
+	metadata, authority, err := projectRuntimeCallMetadata(call)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
 	descriptorRef, err := c.runtime.ResolveDescriptorRef(ctx, RuntimeDescriptorRefRequest{
-		CalleeURA:  strings.TrimSpace(call.CalleeURA),
-		Ability:    abilityName,
-		CallMode:   mode,
-		CallerURA:  strings.TrimSpace(call.CallerURA),
-		SubjectURA: descriptorSubjectURA,
-		Provider:   policy.descriptorProvider,
+		CalleeURA:         strings.TrimSpace(call.CalleeURA),
+		Ability:           abilityName,
+		CallMode:          mode,
+		CallerURA:         strings.TrimSpace(call.CallerURA),
+		SubjectURA:        descriptorSubjectURA,
+		AuthorityMetadata: descriptorResolutionAuthorityMetadata(metadata),
+		Provider:          policy.descriptorProvider,
 	})
 	if err != nil {
 		return InvocationDraft{}, err
@@ -289,8 +294,12 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 	if err != nil {
 		return InvocationDraft{}, err
 	}
-	metadata, err := canonicalRuntimeCallMetadata(call, subjectURA, ability)
-	if err != nil {
+	if authority != nil {
+		if err := validateRuntimeAuthorityBinding(authority, call, subjectURA, ability); err != nil {
+			return InvocationDraft{}, err
+		}
+	}
+	if err := validateAuthorityMetadata(metadata); err != nil {
 		return InvocationDraft{}, err
 	}
 	return NewInvocationBuilder().
@@ -555,56 +564,47 @@ func (p runtimeAbilityProjection) matchesScope(match func(string) bool) bool {
 	return false
 }
 
-func canonicalRuntimeCallMetadata(
-	call RuntimeCallContext,
-	envelopeSubjectURA string,
-	ability runtimeAbilityProjection,
-) (map[string]any, error) {
+func projectRuntimeCallMetadata(call RuntimeCallContext) (map[string]any, RuntimeInvocationAuthority, error) {
 	metadata := cloneAbilityMetadata(call.Metadata)
 	if err := validateAuthorityMetadata(metadata); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if call.Authority != nil {
 		if rawRuntimeAuthorityPresent(metadata) {
-			return nil, invalidRuntimePayload(
+			return nil, nil, invalidRuntimePayload(
 				"runtime call authority must be supplied once as a typed authority or metadata, not both",
 				nil,
 			)
 		}
 		projection, err := call.Authority.Metadata()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		metadata, err = projection.MergeInto(metadata)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if err := validateRuntimeAuthorityBinding(
-			call.Authority,
-			call,
-			envelopeSubjectURA,
-			ability,
-		); err != nil {
-			return nil, err
-		}
-		return metadata, nil
+		return metadata, call.Authority, nil
 	}
 
 	authority, err := runtimeAuthorityFromMetadata(metadata)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if authority != nil {
-		if err := validateRuntimeAuthorityBinding(
-			authority,
-			call,
-			envelopeSubjectURA,
-			ability,
-		); err != nil {
-			return nil, err
+	return metadata, authority, nil
+}
+
+func descriptorResolutionAuthorityMetadata(metadata map[string]any) map[string]string {
+	projection := make(map[string]string, 2)
+	for _, key := range []string{DelegationMetadataKey, SessionAuthorityMetadataKey} {
+		if value, _ := authorityMetadataValue(metadata, key); strings.TrimSpace(value) != "" {
+			projection[key] = value
 		}
 	}
-	return metadata, nil
+	if len(projection) == 0 {
+		return nil
+	}
+	return projection
 }
 
 func rawRuntimeAuthorityPresent(metadata map[string]any) bool {

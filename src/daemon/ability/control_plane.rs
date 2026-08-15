@@ -727,6 +727,7 @@ mod tests {
     use serde_json::json;
 
     const LOCAL_DEVICE_URA: &str = "easynet:///r/default/device/local";
+    const LOCAL_SYSTEM_AGENT_URA: &str = "easynet:///r/default/agent/device.local.locomotion";
     const LOCAL_AGENT_URA: &str = "easynet:///r/default/agent/user.assistant";
 
     fn native_registration<'a>(
@@ -776,7 +777,7 @@ mod tests {
                 CallMode::Rpc,
                 AdmissionAction::Read,
                 None,
-                AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                AuthorityScope::new("system-agent:locomotion", LOCAL_SYSTEM_AGENT_URA).unwrap(),
                 RuntimeEnv::daemon_native(),
             ))
             .unwrap();
@@ -985,7 +986,7 @@ mod tests {
                     CallMode::Rpc,
                     AdmissionAction::Read,
                     Some(&manifest_v1),
-                    AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                    AuthorityScope::new("system-agent:locomotion", LOCAL_SYSTEM_AGENT_URA).unwrap(),
                     RuntimeEnv::new("env:v1").unwrap(),
                     AbilityImplSource::NativeDaemon,
                 )
@@ -999,7 +1000,7 @@ mod tests {
                     CallMode::Rpc,
                     AdmissionAction::Read,
                     Some(&manifest_v2),
-                    AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                    AuthorityScope::new("system-agent:locomotion", LOCAL_SYSTEM_AGENT_URA).unwrap(),
                     RuntimeEnv::new("env:v2").unwrap(),
                     AbilityImplSource::NativeDaemon,
                 )

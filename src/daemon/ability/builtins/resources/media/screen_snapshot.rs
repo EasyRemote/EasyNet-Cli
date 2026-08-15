@@ -47,6 +47,7 @@ use crate::daemon::ability::builtins::resources::media::{
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
 use crate::daemon::persistence::resources::{ResourceEntry, ResourceType};
+use crate::daemon::resources::context::device_scope::ContextDeviceScope;
 
 /// 2 MiB inline cap — same shape as camera.snapshot. This keeps
 /// base64-expanded receipts below Axon's 4 MiB IPC frame limit while
@@ -938,6 +939,7 @@ fn snapshot_handler(
     args: Value,
 ) -> anyhow::Result<Value> {
     let entry = resolve_screen_subject(&env, &args, ABILITY_SCREEN_SNAPSHOT)?;
+    let device_scope = ContextDeviceScope::from_execution_actor(env.callee())?;
 
     let options = parse_capture_options(&args, false)?;
     ensure_region_allowed(&entry, &options)?;
@@ -956,14 +958,12 @@ fn snapshot_handler(
         );
     }
 
-    // Context-surface persistence: the device daemon keeps every
-    // snapshot under `context/captures/screen.snapshot/` so the
-    // Context page can browse it as <device>/<ability>/<artifact>.
-    // Best-effort by design — a full disk must not fail the snapshot
-    // the caller is waiting on.
-    if let Err(err) = crate::daemon::persistence::context_store::record_capture(
+    // Snapshot success includes durable Context persistence. Returning an
+    // inline image while silently losing its catalog entry would expose two
+    // conflicting terminal states for the same capture.
+    let capture = crate::daemon::persistence::context_store::record_capture(
         crate::daemon::persistence::context_store::CaptureRecord {
-            device: env.callee(),
+            device: device_scope.as_str(),
             ability: ABILITY_SCREEN_SNAPSHOT,
             ext: "jpg",
             bytes: &jpeg_bytes,
@@ -973,26 +973,23 @@ fn snapshot_handler(
             duration_ms: None,
             preview: format!("Screenshot {width}x{height}"),
         },
-    ) {
-        crate::op_event!(
-            component = context,
-            kind = capture_persist_failed,
-            level = "warn",
-            ability = ABILITY_SCREEN_SNAPSHOT,
-            error = err,
-        );
-    }
+    )?;
+    let local_path = crate::daemon::persistence::context_store::captures_dir()
+        .join(ABILITY_SCREEN_SNAPSHOT)
+        .join(&capture.file);
 
     let image_bytes_b64 = BASE64_STANDARD.encode(&jpeg_bytes);
-    let captured_at = chrono::Utc::now().to_rfc3339();
     Ok(json!({
         "image_bytes_b64": image_bytes_b64,
         "content_type":    "image/jpeg",
         "width":           width,
         "height":          height,
         "byte_size":       jpeg_bytes.len(),
-        "captured_at":     captured_at,
+        "captured_at":     capture.timestamp,
         "hardware_id":     entry.hardware_id,
+        "capture_id":      capture.id,
+        "capture_file":    capture.file,
+        "local_path":      local_path.display().to_string(),
     }))
 }
 
@@ -1050,7 +1047,7 @@ mod tests {
             file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 kind: ResourceType::Display,
                 binding: ResourceBinding::LocalDevice,
                 hardware_id,
@@ -1208,6 +1205,9 @@ mod tests {
             "byte_size",
             "captured_at",
             "hardware_id",
+            "capture_id",
+            "capture_file",
+            "local_path",
         ] {
             assert!(
                 resp.get(field).is_some(),
@@ -1216,6 +1216,14 @@ mod tests {
         }
         assert_eq!(resp["content_type"], "image/jpeg");
         assert_eq!(resp["hardware_id"], "h-display-e2e");
+        let captures = crate::daemon::persistence::context_store::list_captures(
+            TEST_DEVICE_URA,
+            Some(ABILITY_SCREEN_SNAPSHOT),
+            10,
+        )
+        .unwrap();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].id, resp["capture_id"].as_str().unwrap());
     }
 
     #[test]
@@ -1284,7 +1292,7 @@ mod tests {
             &mut file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 kind: ResourceType::Camera, // wrong type for screen.snapshot
                 binding: ResourceBinding::LocalDevice,
                 hardware_id: "h-cam-not-screen",

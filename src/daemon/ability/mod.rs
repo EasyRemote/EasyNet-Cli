@@ -40,10 +40,10 @@ pub mod wire;
 pub(crate) use authority::public_route_ability_from_descriptor_ref;
 pub use authority::{
     AuthorityBinding, AuthorityBindingKind, AuthorityBindingRegistry, AuthorityPredicate,
-    AuthorityScope, HostedAgentAuthority, HostedAgentDelegationClaims,
+    AuthorityScope, DelegationAuthorityClaims, HostedAgentAuthority, HostedAgentDelegationClaims,
     HostedAgentDelegationContext, HostedAgentDelegationEnvelopeBinding,
     HostedAgentDelegationRequest, HOSTED_AGENT_DELEGATION_METADATA_KEY,
-    HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
+    HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY, RUNTIME_DELEGATION_METADATA_KEY,
 };
 pub(crate) use catalog_row::{
     insert_catalog_descriptor, AbilityCatalogQuery, AbilityCatalogRow, CatalogDescriptorKey,

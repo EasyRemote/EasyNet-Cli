@@ -100,18 +100,18 @@ mod tests {
     }
 
     #[test]
-    fn projection_uses_canonical_device_owner() {
-        let row =
-            AbilityCatalogueRow::from_value(&row("fs.read", "easynet:///r/acme/device/dev-1"))
-                .expect("canonical row should project");
+    fn projection_uses_canonical_system_agent_owner() {
+        let owner = "easynet:///r/acme/agent/device.dev-1.locomotion";
+        let row = AbilityCatalogueRow::from_value(&row("fs.read", owner))
+            .expect("canonical row should project");
 
         assert_eq!(row.label(), "fs.read");
-        assert_eq!(row.owner_ura(), Some("easynet:///r/acme/device/dev-1"));
+        assert_eq!(row.owner_ura(), Some(owner));
     }
 
     #[test]
     fn projection_rejects_non_canonical_catalogue_alias_fields() {
-        let mut value = row("fs.read", "easynet:///r/acme/device/dev-1");
+        let mut value = row("fs.read", "easynet:///r/acme/agent/device.dev-1.locomotion");
         value["ability_name"] = json!("legacy.name");
         value["tool_name"] = json!("legacy.tool");
         let error = AbilityCatalogueRow::from_value(&value)

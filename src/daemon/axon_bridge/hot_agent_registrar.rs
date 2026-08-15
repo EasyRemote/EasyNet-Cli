@@ -151,14 +151,16 @@ pub struct HotAgentRegistrar {
     /// agents do not observe a different user/public tier.
     discover_federation_resolver:
         crate::daemon::ability::builtins::agents::discover::SharedDiscoverFederationResolver,
-    /// Optional hub-advertise bridge for hot-added hosted agents.
+    /// Optional Hub control adapter for hosted-Agent assignment, projection,
+    /// and revocation workflows.
     ///
     /// Runtime registration is local; hub visibility is separate.
     /// Device-mode boot wires this after the long-lived
     /// `session.open` escalation channel exists. Tests and
     /// non-device modes leave it empty. Local lifecycle success is independent
-    /// of Hub reachability; the public lifecycle response reports
-    /// `not_configured`, `succeeded`, or `failed` explicitly.
+    /// of Hub reachability. Live add/refresh publication is owned by the
+    /// catalog's coalesced federation worker; this adapter remains the narrow
+    /// transport used by generation recovery and stop/purge publication.
     hot_advertiser: OnceLock<Arc<dyn HotAgentAdvertiser>>,
 }
 
@@ -298,24 +300,34 @@ impl HotAgentUnregistration {
     }
 }
 
-/// Input for a hot hosted-agent advertise pass.
+/// Input for an explicit hosted-Agent advertise pass.
 ///
 /// `agent_ura` drives `federation.advertise_agent` (identity). When
 /// `abilities_payload` + `abilities_resource_ura` are present, the
 /// advertiser ALSO fires `federation.advertise_abilities` on the same
 /// transport so a hot ability add/remove reaches the hub immediately
 /// instead of waiting for the next heartbeat. ISS-002.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct HotAgentAdvertiseRequest {
     pub agent_ura: String,
-    pub generation: u64,
-    /// Pre-encoded `federation.advertise_abilities` args (built from the
-    /// just-persisted owner projection via
-    /// `advertise::advertise_abilities_payload`). `None` skips the
-    /// abilities advertise (identity-only). The advertiser targets the
-    /// hub federation surface by ability name, so no resource URA is
-    /// carried here.
-    pub abilities_payload: Option<Vec<u8>>,
+    /// Committed runtime descriptors are domain input, not a pre-encoded
+    /// projection. The publication workflow must first obtain and persist the
+    /// Hub assignment, then construct the generation-fenced projection.
+    pub descriptors: Vec<crate::daemon::ability::descriptors::AbilityDescriptor>,
+}
+
+/// Identity-only generation assignment command. It deliberately carries no
+/// descriptors or encoded owner projection, so retraction recovery cannot
+/// accidentally resurrect abilities while learning the generation to revoke.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotAgentAssignmentRequest {
+    pub plan: crate::daemon::federation::hosted_agent_publication::HostedAgentAssignmentPlan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HotAgentAssignmentOutcome {
+    Assigned(crate::daemon::federation::hosted_agent_publication::HostedAgentGenerationAssignment),
+    Failed(String),
 }
 
 /// Projection-only publication. Purge tombstones must use this surface so an
@@ -326,10 +338,13 @@ pub struct HotAgentProjectionRequest {
     pub generation: u64,
     pub transaction_id: String,
     pub delivery_fence: u64,
+    /// Exact complete-set size the Hub receipt must acknowledge. Tombstones
+    /// carry zero; non-empty hot projections carry their descriptor count.
+    pub expected_ability_count: usize,
     pub abilities_payload: Vec<u8>,
 }
 
-/// Outcome for best-effort hub advertisement after hot agent add.
+/// Terminal outcome for one Hub publication transport pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotAgentAdvertiseState {
     Succeeded,
@@ -393,14 +408,17 @@ pub struct HotAgentRevokeRequest {
     pub delivery_fence: u64,
 }
 
-/// Narrow abstraction over the transport used to notify the hub
-/// about a hot-added hosted agent.
+/// Narrow abstraction over hosted-Agent Hub lifecycle transport.
 ///
 /// The registrar owns the trait object so runtime lifecycle code
 /// does not depend on `daemon::invocation` concrete
 /// session types. Device-mode boot supplies an implementation backed
-/// by the current `session.open` bidi; tests can supply a recorder.
+/// by the current `session.open` bidi; tests can supply a recorder. Dynamic
+/// add/refresh convergence is scheduled by the catalog publication worker so
+/// there is only one live identity-publication owner.
 pub trait HotAgentAdvertiser: Send + Sync {
+    fn assign_hosted_agent(&self, request: HotAgentAssignmentRequest) -> HotAgentAssignmentOutcome;
+
     fn advertise_hosted_agent(&self, request: HotAgentAdvertiseRequest)
         -> HotAgentAdvertiseOutcome;
 
@@ -512,6 +530,17 @@ impl HotAgentRegistrar {
                 catalog.as_ref(),
             ),
         )
+    }
+
+    /// True when the boot-owned dynamic federation worker is attached to the
+    /// committed catalog. Agent lifecycle code reports scheduling from this
+    /// explicit capability instead of inferring it from the unrelated
+    /// revoke/assignment transport adapter.
+    #[must_use]
+    pub(crate) fn dynamic_publication_configured(&self) -> bool {
+        self.dispatch_handle
+            .get()
+            .is_some_and(|catalog| catalog.has_dynamic_publication_hook())
     }
 
     /// Register the canonical `<agent>.chat / discover / invoke`

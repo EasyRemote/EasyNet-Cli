@@ -19,6 +19,8 @@ use crate::daemon::invocation::routing::remote_invoke::{
     self, RemoteAbilityInvocationTarget, RemoteCatalogueReadIssuer, RemoteSessionInvocationIssuer,
     RemoteSystemInvocationIssuer, RemoteUserActionInvocationIssuer,
 };
+#[cfg(feature = "axon-pb")]
+use crate::daemon::invocation::routing::route_target;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RemoteTargetSystemAbility {
@@ -122,7 +124,7 @@ pub(crate) fn invoke_remote_device_system_ability_as_caller(
     args: Value,
     caller_ura: &str,
 ) -> anyhow::Result<Value> {
-    let target_ura = remote_invoke::parse_node_ura(target_ura)?;
+    let target_ura = route_target::parse_device_placement_ura(target_ura)?;
     let selector = ability.as_str();
     invoke_target_owned_system_ability(&target_ura, ability, args, caller_ura)
         .with_context(|| format!("forward {selector} to remote device target={target_ura}"))
@@ -138,7 +140,7 @@ pub(crate) fn invoke_remote_device_session_ability(
     authority_metadata: crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
     signer: crate::daemon::invocation::routing::remote_invoke::RemoteInvocationCallerSigner,
 ) -> anyhow::Result<Value> {
-    let target_ura = remote_invoke::parse_node_ura(target_ura)?;
+    let target_ura = route_target::parse_device_placement_ura(target_ura)?;
     let timeout = crate::support::platform::timeouts::remote_system_transport_guard(0)
         .map_err(anyhow::Error::msg)?;
     let target_call =
@@ -168,7 +170,7 @@ pub(crate) fn upload_target_resource_via_file_transfer(
     resource_ref: Value,
     input_chunks: Vec<Vec<u8>>,
 ) -> anyhow::Result<Vec<crate::support::platform::local_invoke::LocalBidiFrame>> {
-    let target_ura = remote_invoke::parse_node_ura(target_ura)?;
+    let target_ura = route_target::parse_device_placement_ura(target_ura)?;
     let timeout = crate::support::platform::timeouts::remote_system_transport_guard(0)
         .map_err(anyhow::Error::msg)?;
     let target_call = RemoteAbilityInvocationTarget::for_target_owned_selector_for_mode(
@@ -203,7 +205,7 @@ pub(crate) fn invoke_target_ability_deploy_from_resource(
     subject_ura: &str,
     resource_ref: Value,
 ) -> anyhow::Result<Value> {
-    let target_ura = remote_invoke::parse_node_ura(target_ura)?;
+    let target_ura = route_target::parse_device_placement_ura(target_ura)?;
     let timeout = crate::support::platform::timeouts::remote_system_transport_guard(0)
         .map_err(anyhow::Error::msg)?;
     let target_call = RemoteAbilityInvocationTarget::for_target_owned_selector(
@@ -236,7 +238,7 @@ pub(crate) fn invoke_target_ability_uninstall(
     ability_ura: &str,
     install_id: Option<&str>,
 ) -> anyhow::Result<Value> {
-    let target_ura = remote_invoke::parse_node_ura(target_ura)?;
+    let target_ura = route_target::parse_device_placement_ura(target_ura)?;
     let timeout = crate::support::platform::timeouts::remote_system_transport_guard(0)
         .map_err(anyhow::Error::msg)?;
     let target_call = RemoteAbilityInvocationTarget::for_target_owned_selector(
@@ -275,7 +277,7 @@ pub(crate) fn invoke_agent_subject_mission_run(
     args: Value,
     timeout: std::time::Duration,
 ) -> anyhow::Result<Value> {
-    let target_device_ura = remote_invoke::parse_node_ura(target_device_ura)?;
+    let target_device_ura = route_target::parse_device_placement_ura(target_device_ura)?;
     let subject = crate::core::ura::parse_ura(subject_ura)
         .map_err(|error| anyhow::anyhow!("mission.run subject URA is invalid: {error}"))?;
     if subject.kind != crate::core::ura::URAKind::Agent {

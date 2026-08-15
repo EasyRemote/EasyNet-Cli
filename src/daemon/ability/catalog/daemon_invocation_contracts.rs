@@ -174,7 +174,7 @@ pub(crate) fn description_for(name: &str) -> Option<&'static str> {
             "Admit a device into the realm federation and return its membership receipt."
         }
         ABILITY_FEDERATION_ADVERTISE_AGENT => {
-            "Publish one hosted Agent directory row under the calling device's federation presence."
+            "Register one Device-hosted Agent incarnation and receive the Hub-owned generation assignment."
         }
         ABILITY_FEDERATION_ADVERTISE_ABILITIES => {
             "Publish governed ability descriptors for an already-advertised Agent projection."
@@ -264,12 +264,14 @@ pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
         ABILITY_FEDERATION_ADVERTISE_AGENT => object_schema(
             json!({
                 "agent_ura": string_prop("Hosted Agent URA being advertised."),
-                "host_node_id": string_prop("Host device or node URA that carries the Agent."),
-                "public_key_hex": string_prop("Optional advertised Agent verifying key."),
-                "generation": integer_prop("Monotonic directory generation for this advertisement.")
+                "incarnation_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{32}$",
+                    "description": "Device-persisted opaque incarnation id; exactly 32 lowercase hexadecimal characters."
+                }
             }),
-            &["agent_ura", "generation"],
-            true,
+            &["agent_ura", "incarnation_id"],
+            false,
         ),
         ABILITY_FEDERATION_ADVERTISE_ABILITIES => object_schema(
             json!({
@@ -446,9 +448,36 @@ fn manifest_for(ability: &str, action: AdmissionAction) -> anyhow::Result<Abilit
     let input_schema = input_schema_for(ability).ok_or_else(|| {
         anyhow::anyhow!("daemon Invocation ability {ability:?} is missing input schema")
     })?;
-    AbilityManifest::new(manifest_name, description, input_schema)?
-        .with_descriptor_version(DEFAULT_ABILITY_DESCRIPTOR_VERSION)?
-        .with_admission_action(action.as_str())
+    let descriptor_version = if ability == ABILITY_FEDERATION_ADVERTISE_AGENT {
+        "2.0.0"
+    } else {
+        DEFAULT_ABILITY_DESCRIPTOR_VERSION
+    };
+    let mut manifest = AbilityManifest::new(manifest_name, description, input_schema)?
+        .with_descriptor_version(descriptor_version)?
+        .with_admission_action(action.as_str())?;
+    if ability == ABILITY_FEDERATION_ADVERTISE_AGENT {
+        manifest = manifest.with_output_schema(json!({
+            "type": "object",
+            "required": ["ack", "assignment"],
+            "additionalProperties": false,
+            "properties": {
+                "ack": { "type": "boolean", "const": true },
+                "assignment": {
+                    "type": "object",
+                    "required": ["agent_ura", "host_device_ura", "incarnation_id", "generation"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "agent_ura": { "type": "string", "minLength": 1 },
+                        "host_device_ura": { "type": "string", "minLength": 1 },
+                        "incarnation_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+                        "generation": { "type": "integer", "minimum": 1 }
+                    }
+                }
+            }
+        }))?;
+    }
+    Ok(manifest)
 }
 
 fn is_principal_mutation(name: &str) -> bool {

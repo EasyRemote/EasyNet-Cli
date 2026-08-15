@@ -107,6 +107,22 @@ type memoryPrincipalAbility struct {
 	args    map[string]any
 }
 
+type recordingPrincipalContextFactory struct {
+	abilities []string
+	subjects  []string
+}
+
+func (f *recordingPrincipalContextFactory) ContextForPrincipalAbility(
+	_ context.Context,
+	ability string,
+) (RuntimeCallContext, error) {
+	call := principalCallFixture()
+	call.SubjectURA = "easynet:///r/example/resource/user.alice/invoke/" + ability
+	f.abilities = append(f.abilities, ability)
+	f.subjects = append(f.subjects, call.SubjectURA)
+	return call, nil
+}
+
 func (m *memoryPrincipalAbility) Invoke(_ context.Context, call RuntimeCallContext, ability string, args any) (map[string]any, error) {
 	if call.CallerURA == "" || call.CalleeURA == "" || call.SubjectURA == "" || call.NonceBase64 == "" || call.CausalContext == nil {
 		return nil, invalidRuntimePayload("call context was not preserved", nil)
@@ -200,6 +216,55 @@ func TestRuntimePrincipalProviderLowersLifecycleTransitions(t *testing.T) {
 	}
 	if _, ok := request["private_key"]; ok {
 		t.Fatalf("private key leaked into principal provider args: %#v", request)
+	}
+}
+
+func TestRuntimePrincipalProviderMintsContextAfterOperationSelection(t *testing.T) {
+	transport := &memoryPrincipalAbility{}
+	factory := &recordingPrincipalContextFactory{}
+	provider, err := NewRuntimePrincipalProviderWithContextFactory(transport, factory)
+	if err != nil {
+		t.Fatalf("NewRuntimePrincipalProviderWithContextFactory: %v", err)
+	}
+	client, err := NewPrincipalClient(provider)
+	if err != nil {
+		t.Fatalf("NewPrincipalClient: %v", err)
+	}
+	ctx := context.Background()
+	principalURA := "easynet:///r/example/user/alice"
+	command := principalCommandFixture()
+	if _, err = client.Get(ctx, principalURA); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if _, err = client.Create(ctx, CreatePrincipalRequest{Command: command, PrincipalURA: principalURA}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	bind := BindPrincipalKeyRequest{
+		Command:      command,
+		PrincipalURA: principalURA,
+		KeyID:        "laptop",
+		PublicKey:    make(ed25519.PublicKey, ed25519.PublicKeySize),
+	}
+	if _, err = client.BindFirstKey(ctx, bind); err != nil {
+		t.Fatalf("BindFirstKey: %v", err)
+	}
+	if _, err = client.AddKey(ctx, bind); err != nil {
+		t.Fatalf("AddKey: %v", err)
+	}
+	wantAbilities := []string{
+		principalAbilityGet,
+		principalAbilityCreate,
+		principalAbilityBindFirstKey,
+		principalAbilityAddKey,
+	}
+	if !reflect.DeepEqual(factory.abilities, wantAbilities) {
+		t.Fatalf("factory abilities = %#v, want %#v", factory.abilities, wantAbilities)
+	}
+	for index, ability := range wantAbilities {
+		wantSubject := "easynet:///r/example/resource/user.alice/invoke/" + ability
+		if factory.subjects[index] != wantSubject {
+			t.Fatalf("subject[%d] = %q, want %q", index, factory.subjects[index], wantSubject)
+		}
 	}
 }
 

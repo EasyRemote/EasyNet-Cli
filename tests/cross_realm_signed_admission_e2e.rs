@@ -134,7 +134,8 @@ impl FederationClient for InProcessForwarder {
             .await
             .map_err(|status| FederationClientError::InnerInvokeFailed {
                 endpoint: "in-process-A".to_string(),
-                status: format!("code={:?} message={}", status.code(), status.message()),
+                status_code: status.code(),
+                status_message: status.message().to_string(),
             })?;
         Ok(response.into_inner())
     }

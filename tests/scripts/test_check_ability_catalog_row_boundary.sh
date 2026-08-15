@@ -12,8 +12,9 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
-    mkdir -p "$sandbox/src/cli/commands/groups"
+    mkdir -p "$sandbox/src/cli/commands/groups" "$sandbox/src/daemon/ability"
     cp "$REPO_ROOT/src/cli/commands/ability_catalog_row.rs" "$sandbox/src/cli/commands/ability_catalog_row.rs"
+    cp "$REPO_ROOT/src/daemon/ability/catalog_row.rs" "$sandbox/src/daemon/ability/catalog_row.rs"
     cp "$REPO_ROOT/src/cli/commands/groups/device.rs" "$sandbox/src/cli/commands/groups/device.rs"
     echo "$sandbox"
 }
@@ -35,7 +36,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "non-Result projector should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/#\[serde\(deny_unknown_fields\)\]/#[serde(default)]/' "$SB/src/cli/commands/ability_catalog_row.rs"
+perl -0pi -e 's/serde_json::from_value\(value\.clone\(\)\)/serde_json::from_value(Value::Object(Default::default()))/' "$SB/src/daemon/ability/catalog_row.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
@@ -49,7 +50,7 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "retired alias regression name should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/struct AbilityCatalogueRowWire/const RETIRED_CATALOGUE_FIELDS: &[&str] = &["ability_name", "tool_name"];\\n\\nfn reject_retired_catalogue_fields(_: &Value) -> anyhow::Result<()> { Ok(()) }\\n\\nstruct AbilityCatalogueRowWire/' "$SB/src/cli/commands/ability_catalog_row.rs"
+perl -0pi -e 's/pub\(crate\) struct AbilityCatalogueRow/const RETIRED_CATALOGUE_FIELDS: &[&str] = &["ability_name", "tool_name"];\\n\\nfn reject_retired_catalogue_fields(_: &Value) -> anyhow::Result<()> { Ok(()) }\\n\\npub(crate) struct AbilityCatalogueRow/' "$SB/src/cli/commands/ability_catalog_row.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"

@@ -508,19 +508,7 @@ impl AgentHostedIdentitySnapshot {
                 continue;
             }
             if seen.insert(agent_ura.to_string()) {
-                entries.push(AgentHostedAdvertiseEntry::new(agent_ura));
-            }
-        }
-
-        if !realm.is_empty() && !user_segment.is_empty() && user_segment != "self" {
-            for synthetic in ["pages", "files"] {
-                let agent_ura = crate::core::ura::agent_ura(realm, user_segment, synthetic);
-                if seen.insert(agent_ura.clone()) {
-                    entries.push(AgentHostedAdvertiseEntry {
-                        agent_ura,
-                        short_label: format!("{user_segment}.{synthetic}"),
-                    });
-                }
+                entries.push(AgentHostedAdvertiseEntry::configured(agent_ura));
             }
         }
 
@@ -535,7 +523,7 @@ pub(crate) struct AgentHostedAdvertiseEntry {
 }
 
 impl AgentHostedAdvertiseEntry {
-    fn new(agent_ura: &str) -> Self {
+    fn configured(agent_ura: &str) -> Self {
         Self {
             agent_ura: agent_ura.to_string(),
             short_label: hosted_agent_short_label(agent_ura),
@@ -585,7 +573,6 @@ impl AgentHostedSkillOwnerProjection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentHostDescriptorIdentityProjection {
     host_device_ura: Option<String>,
-    mcp_agent_ura: Option<String>,
     llm_agent_uras: Vec<(String, String)>,
 }
 
@@ -593,8 +580,6 @@ impl AgentHostDescriptorIdentityProjection {
     fn from_local_agents(local_agents: &LocalAgentsFile) -> Self {
         Self {
             host_device_ura: trimmed_nonempty(&local_agents.host_device_ura).map(str::to_string),
-            mcp_agent_ura: hosted_profile_agent_ura(local_agents, "mcp", "default")
-                .map(str::to_string),
             llm_agent_uras: local_agents
                 .hosted_agents
                 .iter()
@@ -606,10 +591,6 @@ impl AgentHostDescriptorIdentityProjection {
 
     pub(crate) fn host_device_ura(&self) -> Option<&str> {
         self.host_device_ura.as_deref()
-    }
-
-    pub(crate) fn mcp_agent_ura(&self) -> Option<&str> {
-        self.mcp_agent_ura.as_deref()
     }
 
     pub(crate) fn llm_agent_uras(&self) -> &[(String, String)] {
@@ -667,22 +648,6 @@ fn hosted_llm_agent_identity<'a>(
         return HostedLlmAgentIdentity::Ambiguous;
     }
     HostedLlmAgentIdentity::Present(identity)
-}
-
-fn hosted_profile_agent_ura<'a>(
-    local_agents: &'a LocalAgentsFile,
-    profile: &str,
-    name: &str,
-) -> Option<&'a str> {
-    let mut matches = local_agents
-        .hosted_agents
-        .iter()
-        .filter(|entry| entry.profile == profile && entry.name == name);
-    let identity = matches.next()?;
-    if matches.next().is_some() {
-        return None;
-    }
-    Some(identity.agent_ura.as_str())
 }
 
 fn hosted_agent_short_label(agent_ura: &str) -> String {
@@ -1411,7 +1376,7 @@ mod tests {
     }
 
     #[test]
-    fn hosted_advertise_entries_project_persisted_and_synthetic_agents() {
+    fn hosted_advertise_entries_project_only_persisted_configured_agents() {
         let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
             host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
             hosted_agents: vec![
@@ -1438,16 +1403,12 @@ mod tests {
 
         assert_eq!(
             rows,
-            vec![
-                ("easynet:///r/acme/agent/u1.claude", "u1.claude"),
-                ("easynet:///r/acme/agent/u1.pages", "u1.pages"),
-                ("easynet:///r/acme/agent/u1.files", "u1.files"),
-            ]
+            vec![("easynet:///r/acme/agent/u1.claude", "u1.claude")]
         );
     }
 
     #[test]
-    fn hosted_advertise_entries_skip_synthetic_self_and_blank_context() {
+    fn hosted_advertise_entries_require_exact_runtime_user_context() {
         let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
             host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
             hosted_agents: vec![hosted_agent(
@@ -1480,10 +1441,6 @@ mod tests {
             Some("easynet:///r/acme/device/dev-1")
         );
         assert_eq!(
-            projection.mcp_agent_ura(),
-            Some("easynet:///r/acme/agent/u1.mcp")
-        );
-        assert_eq!(
             projection.llm_agent_uras(),
             &[
                 (
@@ -1496,22 +1453,6 @@ mod tests {
                 ),
             ]
         );
-    }
-
-    #[test]
-    fn host_descriptor_profile_owner_requires_unambiguous_default_identity() {
-        let snapshot = AgentHostedIdentitySnapshot::new(LocalAgentsFile {
-            host_device_ura: "easynet:///r/acme/device/dev-1".to_string(),
-            hosted_agents: vec![hosted_agent(
-                "mcp",
-                "other",
-                "easynet:///r/acme/agent/u1.mcp",
-            )],
-        });
-
-        let projection = snapshot.host_descriptor_identity_projection();
-
-        assert_eq!(projection.mcp_agent_ura(), None);
     }
 
     #[test]

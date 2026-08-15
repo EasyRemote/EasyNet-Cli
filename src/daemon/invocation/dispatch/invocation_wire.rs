@@ -671,6 +671,7 @@ impl EntityRefKindResolution {
         }
         match crate::core::ura::parse_ura(ura.trim()).map(|parsed| parsed.kind) {
             Ok(crate::core::ura::URAKind::Agent) => Ok(Self::Agent),
+            Ok(crate::core::ura::URAKind::Service) => Ok(Self::Agent),
             Ok(crate::core::ura::URAKind::Authority) => Ok(Self::Agent),
             Ok(crate::core::ura::URAKind::Ability) => Ok(Self::Ability),
             Ok(crate::core::ura::URAKind::Device) => Ok(Self::Device),
@@ -708,7 +709,7 @@ fn top_level_subject_resolution(ura: &str) -> Option<EntityRefKindResolution> {
         return None;
     }
     match role {
-        "agent" | "agents" => Some(EntityRefKindResolution::Agent),
+        "agent" | "agents" | "service" | "services" => Some(EntityRefKindResolution::Agent),
         "ability" | "abilities" => Some(EntityRefKindResolution::Ability),
         "device" | "devices" => Some(EntityRefKindResolution::Device),
         "resource" | "resources" => Some(EntityRefKindResolution::Resource),
@@ -724,6 +725,7 @@ fn subject_kind_label(kind: crate::core::ura::URAKind) -> &'static str {
     match kind {
         crate::core::ura::URAKind::Authority => "Hub",
         crate::core::ura::URAKind::User => "User",
+        crate::core::ura::URAKind::Service => "Service",
         crate::core::ura::URAKind::Agent => "Agent",
         crate::core::ura::URAKind::Ability => "Ability",
         crate::core::ura::URAKind::Device => "Device",
@@ -1174,6 +1176,10 @@ mod tests {
         let hub_ura = crate::core::ura::hub_ura("acme");
         let cases = [
             ("easynet:///r/acme/agent/alice.worker", EntityRefKind::Agent),
+            (
+                "easynet:///r/acme/service/alice.pages",
+                EntityRefKind::Agent,
+            ),
             (hub_ura.as_str(), EntityRefKind::Agent),
             (
                 "easynet:///r/acme/ability/device.dev-a.observe.health",

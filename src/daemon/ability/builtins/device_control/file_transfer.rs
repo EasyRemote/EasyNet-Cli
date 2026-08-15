@@ -109,12 +109,17 @@ const UPLOAD_RECV_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Register the bidi handler on the dispatcher. Mirrors
 /// terminal_attach_ability::register's signature so the daemon-boot
 /// path stays uniform.
-pub fn register(reg: &mut AxonAbilityCatalog) {
+pub fn register(
+    reg: &mut AxonAbilityCatalog,
+    filesystem: filesystem::FilesystemResourceProvider,
+) -> anyhow::Result<()> {
+    super::files::require_catalog_filesystem_owner(reg, &filesystem)?;
     reg.register_bidi_with_owner(
         "fs.transfer",
         OwnerKind::locomotion_system(),
-        Arc::new(move |args: Value| open_handler(args)),
+        Arc::new(move |args: Value| open_handler_with_provider(args, &filesystem)),
     );
+    Ok(())
 }
 
 /// Bidi-open entry. Validates the args envelope, opens the local
@@ -122,8 +127,11 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 /// pump task, and returns the BidiSource so the IPC layer can
 /// wire its forwarders. Errors here surface as `OpenBidi` failures
 /// — the caller never sees a session id.
-fn open_handler(args: Value) -> anyhow::Result<BidiSource> {
-    let parsed = ParsedArgs::parse(&args)?;
+fn open_handler_with_provider(
+    args: Value,
+    filesystem: &filesystem::FilesystemResourceProvider,
+) -> anyhow::Result<BidiSource> {
+    let parsed = ParsedArgs::parse_with_provider(&args, filesystem)?;
 
     // Channel halves are transport-axis (see ability_dispatch::
     // BidiSource):
@@ -177,7 +185,10 @@ impl TransferTarget {
 }
 
 impl ParsedArgs {
-    fn parse(args: &Value) -> anyhow::Result<Self> {
+    fn parse_with_provider(
+        args: &Value,
+        filesystem: &filesystem::FilesystemResourceProvider,
+    ) -> anyhow::Result<Self> {
         let mode_str = args
             .get("mode")
             .and_then(Value::as_str)
@@ -191,10 +202,31 @@ impl ParsedArgs {
             Mode::Upload => FilesystemResourceCapability::Write,
             Mode::Download => FilesystemResourceCapability::Read,
         };
-        let target = filesystem::resolve_filesystem_path_without_existing_target(args, capability)
+        let target = filesystem
+            .resolve_filesystem_path_without_existing_target(args, capability)
             .map(TransferTarget::from_resolved)?;
         Ok(Self { mode, target })
     }
+}
+
+#[cfg(test)]
+const TEST_FILE_TRANSFER_DEVICE_URA: &str = "easynet:///r/test/device/file-transfer";
+
+#[cfg(test)]
+impl ParsedArgs {
+    fn parse(args: &Value) -> anyhow::Result<Self> {
+        Self::parse_with_provider(args, &test_filesystem())
+    }
+}
+
+#[cfg(test)]
+fn open_handler(args: Value) -> anyhow::Result<BidiSource> {
+    open_handler_with_provider(args, &test_filesystem())
+}
+
+#[cfg(test)]
+fn test_filesystem() -> filesystem::FilesystemResourceProvider {
+    filesystem::FilesystemResourceProvider::for_device(TEST_FILE_TRANSFER_DEVICE_URA).unwrap()
 }
 
 /// Upload pump: read chunks from the wire, append to the staging
@@ -325,7 +357,7 @@ fn spawn_upload(
 
         let sha = hex_lower(&hasher.finalize());
         let _ = to_client
-            .send(BidiOutputFrame::json(json!({
+            .send(BidiOutputFrame::terminal_json(json!({
                 "type": "complete",
                 "sha256": sha,
                 "bytes": total,
@@ -492,7 +524,7 @@ fn spawn_download(target: TransferTarget, to_client: mpsc::Sender<BidiOutputFram
             Ok(Ok((total, digest))) if !digest.is_empty() => {
                 let sha = hex_lower_bytes(&digest);
                 let _ = to_client
-                    .send(BidiOutputFrame::json(json!({
+                    .send(BidiOutputFrame::terminal_json(json!({
                         "type": "complete",
                         "sha256": sha,
                         "bytes": total,
@@ -681,7 +713,7 @@ mod tests {
     #[test]
     fn registration_mounts_bidi_handler() {
         let mut reg = metadata_test_catalog();
-        register(&mut reg);
+        register(&mut reg, test_filesystem()).unwrap();
         assert!(reg.get_bidi(ABILITY_FILE_TRANSFER).is_some());
     }
 
@@ -697,7 +729,8 @@ mod tests {
     }
 
     fn transfer_ref(path: &Path, capability: FilesystemResourceCapability) -> Value {
-        filesystem::resource_ref_for_local_path(path, capability)
+        test_filesystem()
+            .resource_ref_for_local_path(path, capability)
             .expect("file transfer fixture must be owned by this test daemon's local Device")
     }
 

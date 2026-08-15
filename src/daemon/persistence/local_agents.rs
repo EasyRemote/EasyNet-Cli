@@ -195,6 +195,33 @@ impl LocalHostedAgentIdentityAggregate {
     pub(crate) fn hosted_agents(&self) -> &[ValidatedHostedAgentIdentity] {
         &self.hosted_agents
     }
+
+    /// Prove that one exact LLM Agent is locally owned by one exact host
+    /// Device. Publication code consumes this aggregate proof instead of
+    /// independently reinterpreting raw persistence rows.
+    pub(crate) fn require_llm_publication_owner(
+        &self,
+        agent_ura: &str,
+        host_device_ura: &str,
+    ) -> anyhow::Result<()> {
+        if self.host_device_ura != host_device_ura {
+            anyhow::bail!(
+                "local hosted-Agent identity belongs to host {}, not {}",
+                self.host_device_ura,
+                host_device_ura
+            );
+        }
+        if !self
+            .hosted_agents
+            .iter()
+            .any(|entry| entry.profile == "llm" && entry.agent_ura == agent_ura)
+        {
+            anyhow::bail!(
+                "hosted Agent {agent_ura} is absent from the canonical local LLM identity aggregate"
+            );
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -379,6 +406,24 @@ pub fn upsert_hosted_agent(
         first_seen_at: now,
     });
     false
+}
+
+#[cfg(test)]
+pub(crate) fn save_test_llm_publication_owner(
+    host_device_ura: &str,
+    agent_ura: &str,
+) -> anyhow::Result<()> {
+    let parsed = crate::core::ura::parse_ura(agent_ura)?;
+    let (_, agent_id) = parsed
+        .agent_ids()
+        .ok_or_else(|| anyhow::anyhow!("test publication owner must be an Agent URA"))?;
+    let mut file = LocalAgentsFile {
+        host_device_ura: host_device_ura.to_string(),
+        hosted_agents: Vec::new(),
+    };
+    upsert_hosted_agent(&mut file, "llm", agent_id, agent_ura);
+    LocalHostedAgentIdentityAggregate::validate(&file)?;
+    save(&file)
 }
 
 fn validate_host_device_ura_field(host_device_ura: &str) -> Result<(), String> {

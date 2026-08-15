@@ -7,6 +7,7 @@
 
 use thiserror::Error;
 
+use axon_sdk::invocation::AuthorityBinding;
 use axon_sdk::pb::axon::v1::Envelope;
 
 use crate::core::ura::{parse_ura, URAKind};
@@ -24,6 +25,7 @@ impl OwnerProjectionPublicationAuthority {
         advertised_agents: &AdvertisedAgentStore,
         trust_anchor: &RealmTrustAnchor,
         daemon_ura: Option<&str>,
+        authority_binding: Option<&AuthorityBinding>,
     ) -> Result<(), OwnerProjectionPublicationError> {
         let caller_ura = envelope
             .caller
@@ -52,6 +54,7 @@ impl OwnerProjectionPublicationAuthority {
             advertised_agents,
             trust_anchor,
             daemon_ura,
+            authority_binding,
         )
     }
 
@@ -70,6 +73,7 @@ impl OwnerProjectionPublicationAuthority {
             advertised_agents,
             trust_anchor,
             Some(hub_ura),
+            None,
         )
     }
 
@@ -82,6 +86,7 @@ impl OwnerProjectionPublicationAuthority {
         advertised_agents: &AdvertisedAgentStore,
         trust_anchor: &RealmTrustAnchor,
         daemon_ura: Option<&str>,
+        authority_binding: Option<&AuthorityBinding>,
     ) -> Result<(), OwnerProjectionPublicationError> {
         publication
             .validate_integrity()
@@ -115,7 +120,7 @@ impl OwnerProjectionPublicationAuthority {
 
         let owner = parse_ura(&publication.owner_ura).map_err(|_| {
             OwnerProjectionPublicationError::InvalidIdentity(
-                "owner_ura must be a canonical Agent, Authority, or same-device DeviceProfileProjection URA",
+                "owner_ura must be a canonical Agent, Service, Authority, or same-device DeviceProfileProjection URA",
             )
         })?;
         if owner.realm != caller.realm {
@@ -145,13 +150,17 @@ impl OwnerProjectionPublicationAuthority {
                     let agent_owner = trust_anchor
                         .lookup_principal_owner(&publication.owner_ura)
                         .ok_or(OwnerProjectionPublicationError::OwnerBindingMissing)?;
-                    if let Some(record) = advertised_agents.get(&publication.owner_ura) {
-                        if record.host_ura() != Some(caller_ura)
-                            && (caller_owner.owner_user_id != agent_owner.owner_user_id
-                                || caller_owner.owner_ura != agent_owner.owner_ura)
-                        {
-                            return Err(OwnerProjectionPublicationError::HostMismatch);
-                        }
+                    let record = advertised_agents
+                        .get(&publication.owner_ura)
+                        .ok_or(OwnerProjectionPublicationError::HostedAgentRegistrationMissing)?;
+                    if record.host_ura() != Some(caller_ura) {
+                        return Err(OwnerProjectionPublicationError::HostMismatch);
+                    }
+                    if record.generation != publication.generation {
+                        return Err(OwnerProjectionPublicationError::GenerationMismatch {
+                            registered: record.generation,
+                            published: publication.generation,
+                        });
                     }
                     if caller_owner.owner_user_id != agent_owner.owner_user_id
                         || caller_owner.owner_ura != agent_owner.owner_ura
@@ -160,6 +169,12 @@ impl OwnerProjectionPublicationAuthority {
                     }
                     Ok(())
                 }
+                URAKind::Service => verify_user_service_delegation(
+                    &owner,
+                    caller_ura,
+                    callee_ura,
+                    authority_binding,
+                ),
                 _ => Err(OwnerProjectionPublicationError::OwnerMismatch),
             },
             (_, URAKind::Authority)
@@ -174,6 +189,33 @@ impl OwnerProjectionPublicationAuthority {
             )),
         }
     }
+}
+
+fn verify_user_service_delegation(
+    owner: &crate::core::ura::ParsedURA,
+    caller_ura: &str,
+    callee_ura: &str,
+    authority_binding: Option<&AuthorityBinding>,
+) -> Result<(), OwnerProjectionPublicationError> {
+    let owner_user_ura = owner
+        .service_ids()
+        .map(|(principal_id, _)| crate::core::ura::user_ura(&owner.realm, principal_id))
+        .ok_or(OwnerProjectionPublicationError::ServiceDelegationRequired)?;
+    let Some(AuthorityBinding::Delegated(proof)) = authority_binding else {
+        return Err(OwnerProjectionPublicationError::ServiceDelegationRequired);
+    };
+    let scope_matches = proof.scopes.iter().any(|scope| {
+        scope == crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES
+    });
+    if proof.issuer_ura != owner_user_ura
+        || proof.subject_ura != owner.raw
+        || proof.caller_ura != caller_ura
+        || proof.audience != callee_ura
+        || !scope_matches
+    {
+        return Err(OwnerProjectionPublicationError::ServiceDelegationMismatch);
+    }
+    Ok(())
 }
 
 fn device_sponsored_system_agent_owned_by_caller(
@@ -207,6 +249,16 @@ pub(crate) enum OwnerProjectionPublicationError {
     OwnerMismatch,
     #[error("projection owner has no authoritative runtime owner binding")]
     OwnerBindingMissing,
+    #[error("User-owned Service projection requires an admitted User delegation")]
+    ServiceDelegationRequired,
+    #[error("User-owned Service projection delegation does not bind the exact owner, host, Authority, and publish scope")]
+    ServiceDelegationMismatch,
+    #[error("User-owned Agent projection requires a registered active host")]
+    HostedAgentRegistrationMissing,
+    #[error(
+        "User-owned Agent projection generation {published} does not match active identity generation {registered}"
+    )]
+    GenerationMismatch { registered: u64, published: u64 },
     #[error("projection integrity check failed: {0}")]
     Integrity(String),
 }
@@ -215,11 +267,23 @@ pub(crate) enum OwnerProjectionPublicationError {
 mod tests {
     use super::*;
     use crate::daemon::ability::descriptors::{AbilityDescriptor, CallMode, Visibility};
-    use crate::daemon::federation::read_model::owner_projection::prepare_and_persist;
+    use crate::daemon::federation::read_model::advertised_agents::{
+        AdvertisedAgentRecord, AdvertisedAgentSigningAuthority,
+    };
+    use crate::daemon::federation::read_model::owner_projection::{
+        prepare_and_persist, prepare_hosted_and_persist_for_test,
+    };
     use crate::daemon::trust::anchor::TrustedPrincipalOwner;
+    use axon_sdk::invocation::DelegationProofBody;
+    use axon_sdk::pb::axon::v1::{
+        AgentIdentity as PbAgentIdentity, SubjectIdentity as PbSubjectIdentity,
+    };
 
     const DEVICE_URA: &str = "easynet:///r/test/device/dev-1";
+    const SECOND_DEVICE_URA: &str = "easynet:///r/test/device/dev-2";
     const AGENT_URA: &str = "easynet:///r/test/agent/dev.chat";
+    const SERVICE_URA: &str =
+        "easynet:///r/test/service/16567c49-7621-468e-8ed0-273825299cc2.pages";
     const HUB_URA: &str = "easynet:///r/test/authority";
     const USER_ID: &str = "16567c49-7621-468e-8ed0-273825299cc2";
     const USER_URA: &str = "easynet:///r/test/user/16567c49-7621-468e-8ed0-273825299cc2";
@@ -244,13 +308,134 @@ mod tests {
         .with_call_mode(call_mode)
     }
 
+    fn registered_agent(host_ura: &str) -> AdvertisedAgentStore {
+        let store = AdvertisedAgentStore::new();
+        store.upsert(AdvertisedAgentRecord {
+            agent_ura: AGENT_URA.to_string(),
+            generation: 1,
+            public_key_hex: String::new(),
+            host_node_id: parse_ura(host_ura)
+                .ok()
+                .and_then(|parsed| parsed.device_id().map(str::to_string)),
+            signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
+                host_ura: host_ura.to_string(),
+            },
+        });
+        store
+    }
+
+    fn caller_signed_envelope(subject_ura: &str) -> Envelope {
+        Envelope {
+            caller: Some(PbAgentIdentity {
+                ura: DEVICE_URA.to_string(),
+                profile: "axon-strict-v2".to_string(),
+            }),
+            callee: Some(PbAgentIdentity {
+                ura: HUB_URA.to_string(),
+                profile: "axon-strict-v2".to_string(),
+            }),
+            subject: Some(PbSubjectIdentity {
+                ura: subject_ura.to_string(),
+                profile: "axon-strict-v2".to_string(),
+            }),
+            ..Envelope::default()
+        }
+    }
+
+    fn service_delegation(issuer_ura: &str) -> AuthorityBinding {
+        AuthorityBinding::Delegated(DelegationProofBody {
+            issuer_ura: issuer_ura.to_string(),
+            subject_ura: SERVICE_URA.to_string(),
+            caller_ura: DEVICE_URA.to_string(),
+            audience: HUB_URA.to_string(),
+            scopes: vec![
+                crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES
+                    .to_string(),
+            ],
+            issued_at_ms: 1,
+            expires_at_ms: 2,
+            signature: vec![0x51; 64],
+        })
+    }
+
+    #[test]
+    fn user_service_projection_requires_exact_admitted_delegation() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let service_descriptor = AbilityDescriptor::new(
+            "pages.publish",
+            SERVICE_URA,
+            Visibility::Scoped,
+            crate::daemon::ability::descriptors::AdmissionAction::Manage,
+        )
+        .expect("Pages Service descriptor");
+        let publication = prepare_and_persist(SERVICE_URA, DEVICE_URA, &[service_descriptor])
+            .expect("canonical Service projection");
+        let envelope = caller_signed_envelope(SERVICE_URA);
+        let trust_anchor = RealmTrustAnchor::from_entries(Vec::new()).expect("empty trust anchor");
+        let advertised_agents = AdvertisedAgentStore::new();
+        let admitted_delegation = service_delegation(USER_URA);
+
+        OwnerProjectionPublicationAuthority::verify(
+            &envelope,
+            &publication,
+            &advertised_agents,
+            &trust_anchor,
+            Some(HUB_URA),
+            Some(&admitted_delegation),
+        )
+        .expect("exact admitted User delegation authorizes its Service projection");
+
+        let missing = OwnerProjectionPublicationAuthority::verify(
+            &envelope,
+            &publication,
+            &advertised_agents,
+            &trust_anchor,
+            Some(HUB_URA),
+            None,
+        )
+        .expect_err("Device custody alone must not authorize a User Service");
+        assert_eq!(
+            missing,
+            OwnerProjectionPublicationError::ServiceDelegationRequired
+        );
+
+        let foreign = service_delegation("easynet:///r/test/user/other");
+        let mismatch = OwnerProjectionPublicationAuthority::verify(
+            &envelope,
+            &publication,
+            &advertised_agents,
+            &trust_anchor,
+            Some(HUB_URA),
+            Some(&foreign),
+        )
+        .expect_err("another User cannot delegate authority over this Service");
+        assert_eq!(
+            mismatch,
+            OwnerProjectionPublicationError::ServiceDelegationMismatch
+        );
+
+        let session_bypass = OwnerProjectionPublicationAuthority::verify_admitted_session(
+            DEVICE_URA,
+            HUB_URA,
+            &publication,
+            &advertised_agents,
+            &trust_anchor,
+        )
+        .expect_err("an admitted Device session does not replace User delegation");
+        assert_eq!(
+            session_bypass,
+            OwnerProjectionPublicationError::ServiceDelegationRequired
+        );
+    }
+
     #[test]
     fn admitted_agent_publication_accepts_canonical_multi_mode_geometry() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let publication = prepare_and_persist(
+        let publication = prepare_hosted_and_persist_for_test(
             AGENT_URA,
             DEVICE_URA,
             &[descriptor(CallMode::Rpc), descriptor(CallMode::Stream)],
+            1,
         )
         .expect("canonical agent publication");
         let publication: OwnerProjectionPublication = serde_json::from_value(
@@ -272,7 +457,7 @@ mod tests {
             Vec::new(),
         )
         .expect("owner bindings");
-        let advertised_agents = AdvertisedAgentStore::new();
+        let advertised_agents = registered_agent(DEVICE_URA);
 
         OwnerProjectionPublicationAuthority::verify_admitted_session(
             DEVICE_URA,
@@ -291,6 +476,99 @@ mod tests {
         )
         .expect_err("host identity remains bound");
         assert_eq!(error, OwnerProjectionPublicationError::HostMismatch);
+    }
+
+    #[test]
+    fn user_agent_projection_requires_prior_host_registration() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let publication = prepare_hosted_and_persist_for_test(
+            AGENT_URA,
+            DEVICE_URA,
+            &[descriptor(CallMode::Rpc)],
+            1,
+        )
+        .expect("canonical agent publication");
+        let trust_anchor = RealmTrustAnchor::from_parts_with_principal_owners(
+            Vec::new(),
+            vec![owner_binding(DEVICE_URA), owner_binding(AGENT_URA)],
+            Vec::new(),
+        )
+        .expect("owner bindings");
+
+        let error = OwnerProjectionPublicationAuthority::verify_admitted_session(
+            DEVICE_URA,
+            HUB_URA,
+            &publication,
+            &AdvertisedAgentStore::new(),
+            &trust_anchor,
+        )
+        .expect_err("unregistered User-Agent owner projection must fail closed");
+
+        assert_eq!(
+            error,
+            OwnerProjectionPublicationError::HostedAgentRegistrationMissing
+        );
+    }
+
+    #[test]
+    fn user_agent_projection_generation_must_equal_active_identity() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let base = prepare_hosted_and_persist_for_test(
+            AGENT_URA,
+            DEVICE_URA,
+            &[descriptor(CallMode::Rpc)],
+            1,
+        )
+        .expect("canonical agent publication");
+        let trust_anchor = RealmTrustAnchor::from_parts_with_principal_owners(
+            Vec::new(),
+            vec![owner_binding(DEVICE_URA), owner_binding(AGENT_URA)],
+            Vec::new(),
+        )
+        .expect("owner bindings");
+        let advertised_agents = AdvertisedAgentStore::new();
+        advertised_agents.upsert(AdvertisedAgentRecord {
+            agent_ura: AGENT_URA.to_string(),
+            generation: 2,
+            public_key_hex: String::new(),
+            host_node_id: Some("dev-1".to_string()),
+            signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
+                host_ura: DEVICE_URA.to_string(),
+            },
+        });
+
+        for published in [1, 3, u64::MAX] {
+            let mut publication = base.clone();
+            publication.generation = published;
+            publication.projection_digest = publication.canonical_digest();
+            let error = OwnerProjectionPublicationAuthority::verify_admitted_session(
+                DEVICE_URA,
+                HUB_URA,
+                &publication,
+                &advertised_agents,
+                &trust_anchor,
+            )
+            .expect_err("non-current identity generation must fail closed");
+            assert_eq!(
+                error,
+                OwnerProjectionPublicationError::GenerationMismatch {
+                    registered: 2,
+                    published,
+                }
+            );
+        }
+
+        let mut current = base;
+        current.generation = 2;
+        current.projection_digest = current.canonical_digest();
+        OwnerProjectionPublicationAuthority::verify_admitted_session(
+            DEVICE_URA,
+            HUB_URA,
+            &current,
+            &advertised_agents,
+            &trust_anchor,
+        )
+        .expect("exact active identity generation is publishable");
     }
 
     #[test]
@@ -321,5 +599,34 @@ mod tests {
             &trust_anchor,
         )
         .expect("Device sponsor owns the declared SystemAgent publication boundary");
+    }
+
+    #[test]
+    fn same_user_second_device_cannot_replace_registered_agent_host() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let publication = prepare_hosted_and_persist_for_test(
+            AGENT_URA,
+            SECOND_DEVICE_URA,
+            &[descriptor(CallMode::Rpc)],
+            1,
+        )
+        .expect("canonical second-device publication");
+        let trust_anchor = RealmTrustAnchor::from_parts_with_principal_owners(
+            Vec::new(),
+            vec![owner_binding(SECOND_DEVICE_URA), owner_binding(AGENT_URA)],
+            Vec::new(),
+        )
+        .expect("same-User owner bindings");
+        let advertised_agents = registered_agent(DEVICE_URA);
+
+        let error = OwnerProjectionPublicationAuthority::verify_admitted_session(
+            SECOND_DEVICE_URA,
+            HUB_URA,
+            &publication,
+            &advertised_agents,
+            &trust_anchor,
+        )
+        .expect_err("registered hosting Device remains exact");
+        assert_eq!(error, OwnerProjectionPublicationError::HostMismatch);
     }
 }

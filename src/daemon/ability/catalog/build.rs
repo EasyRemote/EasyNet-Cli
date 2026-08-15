@@ -66,8 +66,6 @@ use crate::daemon::persistence::{
 use anyhow::Context as _;
 use std::sync::Arc;
 
-const BUILTIN_PROFILE_AGENT_USER_ID: &str = "builtin-profile";
-
 /// Build a `AxonAbilityCatalog` populated with every v1 system
 /// ability handler plus deterministic builtin plugin abilities.
 /// Suitable for early-boot smoke tests + the `published_ability_names`
@@ -249,6 +247,14 @@ fn deterministic_snapshot_build_config_for_profile<'a>(
     };
     let mut config =
         RegistryBuildConfig::new_with_authority_context(services, agents, authority_context);
+    if authority_profile == DeterministicAuthorityProfile::SystemInventory {
+        config.pages_identity = PagesIdentity {
+            user: Some("catalog-pages".to_string()),
+            owner_user_id: Some("catalog-pages-owner".to_string()),
+            realm: Some(crate::core::ura::REALM_EASYNET.to_string()),
+            listener_port: Some(8787),
+        };
+    }
     // Descriptor snapshots are metadata-only. Executable daemon assembly must
     // inject its one canonical runtime explicitly.
     config.local_runtime = None;
@@ -355,6 +361,27 @@ impl RegistryBuildServices {
         schedule: Arc<ScheduleService>,
         loop_svc: Arc<LoopService>,
     ) -> Self {
+        Self::new_with_access_control_stores(
+            sessions,
+            perms,
+            discuss,
+            schedule,
+            loop_svc,
+            Arc::new(AccessControlStoreRegistry::transient()),
+        )
+    }
+
+    /// Construct services with the process-owned persistent policy registry.
+    /// Daemon boot uses this constructor; detached catalog snapshots use
+    /// [`Self::new`] and therefore never discover policy storage through HOME.
+    pub fn new_with_access_control_stores(
+        sessions: Arc<SessionService>,
+        perms: Arc<PermissionService>,
+        discuss: Arc<DiscussService>,
+        schedule: Arc<ScheduleService>,
+        loop_svc: Arc<LoopService>,
+        access_control_stores: Arc<AccessControlStoreRegistry>,
+    ) -> Self {
         Self {
             sessions,
             perms,
@@ -364,7 +391,7 @@ impl RegistryBuildServices {
             discover_federation_resolver: Arc::new(
                 discover_ability::DetachedDiscoverFederationResolver,
             ),
-            access_control_stores: Arc::new(AccessControlStoreRegistry::default()),
+            access_control_stores,
         }
     }
 
@@ -594,8 +621,6 @@ fn build_registry_with_services_result_inner(
     let replay_hosted_agent_runtime =
         owns_device_product_state && assembly_mode.replays_hosted_agent_runtime();
     let plugin_registry_mode = assembly_mode.plugin_registry_mode();
-    let authority_context =
-        declare_daemon_native_agent_authorities(authority_context, &pages_identity)?;
     // Hub-only assembly must not consult or replay Device product state. Keep
     // one empty registry view for provider constructors while static owner
     // admission remains centralized in `StaticRegistration::commit`.
@@ -632,6 +657,15 @@ fn build_registry_with_services_result_inner(
         }
         None => AxonAbilityCatalog::new_metadata_only_with_authority_context(authority_context),
     };
+    let filesystem_provider = reg
+        .hosted_device_authority_root()
+        .map(|device_ura| {
+            crate::daemon::resources::files::FilesystemResourceProvider::for_device(
+                device_ura.to_string(),
+            )
+        })
+        .transpose()
+        .context("construct Device filesystem resource provider")?;
     if hosts_realm_authority {
         daemon_invocation_contracts::register_for_owner(
             &mut reg,
@@ -643,16 +677,16 @@ fn build_registry_with_services_result_inner(
     }
     ping::register(&mut reg);
     network_health_ability::register(&mut reg, Arc::clone(&discover_federation_resolver));
-    // AXIOM §"Tier 2.5" Baseline Locomotion Profile, filesystem
-    // half. Three stateless handlers (fs.read / fs.write /
-    // fs.list) — every host-embodied agent claiming
-    // `baseline-locomotion-v1` MUST expose them.
-    fs_ability::register(&mut reg);
-    // AXIOM §"Tier 2.5" Baseline Locomotion — surgical text
-    // edit. Sibling of fs.read / fs.write; uses the SAME
-    // atomic-write path (tempfile + fdatasync + rename) so
-    // the crash-resilience story is uniform.
-    fs_edit_ability::register(&mut reg);
+    // AXIOM §"Tier 2.5" Device filesystem surface. The locomotion
+    // SystemAgent owns the public descriptors; its sponsor Device owns the
+    // local ResourceRef plane. Authority-only catalogs install neither the
+    // descriptors nor handlers because they have no Device substrate.
+    if let Some(filesystem) = filesystem_provider.as_ref() {
+        fs_ability::register(&mut reg, filesystem.clone())
+            .context("register Device filesystem abilities")?;
+        fs_edit_ability::register(&mut reg, filesystem.clone())
+            .context("register Device filesystem edit ability")?;
+    }
     // AXIOM §"Tier 2.5" Baseline Locomotion Profile —
     // structured execution. `process.exec` shares the
     // destructive command list and process-execution
@@ -714,10 +748,13 @@ fn build_registry_with_services_result_inner(
     terminal_io_ability::register(&mut reg, pty, terminal_io);
     // fs.transfer — bidi chunked file upload/download.
     // Pairs with the EasyNet backend's /api/v1/files/{upload,
-    // download} routes. No shared service state needed; the
-    // handler opens its own per-session FS handle on each
-    // OpenBidi.
-    file_transfer_ability::register(&mut reg);
+    // download} routes. The handler captures the same validated Device
+    // ResourceRef provider as the unary filesystem surface and opens its own
+    // per-session FS handle on each OpenBidi.
+    if let Some(filesystem) = filesystem_provider.as_ref() {
+        file_transfer_ability::register(&mut reg, filesystem.clone())
+            .context("register Device filesystem transfer ability")?;
+    }
     // RFC-005 v3.2 — physical-channel media abilities (A1–A8)
     // plus meta.list_resources (A9). `resources::media` owns the
     // shared metadata contract only; real provider-backed modules
@@ -881,11 +918,11 @@ fn build_registry_with_services_result_inner(
     // deterministic user without reaching into the keyring resolver.
     // Listener port comes from `EASYNET_PAGES_PORT` (default 8787).
     {
-        // User-scoped ability families. Runtime descriptors for Pages and
-        // Files are owned by daemon-native hosted Agents
-        // (`agent/<user-id>.pages`, `agent/<user-id>.files`); product URLs and
-        // storage may still use the display user slug. Identity is sourced
-        // explicitly from the `pages_identity` argument — no env-var read here.
+        // User-scoped resource families. Pages descriptors are owned by the
+        // principal-scoped Pages Service; Files/API-key descriptors retain
+        // their own owner planes. Product URLs and resource URAs retain the
+        // paired user identity. Identity is sourced explicitly from
+        // `pages_identity` — no env-var read here.
         //
         // The user-scoped family has no placeholder owner. An unpaired
         // daemon (`pages_identity.user` is None) skips the family entirely. The
@@ -911,8 +948,8 @@ fn build_registry_with_services_result_inner(
             .context("register Pages reference system")?;
             // Files reference system: content-addressed blob store
             // serving `/v1/files{,/<id>/content}` + chat-multimodal
-            // URA dereferences. Same immutable user id as pages so the hosted
-            // Files Agent and hosted Pages Agent share the same account scope.
+            // URA dereferences. Same immutable user id as Pages so their
+            // resource URAs share the same account scope.
             files::register(
                 &mut reg,
                 files::FilesConfig {
@@ -1080,17 +1117,10 @@ fn build_registry_with_services_result_inner(
     // operators can set `off` and rely solely on
     // `mcp.client.{list,call}`.
     //
-    // **Identity invariant.** The owner URA for reflected abilities
-    // is the mcp-profile agent under the daemon's paired user. An
-    // unpaired daemon has no `pages_identity.user` and we therefore
-    // SKIP reflective registration entirely — we will not fabricate
-    // a synthetic `user_id = "device"` to mint an agent URA, because
-    // per AGENT_IDENTITY.md §2 ("identity, not locator") that would
-    // forge an agent identity that no `easynet:///r/.../user/...`
-    // backs. The outbound `mcp.client.*` family remains
-    // available so operators can still reach upstream tools through
-    // the explicit-server-name shape; only the bare-name projection
-    // is gated on a paired user.
+    // **Identity invariant.** Reflected tools execute through the daemon-local
+    // MCP integration SystemAgent sponsored by this Device. Pairing controls
+    // user accountability and product access; it does not fabricate a shared
+    // hosted Agent for device-local MCP processes.
     // Resolve the post-Arc reflection plan in one place. The plan
     // enum (`PostArcReflection`) encodes the four terminal outcomes
     // of `(mode, paired?)`: skip, attach-after-eager, spawn-lazy. No
@@ -1098,16 +1128,6 @@ fn build_registry_with_services_result_inner(
     // boundary — every branch is a named variant carrying exactly
     // the data the apply step needs.
     let reflection_plan = if stateful_device_runtime {
-        let user_root_identity = pages_identity.user_root_identity()?;
-        let (reflection_user, reflection_realm) = user_root_identity
-            .as_ref()
-            .map(|identity| {
-                (
-                    Some(identity.owner_user_id.as_str()),
-                    identity.realm.as_str(),
-                )
-            })
-            .unwrap_or((None, ""));
         crate::daemon::ability::builtins::integrations::mcp::reflective_registry::PostArcReflection::plan(
             crate::daemon::ability::builtins::integrations::mcp::reflective_registry::McpReflectionMode::from_env()
                 .with_context(|| {
@@ -1116,8 +1136,6 @@ fn build_registry_with_services_result_inner(
                         crate::daemon::ability::builtins::integrations::mcp::reflective_registry::ENV_MCP_REFLECTION_MODE
                     )
                 })?,
-            reflection_user,
-            reflection_realm,
             &mcp_svc,
             &mut reg,
         )
@@ -1278,80 +1296,6 @@ fn build_registry_with_services_result_inner(
     })
 }
 
-/// Declare the stable Agent execution planes derived from the daemon's paired
-/// user identity before the catalog is constructed. These roots are runtime
-/// architecture, not hosted-agent lifecycle rows: Pages and Files execute
-/// resource-management abilities through `<user>.pages` and `<user>.files`,
-/// reflected MCP tools execute through `<user>.mcp`, and default consent/MCP
-/// profile abilities use their named built-in Agent roots. Static eager
-/// registration and post-boot dynamic overlays therefore pass the same
-/// immutable authority gate.
-pub fn declare_daemon_native_agent_authorities(
-    mut authority_context: AbilityAuthorityContext,
-    identity: &PagesIdentity,
-) -> anyhow::Result<AbilityAuthorityContext> {
-    if !authority_context.hosts_device_authority() {
-        return Ok(authority_context);
-    }
-    let user_root_identity = identity.user_root_identity()?;
-    let Some(user_root_identity) = user_root_identity.as_ref() else {
-        let Some(realm) = authority_context
-            .device_authority_realm()
-            .map(str::to_string)
-        else {
-            return Ok(authority_context);
-        };
-        return declare_builtin_profile_agent_authorities(
-            authority_context,
-            &realm,
-            BUILTIN_PROFILE_AGENT_USER_ID,
-        );
-    };
-    let realm = user_root_identity.realm.as_str();
-    let user = user_root_identity.owner_user_id.as_str();
-    authority_context = declare_builtin_profile_agent_authorities(authority_context, realm, user)?;
-    let declared_roots = [
-        ("Pages", pages::management_agent_ura(realm, user)),
-        ("Files", files::management_agent_ura(realm, user)),
-        (
-            "MCP reflection",
-            axon_sdk::ura::agent_ura(realm, user, "mcp"),
-        ),
-    ];
-    for (executor, authority_root) in declared_roots {
-        authority_context = authority_context
-            .with_declared_agent_authority_root(authority_root)
-            .with_context(|| {
-                format!(
-                    "{executor} execution host cannot be admitted by the daemon authority context"
-                )
-            })?;
-    }
-    Ok(authority_context)
-}
-
-fn declare_builtin_profile_agent_authorities(
-    mut authority_context: AbilityAuthorityContext,
-    realm: &str,
-    user: &str,
-) -> anyhow::Result<AbilityAuthorityContext> {
-    for (profile, authority_root) in [(
-        "default MCP profile",
-        axon_sdk::ura::agent_ura(
-            realm,
-            user,
-            crate::daemon::ability::catalog::profiles::DEFAULT_MCP_AGENT_ID,
-        ),
-    )] {
-        authority_context = authority_context
-            .with_declared_agent_authority_root(authority_root)
-            .with_context(|| {
-                format!("{profile} cannot be admitted by the daemon authority context")
-            })?;
-    }
-    Ok(authority_context)
-}
-
 /// Daemon-side assembly entry point. Loads the agent registry and builds the
 /// full `AxonAbilityCatalog` in one call. A brand-new installation receives
 /// the empty registry from `load_agents`; malformed or inaccessible durable
@@ -1445,82 +1389,4 @@ pub(crate) fn recover_descriptor_import_transactions_before_daemon_registry_boot
         );
     }
     Ok(recovered_descriptor_imports)
-}
-
-#[cfg(test)]
-mod daemon_native_authority_tests {
-    use super::*;
-    use crate::daemon::ability::dispatch::{ControlPlaneImplementation, OwnerKind, StreamSource};
-    use crate::daemon::ability::manifest::AbilityManifest;
-    use crate::daemon::ability::AuthorityScope;
-
-    #[test]
-    fn paired_identity_declares_dynamic_mcp_execution_authority() {
-        let device_ura = crate::core::ura::device_ura("native-authority", "dev-1");
-        let identity = PagesIdentity {
-            user: Some("alice".to_string()),
-            owner_user_id: Some("user-alice".to_string()),
-            realm: Some("native-authority".to_string()),
-            listener_port: None,
-        };
-        let authority_context = declare_daemon_native_agent_authorities(
-            AbilityAuthorityContext::for_combined_authority_roots(device_ura)
-                .expect("combined authority context"),
-            &identity,
-        )
-        .expect("declare daemon-native Agent authorities");
-        let mcp_root = axon_sdk::ura::agent_ura("native-authority", "user-alice", "mcp");
-        let pages_root = axon_sdk::ura::agent_ura("native-authority", "user-alice", "pages");
-        let signing_inventory = authority_context
-            .hosted_agent_signing_inventory()
-            .expect("declared daemon-native Agent roots must enter signing inventory");
-        assert!(
-            signing_inventory
-                .resolve_signing_lease(&pages_root)
-                .is_some(),
-            "declared Pages Agent must be receipt-signing visible"
-        );
-        assert!(
-            signing_inventory.resolve_signing_lease(&mcp_root).is_some(),
-            "declared MCP Agent must be receipt-signing visible"
-        );
-        let registry = AxonAbilityCatalog::new_with_runtime_and_authority_context(
-            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
-                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
-                None,
-            ),
-            authority_context,
-        );
-        let handler = Arc::new(|_args| {
-            let (_tx, rx) = tokio::sync::broadcast::channel(1);
-            Ok(StreamSource::Live(rx))
-        });
-
-        registry
-            .hot_register_stream_with_spec_impl_and_authority_scope(
-                "mcp_authority_probe",
-                OwnerKind::Agent("mcp".to_string()),
-                AuthorityScope::new("agent:mcp", &mcp_root).expect("MCP authority scope"),
-                AbilityManifest::new(
-                    "mcp_authority_probe",
-                    "MCP authority assembly probe",
-                    serde_json::json!({"type": "object"}),
-                )
-                .and_then(|manifest| manifest.with_admission_action("stream"))
-                .expect("probe manifest"),
-                handler,
-                ControlPlaneImplementation::native_daemon(),
-            )
-            .expect("dynamic MCP registration must use the declared execution authority");
-
-        let record = registry
-            .control_plane_record_for_authority_mode(
-                &mcp_root,
-                "mcp_authority_probe",
-                crate::daemon::ability::CallMode::Stream,
-            )
-            .expect("authority-scoped lookup")
-            .expect("dynamic MCP control-plane row");
-        assert_eq!(record.authority().scope().authority_root(), mcp_root);
-    }
 }

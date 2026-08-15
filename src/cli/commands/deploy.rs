@@ -41,7 +41,7 @@ use console::style;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use crate::daemon::resources::files::{resource_ref_for_local_path, FilesystemResourceCapability};
+use crate::daemon::resources::files::{FilesystemResourceCapability, FilesystemResourceProvider};
 use crate::support::platform::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
@@ -124,7 +124,10 @@ fn invoke_local_ability_deploy(
     target_ura: &str,
     caller_user_ura: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    let resource_ref = resource_ref_for_local_path(dir, FilesystemResourceCapability::Read)
+    let filesystem = FilesystemResourceProvider::for_device(target_ura.to_string())
+        .context("construct target Device filesystem provider")?;
+    let resource_ref = filesystem
+        .resource_ref_for_local_path(dir, FilesystemResourceCapability::Read)
         .context("mint ability bundle ResourceRef")?;
     let subject_ura = resource_ref
         .get("resource_ura")
