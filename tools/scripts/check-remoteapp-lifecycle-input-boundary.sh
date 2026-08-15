@@ -296,10 +296,30 @@ require 'self\.target\.binding\(\)\.production_scope_ready\(\)' "$SESSION" \
   'production media readiness must be gated by target binding scope readiness'
 require '"target_scope_ready": session\.target_scope_ready\(\)' "$VIEW" \
   'public production readiness must expose target scope readiness'
+require '"blocked_reason": production_readiness_blocked_reason\(session\)' "$VIEW" \
+  'public production readiness must expose one typed blocked_reason instead of forcing UI inference'
+require 'fn production_readiness_blocked_reason\(session: &RemoteDesktopSession\) -> Value' "$VIEW" \
+  'production readiness blocked reason must be centralized in the session view projection'
+require '"target_scope_not_ready"' "$VIEW" \
+  'production readiness must distinguish target scope/fallback blockers'
+require '"production_codec_not_negotiated"' "$VIEW" \
+  'production readiness must distinguish non-production or missing codec blockers'
+require '"media_transport_not_ready"' "$VIEW" \
+  'production readiness must distinguish media transport blockers'
 require 'production_media_ready_requires_target_scope_ready' "$SESSION" \
   'production online predicate must test scope fallback/widening rejection'
 require 'scope widening or display fallback must prevent production online' "$SESSION" \
   'production readiness test must assert fallback/widening cannot report online'
+require 'production_media_ready_requires_production_codec_and_sender_ready' "$SESSION_STORE" \
+  'production readiness must test non-production codec and sender readiness blockers'
+require 'view\["production_readiness"\]\["blocked_reason"\]' "$SESSION_STORE" \
+  'production readiness tests must assert the public blocked_reason projection'
+require 'view\["transport"\]\["production_ready"\]' "$SESSION_STORE" \
+  'public transport summary must expose production_ready separately from primary_ready'
+require 'view\["transports"\]\[0\]\["metadata"\]\["production_ready"\]' "$SESSION_STORE" \
+  'public transport list must preserve production_ready evidence in primary transport metadata'
+require '"production_ready": session\.production_media_ready\(\)' "$VIEW_TRANSPORT" \
+  'transport projection must expose production_ready from the session production predicate'
 require '"scope_widened": self\.scope_audit\.scope_widened' "$TARGET" \
   'TARGET_BOUND payload must project scope widening from the committed binding audit'
 require '"display_fallback_used": self\.scope_audit\.display_fallback_used' "$TARGET" \

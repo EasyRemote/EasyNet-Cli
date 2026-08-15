@@ -1363,6 +1363,10 @@ mod tests {
             json!(true)
         );
         assert_eq!(view["production_readiness"]["ready"], json!(false));
+        assert_eq!(
+            view["production_readiness"]["blocked_reason"],
+            json!("target_scope_not_ready")
+        );
         assert_eq!(view["production_media_ready"], json!(false));
 
         let events = session.events();

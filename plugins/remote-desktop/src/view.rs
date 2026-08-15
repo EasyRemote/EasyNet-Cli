@@ -45,15 +45,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
         "webrtc_error": session.webrtc_error(),
         "route_state": transport_route_state.clone(),
     });
-    let production_readiness = json!({
-        "ready": production_media_ready,
-        "target_scope_ready": session.target_scope_ready(),
-        "requires_production_codec": true,
-        "production_codec_negotiated": session.production_codec_negotiated(),
-        "media_transport_ready": session.media_transport_ready(),
-        "client_media_ready": session.client_media_ready(),
-        "route_state": transport_route_state.clone(),
-    });
+    let production_readiness = production_readiness_view(session, transport_route_state.clone());
     let mut view = json!({
         "session_id": session.session_id(),
         "state": session.state().json_name(),
@@ -109,6 +101,33 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
         map.insert("production_readiness".to_string(), production_readiness);
     }
     view
+}
+
+fn production_readiness_view(session: &RemoteDesktopSession, route_state: Value) -> Value {
+    json!({
+        "ready": session.production_media_ready(),
+        "blocked_reason": production_readiness_blocked_reason(session),
+        "target_scope_ready": session.target_scope_ready(),
+        "requires_production_codec": true,
+        "production_codec_negotiated": session.production_codec_negotiated(),
+        "media_transport_ready": session.media_transport_ready(),
+        "client_media_ready": session.client_media_ready(),
+        "route_state": route_state,
+    })
+}
+
+fn production_readiness_blocked_reason(session: &RemoteDesktopSession) -> Value {
+    if session.production_media_ready() {
+        Value::Null
+    } else if !session.target_scope_ready() {
+        json!("target_scope_not_ready")
+    } else if !session.production_codec_negotiated() {
+        json!("production_codec_not_negotiated")
+    } else if !session.media_transport_ready() {
+        json!("media_transport_not_ready")
+    } else {
+        json!("production_readiness_incomplete")
+    }
 }
 
 /// Build the create-session response, where the opaque session token is

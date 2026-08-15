@@ -297,6 +297,7 @@ fn transport_route_state() {
         "turn_relay": false,
         "easynet_relay": false,
         "failed": false,
+        "production_ready": session.production_media_ready(),
     });
     "host_only_no_nat_or_relay";
     "relay_unavailable";
@@ -319,6 +320,16 @@ RS
   cat >"$SANDBOX/plugins/remote-desktop/src/session_store.rs" <<'RS'
 fn mark_direct_webrtc_media_ready(session_id: &str) {
     direct_webrtc_endpoint_ura(session_id);
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn production_media_ready_requires_production_codec_and_sender_ready() {
+        assert_eq!(view["production_readiness"]["blocked_reason"], json!("production_codec_not_negotiated"));
+        assert_eq!(view["transport"]["production_ready"], json!(false));
+        assert_eq!(view["transports"][0]["metadata"]["production_ready"], json!(false));
+    }
 }
 RS
 
@@ -345,10 +356,25 @@ fn serialize_session() {
             "route_state": transport_route_state.clone(),
         },
         "production_readiness": {
+            "blocked_reason": production_readiness_blocked_reason(session),
             "target_scope_ready": session.target_scope_ready(),
             "route_state": transport_route_state.clone(),
         },
     });
+}
+
+fn production_readiness_blocked_reason(session: &RemoteDesktopSession) -> Value {
+    if session.production_media_ready() {
+        Value::Null
+    } else if !session.target_scope_ready() {
+        json!("target_scope_not_ready")
+    } else if !session.production_codec_negotiated() {
+        json!("production_codec_not_negotiated")
+    } else if !session.media_transport_ready() {
+        json!("media_transport_not_ready")
+    } else {
+        json!("production_readiness_incomplete")
+    }
 }
 RS
 
@@ -864,6 +890,16 @@ write_fixture
 perl -0pi -e 's/"target_scope_ready": session\.target_scope_ready\(\),//' \
   "$SANDBOX/plugins/remote-desktop/src/view.rs"
 run_fail 'public production readiness must expose target scope readiness'
+
+write_fixture
+perl -0pi -e 's/"blocked_reason": production_readiness_blocked_reason\(session\),//' \
+  "$SANDBOX/plugins/remote-desktop/src/view.rs"
+run_fail 'public production readiness must expose one typed blocked_reason instead of forcing UI inference'
+
+write_fixture
+perl -0pi -e 's/"production_ready": session\.production_media_ready\(\),//' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'transport projection must expose production_ready from the session production predicate'
 
 write_fixture
 perl -0pi -e 's/"display_fallback_used": self\.scope_audit\.display_fallback_used/"display_fallback_used": false/' \

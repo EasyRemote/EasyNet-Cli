@@ -602,6 +602,16 @@ mod tests {
             );
             assert_eq!(view["production_media_ready"], json!(false));
             assert_eq!(view["production_readiness"]["ready"], json!(false));
+            assert_eq!(
+                view["production_readiness"]["blocked_reason"],
+                json!("production_codec_not_negotiated")
+            );
+            assert_eq!(view["transport"]["production_ready"], json!(false));
+            assert_eq!(view["transports"][0]["production_ready"], json!(false));
+            assert_eq!(
+                view["transports"][0]["metadata"]["production_ready"],
+                json!(false)
+            );
         });
 
         insert_test_session(&store, "rd-production-ready");
@@ -627,6 +637,13 @@ mod tests {
             );
             assert_eq!(view["production_media_ready"], json!(true));
             assert_eq!(view["production_readiness"]["ready"], json!(true));
+            assert_eq!(view["production_readiness"]["blocked_reason"], json!(null));
+            assert_eq!(view["transport"]["production_ready"], json!(true));
+            assert_eq!(view["transports"][0]["production_ready"], json!(true));
+            assert_eq!(
+                view["transports"][0]["metadata"]["production_ready"],
+                json!(true)
+            );
         });
     }
 }
