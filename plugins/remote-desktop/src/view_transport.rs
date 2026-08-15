@@ -181,7 +181,7 @@ impl CandidateRouteState {
             self.stun_srflx = true;
         }
         if candidate_type_is(candidate_text, "relay") {
-            if candidate_mentions_easynet(candidate) {
+            if candidate_declares_easynet_relay(candidate) {
                 self.easynet_relay = true;
             } else {
                 self.turn_relay = true;
@@ -258,7 +258,7 @@ fn candidate_type_is(candidate_text: &str, candidate_type: &str) -> bool {
     false
 }
 
-fn candidate_mentions_easynet(candidate: &Value) -> bool {
+fn candidate_declares_easynet_relay(candidate: &Value) -> bool {
     candidate
         .get("relay_type")
         .and_then(Value::as_str)
@@ -271,10 +271,6 @@ fn candidate_mentions_easynet(candidate: &Value) -> bool {
             .get("easynet_relay")
             .and_then(Value::as_bool)
             .unwrap_or(false)
-        || candidate
-            .get("candidate")
-            .and_then(Value::as_str)
-            .is_some_and(|candidate_text| candidate_text.contains("easynet"))
 }
 
 fn direct_endpoint_ura(session: &RemoteDesktopSession) -> Value {
@@ -611,6 +607,34 @@ mod tests {
             json!("easynet_relay")
         );
         assert_eq!(summary["reason_code"], Value::Null);
+    }
+
+    #[test]
+    fn turn_relay_hostname_containing_easynet_is_not_easynet_relay() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-turn-hostname-easynet",
+            "easynet:///r/acme/resource/display.01",
+            vec![TRANSPORT_WEBRTC.to_string()],
+        ));
+        session
+            .add_remote_ice_candidate(
+                json!({
+                    "candidate": "candidate:1 1 UDP 41819902 turn.easynet-cdn.example 3478 typ relay",
+                    "sdpMid": "0",
+                    "sdpMLineIndex": 0
+                }),
+                "pending",
+                None,
+            )
+            .expect("TURN relay candidate records");
+
+        let view = RemoteDesktopTransportView::from_session(&session);
+        let summary = view.summary(&session);
+
+        assert_eq!(summary["route_state"]["turn_relay"], json!(true));
+        assert_eq!(summary["route_state"]["easynet_relay"], json!(false));
+        assert_eq!(summary["route_state"]["relay_ready"], json!(true));
+        assert_eq!(summary["route_state"]["route_class"], json!("turn_relay"));
     }
 
     #[test]

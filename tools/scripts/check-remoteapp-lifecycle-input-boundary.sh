@@ -558,6 +558,12 @@ require 'host_only_candidates_are_not_reported_as_nat_or_relay_ready' "$VIEW_TRA
   'transport tests must prove host-only candidates are not NAT/relay readiness'
 require 'easynet_relay_does_not_imply_turn_relay' "$VIEW_TRANSPORT" \
   'transport tests must prove EasyNet relay readiness is distinct from TURN relay readiness'
+require 'candidate_declares_easynet_relay' "$VIEW_TRANSPORT" \
+  'EasyNet relay classification must require explicit relay metadata'
+reject 'candidate_text\.contains\("easynet"\)' "$VIEW_TRANSPORT" \
+  'EasyNet relay classification must not infer relay type from candidate hostname text'
+require 'turn_relay_hostname_containing_easynet_is_not_easynet_relay' "$VIEW_TRANSPORT" \
+  'transport tests must prove TURN hostnames containing easynet are not EasyNet relay routes'
 require 'srflx_without_relay_reports_typed_relay_unavailable_reason' "$VIEW_TRANSPORT" \
   'transport tests must prove STUN-only candidates expose relay-unavailable degradation'
 require 'relay_ready' "$SPEC" \

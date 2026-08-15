@@ -581,6 +581,7 @@ fn transport_route_state() {
         RemoteDesktopTransportBlocker::from_webrtc_error;
     }
     fn transport_route_failed() {}
+    fn candidate_declares_easynet_relay() {}
     "host_only_no_nat_or_relay";
     "relay_unavailable";
 }
@@ -597,6 +598,9 @@ fn host_only_route_keeps_production_offline_after_client_media_presents() {}
 
 #[test]
 fn easynet_relay_does_not_imply_turn_relay() {}
+
+#[test]
+fn turn_relay_hostname_containing_easynet_is_not_easynet_relay() {}
 
 #[test]
 fn srflx_without_relay_reports_typed_relay_unavailable_reason() {
@@ -1497,6 +1501,21 @@ write_fixture
 perl -0pi -e 's/fn host_only_route_keeps_production_offline_after_client_media_presents/fn host_only_route_allows_production_online/' \
   "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
 run_fail 'transport tests must prove host-only routes cannot report production online after client media presents'
+
+write_fixture
+perl -0pi -e 's/fn candidate_declares_easynet_relay/fn candidate_mentions_easynet/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'EasyNet relay classification must require explicit relay metadata'
+
+write_fixture
+perl -0pi -e 's/"relay_unavailable";/"relay_unavailable"; candidate_text.contains("easynet");/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'EasyNet relay classification must not infer relay type from candidate hostname text'
+
+write_fixture
+perl -0pi -e 's/fn turn_relay_hostname_containing_easynet_is_not_easynet_relay/fn turn_relay_hostname_with_easynet_is_misclassified/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'transport tests must prove TURN hostnames containing easynet are not EasyNet relay routes'
 
 write_fixture
 perl -0pi -e 's/"production_route_ready": transport_view\.production_route_ready\(\),//' \
