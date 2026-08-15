@@ -104,6 +104,18 @@ require 'map\.remove\("freshness"\)' "$RESOURCE_BOOTSTRAP" \
   'remote target cache signature must ignore freshness-only metadata'
 require 'map\.remove\("freshness"\)' "$WATCH_TARGETS" \
   'remote target watch signatures must ignore freshness-only metadata'
+require 'trait RemoteTargetInventorySource' "$WATCH_TARGETS" \
+  'remote target watch must use an injectable inventory source instead of binding tests to host-local discovery'
+require 'DaemonRemoteTargetInventorySource' "$WATCH_TARGETS" \
+  'remote target watch production source must be explicitly named'
+require 'handler_with_source' "$WATCH_TARGETS" \
+  'remote target watch handler must be testable with injected inventory source'
+require 'run_watch_loop' "$WATCH_TARGETS" \
+  'remote target watch stream loop must be an explicit deterministic lifecycle worker'
+require 'watch_handler_emits_snapshot_delta_and_stops_at_max_events' "$WATCH_TARGETS" \
+  'remote target watch must test snapshot/delta emission and max_events terminal closure'
+require 'watch_handler_returns_source_error_as_terminal_stream_error' "$WATCH_TARGETS" \
+  'remote target watch must test source errors as deterministic terminal stream errors'
 require 'upsert_resources_indexed' "$RESOURCE_STORE" \
   'resource persistence must expose indexed batch upsert for live target refresh'
 require 'upsert_resources_indexed' "$RESOURCE_BOOTSTRAP" \

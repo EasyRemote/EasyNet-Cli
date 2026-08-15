@@ -127,9 +127,24 @@ fn upsert_resources_indexed(resources: Vec<ResourceUpsert>) {
 RS
 
 cat >"$SANDBOX/src/daemon/ability/builtins/resources/watch_remote_targets.rs" <<'RS'
+trait RemoteTargetInventorySource {}
+struct DaemonRemoteTargetInventorySource;
+
+fn handler_with_source() {
+    run_watch_loop();
+}
+
+fn run_watch_loop() {}
+
 fn stable_resource_signature(map: &mut Map) {
     map.remove("freshness");
 }
+
+#[test]
+fn watch_handler_emits_snapshot_delta_and_stops_at_max_events() {}
+
+#[test]
+fn watch_handler_returns_source_error_as_terminal_stream_error() {}
 RS
 
 cat >"$SANDBOX/src/daemon/ability/builtins/resources/list.rs" <<'RS'
@@ -301,6 +316,16 @@ fn resource_entry() -> ResourceEntry {
 RS
 if CHECK_REMOTEAPP_PICKER_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "remoteapp picker subject checker accepted Device URA owner_agent fixture" >&2
+  exit 1
+fi
+
+cat >"$SANDBOX/src/daemon/ability/builtins/resources/watch_remote_targets.rs" <<'RS'
+fn stable_resource_signature(map: &mut Map) {
+    map.remove("freshness");
+}
+RS
+if CHECK_REMOTEAPP_PICKER_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp picker subject checker accepted non-injectable watch target stream" >&2
   exit 1
 fi
 

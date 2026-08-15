@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
 use crate::daemon::ability::builtins::resources::refresh_remote_targets::{
-    parse_target_kinds, watch_response, RemoteTargetInventoryContext,
+    parse_target_kinds, watch_response, RemoteTargetInventoryContext, RemoteTargetRefreshResponse,
 };
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind, StreamSource};
 use crate::daemon::persistence::resources::ResourceType;
@@ -25,6 +25,28 @@ const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const MIN_POLL_INTERVAL_MS: u64 = 250;
 const MAX_POLL_INTERVAL_MS: u64 = 10_000;
 const WATCH_CHANNEL_CAPACITY: usize = 8;
+
+type WatchSleep = Arc<dyn Fn(Duration) + Send + Sync>;
+
+trait RemoteTargetInventorySource: Send + Sync + 'static {
+    fn observe(
+        &self,
+        args: Value,
+        context: &RemoteTargetInventoryContext,
+    ) -> anyhow::Result<RemoteTargetRefreshResponse>;
+}
+
+struct DaemonRemoteTargetInventorySource;
+
+impl RemoteTargetInventorySource for DaemonRemoteTargetInventorySource {
+    fn observe(
+        &self,
+        args: Value,
+        context: &RemoteTargetInventoryContext,
+    ) -> anyhow::Result<RemoteTargetRefreshResponse> {
+        watch_response(args, context)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -111,8 +133,9 @@ impl RemoteTargetInventorySnapshot {
     fn refresh(
         context: &RemoteTargetInventoryContext,
         config: &WatchConfig,
+        source: &dyn RemoteTargetInventorySource,
     ) -> anyhow::Result<Self> {
-        let response = watch_response(config.refresh_args(), context)?;
+        let response = source.observe(config.refresh_args(), context)?;
         let mut signatures = BTreeMap::new();
         let mut resources_by_ura = BTreeMap::new();
         for resource in response.resources {
@@ -205,6 +228,8 @@ impl RemoteTargetInventorySnapshot {
 }
 
 pub fn register(reg: &mut AxonAbilityCatalog, context: RemoteTargetInventoryContext) {
+    let source: Arc<dyn RemoteTargetInventorySource> = Arc::new(DaemonRemoteTargetInventorySource);
+    let sleep: WatchSleep = Arc::new(thread::sleep);
     reg.register_stream_with_spec(
         ABILITY_RESOURCE_WATCH_REMOTE_TARGETS,
         OwnerKind::media_system(),
@@ -213,11 +238,18 @@ pub fn register(reg: &mut AxonAbilityCatalog, context: RemoteTargetInventoryCont
             description(),
             input_schema(),
         ),
-        Arc::new(move |args| handler(args, &context)),
+        Arc::new(move |args| {
+            handler_with_source(args, &context, Arc::clone(&source), Arc::clone(&sleep))
+        }),
     );
 }
 
-fn handler(args: Value, context: &RemoteTargetInventoryContext) -> anyhow::Result<StreamSource> {
+fn handler_with_source(
+    args: Value,
+    context: &RemoteTargetInventoryContext,
+    source: Arc<dyn RemoteTargetInventorySource>,
+    sleep: WatchSleep,
+) -> anyhow::Result<StreamSource> {
     let config = WatchConfig::parse(&args)?;
     let context = context.clone();
     let (tx, rx) = tokio::sync::mpsc::channel(WATCH_CHANNEL_CAPACITY);
@@ -225,52 +257,63 @@ fn handler(args: Value, context: &RemoteTargetInventoryContext) -> anyhow::Resul
     thread::Builder::new()
         .name("easynet-remote-target-inventory-watch".to_string())
         .spawn(move || {
-            let mut previous = None;
-            let mut next_event_id = 1_u64;
-            let mut emitted = 0_u64;
-
-            loop {
-                let snapshot = match RemoteTargetInventorySnapshot::refresh(&context, &config) {
-                    Ok(snapshot) => snapshot,
-                    Err(error) => {
-                        let _ = tx.blocking_send(Err(error));
-                        break;
-                    }
-                };
-
-                let event = match previous.as_ref() {
-                    None => Some(snapshot.snapshot_event(next_event_id)),
-                    Some(previous) => snapshot.delta_event(previous, next_event_id),
-                };
-
-                if let Some(event) = event {
-                    let value = match serde_json::to_value(event) {
-                        Ok(value) => value,
-                        Err(error) => {
-                            let _ = tx.blocking_send(Err(error.into()));
-                            break;
-                        }
-                    };
-                    if tx.blocking_send(Ok(value)).is_err() {
-                        break;
-                    }
-                    emitted = emitted.saturating_add(1);
-                    next_event_id = next_event_id.saturating_add(1);
-                    if config
-                        .max_events
-                        .is_some_and(|max_events| emitted >= max_events)
-                    {
-                        break;
-                    }
-                }
-
-                previous = Some(snapshot);
-                thread::sleep(Duration::from_millis(config.poll_interval_ms));
-            }
+            run_watch_loop(context, config, source, tx, sleep);
         })
         .map_err(|error| anyhow::anyhow!("spawn remote target inventory watch thread: {error}"))?;
 
     Ok(StreamSource::Finite(rx))
+}
+
+fn run_watch_loop(
+    context: RemoteTargetInventoryContext,
+    config: WatchConfig,
+    source: Arc<dyn RemoteTargetInventorySource>,
+    tx: tokio::sync::mpsc::Sender<anyhow::Result<Value>>,
+    sleep: WatchSleep,
+) {
+    let mut previous = None;
+    let mut next_event_id = 1_u64;
+    let mut emitted = 0_u64;
+
+    loop {
+        let snapshot =
+            match RemoteTargetInventorySnapshot::refresh(&context, &config, source.as_ref()) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    let _ = tx.blocking_send(Err(error));
+                    break;
+                }
+            };
+
+        let event = match previous.as_ref() {
+            None => Some(snapshot.snapshot_event(next_event_id)),
+            Some(previous) => snapshot.delta_event(previous, next_event_id),
+        };
+
+        if let Some(event) = event {
+            let value = match serde_json::to_value(event) {
+                Ok(value) => value,
+                Err(error) => {
+                    let _ = tx.blocking_send(Err(error.into()));
+                    break;
+                }
+            };
+            if tx.blocking_send(Ok(value)).is_err() {
+                break;
+            }
+            emitted = emitted.saturating_add(1);
+            next_event_id = next_event_id.saturating_add(1);
+            if config
+                .max_events
+                .is_some_and(|max_events| emitted >= max_events)
+            {
+                break;
+            }
+        }
+
+        previous = Some(snapshot);
+        sleep(Duration::from_millis(config.poll_interval_ms));
+    }
 }
 
 pub fn input_schema() -> Value {
@@ -345,6 +388,8 @@ fn inventory_hash(signatures: &BTreeMap<String, String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
 
     #[test]
     fn registration_makes_watch_dispatchable_under_media_system() {
@@ -445,6 +490,88 @@ mod tests {
         assert!(current.delta_event(&previous, 2).is_none());
     }
 
+    #[test]
+    fn watch_handler_emits_snapshot_delta_and_stops_at_max_events() {
+        let context = RemoteTargetInventoryContext::from_device_ura("easynet:///r/test/device/dev")
+            .expect("context");
+        let source = Arc::new(SequenceInventorySource::new(vec![
+            Ok(refresh_response(vec![remote_target_entry(
+                "res-a", "Window A", 10,
+            )])),
+            Ok(refresh_response(vec![
+                remote_target_entry("res-a", "Window A moved", 20),
+                remote_target_entry("res-b", "Window B", 20),
+            ])),
+        ]));
+        let stream = handler_with_source(
+            json!({
+                "types": ["window"],
+                "poll_interval_ms": 250,
+                "max_events": 2
+            }),
+            &context,
+            source,
+            Arc::new(|_| {}),
+        )
+        .expect("watch stream");
+        let StreamSource::Finite(mut rx) = stream else {
+            panic!("resource.watch_remote_targets must return a finite stream source")
+        };
+
+        let snapshot = rx
+            .blocking_recv()
+            .expect("snapshot frame")
+            .expect("snapshot ok");
+        assert_eq!(snapshot["event_id"], json!(1));
+        assert_eq!(snapshot["event_type"], json!("target_inventory_snapshot"));
+        assert_eq!(
+            snapshot["resources"][0]["resource_ura"],
+            json!("easynet:///r/test/resource/res-a")
+        );
+
+        let delta = rx.blocking_recv().expect("delta frame").expect("delta ok");
+        assert_eq!(delta["event_id"], json!(2));
+        assert_eq!(delta["event_type"], json!("target_inventory_delta"));
+        assert_eq!(
+            delta["added"][0]["resource_ura"],
+            json!("easynet:///r/test/resource/res-b")
+        );
+        assert_eq!(
+            delta["updated"][0]["resource_ura"],
+            json!("easynet:///r/test/resource/res-a")
+        );
+        assert!(
+            rx.blocking_recv().is_none(),
+            "max_events must close the finite watch stream deterministically"
+        );
+    }
+
+    #[test]
+    fn watch_handler_returns_source_error_as_terminal_stream_error() {
+        let context = RemoteTargetInventoryContext::from_device_ura("easynet:///r/test/device/dev")
+            .expect("context");
+        let source = Arc::new(SequenceInventorySource::new(vec![Err(anyhow::anyhow!(
+            "inventory boom"
+        ))]));
+        let stream =
+            handler_with_source(json!({"max_events": 1}), &context, source, Arc::new(|_| {}))
+                .expect("watch stream");
+        let StreamSource::Finite(mut rx) = stream else {
+            panic!("resource.watch_remote_targets must return a finite stream source")
+        };
+
+        let err = rx
+            .blocking_recv()
+            .expect("terminal error frame")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("inventory boom"), "unexpected error: {err}");
+        assert!(
+            rx.blocking_recv().is_none(),
+            "source errors must close the finite stream"
+        );
+    }
+
     fn snapshot(resources: Vec<RemoteTargetListEntry>) -> RemoteTargetInventorySnapshot {
         let mut signatures = BTreeMap::new();
         let mut resources_by_ura = BTreeMap::new();
@@ -495,6 +622,46 @@ mod tests {
                     "source": "live_refresh",
                 },
             }),
+        }
+    }
+
+    fn refresh_response(resources: Vec<RemoteTargetListEntry>) -> RemoteTargetRefreshResponse {
+        RemoteTargetRefreshResponse {
+            observed_at_ms: resources
+                .iter()
+                .map(|resource| resource.observed_at_ms)
+                .max()
+                .unwrap_or(0),
+            freshness_ttl_ms: 5_000,
+            retired_count: 0,
+            screen_target_discovery_available: true,
+            resources,
+        }
+    }
+
+    struct SequenceInventorySource {
+        responses: Mutex<VecDeque<anyhow::Result<RemoteTargetRefreshResponse>>>,
+    }
+
+    impl SequenceInventorySource {
+        fn new(responses: Vec<anyhow::Result<RemoteTargetRefreshResponse>>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into()),
+            }
+        }
+    }
+
+    impl RemoteTargetInventorySource for SequenceInventorySource {
+        fn observe(
+            &self,
+            _args: Value,
+            _context: &RemoteTargetInventoryContext,
+        ) -> anyhow::Result<RemoteTargetRefreshResponse> {
+            self.responses
+                .lock()
+                .expect("source lock")
+                .pop_front()
+                .unwrap_or_else(|| Err(anyhow::anyhow!("unexpected inventory observation")))
         }
     }
 }
