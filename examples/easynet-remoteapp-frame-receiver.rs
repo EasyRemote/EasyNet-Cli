@@ -290,6 +290,7 @@ impl FrameObservation {
 #[derive(Debug, Clone)]
 struct SignalingAnswer {
     answer: RTCSessionDescription,
+    transport_epoch: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -458,6 +459,8 @@ async fn run_receiver(config: &ReceiverConfig) -> Result<ReceiverObservation> {
         match observation_rx.try_recv() {
             Ok(observation) => {
                 if observation.assertions_satisfied() {
+                    report_client_presenting(config, signal.transport_epoch)
+                        .context("invoke remote_desktop.report_client_state after decoded frame")?;
                     let latest_session_view = show_session_view(config)
                         .context("invoke remote_desktop.show_session after decoded frame")
                         .ok();
@@ -691,7 +694,46 @@ fn signal_offer(config: &ReceiverConfig, offer: &RTCSessionDescription) -> Resul
         })?;
     let answer = serde_json::from_value(answer)
         .context("parse WebRTC answer from signaling.local_description")?;
-    Ok(SignalingAnswer { answer })
+    let transport_epoch = response
+        .get("transport_epoch")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| {
+            anyhow!("remote_desktop.set_description response missing positive transport_epoch")
+        })?;
+    Ok(SignalingAnswer {
+        answer,
+        transport_epoch,
+    })
+}
+
+fn report_client_presenting(config: &ReceiverConfig, transport_epoch: u64) -> Result<Value> {
+    let transport_epoch = transport_epoch.to_string();
+    let output = easynet_command(config)
+        .args([
+            "ability",
+            "report-remote-desktop-client-state",
+            "--session-json",
+        ])
+        .arg(&config.session_json)
+        .args([
+            "--state",
+            "presenting",
+            "--transport-epoch",
+            &transport_epoch,
+            "--format",
+            "json",
+        ])
+        .output()
+        .context("spawn easynet ability report-remote-desktop-client-state")?;
+    if !output.status.success() {
+        bail!(
+            "easynet report-remote-desktop-client-state failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    serde_json::from_slice(&output.stdout)
+        .context("parse remote_desktop.report_client_state JSON response")
 }
 
 fn show_session_view(config: &ReceiverConfig) -> Result<Value> {

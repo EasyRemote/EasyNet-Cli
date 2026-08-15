@@ -131,6 +131,10 @@ pub enum AbilityAction {
     #[cfg(feature = "remote-desktop")]
     #[command(name = "watch-remote-desktop-events", hide = true)]
     WatchRemoteDesktopEvents(WatchRemoteDesktopEventsArgs),
+    /// Report decoded-frame client presentation for host E2E verification.
+    #[cfg(feature = "remote-desktop")]
+    #[command(name = "report-remote-desktop-client-state", hide = true)]
+    ReportRemoteDesktopClientState(ReportRemoteDesktopClientStateArgs),
     /// Run a one-shot ad-hoc command on a device (ephemeral ability).
     Exec(exec::ExecArgs),
     /// Grant one agent permission to import a declaration-only descriptor.
@@ -293,6 +297,23 @@ pub struct WatchRemoteDesktopEventsArgs {
     pub format: OutputFormat,
 }
 
+#[derive(Debug, Args)]
+#[cfg(feature = "remote-desktop")]
+pub struct ReportRemoteDesktopClientStateArgs {
+    /// JSON response from create-remote-desktop-session; carries subject, token, and consent receipt.
+    #[arg(long, value_name = "PATH")]
+    pub session_json: PathBuf,
+    /// Client media presentation state observed by the receiver/browser.
+    #[arg(long, value_parser = ["presenting", "stalled", "detached"])]
+    pub state: String,
+    /// Direct WebRTC transport epoch returned by set/show session.
+    #[arg(long, value_name = "EPOCH")]
+    pub transport_epoch: u64,
+    /// Output format. JSON is the host receiver contract.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub format: OutputFormat,
+}
+
 pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
     match args.action {
         AbilityAction::New(a) => ability_scaffold::run_new(a),
@@ -318,6 +339,10 @@ pub fn run(args: AbilityArgs) -> anyhow::Result<()> {
         AbilityAction::AddRemoteDesktopIceCandidate(a) => run_add_remote_desktop_ice_candidate(a),
         #[cfg(feature = "remote-desktop")]
         AbilityAction::WatchRemoteDesktopEvents(a) => run_watch_remote_desktop_events(a),
+        #[cfg(feature = "remote-desktop")]
+        AbilityAction::ReportRemoteDesktopClientState(a) => {
+            run_report_remote_desktop_client_state(a)
+        }
         AbilityAction::Exec(a) => exec::run(a),
         AbilityAction::Teach(a) => teach::run_teach(a),
         AbilityAction::Learn(a) => teach::run_learn(a),
@@ -714,6 +739,37 @@ fn watch_remote_desktop_events_request(args: &WatchRemoteDesktopEventsArgs) -> V
 }
 
 #[cfg(feature = "remote-desktop")]
+fn run_report_remote_desktop_client_state(
+    args: ReportRemoteDesktopClientStateArgs,
+) -> anyhow::Result<()> {
+    let binding = remote_desktop_session_control_binding_from_file(&args.session_json)?;
+    let request = report_remote_desktop_client_state_request(&args)?;
+    let response = LocalRemoteDesktopSessionIssuer::report_client_state(&binding, request)
+        .context("invoke remote_desktop.report_client_state")?;
+    if args.format == OutputFormat::Json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+
+    output::success("reported remote desktop client state");
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+#[cfg(feature = "remote-desktop")]
+fn report_remote_desktop_client_state_request(
+    args: &ReportRemoteDesktopClientStateArgs,
+) -> anyhow::Result<Value> {
+    if args.transport_epoch == 0 {
+        anyhow::bail!("--transport-epoch must be greater than zero");
+    }
+    Ok(serde_json::json!({
+        "state": args.state,
+        "transport_epoch": args.transport_epoch,
+    }))
+}
+
+#[cfg(feature = "remote-desktop")]
 fn remote_desktop_session_control_binding_from_file(
     path: &PathBuf,
 ) -> anyhow::Result<LocalRemoteDesktopSessionControlBinding> {
@@ -997,5 +1053,44 @@ mod tests {
         assert!(request.get("resource_ura").is_none());
         assert!(request.get("session_id").is_none());
         assert!(request.get("session_token").is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "remote-desktop")]
+    fn report_remote_desktop_client_state_request_keeps_session_fields_out_of_args() {
+        let request =
+            report_remote_desktop_client_state_request(&ReportRemoteDesktopClientStateArgs {
+                session_json: PathBuf::from("session.json"),
+                state: "presenting".to_string(),
+                transport_epoch: 7,
+                format: OutputFormat::Json,
+            })
+            .expect("client state request");
+
+        assert_eq!(
+            request,
+            serde_json::json!({
+                "state": "presenting",
+                "transport_epoch": 7,
+            })
+        );
+        assert!(request.get("subject").is_none());
+        assert!(request.get("resource_ura").is_none());
+        assert!(request.get("session_id").is_none());
+        assert!(request.get("session_token").is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "remote-desktop")]
+    fn report_remote_desktop_client_state_request_rejects_zero_epoch() {
+        let err = report_remote_desktop_client_state_request(&ReportRemoteDesktopClientStateArgs {
+            session_json: PathBuf::from("session.json"),
+            state: "presenting".to_string(),
+            transport_epoch: 0,
+            format: OutputFormat::Json,
+        })
+        .expect_err("zero epoch must be rejected before invocation");
+
+        assert!(err.to_string().contains("--transport-epoch"));
     }
 }

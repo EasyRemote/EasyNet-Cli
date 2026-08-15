@@ -1462,6 +1462,31 @@ impl LocalRemoteDesktopSessionIssuer {
         )
     }
 
+    pub fn report_client_state(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+    ) -> anyhow::Result<Value> {
+        Self::report_client_state_timeout(
+            binding,
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn report_client_state_timeout(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        invoke_remote_desktop_session_control_rpc(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_REPORT_CLIENT_STATE,
+            binding,
+            args,
+            timeout,
+        )
+    }
+
     pub fn watch_events(
         binding: &LocalRemoteDesktopSessionControlBinding,
         args: Value,

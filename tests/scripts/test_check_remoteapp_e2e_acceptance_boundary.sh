@@ -651,6 +651,17 @@ fi
 mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 
+cp "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs" \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs.good"
+perl -0pi -e 's/report_client_presenting\(config, signal\.transport_epoch\)/report_client_presenting_omitted(config, signal.transport_epoch)/g' \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted receiver without client-presenting report" >&2
+  exit 1
+fi
+mv "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs.good" \
+  "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
+
 cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
 perl -0pi -e 's/unrelated_sentinel_present/unrelated_sentinel_omitted/g' \

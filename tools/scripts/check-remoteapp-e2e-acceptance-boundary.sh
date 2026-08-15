@@ -216,6 +216,10 @@ require 'cleanup\.sh' "$FIXTURE" \
 
 require 'show-remote-desktop-session' "$RECEIVER" \
   'bundled frame receiver must read the latest post-decoded-frame session projection'
+require 'report-remote-desktop-client-state' "$RECEIVER" \
+  'bundled frame receiver must report decoded-frame client presentation before readiness projection'
+require 'report_client_presenting\(config, signal\.transport_epoch\)' "$RECEIVER" \
+  'bundled frame receiver must bind client-presenting report to the negotiated transport epoch'
 require 'show_session_view\(config\)' "$RECEIVER" \
   'bundled frame receiver must source readiness from remote_desktop.show_session after decoded frames'
 require '"production_media_ready": session_view' "$RECEIVER" \
