@@ -572,7 +572,8 @@ fn transport_route_state() {
         "turn_relay": false,
         "easynet_relay": false,
         "failed": false,
-        "production_ready": session.production_media_ready(),
+        "production_ready": self.production_ready(session),
+        "production_route_ready": self.production_route_ready(),
     });
     fn transport_reason_code() {
         TargetResolutionError::TransportRouteUnavailable;
@@ -590,6 +591,9 @@ fn direct_endpoint_ura(session: &RemoteDesktopSession) {
 
 #[test]
 fn host_only_candidates_are_not_reported_as_nat_or_relay_ready() {}
+
+#[test]
+fn host_only_route_keeps_production_offline_after_client_media_presents() {}
 
 #[test]
 fn easynet_relay_does_not_imply_turn_relay() {}
@@ -654,14 +658,15 @@ fn serialize_session() {
             "route_state": transport_route_state.clone(),
         },
         "production_readiness": {
-            "blocked_reason": production_readiness_blocked_reason(session),
+            "blocked_reason": production_readiness_blocked_reason(session, transport_view),
             "target_scope_ready": session.target_scope_ready(),
+            "production_route_ready": transport_view.production_route_ready(),
             "route_state": transport_route_state.clone(),
         },
     });
 }
 
-fn production_readiness_blocked_reason(session: &RemoteDesktopSession) -> Value {
+fn production_readiness_blocked_reason(session: &RemoteDesktopSession, transport_view: &RemoteDesktopTransportView) -> Value {
     if session.production_media_ready() {
         Value::Null
     } else if !session.target_scope_ready() {
@@ -672,6 +677,8 @@ fn production_readiness_blocked_reason(session: &RemoteDesktopSession) -> Value 
         json!("media_transport_not_ready")
     } else if !session.client_media_ready() {
         json!("client_media_not_presenting")
+    } else if !transport_view.production_route_ready() {
+        json!("transport_route_unavailable")
     } else {
         json!("production_readiness_incomplete")
     }
@@ -1487,6 +1494,16 @@ perl -0pi -e 's/"relay_unavailable"/"webrtc_ice_connecting"/' \
 run_fail 'relay-unavailable transport degradation must have a typed unavailable reason'
 
 write_fixture
+perl -0pi -e 's/fn host_only_route_keeps_production_offline_after_client_media_presents/fn host_only_route_allows_production_online/' \
+  "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
+run_fail 'transport tests must prove host-only routes cannot report production online after client media presents'
+
+write_fixture
+perl -0pi -e 's/"production_route_ready": transport_view\.production_route_ready\(\),//' \
+  "$SANDBOX/plugins/remote-desktop/src/view.rs"
+run_fail 'public production readiness must expose production route readiness'
+
+write_fixture
 perl -0pi -e 's/assert_eq!\(summary\["reason_code"\], json!\("transport_route_unavailable"\)\);//' \
   "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
 run_fail 'transport tests must assert canonical route degradation reason_code'
@@ -1542,19 +1559,19 @@ perl -0pi -e 's/"target_scope_ready": session\.target_scope_ready\(\),//' \
 run_fail 'public production readiness must expose target scope readiness'
 
 write_fixture
-perl -0pi -e 's/"blocked_reason": production_readiness_blocked_reason\(session\),//' \
+perl -0pi -e 's/"blocked_reason": production_readiness_blocked_reason\(session, transport_view\),//' \
   "$SANDBOX/plugins/remote-desktop/src/view.rs"
 run_fail 'public production readiness must expose one typed blocked_reason instead of forcing UI inference'
 
 write_fixture
-perl -0pi -e 's/\n    } else if !session\.client_media_ready\(\) \{\n        json!\("client_media_not_presenting"\)//' \
+perl -0pi -e 's/"client_media_not_presenting"/"production_readiness_incomplete"/' \
   "$SANDBOX/plugins/remote-desktop/src/view.rs"
 run_fail 'production readiness must distinguish missing client presenting/decoded evidence'
 
 write_fixture
-perl -0pi -e 's/"production_ready": session\.production_media_ready\(\),//' \
+perl -0pi -e 's/"production_ready": self\.production_ready\(session\),//' \
   "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
-run_fail 'transport projection must expose production_ready from the session production predicate'
+run_fail 'transport projection must expose route-gated production_ready separately from primary_ready'
 
 write_fixture
 perl -0pi -e 's/"display_fallback_used": self\.scope_audit\.display_fallback_used/"display_fallback_used": false/' \

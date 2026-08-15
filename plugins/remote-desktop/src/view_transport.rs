@@ -23,6 +23,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopTransportView
     reason_code: Value,
     unavailable_reason: Value,
     route_state: Value,
+    production_route_ready: bool,
     message: &'static str,
 }
 
@@ -36,12 +37,14 @@ impl RemoteDesktopTransportView {
         let reason_code = transport_reason_code(session, &route_state_projection);
         let unavailable_reason = transport_unavailable_reason(session, &route_state_projection);
         let route_state = transport_route_state(&route_state_projection);
+        let production_route_ready = route_state_projection.production_remote_ready();
         let message = transport_message(session);
         Self {
             endpoint_ura,
             reason_code,
             unavailable_reason,
             route_state,
+            production_route_ready,
             message,
         }
     }
@@ -49,6 +52,17 @@ impl RemoteDesktopTransportView {
     /// Return the typed route-readiness projection.
     pub(in crate::daemon::plugins::remote_desktop) fn route_state(&self) -> Value {
         self.route_state.clone()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn production_route_ready(&self) -> bool {
+        self.production_route_ready
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn production_ready(
+        &self,
+        session: &RemoteDesktopSession,
+    ) -> bool {
+        session.production_media_ready() && self.production_route_ready()
     }
 
     /// Build the canonical transport object.
@@ -60,7 +74,8 @@ impl RemoteDesktopTransportView {
             "kind": TRANSPORT_WEBRTC,
             "primary_transport": TRANSPORT_WEBRTC,
             "primary_ready": session.media_transport_ready(),
-            "production_ready": session.production_media_ready(),
+            "production_ready": self.production_ready(session),
+            "production_route_ready": self.production_route_ready(),
             "preferred": session.transport_preferences(),
             "endpoint_ura": self.endpoint_ura.clone(),
             "preview_ability": "screen.subscribe",
@@ -83,11 +98,12 @@ impl RemoteDesktopTransportView {
                 "transport": TRANSPORT_WEBRTC,
                 "transport_proto": "REMOTE_DESKTOP_TRANSPORT_WEBRTC",
                 "ready": session.media_transport_ready(),
-                "production_ready": session.production_media_ready(),
+                "production_ready": self.production_ready(session),
                 "endpoint_ura": self.endpoint_ura.clone(),
                 "metadata": {
                     "role": "primary",
-                    "production_ready": session.production_media_ready(),
+                    "production_ready": self.production_ready(session),
+                    "production_route_ready": self.production_route_ready(),
                     "signaling_plane": "axon_signed_invocation",
                     "media_plane": "rtp_srtp",
                     "input_plane": "webrtc_data_channel",
@@ -185,6 +201,7 @@ impl CandidateRouteState {
             "host_only": self.host_candidate && !nat_traversal_ready,
             "nat_traversal_ready": nat_traversal_ready,
             "relay_ready": relay_ready,
+            "production_route_ready": self.production_remote_ready(),
             "route_class": self.route_class(),
         })
     }
@@ -219,6 +236,14 @@ impl CandidateRouteState {
 
     fn relay_ready(&self) -> bool {
         self.turn_relay || self.easynet_relay
+    }
+
+    fn production_remote_ready(&self) -> bool {
+        self.relay_ready() && !self.failed
+    }
+
+    fn blocks_production_remote_readiness(&self) -> bool {
+        self.failed || self.host_only() || (self.has_candidate() && !self.relay_ready())
     }
 }
 
@@ -268,18 +293,15 @@ fn transport_reason_code(
     session: &RemoteDesktopSession,
     route_state: &CandidateRouteState,
 ) -> Value {
-    if session.media_transport_ready() {
-        Value::Null
-    } else if let Some(blocker) = session
+    if let Some(blocker) = session
         .webrtc_error()
         .and_then(RemoteDesktopTransportBlocker::from_webrtc_error)
     {
         json!(blocker.reason_code_str())
-    } else if route_state.failed
-        || route_state.host_only()
-        || (route_state.has_candidate() && !route_state.relay_ready())
-    {
+    } else if route_state.blocks_production_remote_readiness() {
         json!(TargetResolutionError::TransportRouteUnavailable.as_str())
+    } else if session.media_transport_ready() {
+        Value::Null
     } else {
         Value::Null
     }
@@ -289,9 +311,7 @@ fn transport_unavailable_reason(
     session: &RemoteDesktopSession,
     route_state: &CandidateRouteState,
 ) -> Value {
-    if session.media_transport_ready() {
-        Value::Null
-    } else if let Some(error) = session.webrtc_error() {
+    if let Some(error) = session.webrtc_error() {
         json!(error)
     } else if session.webrtc_ice_state() == Some("failed") {
         json!("webrtc_ice_failed")
@@ -301,6 +321,8 @@ fn transport_unavailable_reason(
         json!("host_only_no_nat_or_relay")
     } else if route_state.has_candidate() && !route_state.relay_ready() {
         json!("relay_unavailable")
+    } else if session.media_transport_ready() {
+        Value::Null
     } else if session.local_description().is_some() {
         json!("webrtc_ice_connecting")
     } else {
@@ -412,6 +434,59 @@ mod tests {
         assert_eq!(
             summary["unavailable_reason"],
             json!("host_only_no_nat_or_relay")
+        );
+    }
+
+    #[test]
+    fn host_only_route_keeps_production_offline_after_client_media_presents() {
+        let epoch = TransportEpoch::new(1);
+        let endpoint_ura = direct_webrtc_endpoint_ura("rd-host-only-presenting");
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-host-only-presenting",
+            "easynet:///r/acme/resource/display.01",
+            vec![TRANSPORT_WEBRTC.to_string()],
+        ));
+        session.begin_webrtc_negotiation(epoch);
+        session.set_local_webrtc_answer(
+            epoch,
+            json!({ "type": "answer", "sdp": "v=0" }),
+            "native",
+            true,
+            endpoint_ura.clone(),
+        );
+        session
+            .record_local_ice_candidate(json!({
+                "candidate": "candidate:1 1 UDP 2122252543 127.0.0.1 50000 typ host",
+                "sdpMid": "0",
+                "sdpMLineIndex": 0
+            }))
+            .expect("local host candidate records");
+        session.mark_webrtc_media_sending(epoch, endpoint_ura);
+        assert!(session.report_client_media_state(epoch, "presenting"));
+        assert!(session.media_transport_ready());
+        assert!(session.client_media_ready());
+        assert!(session.production_media_ready());
+
+        let view = RemoteDesktopTransportView::from_session(&session);
+        let summary = view.summary(&session);
+        let transports = view.transport_list(&session);
+
+        assert_eq!(summary["primary_ready"], json!(true));
+        assert_eq!(summary["production_ready"], json!(false));
+        assert_eq!(summary["production_route_ready"], json!(false));
+        assert_eq!(
+            summary["route_state"]["production_route_ready"],
+            json!(false)
+        );
+        assert_eq!(summary["reason_code"], json!("transport_route_unavailable"));
+        assert_eq!(
+            summary["unavailable_reason"],
+            json!("host_only_no_nat_or_relay")
+        );
+        assert_eq!(transports[0]["production_ready"], json!(false));
+        assert_eq!(
+            transports[0]["metadata"]["production_route_ready"],
+            json!(false)
         );
     }
 

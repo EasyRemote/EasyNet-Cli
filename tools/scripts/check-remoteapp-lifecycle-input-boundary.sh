@@ -472,9 +472,9 @@ require '&& self\.transport\.client_media_ready\(\)' "$SESSION" \
   'production media readiness must wait for client presenting evidence, not only device sender readiness'
 require '"target_scope_ready": session\.target_scope_ready\(\)' "$VIEW" \
   'public production readiness must expose target scope readiness'
-require '"blocked_reason": production_readiness_blocked_reason\(session\)' "$VIEW" \
+require '"blocked_reason": production_readiness_blocked_reason\(session, transport_view\)' "$VIEW" \
   'public production readiness must expose one typed blocked_reason instead of forcing UI inference'
-require 'fn production_readiness_blocked_reason\(session: &RemoteDesktopSession\) -> Value' "$VIEW" \
+require 'fn production_readiness_blocked_reason\(' "$VIEW" \
   'production readiness blocked reason must be centralized in the session view projection'
 require '"target_scope_not_ready"' "$VIEW" \
   'production readiness must distinguish target scope/fallback blockers'
@@ -500,8 +500,8 @@ require 'view\["transport"\]\["production_ready"\]' "$SESSION_STORE" \
   'public transport summary must expose production_ready separately from primary_ready'
 require 'view\["transports"\]\[0\]\["metadata"\]\["production_ready"\]' "$SESSION_STORE" \
   'public transport list must preserve production_ready evidence in primary transport metadata'
-require '"production_ready": session\.production_media_ready\(\)' "$VIEW_TRANSPORT" \
-  'transport projection must expose production_ready from the session production predicate'
+require '"production_ready": self\.production_ready\(session\)' "$VIEW_TRANSPORT" \
+  'transport projection must expose route-gated production_ready separately from primary_ready'
 require '"scope_widened": self\.scope_audit\.scope_widened' "$TARGET" \
   'TARGET_BOUND payload must project scope widening from the committed binding audit'
 require '"display_fallback_used": self\.scope_audit\.display_fallback_used' "$TARGET" \
@@ -542,6 +542,14 @@ require '"host_only_no_nat_or_relay"' "$VIEW_TRANSPORT" \
   'host-only transport degradation must have a typed unavailable reason'
 require '"relay_unavailable"' "$VIEW_TRANSPORT" \
   'relay-unavailable transport degradation must have a typed unavailable reason'
+require 'production_route_ready' "$VIEW_TRANSPORT" \
+  'transport view must publish production route readiness separately from primary media readiness'
+require 'host_only_route_keeps_production_offline_after_client_media_presents' "$VIEW_TRANSPORT" \
+  'transport tests must prove host-only routes cannot report production online after client media presents'
+require '"production_route_ready": transport_view\.production_route_ready\(\)' "$VIEW" \
+  'public production readiness must expose production route readiness'
+require 'transport_route_unavailable' "$VIEW" \
+  'public production readiness must block production online on route-unavailable sessions'
 require 'summary\["reason_code"\]' "$VIEW_TRANSPORT" \
   'transport tests must assert canonical route degradation reason_code'
 require 'transport_route_unavailable' "$VIEW_TRANSPORT" \

@@ -728,6 +728,50 @@ mod tests {
                 view["production_readiness"]["client_media_ready"],
                 json!(true)
             );
+            assert_eq!(
+                view["production_readiness"]["production_route_ready"],
+                json!(false)
+            );
+            assert_eq!(view["production_media_ready"], json!(false));
+            assert_eq!(view["production_readiness"]["ready"], json!(false));
+            assert_eq!(
+                view["production_readiness"]["blocked_reason"],
+                json!("transport_route_unavailable")
+            );
+            assert_eq!(view["transport"]["production_ready"], json!(false));
+            assert_eq!(view["transports"][0]["production_ready"], json!(false));
+        });
+        store.with_sessions(|sessions| {
+            sessions
+                .get_mut("rd-production-ready")
+                .unwrap()
+                .add_remote_ice_candidate(
+                    json!({
+                        "candidate": "candidate:relay 1 UDP 41819902 turn.example.test 3478 typ relay",
+                        "relay_type": "turn",
+                        "sdpMid": "0",
+                        "sdpMLineIndex": 0
+                    }),
+                    "applied",
+                    Some(TransportEpoch::new(1)),
+                )
+                .expect("relay route candidate records");
+        });
+        store.with_sessions(|sessions| {
+            let view = serialize_session(sessions.get("rd-production-ready").unwrap());
+            assert_eq!(view["media_transport_ready"], json!(true));
+            assert_eq!(
+                view["production_readiness"]["production_codec_negotiated"],
+                json!(true)
+            );
+            assert_eq!(
+                view["production_readiness"]["client_media_ready"],
+                json!(true)
+            );
+            assert_eq!(
+                view["production_readiness"]["production_route_ready"],
+                json!(true)
+            );
             assert_eq!(view["production_media_ready"], json!(true));
             assert_eq!(view["production_readiness"]["ready"], json!(true));
             assert_eq!(view["production_readiness"]["blocked_reason"], json!(null));
