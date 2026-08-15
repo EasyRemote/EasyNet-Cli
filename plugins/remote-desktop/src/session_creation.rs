@@ -203,9 +203,38 @@ mod tests {
         resources,
         resources::{ResourceType, ResourcesFile},
     };
+    use crate::daemon::plugins::remote_desktop::target::{
+        RemoteAppTargetBinding, RemoteAppTargetError, ResolvedCaptureTargetProof,
+    };
     use crate::daemon::plugins::remote_desktop::test_support::{
         env_for, seed_display, test_lock, test_plugin, with_consent_ticket,
     };
+
+    struct TestTargetBindingVerifier;
+
+    impl RemoteAppTargetBindingVerifier for TestTargetBindingVerifier {
+        fn verify_for_session(
+            &self,
+            _ability: &'static str,
+            binding: &RemoteAppTargetBinding,
+        ) -> Result<ResolvedCaptureTargetProof, RemoteAppTargetError> {
+            let projection = binding.to_value();
+            let backend = projection["backend"]
+                .as_str()
+                .expect("test binding must project backend");
+            let locator = binding.native_locator();
+            Ok(ResolvedCaptureTargetProof::new(
+                backend,
+                binding.target_kind(),
+                locator.display_id(),
+                locator.window_id(),
+                locator.pid(),
+                None,
+                locator.bundle_id().map(ToOwned::to_owned),
+                Some((1280, 720)),
+            ))
+        }
+    }
 
     #[test]
     fn creation_workflow_builds_insertable_session_only_after_target_binding() {
@@ -226,7 +255,7 @@ mod tests {
             .expect("subject and request parse")
             .consume_consent(&plugin.consent_registry(), &env)
             .expect("consent consumed")
-            .resolve_target()
+            .resolve_target_with_verifier(&TestTargetBindingVerifier)
             .expect("target resolved");
         assert_eq!(workflow.session_id(), "rd-workflow");
 
