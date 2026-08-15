@@ -69,7 +69,8 @@ impl ScopeAudit {
 }
 
 impl ResourceEntryTargetResolver {
-    fn resolve_for_session(&self, target_kind: RemoteDesktopTargetKind) {
+    fn resolve_for_session(&self, ability: &'static str, entry: &ResourceEntry, target_kind: RemoteDesktopTargetKind) {
+        validate_owner_agent_ura(ability, entry)?;
         validate_resource_inventory_state();
         metadata_freshness_u64();
         let _ = TargetResolutionError::TargetIdentityAmbiguous;
@@ -79,6 +80,13 @@ impl ResourceEntryTargetResolver {
             "target_model": target_kind.target_model(),
         });
     }
+}
+
+fn validate_owner_agent_ura(ability: &'static str, entry: &ResourceEntry) -> Result<(), RemoteAppTargetError> {
+    let _ = ability;
+    let _ = entry;
+    let _ = "owner_agent must be an Agent/SystemAgent URA";
+    Ok(())
 }
 
 #[cfg(test)]
@@ -95,6 +103,9 @@ mod tests {
 
     #[test]
     fn application_requires_display_scoped_stable_identity() {}
+
+    #[test]
+    fn target_binding_rejects_non_agent_owner_projection() {}
 }
 RS
 
@@ -417,6 +428,19 @@ if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1
 fi
 
 perl -0pi -e 's/(\n        metadata_freshness_u64\(\);)/\n        validate_resource_inventory_state();$1/' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+perl -0pi -e 's/\n        validate_owner_agent_ura\(ability, entry\)\?;//' \
+  "$SANDBOX/plugins/remote-desktop/src/target.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted missing owner_agent validation" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/(\n        validate_resource_inventory_state\(\);)/\n        validate_owner_agent_ura(ability, entry)?;$1/' \
   "$SANDBOX/plugins/remote-desktop/src/target.rs"
 
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null

@@ -165,6 +165,18 @@ require_count_at_least '"target_model": self\.target_kind\.target_model\(\)' \
 require 'validate_resource_inventory_state\(' \
   "$REMOTE_ROOT/target.rs" \
   'target resolver must fail closed on unavailable or stale live inventory rows'
+require 'fn validate_owner_agent_ura\(' \
+  "$REMOTE_ROOT/target.rs" \
+  'target resolver must centralize resource owner_agent Agent/SystemAgent URA validation'
+require 'validate_owner_agent_ura\(ability, entry\)\?' \
+  "$REMOTE_ROOT/target.rs" \
+  'target resolver must reject non-Agent owner_agent before committing target binding'
+require 'owner_agent must be an Agent/SystemAgent URA' \
+  "$REMOTE_ROOT/target.rs" \
+  'owner_agent rejection must explain the owner projection rule'
+require 'target_binding_rejects_non_agent_owner_projection' \
+  "$REMOTE_ROOT/target.rs" \
+  'owner projection rule must have resolver regression coverage'
 require 'metadata_freshness_u64\(' \
   "$REMOTE_ROOT/target.rs" \
   'target resolver must consume inventory freshness when present'

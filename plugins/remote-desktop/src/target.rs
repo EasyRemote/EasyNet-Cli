@@ -20,6 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axon_sdk::invocation::{AxonError, AxonErrorKind, ErrorCode, ErrorStage, SecurityClass};
 use serde_json::{json, Value};
 
+use crate::core::ura::{parse_ura, URAKind};
 use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1278,6 +1279,7 @@ impl RemoteAppTargetResolver for ResourceEntryTargetResolver {
                 ),
             ));
         }
+        validate_owner_agent_ura(ability, entry)?;
         let target_kind = RemoteDesktopTargetKind::try_from(entry.kind).map_err(|error| {
             RemoteAppTargetError::new(ability, error.reason(), error.to_string())
         })?;
@@ -1368,6 +1370,38 @@ impl RemoteAppTargetResolver for ResourceEntryTargetResolver {
             capture_proof: None,
         })
     }
+}
+
+fn validate_owner_agent_ura(
+    ability: &'static str,
+    entry: &ResourceEntry,
+) -> Result<(), RemoteAppTargetError> {
+    let owner_agent = entry.owner_agent.trim();
+    let parsed = parse_ura(owner_agent).map_err(|error| {
+        RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::TargetMetadataIncomplete,
+            format!(
+                "remote desktop target {} owner_agent must be an Agent/SystemAgent URA; got invalid owner_agent `{}`: {}",
+                entry.resource_ura, entry.owner_agent, error
+            ),
+        )
+    })?;
+
+    if parsed.kind == URAKind::Agent {
+        return Ok(());
+    }
+
+    Err(RemoteAppTargetError::new(
+        ability,
+        TargetResolutionError::TargetMetadataIncomplete,
+        format!(
+            "remote desktop target {} owner_agent must be an Agent/SystemAgent URA; got {} URA `{}`",
+            entry.resource_ura,
+            crate::core::ura::ura_kind_scope_label(parsed.kind),
+            entry.owner_agent
+        ),
+    ))
 }
 
 fn validate_resource_inventory_state(
@@ -1856,6 +1890,40 @@ mod tests {
                 1,
             )
             .is_ok());
+    }
+
+    #[test]
+    fn target_binding_rejects_non_agent_owner_projection() {
+        let resolver = ResourceEntryTargetResolver;
+        for owner_agent in [
+            "",
+            "easynet:///r/acme/device/01DEV",
+            "easynet:///r/acme/user/u-1",
+            "easynet:///r/acme/service/u-1.pages",
+            "easynet:///r/acme/resource/device.01DEV/streams/display.test",
+        ] {
+            let mut target = entry(ResourceType::Display, json!({"display_id": 7}));
+            target.owner_agent = owner_agent.to_string();
+            let err = resolver
+                .resolve_for_session("remote_desktop.create_session", &target, "view_only", 1)
+                .expect_err("non-Agent owner_agent projection must fail before target binding");
+
+            assert_eq!(
+                err.reason(),
+                TargetResolutionError::TargetMetadataIncomplete
+            );
+            assert!(
+                err.to_string()
+                    .contains("owner_agent must be an Agent/SystemAgent URA"),
+                "unexpected owner projection error for {owner_agent:?}: {err}"
+            );
+        }
+
+        let mut target = entry(ResourceType::Display, json!({"display_id": 7}));
+        target.owner_agent = "easynet:///r/acme/agent/device.01DEV.remote-desktop".to_string();
+        resolver
+            .resolve_for_session("remote_desktop.create_session", &target, "view_only", 1)
+            .expect("Agent/SystemAgent owner projection must remain admissible");
     }
 
     #[test]
