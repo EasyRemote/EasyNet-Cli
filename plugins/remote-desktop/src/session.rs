@@ -1006,16 +1006,32 @@ mod tests {
 
         session.close("caller_ended");
 
-        let event = session
-            .events()
-            .into_iter()
-            .find(|event| event["event_type"] == json!("SESSION_CLOSED"))
+        let events = session.events();
+        let closing_index = events
+            .iter()
+            .position(|event| event["event_type"] == json!("SESSION_CLOSING"))
+            .expect("SESSION_CLOSING event");
+        let closed_index = events
+            .iter()
+            .position(|event| event["event_type"] == json!("SESSION_CLOSED"))
             .expect("SESSION_CLOSED event");
-        assert_eq!(event["reason_code"], json!("caller_ended"));
-        assert_eq!(event["recoverability"], json!("closed"));
-        assert_eq!(event["payload"]["reason_code"], json!("caller_ended"));
-        assert_eq!(event["payload"]["recoverability"], json!("closed"));
-        assert_eq!(event["terminal"], json!(true));
+        assert!(
+            closing_index < closed_index,
+            "closing event must precede terminal close"
+        );
+        let closing = &events[closing_index];
+        assert_eq!(closing["reason_code"], json!("caller_ended"));
+        assert_eq!(closing["recoverability"], json!("closing"));
+        assert_eq!(closing["payload"]["reason_code"], json!("caller_ended"));
+        assert_eq!(closing["payload"]["recoverability"], json!("closing"));
+        assert_eq!(closing["terminal"], json!(false));
+
+        let closed = &events[closed_index];
+        assert_eq!(closed["reason_code"], json!("caller_ended"));
+        assert_eq!(closed["recoverability"], json!("closed"));
+        assert_eq!(closed["payload"]["reason_code"], json!("caller_ended"));
+        assert_eq!(closed["payload"]["recoverability"], json!("closed"));
+        assert_eq!(closed["terminal"], json!(true));
     }
 
     #[test]

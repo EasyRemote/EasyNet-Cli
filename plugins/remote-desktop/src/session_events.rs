@@ -271,7 +271,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn media_pipeline_stats(
 pub(in crate::daemon::plugins::remote_desktop) fn session_closing(
     reason: &str,
 ) -> RemoteDesktopEventProjection {
-    ("SESSION_CLOSING", json!({ "reason": reason }))
+    (
+        "SESSION_CLOSING",
+        json!({
+            "reason": reason,
+            "reason_code": reason,
+            "recoverability": "closing",
+        }),
+    )
 }
 
 /// Build a caller-requested closed payload.
@@ -413,8 +420,8 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
 
     use super::{
-        media_source_lost, preview_transport_connected, session_closed, session_expired,
-        transport_blocked, webrtc_failed_with_context, webrtc_sender_ready,
+        media_source_lost, preview_transport_connected, session_closed, session_closing,
+        session_expired, transport_blocked, webrtc_failed_with_context, webrtc_sender_ready,
         webrtc_transport_failure_context, WebRtcFailureEventKind,
     };
 
@@ -425,6 +432,16 @@ mod tests {
 
         assert_eq!(preview_payload["transport_kind"], json!("invoke_bidi"));
         assert_eq!(webrtc_payload["transport_kind"], json!("webrtc"));
+    }
+
+    #[test]
+    fn session_closing_payload_projects_terminal_reason_code() {
+        let (event_type, payload) = session_closing("caller_ended");
+
+        assert_eq!(event_type, "SESSION_CLOSING");
+        assert_eq!(payload["reason"], json!("caller_ended"));
+        assert_eq!(payload["reason_code"], json!("caller_ended"));
+        assert_eq!(payload["recoverability"], json!("closing"));
     }
 
     #[test]

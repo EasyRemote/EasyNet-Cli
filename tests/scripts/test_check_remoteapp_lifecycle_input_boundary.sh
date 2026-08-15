@@ -195,6 +195,12 @@ mod tests {
     #[test]
     fn session_close_events_project_terminal_reason_code() {}
 
+    let closing_index = 1;
+    let closed_index = 2;
+    assert!(closing_index < closed_index);
+    let closing = event;
+    assert_eq!(closing["recoverability"], json!("closing"));
+
     #[test]
     fn session_expiry_events_project_terminal_reason_code() {}
 
@@ -357,6 +363,14 @@ fn session_closed(reason: &str) {
     });
 }
 
+fn session_closing(reason: &str) {
+    json!({
+        "reason": reason,
+        "reason_code": reason,
+        "recoverability": "closing",
+    });
+}
+
 fn session_expired(reason: &str) {
     json!({
         "reason": reason,
@@ -391,6 +405,9 @@ fn transport_blocked() {
 
 #[test]
 fn transport_blocked_projects_capture_backend_reason_code() {}
+
+#[test]
+fn session_closing_payload_projects_terminal_reason_code() {}
 
 #[test]
 fn session_closed_payload_projects_terminal_reason_code() {}
@@ -1174,7 +1191,17 @@ perl -0pi -e 's/assert_eq!\(event\["recoverability"\], json!\("retry_session"\)\
 run_fail 'session-store tests must prove TRANSPORT_FAILED top-level recoverability is projected'
 
 write_fixture
-perl -0pi -e 's/"reason_code": reason,//' \
+perl -0pi -e 's/"recoverability": "closing",//' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'SESSION_CLOSING path must publish terminal reason_code and closing recoverability'
+
+write_fixture
+perl -0pi -e 's/session_closing_payload_projects_terminal_reason_code/session_closing_payload_lacks_terminal_reason_code/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'session event tests must prove closing payload publishes terminal reason_code'
+
+write_fixture
+perl -0pi -e 's/(fn session_closed\((?:(?!fn session_expired).)*?)"reason_code": reason,/$1/s' \
   "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
 run_fail 'SESSION_CLOSED caller path must publish terminal reason_code and closed recoverability'
 
@@ -1197,6 +1224,16 @@ write_fixture
 perl -0pi -e 's/session_close_events_project_terminal_reason_code/session_close_events_lack_terminal_reason_code/' \
   "$SANDBOX/plugins/remote-desktop/src/session.rs"
 run_fail 'session aggregate tests must prove close event-log top-level reason_code is projected'
+
+write_fixture
+perl -0pi -e 's/assert!\(closing_index < closed_index\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate tests must prove SESSION_CLOSING precedes terminal SESSION_CLOSED'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(closing\["recoverability"\], json!\("closing"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate tests must prove SESSION_CLOSING top-level recoverability is projected'
 
 write_fixture
 perl -0pi -e 's/session_expiry_events_project_terminal_reason_code/session_expiry_events_lack_terminal_reason_code/' \

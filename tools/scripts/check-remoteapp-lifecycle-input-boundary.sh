@@ -286,16 +286,24 @@ require 'event\["reason_code"\]' "$SESSION_STORE" \
   'session-store tests must prove TRANSPORT_FAILED top-level reason_code is projected'
 require 'event\["recoverability"\]' "$SESSION_STORE" \
   'session-store tests must prove TRANSPORT_FAILED top-level recoverability is projected'
+require_multiline '/fn session_closing\((?:(?!fn session_closed).)*"reason_code": reason,(?:(?!fn session_closed).)*"recoverability": "closing"/s' "$SESSION_EVENTS" \
+  'SESSION_CLOSING path must publish terminal reason_code and closing recoverability'
 require_multiline '/fn session_closed\((?:(?!fn session_expired).)*"reason_code": reason,(?:(?!fn session_expired).)*"recoverability": "closed"/s' "$SESSION_EVENTS" \
   'SESSION_CLOSED caller path must publish terminal reason_code and closed recoverability'
 require_multiline '/fn session_expired\((?:(?!fn webrtc_sender_ready).)*"reason_code": reason,(?:(?!fn webrtc_sender_ready).)*"recoverability": "closed"/s' "$SESSION_EVENTS" \
   'SESSION_CLOSED lease-expiry path must publish terminal reason_code and closed recoverability'
+require 'session_closing_payload_projects_terminal_reason_code' "$SESSION_EVENTS" \
+  'session event tests must prove closing payload publishes terminal reason_code'
 require 'session_closed_payload_projects_terminal_reason_code' "$SESSION_EVENTS" \
   'session event tests must prove caller close payload publishes terminal reason_code'
 require 'session_expired_payload_projects_terminal_reason_code' "$SESSION_EVENTS" \
   'session event tests must prove lease expiry payload publishes terminal reason_code'
 require 'session_close_events_project_terminal_reason_code' "$SESSION" \
   'session aggregate tests must prove close event-log top-level reason_code is projected'
+require 'closing_index < closed_index' "$SESSION" \
+  'session aggregate tests must prove SESSION_CLOSING precedes terminal SESSION_CLOSED'
+require 'closing\["recoverability"\]' "$SESSION" \
+  'session aggregate tests must prove SESSION_CLOSING top-level recoverability is projected'
 require 'session_expiry_events_project_terminal_reason_code' "$SESSION" \
   'session aggregate tests must prove expiry event-log top-level reason_code is projected'
 require 'events\[media_source_lost_index\]\["binding_id"\]' "$SESSION" \
