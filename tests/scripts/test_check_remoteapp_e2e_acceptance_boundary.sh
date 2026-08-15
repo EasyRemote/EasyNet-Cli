@@ -10,6 +10,7 @@ TARGET_FRESHNESS="$REPO_ROOT/tools/scripts/host-remoteapp-target-picker-freshnes
 CREATE_FAILCLOSED="$REPO_ROOT/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
 PERMISSION_SUBJECT="$REPO_ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 DISPLAY_FALLBACK_FORBIDDEN="$REPO_ROOT/tools/scripts/host-remoteapp-display-fallback-forbidden-e2e.sh"
+WEAK_IDENTITY_AMBIGUITY="$REPO_ROOT/tools/scripts/host-remoteapp-weak-identity-ambiguity-e2e.sh"
 SANDBOX="$(mktemp -d)"
 trap 'rm -rf "$SANDBOX"' EXIT
 
@@ -21,6 +22,7 @@ cp "$TARGET_FRESHNESS" "$SANDBOX/tools/scripts/host-remoteapp-target-picker-fres
 cp "$CREATE_FAILCLOSED" "$SANDBOX/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
 cp "$PERMISSION_SUBJECT" "$SANDBOX/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 cp "$DISPLAY_FALLBACK_FORBIDDEN" "$SANDBOX/tools/scripts/host-remoteapp-display-fallback-forbidden-e2e.sh"
+cp "$WEAK_IDENTITY_AMBIGUITY" "$SANDBOX/tools/scripts/host-remoteapp-weak-identity-ambiguity-e2e.sh"
 cp "$REPO_ROOT/examples/easynet-remoteapp-frame-receiver.rs" \
   "$SANDBOX/examples/easynet-remoteapp-frame-receiver.rs"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
@@ -30,6 +32,7 @@ chmod +x "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 chmod +x "$SANDBOX/tools/scripts/host-remoteapp-display-fallback-forbidden-e2e.sh"
+chmod +x "$SANDBOX/tools/scripts/host-remoteapp-weak-identity-ambiguity-e2e.sh"
 cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
 | E2E-01 target picker freshness | live refresh returns known target |
 | E2E-02 permission subject correctness | invalid_argument for target Resource subjects |
@@ -40,6 +43,7 @@ cat >"$SANDBOX/docs/design/remoteapp-targeted-session-spec.md" <<'MD'
 | E2E-07 display fallback forbidden | no decoded full display |
 | E2E-08 move/resize tracking | ordered target geometry events |
 | E2E-09 target loss vs transport failure | target loss is not transport failure |
+| E2E-10 weak identity ambiguity | weak native identity fails closed |
 MD
 
 CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
@@ -57,6 +61,8 @@ CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh" \
   --self-test >/dev/null
 "$SANDBOX/tools/scripts/host-remoteapp-display-fallback-forbidden-e2e.sh" \
+  --self-test >/dev/null
+"$SANDBOX/tools/scripts/host-remoteapp-weak-identity-ambiguity-e2e.sh" \
   --self-test >/dev/null
 
 cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \

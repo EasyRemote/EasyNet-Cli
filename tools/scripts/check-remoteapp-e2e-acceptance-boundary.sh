@@ -9,6 +9,7 @@ TARGET_FRESHNESS="$ROOT/tools/scripts/host-remoteapp-target-picker-freshness-e2e
 CREATE_FAILCLOSED="$ROOT/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
 PERMISSION_SUBJECT="$ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 DISPLAY_FALLBACK_FORBIDDEN="$ROOT/tools/scripts/host-remoteapp-display-fallback-forbidden-e2e.sh"
+WEAK_IDENTITY_AMBIGUITY="$ROOT/tools/scripts/host-remoteapp-weak-identity-ambiguity-e2e.sh"
 RECEIVER="$ROOT/examples/easynet-remoteapp-frame-receiver.rs"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 
@@ -31,6 +32,7 @@ require() {
 [[ -f "$CREATE_FAILCLOSED" ]] || fail "missing host create_session fail-closed E2E harness"
 [[ -f "$PERMISSION_SUBJECT" ]] || fail "missing host permission subject E2E harness"
 [[ -f "$DISPLAY_FALLBACK_FORBIDDEN" ]] || fail "missing host display fallback forbidden E2E harness"
+[[ -f "$WEAK_IDENTITY_AMBIGUITY" ]] || fail "missing host weak identity ambiguity E2E harness"
 [[ -f "$RECEIVER" ]] || fail "missing bundled host decoded-frame receiver"
 [[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
 
@@ -52,6 +54,8 @@ require 'E2E-08 move/resize tracking' "$SPEC" \
   'SPEC must retain live move/resize acceptance'
 require 'E2E-09 target loss vs transport failure' "$SPEC" \
   'SPEC must retain live target-loss acceptance'
+require 'E2E-10 weak identity ambiguity' "$SPEC" \
+  'SPEC must retain weak identity ambiguity acceptance'
 
 require 'remote_desktop\.permission_status' "$PERMISSION_SUBJECT" \
   'host permission subject E2E must invoke remote_desktop.permission_status'
@@ -88,6 +92,27 @@ require 'session_failed_before_media' "$DISPLAY_FALLBACK_FORBIDDEN" \
   'host display fallback E2E must bind decoded-frame absence to pre-media session failure'
 require 'restore_resources|resource_registry_restored' "$DISPLAY_FALLBACK_FORBIDDEN" \
   'host display fallback E2E must restore the operator resource registry'
+
+require 'remote_desktop\.create_session' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must invoke remote_desktop.create_session'
+require 'remote_desktop\.show_session' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must prove absence through remote_desktop.show_session'
+require 'target_identity_ambiguous' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must require typed target_identity_ambiguous failure'
+require 'app_name/title are diagnostic hints, not production routing identity|app_name/title are diagnostic' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must prove app_name/title are not production routing identity'
+require 'pid.*primary_pid.*app_identity.*bundle_id|app_identity.*bundle_id' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must construct a window without stable owner identity'
+require 'active_session_row_inserted.*False|active_session_row_inserted.*false' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must prove no active session row was inserted'
+require 'stream_start_attempted.*False|stream_start_attempted.*false' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must prove no stream startup was attempted'
+require 'media_start_attempted.*False|media_start_attempted.*false' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must prove no media startup was attempted'
+require 'session_failed_before_stream' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must bind decoded-frame absence to pre-stream session failure'
+require 'restore_resources|resource_registry_restored' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must restore the operator resource registry'
 
 require 'resource\.refresh_remote_targets' "$TARGET_FRESHNESS" \
   'host target picker freshness E2E must refresh through resource.refresh_remote_targets'
