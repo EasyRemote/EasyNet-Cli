@@ -10,6 +10,7 @@ use crate::daemon::plugins::remote_desktop::constants::{
     MAX_ICE_CANDIDATE_BYTES, MAX_LOCAL_ICE_CANDIDATES, MAX_REMOTE_ICE_CANDIDATES,
     MAX_SIGNALING_DESCRIPTION_BYTES, TRANSPORT_WEBRTC,
 };
+use crate::daemon::plugins::remote_desktop::sdp::validate_ice_candidate_row;
 
 /// SDP description accepted for one side of a remote desktop session.
 ///
@@ -48,8 +49,9 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopIceCandidate 
 }
 
 impl RemoteDesktopIceCandidate {
-    fn new(value: Value) -> Self {
-        Self { value }
+    fn new(value: Value) -> anyhow::Result<Self> {
+        validate_ice_candidate_row(&value)?;
+        Ok(Self { value })
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
@@ -276,7 +278,7 @@ impl RemoteDesktopSignalingState {
     ) -> anyhow::Result<usize> {
         self.ensure_remote_ice_candidate_capacity()?;
         self.remote_ice_candidates
-            .push(RemoteDesktopIceCandidate::new(candidate));
+            .push(RemoteDesktopIceCandidate::new(candidate)?);
         Ok(self.remote_ice_candidates.len())
     }
 
@@ -297,7 +299,7 @@ impl RemoteDesktopSignalingState {
         }
         self.remote_ice_candidate_reservations -= 1;
         self.remote_ice_candidates
-            .push(RemoteDesktopIceCandidate::new(candidate));
+            .push(RemoteDesktopIceCandidate::new(candidate)?);
         Ok(self.remote_ice_candidates.len())
     }
 
@@ -319,7 +321,7 @@ impl RemoteDesktopSignalingState {
             .into());
         }
         self.local_ice_candidates
-            .push(RemoteDesktopIceCandidate::new(candidate));
+            .push(RemoteDesktopIceCandidate::new(candidate)?);
         Ok(self.local_ice_candidates.len())
     }
 
@@ -544,6 +546,47 @@ mod tests {
             FLOOD_CANDIDATES - MAX_REMOTE_ICE_CANDIDATES
         );
         assert_eq!(local_rejected, FLOOD_CANDIDATES - MAX_LOCAL_ICE_CANDIDATES);
+    }
+
+    #[test]
+    fn signaling_state_validates_local_and_remote_ice_rows_before_storage() {
+        let mut signaling = RemoteDesktopSignalingState::new();
+        let malformed = json!({"sdpMid": "0", "sdpMLineIndex": 0});
+        let remote_err = signaling
+            .push_remote_ice_candidate(malformed.clone())
+            .expect_err("remote signaling state must reject schema-incomplete ICE rows")
+            .to_string();
+        assert!(
+            remote_err.contains("must include string `candidate`"),
+            "got {remote_err}"
+        );
+        let local_err = signaling
+            .push_local_ice_candidate(malformed)
+            .expect_err("local WebRTC callbacks must not bypass ICE row schema validation")
+            .to_string();
+        assert!(
+            local_err.contains("must include string `candidate`"),
+            "got {local_err}"
+        );
+
+        let oversized = json!({
+            "candidate": format!(
+                "candidate:oversized 1 UDP 2122252543 {} 54400 typ host",
+                "x".repeat(MAX_ICE_CANDIDATE_BYTES)
+            ),
+            "sdpMid": "0",
+            "sdpMLineIndex": 0
+        });
+        let local_oversized_err = signaling
+            .push_local_ice_candidate(oversized)
+            .expect_err("local signaling state must reject oversized ICE rows before storage")
+            .to_string();
+        assert!(
+            local_oversized_err.contains("exceeds"),
+            "got {local_oversized_err}"
+        );
+        assert_eq!(signaling.remote_ice_candidates().len(), 0);
+        assert_eq!(signaling.local_ice_candidates().len(), 0);
     }
 
     #[test]

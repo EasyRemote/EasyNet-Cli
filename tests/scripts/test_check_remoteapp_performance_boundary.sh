@@ -98,6 +98,9 @@ fn remote_desktop_signaling_rejects_more_than_ten_thousand_candidates_without_gr
 
 #[test]
 fn remote_desktop_signaling_bounded_view_projects_counts_and_limits() {}
+
+#[test]
+fn signaling_state_validates_local_and_remote_ice_rows_before_storage() {}
 RS
 
 cat >"$SB/plugins/remote-desktop/src/session_store.rs" <<'RS'
@@ -234,6 +237,21 @@ set -e
 grep -q "bounded public view projection" /tmp/check-remoteapp-performance-boundary-signaling-view.out || fail "expected PERF-05 bounded signaling view failure"
 
 perl -0pi -e 's/fn to_unbounded_view/fn to_bounded_view/' \
+  "$SB/plugins/remote-desktop/src/session_signaling.rs"
+perl -0pi -e 's/fn signaling_state_validates_local_and_remote_ice_rows_before_storage/fn signaling_state_skips_ice_row_validation/' \
+  "$SB/plugins/remote-desktop/src/session_signaling.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-ice-row-validation.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing signaling ICE row validation should exit 1 (got $rc)"
+grep -q "validate local and remote ICE rows before storage" /tmp/check-remoteapp-performance-boundary-ice-row-validation.out || fail "expected PERF-05 ICE row validation failure"
+
+perl -0pi -e 's/fn signaling_state_skips_ice_row_validation/fn signaling_state_validates_local_and_remote_ice_rows_before_storage/' \
   "$SB/plugins/remote-desktop/src/session_signaling.rs"
 perl -0pi -e 's/"remote_ice_candidates_elided": true/"remote_ice_candidates": []/' \
   "$SB/plugins/remote-desktop/src/session_signaling.rs"

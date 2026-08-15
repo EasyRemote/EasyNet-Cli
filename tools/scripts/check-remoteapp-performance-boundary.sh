@@ -102,6 +102,8 @@ require 'fn to_bounded_view\(' "$SESSION_SIGNALING" \
   'PERF-05 signaling state must own bounded public view projection'
 require 'remote_desktop_signaling_bounded_view_projects_counts_and_limits' "$SESSION_SIGNALING" \
   'PERF-05 must test bounded signaling view limits and candidate elision'
+require 'signaling_state_validates_local_and_remote_ice_rows_before_storage' "$SESSION_SIGNALING" \
+  'PERF-05 signaling state must validate local and remote ICE rows before storage'
 require '"signaling_limits"' "$SESSION_SIGNALING" \
   'PERF-05 bounded signaling view must publish explicit signaling limits'
 require '"remote_ice_candidates_elided": true' "$SESSION_SIGNALING" \

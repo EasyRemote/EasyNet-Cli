@@ -132,6 +132,18 @@ pub(in crate::daemon::plugins::remote_desktop) fn validate_ice_candidate_size(
     anyhow::bail!("ICE candidate row exceeds {MAX_ICE_CANDIDATE_BYTES} bytes")
 }
 
+pub(in crate::daemon::plugins::remote_desktop) fn validate_ice_candidate_row(
+    candidate: &Value,
+) -> anyhow::Result<()> {
+    if candidate.is_null() {
+        validate_ice_candidate_size(candidate)?;
+        return Ok(());
+    }
+    validate_ice_candidate_size(candidate)?;
+    ice_candidate_text(candidate)?;
+    Ok(())
+}
+
 /// Require the answer's video media section to send device media.
 ///
 /// A connected ICE/DTLS transport is not proof that remote desktop media was
@@ -187,8 +199,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn remote_ice_candidate_inits(
     if candidate.is_null() {
         return Ok(Vec::new());
     }
-    validate_ice_candidate_size(candidate)?;
-    ice_candidate_text(candidate)?;
+    validate_ice_candidate_row(candidate)?;
     let candidate_init: RTCIceCandidateInit = serde_json::from_value(candidate.clone())?;
     Ok(vec![candidate_init])
 }
