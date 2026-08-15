@@ -195,7 +195,7 @@ fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetErro
     if !off_display_window_ids.is_empty() {
         return Err(RemoteAppTargetError::new(
             "remote_desktop.create_session",
-            TargetResolutionError::UnsupportedCaptureScope,
+            TargetResolutionError::TargetMultiDisplayUnsupported,
             "application target requires MultiAppSurface support",
         ));
     }
@@ -464,7 +464,7 @@ fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetErro
     if !off_display_window_ids.is_empty() {
         return Err(RemoteAppTargetError::new(
             "remote_desktop.create_session",
-            TargetResolutionError::UnsupportedCaptureScope,
+            TargetResolutionError::TargetMultiDisplayUnsupported,
             "application target requires MultiAppSurface support",
         ));
     }
@@ -473,6 +473,17 @@ fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetErro
 RS
 
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+perl -0pi -e 's/TargetResolutionError::TargetMultiDisplayUnsupported/TargetResolutionError::UnsupportedCaptureScope/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted generic unsupported_capture_scope for multi-display app binding" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/TargetResolutionError::UnsupportedCaptureScope/TargetResolutionError::TargetMultiDisplayUnsupported/' \
+  "$SANDBOX/plugins/remote-desktop/src/screencapturekit_capture.rs"
 
 perl -0pi -e 's/display_scoped_application_window_set/application/g' \
   "$SANDBOX/plugins/remote-desktop/src/target.rs"

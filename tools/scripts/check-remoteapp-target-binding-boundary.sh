@@ -231,9 +231,9 @@ require 'target_binding\(\)' \
 require 'off_display_window_ids' \
   "$REMOTE_ROOT/screencapturekit_capture.rs" \
   'ScreenCaptureKit application binding must detect app windows outside the selected display'
-require 'TargetResolutionError::UnsupportedCaptureScope' \
+require 'TargetResolutionError::TargetMultiDisplayUnsupported' \
   "$REMOTE_ROOT/screencapturekit_capture.rs" \
-  'ScreenCaptureKit application binding must fail closed when single-stream AppSurface would hide other app windows'
+  'ScreenCaptureKit application binding must use the typed multi-display unsupported reason when single-stream AppSurface would hide other app windows'
 require 'MultiAppSurface support' \
   "$REMOTE_ROOT/screencapturekit_capture.rs" \
   'ScreenCaptureKit application binding must explain that multi-display applications require MultiAppSurface support'

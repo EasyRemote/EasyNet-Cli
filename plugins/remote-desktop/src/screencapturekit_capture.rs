@@ -380,7 +380,7 @@ fn select_application_window_set_for_binding(
         off_display_window_ids.dedup();
         return Err(RemoteAppTargetError::new(
             ability,
-            TargetResolutionError::UnsupportedCaptureScope,
+            TargetResolutionError::TargetMultiDisplayUnsupported,
             format!(
                 "application target spans windows outside display {display_id}; \
                  multi-display application capture requires MultiAppSurface support; \
