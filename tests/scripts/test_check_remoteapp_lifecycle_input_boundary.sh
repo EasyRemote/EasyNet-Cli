@@ -718,6 +718,52 @@ fn srflx_without_relay_reports_typed_relay_unavailable_reason() {
 fn transport_summary_projects_remote_desktop_attach_as_preview_ability() {}
 RS
 
+  cat >"$SANDBOX/plugins/remote-desktop/src/network.rs" <<'RS'
+enum DirectWebRtcRouteCandidateClass {
+    Host,
+    StunServerReflexive,
+    TurnRelay,
+    EasyNetRelay,
+}
+
+const DIRECT_WEBRTC_ROUTE_MODEL: &[DirectWebRtcRouteCandidateClass] = &[
+    DirectWebRtcRouteCandidateClass::Host,
+    DirectWebRtcRouteCandidateClass::StunServerReflexive,
+    DirectWebRtcRouteCandidateClass::TurnRelay,
+    DirectWebRtcRouteCandidateClass::EasyNetRelay,
+];
+
+impl DirectWebRtcRouteCandidateClass {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Host => "host_candidate",
+            Self::StunServerReflexive => "stun_srflx",
+            Self::TurnRelay => "turn_relay",
+            Self::EasyNetRelay => "easynet_relay",
+        }
+    }
+}
+
+struct DirectWebRtcRouteCandidate;
+
+impl DirectWebRtcRouteCandidate {
+    fn endpoint(&self) -> &str {
+        "127.0.0.1:0"
+    }
+}
+
+trait DirectWebRtcRouteCandidateProvider {
+    fn route_candidates(&self) -> Vec<DirectWebRtcRouteCandidate>;
+}
+
+struct LocalInterfaceRouteCandidateProvider;
+
+#[test]
+fn route_candidate_evidence_keeps_host_only_provider_explicit() {
+    assert_eq!(evidence["provider_state"], json!("host_local_only"));
+}
+RS
+
   cat >"$SANDBOX/plugins/remote-desktop/src/session_store.rs" <<'RS'
 fn mark_direct_webrtc_media_ready(session_id: &str) {
     direct_webrtc_endpoint_ura(session_id);
@@ -764,8 +810,15 @@ RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_endpoint.rs" <<'RS'
 fn answer(endpoint_config: EndpointConfig) {
+    let route_candidate_provider = LocalInterfaceRouteCandidateProvider;
+    let route_candidates = route_candidate_provider.route_candidates();
+    let udp_addrs = route_candidates
+        .iter()
+        .map(|candidate| candidate.endpoint().to_string())
+        .collect::<Vec<_>>();
     json!({
         "endpoint_ura": direct_webrtc_endpoint_ura(&endpoint_config.session_id),
+        "route_candidate_evidence": route_candidate_evidence,
     });
 }
 RS
@@ -2047,6 +2100,46 @@ write_fixture
 perl -0pi -e 's/fn turn_relay_hostname_containing_easynet_is_not_easynet_relay/fn turn_relay_hostname_with_easynet_is_misclassified/' \
   "$SANDBOX/plugins/remote-desktop/src/view_transport.rs"
 run_fail 'transport tests must prove TURN hostnames containing easynet are not EasyNet relay routes'
+
+write_fixture
+perl -0pi -e 's/trait DirectWebRtcRouteCandidateProvider/trait DirectWebRtcAddressProvider/' \
+  "$SANDBOX/plugins/remote-desktop/src/network.rs"
+run_fail 'direct WebRTC endpoint route discovery must be provider-backed instead of a bare UDP address helper'
+
+write_fixture
+perl -0pi -e 's/struct DirectWebRtcRouteCandidate;/struct DirectWebRtcUdpAddress;/' \
+  "$SANDBOX/plugins/remote-desktop/src/network.rs"
+run_fail 'direct WebRTC route candidates must carry typed route-class evidence'
+
+write_fixture
+perl -0pi -e 's/TurnRelay/RelayOverloaded/g' \
+  "$SANDBOX/plugins/remote-desktop/src/network.rs"
+run_fail 'direct WebRTC route candidate model must reserve TURN relay evidence explicitly'
+
+write_fixture
+perl -0pi -e 's/assert_eq!\(evidence\["provider_state"\], json!\("host_local_only"\)\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/network.rs"
+run_fail 'local route candidate provider tests must prove host-only state is explicit'
+
+write_fixture
+perl -0pi -e 's/^/fn direct_webrtc_udp_addrs() {}\n/' \
+  "$SANDBOX/plugins/remote-desktop/src/network.rs"
+run_fail 'direct WebRTC route discovery must not regress to an untyped UDP address helper'
+
+write_fixture
+perl -0pi -e 's/"route_candidate_evidence": route_candidate_evidence,//' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
+run_fail 'direct WebRTC answer must publish route candidate evidence for frontend/backend diagnosis'
+
+write_fixture
+perl -0pi -e 's/LocalInterfaceRouteCandidateProvider/DirectWebRtcUdpAddressProvider/g' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
+run_fail 'direct WebRTC endpoint must consume the typed local route candidate provider'
+
+write_fixture
+perl -0pi -e 's/candidate\.endpoint\(\)\.to_string\(\)/candidate.to_string()/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
+run_fail 'endpoint UDP bind addresses must be derived from typed route candidates'
 
 write_fixture
 perl -0pi -e 's/"production_route_ready": transport_view\.production_route_ready\(\),//' \

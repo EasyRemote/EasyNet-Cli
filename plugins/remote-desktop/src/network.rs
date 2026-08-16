@@ -2,16 +2,108 @@
 // ===============================================
 //
 // File: plugins/remote-desktop/src/network.rs
-// Description: Local interface candidate discovery for direct WebRTC endpoints.
+// Description: Typed route candidate discovery for direct WebRTC endpoints.
 
 #[cfg(unix)]
 use std::net::Ipv4Addr;
 
-pub(crate) fn direct_webrtc_udp_addrs() -> Vec<String> {
-    direct_webrtc_host_ips()
-        .into_iter()
-        .map(|ip| format!("{ip}:0"))
-        .collect()
+use serde_json::{json, Value};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) enum DirectWebRtcRouteCandidateClass {
+    Host,
+    StunServerReflexive,
+    TurnRelay,
+    EasyNetRelay,
+}
+
+impl DirectWebRtcRouteCandidateClass {
+    pub(in crate::daemon::plugins::remote_desktop) fn as_str(self) -> &'static str {
+        match self {
+            Self::Host => "host_candidate",
+            Self::StunServerReflexive => "stun_srflx",
+            Self::TurnRelay => "turn_relay",
+            Self::EasyNetRelay => "easynet_relay",
+        }
+    }
+}
+
+const DIRECT_WEBRTC_ROUTE_MODEL: &[DirectWebRtcRouteCandidateClass] = &[
+    DirectWebRtcRouteCandidateClass::Host,
+    DirectWebRtcRouteCandidateClass::StunServerReflexive,
+    DirectWebRtcRouteCandidateClass::TurnRelay,
+    DirectWebRtcRouteCandidateClass::EasyNetRelay,
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcRouteCandidate {
+    class: DirectWebRtcRouteCandidateClass,
+    endpoint: String,
+}
+
+impl DirectWebRtcRouteCandidate {
+    fn host(ip: String) -> Self {
+        Self {
+            class: DirectWebRtcRouteCandidateClass::Host,
+            endpoint: format!("{ip}:0"),
+        }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    fn to_value(&self) -> Value {
+        json!({
+            "candidate_class": self.class.as_str(),
+            "endpoint": self.endpoint,
+        })
+    }
+}
+
+pub(in crate::daemon::plugins::remote_desktop) trait DirectWebRtcRouteCandidateProvider {
+    fn provider_id(&self) -> &'static str;
+    fn provider_state(&self) -> &'static str;
+    fn route_candidates(&self) -> Vec<DirectWebRtcRouteCandidate>;
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(in crate::daemon::plugins::remote_desktop) struct LocalInterfaceRouteCandidateProvider;
+
+impl DirectWebRtcRouteCandidateProvider for LocalInterfaceRouteCandidateProvider {
+    fn provider_id(&self) -> &'static str {
+        "local_interface"
+    }
+
+    fn provider_state(&self) -> &'static str {
+        "host_local_only"
+    }
+
+    fn route_candidates(&self) -> Vec<DirectWebRtcRouteCandidate> {
+        direct_webrtc_host_ips()
+            .into_iter()
+            .map(DirectWebRtcRouteCandidate::host)
+            .collect()
+    }
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn direct_webrtc_route_candidate_evidence(
+    provider: &impl DirectWebRtcRouteCandidateProvider,
+    candidates: &[DirectWebRtcRouteCandidate],
+) -> Value {
+    json!({
+        "provider": provider.provider_id(),
+        "provider_state": provider.provider_state(),
+        "route_model": DIRECT_WEBRTC_ROUTE_MODEL
+            .iter()
+            .map(|class| class.as_str())
+            .collect::<Vec<_>>(),
+        "candidate_count": candidates.len(),
+        "candidates": candidates
+            .iter()
+            .map(DirectWebRtcRouteCandidate::to_value)
+            .collect::<Vec<_>>(),
+    })
 }
 
 fn direct_webrtc_host_ips() -> Vec<String> {
@@ -66,15 +158,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_webrtc_host_ips_are_local_interface_candidates_only() {
-        let ips = direct_webrtc_host_ips();
+    fn direct_webrtc_route_candidates_are_typed_host_candidates() {
+        let provider = LocalInterfaceRouteCandidateProvider;
+        let candidates = provider.route_candidates();
+        let endpoints = candidates
+            .iter()
+            .map(DirectWebRtcRouteCandidate::endpoint)
+            .collect::<Vec<_>>();
         assert!(
-            ips.iter().any(|ip| ip == "127.0.0.1"),
-            "direct WebRTC candidates must always include loopback: {ips:?}"
+            endpoints.iter().any(|endpoint| endpoint == &"127.0.0.1:0"),
+            "direct WebRTC candidates must always include loopback: {endpoints:?}"
         );
         assert!(
-            !ips.iter().any(|ip| ip == "8.8.8.8"),
-            "direct WebRTC candidates must not include or depend on public probe targets: {ips:?}"
+            candidates
+                .iter()
+                .all(|candidate| candidate.class == DirectWebRtcRouteCandidateClass::Host),
+            "local provider must not synthesize STUN/TURN/EasyNet relay candidates: {candidates:?}"
+        );
+        assert!(
+            !endpoints.iter().any(|endpoint| endpoint.starts_with("8.8.8.8:")),
+            "direct WebRTC candidates must not include or depend on public probe targets: {endpoints:?}"
+        );
+    }
+
+    #[test]
+    fn route_candidate_evidence_keeps_host_only_provider_explicit() {
+        let provider = LocalInterfaceRouteCandidateProvider;
+        let candidates = provider.route_candidates();
+        let evidence = direct_webrtc_route_candidate_evidence(&provider, &candidates);
+
+        assert_eq!(evidence["provider"], json!("local_interface"));
+        assert_eq!(evidence["provider_state"], json!("host_local_only"));
+        assert_eq!(
+            evidence["route_model"],
+            json!([
+                "host_candidate",
+                "stun_srflx",
+                "turn_relay",
+                "easynet_relay"
+            ])
+        );
+        assert_eq!(
+            evidence["candidates"][0]["candidate_class"],
+            json!("host_candidate")
         );
     }
 }

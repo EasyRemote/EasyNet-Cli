@@ -51,7 +51,10 @@ use crate::daemon::plugins::remote_desktop::constants::{
     REASON_RESOURCE_TYPE_MISMATCH, TRANSPORT_WEBRTC,
 };
 use crate::daemon::plugins::remote_desktop::media::encode::build_direct_webrtc_h264_config_for_binding;
-use crate::daemon::plugins::remote_desktop::network::direct_webrtc_udp_addrs;
+use crate::daemon::plugins::remote_desktop::network::{
+    direct_webrtc_route_candidate_evidence, DirectWebRtcRouteCandidateProvider,
+    LocalInterfaceRouteCandidateProvider,
+};
 use crate::daemon::plugins::remote_desktop::sdp::{
     ensure_answer_sends_video, normalize_browser_answer_sdp, normalize_remote_offer_sdp,
 };
@@ -206,10 +209,19 @@ async fn create_direct_webrtc_endpoint(
         connected_tx,
         done_tx,
     ));
-    let udp_addrs = direct_webrtc_udp_addrs();
+    let route_candidate_provider = LocalInterfaceRouteCandidateProvider;
+    let route_candidates = route_candidate_provider.route_candidates();
+    let route_candidate_evidence =
+        direct_webrtc_route_candidate_evidence(&route_candidate_provider, &route_candidates);
+    let udp_addrs = route_candidates
+        .iter()
+        .map(|candidate| candidate.endpoint().to_string())
+        .collect::<Vec<_>>();
     eprintln!(
-        "[remote-desktop-webrtc] session={} udp_addrs={}",
+        "[remote-desktop-webrtc] session={} route_provider={} provider_state={} udp_addrs={}",
         endpoint_config.session_id,
+        route_candidate_provider.provider_id(),
+        route_candidate_provider.provider_state(),
         udp_addrs.join(",")
     );
     let peer_connection: Arc<dyn PeerConnection> = Arc::new(
@@ -289,6 +301,7 @@ async fn create_direct_webrtc_endpoint(
         "endpoint_ura": direct_webrtc_endpoint_ura(&endpoint_config.session_id),
         "codec": "h264",
         "carrier": "rtp_srtp",
+        "route_candidate_evidence": route_candidate_evidence,
     });
 
     let peer_connection_for_endpoint = Arc::clone(&peer_connection);

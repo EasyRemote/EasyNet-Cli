@@ -64,6 +64,7 @@ VIEW_DEVICE="$REMOTE_ROOT/view_device.rs"
 INPUT="$REMOTE_ROOT/input.rs"
 TARGET="$REMOTE_ROOT/target.rs"
 CONSTANTS="$REMOTE_ROOT/constants.rs"
+NETWORK="$REMOTE_ROOT/network.rs"
 SCK="$REMOTE_ROOT/screencapturekit_capture.rs"
 REQUEST="$REMOTE_ROOT/request.rs"
 SESSION_STORE="$REMOTE_ROOT/session_store.rs"
@@ -78,7 +79,7 @@ WEBRTC_NATIVE="$REMOTE_ROOT/transport/webrtc_native_media.rs"
 WEBRTC_NEGOTIATION="$REMOTE_ROOT/transport/webrtc_negotiation.rs"
 TRANSPORT_BLOCKER="$REMOTE_ROOT/transport_blocker.rs"
 
-for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$LEASE_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SET_DESCRIPTION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NATIVE" "$WEBRTC_NEGOTIATION" "$TRANSPORT_BLOCKER"; do
+for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$LEASE_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$NETWORK" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SET_DESCRIPTION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NATIVE" "$WEBRTC_NEGOTIATION" "$TRANSPORT_BLOCKER"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -682,6 +683,28 @@ require 'srflx_without_relay_reports_typed_relay_unavailable_reason' "$VIEW_TRAN
   'transport tests must prove STUN-only candidates expose relay-unavailable degradation'
 require 'relay_ready' "$SPEC" \
   'SPEC must name relay_ready as the aggregate any-relay state instead of overloading TURN relay'
+require 'trait DirectWebRtcRouteCandidateProvider' "$NETWORK" \
+  'direct WebRTC endpoint route discovery must be provider-backed instead of a bare UDP address helper'
+require 'struct DirectWebRtcRouteCandidate' "$NETWORK" \
+  'direct WebRTC route candidates must carry typed route-class evidence'
+require 'DirectWebRtcRouteCandidateClass::Host' "$NETWORK" \
+  'direct WebRTC route candidate model must represent host candidates explicitly'
+require 'DirectWebRtcRouteCandidateClass::StunServerReflexive' "$NETWORK" \
+  'direct WebRTC route candidate model must reserve STUN server-reflexive evidence explicitly'
+require 'DirectWebRtcRouteCandidateClass::TurnRelay' "$NETWORK" \
+  'direct WebRTC route candidate model must reserve TURN relay evidence explicitly'
+require 'DirectWebRtcRouteCandidateClass::EasyNetRelay' "$NETWORK" \
+  'direct WebRTC route candidate model must reserve EasyNet relay evidence explicitly'
+require 'provider_state"\]\s*,\s*json!\("host_local_only"\)' "$NETWORK" \
+  'local route candidate provider tests must prove host-only state is explicit'
+reject 'fn direct_webrtc_udp_addrs' "$NETWORK" \
+  'direct WebRTC route discovery must not regress to an untyped UDP address helper'
+require 'route_candidate_evidence' "$WEBRTC_ENDPOINT" \
+  'direct WebRTC answer must publish route candidate evidence for frontend/backend diagnosis'
+require 'LocalInterfaceRouteCandidateProvider' "$WEBRTC_ENDPOINT" \
+  'direct WebRTC endpoint must consume the typed local route candidate provider'
+require 'candidate\.endpoint\(\)\.to_string\(\)' "$WEBRTC_ENDPOINT" \
+  'endpoint UDP bind addresses must be derived from typed route candidates'
 
 # Public transport evidence must remain in the EasyNet URA model. WebRTC is a
 # transport kind/carrier, not a routable scheme, and tests must not preserve
