@@ -46,7 +46,7 @@ const AUTOMATIC_REBIND_WINDOW_MS: u64 = 30_000;
 struct TargetLifecycleEventCoalescer;
 
 fn commit_geometry() {
-    geometry_event_type();
+    geometry_event_types();
     ApplicationWindowSetChanged;
     "TARGET_PERMISSION_REVOKED";
     "target_title_after_loss";
@@ -80,6 +80,10 @@ fn coalesced_lifecycle_event() {
     payload["coalesced_target_events"] = json!(0);
 }
 
+struct TargetTrackingEmission;
+
+fn ordered_events() {}
+
 fn input_blocked_reason() {}
 
 fn target_failure_payload() {}
@@ -96,18 +100,17 @@ fn expire_rebind_deadline() {
     "rebind_window_expired";
 }
 
-fn geometry_event_type() -> &'static str {
-    if moved() {
-        "TARGET_MOVED"
-    } else {
-        "TARGET_RESIZED"
-    }
+fn geometry_event_types() -> Vec<&'static str> {
+    vec!["TARGET_MOVED", "TARGET_RESIZED"]
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
     fn tracker_commits_move_resize_and_lost_without_rebinding() {}
+
+    #[test]
+    fn tracker_expands_combined_move_resize_observation_into_ordered_events() {}
 
     #[test]
     fn tracker_coalesces_high_rate_geometry_and_title_events() {}
@@ -182,6 +185,7 @@ fn record_target_observation() {
 
 fn push_target_tracking_event() {
     payload["transport_epoch"] = self.transport.active_epoch();
+    for (event_type, mut payload) in event.ordered_events() {}
 }
 
 fn push_projected_event(&mut self, event: session_events::RemoteDesktopEventProjection) {
@@ -247,6 +251,11 @@ mod tests {
     fn target_tracking_events_include_active_transport_epoch_at_session_boundary() {
         assert_eq!(target_event["transport_epoch"], json!(epoch.value()));
         assert_eq!(target_event["payload"]["transport_epoch"], json!(epoch.value()));
+        assert!(
+            geometry_events[1]["sequence"].as_u64().unwrap()
+                == geometry_events[0]["sequence"].as_u64().unwrap() + 1,
+            "combined geometry observation must expand into monotonic ordered event-log rows"
+        );
     }
 
     #[test]

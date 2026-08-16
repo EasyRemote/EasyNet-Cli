@@ -288,18 +288,68 @@ pub(in crate::daemon::plugins::remote_desktop) enum TargetObservation {
 }
 
 #[derive(Debug, Clone)]
-pub(in crate::daemon::plugins::remote_desktop) struct TargetTrackingEvent {
+pub(in crate::daemon::plugins::remote_desktop) struct TargetTrackingEmission {
+    events: Vec<TargetTrackingEvent>,
+}
+
+#[derive(Debug, Clone)]
+struct TargetTrackingEvent {
     event_type: &'static str,
     payload: Value,
 }
 
-impl TargetTrackingEvent {
-    pub(in crate::daemon::plugins::remote_desktop) fn event_type(&self) -> &'static str {
-        self.event_type
+impl TargetTrackingEmission {
+    fn single(event_type: &'static str, payload: Value) -> Self {
+        Self {
+            events: vec![TargetTrackingEvent {
+                event_type,
+                payload,
+            }],
+        }
     }
 
+    fn ordered(event_types: &[&'static str], payload: Value) -> Option<Self> {
+        let events = event_types
+            .iter()
+            .map(|event_type| TargetTrackingEvent {
+                event_type,
+                payload: payload.clone(),
+            })
+            .collect::<Vec<_>>();
+        (!events.is_empty()).then_some(Self { events })
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn event_type(&self) -> &'static str {
+        self.events
+            .first()
+            .expect("target tracking emission is constructed non-empty")
+            .event_type
+    }
+
+    #[cfg(test)]
     pub(in crate::daemon::plugins::remote_desktop) fn payload(&self) -> Value {
-        self.payload.clone()
+        self.events
+            .first()
+            .expect("target tracking emission is constructed non-empty")
+            .payload
+            .clone()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn ordered_events(
+        &self,
+    ) -> Vec<(&'static str, Value)> {
+        self.events
+            .iter()
+            .map(|event| (event.event_type, event.payload.clone()))
+            .collect()
+    }
+
+    #[cfg(test)]
+    fn ordered_event_types(&self) -> Vec<&'static str> {
+        self.ordered_events()
+            .into_iter()
+            .map(|(event_type, _)| event_type)
+            .collect()
     }
 }
 
@@ -400,7 +450,7 @@ impl RemoteAppTargetBindingStateMachine {
     pub(in crate::daemon::plugins::remote_desktop) fn commit_observation(
         &mut self,
         observation: TargetObservation,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
         self.commit_observation_with_media_source_activity(observation, false)
     }
 
@@ -408,7 +458,7 @@ impl RemoteAppTargetBindingStateMachine {
         &mut self,
         observation: TargetObservation,
         media_source_active: bool,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
         match observation {
             TargetObservation::GeometryChanged {
                 geometry,
@@ -479,7 +529,7 @@ impl RemoteAppTargetBindingStateMachine {
         geometry: TargetGeometry,
         target_geometry_revision: u64,
         observed_at_ms: u64,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
         if self.snapshot.status == TargetBindingPhase::Lost {
             return self.begin_rebinding("target_geometry_after_loss", observed_at_ms);
         }
@@ -491,7 +541,7 @@ impl RemoteAppTargetBindingStateMachine {
         if target_geometry_revision <= previous && geometry == self.snapshot.geometry {
             return None;
         }
-        let event_type = geometry_event_type(&self.snapshot.geometry, &geometry);
+        let event_types = geometry_event_types(&self.snapshot.geometry, &geometry);
         self.snapshot.status = TargetBindingPhase::Resolved;
         self.snapshot.visibility_state = TargetVisibilityState::Visible;
         self.snapshot.geometry = geometry;
@@ -502,8 +552,8 @@ impl RemoteAppTargetBindingStateMachine {
             "target_geometry_changed",
             observed_at_ms,
         );
-        self.coalesced_lifecycle_event(
-            event_type,
+        self.coalesced_lifecycle_events(
+            &event_types,
             self.event_payload("target_geometry_changed", observed_at_ms, Some(previous)),
             observed_at_ms,
         )
@@ -514,7 +564,7 @@ impl RemoteAppTargetBindingStateMachine {
         visibility_state: TargetVisibilityState,
         target_geometry_revision: u64,
         observed_at_ms: u64,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
         if self.snapshot.status == TargetBindingPhase::Lost {
             if visibility_state == TargetVisibilityState::Lost {
                 return None;
@@ -583,8 +633,8 @@ impl RemoteAppTargetBindingStateMachine {
         } else {
             payload
         };
-        Some(TargetTrackingEvent {
-            event_type: match visibility_state {
+        Some(TargetTrackingEmission::single(
+            match visibility_state {
                 TargetVisibilityState::Visible if !was_visible => "TARGET_RESTORED",
                 TargetVisibilityState::Visible => "TARGET_VISIBLE",
                 TargetVisibilityState::Hidden => "TARGET_HIDDEN",
@@ -592,14 +642,14 @@ impl RemoteAppTargetBindingStateMachine {
                 TargetVisibilityState::Lost => "TARGET_LOST",
             },
             payload,
-        })
+        ))
     }
 
     fn commit_title(
         &mut self,
         title: Option<String>,
         observed_at_ms: u64,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
         if self.snapshot.status == TargetBindingPhase::Lost {
             return self.begin_rebinding("target_title_after_loss", observed_at_ms);
         }
@@ -622,7 +672,11 @@ impl RemoteAppTargetBindingStateMachine {
         self.coalesced_lifecycle_event("TARGET_TITLE_CHANGED", payload, observed_at_ms)
     }
 
-    fn commit_focus(&mut self, focused: bool, observed_at_ms: u64) -> Option<TargetTrackingEvent> {
+    fn commit_focus(
+        &mut self,
+        focused: bool,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEmission> {
         if self.snapshot.status == TargetBindingPhase::Lost {
             return self.begin_rebinding("target_focus_after_loss", observed_at_ms);
         }
@@ -659,14 +713,14 @@ impl RemoteAppTargetBindingStateMachine {
         } else {
             payload
         };
-        Some(TargetTrackingEvent {
-            event_type: if focused {
+        Some(TargetTrackingEmission::single(
+            if focused {
                 "TARGET_FOCUSED"
             } else {
                 "TARGET_BLURRED"
             },
             payload,
-        })
+        ))
     }
 
     fn commit_application_window_set(
@@ -676,7 +730,7 @@ impl RemoteAppTargetBindingStateMachine {
         target_identity_epoch: u64,
         target_geometry_revision: u64,
         observed_at_ms: u64,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
         if self.snapshot.status == TargetBindingPhase::Lost {
             return self.begin_rebinding("application_window_set_after_loss", observed_at_ms);
         }
@@ -734,7 +788,7 @@ impl RemoteAppTargetBindingStateMachine {
         target_identity_epoch: u64,
         target_geometry_revision: u64,
         observed_at_ms: u64,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
         if self.snapshot.status == TargetBindingPhase::Lost {
             return self.begin_rebinding("application_window_set_after_loss", observed_at_ms);
         }
@@ -835,10 +889,10 @@ impl RemoteAppTargetBindingStateMachine {
             }),
             FrontendAction::RetrySession.as_str(),
         );
-        Some(TargetTrackingEvent {
-            event_type: "TARGET_REBIND_ATTEMPTED",
+        Some(TargetTrackingEmission::single(
+            "TARGET_REBIND_ATTEMPTED",
             payload,
-        })
+        ))
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn commit_pending_media_rebind(
@@ -847,7 +901,7 @@ impl RemoteAppTargetBindingStateMachine {
         media_source_epoch: u64,
         capture_proof: ResolvedCaptureTargetProof,
         observed_at_ms: u64,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
         let pending = self.pending_media_rebind.take()?;
         if pending.binding.binding_epoch() != binding_epoch
             || pending.binding.media_source_epoch() != media_source_epoch
@@ -903,10 +957,7 @@ impl RemoteAppTargetBindingStateMachine {
         payload["media_source_epoch"] = json!(self.snapshot.media_source_epoch);
         payload["rebind_started_at_ms"] = json!(pending.observed_at_ms);
         payload["detail"] = json!(pending.detail);
-        Some(TargetTrackingEvent {
-            event_type: "TARGET_REBOUND",
-            payload,
-        })
+        Some(TargetTrackingEmission::single("TARGET_REBOUND", payload))
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn commit_pending_media_rebind_failed(
@@ -914,7 +965,7 @@ impl RemoteAppTargetBindingStateMachine {
         reason: TargetResolutionError,
         detail: String,
         observed_at_ms: u64,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
         if self.snapshot.status != TargetBindingPhase::Rebinding || self.rebind_failure_emitted {
             return None;
         }
@@ -988,16 +1039,16 @@ impl RemoteAppTargetBindingStateMachine {
             }),
             frontend_action,
         );
-        Some(TargetTrackingEvent {
-            event_type: "TARGET_REBIND_FAILED",
+        Some(TargetTrackingEmission::single(
+            "TARGET_REBIND_FAILED",
             payload,
-        })
+        ))
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn expire_rebind_deadline(
         &mut self,
         observed_at_ms: u64,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
         if self.snapshot.status != TargetBindingPhase::Rebinding || self.rebind_failure_emitted {
             return None;
         }
@@ -1020,7 +1071,7 @@ impl RemoteAppTargetBindingStateMachine {
         &mut self,
         detail: String,
         observed_at_ms: u64,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
         if self.snapshot.status == TargetBindingPhase::Invalidated {
             return None;
         }
@@ -1053,15 +1104,15 @@ impl RemoteAppTargetBindingStateMachine {
         payload["frontend_action"] = json!(TargetResolutionError::TargetPermissionMissing
             .frontend_action()
             .as_str());
-        Some(TargetTrackingEvent {
-            event_type: "TARGET_PERMISSION_REVOKED",
-            payload: target_failure_payload(
+        Some(TargetTrackingEmission::single(
+            "TARGET_PERMISSION_REVOKED",
+            target_failure_payload(
                 payload,
                 TargetResolutionError::TargetPermissionMissing
                     .frontend_action()
                     .as_str(),
             ),
-        })
+        ))
     }
 
     fn commit_display_topology(
@@ -1069,7 +1120,7 @@ impl RemoteAppTargetBindingStateMachine {
         mut available_display_ids: Vec<u64>,
         selected_display_available: bool,
         observed_at_ms: u64,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
         available_display_ids.sort_unstable();
         available_display_ids.dedup();
         let display_unavailable_reason = TargetResolutionError::TargetDisplayUnavailable.as_str();
@@ -1130,10 +1181,10 @@ impl RemoteAppTargetBindingStateMachine {
                     .as_str(),
             )
         };
-        Some(TargetTrackingEvent {
-            event_type: "DISPLAY_TOPOLOGY_CHANGED",
+        Some(TargetTrackingEmission::single(
+            "DISPLAY_TOPOLOGY_CHANGED",
             payload,
-        })
+        ))
     }
 
     fn commit_lost(
@@ -1141,7 +1192,7 @@ impl RemoteAppTargetBindingStateMachine {
         reason: TargetResolutionError,
         detail: String,
         observed_at_ms: u64,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
         if self.snapshot.status == TargetBindingPhase::Lost {
             self.latest_loss_observed_at_ms = Some(
                 self.latest_loss_observed_at_ms
@@ -1206,17 +1257,17 @@ impl RemoteAppTargetBindingStateMachine {
         let mut payload =
             self.event_payload(pending.reason.as_str(), observed_at_ms, Some(previous));
         payload["detail"] = json!(pending.detail);
-        Some(TargetTrackingEvent {
-            event_type: "TARGET_LOST",
-            payload: target_failure_payload(payload, pending.reason.frontend_action().as_str()),
-        })
+        Some(TargetTrackingEmission::single(
+            "TARGET_LOST",
+            target_failure_payload(payload, pending.reason.frontend_action().as_str()),
+        ))
     }
 
     fn begin_rebinding(
         &mut self,
         detail: &'static str,
         observed_at_ms: u64,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
         if self.rebind_failure_emitted
             || self
                 .latest_loss_observed_at_ms
@@ -1265,17 +1316,17 @@ impl RemoteAppTargetBindingStateMachine {
             }),
             frontend_action,
         );
-        Some(TargetTrackingEvent {
-            event_type: "TARGET_REBIND_ATTEMPTED",
+        Some(TargetTrackingEmission::single(
+            "TARGET_REBIND_ATTEMPTED",
             payload,
-        })
+        ))
     }
 
     fn commit_rebind_failed(
         &mut self,
         detail: &'static str,
         observed_at_ms: u64,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
         if self.snapshot.status != TargetBindingPhase::Rebinding {
             return None;
         }
@@ -1330,10 +1381,10 @@ impl RemoteAppTargetBindingStateMachine {
             }),
             frontend_action,
         );
-        Some(TargetTrackingEvent {
-            event_type: "TARGET_REBIND_FAILED",
+        Some(TargetTrackingEmission::single(
+            "TARGET_REBIND_FAILED",
             payload,
-        })
+        ))
     }
 
     fn clear_pending_lost(&mut self) {
@@ -1346,16 +1397,25 @@ impl RemoteAppTargetBindingStateMachine {
     fn coalesced_lifecycle_event(
         &mut self,
         event_type: &'static str,
+        payload: Value,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEmission> {
+        self.coalesced_lifecycle_events(&[event_type], payload, observed_at_ms)
+    }
+
+    fn coalesced_lifecycle_events(
+        &mut self,
+        event_types: &[&'static str],
         mut payload: Value,
         observed_at_ms: u64,
-    ) -> Option<TargetTrackingEvent> {
+    ) -> Option<TargetTrackingEmission> {
+        if event_types.is_empty() {
+            return None;
+        }
         let emission = self.lifecycle_event_coalescer.observe(observed_at_ms)?;
         payload["coalesced_target_events"] = json!(emission.suppressed_since_last);
         payload["coalesce_interval_ms"] = json!(TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS);
-        Some(TargetTrackingEvent {
-            event_type,
-            payload,
-        })
+        TargetTrackingEmission::ordered(event_types, payload)
     }
 
     fn pending_lost_diagnostic(&self, pending: &PendingLostObservation) -> Value {
@@ -1445,12 +1505,20 @@ fn target_failure_payload(mut payload: Value, frontend_action: &str) -> Value {
     payload
 }
 
-fn geometry_event_type(previous: &TargetGeometry, next: &TargetGeometry) -> &'static str {
-    if previous.width != next.width || previous.height != next.height {
-        "TARGET_RESIZED"
-    } else {
-        "TARGET_MOVED"
+fn geometry_event_types(previous: &TargetGeometry, next: &TargetGeometry) -> Vec<&'static str> {
+    let moved = previous.x != next.x || previous.y != next.y;
+    let resized = previous.width != next.width || previous.height != next.height;
+    let mut event_types = Vec::with_capacity(2);
+    if moved {
+        event_types.push("TARGET_MOVED");
     }
+    if resized {
+        event_types.push("TARGET_RESIZED");
+    }
+    if event_types.is_empty() {
+        event_types.push("TARGET_MOVED");
+    }
+    event_types
 }
 
 #[cfg(test)]
@@ -1880,6 +1948,40 @@ mod tests {
             json!("target_lost")
         );
         assert!(tracker.snapshot().pointer_target_value().is_none());
+    }
+
+    #[test]
+    fn tracker_expands_combined_move_resize_observation_into_ordered_events() {
+        let binding = window_binding();
+        let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding);
+
+        let event = tracker
+            .commit_observation(TargetObservation::GeometryChanged {
+                geometry: TargetGeometry {
+                    x: Some(140.0),
+                    y: Some(220.0),
+                    width: Some(1024.0),
+                    height: Some(768.0),
+                },
+                target_geometry_revision: 4,
+                observed_at_ms: 10,
+            })
+            .expect("combined move+resize commits one target snapshot update");
+
+        assert_eq!(
+            event.ordered_event_types(),
+            vec!["TARGET_MOVED", "TARGET_RESIZED"],
+            "one host geometry observation must preserve both lifecycle facts"
+        );
+        let ordered = event.ordered_events();
+        assert_eq!(ordered[0].1["target_geometry_revision"], json!(4));
+        assert_eq!(ordered[1].1["target_geometry_revision"], json!(4));
+        assert_eq!(ordered[0].1["geometry"], ordered[1].1["geometry"]);
+        assert_eq!(
+            tracker.snapshot().target_geometry_revision(),
+            4,
+            "combined event expansion must not mutate the target snapshot twice"
+        );
     }
 
     #[test]

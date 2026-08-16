@@ -108,12 +108,18 @@ require 'target_geometry_revision: u64' "$TARGET_TRACKING" \
   'target tracker snapshot must carry target_geometry_revision'
 require 'fn commit_geometry\(' "$TARGET_TRACKING" \
   'target tracker must own geometry commits'
-require 'geometry_event_type\(' "$TARGET_TRACKING" \
+require 'geometry_event_types\(' "$TARGET_TRACKING" \
   'target tracker must classify geometry changes centrally'
 require '"TARGET_MOVED"' "$TARGET_TRACKING" \
   'target tracker must emit TARGET_MOVED'
 require '"TARGET_RESIZED"' "$TARGET_TRACKING" \
   'target tracker must emit TARGET_RESIZED'
+require 'fn ordered_events\(' "$TARGET_TRACKING" \
+  'target tracker must expose ordered event expansion for one committed target observation'
+require 'struct TargetTrackingEmission' "$TARGET_TRACKING" \
+  'target tracker must represent one atomic observation as an ordered lifecycle-event emission'
+require 'tracker_expands_combined_move_resize_observation_into_ordered_events' "$TARGET_TRACKING" \
+  'E2E-08 must prove combined move+resize observations preserve both ordered lifecycle facts'
 require 'TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS: u64 = 100' "$TARGET_TRACKING" \
   'move/resize/title event coalescing must be capped at 10Hz per session'
 require 'struct TargetLifecycleEventCoalescer' "$TARGET_TRACKING" \
@@ -228,10 +234,14 @@ require 'payload\["transport_epoch"\]' "$SESSION" \
   'target lifecycle event payloads must include current transport_epoch before event-log projection'
 require 'self\.transport\.active_epoch\(\)' "$SESSION" \
   'target lifecycle event transport_epoch must come from the session transport state'
+require 'for \(event_type, mut payload\) in event\.ordered_events\(\)' "$SESSION" \
+  'session aggregate must write every ordered target lifecycle event into the event log'
 require_multiline 'm/fn record_target_observation\((?:(?!\nfn push_target_tracking_event\()(?!fn pending_media_rebind_binding).)*self\.push_target_tracking_event\(event\)/s' "$SESSION" \
   'record_target_observation must write target events through the session aggregate projection boundary'
 require 'target_tracking_events_include_active_transport_epoch_at_session_boundary' "$SESSION" \
   'E2E-08 must prove target lifecycle events carry the active transport epoch'
+require 'combined geometry observation must expand into monotonic ordered event-log rows' "$SESSION" \
+  'E2E-08 must prove combined move+resize observations are separately visible through watch-events/event-log ordering'
 require 'input_blocked_reason' "$TARGET_TRACKING" \
   'target snapshot must expose explicit input block reason'
 require 'fn input_blocked_reason\(' "$TARGET_TRACKING" \

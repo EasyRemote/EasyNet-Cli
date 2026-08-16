@@ -36,7 +36,7 @@ use crate::daemon::plugins::remote_desktop::target::{
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::{
     RemoteAppTargetBindingStateMachine, TargetObservation, TargetTrackerSnapshot,
-    TargetTrackingEvent, TargetVisibilityState,
+    TargetTrackingEmission, TargetVisibilityState,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -390,15 +390,16 @@ impl RemoteDesktopSession {
         self.push_event(event.event_type(), event.into_payload());
     }
 
-    fn push_target_tracking_event(&mut self, event: TargetTrackingEvent) {
-        let event_type = event.event_type();
-        let mut payload = event.payload();
-        payload["transport_epoch"] = self
+    fn push_target_tracking_event(&mut self, event: TargetTrackingEmission) {
+        let transport_epoch = self
             .transport
             .active_epoch()
             .map(|epoch| json!(epoch.value()))
             .unwrap_or(Value::Null);
-        self.push_event(event_type, payload);
+        for (event_type, mut payload) in event.ordered_events() {
+            payload["transport_epoch"] = transport_epoch.clone();
+            self.push_event(event_type, payload);
+        }
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn record_target_observation(
@@ -1077,7 +1078,29 @@ mod tests {
         let events = session.events();
         assert!(events
             .iter()
+            .any(|event| event["event_type"] == json!("TARGET_MOVED")));
+        assert!(events
+            .iter()
             .any(|event| event["event_type"] == json!("TARGET_RESIZED")));
+        let geometry_events: Vec<_> = events
+            .iter()
+            .filter(|event| {
+                event["event_type"] == json!("TARGET_MOVED")
+                    || event["event_type"] == json!("TARGET_RESIZED")
+            })
+            .collect();
+        assert_eq!(geometry_events.len(), 2);
+        assert_eq!(geometry_events[0]["event_type"], json!("TARGET_MOVED"));
+        assert_eq!(geometry_events[1]["event_type"], json!("TARGET_RESIZED"));
+        assert_eq!(
+            geometry_events[0]["target_geometry_revision"],
+            geometry_events[1]["target_geometry_revision"]
+        );
+        assert_eq!(
+            geometry_events[1]["sequence"].as_u64().unwrap(),
+            geometry_events[0]["sequence"].as_u64().unwrap() + 1,
+            "combined geometry observation must expand into monotonic ordered event-log rows"
+        );
         assert_eq!(
             session.target_tracking_state()["target_geometry_revision"],
             json!(2)
