@@ -38,6 +38,17 @@ enum RemoteDesktopSessionCreationState {
     ReadyToInsert,
 }
 
+impl RemoteDesktopSessionCreationState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ValidatingSubject => "validating_subject",
+            Self::AwaitingConsent => "awaiting_consent",
+            Self::ResolvingTarget => "resolving_target",
+            Self::ReadyToInsert => "ready_to_insert",
+        }
+    }
+}
+
 /// Pre-row workflow for `remote_desktop.create_session`.
 ///
 /// The workflow deliberately owns the values needed to build
@@ -119,7 +130,7 @@ impl RemoteDesktopSessionCreationWorkflow {
         registry: &RemoteDesktopConsentRegistry,
         env: &EnvelopeContext,
     ) -> anyhow::Result<Self> {
-        self.assert_state(RemoteDesktopSessionCreationState::AwaitingConsent);
+        self.ensure_state(RemoteDesktopSessionCreationState::AwaitingConsent)?;
         let authorization = registry.consume(
             &self.consent_ticket,
             &self.caller_ura,
@@ -144,7 +155,7 @@ impl RemoteDesktopSessionCreationWorkflow {
         mut self,
         verifier: &impl RemoteAppTargetBindingVerifier,
     ) -> anyhow::Result<Self> {
-        self.assert_state(RemoteDesktopSessionCreationState::ResolvingTarget);
+        self.ensure_state(RemoteDesktopSessionCreationState::ResolvingTarget)?;
         let mut target_binding = ResourceEntryTargetResolver.resolve_for_session(
             ABILITY_CREATE_SESSION,
             &self.entry,
@@ -165,31 +176,39 @@ impl RemoteDesktopSessionCreationWorkflow {
 
     pub(in crate::daemon::plugins::remote_desktop) fn into_session_init(
         self,
-    ) -> RemoteDesktopSessionInit {
-        self.assert_state(RemoteDesktopSessionCreationState::ReadyToInsert);
-        RemoteDesktopSessionInit {
+    ) -> anyhow::Result<RemoteDesktopSessionInit> {
+        self.ensure_state(RemoteDesktopSessionCreationState::ReadyToInsert)?;
+        let consent = self.consent.ok_or_else(|| {
+            anyhow::anyhow!("{ABILITY_CREATE_SESSION}: ready-to-insert workflow is missing consent")
+        })?;
+        let target_binding = self.target_binding.ok_or_else(|| {
+            anyhow::anyhow!(
+                "{ABILITY_CREATE_SESSION}: ready-to-insert workflow is missing target binding"
+            )
+        })?;
+        Ok(RemoteDesktopSessionInit {
             session_id: self.session_id,
             session_token: self.session_token,
             creator_caller_ura: self.caller_ura,
-            consent: self
-                .consent
-                .expect("ReadyToInsert workflow must contain consent"),
-            target_binding: self
-                .target_binding
-                .expect("ReadyToInsert workflow must contain target binding"),
+            consent,
+            target_binding,
             mode: self.mode,
             lease_ttl_ms: self.lease_ttl_ms,
             transport_preferences: self.transport_preferences,
             video: self.video,
             input_policy: self.input_policy,
-        }
+        })
     }
 
-    fn assert_state(&self, expected: RemoteDesktopSessionCreationState) {
-        assert_eq!(
-            self.state, expected,
-            "remote_desktop.create_session workflow state mismatch"
-        );
+    fn ensure_state(&self, expected: RemoteDesktopSessionCreationState) -> anyhow::Result<()> {
+        if self.state == expected {
+            return Ok(());
+        }
+        Err(anyhow::anyhow!(
+            "{ABILITY_CREATE_SESSION}: workflow state mismatch: expected {}, got {}",
+            expected.as_str(),
+            self.state.as_str()
+        ))
     }
 }
 
@@ -259,7 +278,9 @@ mod tests {
             .expect("target resolved");
         assert_eq!(workflow.session_id(), "rd-workflow");
 
-        let init = workflow.into_session_init();
+        let init = workflow
+            .into_session_init()
+            .expect("ready workflow converts into session init");
         assert_eq!(init.session_id, "rd-workflow");
         assert_eq!(init.target_binding.subject_ura(), ura);
         assert_eq!(

@@ -774,10 +774,20 @@ require 'RemoteDesktopSessionCreationWorkflow::start' "$CREATE_SESSION" \
   'create_session must use the pre-row creation workflow'
 require '\.resolve_target\(\)\?' "$CREATE_SESSION" \
   'create_session must resolve target before constructing an active session'
-require 'RemoteDesktopSession::new\(workflow\.into_session_init\(\)\)' "$CREATE_SESSION" \
-  'create_session must construct the session only after target resolution'
+require 'RemoteDesktopSession::new\(workflow\.into_session_init\(\)\?\)' "$CREATE_SESSION" \
+  'create_session must construct the session only after fallible ready-to-insert conversion'
 require 'RemoteDesktopSessionCreationState::ReadyToInsert' "$SESSION_CREATION" \
   'creation workflow must have an explicit ready-to-insert state'
+require 'fn ensure_state\(' "$SESSION_CREATION" \
+  'creation workflow state guard must return a typed error instead of panicking'
+reject 'assert_state' "$SESSION_CREATION" \
+  'creation workflow state transitions must not use panic assertions'
+reject 'ReadyToInsert workflow must contain' "$SESSION_CREATION" \
+  'ready-to-insert conversion must not prove consent/target binding with expect'
+require 'ready-to-insert workflow is missing consent' "$SESSION_CREATION" \
+  'ready-to-insert conversion must surface missing consent as an invocation error'
+require 'ready-to-insert workflow is missing target binding' "$SESSION_CREATION" \
+  'ready-to-insert conversion must surface missing target binding as an invocation error'
 require 'TargetResolutionError::TargetIdentityAmbiguous' "$SCK" \
   'ScreenCaptureKit binding must fail closed on native identity ambiguity'
 require 'requested ScreenCaptureKit window identity is ambiguous' "$SCK" \

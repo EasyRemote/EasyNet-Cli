@@ -51,7 +51,7 @@ fn insert_created_session(
     workflow: RemoteDesktopSessionCreationWorkflow,
 ) -> anyhow::Result<Value> {
     let session_id = workflow.session_id().to_string();
-    let session = RemoteDesktopSession::new(workflow.into_session_init());
+    let session = RemoteDesktopSession::new(workflow.into_session_init()?);
     let now = now_ms();
     let (watchdog_session_id, tracker_session_id, lease_expires_at_ms, view) = plugin
         .session_store()

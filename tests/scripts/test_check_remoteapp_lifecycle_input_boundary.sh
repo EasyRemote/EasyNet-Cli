@@ -1081,7 +1081,7 @@ fn handle() {
     let workflow = RemoteDesktopSessionCreationWorkflow::start(&env, &args)?
         .consume_consent(&registry, &env)?
         .resolve_target()?;
-    let session = RemoteDesktopSession::new(workflow.into_session_init());
+    let session = RemoteDesktopSession::new(workflow.into_session_init()?);
     if let Err(err) =
         RemoteDesktopPlugin::schedule_session_lease(&plugin, watchdog_session_id.clone(), lease_expires_at_ms)
     {
@@ -1118,6 +1118,24 @@ enum RemoteDesktopSessionCreationState {
 
 const READY_TO_INSERT: RemoteDesktopSessionCreationState =
     RemoteDesktopSessionCreationState::ReadyToInsert;
+
+fn ensure_state(expected: RemoteDesktopSessionCreationState) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn into_session_init(self) -> anyhow::Result<RemoteDesktopSessionInit> {
+    let consent = self.consent.ok_or_else(|| {
+        anyhow::anyhow!(
+            "{ABILITY_CREATE_SESSION}: ready-to-insert workflow is missing consent"
+        )
+    })?;
+    let target_binding = self.target_binding.ok_or_else(|| {
+        anyhow::anyhow!(
+            "{ABILITY_CREATE_SESSION}: ready-to-insert workflow is missing target binding"
+        )
+    })?;
+    Ok(RemoteDesktopSessionInit { consent, target_binding })
+}
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/invoke_bidi.rs" <<'RS'
@@ -1537,6 +1555,21 @@ write_fixture
 perl -0pi -e 's/unsupported_platform_observer_fails_app_window_targets_closed/unsupported_platform_observer_silently_noops/' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
 run_fail 'target observer tests must prove unsupported platforms fail app/window targets closed'
+
+write_fixture
+perl -0pi -e 's/workflow\.into_session_init\(\)\?/workflow.into_session_init()/' \
+  "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
+run_fail 'create_session must construct the session only after fallible ready-to-insert conversion'
+
+write_fixture
+perl -0pi -e 's/(fn ensure_state\([^}]+\}\n)/$1\nfn assert_state() {}\n/s' \
+  "$SANDBOX/plugins/remote-desktop/src/session_creation.rs"
+run_fail 'creation workflow state transitions must not use panic assertions'
+
+write_fixture
+perl -0pi -e 's/(fn into_session_init\(self\) -> anyhow::Result<RemoteDesktopSessionInit> \{\n)/$1    self.consent.expect("ReadyToInsert workflow must contain consent");\n/s' \
+  "$SANDBOX/plugins/remote-desktop/src/session_creation.rs"
+run_fail 'ready-to-insert conversion must not prove consent/target binding with expect'
 
 write_fixture
 perl -0pi -e 's/if let Err\(err\) =\n        RemoteDesktopPlugin::schedule_session_lease\(&plugin, watchdog_session_id\.clone\(\), lease_expires_at_ms\)\n    \{\n        remove_inserted_session\(&plugin, &tracker_session_id\);\n        return Err\(err\);\n    \}//' \
