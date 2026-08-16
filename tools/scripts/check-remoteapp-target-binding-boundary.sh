@@ -297,9 +297,9 @@ require 'reason\.frontend_action\(\)\.as_str\(\)' \
 require 'media_source_loss_projects_typed_frontend_action' \
   "$REMOTE_ROOT/session_events.rs" \
   'session events must test typed target failure frontend_action projection'
-require 'input_policy_for_binding\(' \
+require_multiline 'm/EffectiveRemoteDesktopInputPolicy::for_binding\(\s*&input_policy,\s*&target_binding,?\s*\)/s' \
   "$REMOTE_ROOT/transport/webrtc_negotiation.rs" \
-  'WebRTC input policy must consume RemoteAppTargetBinding'
+  'WebRTC input policy must derive its typed execution policy from the session-owned RemoteAppTargetBinding'
 require 'target_binding\(\)' \
   "$REMOTE_ROOT/handlers/attach.rs" \
   'diagnostic attach must consume the session-owned target binding'

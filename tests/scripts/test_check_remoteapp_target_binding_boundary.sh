@@ -270,8 +270,9 @@ RS
 
 cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_negotiation.rs" <<'RS'
 fn negotiate(session: Session) {
-    let binding = session.target_binding().clone();
-    input_policy_for_binding();
+    let target_binding = session.target_binding().clone();
+    let input_policy = session.input_policy().clone();
+    EffectiveRemoteDesktopInputPolicy::for_binding(&input_policy, &target_binding);
 }
 RS
 
@@ -569,6 +570,17 @@ perl -0pi -e 's/None/Some(expected_binding_id)/g' \
   "$SANDBOX/plugins/remote-desktop/src/transport/media_source.rs"
 
 CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+perl -0pi -e 's/EffectiveRemoteDesktopInputPolicy::for_binding\(&input_policy, &target_binding\);/RemoteDesktopInputPolicy::default();/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_negotiation.rs"
+
+if CHECK_REMOTEAPP_TARGET_BINDING_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp target binding checker accepted WebRTC input policy without the session-owned target binding" >&2
+  exit 1
+fi
+
+perl -0pi -e 's/RemoteDesktopInputPolicy::default\(\);/EffectiveRemoteDesktopInputPolicy::for_binding(&input_policy, &target_binding);/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_negotiation.rs"
 
 perl -0pi -e 's/supported_subjects: &\["display"\]/supported_subjects: &["display", "window", "application"]/g' \
   "$SANDBOX/plugins/remote-desktop/src/media/mod.rs"
