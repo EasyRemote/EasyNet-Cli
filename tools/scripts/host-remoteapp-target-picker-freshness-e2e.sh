@@ -112,6 +112,58 @@ print(int(time.time() * 1000))
 PY
 }
 
+write_failure_report() {
+  local reason="$1"
+  python3 - "$REPORT_JSON" "$REPORT_MD" "$reason" <<'PY'
+import json
+import pathlib
+import sys
+
+report_path, md_path, reason = sys.argv[1:4]
+report = {
+    "status": "failed",
+    "reason": reason,
+    "phase": "daemon_invocation_preflight",
+    "evidence_json": None,
+}
+pathlib.Path(report_path).write_text(
+    json.dumps(report, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+with open(md_path, "w", encoding="utf-8") as f:
+    f.write("# RemoteApp target picker freshness E2E report\n\n")
+    f.write("- Status: `failed`\n")
+    f.write("- Phase: `daemon_invocation_preflight`\n")
+    f.write(f"- Reason: `{reason}`\n")
+PY
+}
+
+preflight_daemon_invocation_ready() {
+  run_easynet runtime status --json >"$RUNTIME_STATUS_JSON"
+  python3 - "$RUNTIME_STATUS_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    status = json.load(f)
+
+errors = []
+daemon = status.get("daemon") if isinstance(status.get("daemon"), dict) else {}
+runtime = status.get("runtime") if isinstance(status.get("runtime"), dict) else {}
+
+if daemon.get("pid_alive") is not True:
+    errors.append("daemon.pid_alive is not true")
+if daemon.get("invocation_accepting") is not True:
+    errors.append("daemon.invocation_accepting is not true")
+started = runtime.get("started_at")
+if not isinstance(started, str) or not started:
+    errors.append("runtime.started_at is missing")
+
+if errors:
+    raise SystemExit("; ".join(errors))
+PY
+}
+
 validate_evidence() {
   python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" <<'PY'
 import json
@@ -322,7 +374,10 @@ fi
 
 need_cmd python3
 
-run_easynet runtime status --json >"$RUNTIME_STATUS_JSON"
+if ! preflight_output="$(preflight_daemon_invocation_ready 2>&1)"; then
+  write_failure_report "daemon_invocation_preflight_failed: $preflight_output"
+  die "daemon invocation preflight failed before launching sentinel fixture: $preflight_output"
+fi
 RUNTIME_STARTED_AT_MS="$(python3 - "$RUNTIME_STATUS_JSON" <<'PY'
 import datetime
 import json

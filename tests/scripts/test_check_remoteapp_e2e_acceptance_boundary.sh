@@ -93,6 +93,17 @@ fi
 mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 
+cp "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh.good"
+perl -0pi -e 's/preflight_output="\$\(preflight_daemon_invocation_ready 2>&1\)"/preflight_output="$(true 2>\&1)"/' \
+  "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted target picker harness without daemon invocation preflight call" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
+
 PROBE="$SANDBOX/fake_probe.py"
 cat >"$PROBE" <<'PY'
 import json

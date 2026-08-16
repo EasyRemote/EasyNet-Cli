@@ -191,6 +191,16 @@ require 'resource_ura.*easynet:///' "$TARGET_FRESHNESS" \
   'host target picker freshness E2E must require selected Resource URA evidence'
 require 'metadata\.pid.*selected sentinel pid|selected resource metadata\.pid must match selected sentinel pid' "$TARGET_FRESHNESS" \
   'host target picker freshness E2E must bind the selected row to the known native sentinel window'
+require 'preflight_daemon_invocation_ready' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must preflight daemon invocation readiness before launching host fixtures'
+require 'daemon_invocation_preflight_failed' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E failure report must identify daemon invocation preflight failures'
+require 'write_failure_report' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must write a structured failure report when daemon invocation preflight fails'
+require 'daemon\.invocation_accepting is not true' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E preflight must require daemon invocation acceptance'
+require_order 'preflight_output=.*preflight_daemon_invocation_ready' 'bash -lc "\$SENTINEL_FIXTURE_CMD"' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must run daemon invocation preflight before sentinel fixture startup'
 
 require 'resource\.refresh_remote_targets' "$SCRIPT" \
   'host decoded-frame E2E must prove live refresh inventory was used'
