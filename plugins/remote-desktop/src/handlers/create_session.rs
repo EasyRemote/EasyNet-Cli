@@ -70,9 +70,27 @@ fn insert_created_session(
                 view,
             ))
         })?;
-    RemoteDesktopPlugin::schedule_session_lease(&plugin, watchdog_session_id, lease_expires_at_ms);
-    RemoteDesktopPlugin::track_session_target(&plugin, tracker_session_id);
+    if let Err(err) = RemoteDesktopPlugin::schedule_session_lease(
+        &plugin,
+        watchdog_session_id.clone(),
+        lease_expires_at_ms,
+    ) {
+        remove_inserted_session(&plugin, &tracker_session_id);
+        return Err(err);
+    }
+    if let Err(err) = RemoteDesktopPlugin::track_session_target(&plugin, tracker_session_id.clone())
+    {
+        plugin.cancel_session_lease(&watchdog_session_id);
+        remove_inserted_session(&plugin, &tracker_session_id);
+        return Err(err);
+    }
     Ok(view)
+}
+
+fn remove_inserted_session(plugin: &RemoteDesktopPlugin, session_id: &str) {
+    plugin.session_store().with_sessions(|sessions| {
+        sessions.remove(session_id);
+    });
 }
 
 fn preflight_session_insert(

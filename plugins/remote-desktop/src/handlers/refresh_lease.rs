@@ -44,6 +44,6 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                 let view = serialize_session(session);
                 Ok((lease_expires_at_ms, view))
             })?;
-    RemoteDesktopPlugin::schedule_session_lease(&plugin, session_id, lease_expires_at_ms);
+    RemoteDesktopPlugin::schedule_session_lease(&plugin, session_id, lease_expires_at_ms)?;
     Ok(view)
 }

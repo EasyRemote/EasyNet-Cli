@@ -64,14 +64,14 @@ impl RemoteDesktopLeaseMonitor {
         plugin: &Arc<RemoteDesktopPlugin>,
         session_id: String,
         lease_expires_at_ms: u64,
-    ) {
+    ) -> anyhow::Result<()> {
         let command = LeaseMonitorCommand::Schedule {
             session_id,
             lease_expires_at_ms,
         };
-        let tx = self.ensure_worker(plugin);
+        let tx = self.ensure_worker(plugin)?;
         let command = match tx.send(command) {
-            Ok(()) => return,
+            Ok(()) => return Ok(()),
             Err(error) => error.0,
         };
 
@@ -80,12 +80,14 @@ impl RemoteDesktopLeaseMonitor {
             lease_expires_at_ms,
         } = command
         {
-            let tx = self.restart_worker(plugin);
-            let _ = tx.send(LeaseMonitorCommand::Schedule {
+            let tx = self.restart_worker(plugin)?;
+            tx.send(LeaseMonitorCommand::Schedule {
                 session_id,
                 lease_expires_at_ms,
-            });
+            })
+            .map_err(|err| anyhow::anyhow!("remote desktop lease monitor unavailable: {err}"))?;
         }
+        Ok(())
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn cancel(&self, session_id: &str) {
@@ -97,26 +99,36 @@ impl RemoteDesktopLeaseMonitor {
         }
     }
 
-    fn ensure_worker(&self, plugin: &Arc<RemoteDesktopPlugin>) -> Sender<LeaseMonitorCommand> {
+    fn ensure_worker(
+        &self,
+        plugin: &Arc<RemoteDesktopPlugin>,
+    ) -> anyhow::Result<Sender<LeaseMonitorCommand>> {
         let mut worker = self.worker();
         if let Some(tx) = &worker.tx {
-            return tx.clone();
+            return Ok(tx.clone());
         }
         let (tx, rx) = mpsc::channel();
+        let join = spawn_lease_monitor_worker(Arc::downgrade(plugin), rx)
+            .map_err(|err| anyhow::anyhow!("spawn remote desktop lease monitor: {err}"))?;
         worker.tx = Some(tx.clone());
-        worker.join = Some(spawn_lease_monitor_worker(Arc::downgrade(plugin), rx));
-        tx
+        worker.join = Some(join);
+        Ok(tx)
     }
 
-    fn restart_worker(&self, plugin: &Arc<RemoteDesktopPlugin>) -> Sender<LeaseMonitorCommand> {
+    fn restart_worker(
+        &self,
+        plugin: &Arc<RemoteDesktopPlugin>,
+    ) -> anyhow::Result<Sender<LeaseMonitorCommand>> {
         let mut worker = self.worker();
         if let Some(join) = worker.join.take() {
             let _ = join.join();
         }
         let (tx, rx) = mpsc::channel();
+        let join = spawn_lease_monitor_worker(Arc::downgrade(plugin), rx)
+            .map_err(|err| anyhow::anyhow!("spawn remote desktop lease monitor: {err}"))?;
         worker.tx = Some(tx.clone());
-        worker.join = Some(spawn_lease_monitor_worker(Arc::downgrade(plugin), rx));
-        tx
+        worker.join = Some(join);
+        Ok(tx)
     }
 
     fn worker(&self) -> MutexGuard<'_, LeaseMonitorWorker> {
@@ -145,11 +157,10 @@ impl Drop for RemoteDesktopLeaseMonitor {
 fn spawn_lease_monitor_worker(
     plugin: Weak<RemoteDesktopPlugin>,
     rx: Receiver<LeaseMonitorCommand>,
-) -> JoinHandle<()> {
+) -> std::io::Result<JoinHandle<()>> {
     thread::Builder::new()
         .name("easynet-rd-lease-monitor".into())
         .spawn(move || run_lease_monitor(plugin, rx))
-        .expect("spawn remote desktop lease monitor")
 }
 
 fn run_lease_monitor(plugin: Weak<RemoteDesktopPlugin>, rx: Receiver<LeaseMonitorCommand>) {

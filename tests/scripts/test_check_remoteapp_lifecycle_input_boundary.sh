@@ -1082,7 +1082,23 @@ fn handle() {
         .consume_consent(&registry, &env)?
         .resolve_target()?;
     let session = RemoteDesktopSession::new(workflow.into_session_init());
-    RemoteDesktopPlugin::track_session_target(&plugin, tracker_session_id);
+    if let Err(err) =
+        RemoteDesktopPlugin::schedule_session_lease(&plugin, watchdog_session_id.clone(), lease_expires_at_ms)
+    {
+        remove_inserted_session(&plugin, &tracker_session_id);
+        return Err(err);
+    }
+    if let Err(err) = RemoteDesktopPlugin::track_session_target(&plugin, tracker_session_id) {
+        plugin.cancel_session_lease(&watchdog_session_id);
+        remove_inserted_session(&plugin, &tracker_session_id);
+        return Err(err);
+    }
+}
+
+fn remove_inserted_session(plugin: &RemoteDesktopPlugin, session_id: &str) {
+    plugin.session_store().with_sessions(|sessions| {
+        sessions.remove(session_id);
+    });
 }
 
 #[cfg(test)]
@@ -1239,6 +1255,14 @@ mod platform {
 }
 RS
 
+  cat >"$SANDBOX/plugins/remote-desktop/src/lease_monitor.rs" <<'RS'
+fn spawn_lease_monitor_worker() -> std::io::Result<JoinHandle<()>> {
+    thread::Builder::new()
+        .name("easynet-rd-lease-monitor".into())
+        .spawn(move || run_lease_monitor(plugin, rx))
+}
+RS
+
   cat >"$SANDBOX/plugins/remote-desktop/src/target_monitor.rs" <<'RS'
 use std::collections::HashSet;
 
@@ -1264,6 +1288,12 @@ fn apply_command(command: TargetMonitorCommand, tracked: &mut HashSet<String>) -
     }
 }
 
+fn spawn_target_monitor_worker() -> std::io::Result<JoinHandle<()>> {
+    thread::Builder::new()
+        .name("easynet-rd-target-monitor".into())
+        .spawn(move || run_target_monitor(plugin, rx))
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -1273,11 +1303,22 @@ RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/runtime.rs" <<'RS'
 struct RemoteDesktopRuntime {
+    lease_monitor: RemoteDesktopLeaseMonitor,
     target_monitor: RemoteDesktopTargetMonitor,
 }
 
-fn track_session_target(plugin: &Arc<RemoteDesktopPlugin>, session_id: String) {
-    plugin.target_monitor.track(plugin, session_id);
+fn schedule_session_lease(
+    plugin: &Arc<RemoteDesktopPlugin>,
+    session_id: String,
+    lease_expires_at_ms: u64,
+) -> anyhow::Result<()> {
+    plugin
+        .lease_monitor
+        .schedule(plugin, session_id, lease_expires_at_ms)
+}
+
+fn track_session_target(plugin: &Arc<RemoteDesktopPlugin>, session_id: String) -> anyhow::Result<()> {
+    plugin.target_monitor.track(plugin, session_id)
 }
 
 fn cancel_session_target_tracking(&self, session_id: &str) {
@@ -1498,9 +1539,34 @@ perl -0pi -e 's/unsupported_platform_observer_fails_app_window_targets_closed/un
 run_fail 'target observer tests must prove unsupported platforms fail app/window targets closed'
 
 write_fixture
-perl -0pi -e 's/RemoteDesktopPlugin::track_session_target\(&plugin, tracker_session_id\);//' \
+perl -0pi -e 's/if let Err\(err\) =\n        RemoteDesktopPlugin::schedule_session_lease\(&plugin, watchdog_session_id\.clone\(\), lease_expires_at_ms\)\n    \{\n        remove_inserted_session\(&plugin, &tracker_session_id\);\n        return Err\(err\);\n    \}//' \
+  "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
+run_fail 'create_session must register created sessions with the lease monitor before returning'
+
+write_fixture
+perl -0pi -e 's/if let Err\(err\) = RemoteDesktopPlugin::track_session_target\(&plugin, tracker_session_id\) \{\n        plugin\.cancel_session_lease\(&watchdog_session_id\);\n        remove_inserted_session\(&plugin, &tracker_session_id\);\n        return Err\(err\);\n    \}//' \
   "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
 run_fail 'create_session must register created sessions with the target monitor'
+
+write_fixture
+perl -0pi -e 's/remove_inserted_session\(&plugin, &tracker_session_id\);//g' \
+  "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
+run_fail 'create_session must roll back the inserted row when monitor registration fails'
+
+write_fixture
+perl -0pi -e 's/plugin\.cancel_session_lease\(&watchdog_session_id\);//' \
+  "$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs"
+run_fail 'create_session must cancel the lease monitor if target tracking registration fails'
+
+write_fixture
+perl -0pi -e 's/(\.spawn\(move \|\| run_lease_monitor\(plugin, rx\)\))/$1\n        .expect("spawn remote desktop lease monitor")/' \
+  "$SANDBOX/plugins/remote-desktop/src/lease_monitor.rs"
+run_fail 'lease monitor worker spawn must propagate errors instead of panicking'
+
+write_fixture
+perl -0pi -e 's/(\.spawn\(move \|\| run_target_monitor\(plugin, rx\)\))/$1\n        .expect("spawn remote desktop target monitor")/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_monitor.rs"
+run_fail 'target monitor worker spawn must propagate errors instead of panicking'
 
 write_fixture
 perl -0pi -e 's/plugin\.cancel_session_target_tracking\(session_id\);//' \

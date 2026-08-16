@@ -48,6 +48,7 @@ reject_multiline() {
 TARGET_TRACKING="$REMOTE_ROOT/target_tracking.rs"
 TARGET_OBSERVER="$REMOTE_ROOT/target_observer.rs"
 TARGET_MONITOR="$REMOTE_ROOT/target_monitor.rs"
+LEASE_MONITOR="$REMOTE_ROOT/lease_monitor.rs"
 SESSION="$REMOTE_ROOT/session.rs"
 SESSION_CONSENT_STATE="$REMOTE_ROOT/session_consent_state.rs"
 SESSION_IDENTITY="$REMOTE_ROOT/session_identity.rs"
@@ -76,7 +77,7 @@ WEBRTC_MEDIA="$REMOTE_ROOT/transport/webrtc_media.rs"
 WEBRTC_NEGOTIATION="$REMOTE_ROOT/transport/webrtc_negotiation.rs"
 TRANSPORT_BLOCKER="$REMOTE_ROOT/transport_blocker.rs"
 
-for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SET_DESCRIPTION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NEGOTIATION" "$TRANSPORT_BLOCKER"; do
+for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$LEASE_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SET_DESCRIPTION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NEGOTIATION" "$TRANSPORT_BLOCKER"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -168,16 +169,32 @@ require 'RemoteDesktopTargetMonitor' "$RUNTIME" \
   'remote desktop runtime must own a plugin-scoped target monitor'
 require 'fn track_session_target\(' "$RUNTIME" \
   'remote desktop runtime must expose a target tracking registration boundary'
+require 'fn schedule_session_lease\(' "$RUNTIME" \
+  'remote desktop runtime must expose a fallible lease scheduler registration boundary'
+require '-> anyhow::Result<\(\)>' "$RUNTIME" \
+  'remote desktop monitor registration boundaries must propagate spawn/send failures'
 require 'plugin\.target_monitor\.track\(plugin, session_id\)' "$RUNTIME" \
   'target tracking registration must go through the plugin-owned target monitor'
+require_multiline 'm/plugin\s*\.\s*lease_monitor\s*\.\s*schedule\(plugin, session_id, lease_expires_at_ms\)/s' "$RUNTIME" \
+  'lease scheduling registration must go through the plugin-owned lease monitor'
 require 'fn cancel_session_target_tracking\(' "$RUNTIME" \
   'remote desktop runtime must expose a target tracking cancellation boundary'
 require 'self\.target_monitor\.cancel\(session_id\)' "$RUNTIME" \
   'target tracking cancellation must go through the plugin-owned target monitor'
-require 'RemoteDesktopPlugin::track_session_target\(&plugin, tracker_session_id\)' "$CREATE_SESSION" \
+require 'RemoteDesktopPlugin::track_session_target\(&plugin, tracker_session_id' "$CREATE_SESSION" \
   'create_session must register created sessions with the target monitor'
+require_multiline 'm/RemoteDesktopPlugin::schedule_session_lease\(\s*&plugin,\s*watchdog_session_id\.clone\(\),\s*lease_expires_at_ms,?\s*\)/s' "$CREATE_SESSION" \
+  'create_session must register created sessions with the lease monitor before returning'
+require 'remove_inserted_session\(&plugin, &tracker_session_id\)' "$CREATE_SESSION" \
+  'create_session must roll back the inserted row when monitor registration fails'
+require 'plugin\.cancel_session_lease\(&watchdog_session_id\)' "$CREATE_SESSION" \
+  'create_session must cancel the lease monitor if target tracking registration fails'
 require 'plugin\.cancel_session_target_tracking\(session_id\)' "$SESSION_LIFECYCLE" \
   'terminal session cleanup must cancel target tracking'
+reject 'expect\("spawn remote desktop lease monitor"\)' "$LEASE_MONITOR" \
+  'lease monitor worker spawn must propagate errors instead of panicking'
+reject 'expect\("spawn remote desktop target monitor"\)' "$TARGET_MONITOR" \
+  'target monitor worker spawn must propagate errors instead of panicking'
 require 'fn apply_command\(command: TargetMonitorCommand, tracked: &mut HashSet<String>\) -> bool' "$TARGET_MONITOR" \
   'target monitor must centralize command state transitions'
 require 'TargetMonitorCommand::Track \{ session_id \}' "$TARGET_MONITOR" \

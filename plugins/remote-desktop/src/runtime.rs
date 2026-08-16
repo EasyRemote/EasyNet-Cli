@@ -99,10 +99,10 @@ impl RemoteDesktopPlugin {
         plugin: &Arc<Self>,
         session_id: String,
         lease_expires_at_ms: u64,
-    ) {
+    ) -> anyhow::Result<()> {
         plugin
             .lease_monitor
-            .schedule(plugin, session_id, lease_expires_at_ms);
+            .schedule(plugin, session_id, lease_expires_at_ms)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn cancel_session_lease(
@@ -115,8 +115,8 @@ impl RemoteDesktopPlugin {
     pub(in crate::daemon::plugins::remote_desktop) fn track_session_target(
         plugin: &Arc<Self>,
         session_id: String,
-    ) {
-        plugin.target_monitor.track(plugin, session_id);
+    ) -> anyhow::Result<()> {
+        plugin.target_monitor.track(plugin, session_id)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn cancel_session_target_tracking(
