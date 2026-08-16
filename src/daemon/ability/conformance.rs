@@ -29,7 +29,10 @@
 
 use std::collections::BTreeSet;
 
-use crate::daemon::ability::CallMode;
+use crate::daemon::ability::{
+    dispatch::{CatalogRuntimeBindingState, OwnerKind},
+    CallMode,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BaselineSurface {
@@ -568,14 +571,64 @@ impl BaselineConformanceReport {
     }
 }
 
-pub struct RegistryConformance<'a> {
-    registry: &'a crate::daemon::ability::dispatch::AxonAbilityCatalog,
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BoundRegistryAbility {
+    name: String,
+    call_mode: CallMode,
+    owner: OwnerKind,
 }
 
-impl<'a> RegistryConformance<'a> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BoundRegistrySurface {
+    abilities: Vec<BoundRegistryAbility>,
+}
+
+impl BoundRegistrySurface {
+    fn capture(registry: &crate::daemon::ability::dispatch::AxonAbilityCatalog) -> Self {
+        let abilities = registry
+            .authority_ability_catalog_snapshot()
+            .into_iter()
+            .filter(|row| row.runtime_binding.state == CatalogRuntimeBindingState::Bound)
+            .map(|row| BoundRegistryAbility {
+                name: row.name,
+                call_mode: row.descriptor.call_mode(),
+                owner: row.owner,
+            })
+            .collect();
+        Self { abilities }
+    }
+
+    fn supports(&self, ability: BaselineAbility) -> bool {
+        let expected_owner = match ability.domain {
+            BaselineDomain::HubIntrospection => OwnerKind::RealmAuthority,
+            _ => {
+                let Some(owner) = crate::daemon::ability::catalog::ownership::device_sponsored_system_agent_owner_for_public_ability(
+                    ability.name,
+                ) else {
+                    return false;
+                };
+                OwnerKind::SystemAgent(owner.system_agent_id().to_string())
+            }
+        };
+
+        self.abilities.iter().any(|candidate| {
+            candidate.name == ability.name
+                && candidate.owner == expected_owner
+                && candidate.call_mode == ability.call_mode
+        })
+    }
+}
+
+pub struct RegistryConformance {
+    surface: BoundRegistrySurface,
+}
+
+impl RegistryConformance {
     #[must_use]
-    pub fn new(registry: &'a crate::daemon::ability::dispatch::AxonAbilityCatalog) -> Self {
-        Self { registry }
+    pub fn new(registry: &crate::daemon::ability::dispatch::AxonAbilityCatalog) -> Self {
+        Self {
+            surface: BoundRegistrySurface::capture(registry),
+        }
     }
 
     #[must_use]
@@ -588,7 +641,7 @@ impl<'a> RegistryConformance<'a> {
             .iter()
             .copied()
             .filter(|ability| ability.surface == BaselineSurface::LocalRegistry)
-            .filter(|ability| !registry_supports(self.registry, *ability))
+            .filter(|ability| !self.surface.supports(*ability))
             .collect();
         BaselineConformanceReport::new(profile, BaselineSurface::LocalRegistry, missing)
     }
@@ -718,17 +771,6 @@ pub fn duplicate_ability_names(abilities: &[BaselineAbility]) -> Vec<&'static st
 #[must_use]
 pub fn baseline_names(abilities: &[BaselineAbility]) -> BTreeSet<&'static str> {
     abilities.iter().map(|ability| ability.name).collect()
-}
-
-fn registry_supports(
-    registry: &crate::daemon::ability::dispatch::AxonAbilityCatalog,
-    ability: BaselineAbility,
-) -> bool {
-    match ability.call_mode {
-        CallMode::Rpc => registry.has_rpc(ability.name),
-        CallMode::Stream => registry.has_stream(ability.name),
-        CallMode::Bidi => registry.has_bidi(ability.name),
-    }
 }
 
 #[cfg(test)]
@@ -902,6 +944,38 @@ mod tests {
         let report =
             RegistryConformance::new(&registry).check("hub", HubBaseline::required_abilities());
         assert!(report.is_conformant(), "{}", report.panic_message());
+    }
+
+    #[test]
+    fn combined_registry_satisfies_each_authority_baseline_without_name_only_fallback() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let device_ura = crate::core::ura::device_ura("conformance-test", "device-a");
+        let authority_context = crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+            device_ura,
+        )
+        .expect("combined authority context");
+        let registry =
+            crate::daemon::ability::catalog::build_registry_snapshot_with_authority_context(
+                authority_context,
+            )
+            .expect("build combined registry snapshot");
+
+        assert!(
+            !registry.has_rpc(ABILITY_META_LIST_ABILITIES),
+            "name-only production lookup must remain fail-closed across authority roots"
+        );
+
+        let device = DeviceBaseline::required_abilities();
+        let device_report = RegistryConformance::new(&registry).check("device", &device);
+        assert!(
+            device_report.is_conformant(),
+            "{}",
+            device_report.panic_message()
+        );
+
+        let hub_report =
+            RegistryConformance::new(&registry).check("hub", HubBaseline::required_abilities());
+        assert!(hub_report.is_conformant(), "{}", hub_report.panic_message());
     }
 
     #[cfg(feature = "axon-pb")]
