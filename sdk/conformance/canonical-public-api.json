@@ -393,6 +393,7 @@
       "AbilityOwner",
       "AbilityOwnerAgent",
       "AbilityOwnerKind",
+      "AbilityOwnerService",
       "AbilityRef",
       "AbilityURA",
       "AccessControlAbilityCallTrace",
@@ -750,6 +751,7 @@
       "NewRuntimeIdentityProjectionFromJSON",
       "NewRuntimeLifecycleStatusFromJSON",
       "NewRuntimePrincipalProvider",
+      "NewRuntimePrincipalProviderWithContextFactory",
       "NewRuntimeReceiptFromJSON",
       "NewRuntimeReceiptProvider",
       "NewRuntimeRecoveryReportFromJSON",
@@ -778,6 +780,7 @@
       "PresignedCallerSignature",
       "PrincipalClient",
       "PrincipalCommand",
+      "PrincipalInvocationContextFactory",
       "PrincipalLifecycle",
       "PrincipalProofActiveKey",
       "PrincipalProofBootstrap",
@@ -959,6 +962,8 @@
       "SDKError",
       "SdkEnvironment",
       "SdkEnvironmentOptions",
+      "ServiceAbilityURA",
+      "ServiceURA",
       "SessionAbilityOperations",
       "SessionAuthority",
       "SessionAuthorityMetadataKey",
@@ -1007,6 +1012,7 @@
       "URAKindAuthority",
       "URAKindDevice",
       "URAKindResource",
+      "URAKindService",
       "URAKindUnknown",
       "URAKindUser",
       "URAProjectionRequest",
@@ -1344,6 +1350,8 @@
       "runtime_identity_projection_from_json",
       "runtime_state_read_subject_ura",
       "runtime_state_root",
+      "service_ability_ura",
+      "service_ura",
       "signer_handle_provenance_error",
       "start_runtime_host",
       "user_ura",
@@ -1491,6 +1499,7 @@
       "RuntimeClient",
       "RuntimeDescriptorRefRequest",
       "RuntimeFuture",
+      "RuntimeGovernanceRoutesGen",
       "RuntimeHealth",
       "RuntimePrincipals",
       "RuntimeReceipt",
@@ -1854,6 +1863,7 @@
       "AbilityDescriptorProjection.AbilityURA",
       "AbilityDescriptorProjection.CallMode",
       "AbilityDescriptorProjection.Class",
+      "AbilityDescriptorProjection.DeniedAgents",
       "AbilityDescriptorProjection.Description",
       "AbilityDescriptorProjection.DescriptorHash",
       "AbilityDescriptorProjection.DescriptorRef",
@@ -1865,6 +1875,8 @@
       "AbilityDescriptorProjection.ReceiptSemantics",
       "AbilityDescriptorProjection.SchemaHash",
       "AbilityDescriptorProjection.SchemaSummary",
+      "AbilityDescriptorProjection.ScopeAgents",
+      "AbilityDescriptorProjection.ScopeSubjects",
       "AbilityDescriptorProjection.Source",
       "AbilityDescriptorProjection.Version",
       "AbilityDescriptorProjection.Visibility",
@@ -1878,6 +1890,7 @@
       "AbilityOwner.AgentID",
       "AbilityOwner.Kind",
       "AbilityOwner.OwnerID",
+      "AbilityOwner.ServiceID",
       "AbilityOwner.UserID",
       "AbilityRef.Name",
       "AccessControlAbilityCallTrace.AbilityURA",
@@ -2416,6 +2429,7 @@
       "DirectoryResolution.Authority",
       "DirectoryResolution.CachePolicy",
       "DirectoryResolution.CanonicalURA",
+      "DirectoryResolution.DescriptorRef",
       "DirectoryResolution.Negative",
       "DirectoryResolution.NextCursor",
       "DirectoryResolution.NextHop",
@@ -2675,6 +2689,7 @@
       "ParsedURA.Raw",
       "ParsedURA.Realm",
       "ParsedURA.ResourceNamespace",
+      "ParsedURA.ServiceID",
       "ParsedURA.UserID",
       "PrepareOptions.ExpiresInMS",
       "PrepareOptions.PolicyRef",
@@ -2717,6 +2732,7 @@
       "PrincipalCommand.ExpectedVersion",
       "PrincipalCommand.IdempotencyKey",
       "PrincipalCommand.Proof",
+      "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
       "PrincipalLifecycle.AddKey",
       "PrincipalLifecycle.BindFirstKey",
       "PrincipalLifecycle.ConfigureRecovery",
@@ -2907,6 +2923,7 @@
       "RuntimeConnectorFunc.Resolve",
       "RuntimeConnectorFunc.ResolveFunc",
       "RuntimeDescriptorRefRequest.Ability",
+      "RuntimeDescriptorRefRequest.AuthorityMetadata",
       "RuntimeDescriptorRefRequest.CallMode",
       "RuntimeDescriptorRefRequest.CalleeURA",
       "RuntimeDescriptorRefRequest.CallerURA",
@@ -3315,6 +3332,10 @@
       "SignerProvider.CallerSigner",
       "SigningMaterial.Algorithm",
       "SigningMaterial.ArgsDigestHex",
+      "SigningMaterial.CalleeProfile",
+      "SigningMaterial.CalleeURA",
+      "SigningMaterial.CallerProfile",
+      "SigningMaterial.CallerURA",
       "SigningMaterial.CanonicalBytesBase64",
       "SigningMaterial.CanonicalHashHex",
       "SigningMaterial.DescriptorRef",
@@ -3322,6 +3343,8 @@
       "SigningMaterial.NonceBase64",
       "SigningMaterial.SignedFields",
       "SigningMaterial.SignerPolicy",
+      "SigningMaterial.SubjectProfile",
+      "SigningMaterial.SubjectURA",
       "StaticCallerIdentityProvider.Caller",
       "StaticCallerIdentityProvider.CallerIdentity",
       "StreamCancel.Cancelled",
@@ -3764,6 +3787,8 @@
       "AddressingClient.project_ability_ura",
       "AddressingClient.project_descriptor_ref",
       "AddressingClient.resource_ura",
+      "AddressingClient.service_ability_ura",
+      "AddressingClient.service_ura",
       "AddressingClient.transport",
       "AddressingClient.user_ura",
       "AddressingProjection.ability_ura",
@@ -7275,6 +7300,7 @@
           "AbilityDescriptorProjection.AbilityURA",
           "AbilityDescriptorProjection.CallMode",
           "AbilityDescriptorProjection.Class",
+          "AbilityDescriptorProjection.DeniedAgents",
           "AbilityDescriptorProjection.Description",
           "AbilityDescriptorProjection.DescriptorHash",
           "AbilityDescriptorProjection.DescriptorRef",
@@ -7286,6 +7312,8 @@
           "AbilityDescriptorProjection.ReceiptSemantics",
           "AbilityDescriptorProjection.SchemaHash",
           "AbilityDescriptorProjection.SchemaSummary",
+          "AbilityDescriptorProjection.ScopeAgents",
+          "AbilityDescriptorProjection.ScopeSubjects",
           "AbilityDescriptorProjection.Source",
           "AbilityDescriptorProjection.Version",
           "AbilityDescriptorProjection.Visibility",
@@ -7317,6 +7345,7 @@
           "RuntimeClient.ResolveDescriptorRef",
           "RuntimeClientDescriptorProvider.ResolveDescriptor",
           "RuntimeDescriptorRefRequest.Ability",
+          "RuntimeDescriptorRefRequest.AuthorityMetadata",
           "RuntimeDescriptorRefRequest.CallMode",
           "RuntimeDescriptorRefRequest.CalleeURA",
           "RuntimeDescriptorRefRequest.CallerURA",
@@ -9450,6 +9479,7 @@
           "AbilityOwner",
           "AbilityOwnerAgent",
           "AbilityOwnerKind",
+          "AbilityOwnerService",
           "AbilityURA",
           "Addressing",
           "AddressingProjection",
@@ -9485,12 +9515,15 @@
           "ResourceNamespaceShell",
           "ResourceURA",
           "RuntimeResourceURA",
+          "ServiceAbilityURA",
+          "ServiceURA",
           "URA",
           "URAKind",
           "URAKindAbility",
           "URAKindAgent",
           "URAKindDevice",
           "URAKindResource",
+          "URAKindService",
           "URAKindUnknown",
           "URAKindUser",
           "URAProjectionRequest",
@@ -9502,6 +9535,7 @@
           "AbilityOwner.AgentID",
           "AbilityOwner.Kind",
           "AbilityOwner.OwnerID",
+          "AbilityOwner.ServiceID",
           "AbilityOwner.UserID",
           "Addressing.AbilityURAFromDescriptorRef",
           "Addressing.BuildDescriptorRef",
@@ -9570,6 +9604,7 @@
           "ParsedURA.Raw",
           "ParsedURA.Realm",
           "ParsedURA.ResourceNamespace",
+          "ParsedURA.ServiceID",
           "ParsedURA.UserID",
           "URA.AbilityName",
           "URA.Kind",
@@ -9599,6 +9634,8 @@
           "parse_ura",
           "project_descriptor_ref",
           "resource_ura",
+          "service_ability_ura",
+          "service_ura",
           "user_ura"
         ],
         "members": [
@@ -9629,6 +9666,8 @@
           "AddressingClient.project_ability_ura",
           "AddressingClient.project_descriptor_ref",
           "AddressingClient.resource_ura",
+          "AddressingClient.service_ability_ura",
+          "AddressingClient.service_ura",
           "AddressingClient.transport",
           "AddressingClient.user_ura",
           "AddressingProjection.ability_ura",
@@ -10210,6 +10249,7 @@
           "DirectoryResolution.Authority",
           "DirectoryResolution.CachePolicy",
           "DirectoryResolution.CanonicalURA",
+          "DirectoryResolution.DescriptorRef",
           "DirectoryResolution.Negative",
           "DirectoryResolution.NextCursor",
           "DirectoryResolution.NextHop",
@@ -10660,6 +10700,7 @@
       "java": {
         "symbols": [
           "RuntimeFuture",
+          "RuntimeGovernanceRoutesGen",
           "RuntimeSubjects",
           "RuntimeTransport"
         ],
@@ -10878,6 +10919,10 @@
           "SignerProvider.CallerSigner",
           "SigningMaterial.Algorithm",
           "SigningMaterial.ArgsDigestHex",
+          "SigningMaterial.CalleeProfile",
+          "SigningMaterial.CalleeURA",
+          "SigningMaterial.CallerProfile",
+          "SigningMaterial.CallerURA",
           "SigningMaterial.CanonicalBytesBase64",
           "SigningMaterial.CanonicalHashHex",
           "SigningMaterial.DescriptorRef",
@@ -10885,6 +10930,8 @@
           "SigningMaterial.NonceBase64",
           "SigningMaterial.SignedFields",
           "SigningMaterial.SignerPolicy",
+          "SigningMaterial.SubjectProfile",
+          "SigningMaterial.SubjectURA",
           "SubmittedInvocation.Handle",
           "SubmittedInvocation.Signed"
         ]
@@ -11338,8 +11385,10 @@
           "CreatePrincipalRequest",
           "NewPrincipalClient",
           "NewRuntimePrincipalProvider",
+          "NewRuntimePrincipalProviderWithContextFactory",
           "PrincipalClient",
           "PrincipalCommand",
+          "PrincipalInvocationContextFactory",
           "PrincipalLifecycle",
           "PrincipalProofActiveKey",
           "PrincipalProofBootstrap",
@@ -11379,6 +11428,7 @@
           "PrincipalCommand.ExpectedVersion",
           "PrincipalCommand.IdempotencyKey",
           "PrincipalCommand.Proof",
+          "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
           "PrincipalLifecycle.AddKey",
           "PrincipalLifecycle.BindFirstKey",
           "PrincipalLifecycle.ConfigureRecovery",
@@ -14826,7 +14876,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "b103071fe4e1f7160d855f001979ce35d5ca8fb7972e4b7d4de2d10ce48ecb6e",
           "interface": "RuntimeConnector",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -14878,7 +14928,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "80e84c90a6d4a27b64d282e55400423de51c7aef2b39f8d5737c4d1c4fc56b6a",
           "interface": "RuntimeConnector",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -14932,7 +14982,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "b103071fe4e1f7160d855f001979ce35d5ca8fb7972e4b7d4de2d10ce48ecb6e",
           "interface": "RuntimeConnector",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -14974,7 +15024,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "80e84c90a6d4a27b64d282e55400423de51c7aef2b39f8d5737c4d1c4fc56b6a",
           "interface": "RuntimeConnector",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -15018,7 +15068,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "b103071fe4e1f7160d855f001979ce35d5ca8fb7972e4b7d4de2d10ce48ecb6e",
           "interface": "RuntimeConnector",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -15070,7 +15120,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "80e84c90a6d4a27b64d282e55400423de51c7aef2b39f8d5737c4d1c4fc56b6a",
           "interface": "RuntimeConnector",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -15124,7 +15174,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "b103071fe4e1f7160d855f001979ce35d5ca8fb7972e4b7d4de2d10ce48ecb6e",
           "interface": "RuntimeConnector",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -15201,7 +15251,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "80e84c90a6d4a27b64d282e55400423de51c7aef2b39f8d5737c4d1c4fc56b6a",
           "interface": "RuntimeConnector",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -15280,7 +15330,7 @@
           "path": "sdk/go/cabi_runtime.go",
           "sha256": "80d04099685bd8a4cfaab1b0867a4b3ed489ee2cb6005e15a5d5ee8eac423245",
           "interface": "RuntimeTransport",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -15377,7 +15427,7 @@
           "path": "sdk/python/easynet_sdk/_cabi.py",
           "sha256": "e044f0f41ccb3b3ffb695bbcfb41fd60fdbbc864faae547b1dd2c22a6841b54c",
           "interface": "CABIRuntimeTransport",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -15476,7 +15526,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "b103071fe4e1f7160d855f001979ce35d5ca8fb7972e4b7d4de2d10ce48ecb6e",
           "interface": "RuntimeConnector",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -15553,7 +15603,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "80e84c90a6d4a27b64d282e55400423de51c7aef2b39f8d5737c4d1c4fc56b6a",
           "interface": "RuntimeConnector",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -15632,7 +15682,7 @@
           "path": "sdk/go/cabi_runtime.go",
           "sha256": "80d04099685bd8a4cfaab1b0867a4b3ed489ee2cb6005e15a5d5ee8eac423245",
           "interface": "RuntimeTransport",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -15754,7 +15804,7 @@
           "path": "sdk/python/easynet_sdk/_cabi.py",
           "sha256": "e044f0f41ccb3b3ffb695bbcfb41fd60fdbbc864faae547b1dd2c22a6841b54c",
           "interface": "CABIRuntimeTransport",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -15878,7 +15928,7 @@
           "path": "sdk/go/runtime_ability.go",
           "sha256": "a61927128735ff97ce790b665f587334a5d1b974e8fba47e58aef25315e12901",
           "interface": "RuntimeAbilityClient",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -16005,7 +16055,7 @@
           "path": "sdk/python/easynet_sdk/ability_invocation.py",
           "sha256": "11780406d28b1086b065fb9a38856e3b66666814b6b938164176b808c153f028",
           "interface": "AbilityInvocationClient",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -16134,7 +16184,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "b103071fe4e1f7160d855f001979ce35d5ca8fb7972e4b7d4de2d10ce48ecb6e",
           "interface": "RuntimeConnector",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -16176,7 +16226,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "80e84c90a6d4a27b64d282e55400423de51c7aef2b39f8d5737c4d1c4fc56b6a",
           "interface": "RuntimeConnector",
-          "revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+          "revision": "da119771bb528acf3916fb632bf7bfbf016679de"
         },
         "step_evidence": [
           {
@@ -16774,10 +16824,11 @@
       "AbilityDescriptorListRequest.Scope": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityDescriptorPage": "113811812b2eb1f67e40b728b20a55c72d3a40e78486f5859174f82a4a499f31",
       "AbilityDescriptorPage.Descriptors": "df56645aa69dfbbeebb229d7e65405bb05bdb65bd12415db7755cf75e72ac5d6",
-      "AbilityDescriptorProjection": "33d92be39e89bd2448e7503f595f2a2c6dcc43f89bc40b53e300d203cc6c15dc",
+      "AbilityDescriptorProjection": "095baf43ceff4f05e82918f029e2c1937de4b815cd27d3fb8129cbbb77195f93",
       "AbilityDescriptorProjection.AbilityURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityDescriptorProjection.CallMode": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityDescriptorProjection.Class": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
+      "AbilityDescriptorProjection.DeniedAgents": "4af101177fe720bf0766557228231c42b38635920ef7206f518a04030b3dcdf0",
       "AbilityDescriptorProjection.Description": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityDescriptorProjection.DescriptorHash": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityDescriptorProjection.DescriptorRef": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
@@ -16789,6 +16840,8 @@
       "AbilityDescriptorProjection.ReceiptSemantics": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415",
       "AbilityDescriptorProjection.SchemaHash": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityDescriptorProjection.SchemaSummary": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415",
+      "AbilityDescriptorProjection.ScopeAgents": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415",
+      "AbilityDescriptorProjection.ScopeSubjects": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415",
       "AbilityDescriptorProjection.Source": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityDescriptorProjection.Version": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityDescriptorProjection.Visibility": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
@@ -16802,13 +16855,15 @@
       "AbilityDescriptorRef.Raw": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityDescriptorRef.Version": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityNameFromURA": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
-      "AbilityOwner": "d1351b32a519611b5a047606ffdbb364510f709dc5ed3ece3f72a8643d04f746",
+      "AbilityOwner": "e51f2323f913ba874f5ba40d4c8f160314abb3cf7ad0821b9f8e602901bbcf90",
       "AbilityOwner.AgentID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityOwner.Kind": "cd943d7f31b9f3b619b87d161aedae0a4e937bf92cd11b79074977389baad950",
       "AbilityOwner.OwnerID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
+      "AbilityOwner.ServiceID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityOwner.UserID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityOwnerAgent": "80b522b139b62ee74889d7f936b63bdc2e3535985f89a867394ea9a2c7d1e9b7",
       "AbilityOwnerKind": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
+      "AbilityOwnerService": "2c73a6a86472eb5c91271a6b22e220a286d2c8f304a6c497beacf02467c2e1cf",
       "AbilityRef": "9ab7cb039be48e7fb06c95682bab70355fa0689b643e6160f3addac6b3670c33",
       "AbilityRef.Name": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "AbilityURA": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
@@ -17496,12 +17551,13 @@
       "DirectoryRecord.Raw": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415",
       "DirectoryRecord.RouteURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "DirectoryRecord.URA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
-      "DirectoryResolution": "21f101bdaaad220743ef442d1163ede082130d460fe8d23ab422a825d1fae78a",
+      "DirectoryResolution": "19330855a84af7566f7c490fa1a78f05b5bb5d050fd9766baa191cc6478e4318",
       "DirectoryResolution.AbilityURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "DirectoryResolution.AnswerKind": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "DirectoryResolution.Authority": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415",
       "DirectoryResolution.CachePolicy": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415",
       "DirectoryResolution.CanonicalURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
+      "DirectoryResolution.DescriptorRef": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "DirectoryResolution.Negative": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415",
       "DirectoryResolution.NextCursor": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "DirectoryResolution.NextHop": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415",
@@ -17947,6 +18003,7 @@
       "NewRuntimeIdentityProjectionFromJSON": "c6716ac4e0d93fc7aa49de68466cccf6c0245cbdb4f1c5d6e41e33e730987183",
       "NewRuntimeLifecycleStatusFromJSON": "18adc7117a7b350df820788c44fc5c1308568c65c85173dba814b65cb75c1cd4",
       "NewRuntimePrincipalProvider": "05b08f71595075f35ad49ec3115f1799125de20252bb820cc2ab9e16d79cf3ee",
+      "NewRuntimePrincipalProviderWithContextFactory": "b206a8f253cfddb6b6b667d60edf164ad42665c85b72172b4c453b577752181e",
       "NewRuntimeReceiptFromJSON": "c459b44b77e24da75178fa2c614db3176774636d6373d0d6f2476c262782d2d0",
       "NewRuntimeReceiptProvider": "eee2ad1357d875a8eb81cc038ac0e30c2552c51b4a07ec0ea433c4e22ceb1b62",
       "NewRuntimeRecoveryReportFromJSON": "bbc0e35b4577373a8ef4908797c9bd0e272aee89835e123d173ed257832004b3",
@@ -17971,7 +18028,7 @@
       "ParsedAbility.LocalName": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "ParsedAbility.Namespace": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "ParsedAbility.Owner": "4d19857a8b2fe47b72db6cc583a3411d40a1c9bd9ce75dadc0e3ec51328e1095",
-      "ParsedURA": "4f01da35f5d46077182b3149cd191b2232daa65098339cdc83210cebf2248d48",
+      "ParsedURA": "141baa4877bfabcef94530c564f1d90ccff817a21aa4b8243997be0b6e2a97cd",
       "ParsedURA.AbilityID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "ParsedURA.AbilityLocalName": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "ParsedURA.AbilityNamespace": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
@@ -17984,6 +18041,7 @@
       "ParsedURA.Raw": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "ParsedURA.Realm": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "ParsedURA.ResourceNamespace": "6616c8cbffe5b8f29ce728b63cfa74052983bdc4773079b645a1cba13b0cea4a",
+      "ParsedURA.ServiceID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "ParsedURA.UserID": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "PrepareOptions": "527bd756286850ffb5061f31ed7a95ceb90115200fbc71bd1021b7afd05fc8ea",
       "PrepareOptions.ExpiresInMS": "bc2229666b96007e875c5f62897ee5b7648db2baa5fabf3e771afac323afbd57",
@@ -18032,6 +18090,8 @@
       "PrincipalCommand.ExpectedVersion": "87cde9b6d243abccc1ca85aa5a0d6c9120223b4ccb38eefdc722361a8177748c",
       "PrincipalCommand.IdempotencyKey": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "PrincipalCommand.Proof": "e8e56d9ffd472db06a834740548bda5e3be3467de2042886fd6549b56c70946e",
+      "PrincipalInvocationContextFactory": "17ccffcb4ec570f687db7264cafb54c9e2682796e1f9eec13c215dd2fb75559b",
+      "PrincipalInvocationContextFactory.ContextForPrincipalAbility": "1e7a435861c2605324c0ce8659d8b9993c47634bc3bfaf0d80b3635044f1ce54",
       "PrincipalLifecycle": "1aa7a30cc99c72f72ae2a2be6ea3d6bd305b2cb12282d46c5a68e5849762954b",
       "PrincipalLifecycle.AddKey": "1160636405161608bb720cdc9942347d86dd3f253576a4ccb167ac9c3a188165",
       "PrincipalLifecycle.BindFirstKey": "1160636405161608bb720cdc9942347d86dd3f253576a4ccb167ac9c3a188165",
@@ -18317,8 +18377,9 @@
       "RuntimeControlReady": "cfffa187a40f2deeffef262630b2b22b0b941b474f2f516e53111629f678d0d8",
       "RuntimeCrashLoop": "95e99777c0eb70b329f4e62abb60eab8d25d24ec4bb011155f9130572e77521a",
       "RuntimeCredentialsPath": "e5e4fd6b2c54fb5e678b1b056e12410d452db38c8b0c50a4e015dde3ea9f8f52",
-      "RuntimeDescriptorRefRequest": "1b106b1fed419d513eaaef18ebd68643f132d3766e2347a63fe7eb77dbbd1b33",
+      "RuntimeDescriptorRefRequest": "36ef83c2ab42a7154ea513e273322cd1327688bcc1aaf63f7da33b093be143ba",
       "RuntimeDescriptorRefRequest.Ability": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
+      "RuntimeDescriptorRefRequest.AuthorityMetadata": "219dd46d9c2a4a1d442d64ab1c344e10d8c0c39465c50c33fef8df59a967bd8a",
       "RuntimeDescriptorRefRequest.CallMode": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "RuntimeDescriptorRefRequest.CalleeURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
       "RuntimeDescriptorRefRequest.CallerURA": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8",
@@ -18730,6 +18791,8 @@
       "SdkEnvironmentOptions.Connect": "292a92b77d4a7c674efc76a2c79a16f62e3489bd871d75530488e0856e1a8a79",
       "SdkEnvironmentOptions.Discover": "a99d6bbd5ee26223177d1d19e7c7132abda910c8cd65d1609ce98b530564fdde",
       "SdkEnvironmentOptions.ExpectedABIVersion": "1c06d81634ed9a2e4e5594026e886b021f6ccad84a982c2034d9693403089b91",
+      "ServiceAbilityURA": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
+      "ServiceURA": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158",
       "SessionAbilityOperations": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "SessionAbilityOperations.Resolve": "2ff471f7ca192a2f9c66f234325ecee1c70e103a91a2c5fa71f4b665e810cd0a",
       "SessionAuthority": "80cf59fcddba17f99d4cdf63de35870eac85a2a436c39396bbb34aa4acf4a4b7",
@@ -18831,6 +18894,10 @@
       "SigningMaterial": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2",
       "SigningMaterial.Algorithm": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "SigningMaterial.ArgsDigestHex": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
+      "SigningMaterial.CalleeProfile": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
+      "SigningMaterial.CalleeURA": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
+      "SigningMaterial.CallerProfile": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
+      "SigningMaterial.CallerURA": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "SigningMaterial.CanonicalBytesBase64": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "SigningMaterial.CanonicalHashHex": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "SigningMaterial.DescriptorRef": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
@@ -18838,6 +18905,8 @@
       "SigningMaterial.NonceBase64": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "SigningMaterial.SignedFields": "9392955705c3e635c49cb6ac5992063177893ccb34641eb23c1e430623fcc584",
       "SigningMaterial.SignerPolicy": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a",
+      "SigningMaterial.SubjectProfile": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
+      "SigningMaterial.SubjectURA": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7",
       "StartRuntimeHost": "6432abbc61514138bb0655e5ec7b496188b39ddbb39f61ebff284ea7b1d70cc9",
       "StaticCallerIdentityProvider": "8153f57163d3abd01894fb7760262fb3b0ba5afe112b3400efd5ae3d240eafba",
       "StaticCallerIdentityProvider.Caller": "f140734733c8ad836bdcbfaf22d72239ef36f16f6c00c4067a1cdcaa8b5d51c1",
@@ -18924,6 +18993,7 @@
       "URAKindAuthority": "c5316d668bda8145f09eccbbaeca9132f0ab256fc666fe2c14875884d749ee61",
       "URAKindDevice": "38ced68206be65cfaf760bdaffb5216d1d41e53bc6615a70cf4dc482e9fdd879",
       "URAKindResource": "24635fd3f75d31f241cda7eb3af05a842373de2c97153b1cbcc3147281c4607e",
+      "URAKindService": "3cfd91381a117fd1c6f139fe61c37324f568151dd400ef0eefe8d3514ed2f2ee",
       "URAKindUnknown": "ba0200df40ebe1d7f29d2517274223fa970d2a6bebb2a0c318dd4990c9979d75",
       "URAKindUser": "9f295bddb845ba84e9208eb713e6bcc16c107b3907a25e351cc200554a6a91c1",
       "URAProjectionRequest": "6d6c9d3441b30f5387f0cf0f9220765f5a16147b849b37bf2c2a7606f1bf63b8",
@@ -19340,7 +19410,7 @@
       "AccessControlSignatureDecision.verifier_ura": "45430548db8e0faf8894e4000784bcd8f860d9c74dc44bfd71c60c1c67144fca",
       "ActingPrincipalRef": "575510319171c69f130844e0ab5508ba6d3680e37605d50ea4f9ac0ac8371a7d",
       "ActingPrincipalRef.principal": "e52689f7a36cece505ac3dee46b8f1c4f96a55e276e9b12752f9656974766620",
-      "AddressingClient": "f7a426d8adc2ef5d33bc64b6917368db6270a664f60cf8cd68360a5d2e1dfd48",
+      "AddressingClient": "f02d26e1c9c6a4f7aaaee8e9dbe72cf772ba578f9c78504fb45492fceb28b063",
       "AddressingClient.ability_ura": "6683ce038bd0208de5b61f1bfc7761931e9883432c2ed2899ee07c9781ed6319",
       "AddressingClient.ability_ura_from_descriptor_ref": "7d9def5084636623e4692b2fe56d9627538631d697e55f39128aebd4e47803d1",
       "AddressingClient.agent_ura": "4eb9cfb9404783442b31926f4152e1b6e3a3850dfd09b52a8b995b616eee3062",
@@ -19358,6 +19428,8 @@
       "AddressingClient.project_ability_ura": "b40d6b5bed5565ae93eb61c52459febd26c777bd544cb03ee87ed3d48ac99b0e",
       "AddressingClient.project_descriptor_ref": "158d654897ba5f2c6d76bf42ab2dbdaacf30284c5980af75bc54f33a2a8409d2",
       "AddressingClient.resource_ura": "f364807bfe0de015ff588d651031282f2fcdb7d72747394d0359b64e04d0e1d8",
+      "AddressingClient.service_ability_ura": "f1798019e0fd3a2cf9dff5dbd5fd379e5e09546564624044fc0aa83ad05d641f",
+      "AddressingClient.service_ura": "f064b61c9d41bc98fcff15a21a274c90017765ad5ea9e028f503227c3dcdbdf7",
       "AddressingClient.transport": "99070e29c286fe09dc68f4c1d61f56e6c2f6d63de86a71da171ee8f8c754ddb5",
       "AddressingClient.user_ura": "1720023a2b538838f6d8c45b147a90de97ec556b851407b53d4ec6107b631315",
       "AddressingProjection": "300871db8d58c0c284d07535e14d247b781947af79bbce9adfaaded277439b40",
@@ -19442,7 +19514,7 @@
       "AuthorizedRuntimeSession.prepare": "a6568cfe9c2ac2a3483b11fdf6faab17ae87d3497702567e58ca84ffa6a941bb",
       "AuthorizedRuntimeSession.sign": "597257733b9757419c6da061cc212c3f35e67c07f4b2b8d750871dbb013379c9",
       "AuthorizedRuntimeSession.submit": "ca34c6771cb481c583eb2124650a2a3952921e513706f703ebb0711996cccf6d",
-      "AxonAddressingTransport": "759f75342f1479ab56afe7fc9e571580504935576848a3b6c1963d68048a6e1b",
+      "AxonAddressingTransport": "d0b5d3f6a646da76191c334cb93ddabb06bc6851657df3f9b249829401da8eda",
       "AxonAddressingTransport.build_descriptor_ref": "65ff13b62167159885c3cd00772c679e2363e7938261cea8003c0a4f5f9a8527",
       "AxonAddressingTransport.build_ura": "d340e69e6afa76e31da8281aba97fbccec3579c41c7c66bb830c5a506b2a3dce",
       "AxonAddressingTransport.close": "a5cbc63f606a2f1d00d0ddd107d98a028930221ccb5e3eff66763a0d57c98832",
@@ -21057,6 +21129,8 @@
       "runtime_identity_projection_from_json": "6d22b91fad55114822714b056418dd320d66c714ae81ac824d11d045c70fa5ce",
       "runtime_state_read_subject_ura": "01f174c86edc9af06c5588ef3ce964604b1f52d0e8b5fe7172ee4bfcd2c3ca99",
       "runtime_state_root": "11d059c666917fdd1c911d85554303f9280be712e3daa81967c7965acf3648e0",
+      "service_ability_ura": "bc27fa2534b518e751e7a1fefabebe1cb8bdb5eef41bb5d57efa15c0de251bd6",
+      "service_ura": "e3bb25052235651e0105a9dc40753bf94312033cbfaacfdc83524de21825cba8",
       "signer_handle_provenance_error": "4d1e2d8ca981adab29ea68dad83a60124f6d8de16d01dfe9846a5d4a8fee8af4",
       "start_runtime_host": "d7bbebf68c08ed7990346d08ddb5e71c4250c067e7c2ecc8991f26fd7b83a137",
       "user_ura": "61cf47948e6fff64d5800601a66b93d73bd1bb71b7b6bfc63157a59f1cb4ffa3",
@@ -22160,6 +22234,7 @@
       "RuntimeDescriptorRefRequest.toString": "a228119c68e6b363c289f8682e6850cf88ca540fd6b36456af0312774cce0571",
       "RuntimeFuture": "33617a10367549f0b4080e5fc33e4ec3fd64565c16bc056a91390348f8f92ca8",
       "RuntimeFuture.cancel": "2afb6ae38fc4766d905b13187ae6528e6201529c6462e463586bf00830f57c34",
+      "RuntimeGovernanceRoutesGen": "6effd1427a9ce41475a51c9cecf8278efa54fa4422a6fd8b54f28b8151e42e1d",
       "RuntimeHealth": "66be064132b7886697f9acdc0da0dd0695cdc38dc3c3225911e8927a467eee69",
       "RuntimeHealth.abiVersion": "26f21486e749d2258c93e1767fb83501b0c58f617797e2c640c7ad0df823c938",
       "RuntimeHealth.apiAlive": "a2fe5ff7a7edce7d483d63bff51d3f3fd02c39b91133d3bfd874d078a11226fb",
@@ -23447,7 +23522,7 @@
     }
   ],
   "dependency_revisions": {
-    "axon_sdk": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+    "axon_sdk": "da119771bb528acf3916fb632bf7bfbf016679de"
   },
   "provider_implementations": [
     {
@@ -23468,7 +23543,7 @@
         "terminal_receipt_facts",
         "unary_invoke"
       ],
-      "axon_revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+      "axon_revision": "da119771bb528acf3916fb632bf7bfbf016679de"
     },
     {
       "language": "python",
@@ -23488,7 +23563,7 @@
         "terminal_receipt_facts",
         "unary_invoke"
       ],
-      "axon_revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+      "axon_revision": "da119771bb528acf3916fb632bf7bfbf016679de"
     },
     {
       "language": "go",
@@ -23504,7 +23579,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+      "axon_revision": "da119771bb528acf3916fb632bf7bfbf016679de"
     },
     {
       "language": "python",
@@ -23520,7 +23595,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+      "axon_revision": "da119771bb528acf3916fb632bf7bfbf016679de"
     },
     {
       "language": "go",
@@ -23535,7 +23610,7 @@
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+      "axon_revision": "da119771bb528acf3916fb632bf7bfbf016679de"
     },
     {
       "language": "python",
@@ -23550,14 +23625,14 @@
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "e5abef32983c8a6c70b47b9a90a759cea0169111"
+      "axon_revision": "da119771bb528acf3916fb632bf7bfbf016679de"
     }
   ],
   "inventory_source_revisions": {
-    "rust": "e5abef32983c8a6c70b47b9a90a759cea0169111",
+    "rust": "da119771bb528acf3916fb632bf7bfbf016679de",
     "c_abi": "current_checkout",
     "go": "current_checkout",
-    "python": "e5abef32983c8a6c70b47b9a90a759cea0169111",
+    "python": "da119771bb528acf3916fb632bf7bfbf016679de",
     "node": "current_checkout",
     "java": "current_checkout",
     "swift": "current_checkout"

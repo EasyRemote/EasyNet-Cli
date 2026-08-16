@@ -82,6 +82,19 @@ class AxonAddressingProviderTests(unittest.TestCase):
             addressing.user_ura("example", "alice"),
             "easynet:///r/example/user/alice",
         )
+        self.assertEqual(
+            addressing.service_ura("example", "alice", "pages"),
+            "easynet:///r/example/service/alice.pages",
+        )
+        self.assertEqual(
+            addressing.service_ability_ura(
+                "example",
+                "alice",
+                "pages",
+                "project.list",
+            ),
+            "easynet:///r/example/ability/service.alice.pages.project.list",
+        )
 
         self.assertEqual(
             addressing.owner_ability_descriptor_ref(
@@ -127,6 +140,26 @@ class AxonAddressingProviderTests(unittest.TestCase):
                 "local_registry_ability": "observe.health",
             },
         )
+        service_descriptor = addressing.project_descriptor_ref(
+            addressing.owner_ability_descriptor_ref(
+                "easynet:///r/example/service/alice.pages",
+                "project.list",
+                "1.0.0",
+                descriptor_hash=(
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                ),
+                action="read",
+            )
+        )
+        self.assertEqual(
+            service_descriptor.descriptor_ref,
+            "easynet:///r/example/ability/service.alice.pages.project.list@1.0.0#bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb!read",
+        )
+        self.assertEqual(
+            service_descriptor.components["owner_ura"],
+            "easynet:///r/example/service/alice.pages",
+        )
+        self.assertEqual(service_descriptor.components["owner_kind"], "service")
         environment.close()
 
     def test_runtime_projection_preserves_authority_kind(self) -> None:

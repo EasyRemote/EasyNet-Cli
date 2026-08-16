@@ -162,6 +162,14 @@ class AddressingClient:
             agent_id=_clean(agent_id, "agent_id"),
         )
 
+    def service_ura(self, realm: str, user_id: str, service_id: str) -> str:
+        return self._build(
+            "service",
+            realm=_clean(realm, "realm"),
+            user_id=_clean(user_id, "user_id"),
+            service_id=_clean(service_id, "service_id"),
+        )
+
     def device_agent_ura(self, realm: str, device_id: str, agent_id: str) -> str:
         return self._build(
             "agent",
@@ -203,6 +211,14 @@ class AddressingClient:
             if part
         )
         return self.owner_ability_ura(self.device_ura(realm, device_id), name)
+
+    def service_ability_ura(
+        self, realm: str, user_id: str, service_id: str, ability_name: str
+    ) -> str:
+        return self.owner_ability_ura(
+            self.service_ura(realm, user_id, service_id),
+            _clean(ability_name, "ability_name"),
+        )
 
     def owner_ura_for_ability(self, ability_ura: str) -> str:
         projection = self.parse_ura(ability_ura)
@@ -315,6 +331,10 @@ def agent_ura(realm: str, user_id: str, agent_id: str) -> str:
     return _with_client(lambda client: client.agent_ura(realm, user_id, agent_id))
 
 
+def service_ura(realm: str, user_id: str, service_id: str) -> str:
+    return _with_client(lambda client: client.service_ura(realm, user_id, service_id))
+
+
 def device_agent_ura(realm: str, device_id: str, agent_id: str) -> str:
     return _with_client(
         lambda client: client.device_agent_ura(realm, device_id, agent_id)
@@ -341,6 +361,16 @@ def device_ability_ura(
     return _with_client(
         lambda client: client.device_ability_ura(
             realm, device_id, namespace, local_name
+        )
+    )
+
+
+def service_ability_ura(
+    realm: str, user_id: str, service_id: str, ability_name: str
+) -> str:
+    return _with_client(
+        lambda client: client.service_ability_ura(
+            realm, user_id, service_id, ability_name
         )
     )
 
@@ -467,6 +497,15 @@ class AxonAddressingTransport:
                     ),
                 )
             raise ParseError(f"unsupported agent owner_kind {owner_kind!r}")
+        if kind == "service":
+            return cast(
+                str,
+                self._addressing.service_ura(
+                    _required_string(request, "realm"),
+                    _required_string(request, "user_id"),
+                    _required_string(request, "service_id"),
+                ),
+            )
         if kind == "authority":
             return cast(
                 str, self._addressing.authority_ura(_required_string(request, "realm"))
@@ -568,6 +607,13 @@ def _ura_projection(addressing: CanonicalUraFacade, parsed: ParsedURA) -> bytes:
             components["device_id"] = parsed.device_id or ""
         else:
             components["user_id"] = parsed.user_id or ""
+    elif parsed.kind == "service":
+        components.update(
+            {
+                "user_id": parsed.user_id or "",
+                "service_id": parsed.service_id or "",
+            }
+        )
     elif parsed.kind == "resource":
         components.update(
             {

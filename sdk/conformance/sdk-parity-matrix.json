@@ -2417,7 +2417,7 @@
         },
         {
           "item": "AbilityDescriptorProjection",
-          "sha256": "33d92be39e89bd2448e7503f595f2a2c6dcc43f89bc40b53e300d203cc6c15dc"
+          "sha256": "095baf43ceff4f05e82918f029e2c1937de4b815cd27d3fb8129cbbb77195f93"
         },
         {
           "item": "AbilityDescriptorProvider",
@@ -2521,7 +2521,7 @@
         },
         {
           "item": "RuntimeDescriptorRefRequest",
-          "sha256": "1b106b1fed419d513eaaef18ebd68643f132d3766e2347a63fe7eb77dbbd1b33"
+          "sha256": "36ef83c2ab42a7154ea513e273322cd1327688bcc1aaf63f7da33b093be143ba"
         },
         {
           "item": "AbilityDescriptorClient.Get",
@@ -2604,6 +2604,10 @@
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
+          "item": "AbilityDescriptorProjection.DeniedAgents",
+          "sha256": "4af101177fe720bf0766557228231c42b38635920ef7206f518a04030b3dcdf0"
+        },
+        {
           "item": "AbilityDescriptorProjection.Description",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
@@ -2645,6 +2649,14 @@
         },
         {
           "item": "AbilityDescriptorProjection.SchemaSummary",
+          "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+        },
+        {
+          "item": "AbilityDescriptorProjection.ScopeAgents",
+          "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+        },
+        {
+          "item": "AbilityDescriptorProjection.ScopeSubjects",
           "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
         },
         {
@@ -2772,6 +2784,10 @@
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
+          "item": "RuntimeDescriptorRefRequest.AuthorityMetadata",
+          "sha256": "219dd46d9c2a4a1d442d64ab1c344e10d8c0c39465c50c33fef8df59a967bd8a"
+        },
+        {
           "item": "RuntimeDescriptorRefRequest.CallMode",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
@@ -2828,7 +2844,7 @@
             },
             {
               "item": "AbilityDescriptorProjection",
-              "sha256": "33d92be39e89bd2448e7503f595f2a2c6dcc43f89bc40b53e300d203cc6c15dc"
+              "sha256": "095baf43ceff4f05e82918f029e2c1937de4b815cd27d3fb8129cbbb77195f93"
             },
             {
               "item": "AbilityDescriptorProvider",
@@ -2932,7 +2948,7 @@
             },
             {
               "item": "RuntimeDescriptorRefRequest",
-              "sha256": "1b106b1fed419d513eaaef18ebd68643f132d3766e2347a63fe7eb77dbbd1b33"
+              "sha256": "36ef83c2ab42a7154ea513e273322cd1327688bcc1aaf63f7da33b093be143ba"
             },
             {
               "item": "AbilityDescriptorClient.Get",
@@ -3015,6 +3031,10 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
+              "item": "AbilityDescriptorProjection.DeniedAgents",
+              "sha256": "4af101177fe720bf0766557228231c42b38635920ef7206f518a04030b3dcdf0"
+            },
+            {
               "item": "AbilityDescriptorProjection.Description",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -3056,6 +3076,14 @@
             },
             {
               "item": "AbilityDescriptorProjection.SchemaSummary",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "AbilityDescriptorProjection.ScopeAgents",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "AbilityDescriptorProjection.ScopeSubjects",
               "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
             },
             {
@@ -3181,6 +3209,10 @@
             {
               "item": "RuntimeDescriptorRefRequest.Ability",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeDescriptorRefRequest.AuthorityMetadata",
+              "sha256": "219dd46d9c2a4a1d442d64ab1c344e10d8c0c39465c50c33fef8df59a967bd8a"
             },
             {
               "item": "RuntimeDescriptorRefRequest.CallMode",
@@ -3239,7 +3271,7 @@
             },
             {
               "item": "AbilityDescriptorProjection",
-              "sha256": "33d92be39e89bd2448e7503f595f2a2c6dcc43f89bc40b53e300d203cc6c15dc"
+              "sha256": "095baf43ceff4f05e82918f029e2c1937de4b815cd27d3fb8129cbbb77195f93"
             },
             {
               "item": "AbilityDescriptorProvider",
@@ -3343,7 +3375,7 @@
             },
             {
               "item": "RuntimeDescriptorRefRequest",
-              "sha256": "1b106b1fed419d513eaaef18ebd68643f132d3766e2347a63fe7eb77dbbd1b33"
+              "sha256": "36ef83c2ab42a7154ea513e273322cd1327688bcc1aaf63f7da33b093be143ba"
             },
             {
               "item": "AbilityDescriptorClient.Get",
@@ -3426,6 +3458,10 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
+              "item": "AbilityDescriptorProjection.DeniedAgents",
+              "sha256": "4af101177fe720bf0766557228231c42b38635920ef7206f518a04030b3dcdf0"
+            },
+            {
               "item": "AbilityDescriptorProjection.Description",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -3467,6 +3503,14 @@
             },
             {
               "item": "AbilityDescriptorProjection.SchemaSummary",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "AbilityDescriptorProjection.ScopeAgents",
+              "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
+            },
+            {
+              "item": "AbilityDescriptorProjection.ScopeSubjects",
               "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
             },
             {
@@ -3592,6 +3636,10 @@
             {
               "item": "RuntimeDescriptorRefRequest.Ability",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeDescriptorRefRequest.AuthorityMetadata",
+              "sha256": "219dd46d9c2a4a1d442d64ab1c344e10d8c0c39465c50c33fef8df59a967bd8a"
             },
             {
               "item": "RuntimeDescriptorRefRequest.CallMode",
@@ -89583,7 +89631,7 @@
         },
         {
           "item": "AbilityOwner",
-          "sha256": "d1351b32a519611b5a047606ffdbb364510f709dc5ed3ece3f72a8643d04f746"
+          "sha256": "e51f2323f913ba874f5ba40d4c8f160314abb3cf7ad0821b9f8e602901bbcf90"
         },
         {
           "item": "AbilityOwnerAgent",
@@ -89592,6 +89640,10 @@
         {
           "item": "AbilityOwnerKind",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
+          "item": "AbilityOwnerService",
+          "sha256": "2c73a6a86472eb5c91271a6b22e220a286d2c8f304a6c497beacf02467c2e1cf"
         },
         {
           "item": "AbilityURA",
@@ -89671,7 +89723,7 @@
         },
         {
           "item": "ParsedURA",
-          "sha256": "4f01da35f5d46077182b3149cd191b2232daa65098339cdc83210cebf2248d48"
+          "sha256": "141baa4877bfabcef94530c564f1d90ccff817a21aa4b8243997be0b6e2a97cd"
         },
         {
           "item": "PublicAbilityNameForOwner",
@@ -89734,6 +89786,14 @@
           "sha256": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158"
         },
         {
+          "item": "ServiceAbilityURA",
+          "sha256": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158"
+        },
+        {
+          "item": "ServiceURA",
+          "sha256": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158"
+        },
+        {
           "item": "URA",
           "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
         },
@@ -89756,6 +89816,10 @@
         {
           "item": "URAKindResource",
           "sha256": "24635fd3f75d31f241cda7eb3af05a842373de2c97153b1cbcc3147281c4607e"
+        },
+        {
+          "item": "URAKindService",
+          "sha256": "3cfd91381a117fd1c6f139fe61c37324f568151dd400ef0eefe8d3514ed2f2ee"
         },
         {
           "item": "URAKindUnknown",
@@ -89791,6 +89855,10 @@
         },
         {
           "item": "AbilityOwner.OwnerID",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
+          "item": "AbilityOwner.ServiceID",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
@@ -90066,6 +90134,10 @@
           "sha256": "6616c8cbffe5b8f29ce728b63cfa74052983bdc4773079b645a1cba13b0cea4a"
         },
         {
+          "item": "ParsedURA.ServiceID",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
           "item": "ParsedURA.UserID",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
@@ -90118,7 +90190,7 @@
             },
             {
               "item": "AbilityOwner",
-              "sha256": "d1351b32a519611b5a047606ffdbb364510f709dc5ed3ece3f72a8643d04f746"
+              "sha256": "e51f2323f913ba874f5ba40d4c8f160314abb3cf7ad0821b9f8e602901bbcf90"
             },
             {
               "item": "AbilityOwnerAgent",
@@ -90127,6 +90199,10 @@
             {
               "item": "AbilityOwnerKind",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "AbilityOwnerService",
+              "sha256": "2c73a6a86472eb5c91271a6b22e220a286d2c8f304a6c497beacf02467c2e1cf"
             },
             {
               "item": "AbilityURA",
@@ -90206,7 +90282,7 @@
             },
             {
               "item": "ParsedURA",
-              "sha256": "4f01da35f5d46077182b3149cd191b2232daa65098339cdc83210cebf2248d48"
+              "sha256": "141baa4877bfabcef94530c564f1d90ccff817a21aa4b8243997be0b6e2a97cd"
             },
             {
               "item": "PublicAbilityNameForOwner",
@@ -90269,6 +90345,14 @@
               "sha256": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158"
             },
             {
+              "item": "ServiceAbilityURA",
+              "sha256": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158"
+            },
+            {
+              "item": "ServiceURA",
+              "sha256": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158"
+            },
+            {
               "item": "URA",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
@@ -90291,6 +90375,10 @@
             {
               "item": "URAKindResource",
               "sha256": "24635fd3f75d31f241cda7eb3af05a842373de2c97153b1cbcc3147281c4607e"
+            },
+            {
+              "item": "URAKindService",
+              "sha256": "3cfd91381a117fd1c6f139fe61c37324f568151dd400ef0eefe8d3514ed2f2ee"
             },
             {
               "item": "URAKindUnknown",
@@ -90326,6 +90414,10 @@
             },
             {
               "item": "AbilityOwner.OwnerID",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "AbilityOwner.ServiceID",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -90601,6 +90693,10 @@
               "sha256": "6616c8cbffe5b8f29ce728b63cfa74052983bdc4773079b645a1cba13b0cea4a"
             },
             {
+              "item": "ParsedURA.ServiceID",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "ParsedURA.UserID",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -90662,7 +90758,7 @@
         },
         {
           "item": "AddressingClient",
-          "sha256": "f7a426d8adc2ef5d33bc64b6917368db6270a664f60cf8cd68360a5d2e1dfd48"
+          "sha256": "f02d26e1c9c6a4f7aaaee8e9dbe72cf772ba578f9c78504fb45492fceb28b063"
         },
         {
           "item": "AddressingProjection",
@@ -90674,7 +90770,7 @@
         },
         {
           "item": "AxonAddressingTransport",
-          "sha256": "759f75342f1479ab56afe7fc9e571580504935576848a3b6c1963d68048a6e1b"
+          "sha256": "d0b5d3f6a646da76191c334cb93ddabb06bc6851657df3f9b249829401da8eda"
         },
         {
           "item": "agent_ura",
@@ -90715,6 +90811,14 @@
         {
           "item": "resource_ura",
           "sha256": "9023d498e3f1a8d68e3979df8aa1d496f1b70aadb8e75ae2cc1036bbbb004a0a"
+        },
+        {
+          "item": "service_ability_ura",
+          "sha256": "bc27fa2534b518e751e7a1fefabebe1cb8bdb5eef41bb5d57efa15c0de251bd6"
+        },
+        {
+          "item": "service_ura",
+          "sha256": "e3bb25052235651e0105a9dc40753bf94312033cbfaacfdc83524de21825cba8"
         },
         {
           "item": "user_ura",
@@ -90827,6 +90931,14 @@
         {
           "item": "AddressingClient.resource_ura",
           "sha256": "f364807bfe0de015ff588d651031282f2fcdb7d72747394d0359b64e04d0e1d8"
+        },
+        {
+          "item": "AddressingClient.service_ability_ura",
+          "sha256": "f1798019e0fd3a2cf9dff5dbd5fd379e5e09546564624044fc0aa83ad05d641f"
+        },
+        {
+          "item": "AddressingClient.service_ura",
+          "sha256": "f064b61c9d41bc98fcff15a21a274c90017765ad5ea9e028f503227c3dcdbdf7"
         },
         {
           "item": "AddressingClient.transport",
@@ -90949,7 +91061,7 @@
             },
             {
               "item": "AddressingClient",
-              "sha256": "f7a426d8adc2ef5d33bc64b6917368db6270a664f60cf8cd68360a5d2e1dfd48"
+              "sha256": "f02d26e1c9c6a4f7aaaee8e9dbe72cf772ba578f9c78504fb45492fceb28b063"
             },
             {
               "item": "AddressingProjection",
@@ -90961,7 +91073,7 @@
             },
             {
               "item": "AxonAddressingTransport",
-              "sha256": "759f75342f1479ab56afe7fc9e571580504935576848a3b6c1963d68048a6e1b"
+              "sha256": "d0b5d3f6a646da76191c334cb93ddabb06bc6851657df3f9b249829401da8eda"
             },
             {
               "item": "agent_ura",
@@ -91002,6 +91114,14 @@
             {
               "item": "resource_ura",
               "sha256": "9023d498e3f1a8d68e3979df8aa1d496f1b70aadb8e75ae2cc1036bbbb004a0a"
+            },
+            {
+              "item": "service_ability_ura",
+              "sha256": "bc27fa2534b518e751e7a1fefabebe1cb8bdb5eef41bb5d57efa15c0de251bd6"
+            },
+            {
+              "item": "service_ura",
+              "sha256": "e3bb25052235651e0105a9dc40753bf94312033cbfaacfdc83524de21825cba8"
             },
             {
               "item": "user_ura",
@@ -91114,6 +91234,14 @@
             {
               "item": "AddressingClient.resource_ura",
               "sha256": "f364807bfe0de015ff588d651031282f2fcdb7d72747394d0359b64e04d0e1d8"
+            },
+            {
+              "item": "AddressingClient.service_ability_ura",
+              "sha256": "f1798019e0fd3a2cf9dff5dbd5fd379e5e09546564624044fc0aa83ad05d641f"
+            },
+            {
+              "item": "AddressingClient.service_ura",
+              "sha256": "f064b61c9d41bc98fcff15a21a274c90017765ad5ea9e028f503227c3dcdbdf7"
             },
             {
               "item": "AddressingClient.transport",
@@ -126753,7 +126881,7 @@
         },
         {
           "item": "DirectoryResolution",
-          "sha256": "21f101bdaaad220743ef442d1163ede082130d460fe8d23ab422a825d1fae78a"
+          "sha256": "19330855a84af7566f7c490fa1a78f05b5bb5d050fd9766baa191cc6478e4318"
         },
         {
           "item": "DirectoryResolveCanonicalIdentity",
@@ -126984,6 +127112,10 @@
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
+          "item": "DirectoryResolution.DescriptorRef",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
           "item": "DirectoryResolution.Negative",
           "sha256": "26c0c2adc8ab309ae43ec9e419697304d0c5bc6def3858cf3b609bef3562b415"
         },
@@ -127152,7 +127284,7 @@
             },
             {
               "item": "DirectoryResolution",
-              "sha256": "21f101bdaaad220743ef442d1163ede082130d460fe8d23ab422a825d1fae78a"
+              "sha256": "19330855a84af7566f7c490fa1a78f05b5bb5d050fd9766baa191cc6478e4318"
             },
             {
               "item": "DirectoryResolveCanonicalIdentity",
@@ -127380,6 +127512,10 @@
             },
             {
               "item": "DirectoryResolution.CanonicalURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryResolution.DescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -127551,7 +127687,7 @@
             },
             {
               "item": "DirectoryResolution",
-              "sha256": "21f101bdaaad220743ef442d1163ede082130d460fe8d23ab422a825d1fae78a"
+              "sha256": "19330855a84af7566f7c490fa1a78f05b5bb5d050fd9766baa191cc6478e4318"
             },
             {
               "item": "DirectoryResolveCanonicalIdentity",
@@ -127779,6 +127915,10 @@
             },
             {
               "item": "DirectoryResolution.CanonicalURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryResolution.DescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -127950,7 +128090,7 @@
             },
             {
               "item": "DirectoryResolution",
-              "sha256": "21f101bdaaad220743ef442d1163ede082130d460fe8d23ab422a825d1fae78a"
+              "sha256": "19330855a84af7566f7c490fa1a78f05b5bb5d050fd9766baa191cc6478e4318"
             },
             {
               "item": "DirectoryResolveCanonicalIdentity",
@@ -128178,6 +128318,10 @@
             },
             {
               "item": "DirectoryResolution.CanonicalURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryResolution.DescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -128349,7 +128493,7 @@
             },
             {
               "item": "DirectoryResolution",
-              "sha256": "21f101bdaaad220743ef442d1163ede082130d460fe8d23ab422a825d1fae78a"
+              "sha256": "19330855a84af7566f7c490fa1a78f05b5bb5d050fd9766baa191cc6478e4318"
             },
             {
               "item": "DirectoryResolveCanonicalIdentity",
@@ -128577,6 +128721,10 @@
             },
             {
               "item": "DirectoryResolution.CanonicalURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryResolution.DescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -128748,7 +128896,7 @@
             },
             {
               "item": "DirectoryResolution",
-              "sha256": "21f101bdaaad220743ef442d1163ede082130d460fe8d23ab422a825d1fae78a"
+              "sha256": "19330855a84af7566f7c490fa1a78f05b5bb5d050fd9766baa191cc6478e4318"
             },
             {
               "item": "DirectoryResolveCanonicalIdentity",
@@ -128976,6 +129124,10 @@
             },
             {
               "item": "DirectoryResolution.CanonicalURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryResolution.DescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -129147,7 +129299,7 @@
             },
             {
               "item": "DirectoryResolution",
-              "sha256": "21f101bdaaad220743ef442d1163ede082130d460fe8d23ab422a825d1fae78a"
+              "sha256": "19330855a84af7566f7c490fa1a78f05b5bb5d050fd9766baa191cc6478e4318"
             },
             {
               "item": "DirectoryResolveCanonicalIdentity",
@@ -129375,6 +129527,10 @@
             },
             {
               "item": "DirectoryResolution.CanonicalURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryResolution.DescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -129546,7 +129702,7 @@
             },
             {
               "item": "DirectoryResolution",
-              "sha256": "21f101bdaaad220743ef442d1163ede082130d460fe8d23ab422a825d1fae78a"
+              "sha256": "19330855a84af7566f7c490fa1a78f05b5bb5d050fd9766baa191cc6478e4318"
             },
             {
               "item": "DirectoryResolveCanonicalIdentity",
@@ -129774,6 +129930,10 @@
             },
             {
               "item": "DirectoryResolution.CanonicalURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryResolution.DescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -129945,7 +130105,7 @@
             },
             {
               "item": "DirectoryResolution",
-              "sha256": "21f101bdaaad220743ef442d1163ede082130d460fe8d23ab422a825d1fae78a"
+              "sha256": "19330855a84af7566f7c490fa1a78f05b5bb5d050fd9766baa191cc6478e4318"
             },
             {
               "item": "DirectoryResolveCanonicalIdentity",
@@ -130173,6 +130333,10 @@
             },
             {
               "item": "DirectoryResolution.CanonicalURA",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "DirectoryResolution.DescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -142358,6 +142522,10 @@
           "sha256": "33617a10367549f0b4080e5fc33e4ec3fd64565c16bc056a91390348f8f92ca8"
         },
         {
+          "item": "RuntimeGovernanceRoutesGen",
+          "sha256": "6effd1427a9ce41475a51c9cecf8278efa54fa4422a6fd8b54f28b8151e42e1d"
+        },
+        {
           "item": "RuntimeSubjects",
           "sha256": "00bd7ef3e94fdfbc7e1620435dacb45c1a42ff13882ec3f32a0c8c8b5ccba59b"
         },
@@ -142427,6 +142595,10 @@
             {
               "item": "RuntimeFuture",
               "sha256": "33617a10367549f0b4080e5fc33e4ec3fd64565c16bc056a91390348f8f92ca8"
+            },
+            {
+              "item": "RuntimeGovernanceRoutesGen",
+              "sha256": "6effd1427a9ce41475a51c9cecf8278efa54fa4422a6fd8b54f28b8151e42e1d"
             },
             {
               "item": "RuntimeSubjects",
@@ -142500,6 +142672,10 @@
               "sha256": "33617a10367549f0b4080e5fc33e4ec3fd64565c16bc056a91390348f8f92ca8"
             },
             {
+              "item": "RuntimeGovernanceRoutesGen",
+              "sha256": "6effd1427a9ce41475a51c9cecf8278efa54fa4422a6fd8b54f28b8151e42e1d"
+            },
+            {
               "item": "RuntimeSubjects",
               "sha256": "00bd7ef3e94fdfbc7e1620435dacb45c1a42ff13882ec3f32a0c8c8b5ccba59b"
             },
@@ -142569,6 +142745,10 @@
             {
               "item": "RuntimeFuture",
               "sha256": "33617a10367549f0b4080e5fc33e4ec3fd64565c16bc056a91390348f8f92ca8"
+            },
+            {
+              "item": "RuntimeGovernanceRoutesGen",
+              "sha256": "6effd1427a9ce41475a51c9cecf8278efa54fa4422a6fd8b54f28b8151e42e1d"
             },
             {
               "item": "RuntimeSubjects",
@@ -142642,6 +142822,10 @@
               "sha256": "33617a10367549f0b4080e5fc33e4ec3fd64565c16bc056a91390348f8f92ca8"
             },
             {
+              "item": "RuntimeGovernanceRoutesGen",
+              "sha256": "6effd1427a9ce41475a51c9cecf8278efa54fa4422a6fd8b54f28b8151e42e1d"
+            },
+            {
               "item": "RuntimeSubjects",
               "sha256": "00bd7ef3e94fdfbc7e1620435dacb45c1a42ff13882ec3f32a0c8c8b5ccba59b"
             },
@@ -142711,6 +142895,10 @@
             {
               "item": "RuntimeFuture",
               "sha256": "33617a10367549f0b4080e5fc33e4ec3fd64565c16bc056a91390348f8f92ca8"
+            },
+            {
+              "item": "RuntimeGovernanceRoutesGen",
+              "sha256": "6effd1427a9ce41475a51c9cecf8278efa54fa4422a6fd8b54f28b8151e42e1d"
             },
             {
               "item": "RuntimeSubjects",
@@ -142784,6 +142972,10 @@
               "sha256": "33617a10367549f0b4080e5fc33e4ec3fd64565c16bc056a91390348f8f92ca8"
             },
             {
+              "item": "RuntimeGovernanceRoutesGen",
+              "sha256": "6effd1427a9ce41475a51c9cecf8278efa54fa4422a6fd8b54f28b8151e42e1d"
+            },
+            {
               "item": "RuntimeSubjects",
               "sha256": "00bd7ef3e94fdfbc7e1620435dacb45c1a42ff13882ec3f32a0c8c8b5ccba59b"
             },
@@ -142855,6 +143047,10 @@
               "sha256": "33617a10367549f0b4080e5fc33e4ec3fd64565c16bc056a91390348f8f92ca8"
             },
             {
+              "item": "RuntimeGovernanceRoutesGen",
+              "sha256": "6effd1427a9ce41475a51c9cecf8278efa54fa4422a6fd8b54f28b8151e42e1d"
+            },
+            {
               "item": "RuntimeSubjects",
               "sha256": "00bd7ef3e94fdfbc7e1620435dacb45c1a42ff13882ec3f32a0c8c8b5ccba59b"
             },
@@ -142924,6 +143120,10 @@
             {
               "item": "RuntimeFuture",
               "sha256": "33617a10367549f0b4080e5fc33e4ec3fd64565c16bc056a91390348f8f92ca8"
+            },
+            {
+              "item": "RuntimeGovernanceRoutesGen",
+              "sha256": "6effd1427a9ce41475a51c9cecf8278efa54fa4422a6fd8b54f28b8151e42e1d"
             },
             {
               "item": "RuntimeSubjects",
@@ -145155,6 +145355,22 @@
           "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
         },
         {
+          "item": "SigningMaterial.CalleeProfile",
+          "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+        },
+        {
+          "item": "SigningMaterial.CalleeURA",
+          "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+        },
+        {
+          "item": "SigningMaterial.CallerProfile",
+          "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+        },
+        {
+          "item": "SigningMaterial.CallerURA",
+          "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+        },
+        {
           "item": "SigningMaterial.CanonicalBytesBase64",
           "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
         },
@@ -145181,6 +145397,14 @@
         {
           "item": "SigningMaterial.SignerPolicy",
           "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
+        },
+        {
+          "item": "SigningMaterial.SubjectProfile",
+          "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+        },
+        {
+          "item": "SigningMaterial.SubjectURA",
+          "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
         },
         {
           "item": "SubmittedInvocation.Handle",
@@ -145746,6 +145970,22 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "SigningMaterial.CalleeProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CalleeURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
               "item": "SigningMaterial.CanonicalBytesBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
@@ -145772,6 +146012,14 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
+            },
+            {
+              "item": "SigningMaterial.SubjectProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.SubjectURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -146337,6 +146585,22 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "SigningMaterial.CalleeProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CalleeURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
               "item": "SigningMaterial.CanonicalBytesBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
@@ -146363,6 +146627,14 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
+            },
+            {
+              "item": "SigningMaterial.SubjectProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.SubjectURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -146928,6 +147200,22 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "SigningMaterial.CalleeProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CalleeURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
               "item": "SigningMaterial.CanonicalBytesBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
@@ -146954,6 +147242,14 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
+            },
+            {
+              "item": "SigningMaterial.SubjectProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.SubjectURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -147519,6 +147815,22 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "SigningMaterial.CalleeProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CalleeURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
               "item": "SigningMaterial.CanonicalBytesBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
@@ -147545,6 +147857,14 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
+            },
+            {
+              "item": "SigningMaterial.SubjectProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.SubjectURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -148110,6 +148430,22 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "SigningMaterial.CalleeProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CalleeURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
               "item": "SigningMaterial.CanonicalBytesBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
@@ -148136,6 +148472,14 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
+            },
+            {
+              "item": "SigningMaterial.SubjectProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.SubjectURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -148701,6 +149045,22 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "SigningMaterial.CalleeProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CalleeURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
               "item": "SigningMaterial.CanonicalBytesBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
@@ -148727,6 +149087,14 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
+            },
+            {
+              "item": "SigningMaterial.SubjectProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.SubjectURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -149292,6 +149660,22 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "SigningMaterial.CalleeProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CalleeURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
               "item": "SigningMaterial.CanonicalBytesBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
@@ -149318,6 +149702,14 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
+            },
+            {
+              "item": "SigningMaterial.SubjectProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.SubjectURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -149883,6 +150275,22 @@
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
+              "item": "SigningMaterial.CalleeProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CalleeURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.CallerURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
               "item": "SigningMaterial.CanonicalBytesBase64",
               "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
@@ -149909,6 +150317,14 @@
             {
               "item": "SigningMaterial.SignerPolicy",
               "sha256": "f6f24de5b0dbcf37f95b4d7140b12b365b3959b4bf68919dbea480116e3c902a"
+            },
+            {
+              "item": "SigningMaterial.SubjectProfile",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
+            },
+            {
+              "item": "SigningMaterial.SubjectURA",
+              "sha256": "fe1f5563400c634879c436280e0757249de2dc82306a6d4fdbf4a6cacce6e3e7"
             },
             {
               "item": "SubmittedInvocation.Handle",
@@ -164721,12 +165137,20 @@
           "sha256": "05b08f71595075f35ad49ec3115f1799125de20252bb820cc2ab9e16d79cf3ee"
         },
         {
+          "item": "NewRuntimePrincipalProviderWithContextFactory",
+          "sha256": "b206a8f253cfddb6b6b667d60edf164ad42665c85b72172b4c453b577752181e"
+        },
+        {
           "item": "PrincipalClient",
           "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
         },
         {
           "item": "PrincipalCommand",
           "sha256": "52b81c0d414d6fef354aa94e9ef2087120a6d561bcedcd6ea859f6f1619324b2"
+        },
+        {
+          "item": "PrincipalInvocationContextFactory",
+          "sha256": "17ccffcb4ec570f687db7264cafb54c9e2682796e1f9eec13c215dd2fb75559b"
         },
         {
           "item": "PrincipalLifecycle",
@@ -164875,6 +165299,10 @@
         {
           "item": "PrincipalCommand.Proof",
           "sha256": "e8e56d9ffd472db06a834740548bda5e3be3467de2042886fd6549b56c70946e"
+        },
+        {
+          "item": "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
+          "sha256": "1e7a435861c2605324c0ce8659d8b9993c47634bc3bfaf0d80b3635044f1ce54"
         },
         {
           "item": "PrincipalLifecycle.AddKey",
@@ -165028,12 +165456,20 @@
               "sha256": "05b08f71595075f35ad49ec3115f1799125de20252bb820cc2ab9e16d79cf3ee"
             },
             {
+              "item": "NewRuntimePrincipalProviderWithContextFactory",
+              "sha256": "b206a8f253cfddb6b6b667d60edf164ad42665c85b72172b4c453b577752181e"
+            },
+            {
               "item": "PrincipalClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
               "item": "PrincipalCommand",
               "sha256": "52b81c0d414d6fef354aa94e9ef2087120a6d561bcedcd6ea859f6f1619324b2"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory",
+              "sha256": "17ccffcb4ec570f687db7264cafb54c9e2682796e1f9eec13c215dd2fb75559b"
             },
             {
               "item": "PrincipalLifecycle",
@@ -165182,6 +165618,10 @@
             {
               "item": "PrincipalCommand.Proof",
               "sha256": "e8e56d9ffd472db06a834740548bda5e3be3467de2042886fd6549b56c70946e"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
+              "sha256": "1e7a435861c2605324c0ce8659d8b9993c47634bc3bfaf0d80b3635044f1ce54"
             },
             {
               "item": "PrincipalLifecycle.AddKey",
@@ -165335,12 +165775,20 @@
               "sha256": "05b08f71595075f35ad49ec3115f1799125de20252bb820cc2ab9e16d79cf3ee"
             },
             {
+              "item": "NewRuntimePrincipalProviderWithContextFactory",
+              "sha256": "b206a8f253cfddb6b6b667d60edf164ad42665c85b72172b4c453b577752181e"
+            },
+            {
               "item": "PrincipalClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
               "item": "PrincipalCommand",
               "sha256": "52b81c0d414d6fef354aa94e9ef2087120a6d561bcedcd6ea859f6f1619324b2"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory",
+              "sha256": "17ccffcb4ec570f687db7264cafb54c9e2682796e1f9eec13c215dd2fb75559b"
             },
             {
               "item": "PrincipalLifecycle",
@@ -165489,6 +165937,10 @@
             {
               "item": "PrincipalCommand.Proof",
               "sha256": "e8e56d9ffd472db06a834740548bda5e3be3467de2042886fd6549b56c70946e"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
+              "sha256": "1e7a435861c2605324c0ce8659d8b9993c47634bc3bfaf0d80b3635044f1ce54"
             },
             {
               "item": "PrincipalLifecycle.AddKey",
@@ -165642,12 +166094,20 @@
               "sha256": "05b08f71595075f35ad49ec3115f1799125de20252bb820cc2ab9e16d79cf3ee"
             },
             {
+              "item": "NewRuntimePrincipalProviderWithContextFactory",
+              "sha256": "b206a8f253cfddb6b6b667d60edf164ad42665c85b72172b4c453b577752181e"
+            },
+            {
               "item": "PrincipalClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
               "item": "PrincipalCommand",
               "sha256": "52b81c0d414d6fef354aa94e9ef2087120a6d561bcedcd6ea859f6f1619324b2"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory",
+              "sha256": "17ccffcb4ec570f687db7264cafb54c9e2682796e1f9eec13c215dd2fb75559b"
             },
             {
               "item": "PrincipalLifecycle",
@@ -165796,6 +166256,10 @@
             {
               "item": "PrincipalCommand.Proof",
               "sha256": "e8e56d9ffd472db06a834740548bda5e3be3467de2042886fd6549b56c70946e"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
+              "sha256": "1e7a435861c2605324c0ce8659d8b9993c47634bc3bfaf0d80b3635044f1ce54"
             },
             {
               "item": "PrincipalLifecycle.AddKey",
@@ -165949,12 +166413,20 @@
               "sha256": "05b08f71595075f35ad49ec3115f1799125de20252bb820cc2ab9e16d79cf3ee"
             },
             {
+              "item": "NewRuntimePrincipalProviderWithContextFactory",
+              "sha256": "b206a8f253cfddb6b6b667d60edf164ad42665c85b72172b4c453b577752181e"
+            },
+            {
               "item": "PrincipalClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
               "item": "PrincipalCommand",
               "sha256": "52b81c0d414d6fef354aa94e9ef2087120a6d561bcedcd6ea859f6f1619324b2"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory",
+              "sha256": "17ccffcb4ec570f687db7264cafb54c9e2682796e1f9eec13c215dd2fb75559b"
             },
             {
               "item": "PrincipalLifecycle",
@@ -166103,6 +166575,10 @@
             {
               "item": "PrincipalCommand.Proof",
               "sha256": "e8e56d9ffd472db06a834740548bda5e3be3467de2042886fd6549b56c70946e"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
+              "sha256": "1e7a435861c2605324c0ce8659d8b9993c47634bc3bfaf0d80b3635044f1ce54"
             },
             {
               "item": "PrincipalLifecycle.AddKey",
@@ -166256,12 +166732,20 @@
               "sha256": "05b08f71595075f35ad49ec3115f1799125de20252bb820cc2ab9e16d79cf3ee"
             },
             {
+              "item": "NewRuntimePrincipalProviderWithContextFactory",
+              "sha256": "b206a8f253cfddb6b6b667d60edf164ad42665c85b72172b4c453b577752181e"
+            },
+            {
               "item": "PrincipalClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
               "item": "PrincipalCommand",
               "sha256": "52b81c0d414d6fef354aa94e9ef2087120a6d561bcedcd6ea859f6f1619324b2"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory",
+              "sha256": "17ccffcb4ec570f687db7264cafb54c9e2682796e1f9eec13c215dd2fb75559b"
             },
             {
               "item": "PrincipalLifecycle",
@@ -166410,6 +166894,10 @@
             {
               "item": "PrincipalCommand.Proof",
               "sha256": "e8e56d9ffd472db06a834740548bda5e3be3467de2042886fd6549b56c70946e"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
+              "sha256": "1e7a435861c2605324c0ce8659d8b9993c47634bc3bfaf0d80b3635044f1ce54"
             },
             {
               "item": "PrincipalLifecycle.AddKey",
@@ -166563,12 +167051,20 @@
               "sha256": "05b08f71595075f35ad49ec3115f1799125de20252bb820cc2ab9e16d79cf3ee"
             },
             {
+              "item": "NewRuntimePrincipalProviderWithContextFactory",
+              "sha256": "b206a8f253cfddb6b6b667d60edf164ad42665c85b72172b4c453b577752181e"
+            },
+            {
               "item": "PrincipalClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
               "item": "PrincipalCommand",
               "sha256": "52b81c0d414d6fef354aa94e9ef2087120a6d561bcedcd6ea859f6f1619324b2"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory",
+              "sha256": "17ccffcb4ec570f687db7264cafb54c9e2682796e1f9eec13c215dd2fb75559b"
             },
             {
               "item": "PrincipalLifecycle",
@@ -166717,6 +167213,10 @@
             {
               "item": "PrincipalCommand.Proof",
               "sha256": "e8e56d9ffd472db06a834740548bda5e3be3467de2042886fd6549b56c70946e"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
+              "sha256": "1e7a435861c2605324c0ce8659d8b9993c47634bc3bfaf0d80b3635044f1ce54"
             },
             {
               "item": "PrincipalLifecycle.AddKey",
@@ -166870,12 +167370,20 @@
               "sha256": "05b08f71595075f35ad49ec3115f1799125de20252bb820cc2ab9e16d79cf3ee"
             },
             {
+              "item": "NewRuntimePrincipalProviderWithContextFactory",
+              "sha256": "b206a8f253cfddb6b6b667d60edf164ad42665c85b72172b4c453b577752181e"
+            },
+            {
               "item": "PrincipalClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
               "item": "PrincipalCommand",
               "sha256": "52b81c0d414d6fef354aa94e9ef2087120a6d561bcedcd6ea859f6f1619324b2"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory",
+              "sha256": "17ccffcb4ec570f687db7264cafb54c9e2682796e1f9eec13c215dd2fb75559b"
             },
             {
               "item": "PrincipalLifecycle",
@@ -167024,6 +167532,10 @@
             {
               "item": "PrincipalCommand.Proof",
               "sha256": "e8e56d9ffd472db06a834740548bda5e3be3467de2042886fd6549b56c70946e"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
+              "sha256": "1e7a435861c2605324c0ce8659d8b9993c47634bc3bfaf0d80b3635044f1ce54"
             },
             {
               "item": "PrincipalLifecycle.AddKey",
@@ -167177,12 +167689,20 @@
               "sha256": "05b08f71595075f35ad49ec3115f1799125de20252bb820cc2ab9e16d79cf3ee"
             },
             {
+              "item": "NewRuntimePrincipalProviderWithContextFactory",
+              "sha256": "b206a8f253cfddb6b6b667d60edf164ad42665c85b72172b4c453b577752181e"
+            },
+            {
               "item": "PrincipalClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
               "item": "PrincipalCommand",
               "sha256": "52b81c0d414d6fef354aa94e9ef2087120a6d561bcedcd6ea859f6f1619324b2"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory",
+              "sha256": "17ccffcb4ec570f687db7264cafb54c9e2682796e1f9eec13c215dd2fb75559b"
             },
             {
               "item": "PrincipalLifecycle",
@@ -167331,6 +167851,10 @@
             {
               "item": "PrincipalCommand.Proof",
               "sha256": "e8e56d9ffd472db06a834740548bda5e3be3467de2042886fd6549b56c70946e"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
+              "sha256": "1e7a435861c2605324c0ce8659d8b9993c47634bc3bfaf0d80b3635044f1ce54"
             },
             {
               "item": "PrincipalLifecycle.AddKey",
@@ -167484,12 +168008,20 @@
               "sha256": "05b08f71595075f35ad49ec3115f1799125de20252bb820cc2ab9e16d79cf3ee"
             },
             {
+              "item": "NewRuntimePrincipalProviderWithContextFactory",
+              "sha256": "b206a8f253cfddb6b6b667d60edf164ad42665c85b72172b4c453b577752181e"
+            },
+            {
               "item": "PrincipalClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
               "item": "PrincipalCommand",
               "sha256": "52b81c0d414d6fef354aa94e9ef2087120a6d561bcedcd6ea859f6f1619324b2"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory",
+              "sha256": "17ccffcb4ec570f687db7264cafb54c9e2682796e1f9eec13c215dd2fb75559b"
             },
             {
               "item": "PrincipalLifecycle",
@@ -167638,6 +168170,10 @@
             {
               "item": "PrincipalCommand.Proof",
               "sha256": "e8e56d9ffd472db06a834740548bda5e3be3467de2042886fd6549b56c70946e"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
+              "sha256": "1e7a435861c2605324c0ce8659d8b9993c47634bc3bfaf0d80b3635044f1ce54"
             },
             {
               "item": "PrincipalLifecycle.AddKey",
@@ -167791,12 +168327,20 @@
               "sha256": "05b08f71595075f35ad49ec3115f1799125de20252bb820cc2ab9e16d79cf3ee"
             },
             {
+              "item": "NewRuntimePrincipalProviderWithContextFactory",
+              "sha256": "b206a8f253cfddb6b6b667d60edf164ad42665c85b72172b4c453b577752181e"
+            },
+            {
               "item": "PrincipalClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
               "item": "PrincipalCommand",
               "sha256": "52b81c0d414d6fef354aa94e9ef2087120a6d561bcedcd6ea859f6f1619324b2"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory",
+              "sha256": "17ccffcb4ec570f687db7264cafb54c9e2682796e1f9eec13c215dd2fb75559b"
             },
             {
               "item": "PrincipalLifecycle",
@@ -167945,6 +168489,10 @@
             {
               "item": "PrincipalCommand.Proof",
               "sha256": "e8e56d9ffd472db06a834740548bda5e3be3467de2042886fd6549b56c70946e"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
+              "sha256": "1e7a435861c2605324c0ce8659d8b9993c47634bc3bfaf0d80b3635044f1ce54"
             },
             {
               "item": "PrincipalLifecycle.AddKey",
@@ -168098,12 +168646,20 @@
               "sha256": "05b08f71595075f35ad49ec3115f1799125de20252bb820cc2ab9e16d79cf3ee"
             },
             {
+              "item": "NewRuntimePrincipalProviderWithContextFactory",
+              "sha256": "b206a8f253cfddb6b6b667d60edf164ad42665c85b72172b4c453b577752181e"
+            },
+            {
               "item": "PrincipalClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
               "item": "PrincipalCommand",
               "sha256": "52b81c0d414d6fef354aa94e9ef2087120a6d561bcedcd6ea859f6f1619324b2"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory",
+              "sha256": "17ccffcb4ec570f687db7264cafb54c9e2682796e1f9eec13c215dd2fb75559b"
             },
             {
               "item": "PrincipalLifecycle",
@@ -168252,6 +168808,10 @@
             {
               "item": "PrincipalCommand.Proof",
               "sha256": "e8e56d9ffd472db06a834740548bda5e3be3467de2042886fd6549b56c70946e"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
+              "sha256": "1e7a435861c2605324c0ce8659d8b9993c47634bc3bfaf0d80b3635044f1ce54"
             },
             {
               "item": "PrincipalLifecycle.AddKey",
@@ -168405,12 +168965,20 @@
               "sha256": "05b08f71595075f35ad49ec3115f1799125de20252bb820cc2ab9e16d79cf3ee"
             },
             {
+              "item": "NewRuntimePrincipalProviderWithContextFactory",
+              "sha256": "b206a8f253cfddb6b6b667d60edf164ad42665c85b72172b4c453b577752181e"
+            },
+            {
               "item": "PrincipalClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
               "item": "PrincipalCommand",
               "sha256": "52b81c0d414d6fef354aa94e9ef2087120a6d561bcedcd6ea859f6f1619324b2"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory",
+              "sha256": "17ccffcb4ec570f687db7264cafb54c9e2682796e1f9eec13c215dd2fb75559b"
             },
             {
               "item": "PrincipalLifecycle",
@@ -168559,6 +169127,10 @@
             {
               "item": "PrincipalCommand.Proof",
               "sha256": "e8e56d9ffd472db06a834740548bda5e3be3467de2042886fd6549b56c70946e"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
+              "sha256": "1e7a435861c2605324c0ce8659d8b9993c47634bc3bfaf0d80b3635044f1ce54"
             },
             {
               "item": "PrincipalLifecycle.AddKey",
@@ -168712,12 +169284,20 @@
               "sha256": "05b08f71595075f35ad49ec3115f1799125de20252bb820cc2ab9e16d79cf3ee"
             },
             {
+              "item": "NewRuntimePrincipalProviderWithContextFactory",
+              "sha256": "b206a8f253cfddb6b6b667d60edf164ad42665c85b72172b4c453b577752181e"
+            },
+            {
               "item": "PrincipalClient",
               "sha256": "2c1dc42555dea72b2023ac73d3368a32ba7c3fed934d0fe52024196c65d60bd2"
             },
             {
               "item": "PrincipalCommand",
               "sha256": "52b81c0d414d6fef354aa94e9ef2087120a6d561bcedcd6ea859f6f1619324b2"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory",
+              "sha256": "17ccffcb4ec570f687db7264cafb54c9e2682796e1f9eec13c215dd2fb75559b"
             },
             {
               "item": "PrincipalLifecycle",
@@ -168866,6 +169446,10 @@
             {
               "item": "PrincipalCommand.Proof",
               "sha256": "e8e56d9ffd472db06a834740548bda5e3be3467de2042886fd6549b56c70946e"
+            },
+            {
+              "item": "PrincipalInvocationContextFactory.ContextForPrincipalAbility",
+              "sha256": "1e7a435861c2605324c0ce8659d8b9993c47634bc3bfaf0d80b3635044f1ce54"
             },
             {
               "item": "PrincipalLifecycle.AddKey",

@@ -74,7 +74,7 @@ SEMANTIC_RULES: list[tuple[str, str]] = [
     ),
     (r"(authorityartifact|authorizationprovider)", "authority_metadata"),
     (
-        r"(canonicaladdress|abilityaddress|addressing|abilityura|agentura|entityura|receiptura|\bura\b|urabuilder|easynetaxonura|axonsdkura)",
+        r"(canonicaladdress|abilityaddress|abilityowner|addressing|abilityura|agentura|serviceura|entityura|receiptura|urakind|\bura\b|urabuilder|easynetaxonura|axonsdkura)",
         "canonical_addressing",
     ),
     (r"(bidi|duplex)", "bidi"),
