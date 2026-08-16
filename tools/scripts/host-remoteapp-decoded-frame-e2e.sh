@@ -18,6 +18,7 @@ set -euo pipefail
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 BUNDLED_PROBE="$SELF_DIR/host-remoteapp-decoded-frame-probe.sh"
+BUNDLED_PERMISSION_PREFLIGHT="$SELF_DIR/host-remoteapp-permission-subject-e2e.sh"
 BUNDLED_SENTINEL_FIXTURE="$SELF_DIR/host-remoteapp-sentinel-fixture.sh"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 OUT_DIR="${EASYNET_REMOTEAPP_E2E_OUT_DIR:-}"
@@ -120,7 +121,9 @@ Probe contract:
 Bundled probe preflight:
   When --probe-cmd is omitted, the harness uses the bundled EasyNet probe and
   fails before launching host sentinel windows unless daemon control discovery
-  publishes daemon_identity. The harness must not synthesize daemon identity
+  publishes daemon_identity and the host-local screen-capture permission probe
+  reaches granted=true through descriptor-bound permission_status/request_permission.
+  The harness must not synthesize daemon identity or target permission state
   for the probe because that would invalidate Invocation.subject evidence.
 
 Exit semantics:
@@ -222,6 +225,15 @@ if mode in {"device", "both"} and not str(node_id or "").strip():
         "bundled EasyNet host probe found device-primary daemon_identity without node_id"
     )
 PY
+}
+
+preflight_bundled_probe_permissions() {
+  [[ -x "$BUNDLED_PERMISSION_PREFLIGHT" ]] || die "missing executable bundled permission preflight: $BUNDLED_PERMISSION_PREFLIGHT"
+  local permission_out_dir="$OUT_DIR/permission-preflight"
+  "$BUNDLED_PERMISSION_PREFLIGHT" \
+    --run \
+    --require-screen-capture-granted \
+    --out-dir "$permission_out_dir"
 }
 
 mkdir -p "$OUT_DIR"
@@ -771,6 +783,10 @@ if [[ "$SELF_TEST" == "1" ]]; then
   grep -q "TARGET_MOVED" "$0"
   grep -q "TARGET_LOST" "$0"
   grep -q "host-remoteapp-sentinel-fixture.sh" "$0"
+  grep -q "host-remoteapp-permission-subject-e2e.sh" "$0"
+  grep -q -- "--require-screen-capture-granted" "$0"
+  grep -q "bundled_permission_preflight_failed" "$0"
+  grep -q "permission preflight must run before sentinel fixture" "$0"
   grep -q "EASYNET_REMOTEAPP_SENTINEL_FIXTURE" "$0"
   grep -q "cleanup.sh" "$0"
   python3 - "$EVIDENCE_JSON" "$TARGET_KIND" <<'PY'
@@ -944,6 +960,13 @@ if [[ "$PROBE_CMD_USES_BUNDLED" == "1" ]]; then
   if ! preflight_output="$(preflight_bundled_probe_runtime 2>&1)"; then
     write_failure_report "bundled_probe_preflight_failed: $preflight_output"
     echo "$preflight_output" >&2
+    exit 1
+  fi
+  # SPEC lifecycle gate: permission preflight must run before sentinel fixture
+  # creation, target selection, create_session, or media startup.
+  if ! permission_preflight_output="$(preflight_bundled_probe_permissions 2>&1)"; then
+    write_failure_report "bundled_permission_preflight_failed: $permission_preflight_output"
+    echo "$permission_preflight_output" >&2
     exit 1
   fi
 fi

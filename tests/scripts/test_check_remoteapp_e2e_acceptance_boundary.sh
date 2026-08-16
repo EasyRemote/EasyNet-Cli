@@ -82,6 +82,17 @@ fi
 mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
 
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good"
+perl -0pi -e 's/permission_preflight_output="\$\(preflight_bundled_probe_permissions 2>&1\)"/permission_preflight_output="$(true 2>\&1)"/' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted decoded-frame harness without permission preflight call" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+
 PROBE="$SANDBOX/fake_probe.py"
 cat >"$PROBE" <<'PY'
 import json
@@ -733,6 +744,91 @@ cat >"$FAKE_EASYNET" <<'SH'
 set -euo pipefail
 
 case "$*" in
+  "runtime status --json")
+    cat <<'JSON'
+{
+  "connection": {
+    "device_ura": "easynet:///r/localhost/device/dev",
+    "node_id": "dev",
+    "state": "online"
+  }
+}
+JSON
+    ;;
+  "ability list --format json --pattern remote_desktop.*")
+    cat <<'JSON'
+[
+  {
+    "name": "remote_desktop.permission_status",
+    "descriptor_ref": "easynet:///r/localhost/ability/system-agent.dev.remote-desktop.remote_desktop.permission_status@1.0.0#test!read",
+    "owner_ura": "easynet:///r/localhost/agent/device.dev.remote-desktop",
+    "metadata": {
+      "subject_contract_ura": "easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject"
+    },
+    "scope_subjects": {
+      "uras": ["agent", "resource", "user"]
+    }
+  },
+  {
+    "name": "remote_desktop.request_permission",
+    "descriptor_ref": "easynet:///r/localhost/ability/system-agent.dev.remote-desktop.remote_desktop.request_permission@1.0.0#test!write",
+    "owner_ura": "easynet:///r/localhost/agent/device.dev.remote-desktop",
+    "metadata": {
+      "subject_contract_ura": "easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject"
+    },
+    "scope_subjects": {
+      "uras": ["agent", "resource", "user"]
+    }
+  }
+]
+JSON
+    ;;
+  ability\ invoke\ *remote_desktop.permission_status*\ --node\ *\ --subject\ easynet:///r/localhost/resource/user.*/invoke/remote_desktop.permission_status\ *)
+    cat <<'JSON'
+{
+  "granted": true,
+  "permission": "screen_capture",
+  "process_path": "/tmp/easynet-daemon-test",
+  "settings_hint": "System Settings > Privacy & Security > Screen & System Audio Recording",
+  "subject_contract": {
+    "subject_contract_ura": "easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject",
+    "allowed_subjects": [
+      "caller_user_self",
+      "descriptor_bound_invoke_resource",
+      "local_system_loopback"
+    ],
+    "target_resource_subjects_allowed": false
+  }
+}
+JSON
+    ;;
+  ability\ invoke\ *remote_desktop.request_permission*\ --node\ *\ --subject\ easynet:///r/localhost/resource/user.*/invoke/remote_desktop.request_permission\ *)
+    cat <<'JSON'
+{
+  "granted": true,
+  "permission": "screen_capture",
+  "process_path": "/tmp/easynet-daemon-test",
+  "settings_hint": "System Settings > Privacy & Security > Screen & System Audio Recording",
+  "subject_contract": {
+    "subject_contract_ura": "easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject",
+    "allowed_subjects": [
+      "caller_user_self",
+      "descriptor_bound_invoke_resource",
+      "local_system_loopback"
+    ],
+    "target_resource_subjects_allowed": false
+  }
+}
+JSON
+    ;;
+  ability\ invoke\ *remote_desktop.permission_status*\ --node\ *\ --subject\ easynet:///r/localhost/resource/device.dev/streams/*\ *)
+    echo "remote_desktop.permission_status: screen-capture permission probes are host-local and MUST NOT be scoped to a remote desktop resource subject; reason=invalid_argument" >&2
+    exit 1
+    ;;
+  ability\ invoke\ *remote_desktop.request_permission*\ --node\ *\ --subject\ easynet:///r/localhost/resource/device.dev/streams/*\ *)
+    echo "remote_desktop.request_permission: screen-capture permission probes are host-local and MUST NOT be scoped to a remote desktop resource subject; reason=invalid_argument" >&2
+    exit 1
+    ;;
   "ability refresh-remote-targets --type window --format json")
     cat <<'JSON'
 {

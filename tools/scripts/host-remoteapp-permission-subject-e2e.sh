@@ -16,6 +16,7 @@ REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 
 MODE=run
 OUT_DIR=""
+REQUIRE_SCREEN_CAPTURE_GRANTED=0
 
 HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA='easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject'
 
@@ -29,6 +30,11 @@ Options:
   --run          Execute against the local EasyNet daemon.
   --self-test    Validate the harness against synthetic positive evidence.
   --out-dir DIR  Report directory. Defaults under target/e2e.
+  --require-screen-capture-granted
+                 After proving host-local permission subject correctness,
+                 request permission if needed and fail unless the final
+                 permission_status response reports granted=true. This is
+                 the pre-target gate for decoded-frame E2E harnesses.
 
 Environment:
   EASYNET_REMOTEAPP_EASYNET_BIN
@@ -44,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --run) MODE=run; shift ;;
     --self-test) MODE=self-test; shift ;;
     --out-dir) OUT_DIR="${2:?missing value for --out-dir}"; shift 2 ;;
+    --require-screen-capture-granted) REQUIRE_SCREEN_CAPTURE_GRANTED=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 64 ;;
   esac
@@ -62,6 +69,10 @@ ABILITY_LIST_JSON="$OUT_DIR/ability-list.json"
 RUNTIME_STATUS_JSON="$OUT_DIR/runtime-status.json"
 POSITIVE_STDOUT="$OUT_DIR/permission-status-positive.stdout"
 POSITIVE_STDERR="$OUT_DIR/permission-status-positive.stderr"
+REQUEST_PERMISSION_STDOUT="$OUT_DIR/request-permission.stdout"
+REQUEST_PERMISSION_STDERR="$OUT_DIR/request-permission.stderr"
+AFTER_PERMISSION_STDOUT="$OUT_DIR/permission-status-after-request.stdout"
+AFTER_PERMISSION_STDERR="$OUT_DIR/permission-status-after-request.stderr"
 
 die() {
   echo "[FAIL] $*" >&2
@@ -90,13 +101,29 @@ print(secrets.token_hex(16))
 PY
 }
 
-validate_evidence() {
-  python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" "$HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA" <<'PY'
+json_permission_granted() {
+  python3 - "$1" <<'PY'
 import json
 import pathlib
 import sys
 
-evidence_path, report_path, md_path, contract_ura = sys.argv[1:5]
+raw = pathlib.Path(sys.argv[1]).read_text(errors="replace")
+try:
+    data = json.loads(raw) if raw.strip() else {}
+except json.JSONDecodeError:
+    data = {}
+raise SystemExit(0 if isinstance(data, dict) and data.get("granted") is True else 1)
+PY
+}
+
+validate_evidence() {
+  python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" "$HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA" "$REQUIRE_SCREEN_CAPTURE_GRANTED" <<'PY'
+import json
+import pathlib
+import sys
+
+evidence_path, report_path, md_path, contract_ura, require_screen_capture_granted_raw = sys.argv[1:6]
+require_screen_capture_granted = require_screen_capture_granted_raw == "1"
 with open(evidence_path, encoding="utf-8") as f:
     evidence = json.load(f)
 
@@ -158,6 +185,27 @@ if isinstance(positive, dict):
                 require("descriptor_bound_invoke_resource" in allowed,
                         "positive permission_status contract must allow descriptor-bound invoke Resource subjects")
 
+screen_capture_preflight = evidence.get("screen_capture_permission_preflight")
+if require_screen_capture_granted:
+    require(isinstance(screen_capture_preflight, dict),
+            "screen_capture_permission_preflight evidence must be present when granted permission is required")
+    if isinstance(screen_capture_preflight, dict):
+        require(screen_capture_preflight.get("required") is True,
+                "screen_capture_permission_preflight.required must be true")
+        granted = screen_capture_preflight.get("granted")
+        if granted is not True:
+            process_path = screen_capture_preflight.get("process_path") or "<unknown process>"
+            settings_hint = screen_capture_preflight.get("settings_hint") or "System Settings > Privacy & Security > Screen & System Audio Recording"
+            require(
+                False,
+                "screen capture permission must be granted before decoded-frame E2E starts; "
+                f"process_path={process_path}; settings_hint={settings_hint}",
+            )
+        require(screen_capture_preflight.get("positive_subject_ura") == get("positive_permission_status.subject_ura"),
+                "screen_capture_permission_preflight must reuse the descriptor-bound permission_status subject")
+        require(screen_capture_preflight.get("target_resource_subjects_allowed") is False,
+                "screen_capture_permission_preflight must preserve the host-local target-resource prohibition")
+
 negative = evidence.get("negative_target_subjects")
 require(isinstance(negative, list), "negative_target_subjects evidence must be a list")
 if isinstance(negative, list):
@@ -197,6 +245,10 @@ report = {
     "evidence_json": evidence_path,
     "positive_subject_ura": get("positive_permission_status.subject_ura"),
     "negative_case_count": len(negative) if isinstance(negative, list) else None,
+    "screen_capture_permission_required": require_screen_capture_granted,
+    "screen_capture_permission_granted": get("screen_capture_permission_preflight.granted"),
+    "screen_capture_process_path": get("screen_capture_permission_preflight.process_path"),
+    "screen_capture_settings_hint": get("screen_capture_permission_preflight.settings_hint"),
 }
 pathlib.Path(report_path).write_text(
     json.dumps(report, indent=2, sort_keys=True) + "\n",
@@ -208,6 +260,8 @@ with open(md_path, "w", encoding="utf-8") as f:
     f.write(f"- Evidence: `{evidence_path}`\n")
     f.write(f"- Positive subject: `{report['positive_subject_ura']}`\n")
     f.write(f"- Negative target-subject cases: `{report['negative_case_count']}`\n")
+    f.write(f"- Screen capture permission required: `{report['screen_capture_permission_required']}`\n")
+    f.write(f"- Screen capture permission granted: `{report['screen_capture_permission_granted']}`\n")
     if errors:
         f.write("\n## Errors\n")
         for error in errors:
@@ -257,7 +311,10 @@ evidence = {
         "subject_ura": subject,
         "exit_code": 0,
         "response": {
+            "granted": True,
             "permission": "screen_capture",
+            "process_path": "/Applications/EasyNet.app/Contents/MacOS/easynet-daemon",
+            "settings_hint": "System Settings > Privacy & Security > Screen & System Audio Recording",
             "subject_contract": {
                 "subject_contract_ura": contract_ura,
                 "allowed_subjects": [
@@ -269,10 +326,23 @@ evidence = {
             },
         },
     },
+    "screen_capture_permission_preflight": {
+        "required": True,
+        "positive_subject_ura": subject,
+        "before_granted": True,
+        "request_permission_attempted": False,
+        "request_permission_exit_code": 0,
+        "after_granted": True,
+        "granted": True,
+        "process_path": "/Applications/EasyNet.app/Contents/MacOS/easynet-daemon",
+        "settings_hint": "System Settings > Privacy & Security > Screen & System Audio Recording",
+        "target_resource_subjects_allowed": False,
+    },
     "negative_target_subjects": negative,
 }
 path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
+  REQUIRE_SCREEN_CAPTURE_GRANTED=1
   validate_evidence
   echo "host-remoteapp-permission-subject-e2e self-test ok"
   exit 0
@@ -354,6 +424,7 @@ PY
 )"
 
 PERMISSION_STATUS_SUBJECT="easynet:///r/$REALM/resource/user.$USER_ID/invoke/remote_desktop.permission_status"
+REQUEST_PERMISSION_SUBJECT="easynet:///r/$REALM/resource/user.$USER_ID/invoke/remote_desktop.request_permission"
 set +e
 run_easynet ability invoke "$PERMISSION_STATUS_REF" \
   --node "$PERMISSION_STATUS_OWNER" \
@@ -365,6 +436,41 @@ run_easynet ability invoke "$PERMISSION_STATUS_REF" \
   --raw >"$POSITIVE_STDOUT" 2>"$POSITIVE_STDERR"
 POSITIVE_EXIT_CODE=$?
 set -e
+
+: >"$REQUEST_PERMISSION_STDOUT"
+: >"$REQUEST_PERMISSION_STDERR"
+cp "$POSITIVE_STDOUT" "$AFTER_PERMISSION_STDOUT"
+: >"$AFTER_PERMISSION_STDERR"
+REQUEST_PERMISSION_EXIT_CODE=0
+AFTER_PERMISSION_EXIT_CODE="$POSITIVE_EXIT_CODE"
+
+if [[ "$REQUIRE_SCREEN_CAPTURE_GRANTED" == "1" ]]; then
+  if ! json_permission_granted "$POSITIVE_STDOUT"; then
+    set +e
+    run_easynet ability invoke "$REQUEST_PERMISSION_REF" \
+      --node "$REQUEST_PERMISSION_OWNER" \
+      --subject "$REQUEST_PERMISSION_SUBJECT" \
+      --args '{}' \
+      --causal-root \
+      --nonce-hex "$(random_nonce_hex)" \
+      --timeout 30 \
+      --raw >"$REQUEST_PERMISSION_STDOUT" 2>"$REQUEST_PERMISSION_STDERR"
+    REQUEST_PERMISSION_EXIT_CODE=$?
+    set -e
+
+    set +e
+    run_easynet ability invoke "$PERMISSION_STATUS_REF" \
+      --node "$PERMISSION_STATUS_OWNER" \
+      --subject "$PERMISSION_STATUS_SUBJECT" \
+      --args '{}' \
+      --causal-root \
+      --nonce-hex "$(random_nonce_hex)" \
+      --timeout 5 \
+      --raw >"$AFTER_PERMISSION_STDOUT" 2>"$AFTER_PERMISSION_STDERR"
+    AFTER_PERMISSION_EXIT_CODE=$?
+    set -e
+  fi
+fi
 
 NEGATIVE_CASES_JSON="$OUT_DIR/negative-cases.json"
 printf '[\n' >"$NEGATIVE_CASES_JSON"
@@ -417,7 +523,9 @@ printf '\n]\n' >>"$NEGATIVE_CASES_JSON"
 
 python3 - "$EVIDENCE_JSON" "$ABILITY_LIST_JSON" "$RUNTIME_STATUS_JSON" "$CALLER_USER_URA" \
   "$PERMISSION_STATUS_SUBJECT" "$POSITIVE_EXIT_CODE" "$POSITIVE_STDOUT" "$POSITIVE_STDERR" \
-  "$NEGATIVE_CASES_JSON" "$HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA" <<'PY'
+  "$REQUEST_PERMISSION_SUBJECT" "$REQUEST_PERMISSION_EXIT_CODE" "$REQUEST_PERMISSION_STDOUT" "$REQUEST_PERMISSION_STDERR" \
+  "$AFTER_PERMISSION_EXIT_CODE" "$AFTER_PERMISSION_STDOUT" "$AFTER_PERMISSION_STDERR" \
+  "$NEGATIVE_CASES_JSON" "$HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA" "$REQUIRE_SCREEN_CAPTURE_GRANTED" <<'PY'
 import json
 import pathlib
 import sys
@@ -431,9 +539,47 @@ import sys
     positive_exit_code,
     positive_stdout_path,
     positive_stderr_path,
+    request_permission_subject,
+    request_permission_exit_code,
+    request_permission_stdout_path,
+    request_permission_stderr_path,
+    after_permission_exit_code,
+    after_permission_stdout_path,
+    after_permission_stderr_path,
     negative_cases_path,
     contract_ura,
-) = sys.argv[1:11]
+    require_screen_capture_granted,
+) = sys.argv[1:19]
+
+def read_text(path):
+    return pathlib.Path(path).read_text(errors="replace")
+
+def read_json_response(path):
+    raw = read_text(path)
+    try:
+        return json.loads(raw) if raw.strip() else None
+    except json.JSONDecodeError as error:
+        return {"decode_error": str(error), "raw": raw}
+
+def response_granted(response):
+    return isinstance(response, dict) and response.get("granted") is True
+
+def response_process_path(response):
+    if isinstance(response, dict):
+        return response.get("process_path")
+    return None
+
+def response_settings_hint(response):
+    if isinstance(response, dict):
+        return response.get("settings_hint")
+    return None
+
+def response_target_resource_subjects_allowed(response):
+    if isinstance(response, dict):
+        contract = response.get("subject_contract")
+        if isinstance(contract, dict):
+            return contract.get("target_resource_subjects_allowed")
+    return None
 
 with open(ability_list_path, encoding="utf-8") as f:
     rows = json.load(f)
@@ -450,11 +596,17 @@ for row in rows:
             "scope_subjects": scope.get("uras"),
         }
 
-positive_stdout = pathlib.Path(positive_stdout_path).read_text(errors="replace")
-try:
-    positive_response = json.loads(positive_stdout) if positive_stdout.strip() else None
-except json.JSONDecodeError as error:
-    positive_response = {"decode_error": str(error), "raw": positive_stdout}
+positive_stdout = read_text(positive_stdout_path)
+positive_response = read_json_response(positive_stdout_path)
+request_permission_stdout = read_text(request_permission_stdout_path)
+request_permission_stderr = read_text(request_permission_stderr_path)
+request_permission_response = read_json_response(request_permission_stdout_path)
+after_permission_stdout = read_text(after_permission_stdout_path)
+after_permission_response = read_json_response(after_permission_stdout_path)
+before_granted = response_granted(positive_response)
+after_granted = response_granted(after_permission_response)
+request_permission_attempted = bool(request_permission_stdout.strip() or request_permission_stderr.strip())
+final_response = after_permission_response if after_permission_response is not None else positive_response
 
 with open(runtime_status_path, encoding="utf-8") as f:
     runtime_status = json.load(f)
@@ -477,6 +629,34 @@ evidence = {
         "stdout": positive_stdout,
         "stderr": pathlib.Path(positive_stderr_path).read_text(errors="replace"),
         "response": positive_response,
+    },
+    "screen_capture_permission_preflight": {
+        "required": require_screen_capture_granted == "1",
+        "positive_subject_ura": permission_status_subject,
+        "request_permission_subject_ura": request_permission_subject,
+        "before_granted": before_granted,
+        "request_permission_attempted": request_permission_attempted,
+        "request_permission_exit_code": int(request_permission_exit_code),
+        "request_permission_stdout": request_permission_stdout,
+        "request_permission_stderr": request_permission_stderr,
+        "request_permission_response": request_permission_response,
+        "after_permission_status_exit_code": int(after_permission_exit_code),
+        "after_permission_status_stdout": after_permission_stdout,
+        "after_permission_status_stderr": pathlib.Path(after_permission_stderr_path).read_text(errors="replace"),
+        "after_permission_status_response": after_permission_response,
+        "after_granted": after_granted,
+        "granted": after_granted,
+        "process_path": response_process_path(final_response) or response_process_path(positive_response),
+        "settings_hint": (
+            response_settings_hint(final_response)
+            or response_settings_hint(positive_response)
+            or "System Settings > Privacy & Security > Screen & System Audio Recording"
+        ),
+        "target_resource_subjects_allowed": (
+            response_target_resource_subjects_allowed(final_response)
+            if response_target_resource_subjects_allowed(final_response) is not None
+            else response_target_resource_subjects_allowed(positive_response)
+        ),
     },
     "negative_target_subjects": negative,
     "contract_ura": contract_ura,

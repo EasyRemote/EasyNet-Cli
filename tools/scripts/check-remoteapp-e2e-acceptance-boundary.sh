@@ -26,6 +26,28 @@ require() {
   rg -q -- "$pattern" "$path" || fail "$message"
 }
 
+line_of() {
+  local pattern="$1"
+  local path="$2"
+  local message="$3"
+  local line
+  line="$(rg -n -- "$pattern" "$path" | head -n 1 | cut -d: -f1 || true)"
+  [[ -n "$line" ]] || fail "$message"
+  printf '%s\n' "$line"
+}
+
+require_order() {
+  local before_pattern="$1"
+  local after_pattern="$2"
+  local path="$3"
+  local message="$4"
+  local before_line
+  local after_line
+  before_line="$(line_of "$before_pattern" "$path" "$message")"
+  after_line="$(line_of "$after_pattern" "$path" "$message")"
+  (( before_line < after_line )) || fail "$message"
+}
+
 [[ -f "$SCRIPT" ]] || fail "missing host decoded-frame E2E harness"
 [[ -f "$PROBE" ]] || fail "missing bundled host decoded-frame probe"
 [[ -f "$FIXTURE" ]] || fail "missing bundled host sentinel fixture"
@@ -77,6 +99,14 @@ require 'target_resource_subjects_allowed.*False|target_resource_subjects_allowe
   'host permission subject E2E must prove the permission contract forbids target resources'
 require 'subject_contract_ura' "$PERMISSION_SUBJECT" \
   'host permission subject E2E must prove descriptor and response subject contract URA'
+require '--require-screen-capture-granted' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must expose a strict granted-permission mode for decoded-frame preflight'
+require 'screen_capture_permission_preflight' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must emit screen-capture granted preflight evidence'
+require 'request_permission_subject_ura' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must record the descriptor-bound request_permission subject'
+require 'screen capture permission must be granted before decoded-frame E2E starts' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must fail explicitly when OS screen-capture permission remains denied'
 
 require 'remote_desktop\.create_session' "$DISPLAY_FALLBACK_FORBIDDEN" \
   'host display fallback E2E must invoke remote_desktop.create_session'
@@ -302,6 +332,18 @@ require 'EASYNET_REMOTEAPP_CONTROL_DISCOVERY_JSON' "$SCRIPT" \
   'host decoded-frame E2E must allow explicit control discovery path for bundled probe preflight'
 require 'daemon_identity' "$SCRIPT" \
   'host decoded-frame E2E bundled probe preflight must require daemon control discovery identity'
+require 'host-remoteapp-permission-subject-e2e\.sh|BUNDLED_PERMISSION_PREFLIGHT' "$SCRIPT" \
+  'host decoded-frame E2E must reuse the permission subject E2E harness for bundled probe permission preflight'
+require 'preflight_bundled_probe_permissions' "$SCRIPT" \
+  'host decoded-frame E2E must preflight host-local screen capture permission before launching host fixtures'
+require '--require-screen-capture-granted' "$SCRIPT" \
+  'host decoded-frame E2E permission preflight must require final granted=true evidence'
+require 'bundled_permission_preflight_failed' "$SCRIPT" \
+  'host decoded-frame E2E failure report must identify bundled permission preflight failures'
+require 'permission preflight must run before sentinel fixture' "$SCRIPT" \
+  'host decoded-frame E2E must document the fail-before-fixture lifecycle gate'
+require_order 'permission_preflight_output=.*preflight_bundled_probe_permissions' 'if \[\[ "\$SENTINEL_FIXTURE" == "1" \]\]' "$SCRIPT" \
+  'host decoded-frame E2E must run bundled permission preflight before sentinel fixture startup'
 require '\$TIMESTAMP-\$TARGET_KIND-\$\$' "$SCRIPT" \
   'host decoded-frame E2E default report directory must isolate concurrent target-kind runs'
 require 'os\.path\.isfile|decoded_frame_sample.*exist' "$SCRIPT" \
