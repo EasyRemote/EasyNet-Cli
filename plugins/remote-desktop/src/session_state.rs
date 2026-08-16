@@ -257,12 +257,30 @@ impl RemoteDesktopSessionStateMachine {
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn begin_rebinding(&mut self) -> bool {
-        if self.phase != RemoteDesktopSessionPhase::Suspended || self.is_terminal() {
+        if self.is_terminal()
+            || !matches!(
+                self.phase,
+                RemoteDesktopSessionPhase::MediaStarting
+                    | RemoteDesktopSessionPhase::MediaActive
+                    | RemoteDesktopSessionPhase::InputActive
+                    | RemoteDesktopSessionPhase::Suspended
+            )
+        {
             return false;
         }
         self.set_active(
             RemoteDesktopSessionPhase::Rebinding,
             RemoteDesktopState::Suspended,
+        )
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn complete_rebinding(&mut self) -> bool {
+        if self.phase != RemoteDesktopSessionPhase::Rebinding || self.is_terminal() {
+            return false;
+        }
+        self.set_active(
+            RemoteDesktopSessionPhase::MediaActive,
+            RemoteDesktopState::Connected,
         )
     }
 

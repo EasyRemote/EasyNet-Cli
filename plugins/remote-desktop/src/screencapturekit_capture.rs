@@ -610,6 +610,49 @@ impl ScreenCaptureKitStream {
         })
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn update_content_filter(
+        &self,
+        ability: &'static str,
+        target: ScreenCaptureKitTarget,
+    ) -> Result<ResolvedCaptureTargetProof, RemoteAppTargetError> {
+        let (tx, rx) = sync_channel::<Result<(), String>>(1);
+        let tx = Mutex::new(Some(tx));
+        let handler = RcBlock::new(move |error: *mut NSError| {
+            let result = if error.is_null() {
+                Ok(())
+            } else {
+                let err = unsafe { &*error };
+                Err(format!(
+                    "SCStream updateContentFilter failed: {}",
+                    err.localizedDescription()
+                ))
+            };
+            if let Some(tx) = take_completion_sender(&tx) {
+                let _ = tx.send(result);
+            }
+        });
+        unsafe {
+            self.stream
+                .updateContentFilter_completionHandler(&target.filter, Some(&handler));
+        }
+        rx.recv_timeout(Duration::from_secs(3))
+            .map_err(|err| {
+                RemoteAppTargetError::new(
+                    ability,
+                    TargetResolutionError::ScreenCaptureKitFilterFailed,
+                    format!("SCStream updateContentFilter timed out: {err}"),
+                )
+            })?
+            .map_err(|err| {
+                RemoteAppTargetError::new(
+                    ability,
+                    TargetResolutionError::ScreenCaptureKitFilterFailed,
+                    err,
+                )
+            })?;
+        Ok(target.capture_proof().clone())
+    }
+
     /// Stop the capture stream (best-effort; errors are logged, not fatal).
     pub fn stop(&self) {
         let (tx, rx) = sync_channel::<()>(1);

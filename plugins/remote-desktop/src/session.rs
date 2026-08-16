@@ -33,7 +33,7 @@ use crate::daemon::plugins::remote_desktop::session_transport_state::{
     PrimaryMediaPhase, RemoteDesktopTransportState, TransportEpoch,
 };
 use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, TargetResolutionError,
+    RemoteAppTargetBinding, ResolvedCaptureTargetProof, TargetResolutionError,
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::{
     RemoteAppTargetBindingStateMachine, TargetObservation, TargetTrackerSnapshot,
@@ -410,7 +410,11 @@ impl RemoteDesktopSession {
         let permission_revoked =
             matches!(&observation, TargetObservation::PermissionRevoked { .. });
         let input_was_enabled = self.target.snapshot().input_enabled();
-        let Some(event) = self.target.commit_observation(observation) else {
+        let media_source_active = self.transport.active_epoch().is_some();
+        let Some(event) = self
+            .target
+            .commit_observation_with_media_source_activity(observation, media_source_active)
+        else {
             if input_was_enabled && !self.target.snapshot().input_enabled() {
                 self.lifecycle.deactivate_input_for_target_block();
                 self.touch();
@@ -449,6 +453,39 @@ impl RemoteDesktopSession {
             ));
         }
         media_loss
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn pending_media_rebind_binding(
+        &self,
+    ) -> Option<&RemoteAppTargetBinding> {
+        if self.lifecycle.is_terminal() {
+            return None;
+        }
+        self.target.pending_media_rebind_binding()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn commit_pending_media_rebind(
+        &mut self,
+        epoch: TransportEpoch,
+        binding_epoch: u64,
+        media_source_epoch: u64,
+        capture_proof: ResolvedCaptureTargetProof,
+    ) -> bool {
+        if self.lifecycle.is_terminal() || self.transport.active_epoch() != Some(epoch) {
+            return false;
+        }
+        let Some(event) = self.target.commit_pending_media_rebind(
+            binding_epoch,
+            media_source_epoch,
+            capture_proof,
+            now_ms(),
+        ) else {
+            return false;
+        };
+        self.lifecycle.complete_rebinding();
+        self.touch();
+        self.push_target_tracking_event(event);
+        true
     }
 
     fn touch(&mut self) {

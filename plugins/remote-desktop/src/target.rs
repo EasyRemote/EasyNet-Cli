@@ -1103,20 +1103,30 @@ impl RemoteAppTargetBinding {
         self.app_window_set.as_ref()
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn update_application_window_set(
-        &mut self,
+    pub(in crate::daemon::plugins::remote_desktop) fn application_window_set_rebind_candidate(
+        &self,
         app_window_set: AppWindowSetProof,
         geometry: TargetGeometry,
         target_geometry_revision: u64,
-    ) -> bool {
+        rebuild_media_source: bool,
+    ) -> Option<Self> {
         if self.target_kind != RemoteDesktopTargetKind::Application {
-            return false;
+            return None;
         }
-        self.target_identity_epoch = app_window_set.window_set_epoch();
-        self.target_geometry_revision = target_geometry_revision;
-        self.geometry = geometry;
-        self.app_window_set = Some(app_window_set);
-        true
+        let mut candidate = self.clone();
+        candidate.binding_epoch = candidate.binding_epoch.saturating_add(1);
+        candidate.target_identity_epoch = app_window_set.window_set_epoch();
+        candidate.target_geometry_revision = target_geometry_revision;
+        if rebuild_media_source {
+            candidate.media_source_epoch = candidate.media_source_epoch.saturating_add(1);
+        }
+        candidate.geometry = geometry;
+        candidate.app_window_set = Some(app_window_set.clone());
+        candidate.capture_proof = candidate
+            .capture_proof
+            .clone()
+            .map(|proof| proof.with_app_window_set(app_window_set));
+        Some(candidate)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn geometry(&self) -> &TargetGeometry {

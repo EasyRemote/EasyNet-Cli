@@ -28,7 +28,9 @@ use crate::daemon::plugins::remote_desktop::screencapturekit_capture::{
 use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
-use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
+use crate::daemon::plugins::remote_desktop::target::{
+    RemoteAppTargetBinding, RemoteAppTargetError,
+};
 use crate::daemon::plugins::remote_desktop::videotoolbox_encoder::VideoToolboxEncoder;
 
 /// Immutable inputs for the macOS native direct-WebRTC strategy.
@@ -117,6 +119,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
         fps,
         sink,
     )?;
+    let mut active_media_source_epoch = target_binding.media_source_epoch();
 
     let frame_dur = Duration::from_secs_f64(1.0 / fps as f64);
     let mut written_units = 0_u64;
@@ -133,6 +136,13 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
         if *stop_rx.borrow() || done_rx.try_recv().is_ok() {
             break;
         }
+        active_media_source_epoch = apply_pending_media_rebind(
+            sessions,
+            &capture,
+            session_id,
+            epoch,
+            active_media_source_epoch,
+        )?;
         let (units, stale_dropped) = latest_native_rtp_units(encoder.poll(), decoder_primed);
         rtp_stale_units_dropped = rtp_stale_units_dropped.saturating_add(stale_dropped as u64);
         for unit in units {
@@ -285,6 +295,35 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
         }),
     );
     Ok(())
+}
+
+fn apply_pending_media_rebind(
+    sessions: &RemoteDesktopSessionStore,
+    capture: &ScreenCaptureKitStream,
+    session_id: &str,
+    epoch: TransportEpoch,
+    active_media_source_epoch: u64,
+) -> Result<u64, RemoteAppTargetError> {
+    let Some(next_binding) = sessions.pending_media_rebind_binding_for_session(
+        session_id,
+        epoch,
+        active_media_source_epoch,
+    ) else {
+        return Ok(active_media_source_epoch);
+    };
+    let next_target = target_for_binding(ABILITY_SET_DESCRIPTION, &next_binding)?;
+    let capture_proof = capture.update_content_filter(ABILITY_SET_DESCRIPTION, next_target)?;
+    if sessions.commit_pending_media_rebind_for_session(
+        session_id,
+        epoch,
+        next_binding.binding_epoch(),
+        next_binding.media_source_epoch(),
+        capture_proof,
+    ) {
+        Ok(next_binding.media_source_epoch())
+    } else {
+        Ok(active_media_source_epoch)
+    }
 }
 
 fn record_media_pipeline_stats(

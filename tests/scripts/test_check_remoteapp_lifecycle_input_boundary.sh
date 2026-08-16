@@ -81,6 +81,10 @@ fn input_blocked_reason() {}
 
 fn target_failure_payload() {}
 
+fn commit_pending_media_rebind() {
+    "TARGET_REBOUND";
+}
+
 fn geometry_event_type() -> &'static str {
     if moved() {
         "TARGET_MOVED"
@@ -1014,7 +1018,7 @@ impl AppWindowSetProof {
     }
 }
 
-fn update_application_window_set() {}
+fn application_window_set_rebind_candidate() {}
 
 fn input_scope_for_request() -> InputScopeDecision {
     match kind {

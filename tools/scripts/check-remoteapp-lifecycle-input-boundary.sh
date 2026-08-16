@@ -491,8 +491,10 @@ require 'fn window_set_epoch\(' "$TARGET" \
   'application window-set proof must expose the recomputed identity epoch'
 require 'ApplicationWindowSetChanged' "$TARGET_TRACKING" \
   'target tracking must model same-app application window-set changes explicitly'
-require 'update_application_window_set' "$TARGET" \
-  'session-owned target binding must update application window-set state through a domain method'
+require 'application_window_set_rebind_candidate' "$TARGET" \
+  'session-owned target binding must build application window-set rebind candidates through a domain method'
+require 'commit_pending_media_rebind' "$TARGET_TRACKING" \
+  'target tracking must commit application window-set state only after pending media rebind proof'
 require 'AppWindowSetProof::new' "$TARGET_OBSERVER" \
   'application observer must rederive the current display-scoped app window-set proof'
 require 'TargetObservation::ApplicationWindowSetChanged' "$TARGET_OBSERVER" \

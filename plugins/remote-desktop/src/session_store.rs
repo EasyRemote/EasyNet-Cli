@@ -20,7 +20,9 @@ use crate::daemon::plugins::remote_desktop::session_events::{
     webrtc_transport_failure_context, WebRtcFailureEventKind,
 };
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
-use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
+use crate::daemon::plugins::remote_desktop::target::{
+    RemoteAppTargetBinding, ResolvedCaptureTargetProof,
+};
 use crate::daemon::plugins::remote_desktop::target_tracking::{
     TargetObservation, TargetTrackerSnapshot,
 };
@@ -230,6 +232,36 @@ impl RemoteDesktopSessionStore {
             return None;
         }
         session.record_target_observation(observation)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn pending_media_rebind_binding_for_session(
+        &self,
+        session_id: &str,
+        epoch: TransportEpoch,
+        active_media_source_epoch: u64,
+    ) -> Option<RemoteAppTargetBinding> {
+        let sessions = self.lock();
+        let session = sessions.get(session_id)?;
+        if session.transport_epoch() != Some(epoch.value()) {
+            return None;
+        }
+        let pending = session.pending_media_rebind_binding()?;
+        (pending.media_source_epoch() > active_media_source_epoch).then(|| pending.clone())
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn commit_pending_media_rebind_for_session(
+        &self,
+        session_id: &str,
+        epoch: TransportEpoch,
+        binding_epoch: u64,
+        media_source_epoch: u64,
+        capture_proof: ResolvedCaptureTargetProof,
+    ) -> bool {
+        let mut sessions = self.lock();
+        let Some(session) = sessions.get_mut(session_id) else {
+            return false;
+        };
+        session.commit_pending_media_rebind(epoch, binding_epoch, media_source_epoch, capture_proof)
     }
 
     /// Mark a direct WebRTC endpoint failed for one non-terminal session.
