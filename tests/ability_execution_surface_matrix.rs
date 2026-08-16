@@ -106,6 +106,42 @@ fn every_descriptor_has_one_honest_execution_surface() {
     }
 
     assert_contract(&contracts, "session.open", "internal", "none");
+    for name in [
+        "ability.deploy",
+        "ability.publish",
+        "ability.uninstall",
+        "ability.unpublish",
+        "admin.status",
+        "fs.edit",
+        "fs.list",
+        "fs.read",
+        "fs.stat",
+        "fs.write",
+        "http.request",
+        "meta.describe",
+        "meta.list_abilities",
+        "meta.list_resources",
+        "node.describe",
+        "node.remove",
+        "observe.health",
+        "observe.network_health",
+        "plugin.activate_realtime",
+        "plugin.reload",
+        "plugin.status",
+        "process.exec",
+        "resource.refresh_remote_targets",
+        "resource.watch_remote_targets",
+        "session.list",
+        "shell.run",
+    ] {
+        assert_subject_contract_kind(&contracts, name, "authenticated-user");
+    }
+    for name in [
+        "resource.refresh_remote_targets",
+        "resource.watch_remote_targets",
+    ] {
+        assert_contract(&contracts, name, "operator", "none");
+    }
     for name in ["speaker.publish", "voice.subscribe", "voice.transcribe"] {
         assert_capability_state(&contracts, name, "unsupported");
     }
@@ -145,6 +181,20 @@ fn assert_contract(
         .unwrap_or_else(|| panic!("missing descriptor {name}"));
     assert_eq!(contract.exposure, exposure, "{name} exposure");
     assert_eq!(contract.dedicated_surface, surface, "{name} surface");
+}
+
+fn assert_subject_contract_kind(
+    contracts: &BTreeMap<String, ExecutionContract>,
+    name: &str,
+    subject_contract_kind: &str,
+) {
+    let contract = contracts
+        .get(name)
+        .unwrap_or_else(|| panic!("missing descriptor {name}"));
+    assert_eq!(
+        contract.subject_contract_kind, subject_contract_kind,
+        "{name} subject_contract_kind"
+    );
 }
 
 fn collect_descriptors(directory: &Path, out: &mut Vec<PathBuf>) {

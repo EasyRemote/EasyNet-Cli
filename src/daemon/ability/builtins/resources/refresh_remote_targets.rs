@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::daemon::ability::builtins::resources::media::resource_bootstrap;
-use crate::daemon::ability::descriptors::AdmissionAction;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 use crate::daemon::persistence::resources::ResourceType;
 use crate::daemon::resources::projection::RemoteTargetListEntry;
@@ -75,10 +74,14 @@ pub struct RemoteTargetRefreshResponse {
 }
 
 pub fn register(reg: &mut AxonAbilityCatalog, context: RemoteTargetInventoryContext) {
-    reg.register_rpc_with_owner_and_action(
+    reg.register_rpc_with_spec(
         ABILITY_RESOURCE_REFRESH_REMOTE_TARGETS,
         OwnerKind::media_system(),
-        AdmissionAction::Manage,
+        crate::daemon::ability::catalog::system_manifest::registry_manifest(
+            ABILITY_RESOURCE_REFRESH_REMOTE_TARGETS,
+            description(),
+            input_schema(),
+        ),
         Arc::new(move |args| handler(args, &context)),
     );
 }
@@ -232,6 +235,20 @@ mod tests {
         assert_eq!(
             reg.control_plane_owner(ABILITY_RESOURCE_REFRESH_REMOTE_TARGETS),
             Some(OwnerKind::media_system())
+        );
+        let descriptor = reg
+            .canonical_descriptor_for_ability(ABILITY_RESOURCE_REFRESH_REMOTE_TARGETS)
+            .expect("unambiguous refresh descriptor")
+            .expect("registered refresh descriptor");
+        assert_eq!(
+            descriptor.metadata.get("exposure").map(String::as_str),
+            Some("operator"),
+            "product-issued refresh must import its canonical operator exposure"
+        );
+        assert_eq!(descriptor.version, "1.0.1");
+        assert_eq!(
+            descriptor.admission_action(),
+            crate::daemon::ability::descriptors::AdmissionAction::Manage
         );
     }
 
