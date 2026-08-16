@@ -53,11 +53,8 @@ PRE_MEDIA_REFRESH_JSON="$OUT_DIR/pre-media-refresh.json"
 TARGET_HINT="${EASYNET_REMOTEAPP_TARGET_HINT:-}"
 TARGET_RESOURCE_URA="${EASYNET_REMOTEAPP_TARGET_RESOURCE_URA:-}"
 TARGET_PID="${EASYNET_REMOTEAPP_TARGET_PID:-}"
-DEFAULT_FRAME_RECEIVER_CMD="cargo run --quiet --example easynet-remoteapp-frame-receiver --features remote-desktop --"
-if [[ -x "$REPO_ROOT/target/debug/examples/easynet-remoteapp-frame-receiver" ]]; then
-  DEFAULT_FRAME_RECEIVER_CMD="$REPO_ROOT/target/debug/examples/easynet-remoteapp-frame-receiver"
-fi
-FRAME_RECEIVER_CMD="${EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD:-$DEFAULT_FRAME_RECEIVER_CMD}"
+BUNDLED_FRAME_RECEIVER_BIN="$REPO_ROOT/target/debug/examples/easynet-remoteapp-frame-receiver"
+FRAME_RECEIVER_CMD="${EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD:-$BUNDLED_FRAME_RECEIVER_BIN}"
 
 die() {
   echo "[FAIL] $*" >&2
@@ -79,6 +76,21 @@ run_easynet() {
   fi
 }
 
+prepare_bundled_frame_receiver() {
+  if [[ -n "${EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD:-}" ]]; then
+    return 0
+  fi
+  if [[ -x "$BUNDLED_FRAME_RECEIVER_BIN" ]]; then
+    FRAME_RECEIVER_CMD="$BUNDLED_FRAME_RECEIVER_BIN"
+    return 0
+  fi
+  need_cmd cargo
+  cargo build --quiet --example easynet-remoteapp-frame-receiver --features remote-desktop
+  [[ -x "$BUNDLED_FRAME_RECEIVER_BIN" ]] || die \
+    "bundled frame receiver build did not produce executable: $BUNDLED_FRAME_RECEIVER_BIN"
+  FRAME_RECEIVER_CMD="$BUNDLED_FRAME_RECEIVER_BIN"
+}
+
 need_cmd python3
 
 [[ -n "${EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB:-}" ]] || die \
@@ -93,6 +105,12 @@ need_cmd python3
 if [[ -z "${EASYNET_REMOTEAPP_EASYNET_BIN:-}" && -x "$REPO_ROOT/target/debug/easynet" ]]; then
   export EASYNET_REMOTEAPP_EASYNET_BIN="$REPO_ROOT/target/debug/easynet"
 fi
+
+# The host E2E must not spend an active remote_desktop session lease compiling
+# its receiver. Build/readiness belongs before live target selection and
+# create_session; after create_session the probe should only negotiate, receive,
+# decode, and report evidence.
+prepare_bundled_frame_receiver
 
 run_easynet ability refresh-remote-targets \
   --type "$TARGET_KIND" \

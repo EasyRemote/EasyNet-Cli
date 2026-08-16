@@ -971,6 +971,17 @@ EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID="4243" \
   --run \
   --out-dir "$SANDBOX/bundled-probe-out" >/dev/null
 
+cp "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh.good"
+perl -0pi -e 's/prepare_bundled_frame_receiver/prepare_frame_receiver_after_session/g' \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
+if CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp e2e acceptance checker accepted probe without pre-session frame receiver preparation" >&2
+  exit 1
+fi
+mv "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh.good" \
+  "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
+
 FAKE_EASYNET_NO_INVOCATION_ARGS="$SANDBOX/fake-easynet-no-invocation-args"
 cp "$FAKE_EASYNET" "$FAKE_EASYNET_NO_INVOCATION_ARGS"
 perl -0pi -e 's/\n    "args": \{\n      "mode": "view_only",\n      "transport_preferences": \["webrtc"\],\n      "consent_ticket": "ticket-from-grant"\n    \},//' \

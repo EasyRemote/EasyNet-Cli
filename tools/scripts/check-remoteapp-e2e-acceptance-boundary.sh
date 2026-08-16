@@ -413,6 +413,10 @@ require 'easynet-remoteapp-frame-receiver' "$PROBE" \
   'bundled host probe must default to the bundled WebRTC frame receiver'
 require 'EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD' "$PROBE" \
   'bundled host probe must allow a real WebRTC frame receiver override'
+require 'prepare_bundled_frame_receiver' "$PROBE" \
+  'bundled host probe must prepare the default frame receiver before creating a leased session'
+require 'cargo build --quiet --example easynet-remoteapp-frame-receiver --features remote-desktop' "$PROBE" \
+  'bundled host probe must build the default frame receiver outside the active session lease'
 require 'EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB' "$PROBE" \
   'bundled host probe must require selected-target RGB sentinel configuration'
 require 'EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB' "$PROBE" \

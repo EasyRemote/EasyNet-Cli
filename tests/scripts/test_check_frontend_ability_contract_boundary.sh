@@ -16,13 +16,13 @@ cp "$REPO_ROOT/plugins/remote-desktop/abilities/remote_desktop.create_session.ab
 
 CHECK_FRONTEND_ABILITY_CONTRACT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
 
-perl -0pi -e 's/subject_contract_kind = "route-target"/subject_contract_kind = "dedicated-surface"/' \
+perl -0pi -e 's/subject_contract_kind = "authenticated-user"/subject_contract_kind = "dedicated-surface"/' \
   "$SANDBOX/ability-descriptors/system/meta.list_abilities.ability.toml"
 if CHECK_FRONTEND_ABILITY_CONTRACT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "frontend contract checker accepted a dedicated subject without a surface" >&2
   exit 1
 fi
-perl -0pi -e 's/subject_contract_kind = "dedicated-surface"/subject_contract_kind = "route-target"/' \
+perl -0pi -e 's/subject_contract_kind = "dedicated-surface"/subject_contract_kind = "authenticated-user"/' \
   "$SANDBOX/ability-descriptors/system/meta.list_abilities.ability.toml"
 perl -0pi -e 's/dedicated_surface = "remote_desktop"/dedicated_surface = "media"/' \
   "$SANDBOX/plugins/remote-desktop/abilities/remote_desktop.create_session.ability.toml"
@@ -32,7 +32,7 @@ if CHECK_FRONTEND_ABILITY_CONTRACT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&
 fi
 perl -0pi -e 's/dedicated_surface = "media"/dedicated_surface = "remote_desktop"/' \
   "$SANDBOX/plugins/remote-desktop/abilities/remote_desktop.create_session.ability.toml"
-perl -0pi -e 's/name = "meta.list_abilities"/name = "meta.remote_desktop_fake"/; s/dedicated_surface = "none"/dedicated_surface = "remote_desktop"/; s/subject_contract_kind = "route-target"/subject_contract_kind = "dedicated-surface"/' \
+perl -0pi -e 's/name = "meta.list_abilities"/name = "meta.remote_desktop_fake"/; s/dedicated_surface = "none"/dedicated_surface = "remote_desktop"/; s/subject_contract_kind = "authenticated-user"/subject_contract_kind = "dedicated-surface"/' \
   "$SANDBOX/ability-descriptors/system/meta.list_abilities.ability.toml"
 if CHECK_FRONTEND_ABILITY_CONTRACT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
   echo "frontend contract checker accepted non-remote_desktop ability on remote_desktop surface" >&2
