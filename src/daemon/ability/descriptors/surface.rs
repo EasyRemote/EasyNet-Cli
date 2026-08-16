@@ -501,13 +501,15 @@ pub struct AbilityDescriptor {
     /// Canonical URA of the entity that publishes this ability — the public
     /// `callee` in any Invoke targeting this name. Per the current Invocation
     /// ontology, ordinary public callees are Agent, device-sponsored
-    /// SystemAgent, or realm Authority. A Device is the execution host and
-    /// sponsor, never an AbilityDescriptor owner/callee.
+    /// SystemAgent, Service, or realm Authority. A Device is the execution
+    /// host and sponsor, never an AbilityDescriptor owner/callee.
     ///
     ///   * `agent/<user-uuid>.<agent-id>` — hosted user Agent
     ///     (consent / policy / mcp / llm sub-agent abilities).
     ///   * `agent/device.<device-id>.<system-agent-id>` — device-sponsored
     ///     SystemAgent for device-native governed surfaces.
+    ///   * `service/<principal-id>.<service-id>` — principal-scoped Service
+    ///     for user-owned product surfaces such as Pages.
     ///   * `authority`                    — realm Authority-published abilities
     ///     (`federation.advertise_*`, `voice.list_calls`, …).
     ///
@@ -1381,6 +1383,25 @@ mod tests {
         )
         .expect("SystemAgent abilities may use owner-local names");
         assert_eq!(descriptor.public_name(), "runtime-introspection.nodot");
+    }
+
+    #[test]
+    fn descriptor_constructor_accepts_owner_local_service_name() {
+        let service_owner = "easynet:///r/acme/service/alice.pages";
+        let descriptor = AbilityDescriptor::new(
+            "project_list",
+            service_owner,
+            Visibility::Public,
+            AdmissionAction::Invoke,
+        )
+        .expect("Service abilities may use owner-local names");
+
+        assert_eq!(descriptor.owner_ura, service_owner);
+        assert_eq!(descriptor.public_name(), "project_list");
+        assert_eq!(
+            descriptor.canonical_ability_ura().as_deref(),
+            Some("easynet:///r/acme/ability/service.alice.pages.project_list")
+        );
     }
 
     #[test]

@@ -31,6 +31,17 @@ fi
 cp "$REPO_ROOT/src/daemon/ability/descriptors/surface.rs" \
   "$SANDBOX/src/daemon/ability/descriptors/surface.rs"
 
+perl -0pi -e 's/, Service//g' \
+  "$SANDBOX/src/daemon/ability/descriptors/surface.rs"
+perl -ni -e 'print unless /service\/<principal-id>\\.<service-id>/' \
+  "$SANDBOX/src/daemon/ability/descriptors/surface.rs"
+if CHECK_ABILITY_IDENTITY_OWNER_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "identity-owner checker accepted AbilityDescriptor docs without Service callee ownership" >&2
+  exit 1
+fi
+cp "$REPO_ROOT/src/daemon/ability/descriptors/surface.rs" \
+  "$SANDBOX/src/daemon/ability/descriptors/surface.rs"
+
 perl -0pi -e 's/runtime_introspection_owner_for_execution_target\(execution_target_ura\)\?/execution_target_ura.to_string()/' \
   "$SANDBOX/src/daemon/invocation/routing/remote_invoke.rs"
 if CHECK_ABILITY_IDENTITY_OWNER_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then

@@ -33,6 +33,10 @@ if grep -Fq 'URAKind::Device' <<<"$validator"; then
 fi
 grep -Fq 'easynet:///r/acme/device/dev-1' "$DESCRIPTOR" \
   || fail "AbilityDescriptor Device-owner rejection evidence is missing"
+grep -Fq 'SystemAgent, Service, or realm Authority' "$DESCRIPTOR" \
+  || fail "AbilityDescriptor owner docs must name Service as an ordinary public callee"
+grep -Fq 'service/<principal-id>.<service-id>' "$DESCRIPTOR" \
+  || fail "AbilityDescriptor owner examples must include principal-scoped Service URAs"
 grep -Fq 'Vec::new()' "$DEVICE_PROFILE" \
   || fail "DeviceProfileProjection live descriptor inventory must remain empty"
 if grep -Fq '.rebind_owner_ura(owner_ura)' "$DEVICE_PROFILE"; then
@@ -50,7 +54,9 @@ grep -Fq 'snapshot.hosted_llm_agent_ura(name)' "$AGENT_LIST" \
 grep -Fq 'missing hosted-Agent identity must not synthesize the User account as an Agent' "$AGENT_LIST" \
   || fail "agent.list needs an explicit no-account-synthesis regression assertion"
 
-grep -Fq 'unique_system_agent_owner_for_public_ability(public_ability)?' "$OWNER" \
+grep -Fq 'fn device_sponsored_system_agent_owner_for_public_ability(' "$OWNER" \
+  || fail "device-native owner projection must expose a typed SystemAgent owner domain object"
+grep -Fq 'super::catalog_metadata::unique_system_agent_owner_for_public_ability(public_ability)' "$OWNER" \
   || fail "device-native owner projection must come from registry ownership"
 grep -Fq 'is_declared_daemon_native_system_agent_id(&system_agent_id)' "$OWNER" \
   || fail "device-native owner projection must validate the SystemAgent inventory"
