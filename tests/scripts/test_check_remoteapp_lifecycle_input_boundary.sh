@@ -85,6 +85,10 @@ fn commit_pending_media_rebind() {
     "TARGET_REBOUND";
 }
 
+fn commit_pending_media_rebind_failed() {
+    "TARGET_REBIND_FAILED";
+}
+
 fn geometry_event_type() -> &'static str {
     if moved() {
         "TARGET_MOVED"
@@ -116,6 +120,9 @@ mod tests {
 
     #[test]
     fn tracker_routes_post_loss_title_focus_through_explicit_rebind() {}
+
+    #[test]
+    fn active_application_window_set_rebind_failure_is_typed() {}
 
     #[test]
     fn display_topology_loss_projects_target_failure_recovery() {
@@ -291,6 +298,9 @@ mod tests {
         assert_eq!(rebind_failed["target_identity_epoch"], json!(session.target_binding().target_identity_epoch()));
         assert_eq!(rebind_failed["media_source_epoch"], json!(session.target_binding().media_source_epoch()));
     }
+
+    #[test]
+    fn pending_media_rebind_failure_rejects_session_rebinding() {}
 
     #[test]
     fn production_media_ready_requires_target_scope_ready() {
@@ -718,6 +728,8 @@ fn mark_direct_webrtc_failed() {
     webrtc_transport_failure_context();
 }
 
+fn fail_pending_media_rebind_for_session() {}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -736,6 +748,17 @@ mod tests {
         assert_eq!(event["payload"]["failure_domain"], json!("transport"));
         assert_eq!(event["payload"]["frontend_action"], json!("retry_session"));
     }
+}
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_native_media.rs" <<'RS'
+fn apply_pending_media_rebind() {}
+fn fail_pending_media_rebind() {}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn native_media_rebind_failure_projects_typed_target_lifecycle() {}
 }
 RS
 
@@ -1656,6 +1679,16 @@ perl -0pi -e 's/tracker_routes_post_loss_title_focus_through_explicit_rebind/tra
 run_fail 'target tracker must test title/focus reappearance through explicit rebind semantics'
 
 write_fixture
+perl -0pi -e 's/commit_pending_media_rebind_failed/commit_pending_media_rebuild_error_removed/g' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'target tracking must terminate failed pending media rebinds as typed target lifecycle events'
+
+write_fixture
+perl -0pi -e 's/active_application_window_set_rebind_failure_is_typed/active_application_window_set_rebind_failure_is_untyped/' \
+  "$SANDBOX/plugins/remote-desktop/src/target_tracking.rs"
+run_fail 'target tracker must test pending media rebind failure as TARGET_REBIND_FAILED'
+
+write_fixture
 perl -0pi -e 's/fn window_set_epoch/fn window_set_epoch_removed/' \
   "$SANDBOX/plugins/remote-desktop/src/target.rs"
 run_fail 'application window-set proof must expose the recomputed identity epoch'
@@ -1719,6 +1752,21 @@ write_fixture
 perl -0pi -e 's/assert_eq!\(rebind_failed\["target_identity_epoch"\], json!\(session\.target_binding\(\)\.target_identity_epoch\(\)\)\);//' \
   "$SANDBOX/plugins/remote-desktop/src/session.rs"
 run_fail 'session aggregate must assert TARGET_REBIND_FAILED top-level target identity epoch'
+
+write_fixture
+perl -0pi -e 's/pending_media_rebind_failure_rejects_session_rebinding/pending_media_rebind_failure_leaves_session_rebinding/' \
+  "$SANDBOX/plugins/remote-desktop/src/session.rs"
+run_fail 'session aggregate must reject Rebinding when pending media source rebuild fails'
+
+write_fixture
+perl -0pi -e 's/fail_pending_media_rebind_for_session/native_rebind_error_bridge_removed/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_store.rs"
+run_fail 'session store must expose a target-lifecycle failure projection for native pending media rebind failures'
+
+write_fixture
+perl -0pi -e 's/native_media_rebind_failure_projects_typed_target_lifecycle/native_media_rebind_failure_projects_transport_only/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_native_media.rs"
+run_fail 'native WebRTC media path must test target-lifecycle projection for pending media rebind failures'
 
 write_fixture
 perl -0pi -e 's/TARGET_CHANGED_EVENT_TYPES\.contains\(&event_type\)/TARGET_CHANGED_EVENT_TYPES.is_empty()/' \

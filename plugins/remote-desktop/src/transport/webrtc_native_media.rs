@@ -311,8 +311,11 @@ fn apply_pending_media_rebind(
     ) else {
         return Ok(active_media_source_epoch);
     };
-    let next_target = target_for_binding(ABILITY_SET_DESCRIPTION, &next_binding)?;
-    let capture_proof = capture.update_content_filter(ABILITY_SET_DESCRIPTION, next_target)?;
+    let next_target = target_for_binding(ABILITY_SET_DESCRIPTION, &next_binding)
+        .map_err(|err| fail_pending_media_rebind(sessions, session_id, epoch, &err))?;
+    let capture_proof = capture
+        .update_content_filter(ABILITY_SET_DESCRIPTION, next_target)
+        .map_err(|err| fail_pending_media_rebind(sessions, session_id, epoch, &err))?;
     if sessions.commit_pending_media_rebind_for_session(
         session_id,
         epoch,
@@ -326,6 +329,21 @@ fn apply_pending_media_rebind(
     }
 }
 
+fn fail_pending_media_rebind(
+    sessions: &RemoteDesktopSessionStore,
+    session_id: &str,
+    epoch: TransportEpoch,
+    err: &RemoteAppTargetError,
+) -> RemoteAppTargetError {
+    sessions.fail_pending_media_rebind_for_session(
+        session_id,
+        epoch,
+        err.reason(),
+        err.to_string(),
+    );
+    err.clone()
+}
+
 fn record_media_pipeline_stats(
     sessions: &RemoteDesktopSessionStore,
     session_id: &str,
@@ -333,4 +351,107 @@ fn record_media_pipeline_stats(
     stats: serde_json::Value,
 ) {
     sessions.record_media_pipeline_stats(session_id, epoch, stats);
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    use crate::daemon::plugins::remote_desktop::constants::{
+        direct_webrtc_endpoint_ura, TRANSPORT_WEBRTC,
+    };
+    use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+    use crate::daemon::plugins::remote_desktop::target::{
+        AppWindowSetProof, TargetGeometry, TargetResolutionError,
+    };
+    use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
+    use crate::daemon::plugins::remote_desktop::test_support::test_application_session_init;
+
+    #[test]
+    fn native_media_rebind_failure_projects_typed_target_lifecycle() {
+        let store = RemoteDesktopSessionStore::new();
+        let session_id = "rd-native-media-rebind-filter-failed";
+        let epoch = TransportEpoch::new(31);
+        let mut session = RemoteDesktopSession::new(test_application_session_init(
+            session_id,
+            vec![TRANSPORT_WEBRTC.to_string()],
+        ));
+        session.begin_webrtc_negotiation(epoch);
+        session
+            .set_local_webrtc_answer(
+                epoch,
+                json!({"type": "answer", "sdp": "v=0"}),
+                "sck-native",
+                true,
+                "easynet:///r/acme/ability/remote-desktop.transport".into(),
+            )
+            .expect("local answer records");
+        session.mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura(session_id));
+        assert!(
+            session
+                .record_target_observation(TargetObservation::ApplicationWindowSetChanged {
+                    app_window_set: AppWindowSetProof::new(
+                        42,
+                        Some("com.example.Editor".to_string()),
+                        Some(9001),
+                        vec![10, 11, 12],
+                    ),
+                    geometry: TargetGeometry {
+                        x: Some(10.0),
+                        y: Some(20.0),
+                        width: Some(320.0),
+                        height: Some(120.0),
+                    },
+                    target_identity_epoch: 100,
+                    target_geometry_revision: 4,
+                    observed_at_ms: 10,
+                })
+                .is_none(),
+            "application window-set drift rebind must not be reported as media loss"
+        );
+        let pending = session
+            .pending_media_rebind_binding()
+            .expect("pending media rebind")
+            .clone();
+        store.with_sessions(|sessions| {
+            sessions.insert(session_id.to_string(), session);
+        });
+
+        let err = RemoteAppTargetError::new(
+            ABILITY_SET_DESCRIPTION,
+            TargetResolutionError::ScreenCaptureKitFilterFailed,
+            "native content filter rejected pending application window set",
+        );
+        let returned = fail_pending_media_rebind(&store, session_id, epoch, &err);
+
+        assert_eq!(
+            returned.reason(),
+            TargetResolutionError::ScreenCaptureKitFilterFailed
+        );
+        store.with_sessions(|sessions| {
+            let session = sessions.get(session_id).expect("session stored");
+            assert_eq!(session.target_tracking_state()["status"], json!("lost"));
+            assert!(session.pending_media_rebind_binding().is_none());
+            let event = session
+                .events()
+                .into_iter()
+                .find(|event| event["event_type"] == json!("TARGET_REBIND_FAILED"))
+                .expect("target rebind failure event");
+            assert_eq!(
+                event["reason_code"],
+                json!("screencapturekit_filter_failed")
+            );
+            assert_eq!(event["payload"]["failure_domain"], json!("target"));
+            assert_eq!(
+                event["payload"]["frontend_action"],
+                json!("show_unsupported")
+            );
+            assert_eq!(
+                event["payload"]["pending_media_source_epoch"],
+                json!(pending.media_source_epoch())
+            );
+        });
+    }
 }

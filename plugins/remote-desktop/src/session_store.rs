@@ -21,7 +21,7 @@ use crate::daemon::plugins::remote_desktop::session_events::{
 };
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, ResolvedCaptureTargetProof,
+    RemoteAppTargetBinding, ResolvedCaptureTargetProof, TargetResolutionError,
 };
 use crate::daemon::plugins::remote_desktop::target_tracking::{
     TargetObservation, TargetTrackerSnapshot,
@@ -262,6 +262,20 @@ impl RemoteDesktopSessionStore {
             return false;
         };
         session.commit_pending_media_rebind(epoch, binding_epoch, media_source_epoch, capture_proof)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn fail_pending_media_rebind_for_session(
+        &self,
+        session_id: &str,
+        epoch: TransportEpoch,
+        reason: TargetResolutionError,
+        detail: String,
+    ) -> bool {
+        let mut sessions = self.lock();
+        let Some(session) = sessions.get_mut(session_id) else {
+            return false;
+        };
+        session.fail_pending_media_rebind(epoch, reason, detail)
     }
 
     /// Mark a direct WebRTC endpoint failed for one non-terminal session.

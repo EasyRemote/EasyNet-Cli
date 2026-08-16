@@ -488,6 +488,27 @@ impl RemoteDesktopSession {
         true
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn fail_pending_media_rebind(
+        &mut self,
+        epoch: TransportEpoch,
+        reason: TargetResolutionError,
+        detail: String,
+    ) -> bool {
+        if self.lifecycle.is_terminal() || self.transport.active_epoch() != Some(epoch) {
+            return false;
+        }
+        let Some(event) = self
+            .target
+            .commit_pending_media_rebind_failed(reason, detail, now_ms())
+        else {
+            return false;
+        };
+        self.lifecycle.reject_rebinding();
+        self.touch();
+        self.push_target_tracking_event(event);
+        true
+    }
+
     fn touch(&mut self) {
         self.lease.touch(now_ms());
     }
@@ -979,11 +1000,15 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::session_consent_state::RemoteDesktopConsentPhase;
     use crate::daemon::plugins::remote_desktop::session_state::RemoteDesktopSessionPhase;
     use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
-    use crate::daemon::plugins::remote_desktop::target::{TargetGeometry, TargetResolutionError};
+    use crate::daemon::plugins::remote_desktop::target::{
+        AppWindowSetProof, TargetGeometry, TargetResolutionError,
+    };
     use crate::daemon::plugins::remote_desktop::target_tracking::{
         TargetObservation, TargetVisibilityState,
     };
-    use crate::daemon::plugins::remote_desktop::test_support::test_session_init;
+    use crate::daemon::plugins::remote_desktop::test_support::{
+        test_application_session_init, test_session_init,
+    };
     use crate::daemon::plugins::remote_desktop::view::serialize_session;
 
     #[test]
@@ -2024,5 +2049,129 @@ mod tests {
         );
         assert_eq!(rebind_failed["payload"]["target_status"], json!("lost"));
         assert_eq!(rebind_failed["payload"]["input_enabled"], json!(false));
+    }
+
+    #[test]
+    fn pending_media_rebind_failure_rejects_session_rebinding() {
+        let mut session = RemoteDesktopSession::new(test_application_session_init(
+            "rd-media-rebind-filter-failed",
+            vec!["webrtc".into()],
+        ));
+        let epoch = TransportEpoch::new(21);
+        let original_binding_epoch = session.target_binding().binding_epoch();
+        let original_identity_epoch = session.target_binding().target_identity_epoch();
+        let original_media_source_epoch = session.target_binding().media_source_epoch();
+
+        session.begin_webrtc_negotiation(epoch);
+        session
+            .set_local_webrtc_answer(
+                epoch,
+                json!({"type": "answer", "sdp": "v=0"}),
+                "sck-native",
+                true,
+                "easynet:///r/acme/ability/remote-desktop.transport".into(),
+            )
+            .expect("local answer records");
+        session.mark_webrtc_media_sending(
+            epoch,
+            direct_webrtc_endpoint_ura("rd-media-rebind-filter-failed"),
+        );
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::MediaActive
+        );
+
+        assert!(
+            session
+                .record_target_observation(TargetObservation::ApplicationWindowSetChanged {
+                    app_window_set: AppWindowSetProof::new(
+                        42,
+                        Some("com.example.Editor".to_string()),
+                        Some(9001),
+                        vec![10, 11, 12],
+                    ),
+                    geometry: TargetGeometry {
+                        x: Some(10.0),
+                        y: Some(20.0),
+                        width: Some(320.0),
+                        height: Some(120.0),
+                    },
+                    target_identity_epoch: 100,
+                    target_geometry_revision: 4,
+                    observed_at_ms: 10,
+                })
+                .is_none(),
+            "application window-set drift rebind must not be reported as media loss"
+        );
+        let pending = session
+            .pending_media_rebind_binding()
+            .expect("session exposes pending media rebind")
+            .clone();
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::Rebinding
+        );
+
+        assert!(session.fail_pending_media_rebind(
+            epoch,
+            TargetResolutionError::ScreenCaptureKitFilterFailed,
+            "native content filter rejected pending application window set".to_string(),
+        ));
+
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::Suspended
+        );
+        assert_eq!(session.state(), RemoteDesktopState::Suspended);
+        assert_eq!(
+            session.target_tracking_state()["status"],
+            json!("lost"),
+            "target projection must terminate rebind instead of remaining stuck in rebinding"
+        );
+        assert!(session.pending_media_rebind_binding().is_none());
+        let events = session.events();
+        let rebind_failed = events
+            .iter()
+            .find(|event| event["event_type"] == json!("TARGET_REBIND_FAILED"))
+            .expect("pending media rebind failure emits target lifecycle failure");
+        assert_eq!(
+            rebind_failed["reason_code"],
+            json!("screencapturekit_filter_failed")
+        );
+        assert_eq!(rebind_failed["payload"]["failure_domain"], json!("target"));
+        assert_eq!(
+            rebind_failed["payload"]["frontend_action"],
+            json!("show_unsupported")
+        );
+        assert_eq!(rebind_failed["payload"]["target_status"], json!("lost"));
+        assert_eq!(rebind_failed["payload"]["input_enabled"], json!(false));
+        assert_eq!(
+            rebind_failed["binding_epoch"],
+            json!(original_binding_epoch)
+        );
+        assert_eq!(
+            rebind_failed["target_identity_epoch"],
+            json!(original_identity_epoch)
+        );
+        assert_eq!(
+            rebind_failed["media_source_epoch"],
+            json!(original_media_source_epoch)
+        );
+        assert_eq!(
+            rebind_failed["payload"]["pending_binding_epoch"],
+            json!(pending.binding_epoch())
+        );
+        assert_eq!(
+            rebind_failed["payload"]["pending_target_identity_epoch"],
+            json!(pending.target_identity_epoch())
+        );
+        assert_eq!(
+            rebind_failed["payload"]["pending_media_source_epoch"],
+            json!(pending.media_source_epoch())
+        );
+        assert_eq!(
+            rebind_failed["event_type_proto"],
+            json!("REMOTE_DESKTOP_EVENT_TARGET_CHANGED")
+        );
     }
 }

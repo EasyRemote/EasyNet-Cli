@@ -74,10 +74,11 @@ SESSION_CREATION="$REMOTE_ROOT/session_creation.rs"
 INVOKE_BIDI="$REMOTE_ROOT/invoke_bidi.rs"
 WEBRTC_ENDPOINT="$REMOTE_ROOT/transport/webrtc_endpoint.rs"
 WEBRTC_MEDIA="$REMOTE_ROOT/transport/webrtc_media.rs"
+WEBRTC_NATIVE="$REMOTE_ROOT/transport/webrtc_native_media.rs"
 WEBRTC_NEGOTIATION="$REMOTE_ROOT/transport/webrtc_negotiation.rs"
 TRANSPORT_BLOCKER="$REMOTE_ROOT/transport_blocker.rs"
 
-for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$LEASE_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SET_DESCRIPTION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NEGOTIATION" "$TRANSPORT_BLOCKER"; do
+for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$LEASE_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SET_DESCRIPTION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NATIVE" "$WEBRTC_NEGOTIATION" "$TRANSPORT_BLOCKER"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -495,6 +496,16 @@ require 'application_window_set_rebind_candidate' "$TARGET" \
   'session-owned target binding must build application window-set rebind candidates through a domain method'
 require 'commit_pending_media_rebind' "$TARGET_TRACKING" \
   'target tracking must commit application window-set state only after pending media rebind proof'
+require 'commit_pending_media_rebind_failed' "$TARGET_TRACKING" \
+  'target tracking must terminate failed pending media rebinds as typed target lifecycle events'
+require 'active_application_window_set_rebind_failure_is_typed' "$TARGET_TRACKING" \
+  'target tracker must test pending media rebind failure as TARGET_REBIND_FAILED'
+require 'fail_pending_media_rebind_for_session' "$SESSION_STORE" \
+  'session store must expose a target-lifecycle failure projection for native pending media rebind failures'
+require 'pending_media_rebind_failure_rejects_session_rebinding' "$SESSION" \
+  'session aggregate must reject Rebinding when pending media source rebuild fails'
+require 'native_media_rebind_failure_projects_typed_target_lifecycle' "$WEBRTC_NATIVE" \
+  'native WebRTC media path must test target-lifecycle projection for pending media rebind failures'
 require 'AppWindowSetProof::new' "$TARGET_OBSERVER" \
   'application observer must rederive the current display-scoped app window-set proof'
 require 'TargetObservation::ApplicationWindowSetChanged' "$TARGET_OBSERVER" \

@@ -25,8 +25,8 @@ use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsen
 use crate::daemon::plugins::remote_desktop::session_creation::RemoteAppTargetBindingVerifier;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::stop_session_transports;
 use crate::daemon::plugins::remote_desktop::target::{
-    RemoteAppTargetBinding, RemoteAppTargetError, RemoteAppTargetResolver,
-    ResolvedCaptureTargetProof, ResourceEntryTargetResolver,
+    AppWindowSetProof, RemoteAppTargetBinding, RemoteAppTargetError, RemoteAppTargetResolver,
+    RemoteDesktopTargetKind, ResolvedCaptureTargetProof, ResourceEntryTargetResolver,
 };
 use crate::daemon::plugins::PluginRuntimeLimits;
 
@@ -197,6 +197,80 @@ pub(in crate::daemon::plugins::remote_desktop) fn test_session_init(
         creator_caller_ura: env.caller().to_string(),
         consent: RemoteDesktopConsentGrant::from_envelope_for_test(&env),
         target_binding,
+        mode: "view_only".to_string(),
+        lease_ttl_ms: 5_000,
+        transport_preferences,
+        video: RemoteDesktopVideoConstraints::default(),
+        input_policy: RemoteDesktopInputPolicy::default(),
+    }
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn test_application_target_binding(
+) -> RemoteAppTargetBinding {
+    let app_window_set = AppWindowSetProof::new(
+        42,
+        Some("com.example.Editor".to_string()),
+        Some(9001),
+        vec![10, 11],
+    );
+    let mut binding = ResourceEntryTargetResolver
+        .resolve_for_session(
+            "test.ability",
+            &ResourceEntry {
+                resource_ura: "easynet:///r/acme/resource/application.test".into(),
+                owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
+                kind: ResourceType::Application,
+                binding: ResourceBinding::LocalDevice,
+                hardware_id: "application:macos:pid:9001".into(),
+                display_name: "Editor".into(),
+                metadata: live_remote_target_metadata(json!({
+                    "display_id": 42,
+                    "bundle_id": "com.example.Editor",
+                    "app_identity": "com.example.Editor",
+                    "primary_pid": 9001,
+                    "resolved_window_ids": [10, 11],
+                    "window_set_epoch": app_window_set.window_set_epoch(),
+                    "target_identity_epoch": app_window_set.window_set_epoch(),
+                    "x": 10,
+                    "y": 20,
+                    "width": 200,
+                    "height": 100,
+                })),
+                first_seen_at: "2026-06-01T00:00:00Z".into(),
+            },
+            "view_only",
+            1,
+        )
+        .expect("application target binding resolves");
+    let proof = ResolvedCaptureTargetProof::new(
+        binding.native_locator().capture_backend(),
+        RemoteDesktopTargetKind::Application,
+        Some(42),
+        None,
+        Some(9001),
+        Some("com.example.Editor".to_string()),
+        Some("com.example.Editor".to_string()),
+        Some((200, 100)),
+    )
+    .with_app_window_set(app_window_set);
+    binding
+        .commit_capture_proof("test.ability", proof)
+        .expect("application proof commits");
+    binding
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn test_application_session_init(
+    session_id: &str,
+    transport_preferences: Vec<String>,
+) -> RemoteDesktopSessionInit {
+    let subject = "easynet:///r/acme/resource/application.test";
+    let env = env_for(subject);
+    RemoteDesktopSessionInit {
+        session_id: session_id.to_string(),
+        session_token: "token".to_string(),
+        creator_caller_ura: env.caller().to_string(),
+        consent: RemoteDesktopConsentGrant::from_envelope_for_test(&env),
+        target_binding: test_application_target_binding(),
         mode: "view_only".to_string(),
         lease_ttl_ms: 5_000,
         transport_preferences,
