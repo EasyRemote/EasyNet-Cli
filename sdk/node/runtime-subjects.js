@@ -33,16 +33,32 @@ export function isRuntimeStateReadSubjectURA(subjectURA) {
 export function isRuntimeOwnerReadSubjectURA(subjectURA, calleeURA) {
   const subject = String(subjectURA ?? "").trim();
   const callee = String(calleeURA ?? "").trim();
-  if (subject === "" || subject !== callee) {
+  if (subject === "" || callee === "") {
     return false;
   }
   const subjectOwner = canonicalRuntimeOwnerSubject(subject);
   const calleeOwner = canonicalRuntimeOwnerSubject(callee);
+  if (
+    subjectOwner !== null &&
+    calleeOwner !== null &&
+    (subjectOwner.kind === "authority" ||
+      subjectOwner.kind === "device") &&
+    subjectOwner.kind === calleeOwner.kind &&
+    subjectOwner.realm === calleeOwner.realm &&
+    subjectOwner.deviceID === calleeOwner.deviceID &&
+    (subjectOwner.agentID ?? "") === (calleeOwner.agentID ?? "") &&
+    subject === callee
+  ) {
+    return true;
+  }
   return (
     subjectOwner !== null &&
     calleeOwner !== null &&
-    subjectOwner.kind === calleeOwner.kind &&
-    subjectOwner.realm === calleeOwner.realm
+    subjectOwner.kind === "device" &&
+    calleeOwner.kind === "system-agent" &&
+    subjectOwner.realm === calleeOwner.realm &&
+    subjectOwner.deviceID !== "" &&
+    subjectOwner.deviceID === calleeOwner.deviceID
   );
 }
 
@@ -87,14 +103,19 @@ function canonicalRuntimeOwnerSubject(subjectURA) {
   if (parsed.path.startsWith("device/")) {
     const deviceID = parsed.path.slice("device/".length).trim();
     if (deviceID !== "" && !deviceID.includes("/")) {
-      return { kind: "device", realm: parsed.realm };
+      return { kind: "device", realm: parsed.realm, deviceID };
     }
   }
   if (parsed.path.startsWith("agent/device.")) {
     const scopedAgentID = parsed.path.slice("agent/device.".length).trim();
     const separator = scopedAgentID.indexOf(".");
     if (separator > 0 && separator < scopedAgentID.length - 1 && !scopedAgentID.includes("/")) {
-      return { kind: "system-agent", realm: parsed.realm };
+      return {
+        kind: "system-agent",
+        realm: parsed.realm,
+        deviceID: scopedAgentID.slice(0, separator),
+        agentID: scopedAgentID.slice(separator + 1),
+      };
     }
   }
   return null;

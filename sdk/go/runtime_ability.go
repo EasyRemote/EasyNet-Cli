@@ -266,6 +266,17 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 	if mode == "" {
 		return InvocationDraft{}, invalidRuntimePayload("call_mode is required", nil)
 	}
+	target, err := newRuntimeCatalogueReadTarget(
+		strings.TrimSpace(call.CalleeURA),
+		strings.TrimSpace(call.SubjectURA),
+		abilityName,
+		policy.descriptorProvider,
+	)
+	if err != nil {
+		return InvocationDraft{}, err
+	}
+	call.CalleeURA = target.calleeURA
+	call.SubjectURA = target.subjectURA
 	subjectURA, err := policy.subjectURA(ctx, c.addressing, call, abilityName)
 	if err != nil {
 		return InvocationDraft{}, err
@@ -279,7 +290,7 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 		return InvocationDraft{}, err
 	}
 	descriptorRef, err := c.runtime.ResolveDescriptorRef(ctx, RuntimeDescriptorRefRequest{
-		CalleeURA:         strings.TrimSpace(call.CalleeURA),
+		CalleeURA:         target.calleeURA,
 		Ability:           abilityName,
 		CallMode:          mode,
 		CallerURA:         strings.TrimSpace(call.CallerURA),
@@ -290,7 +301,7 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 	if err != nil {
 		return InvocationDraft{}, err
 	}
-	ability, err := newRuntimeAbilityProjection(ctx, c.addressing, strings.TrimSpace(call.CalleeURA), descriptorRef)
+	ability, err := newRuntimeAbilityProjection(ctx, c.addressing, target.calleeURA, descriptorRef)
 	if err != nil {
 		return InvocationDraft{}, err
 	}
@@ -304,7 +315,7 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 	}
 	return NewInvocationBuilder().
 		WithCallerURA(strings.TrimSpace(call.CallerURA)).
-		WithCalleeURA(strings.TrimSpace(call.CalleeURA)).
+		WithCalleeURA(target.calleeURA).
 		WithDescriptorRef(ability.descriptorRef).
 		WithSubjectURA(subjectURA).
 		WithNonceBase64(strings.TrimSpace(call.NonceBase64)).

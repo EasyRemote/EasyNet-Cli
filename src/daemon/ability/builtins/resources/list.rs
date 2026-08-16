@@ -55,9 +55,14 @@ pub const ABILITY_META_LIST_RESOURCES: &str =
 
 /// Register `meta.list_resources` on the registry.
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_spec(
         ABILITY_META_LIST_RESOURCES,
         OwnerKind::runtime_introspection_system(),
+        crate::daemon::ability::catalog::system_manifest::registry_manifest(
+            ABILITY_META_LIST_RESOURCES,
+            description(),
+            input_schema(),
+        ),
         Arc::new(handler),
     );
 }
@@ -169,6 +174,20 @@ mod tests {
         assert_eq!(
             reg.control_plane_owner(ABILITY_META_LIST_RESOURCES),
             Some(OwnerKind::runtime_introspection_system())
+        );
+        let descriptor = reg
+            .canonical_descriptor_for_ability(ABILITY_META_LIST_RESOURCES)
+            .expect("unambiguous resource-list descriptor")
+            .expect("registered resource-list descriptor");
+        assert_eq!(
+            descriptor.metadata.get("exposure").map(String::as_str),
+            Some("operator"),
+            "product-issued resource reads must import their canonical operator exposure"
+        );
+        assert_eq!(descriptor.version, "1.0.1");
+        assert_eq!(
+            descriptor.admission_action(),
+            crate::daemon::ability::descriptors::AdmissionAction::Read
         );
     }
 

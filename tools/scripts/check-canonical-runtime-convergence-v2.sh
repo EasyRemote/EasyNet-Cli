@@ -6499,7 +6499,7 @@ for required in (
     "function descriptorBoundRuntimeSubjectURA(subjectURA, abilityName)",
     'return `easynet:///r/${realm}/resource/authority/invoke/${ability}`;',
     'return `easynet:///r/${realm}/resource/user.${userID}/invoke/${ability}`;',
-    "runtimeAbilitySubjectURA(context, ability, policy)",
+    "runtimeAbilitySubjectURA(selectedContext, ability, policy)",
 ):
     if required not in node:
         raise SystemExit(f"sdk_runtime_ability_descriptor_bound_subject_parity:node_missing:{required}")

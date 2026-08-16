@@ -374,6 +374,17 @@ func admitRuntimeDescriptorRefRequest(req RuntimeDescriptorRefRequest) (RuntimeD
 			return RuntimeDescriptorRefRequest{}, invalidRuntimeClient("descriptor_ref provider request " + field.name + " must not be all-zero")
 		}
 	}
+	target, err := newRuntimeCatalogueReadTarget(req.CalleeURA, req.SubjectURA, req.Ability, req.Provider)
+	if err != nil {
+		if strings.Contains(err.Error(), "runtime governance read subject_ura") {
+			return RuntimeDescriptorRefRequest{}, invalidRuntimeClient(
+				"descriptor_ref provider " + req.Provider + " subject_ura must be a runtime governance read subject",
+			)
+		}
+		return RuntimeDescriptorRefRequest{}, err
+	}
+	req.CalleeURA = target.calleeURA
+	req.SubjectURA = target.subjectURA
 	if err := admitRuntimeDescriptorRefProviderSubject(req); err != nil {
 		return RuntimeDescriptorRefRequest{}, err
 	}

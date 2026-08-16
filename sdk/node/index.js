@@ -1702,20 +1702,31 @@ export class RuntimeAbilityClient {
         "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider",
       );
     }
-    const subjectURA = runtimeAbilitySubjectURA(context, ability, policy);
+    const target = runtimeCatalogueReadTarget(
+      context.calleeURA,
+      context.subjectURA,
+      ability,
+      policy.descriptorProvider,
+    );
+    const selectedContext = {
+      ...context,
+      calleeURA: target.calleeURA,
+      subjectURA: target.subjectURA,
+    };
+    const subjectURA = runtimeAbilitySubjectURA(selectedContext, ability, policy);
     const descriptorRef = await this.runtime.resolveDescriptorRef({
-      callee_ura: context.calleeURA,
+      callee_ura: target.calleeURA,
       ability,
       call_mode: requiredRuntimeText(callMode, "call_mode"),
       caller_ura: context.callerURA,
-      subject_ura: runtimeAbilityDescriptorResolutionSubjectURA(context, subjectURA, policy),
+      subject_ura: runtimeAbilityDescriptorResolutionSubjectURA(selectedContext, subjectURA, policy),
       provider: policy.descriptorProvider,
     });
-    const projection = RuntimeAbilityProjection.fromDescriptorRef(context.calleeURA, descriptorRef);
-    const metadata = runtimeAbilityMetadata(context, projection, subjectURA);
+    const projection = RuntimeAbilityProjection.fromDescriptorRef(target.calleeURA, descriptorRef);
+    const metadata = runtimeAbilityMetadata(selectedContext, projection, subjectURA);
     const builder = new InvocationBuilder()
       .withCallerURA(context.callerURA)
-      .withCalleeURA(context.calleeURA)
+      .withCalleeURA(target.calleeURA)
       .withDescriptorRef(descriptorRef)
       .withSubjectURA(subjectURA)
       .withNonceBase64(context.nonceBase64)
@@ -4576,6 +4587,29 @@ function admitRuntimeDescriptorRefRequest(request) {
       `descriptor_ref provider ${request.provider} cannot resolve ability ${request.ability}; use provider ${expectedProvider}`,
     );
   }
+  let target;
+  try {
+    target = runtimeCatalogueReadTarget(
+      request.callee_ura,
+      request.subject_ura,
+      request.ability,
+      request.provider,
+    );
+  } catch (error) {
+    if (
+      error instanceof SDKError &&
+      error.code === ErrorCode.INVALID_ARGUMENT &&
+      error.stage === "build" &&
+      String(error.message).startsWith("runtime governance read subject_ura")
+    ) {
+      throw invalidRuntime(
+        `descriptor_ref provider ${request.provider} subject_ura must be a runtime governance read subject`,
+      );
+    }
+    throw error;
+  }
+  request.callee_ura = target.calleeURA;
+  request.subject_ura = target.subjectURA;
   for (const field of ["caller_ura", "subject_ura"]) {
     if (!request[field]) {
       throw invalidRuntime(`descriptor_ref provider request requires ${field}`);
@@ -4635,9 +4669,10 @@ function runtimeAbilityDispatchPolicy(options = {}) {
 function runtimeAbilityGovernanceReadPolicy(provider) {
   return {
     allowGovernanceRead: true,
-    subjectPolicy: provider === RUNTIME_ABILITY_DESCRIPTOR_PROVIDER
-      ? "runtime_owner"
-      : "descriptor_bound",
+    subjectPolicy:
+      provider === RUNTIME_ABILITY_DESCRIPTOR_PROVIDER
+        ? "runtime_governance_read"
+        : "descriptor_bound",
     descriptorProvider: requiredRuntimeText(provider, "descriptor_provider"),
   };
 }
@@ -4693,6 +4728,8 @@ function runtimeAbilitySubjectURA(call, abilityName, policy) {
       return descriptorBoundRuntimeSubjectURA(call.subjectURA, abilityName);
     case "runtime_owner":
       return call.calleeURA.trim();
+    case "runtime_governance_read":
+      return runtimeGovernanceReadSubjectURA(call.subjectURA, call.calleeURA);
     default:
       throw invalidInvocation("runtime ability subject policy is unsupported");
   }
@@ -4700,7 +4737,10 @@ function runtimeAbilitySubjectURA(call, abilityName, policy) {
 
 function runtimeAbilityDescriptorResolutionSubjectURA(call, subjectURA, policy) {
   if (policy.descriptorProvider === RUNTIME_ABILITY_DESCRIPTOR_PROVIDER) {
-    if (policy.subjectPolicy === "runtime_owner") {
+    if (
+      policy.subjectPolicy === "runtime_owner" ||
+      policy.subjectPolicy === "runtime_governance_read"
+    ) {
       return subjectURA.trim();
     }
     return call.subjectURA.trim();
@@ -4709,6 +4749,132 @@ function runtimeAbilityDescriptorResolutionSubjectURA(call, subjectURA, policy) 
     return subjectURA.trim();
   }
   return call.subjectURA.trim();
+}
+
+function runtimeGovernanceReadSubjectURA(subjectURA, calleeURA) {
+  const subject = requiredRuntimeText(subjectURA, "subject_ura");
+  const callee = requiredRuntimeText(calleeURA, "callee_ura");
+  if (isRuntimeStateReadSubjectURA(subject) || isRuntimeOwnerReadSubjectURA(subject, callee)) {
+    return subject;
+  }
+  const parsed = parseCanonicalURANullable(subject);
+  if (!parsed) {
+    throw invalidInvocation("runtime governance read subject_ura must be canonical");
+  }
+  if (parsed.path.startsWith("user/")) {
+    const userID = parsed.path.slice("user/".length).trim();
+    return buildRuntimeStateReadSubjectURA(parsed.realm, userID, {
+      invalidInvocation,
+      invalidRuntime,
+    });
+  }
+  const owner = runtimeOwnerSubjectProjection(subject);
+  if (owner?.kind === "system-agent") {
+    return `easynet:///r/${owner.realm}/device/${owner.deviceID}`;
+  }
+  const resource = canonicalResourceSubject(subject);
+  if (resource?.ownerID.startsWith("user.")) {
+    return buildRuntimeStateReadSubjectURA(parsed.realm, resource.ownerID.slice("user.".length), {
+      invalidInvocation,
+      invalidRuntime,
+    });
+  }
+  throw invalidInvocation(
+    "runtime governance read subject_ura must be a runtime owner or user-owned runtime-state read subject",
+  );
+}
+
+function runtimeOwnerSubjectProjection(value) {
+  const parsed = parseCanonicalURANullable(value);
+  const path = parsed?.path ?? "";
+  if (path === "authority") {
+    return { kind: "authority", realm: parsed.realm, deviceID: "" };
+  }
+  if (path.startsWith("device/")) {
+    const deviceID = path.slice("device/".length).trim();
+    if (deviceID && !deviceID.includes("/")) {
+      return { kind: "device", realm: parsed.realm, deviceID };
+    }
+  }
+  if (path.startsWith("agent/device.")) {
+    const scopedAgentID = path.slice("agent/device.".length).trim();
+    const separator = scopedAgentID.indexOf(".");
+    if (separator > 0 && separator < scopedAgentID.length - 1 && !scopedAgentID.includes("/")) {
+      return {
+        kind: "system-agent",
+        realm: parsed.realm,
+        deviceID: scopedAgentID.slice(0, separator),
+        agentID: scopedAgentID.slice(separator + 1),
+      };
+    }
+  }
+  return null;
+}
+
+function runtimeCatalogueReadTarget(calleeURA, subjectURA, abilityName, provider) {
+  const callee = requiredRuntimeText(calleeURA, "callee_ura");
+  if (
+    provider !== RUNTIME_ABILITY_DESCRIPTOR_PROVIDER ||
+    generatedRuntimeGovernanceDescriptorProvider(abilityName) !== RUNTIME_ABILITY_DESCRIPTOR_PROVIDER
+  ) {
+    return { calleeURA: callee, subjectURA: String(subjectURA ?? "").trim() };
+  }
+  const projectedCallee = runtimeCatalogueReadCalleeURA(callee);
+  return {
+    calleeURA: projectedCallee,
+    subjectURA: runtimeCatalogueReadSubjectURA(subjectURA, projectedCallee),
+  };
+}
+
+function runtimeCatalogueReadCalleeURA(calleeURA) {
+  const callee = requiredRuntimeText(calleeURA, "callee_ura");
+  const owner = runtimeOwnerSubjectProjection(callee);
+  if (owner?.kind === "device" || owner?.kind === "system-agent") {
+    return `easynet:///r/${owner.realm}/agent/device.${owner.deviceID}.runtime-introspection`;
+  }
+  return callee;
+}
+
+function runtimeCatalogueReadSubjectURA(subjectURA, calleeURA) {
+  try {
+    return runtimeGovernanceReadSubjectURA(subjectURA, calleeURA);
+  } catch (error) {
+    const resourceOwner = runtimeCatalogueResourceOwnerSubjectURA(subjectURA, calleeURA);
+    if (resourceOwner !== "") {
+      return resourceOwner;
+    }
+    throw error;
+  }
+}
+
+function runtimeCatalogueResourceOwnerSubjectURA(subjectURA, calleeURA) {
+  const subject = String(subjectURA ?? "").trim();
+  const parsed = parseCanonicalURANullable(subject);
+  if (!parsed) {
+    return "";
+  }
+  const resource = canonicalResourceSubject(subject);
+  const ownerID = resource?.ownerID ?? "";
+  if (!ownerID.startsWith("device.")) {
+    return "";
+  }
+  const deviceID = ownerID.slice("device.".length).trim();
+  if (deviceID === "" || deviceID.includes("/") || deviceID.includes(".")) {
+    return "";
+  }
+  const ownerSubject = `easynet:///r/${parsed.realm}/device/${deviceID}`;
+  return ownerSubject === runtimeOwnerReadSubjectURA(calleeURA) ? ownerSubject : "";
+}
+
+function runtimeOwnerReadSubjectURA(calleeURA) {
+  const owner = runtimeOwnerSubjectProjection(calleeURA);
+  if (owner?.kind === "authority") {
+    return `easynet:///r/${owner.realm}/authority`;
+  }
+  if (owner?.kind === "device" || owner?.kind === "system-agent") {
+    return `easynet:///r/${owner.realm}/device/${owner.deviceID}`;
+  }
+  throw invalidInvocation("runtime governance read callee_ura has no runtime-owner subject");
 }
 
 function runtimeAbilityMetadata(call, ability, subjectURA) {

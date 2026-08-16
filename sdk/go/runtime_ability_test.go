@@ -64,6 +64,78 @@ func TestRuntimeClientResolveDescriptorRefAdmitsCompleteGenericRequest(t *testin
 	}
 }
 
+func TestRuntimeClientResolveDescriptorRefCanonicalizesCatalogueReadCallee(t *testing.T) {
+	var seen RuntimeDescriptorRefRequest
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(_ context.Context, requestJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(requestJSON, &seen); err != nil {
+				return nil, err
+			}
+			return []byte(`{"descriptor_ref":"easynet:///r/example/ability/system-agent.dev-a.runtime-introspection.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read"}`), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+
+	_, err = runtime.ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
+		CalleeURA:  "easynet:///r/example/agent/device.dev-a.media",
+		Ability:    "meta.list_resources",
+		CallMode:   "rpc",
+		CallerURA:  "easynet:///r/example/user/alice",
+		SubjectURA: "easynet:///r/example/resource/user.alice/runtime-state/read",
+		Provider:   runtimeAbilityDescriptorProvider,
+	})
+	if err != nil {
+		t.Fatalf("ResolveDescriptorRef: %v", err)
+	}
+	if seen.CalleeURA != "easynet:///r/example/agent/device.dev-a.runtime-introspection" {
+		t.Fatalf("descriptor request callee_ura = %q, want runtime-introspection", seen.CalleeURA)
+	}
+	if seen.SubjectURA != "easynet:///r/example/resource/user.alice/runtime-state/read" {
+		t.Fatalf("descriptor request subject_ura = %q, want user runtime-state read", seen.SubjectURA)
+	}
+}
+
+func TestRuntimeCatalogueReadTargetConformanceFixture(t *testing.T) {
+	var fixture struct {
+		Cases []struct {
+			Name               string `json:"name"`
+			CalleeURA          string `json:"callee_ura"`
+			SubjectURA         string `json:"subject_ura"`
+			Ability            string `json:"ability"`
+			Provider           string `json:"provider"`
+			ExpectedCalleeURA  string `json:"expected_callee_ura"`
+			ExpectedSubjectURA string `json:"expected_subject_ura"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(
+		sharedFixture(t, repositoryRoot(t), "runtime-catalogue-read-target.v1.json"),
+		&fixture,
+	); err != nil {
+		t.Fatalf("decode runtime catalogue read target fixture: %v", err)
+	}
+	for _, testCase := range fixture.Cases {
+		t.Run(testCase.Name, func(t *testing.T) {
+			target, err := newRuntimeCatalogueReadTarget(
+				testCase.CalleeURA,
+				testCase.SubjectURA,
+				testCase.Ability,
+				testCase.Provider,
+			)
+			if err != nil {
+				t.Fatalf("newRuntimeCatalogueReadTarget: %v", err)
+			}
+			if target.calleeURA != testCase.ExpectedCalleeURA {
+				t.Fatalf("callee_ura = %q, want %q", target.calleeURA, testCase.ExpectedCalleeURA)
+			}
+			if target.subjectURA != testCase.ExpectedSubjectURA {
+				t.Fatalf("subject_ura = %q, want %q", target.subjectURA, testCase.ExpectedSubjectURA)
+			}
+		})
+	}
+}
+
 func TestRuntimeClientResolveDescriptorRefRejectsIncompleteRequestBeforeTransport(t *testing.T) {
 	tests := []struct {
 		name string
@@ -452,6 +524,103 @@ func TestRuntimeAbilityClientCatalogueReadResolvesDescriptorWithGovernanceReadSu
 	if seen.Provider != runtimeAbilityDescriptorProvider {
 		t.Fatalf("descriptor provider = %q, want %q", seen.Provider, runtimeAbilityDescriptorProvider)
 	}
+	if seen.CalleeURA != "easynet:///r/example/agent/device.device-1.runtime-introspection" {
+		t.Fatalf("descriptor request callee_ura = %q, want runtime-introspection", seen.CalleeURA)
+	}
+	if draft.CalleeURA() != "easynet:///r/example/agent/device.device-1.runtime-introspection" {
+		t.Fatalf("draft callee_ura = %q, want runtime-introspection", draft.CalleeURA())
+	}
+	if draft.DescriptorRef() != "easynet:///r/example/ability/system-agent.device-1.runtime-introspection.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" {
+		t.Fatalf("descriptor_ref = %q, want runtime-introspection meta.list_resources", draft.DescriptorRef())
+	}
+}
+
+func TestRuntimeAbilityClientCatalogueReadCanonicalizesMediaSystemAgentCallee(t *testing.T) {
+	var seen RuntimeDescriptorRefRequest
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(requestJSON, &seen); err != nil {
+				return nil, err
+			}
+			return testResolveDescriptorRef(t)(ctx, requestJSON)
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	call := runtimeAbilityTestContext()
+	call.CalleeURA = "easynet:///r/example/agent/device.device-1.media"
+	call.SubjectURA = "easynet:///r/example/user/alice"
+
+	draft, err := client.buildWithCallModePolicy(
+		context.Background(),
+		call,
+		"meta.list_resources",
+		map[string]any{"types": []string{"application", "window"}},
+		"rpc",
+		runtimeAbilityCatalogueReadPolicy(),
+	)
+	if err != nil {
+		t.Fatalf("buildWithCallModePolicy: %v", err)
+	}
+
+	const wantCallee = "easynet:///r/example/agent/device.device-1.runtime-introspection"
+	if seen.CalleeURA != wantCallee {
+		t.Fatalf("descriptor request callee_ura = %q, want %q", seen.CalleeURA, wantCallee)
+	}
+	if draft.CalleeURA() != wantCallee {
+		t.Fatalf("draft callee_ura = %q, want %q", draft.CalleeURA(), wantCallee)
+	}
+	if draft.DescriptorRef() != "easynet:///r/example/ability/system-agent.device-1.runtime-introspection.meta.list_resources@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read" {
+		t.Fatalf("descriptor_ref = %q, want runtime-introspection meta.list_resources", draft.DescriptorRef())
+	}
+}
+
+func TestRuntimeAbilityClientCatalogueReadFallsBackFromProductResourceSubjectToRuntimeOwner(t *testing.T) {
+	var seen RuntimeDescriptorRefRequest
+	runtime, err := NewRuntimeClient(RuntimeTransportFunc{
+		ResolveDescriptorRefFunc: func(ctx context.Context, requestJSON []byte) ([]byte, error) {
+			if err := json.Unmarshal(requestJSON, &seen); err != nil {
+				return nil, err
+			}
+			return testResolveDescriptorRef(t)(ctx, requestJSON)
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRuntimeClient: %v", err)
+	}
+	client, err := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
+	if err != nil {
+		t.Fatalf("NewRuntimeAbilityClient: %v", err)
+	}
+	call := runtimeAbilityTestContext()
+	call.CalleeURA = "easynet:///r/example/agent/device.device-1.media"
+	call.SubjectURA = "easynet:///r/example/resource/device.device-1/streams/display.default"
+
+	draft, err := client.buildWithCallModePolicy(
+		context.Background(),
+		call,
+		"meta.list_resources",
+		map[string]any{},
+		"rpc",
+		runtimeAbilityCatalogueReadPolicy(),
+	)
+	if err != nil {
+		t.Fatalf("buildWithCallModePolicy: %v", err)
+	}
+
+	const wantCallee = "easynet:///r/example/agent/device.device-1.runtime-introspection"
+	const wantSubject = "easynet:///r/example/device/device-1"
+	if seen.CalleeURA != wantCallee || draft.CalleeURA() != wantCallee {
+		t.Fatalf("callee mismatch: request=%q draft=%q want=%q", seen.CalleeURA, draft.CalleeURA(), wantCallee)
+	}
+	if seen.SubjectURA != wantSubject || draft.SubjectURA() != wantSubject {
+		t.Fatalf("subject mismatch: request=%q draft=%q want=%q", seen.SubjectURA, draft.SubjectURA(), wantSubject)
+	}
 }
 
 func TestRuntimeAbilityClientCatalogueReadUsesSessionOwnerForGovernanceSubject(t *testing.T) {
@@ -475,6 +644,8 @@ func TestRuntimeAbilityClientCatalogueReadUsesSessionOwnerForGovernanceSubject(t
 	call.CalleeURA = "easynet:///r/example/device/device-1"
 	call.SubjectURA = "easynet:///r/example/user/alice"
 	authority := runtimeAbilitySessionAuthority(t, call, "c658f249-e5b5-4126-8a5e-79d1d2322885")
+	authority.CalleeURA = "easynet:///r/example/agent/device.device-1.runtime-introspection"
+	authority.Audience = authority.CalleeURA
 	authority.Scopes = []string{"meta.list_resources"}
 	authority.AllowedFollowupAbilities = []string{"meta.list_resources"}
 	call.Authority = &authority

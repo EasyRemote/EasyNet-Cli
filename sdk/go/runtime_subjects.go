@@ -54,10 +54,17 @@ func isRuntimeGovernanceReadSubjectURA(subjectURA string, calleeURA string) bool
 	if subjectErr != nil || calleeErr != nil {
 		return false
 	}
-	return (subject.Kind == URAKindAuthority || subject.Kind == URAKindDevice) &&
+	if (subject.Kind == URAKindAuthority || subject.Kind == URAKindDevice) &&
 		subject.Kind == callee.Kind &&
 		subject.Realm == callee.Realm &&
-		subjectURA == calleeURA
+		subjectURA == calleeURA {
+		return true
+	}
+	return subject.Kind == URAKindDevice &&
+		callee.Kind == URAKindAgent &&
+		subject.Realm == callee.Realm &&
+		strings.TrimSpace(callee.DeviceID) != "" &&
+		strings.TrimSpace(subject.DeviceID) == strings.TrimSpace(callee.DeviceID)
 }
 
 // RuntimeGovernanceReadSubjectURA projects a business subject into the
@@ -86,6 +93,9 @@ func RuntimeGovernanceReadSubjectURA(subjectURA string, calleeURA string) (strin
 		return RuntimeStateReadSubjectURA(parts.Realm, parts.UserID)
 	case URAKindAgent:
 		if strings.TrimSpace(parts.UserID) == "" {
+			if strings.TrimSpace(parts.DeviceID) != "" {
+				return DeviceURA(parts.Realm, parts.DeviceID), nil
+			}
 			break
 		}
 		return RuntimeStateReadSubjectURA(parts.Realm, parts.UserID)

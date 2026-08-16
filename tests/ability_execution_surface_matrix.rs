@@ -137,6 +137,7 @@ fn every_descriptor_has_one_honest_execution_surface() {
         assert_subject_contract_kind(&contracts, name, "authenticated-user");
     }
     for name in [
+        "meta.list_resources",
         "resource.refresh_remote_targets",
         "resource.watch_remote_targets",
     ] {
