@@ -40,6 +40,7 @@ SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 RESOURCE_BOOTSTRAP="$ROOT/src/daemon/ability/builtins/resources/media/resource_bootstrap.rs"
 RESOURCE_LIST="$ROOT/src/daemon/ability/builtins/resources/list.rs"
 TARGET_OBSERVER="$ROOT/plugins/remote-desktop/src/target_observer.rs"
+TARGET_MONITOR="$ROOT/plugins/remote-desktop/src/target_monitor.rs"
 EVENT_LOG="$ROOT/plugins/remote-desktop/src/event_log.rs"
 REQUEST="$ROOT/plugins/remote-desktop/src/request.rs"
 HANDLERS="$ROOT/plugins/remote-desktop/src/handlers/mod.rs"
@@ -79,28 +80,24 @@ require 'std::fs::read\(&path\)' "$RESOURCE_LIST" \
 require 'modified\(\)' "$RESOURCE_LIST" \
   'PERF-02 must compare resources.json mtime before and after meta.list_resources'
 
-require 'shared_host_snapshot_provider_coalesces_session_observer_reads' "$TARGET_OBSERVER" \
-  'PERF-03 must prove shared target sampling coalesces host enumeration'
-require 'shared_host_snapshot_provider_bounds_session_fanout_to_one_enumeration_per_tick' "$TARGET_OBSERVER" \
-  'PERF-03 must prove 128 session ticks share one host snapshot per refresh window'
-require 'static SNAPSHOTS: OnceLock' "$TARGET_OBSERVER" \
-  'PERF-03 production platform observer must own a shared host snapshot cache'
-require 'SharedHostTargetSnapshotProvider::new' "$TARGET_OBSERVER" \
-  'PERF-03 production platform observer must construct the shared host snapshot provider'
-require 'PLATFORM_TARGET_SNAPSHOT_MIN_REFRESH' "$TARGET_OBSERVER" \
-  'PERF-03 production platform observer must use the bounded target snapshot refresh window'
-require 'SnapshotBackedTargetObservationProvider::new\(snapshots\)\.observe\(binding, snapshot\)' "$TARGET_OBSERVER" \
-  'PERF-03 production platform observer must observe through the shared snapshot-backed provider'
+require 'sampled_host_target_observations_bound_session_fanout_to_one_enumeration_per_tick' "$TARGET_OBSERVER" \
+  'PERF-03 must prove a sampled target observer fans out one host enumeration to 128 sessions'
+require 'pub\(in crate::daemon::plugins::remote_desktop\) fn sample_platform_target_observations' "$TARGET_OBSERVER" \
+  'PERF-03 production platform observer must expose an explicit per-tick sampler'
+require 'sample_host_target_observations\(&MacOsHostTargetSnapshotProvider\)' "$TARGET_OBSERVER" \
+  'PERF-03 macOS platform sampler must capture one host snapshot before session fanout'
+require 'let provider = sample_platform_target_observations\(\);' "$TARGET_MONITOR" \
+  'PERF-03 target monitor must sample host state once before retaining tracked sessions'
+reject 'PlatformTargetObservationProvider' "$TARGET_MONITOR" \
+  'PERF-03 target monitor must not instantiate a per-session platform observation provider'
+reject 'SharedHostTargetSnapshotProvider' "$TARGET_OBSERVER" \
+  'PERF-03 must not rely on refresh-window cache compatibility instead of explicit tick sampling'
 require 'const SESSION_COUNT: usize = 128' "$TARGET_OBSERVER" \
   'PERF-03 shared sampler test must cover S=128 active session ticks'
-require 'Duration::ZERO' "$TARGET_OBSERVER" \
-  'PERF-03 shared sampler test must prove cache expiry permits a new bounded enumeration'
 require 'calls\.load\(Ordering::SeqCst\)' "$TARGET_OBSERVER" \
   'PERF-03 must inspect the host snapshot call count'
-require 'shared target observer must not multiply OS enumeration by session count' "$TARGET_OBSERVER" \
-  'PERF-03 must assert one host snapshot call per shared sampler tick'
-require 'one host enumeration for 128 session ticks' "$TARGET_OBSERVER" \
-  'PERF-03 must assert fanout is bounded to one enumeration for 128 session ticks'
+require 'one host enumeration for 128 session ticks in one monitor tick' "$TARGET_OBSERVER" \
+  'PERF-03 must assert fanout is bounded to one enumeration for 128 session ticks in one monitor tick'
 
 require 'event_log_retains_fixed_ring_and_monotonic_sequences_under_large_storm' "$EVENT_LOG" \
   'PERF-04 must prove bounded event ring behavior under a large storm'

@@ -11,8 +11,6 @@
 // - RemoteDesktopSession remains the only committed target lifecycle writer.
 
 use std::collections::BTreeSet;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session::TargetMediaSourceLost;
@@ -24,8 +22,6 @@ use crate::daemon::plugins::remote_desktop::target::{
 use crate::daemon::plugins::remote_desktop::target_tracking::{
     TargetObservation, TargetTrackerSnapshot, TargetVisibilityState,
 };
-
-const PLATFORM_TARGET_SNAPSHOT_MIN_REFRESH: Duration = Duration::from_millis(250);
 
 pub(in crate::daemon::plugins::remote_desktop) trait TargetObservationProvider {
     fn observe(
@@ -57,8 +53,25 @@ impl TargetObservationPollResult {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-pub(in crate::daemon::plugins::remote_desktop) struct PlatformTargetObservationProvider;
+#[derive(Debug, Clone)]
+pub(in crate::daemon::plugins::remote_desktop) struct PlatformTargetObservationSample {
+    state: PlatformTargetObservationSampleState,
+}
+
+#[derive(Debug, Clone)]
+enum PlatformTargetObservationSampleState {
+    HostSnapshot(HostTargetSnapshot),
+    SnapshotFailed {
+        detail: String,
+        observed_at_ms: u64,
+    },
+    PermissionRevoked {
+        detail: String,
+        observed_at_ms: u64,
+    },
+    #[cfg(not(target_os = "macos"))]
+    UnsupportedPlatform,
+}
 
 #[derive(Debug, Clone)]
 struct ObservedWindow {
@@ -91,71 +104,97 @@ where
     }
 }
 
-#[derive(Debug)]
-struct SharedHostTargetSnapshotProvider<P> {
-    source: P,
-    min_refresh_interval: Duration,
-    cache: Mutex<Option<CachedHostTargetSnapshot>>,
-}
+impl PlatformTargetObservationSample {
+    fn from_snapshot_result(result: anyhow::Result<HostTargetSnapshot>) -> Self {
+        match result {
+            Ok(snapshot) => Self {
+                state: PlatformTargetObservationSampleState::HostSnapshot(snapshot),
+            },
+            Err(error) => Self {
+                state: PlatformTargetObservationSampleState::SnapshotFailed {
+                    detail: format!("host target snapshot failed: {error}"),
+                    observed_at_ms: now_ms(),
+                },
+            },
+        }
+    }
 
-#[derive(Debug, Clone)]
-struct CachedHostTargetSnapshot {
-    captured_at: Instant,
-    snapshot: HostTargetSnapshot,
-}
-
-impl<P> SharedHostTargetSnapshotProvider<P> {
-    fn new(source: P, min_refresh_interval: Duration) -> Self {
+    fn permission_revoked(detail: impl Into<String>) -> Self {
         Self {
-            source,
-            min_refresh_interval,
-            cache: Mutex::new(None),
+            state: PlatformTargetObservationSampleState::PermissionRevoked {
+                detail: detail.into(),
+                observed_at_ms: now_ms(),
+            },
         }
     }
 
-    fn lock_cache(&self) -> std::sync::MutexGuard<'_, Option<CachedHostTargetSnapshot>> {
-        match self.cache.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
+    #[cfg(not(target_os = "macos"))]
+    fn unsupported_platform() -> Self {
+        Self {
+            state: PlatformTargetObservationSampleState::UnsupportedPlatform,
         }
     }
 }
 
-impl<P> HostTargetSnapshotProvider for SharedHostTargetSnapshotProvider<P>
+impl TargetObservationProvider for PlatformTargetObservationSample {
+    fn observe(
+        &self,
+        binding: &RemoteAppTargetBinding,
+        snapshot: &TargetTrackerSnapshot,
+    ) -> Option<TargetObservation> {
+        match &self.state {
+            PlatformTargetObservationSampleState::HostSnapshot(host_snapshot) => {
+                observe_binding_against_host_snapshot(binding, snapshot, host_snapshot)
+            }
+            PlatformTargetObservationSampleState::SnapshotFailed {
+                detail,
+                observed_at_ms,
+            } => Some(TargetObservation::Lost {
+                reason: TargetResolutionError::CaptureBackendUnavailable,
+                detail: detail.clone(),
+                observed_at_ms: *observed_at_ms,
+            }),
+            PlatformTargetObservationSampleState::PermissionRevoked {
+                detail,
+                observed_at_ms,
+            } => Some(TargetObservation::PermissionRevoked {
+                detail: detail.clone(),
+                observed_at_ms: *observed_at_ms,
+            }),
+            #[cfg(not(target_os = "macos"))]
+            PlatformTargetObservationSampleState::UnsupportedPlatform => {
+                unsupported_platform_target_observation(binding)
+            }
+        }
+    }
+}
+
+fn sample_host_target_observations<P>(source: &P) -> PlatformTargetObservationSample
 where
     P: HostTargetSnapshotProvider,
 {
-    fn snapshot(&self) -> anyhow::Result<HostTargetSnapshot> {
-        let now = Instant::now();
-        let mut cache = self.lock_cache();
-        if let Some(cached) = cache.as_ref() {
-            if now.duration_since(cached.captured_at) < self.min_refresh_interval {
-                return Ok(cached.snapshot.clone());
-            }
-        }
-        // The cache guard is intentionally held across enumeration. This is a
-        // single-flight boundary: concurrent session ticks share one bounded
-        // host snapshot instead of multiplying OS work by session count.
-        let snapshot = self.source.snapshot()?;
-        *cache = Some(CachedHostTargetSnapshot {
-            captured_at: Instant::now(),
-            snapshot: snapshot.clone(),
-        });
-        Ok(snapshot)
-    }
+    PlatformTargetObservationSample::from_snapshot_result(source.snapshot())
 }
 
+pub(in crate::daemon::plugins::remote_desktop) fn sample_platform_target_observations(
+) -> PlatformTargetObservationSample {
+    platform::sample_platform_target_observations()
+}
+
+#[cfg(test)]
 #[derive(Debug)]
 struct SnapshotBackedTargetObservationProvider<P> {
     snapshots: P,
 }
 
+#[cfg(test)]
 impl<P> SnapshotBackedTargetObservationProvider<P> {
     fn new(snapshots: P) -> Self {
         Self { snapshots }
     }
 }
 
+#[cfg(test)]
 impl<P> TargetObservationProvider for SnapshotBackedTargetObservationProvider<P>
 where
     P: HostTargetSnapshotProvider,
@@ -469,20 +508,15 @@ mod platform {
     use std::collections::BTreeSet;
     use std::ffi::{c_char, c_void, CStr, CString};
     use std::ptr;
-    use std::sync::OnceLock;
 
     use objc2_app_kit::{NSRunningApplication, NSWorkspace};
 
     use super::{
-        HostTargetSnapshot, HostTargetSnapshotProvider, ObservedWindow,
-        PlatformTargetObservationProvider, SharedHostTargetSnapshotProvider,
-        SnapshotBackedTargetObservationProvider, TargetObservationProvider,
-        PLATFORM_TARGET_SNAPSHOT_MIN_REFRESH,
+        sample_host_target_observations, HostTargetSnapshot, HostTargetSnapshotProvider,
+        ObservedWindow, PlatformTargetObservationSample,
     };
-    use crate::daemon::plugins::remote_desktop::target::{RemoteAppTargetBinding, TargetGeometry};
-    use crate::daemon::plugins::remote_desktop::target_tracking::{
-        TargetObservation, TargetTrackerSnapshot, TargetVisibilityState,
-    };
+    use crate::daemon::plugins::remote_desktop::target::TargetGeometry;
+    use crate::daemon::plugins::remote_desktop::target_tracking::TargetVisibilityState;
 
     type CFArrayRef = *const c_void;
     type CFBooleanRef = *const c_void;
@@ -624,29 +658,13 @@ mod platform {
     #[derive(Debug, Clone, Copy, Default)]
     struct MacOsHostTargetSnapshotProvider;
 
-    impl TargetObservationProvider for PlatformTargetObservationProvider {
-        fn observe(
-            &self,
-            binding: &RemoteAppTargetBinding,
-            snapshot: &TargetTrackerSnapshot,
-        ) -> Option<TargetObservation> {
-            if !crate::daemon::plugins::remote_desktop::screencapturekit_capture::screen_capture_permission_granted() {
-                return Some(TargetObservation::PermissionRevoked {
-                    detail: "macOS Screen Recording permission is no longer granted".to_string(),
-                    observed_at_ms: crate::daemon::plugins::remote_desktop::session::now_ms(),
-                });
-            }
-            static SNAPSHOTS: OnceLock<
-                SharedHostTargetSnapshotProvider<MacOsHostTargetSnapshotProvider>,
-            > = OnceLock::new();
-            let snapshots = SNAPSHOTS.get_or_init(|| {
-                SharedHostTargetSnapshotProvider::new(
-                    MacOsHostTargetSnapshotProvider,
-                    PLATFORM_TARGET_SNAPSHOT_MIN_REFRESH,
-                )
-            });
-            SnapshotBackedTargetObservationProvider::new(snapshots).observe(binding, snapshot)
+    pub(super) fn sample_platform_target_observations() -> PlatformTargetObservationSample {
+        if !crate::daemon::plugins::remote_desktop::screencapturekit_capture::screen_capture_permission_granted() {
+            return PlatformTargetObservationSample::permission_revoked(
+                "macOS Screen Recording permission is no longer granted",
+            );
         }
+        sample_host_target_observations(&MacOsHostTargetSnapshotProvider)
     }
 
     impl HostTargetSnapshotProvider for MacOsHostTargetSnapshotProvider {
@@ -875,7 +893,7 @@ mod tests {
     use super::{
         observe_binding_against_host_snapshot, unsupported_platform_target_observation,
         HostTargetSnapshot, HostTargetSnapshotProvider, ObservedWindow,
-        SharedHostTargetSnapshotProvider, SnapshotBackedTargetObservationProvider,
+        SnapshotBackedTargetObservationProvider,
     };
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::constants::direct_webrtc_endpoint_ura;
@@ -889,7 +907,8 @@ mod tests {
         TargetGeometry, TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::target_observer::{
-        observe_bound_session_target_once, TargetObservationProvider,
+        observe_bound_session_target_once, sample_host_target_observations,
+        TargetObservationProvider,
     };
     use crate::daemon::plugins::remote_desktop::target_tracking::{
         RemoteAppTargetBindingStateMachine, TargetObservation, TargetTrackerSnapshot,
@@ -1497,64 +1516,25 @@ mod tests {
     }
 
     #[test]
-    fn shared_host_snapshot_provider_coalesces_session_observer_reads() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        let provider = SharedHostTargetSnapshotProvider::new(
-            CountingSnapshotProvider {
-                calls: Arc::clone(&calls),
-            },
-            Duration::from_secs(60),
-        );
-
-        provider.snapshot().expect("first host snapshot");
-        provider.snapshot().expect("cached host snapshot");
-
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            1,
-            "shared target observer must not multiply OS enumeration by session count"
-        );
-    }
-
-    #[test]
-    fn shared_host_snapshot_provider_bounds_session_fanout_to_one_enumeration_per_tick() {
+    fn sampled_host_target_observations_bound_session_fanout_to_one_enumeration_per_tick() {
         const SESSION_COUNT: usize = 128;
 
         let calls = Arc::new(AtomicUsize::new(0));
-        let provider = SharedHostTargetSnapshotProvider::new(
-            CountingSnapshotProvider {
-                calls: Arc::clone(&calls),
-            },
-            Duration::from_secs(60),
-        );
+        let source = CountingSnapshotProvider {
+            calls: Arc::clone(&calls),
+        };
+        let sample = sample_host_target_observations(&source);
+        let binding = window_binding();
+        let snapshot = TargetTrackerSnapshot::from_binding(&binding);
 
         for _session_tick in 0..SESSION_COUNT {
-            provider.snapshot().expect("shared host snapshot");
+            sample.observe(&binding, &snapshot);
         }
 
         assert_eq!(
             calls.load(Ordering::SeqCst),
             1,
-            "PERF-03 shared target sampler must use one host enumeration for 128 session ticks inside the same refresh window"
-        );
-
-        let expired_provider = SharedHostTargetSnapshotProvider::new(
-            CountingSnapshotProvider {
-                calls: Arc::clone(&calls),
-            },
-            Duration::ZERO,
-        );
-        expired_provider
-            .snapshot()
-            .expect("first expired-window snapshot");
-        expired_provider
-            .snapshot()
-            .expect("second expired-window snapshot");
-
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            3,
-            "PERF-03 cache expiry must allow a new bounded host enumeration instead of pinning stale target inventory forever"
+            "PERF-03 sampled target observer must use one host enumeration for 128 session ticks in one monitor tick"
         );
     }
 
@@ -1913,22 +1893,9 @@ mod tests {
 
 #[cfg(not(target_os = "macos"))]
 mod platform {
-    use super::{
-        unsupported_platform_target_observation, PlatformTargetObservationProvider,
-        TargetObservationProvider,
-    };
-    use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
-    use crate::daemon::plugins::remote_desktop::target_tracking::{
-        TargetObservation, TargetTrackerSnapshot,
-    };
+    use super::PlatformTargetObservationSample;
 
-    impl TargetObservationProvider for PlatformTargetObservationProvider {
-        fn observe(
-            &self,
-            binding: &RemoteAppTargetBinding,
-            _snapshot: &TargetTrackerSnapshot,
-        ) -> Option<TargetObservation> {
-            unsupported_platform_target_observation(binding)
-        }
+    pub(super) fn sample_platform_target_observations() -> PlatformTargetObservationSample {
+        PlatformTargetObservationSample::unsupported_platform()
     }
 }

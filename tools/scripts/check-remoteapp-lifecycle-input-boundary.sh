@@ -161,8 +161,8 @@ require 'stale_observation_cannot_commit_after_session_binding_reuse' "$TARGET_O
   'stale observations must not advance a reused session binding'
 require 'unsupported_platform_target_observation' "$TARGET_OBSERVER" \
   'target observer must centralize unsupported platform app/window fail-closed semantics'
-require_multiline 'm/#\[cfg\(not\(target_os = .macos.\)\)\]\s*mod platform.+?unsupported_platform_target_observation\(binding\)/s' "$TARGET_OBSERVER" \
-  'non-macOS platform target observer must fail app/window targets closed instead of silently returning no observation'
+require_multiline 'm/#\[cfg\(not\(target_os = .macos.\)\)\]\s*mod platform.+?PlatformTargetObservationSample::unsupported_platform\(\)/s' "$TARGET_OBSERVER" \
+  'non-macOS platform target sample must fail app/window targets closed instead of silently returning no observation'
 require 'unsupported_platform_observer_fails_app_window_targets_closed' "$TARGET_OBSERVER" \
   'target observer tests must prove unsupported platforms fail app/window targets closed'
 require 'RemoteDesktopTargetMonitor' "$RUNTIME" \

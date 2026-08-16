@@ -1271,8 +1271,8 @@ mod tests {
 
 #[cfg(not(target_os = "macos"))]
 mod platform {
-    fn observe(binding: &RemoteAppTargetBinding) -> Option<TargetObservation> {
-        unsupported_platform_target_observation(binding)
+    fn sample_platform_target_observations() -> PlatformTargetObservationSample {
+        PlatformTargetObservationSample::unsupported_platform()
     }
 }
 RS
@@ -1551,9 +1551,9 @@ perl -0pi -e 's/unsupported_platform_target_observation/unsupported_platform_noo
 run_fail 'target observer must centralize unsupported platform app/window fail-closed semantics'
 
 write_fixture
-perl -0pi -e 's/unsupported_platform_target_observation\(binding\)/None/' \
+perl -0pi -e 's/PlatformTargetObservationSample::unsupported_platform\(\)/PlatformTargetObservationSample::noop()/' \
   "$SANDBOX/plugins/remote-desktop/src/target_observer.rs"
-run_fail 'non-macOS platform target observer must fail app/window targets closed instead of silently returning no observation'
+run_fail 'non-macOS platform target sample must fail app/window targets closed instead of silently returning no observation'
 
 write_fixture
 perl -0pi -e 's/unsupported_platform_observer_fails_app_window_targets_closed/unsupported_platform_observer_silently_noops/' \

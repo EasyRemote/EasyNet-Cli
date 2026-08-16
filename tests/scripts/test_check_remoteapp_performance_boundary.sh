@@ -46,39 +46,30 @@ fn meta_list_resources_is_read_only_cache_projection() {
 RS
 
 cat >"$SB/plugins/remote-desktop/src/target_observer.rs" <<'RS'
-const PLATFORM_TARGET_SNAPSHOT_MIN_REFRESH: Duration = Duration::from_millis(250);
-static SNAPSHOTS: OnceLock<SharedHostTargetSnapshotProvider<MacOsHostTargetSnapshotProvider>> = OnceLock::new();
+pub(in crate::daemon::plugins::remote_desktop) fn sample_platform_target_observations() {}
 
-impl TargetObservationProvider for PlatformTargetObservationProvider {
-    fn observe(&self, binding: &RemoteAppTargetBinding, snapshot: &TargetTrackerSnapshot) -> Option<TargetObservation> {
-        let snapshots = SNAPSHOTS.get_or_init(|| {
-            SharedHostTargetSnapshotProvider::new(
-                MacOsHostTargetSnapshotProvider,
-                PLATFORM_TARGET_SNAPSHOT_MIN_REFRESH,
-            )
-        });
-        SnapshotBackedTargetObservationProvider::new(snapshots).observe(binding, snapshot)
-    }
+fn macos_sampler() {
+    sample_host_target_observations(&MacOsHostTargetSnapshotProvider);
 }
 
 #[test]
-fn shared_host_snapshot_provider_coalesces_session_observer_reads() {
-    assert_eq!(
-        calls.load(Ordering::SeqCst),
-        1,
-        "shared target observer must not multiply OS enumeration by session count"
-    );
-}
-
-#[test]
-fn shared_host_snapshot_provider_bounds_session_fanout_to_one_enumeration_per_tick() {
+fn sampled_host_target_observations_bound_session_fanout_to_one_enumeration_per_tick() {
     const SESSION_COUNT: usize = 128;
-    let _ = Duration::ZERO;
     assert_eq!(
         calls.load(Ordering::SeqCst),
         1,
-        "PERF-03 shared target sampler must use one host enumeration for 128 session ticks inside the same refresh window"
+        "PERF-03 sampled target observer must use one host enumeration for 128 session ticks in one monitor tick"
     );
+}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/target_monitor.rs" <<'RS'
+fn poll_tracked_sessions() {
+    let provider = sample_platform_target_observations();
+    tracked.retain(|session_id| {
+        observe_bound_session_target_once(&sessions, session_id, &provider);
+        true
+    });
 }
 RS
 
@@ -387,8 +378,8 @@ grep -q "S=128 active session ticks" /tmp/check-remoteapp-performance-boundary-f
 
 perl -0pi -e 's/const SESSION_COUNT: usize = 8;/const SESSION_COUNT: usize = 128;/' \
   "$SB/plugins/remote-desktop/src/target_observer.rs"
-perl -0pi -e 's/SnapshotBackedTargetObservationProvider::new\(snapshots\)\.observe\(binding, snapshot\)/MacOsHostTargetSnapshotProvider.snapshot().ok(); None/' \
-  "$SB/plugins/remote-desktop/src/target_observer.rs"
+perl -0pi -e 's/let provider = sample_platform_target_observations\(\);/let provider = PlatformTargetObservationProvider;/' \
+  "$SB/plugins/remote-desktop/src/target_monitor.rs"
 
 set +e
 (
@@ -397,11 +388,11 @@ set +e
 ) >/tmp/check-remoteapp-performance-boundary-production-sampler.out 2>&1
 rc=$?
 set -e
-[[ "$rc" == "1" ]] || fail "production observer bypassing shared sampler should exit 1 (got $rc)"
-grep -q "shared snapshot-backed provider" /tmp/check-remoteapp-performance-boundary-production-sampler.out || fail "expected PERF-03 production sampler failure"
+[[ "$rc" == "1" ]] || fail "target monitor per-session platform observer should exit 1 (got $rc)"
+grep -q "sample host state once" /tmp/check-remoteapp-performance-boundary-production-sampler.out || fail "expected PERF-03 target monitor sampler failure"
 
-perl -0pi -e 's/MacOsHostTargetSnapshotProvider\.snapshot\(\)\.ok\(\); None/SnapshotBackedTargetObservationProvider::new(snapshots).observe(binding, snapshot)/' \
-  "$SB/plugins/remote-desktop/src/target_observer.rs"
+perl -0pi -e 's/let provider = PlatformTargetObservationProvider;/let provider = sample_platform_target_observations();/' \
+  "$SB/plugins/remote-desktop/src/target_monitor.rs"
 perl -0pi -e 's/fn event_replay_projects_compaction_before_retained_window/fn event_replay_silently_starts_at_retained_window/' \
   "$SB/plugins/remote-desktop/src/event_log.rs"
 

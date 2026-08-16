@@ -11,9 +11,10 @@
 // - Maintain one worker thread per plugin instance.
 // - Track session ids after TARGET_BOUND/create_session and cancel them at
 //   terminal cleanup.
-// - The worker samples host target state through TargetObservationProvider and
-//   commits observations only through RemoteDesktopSessionStore, so session
-//   aggregate state remains the single mutation boundary.
+// - Each worker tick samples host target state once, fans the immutable sample
+//   out to tracked sessions, and commits observations only through
+//   RemoteDesktopSessionStore, so session aggregate state remains the single
+//   mutation boundary.
 //
 // Architectural Position:
 // - Remote-desktop plugin lifecycle infrastructure, deliberately independent of
@@ -29,7 +30,7 @@ use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::TargetMediaSourceLost;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target_observer::{
-    observe_bound_session_target_once, PlatformTargetObservationProvider,
+    observe_bound_session_target_once, sample_platform_target_observations,
 };
 use crate::daemon::plugins::remote_desktop::transport::RemoteDesktopTransportManager;
 
@@ -221,7 +222,7 @@ fn poll_tracked_sessions(
     };
     let sessions = plugin.session_store();
     let transports = plugin.transport_manager();
-    let provider = PlatformTargetObservationProvider;
+    let provider = sample_platform_target_observations();
     tracked.retain(|session_id| {
         let result = observe_bound_session_target_once(&sessions, session_id, &provider);
         stop_lost_media_source(transports.as_ref(), session_id, result.media_source_lost);
