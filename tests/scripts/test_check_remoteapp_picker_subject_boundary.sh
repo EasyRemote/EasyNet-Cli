@@ -140,11 +140,21 @@ fn stable_resource_signature(map: &mut Map) {
     map.remove("freshness");
 }
 
+fn snapshot(response: Response) {
+    inventory_hash(response.screen_target_discovery_available, &signatures);
+}
+
 #[test]
 fn watch_handler_emits_snapshot_delta_and_stops_at_max_events() {}
 
 #[test]
 fn watch_handler_returns_source_error_as_terminal_stream_error() {}
+
+#[test]
+fn unavailable_inventory_delta_does_not_report_targets_removed() {}
+
+#[test]
+fn discovery_availability_participates_in_inventory_hash() {}
 RS
 
 cat >"$SANDBOX/src/daemon/ability/builtins/resources/list.rs" <<'RS'
@@ -198,6 +208,28 @@ fn screen_resource_subject_spec() {
 RS
 
 CHECK_REMOTEAPP_PICKER_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null
+
+cp "$SANDBOX/src/daemon/ability/builtins/resources/watch_remote_targets.rs" \
+  "$SANDBOX/src/daemon/ability/builtins/resources/watch_remote_targets.rs.good"
+perl -0pi -e 's/response\.screen_target_discovery_available/true/' \
+  "$SANDBOX/src/daemon/ability/builtins/resources/watch_remote_targets.rs"
+if CHECK_REMOTEAPP_PICKER_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp picker subject checker accepted inventory hash without discovery availability" >&2
+  exit 1
+fi
+mv "$SANDBOX/src/daemon/ability/builtins/resources/watch_remote_targets.rs.good" \
+  "$SANDBOX/src/daemon/ability/builtins/resources/watch_remote_targets.rs"
+
+cp "$SANDBOX/src/daemon/ability/builtins/resources/watch_remote_targets.rs" \
+  "$SANDBOX/src/daemon/ability/builtins/resources/watch_remote_targets.rs.good"
+perl -0pi -e 's/discovery_availability_participates_in_inventory_hash/discovery_availability_is_not_observable/' \
+  "$SANDBOX/src/daemon/ability/builtins/resources/watch_remote_targets.rs"
+if CHECK_REMOTEAPP_PICKER_SUBJECT_ROOT="$SANDBOX" bash "$SCRIPT" >/dev/null 2>&1; then
+  echo "remoteapp picker subject checker accepted missing discovery availability regression" >&2
+  exit 1
+fi
+mv "$SANDBOX/src/daemon/ability/builtins/resources/watch_remote_targets.rs.good" \
+  "$SANDBOX/src/daemon/ability/builtins/resources/watch_remote_targets.rs"
 
 cp "$SANDBOX/src/daemon/resources/projection.rs" "$SANDBOX/src/daemon/resources/projection.rs.good"
 cat >"$SANDBOX/src/daemon/resources/projection.rs" <<'RS'

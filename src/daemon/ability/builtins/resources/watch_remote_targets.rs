@@ -21,6 +21,9 @@ use crate::daemon::resources::projection::RemoteTargetListEntry;
 pub const ABILITY_RESOURCE_WATCH_REMOTE_TARGETS: &str =
     crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS;
 
+const EVENT_TARGET_INVENTORY_SNAPSHOT: &str = "target_inventory_snapshot";
+const EVENT_TARGET_INVENTORY_DELTA: &str = "target_inventory_delta";
+const EVENT_TARGET_INVENTORY_UNAVAILABLE: &str = "target_inventory_unavailable";
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const MIN_POLL_INTERVAL_MS: u64 = 250;
 const MAX_POLL_INTERVAL_MS: u64 = 10_000;
@@ -129,6 +132,66 @@ struct RemoteTargetInventorySnapshot {
     resources_by_ura: BTreeMap<String, RemoteTargetListEntry>,
 }
 
+impl RemoteTargetWatchEvent {
+    fn snapshot(event_id: u64, inventory: &RemoteTargetInventorySnapshot) -> Self {
+        let resources = inventory.resources();
+        Self {
+            event_id,
+            event_type: EVENT_TARGET_INVENTORY_SNAPSHOT.to_string(),
+            inventory_hash: inventory.inventory_hash.clone(),
+            observed_at_ms: inventory.observed_at_ms,
+            freshness_ttl_ms: inventory.freshness_ttl_ms,
+            retired_count: inventory.retired_count,
+            screen_target_discovery_available: inventory.screen_target_discovery_available,
+            added: resources.clone(),
+            updated: Vec::new(),
+            removed_resource_uras: Vec::new(),
+            resources,
+        }
+    }
+
+    fn inventory_unavailable_without_removals(
+        event_id: u64,
+        inventory: &RemoteTargetInventorySnapshot,
+    ) -> Self {
+        Self {
+            event_id,
+            event_type: EVENT_TARGET_INVENTORY_UNAVAILABLE.to_string(),
+            inventory_hash: inventory.inventory_hash.clone(),
+            observed_at_ms: inventory.observed_at_ms,
+            freshness_ttl_ms: inventory.freshness_ttl_ms,
+            retired_count: inventory.retired_count,
+            screen_target_discovery_available: false,
+            added: Vec::new(),
+            updated: Vec::new(),
+            removed_resource_uras: Vec::new(),
+            resources: inventory.resources(),
+        }
+    }
+
+    fn delta(
+        event_id: u64,
+        inventory: &RemoteTargetInventorySnapshot,
+        added: Vec<RemoteTargetListEntry>,
+        updated: Vec<RemoteTargetListEntry>,
+        removed_resource_uras: Vec<String>,
+    ) -> Self {
+        Self {
+            event_id,
+            event_type: EVENT_TARGET_INVENTORY_DELTA.to_string(),
+            inventory_hash: inventory.inventory_hash.clone(),
+            observed_at_ms: inventory.observed_at_ms,
+            freshness_ttl_ms: inventory.freshness_ttl_ms,
+            retired_count: inventory.retired_count,
+            screen_target_discovery_available: inventory.screen_target_discovery_available,
+            added,
+            updated,
+            removed_resource_uras,
+            resources: inventory.resources(),
+        }
+    }
+}
+
 impl RemoteTargetInventorySnapshot {
     fn refresh(
         context: &RemoteTargetInventoryContext,
@@ -143,7 +206,8 @@ impl RemoteTargetInventorySnapshot {
             signatures.insert(resource.resource_ura.clone(), signature);
             resources_by_ura.insert(resource.resource_ura.clone(), resource);
         }
-        let inventory_hash = inventory_hash(&signatures);
+        let inventory_hash =
+            inventory_hash(response.screen_target_discovery_available, &signatures);
         Ok(Self {
             observed_at_ms: response.observed_at_ms,
             freshness_ttl_ms: response.freshness_ttl_ms,
@@ -156,20 +220,7 @@ impl RemoteTargetInventorySnapshot {
     }
 
     fn snapshot_event(&self, event_id: u64) -> RemoteTargetWatchEvent {
-        let resources = self.resources();
-        RemoteTargetWatchEvent {
-            event_id,
-            event_type: "target_inventory_snapshot".to_string(),
-            inventory_hash: self.inventory_hash.clone(),
-            observed_at_ms: self.observed_at_ms,
-            freshness_ttl_ms: self.freshness_ttl_ms,
-            retired_count: self.retired_count,
-            screen_target_discovery_available: self.screen_target_discovery_available,
-            added: resources.clone(),
-            updated: Vec::new(),
-            removed_resource_uras: Vec::new(),
-            resources,
-        }
+        RemoteTargetWatchEvent::snapshot(event_id, self)
     }
 
     fn delta_event(
@@ -179,6 +230,12 @@ impl RemoteTargetInventorySnapshot {
     ) -> Option<RemoteTargetWatchEvent> {
         if self.inventory_hash == previous.inventory_hash {
             return None;
+        }
+
+        if !self.screen_target_discovery_available {
+            return Some(
+                RemoteTargetWatchEvent::inventory_unavailable_without_removals(event_id, self),
+            );
         }
 
         let mut added = Vec::new();
@@ -207,19 +264,13 @@ impl RemoteTargetInventorySnapshot {
             }
         }
 
-        Some(RemoteTargetWatchEvent {
+        Some(RemoteTargetWatchEvent::delta(
             event_id,
-            event_type: "target_inventory_delta".to_string(),
-            inventory_hash: self.inventory_hash.clone(),
-            observed_at_ms: self.observed_at_ms,
-            freshness_ttl_ms: self.freshness_ttl_ms,
-            retired_count: self.retired_count,
-            screen_target_discovery_available: self.screen_target_discovery_available,
+            self,
             added,
             updated,
             removed_resource_uras,
-            resources: self.resources(),
-        })
+        ))
     }
 
     fn resources(&self) -> Vec<RemoteTargetListEntry> {
@@ -374,8 +425,20 @@ fn stable_resource_signature(resource: &RemoteTargetListEntry) -> anyhow::Result
     .map_err(Into::into)
 }
 
-fn inventory_hash(signatures: &BTreeMap<String, String>) -> String {
+fn inventory_hash(
+    screen_target_discovery_available: bool,
+    signatures: &BTreeMap<String, String>,
+) -> String {
     let mut hasher = Sha256::new();
+    hasher.update(
+        if screen_target_discovery_available {
+            "screen-target-discovery:available"
+        } else {
+            "screen-target-discovery:unavailable"
+        }
+        .as_bytes(),
+    );
+    hasher.update([0xfe]);
     for (resource_ura, signature) in signatures {
         hasher.update(resource_ura.as_bytes());
         hasher.update([0]);
@@ -491,6 +554,45 @@ mod tests {
     }
 
     #[test]
+    fn unavailable_inventory_delta_does_not_report_targets_removed() {
+        let previous = snapshot(vec![
+            remote_target_entry("res-a", "Window A", 10),
+            remote_target_entry("res-b", "Window B", 10),
+        ]);
+        let current = unavailable_snapshot(Vec::new());
+
+        let event = current
+            .delta_event(&previous, 2)
+            .expect("inventory availability changed");
+
+        assert_eq!(event.event_type, EVENT_TARGET_INVENTORY_UNAVAILABLE);
+        assert!(!event.screen_target_discovery_available);
+        assert!(
+            event.removed_resource_uras.is_empty(),
+            "temporary discovery outage must not be projected as definitive target removal"
+        );
+        assert!(event.added.is_empty());
+        assert!(event.updated.is_empty());
+        assert!(event.resources.is_empty());
+    }
+
+    #[test]
+    fn discovery_availability_participates_in_inventory_hash() {
+        let available_empty = snapshot(Vec::new());
+        let unavailable_empty = unavailable_snapshot(Vec::new());
+
+        let event = unavailable_empty
+            .delta_event(&available_empty, 2)
+            .expect("availability-only inventory change must be observable");
+
+        assert_eq!(event.event_type, EVENT_TARGET_INVENTORY_UNAVAILABLE);
+        assert_ne!(
+            available_empty.inventory_hash, unavailable_empty.inventory_hash,
+            "available-empty and unavailable-empty observations must not coalesce"
+        );
+    }
+
+    #[test]
     fn watch_handler_emits_snapshot_delta_and_stops_at_max_events() {
         let context = RemoteTargetInventoryContext::from_device_ura("easynet:///r/test/device/dev")
             .expect("context");
@@ -547,6 +649,58 @@ mod tests {
     }
 
     #[test]
+    fn watch_handler_emits_unavailable_without_removed_targets() {
+        let context = RemoteTargetInventoryContext::from_device_ura("easynet:///r/test/device/dev")
+            .expect("context");
+        let source = Arc::new(SequenceInventorySource::new(vec![
+            Ok(refresh_response(vec![remote_target_entry(
+                "res-a", "Window A", 10,
+            )])),
+            Ok(unavailable_refresh_response(20)),
+        ]));
+        let stream = handler_with_source(
+            json!({
+                "types": ["window"],
+                "poll_interval_ms": 250,
+                "max_events": 2
+            }),
+            &context,
+            source,
+            Arc::new(|_| {}),
+        )
+        .expect("watch stream");
+        let StreamSource::Finite(mut rx) = stream else {
+            panic!("resource.watch_remote_targets must return a finite stream source")
+        };
+
+        let snapshot = rx
+            .blocking_recv()
+            .expect("snapshot frame")
+            .expect("snapshot ok");
+        assert_eq!(snapshot["event_type"], json!("target_inventory_snapshot"));
+        assert_eq!(snapshot["resources"].as_array().unwrap().len(), 1);
+
+        let unavailable = rx
+            .blocking_recv()
+            .expect("unavailable frame")
+            .expect("unavailable ok");
+        assert_eq!(
+            unavailable["event_type"],
+            json!("target_inventory_unavailable")
+        );
+        assert_eq!(
+            unavailable["screen_target_discovery_available"],
+            json!(false)
+        );
+        assert_eq!(unavailable["removed_resource_uras"], json!([]));
+        assert_eq!(unavailable["resources"], json!([]));
+        assert!(
+            rx.blocking_recv().is_none(),
+            "max_events must close after the typed unavailable frame"
+        );
+    }
+
+    #[test]
     fn watch_handler_returns_source_error_as_terminal_stream_error() {
         let context = RemoteTargetInventoryContext::from_device_ura("easynet:///r/test/device/dev")
             .expect("context");
@@ -573,6 +727,19 @@ mod tests {
     }
 
     fn snapshot(resources: Vec<RemoteTargetListEntry>) -> RemoteTargetInventorySnapshot {
+        inventory_snapshot(resources, true)
+    }
+
+    fn unavailable_snapshot(
+        resources: Vec<RemoteTargetListEntry>,
+    ) -> RemoteTargetInventorySnapshot {
+        inventory_snapshot(resources, false)
+    }
+
+    fn inventory_snapshot(
+        resources: Vec<RemoteTargetListEntry>,
+        screen_target_discovery_available: bool,
+    ) -> RemoteTargetInventorySnapshot {
         let mut signatures = BTreeMap::new();
         let mut resources_by_ura = BTreeMap::new();
         for resource in resources {
@@ -586,8 +753,8 @@ mod tests {
             observed_at_ms: 0,
             freshness_ttl_ms: 5_000,
             retired_count: 0,
-            screen_target_discovery_available: true,
-            inventory_hash: inventory_hash(&signatures),
+            screen_target_discovery_available,
+            inventory_hash: inventory_hash(screen_target_discovery_available, &signatures),
             signatures,
             resources_by_ura,
         }
@@ -636,6 +803,16 @@ mod tests {
             retired_count: 0,
             screen_target_discovery_available: true,
             resources,
+        }
+    }
+
+    fn unavailable_refresh_response(observed_at_ms: u64) -> RemoteTargetRefreshResponse {
+        RemoteTargetRefreshResponse {
+            observed_at_ms,
+            freshness_ttl_ms: 5_000,
+            retired_count: 0,
+            screen_target_discovery_available: false,
+            resources: Vec::new(),
         }
     }
 

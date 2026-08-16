@@ -45,6 +45,32 @@ fn meta_list_resources_is_read_only_cache_projection() {
 }
 RS
 
+cat >"$SB/src/daemon/ability/builtins/resources/watch_remote_targets.rs" <<'RS'
+const EVENT_TARGET_INVENTORY_UNAVAILABLE: &str = "target_inventory_unavailable";
+
+fn snapshot_refresh() {
+    let inventory_hash = inventory_hash(response.screen_target_discovery_available, &signatures);
+}
+
+impl RemoteTargetWatchEvent {
+    fn inventory_unavailable_without_removals() -> Self {
+        Self {
+            event_type: EVENT_TARGET_INVENTORY_UNAVAILABLE.to_string(),
+            removed_resource_uras: Vec::new(),
+        }
+    }
+}
+
+#[test]
+fn unavailable_inventory_delta_does_not_report_targets_removed() {}
+
+#[test]
+fn discovery_availability_participates_in_inventory_hash() {}
+
+#[test]
+fn watch_handler_emits_unavailable_without_removed_targets() {}
+RS
+
 cat >"$SB/plugins/remote-desktop/src/target_observer.rs" <<'RS'
 pub(in crate::daemon::plugins::remote_desktop) fn sample_platform_target_observations() {}
 
@@ -363,6 +389,37 @@ grep -q "PERF-02" /tmp/check-remoteapp-performance-boundary-meta.out || fail "ex
 
 perl -0pi -e 's/meta_list_resources_can_refresh_cache/meta_list_resources_is_read_only_cache_projection/' \
   "$SB/src/daemon/ability/builtins/resources/list.rs"
+perl -0pi -e 's/const EVENT_TARGET_INVENTORY_UNAVAILABLE: &str = "target_inventory_unavailable";//' \
+  "$SB/src/daemon/ability/builtins/resources/watch_remote_targets.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-watch-unavailable-event.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "missing watch unavailable event should exit 1 (got $rc)"
+grep -Eq "typed inventory-unavailable event|target_inventory_unavailable" \
+  /tmp/check-remoteapp-performance-boundary-watch-unavailable-event.out || fail "expected watch unavailable event failure"
+
+perl -0pi -e 's#^#const EVENT_TARGET_INVENTORY_UNAVAILABLE: \&str = "target_inventory_unavailable";\n#' \
+  "$SB/src/daemon/ability/builtins/resources/watch_remote_targets.rs"
+perl -0pi -e 's/removed_resource_uras: Vec::new\(\)/removed_resource_uras: previous_removed_resource_uras/' \
+  "$SB/src/daemon/ability/builtins/resources/watch_remote_targets.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-watch-unavailable-removal.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "unavailable watch removal projection should exit 1 (got $rc)"
+grep -q "must not report previous targets as removed" /tmp/check-remoteapp-performance-boundary-watch-unavailable-removal.out || fail "expected watch unavailable removal failure"
+
+perl -0pi -e 's/removed_resource_uras: previous_removed_resource_uras/removed_resource_uras: Vec::new()/' \
+  "$SB/src/daemon/ability/builtins/resources/watch_remote_targets.rs"
 perl -0pi -e 's/const SESSION_COUNT: usize = 128;/const SESSION_COUNT: usize = 8;/' \
   "$SB/plugins/remote-desktop/src/target_observer.rs"
 

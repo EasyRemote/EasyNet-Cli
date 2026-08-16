@@ -15,6 +15,13 @@ require() {
   rg -q -- "$pattern" "$path" || fail "$message"
 }
 
+require_multiline() {
+  local pattern="$1"
+  local path="$2"
+  local message="$3"
+  perl -0ne "exit(($pattern) ? 0 : 1)" "$path" || fail "$message"
+}
+
 reject() {
   local pattern="$1"
   local path="$2"
@@ -116,6 +123,12 @@ require 'watch_handler_emits_snapshot_delta_and_stops_at_max_events' "$WATCH_TAR
   'remote target watch must test snapshot/delta emission and max_events terminal closure'
 require 'watch_handler_returns_source_error_as_terminal_stream_error' "$WATCH_TARGETS" \
   'remote target watch must test source errors as deterministic terminal stream errors'
+require_multiline 'm/inventory_hash\(\s*response\.screen_target_discovery_available,\s*&signatures\s*\)/s' "$WATCH_TARGETS" \
+  'remote target watch identity must include discovery availability instead of coalescing outages'
+require 'unavailable_inventory_delta_does_not_report_targets_removed' "$WATCH_TARGETS" \
+  'temporary discovery outages must not be projected as definitive target removals'
+require 'discovery_availability_participates_in_inventory_hash' "$WATCH_TARGETS" \
+  'availability-only inventory transitions must have regression coverage'
 require 'upsert_resources_indexed' "$RESOURCE_STORE" \
   'resource persistence must expose indexed batch upsert for live target refresh'
 require 'upsert_resources_indexed' "$RESOURCE_BOOTSTRAP" \

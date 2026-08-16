@@ -39,6 +39,7 @@ reject() {
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 RESOURCE_BOOTSTRAP="$ROOT/src/daemon/ability/builtins/resources/media/resource_bootstrap.rs"
 RESOURCE_LIST="$ROOT/src/daemon/ability/builtins/resources/list.rs"
+WATCH_REMOTE_TARGETS="$ROOT/src/daemon/ability/builtins/resources/watch_remote_targets.rs"
 TARGET_OBSERVER="$ROOT/plugins/remote-desktop/src/target_observer.rs"
 TARGET_MONITOR="$ROOT/plugins/remote-desktop/src/target_monitor.rs"
 EVENT_LOG="$ROOT/plugins/remote-desktop/src/event_log.rs"
@@ -79,6 +80,23 @@ require 'std::fs::read\(&path\)' "$RESOURCE_LIST" \
   'PERF-02 must compare resources.json bytes before and after meta.list_resources'
 require 'modified\(\)' "$RESOURCE_LIST" \
   'PERF-02 must compare resources.json mtime before and after meta.list_resources'
+
+require 'EVENT_TARGET_INVENTORY_UNAVAILABLE' "$WATCH_REMOTE_TARGETS" \
+  'resource.watch_remote_targets must expose a typed inventory-unavailable event'
+require 'target_inventory_unavailable' "$WATCH_REMOTE_TARGETS" \
+  'resource.watch_remote_targets must publish target_inventory_unavailable for discovery outages'
+require_multiline 'm/inventory_hash\(\s*response\.screen_target_discovery_available,\s*&signatures\s*\)/s' "$WATCH_REMOTE_TARGETS" \
+  'watch inventory hash must include discovery availability so unavailable-empty does not coalesce with available-empty'
+require 'inventory_unavailable_without_removals' "$WATCH_REMOTE_TARGETS" \
+  'watch unavailable projection must have a named invariant-preserving constructor'
+require_multiline 'm/fn inventory_unavailable_without_removals\((?:(?!\n    \}).)*removed_resource_uras: Vec::new\(\)/s' "$WATCH_REMOTE_TARGETS" \
+  'watch unavailable observations must not report previous targets as removed'
+require 'unavailable_inventory_delta_does_not_report_targets_removed' "$WATCH_REMOTE_TARGETS" \
+  'watch inventory must test unavailable observations do not emit removed_resource_uras'
+require 'discovery_availability_participates_in_inventory_hash' "$WATCH_REMOTE_TARGETS" \
+  'watch inventory must test discovery availability participates in the stable hash'
+require 'watch_handler_emits_unavailable_without_removed_targets' "$WATCH_REMOTE_TARGETS" \
+  'watch handler must test typed unavailable frames through the stream boundary'
 
 require 'sampled_host_target_observations_bound_session_fanout_to_one_enumeration_per_tick' "$TARGET_OBSERVER" \
   'PERF-03 must prove a sampled target observer fans out one host enumeration to 128 sessions'
