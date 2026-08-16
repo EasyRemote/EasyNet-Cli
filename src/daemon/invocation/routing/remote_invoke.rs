@@ -865,6 +865,26 @@ pub(crate) fn load_remote_invocation_caller_signer(
     load_remote_invocation_caller_signer_for_carrier(caller_ura, RemoteInvocationCarrier::Unary)
 }
 
+pub(crate) fn load_remote_invocation_caller_signer_at_endpoint(
+    caller_ura: &str,
+    daemon_endpoint: &std::path::Path,
+) -> anyhow::Result<RemoteInvocationCallerSigner> {
+    let keyring_socket = daemon_endpoint
+        .parent()
+        .map(|parent| parent.join("keyring.sock"));
+    let Some(keyring_socket) = keyring_socket else {
+        anyhow::bail!(
+            "remote invocation requires a daemon endpoint with a state-root parent, got {}",
+            daemon_endpoint.display()
+        );
+    };
+    crate::daemon::identity::self_identity::load_runtime_caller_signer_at_keyring_socket(
+        caller_ura.to_string(),
+        keyring_socket,
+    )
+    .map_err(|_err| caller_signer_unavailable_error("remote invocation", caller_ura))
+}
+
 fn load_remote_invocation_caller_signer_for_carrier(
     caller_ura: &str,
     carrier: RemoteInvocationCarrier,

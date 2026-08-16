@@ -18,7 +18,15 @@ use crate::daemon::persistence::resources::{
     ResourcesFile,
 };
 
-pub const REMOTE_TARGET_FRESHNESS_TTL_MS: u64 = 5_000;
+/// Freshness lease for live remote target picker rows.
+///
+/// This is not the remote desktop security boundary. Session creation still
+/// resolves the selected resource through the native capture backend and fails
+/// closed if the target is gone or no longer capturable. The lease only says a
+/// freshly observed display/window/application row remains valid long enough
+/// for the product path to complete descriptor lookup, consent, preview, and
+/// `remote_desktop.create_session` over hub-mediated invocation.
+pub const REMOTE_TARGET_FRESHNESS_TTL_MS: u64 = 60_000;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemoteTargetInventoryRefresh {
@@ -1613,10 +1621,10 @@ mod tests {
                 metadata: json!({
                     "backend": "xcap",
                     "observed_at_ms": 10,
-                    "freshness_ttl_ms": 5_000,
+                    "freshness_ttl_ms": REMOTE_TARGET_FRESHNESS_TTL_MS,
                     "freshness": {
                         "observed_at_ms": 10,
-                        "stale_after_ms": 5_010,
+                        "stale_after_ms": 10 + REMOTE_TARGET_FRESHNESS_TTL_MS,
                         "source": "live_refresh",
                     },
                     "bounds": {"x": 1, "y": 2, "width": 300, "height": 200}

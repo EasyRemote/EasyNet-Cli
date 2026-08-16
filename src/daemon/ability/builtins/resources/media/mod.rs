@@ -61,7 +61,7 @@ pub mod resource_bootstrap;
 pub mod resource_bootstrap {
     use crate::daemon::persistence::resources::ResourceEntry;
 
-    pub const REMOTE_TARGET_FRESHNESS_TTL_MS: u64 = 5_000;
+    pub const REMOTE_TARGET_FRESHNESS_TTL_MS: u64 = 60_000;
 
     #[derive(Debug, Clone, PartialEq)]
     pub struct RemoteTargetInventoryRefresh {

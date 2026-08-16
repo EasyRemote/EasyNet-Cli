@@ -265,7 +265,7 @@ mod tests {
                 assert_eq!(owner_agent, context.owner_agent());
                 Ok(resource_bootstrap::RemoteTargetInventoryRefresh {
                     observed_at_ms: 123_456,
-                    freshness_ttl_ms: 5_000,
+                    freshness_ttl_ms: resource_bootstrap::REMOTE_TARGET_FRESHNESS_TTL_MS,
                     retired_count: 1,
                     screen_target_discovery_available: true,
                     resources: vec![
@@ -292,7 +292,10 @@ mod tests {
         .expect("refresh response");
 
         assert_eq!(response.observed_at_ms, 123_456);
-        assert_eq!(response.freshness_ttl_ms, 5_000);
+        assert_eq!(
+            response.freshness_ttl_ms,
+            resource_bootstrap::REMOTE_TARGET_FRESHNESS_TTL_MS
+        );
         assert_eq!(response.retired_count, 1);
         assert!(response.screen_target_discovery_available);
         assert_eq!(response.resources.len(), 1);
@@ -306,7 +309,10 @@ mod tests {
         assert_eq!(target.entry_type, "window");
         assert_eq!(target.availability, "available");
         assert_eq!(target.observed_at_ms, 123_456);
-        assert_eq!(target.freshness_ttl_ms, 5_000);
+        assert_eq!(
+            target.freshness_ttl_ms,
+            resource_bootstrap::REMOTE_TARGET_FRESHNESS_TTL_MS
+        );
         assert_eq!(
             target.metadata["freshness"]["source"],
             json!("live_refresh")
@@ -317,7 +323,7 @@ mod tests {
         );
         assert_eq!(
             target.metadata["freshness"]["stale_after_ms"],
-            json!(128_456)
+            json!(123_456 + resource_bootstrap::REMOTE_TARGET_FRESHNESS_TTL_MS)
         );
         assert_eq!(target.metadata["capture_target"], json!("window"));
         assert!(
@@ -348,10 +354,10 @@ mod tests {
                 "host_device_ura": host_device_ura,
                 "availability": "available",
                 "observed_at_ms": observed_at_ms,
-                "freshness_ttl_ms": 5_000,
+                "freshness_ttl_ms": resource_bootstrap::REMOTE_TARGET_FRESHNESS_TTL_MS,
                 "freshness": {
                     "observed_at_ms": observed_at_ms,
-                    "stale_after_ms": observed_at_ms + 5_000,
+                    "stale_after_ms": observed_at_ms + resource_bootstrap::REMOTE_TARGET_FRESHNESS_TTL_MS,
                     "source": "live_refresh",
                 },
                 "capture_target": kind.as_str(),

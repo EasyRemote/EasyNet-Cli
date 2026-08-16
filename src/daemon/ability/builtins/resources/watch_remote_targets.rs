@@ -18,6 +18,9 @@ use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind, StreamSour
 use crate::daemon::persistence::resources::ResourceType;
 use crate::daemon::resources::projection::RemoteTargetListEntry;
 
+#[cfg(test)]
+use crate::daemon::ability::builtins::resources::media::resource_bootstrap;
+
 pub const ABILITY_RESOURCE_WATCH_REMOTE_TARGETS: &str =
     crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS;
 
@@ -482,7 +485,7 @@ mod tests {
             event_type: "target_inventory_snapshot".to_string(),
             inventory_hash: "sha256:test".to_string(),
             observed_at_ms: 10,
-            freshness_ttl_ms: 5_000,
+            freshness_ttl_ms: resource_bootstrap::REMOTE_TARGET_FRESHNESS_TTL_MS,
             retired_count: 0,
             screen_target_discovery_available: true,
             added: Vec::new(),
@@ -751,7 +754,7 @@ mod tests {
         }
         RemoteTargetInventorySnapshot {
             observed_at_ms: 0,
-            freshness_ttl_ms: 5_000,
+            freshness_ttl_ms: resource_bootstrap::REMOTE_TARGET_FRESHNESS_TTL_MS,
             retired_count: 0,
             screen_target_discovery_available,
             inventory_hash: inventory_hash(screen_target_discovery_available, &signatures),
@@ -777,15 +780,15 @@ mod tests {
             display_name: display_name.to_string(),
             availability: "available".to_string(),
             observed_at_ms,
-            freshness_ttl_ms: 5_000,
+            freshness_ttl_ms: resource_bootstrap::REMOTE_TARGET_FRESHNESS_TTL_MS,
             stale_reason: None,
             metadata: json!({
                 "window_id": resource_id,
                 "observed_at_ms": observed_at_ms,
-                "freshness_ttl_ms": 5_000,
+                "freshness_ttl_ms": resource_bootstrap::REMOTE_TARGET_FRESHNESS_TTL_MS,
                 "freshness": {
                     "observed_at_ms": observed_at_ms,
-                    "stale_after_ms": observed_at_ms + 5_000,
+                    "stale_after_ms": observed_at_ms + resource_bootstrap::REMOTE_TARGET_FRESHNESS_TTL_MS,
                     "source": "live_refresh",
                 },
             }),
@@ -799,7 +802,7 @@ mod tests {
                 .map(|resource| resource.observed_at_ms)
                 .max()
                 .unwrap_or(0),
-            freshness_ttl_ms: 5_000,
+            freshness_ttl_ms: resource_bootstrap::REMOTE_TARGET_FRESHNESS_TTL_MS,
             retired_count: 0,
             screen_target_discovery_available: true,
             resources,
@@ -809,7 +812,7 @@ mod tests {
     fn unavailable_refresh_response(observed_at_ms: u64) -> RemoteTargetRefreshResponse {
         RemoteTargetRefreshResponse {
             observed_at_ms,
-            freshness_ttl_ms: 5_000,
+            freshness_ttl_ms: resource_bootstrap::REMOTE_TARGET_FRESHNESS_TTL_MS,
             retired_count: 0,
             screen_target_discovery_available: false,
             resources: Vec::new(),

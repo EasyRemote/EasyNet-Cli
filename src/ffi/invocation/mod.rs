@@ -2398,8 +2398,9 @@ impl RuntimeDescriptorCatalogReader for AttachedDaemonDescriptorCatalogReader<'_
                         "build signed descriptor catalogue read: {error}"
                     ))
                 })?;
-                let signer = crate::daemon::invocation::routing::remote_invoke::load_remote_invocation_caller_signer(
+                let signer = crate::daemon::invocation::routing::remote_invoke::load_remote_invocation_caller_signer_at_endpoint(
                     &caller_ura,
+                    &endpoint,
                 )
                 .map_err(|error| {
                     DescriptorResolutionError::runtime_attachment_unavailable(format!(
