@@ -248,8 +248,41 @@ fn resolve_for_session() {
 RS
 
 cat >"$SB/plugins/remote-desktop/src/transport/webrtc_endpoint.rs" <<'RS'
+fn start_direct_webrtc_endpoint(transports: RemoteDesktopTransportManager) -> anyhow::Result<()> {
+    transports.block_on(create_direct_webrtc_endpoint())??;
+    std::thread::Builder::new()
+        .name("easynet-remote-desktop-webrtc".into())
+        .spawn(move || {
+            if let Err(err) = transports.block_on(run_direct_webrtc_media_loop()) {
+                eprintln!(
+                    "[remote-desktop-webrtc] direct media loop runtime unavailable: {err}"
+                );
+            }
+        })?;
+    Ok(())
+}
+
 #[test]
 fn endpoint_start_boundary_refuses_to_run_while_session_store_lock_is_held() {}
+RS
+
+cat >"$SB/plugins/remote-desktop/src/transport/manager.rs" <<'RS'
+pub(in crate::daemon::plugins::remote_desktop) fn block_on<F: Future>(
+    &self,
+    future: F,
+) -> anyhow::Result<F::Output> {
+    Ok(self.runtime_handle()?.block_on(future))
+}
+
+fn runtime_handle(&self) -> anyhow::Result<Handle> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_name("easynet-webrtc-runtime")
+        .enable_all()
+        .build()
+        .map_err(|err| anyhow::anyhow!("build remote desktop WebRTC runtime: {err}"))?;
+    Ok(handle)
+}
 RS
 
 cat >"$SB/plugins/remote-desktop/src/input.rs" <<'RS'
@@ -561,6 +594,40 @@ rc=$?
 set -e
 [[ "$rc" == "1" ]] || fail "missing production readiness blocker action assertion should exit 1 (got $rc)"
 grep -q "frontend recovery action" /tmp/check-remoteapp-performance-boundary-readiness-action.out || fail "expected readiness blocker action failure"
+
+perl -0pi -e 's/view\["production_readiness"\]\["route_readiness_blocker"\]\["missing_frontend_action"\]/view["production_readiness"]["route_readiness_blocker"]["frontend_action"]/' \
+  "$SB/plugins/remote-desktop/src/session.rs"
+
+perl -0pi -e 's/anyhow::Result<F::Output>/F::Output/' \
+  "$SB/plugins/remote-desktop/src/transport/manager.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-runtime-result.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "non-fallible direct WebRTC runtime boundary should exit 1 (got $rc)"
+grep -q "must propagate runtime initialization failure" /tmp/check-remoteapp-performance-boundary-runtime-result.out || fail "expected direct runtime fallibility failure"
+
+perl -0pi -e 's/F::Output/anyhow::Result<F::Output>/' \
+  "$SB/plugins/remote-desktop/src/transport/manager.rs"
+perl -0pi -e 's/(fn runtime_handle\(&self\) -> anyhow::Result<Handle> \{\n)/$1    expect("build remote desktop WebRTC runtime");\n/' \
+  "$SB/plugins/remote-desktop/src/transport/manager.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-runtime-expect.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "expect-based direct WebRTC runtime boundary should exit 1 (got $rc)"
+grep -q "runtime initialization must not panic" /tmp/check-remoteapp-performance-boundary-runtime-expect.out || fail "expected direct runtime expect failure"
+
+perl -0pi -e 's/    expect\("build remote desktop WebRTC runtime"\);\n//' \
+  "$SB/plugins/remote-desktop/src/transport/manager.rs"
 
 cat >"$SB/plugins/remote-desktop/src/session.rs" <<'RS'
 #[test]

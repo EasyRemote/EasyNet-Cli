@@ -149,8 +149,8 @@ impl RemoteDesktopTransportManager {
     pub(in crate::daemon::plugins::remote_desktop) fn block_on<F: Future>(
         &self,
         future: F,
-    ) -> F::Output {
-        self.runtime_handle().block_on(future)
+    ) -> anyhow::Result<F::Output> {
+        Ok(self.runtime_handle()?.block_on(future))
     }
 
     fn endpoints(&self) -> MutexGuard<'_, HashMap<String, ManagedDirectWebRtcEndpoint>> {
@@ -167,23 +167,23 @@ impl RemoteDesktopTransportManager {
         }
     }
 
-    fn runtime_handle(&self) -> Handle {
+    fn runtime_handle(&self) -> anyhow::Result<Handle> {
         let mut runtime = self.runtime();
         if runtime.is_none() {
-            *runtime = Some(
-                tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(2)
-                    .thread_name("easynet-webrtc-runtime")
-                    .enable_all()
-                    .build()
-                    .expect("build remote desktop WebRTC runtime"),
-            );
+            let built = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .thread_name("easynet-webrtc-runtime")
+                .enable_all()
+                .build()
+                .map_err(|err| anyhow::anyhow!("build remote desktop WebRTC runtime: {err}"))?;
+            *runtime = Some(built);
         }
         runtime
             .as_ref()
-            .expect("runtime initialized")
-            .handle()
-            .clone()
+            .map(|runtime| runtime.handle().clone())
+            .ok_or_else(|| {
+                anyhow::anyhow!("remote desktop WebRTC runtime unavailable after initialization")
+            })
     }
 }
 

@@ -116,7 +116,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn start_direct_webrtc_endpoint(
             input_policy,
             offer_sdp,
             stop_rx,
-        }))?;
+        }))??;
     transports.activate_endpoint(
         session_id.clone(),
         DirectWebRtcEndpoint {
@@ -299,7 +299,7 @@ async fn create_direct_webrtc_endpoint(
     let completion = std::thread::Builder::new()
         .name("easynet-remote-desktop-webrtc".into())
         .spawn(move || {
-            transports.block_on(run_direct_webrtc_media_loop(
+            if let Err(err) = transports.block_on(run_direct_webrtc_media_loop(
                 Arc::clone(&sessions),
                 DirectWebRtcSession {
                     session_id,
@@ -314,7 +314,9 @@ async fn create_direct_webrtc_endpoint(
                 connected_rx,
                 done_rx,
                 endpoint_config.stop_rx,
-            ));
+            )) {
+                eprintln!("[remote-desktop-webrtc] direct media loop runtime unavailable: {err}");
+            }
         })
         .map_err(|err| anyhow::anyhow!("spawn direct WebRTC media loop: {err}"))?;
 

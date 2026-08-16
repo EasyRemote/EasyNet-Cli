@@ -13,9 +13,17 @@ require() {
   local file="$2"
   local message="$3"
   [[ -f "$file" ]] || fail "missing $file"
-  if ! rg -n "$pattern" "$file" >/dev/null; then
+  if ! rg -n -- "$pattern" "$file" >/dev/null; then
     fail "$message"
   fi
+}
+
+require_multiline() {
+  local pattern="$1"
+  local file="$2"
+  local message="$3"
+  [[ -f "$file" ]] || fail "missing $file"
+  perl -0ne "exit(($pattern) ? 0 : 1)" "$file" || fail "$message"
 }
 
 reject() {
@@ -23,7 +31,7 @@ reject() {
   local file="$2"
   local message="$3"
   [[ -f "$file" ]] || fail "missing $file"
-  if rg -n "$pattern" "$file" >/dev/null; then
+  if rg -n -- "$pattern" "$file" >/dev/null; then
     fail "$message"
   fi
 }
@@ -45,6 +53,7 @@ VIEW_TRANSPORT="$ROOT/plugins/remote-desktop/src/view_transport.rs"
 SDP="$ROOT/plugins/remote-desktop/src/sdp.rs"
 TARGET="$ROOT/plugins/remote-desktop/src/target.rs"
 WEBRTC_ENDPOINT="$ROOT/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
+TRANSPORT_MANAGER="$ROOT/plugins/remote-desktop/src/transport/manager.rs"
 INPUT="$ROOT/plugins/remote-desktop/src/input.rs"
 SCRIPT_CHECKS="$ROOT/tests/script_checks.rs"
 
@@ -193,6 +202,18 @@ require 'resolver_refuses_to_run_while_session_store_lock_is_held' "$TARGET" \
   'PERF-06 must reject target resolution while session store lock is held'
 require 'endpoint_start_boundary_refuses_to_run_while_session_store_lock_is_held' "$WEBRTC_ENDPOINT" \
   'PERF-06 must reject WebRTC endpoint startup while session store lock is held'
+require_multiline 'm/pub\(in crate::daemon::plugins::remote_desktop\) fn block_on<F: Future>\(.+?\) -> anyhow::Result<F::Output>/s' "$TRANSPORT_MANAGER" \
+  'PERF-06 direct WebRTC async runtime boundary must propagate runtime initialization failure'
+require 'build remote desktop WebRTC runtime: \{err\}' "$TRANSPORT_MANAGER" \
+  'PERF-06 direct WebRTC runtime initialization failure must be surfaced as a transport error'
+reject 'expect\("build remote desktop WebRTC runtime"\)' "$TRANSPORT_MANAGER" \
+  'PERF-06 direct WebRTC runtime initialization must not panic'
+require 'transports\.block_on\(create_direct_webrtc_endpoint' "$WEBRTC_ENDPOINT" \
+  'PERF-06 endpoint setup must run through the fallible transport runtime boundary'
+require '\)\)\?\?' "$WEBRTC_ENDPOINT" \
+  'PERF-06 endpoint setup must propagate both runtime-boundary and endpoint-construction failures'
+require 'direct media loop runtime unavailable' "$WEBRTC_ENDPOINT" \
+  'PERF-06 media-loop thread must surface runtime-boundary failure instead of panicking'
 require 'remote_desktop\.target\.resolve_for_session' "$TARGET" \
   'PERF-06 must identify the target resolver lock-boundary stage'
 require '\{stage\} must not run while RemoteDesktopSessionStore is locked' "$SESSION_STORE" \

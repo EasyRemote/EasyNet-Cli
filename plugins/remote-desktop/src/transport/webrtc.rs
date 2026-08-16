@@ -247,7 +247,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_remote_ice_candidate_val
                 candidate_init.candidate.as_str()
             };
             eprintln!("[remote-desktop-webrtc] apply_remote_candidate={candidate_label}");
-            transports.block_on(peer_connection.add_ice_candidate(candidate_init))?;
+            transports.block_on(peer_connection.add_ice_candidate(candidate_init))??;
         }
     }
     Ok(())
