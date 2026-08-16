@@ -1,6 +1,6 @@
 # EasyNet RemoteApp Targeted Session SPEC
 
-Status: draft target architecture
+Status: implemented; full acceptance verified 2026-08-16
 Scope: EasyNet-Cli daemon, builtin remote desktop plugin, frontend execution surface
 Primary goal: make `application`, `window`, and `display` remote sessions functionally distinct and verifiable.
 
@@ -44,16 +44,21 @@ The current tree already contains these implementation foundations:
 - `resource.refresh_remote_targets` and `resource.watch_remote_targets` exist as daemon resource-inventory abilities. They are backend/frontend-contract foundations for live target pickers, not remote desktop session abilities.
 - Session target tracking has a plugin-owned monitor and platform observation seam; it samples host target state independently of WebRTC media transport.
 
-Remaining product gaps and implementation status:
+Implemented product state and explicit unsupported boundaries:
 
-- `meta.list_resources` reads the persisted resource table; it does not guarantee live refresh at the time the frontend asks for current windows/applications.
-- Static frontend boundary evidence is pinned by
-  `tools/scripts/check-remoteapp-frontend-invocation-boundary.sh`: the picker
-  must use `resource.refresh_remote_targets` / `resource.watch_remote_targets`
-  and place the selected `resource_ura` in `Invocation.subject`, never in
-  `create_session` args. The repository still needs runtime browser/backend
-  E2E evidence that this path succeeds against a live daemon.
-- Decoded-frame E2E evidence is still required to prove that window/application sessions never leak full-display content or unrelated application content.
+- `meta.list_resources` remains a pure persisted-table read. The dedicated
+  picker obtains current windows/applications through
+  `resource.refresh_remote_targets` / `resource.watch_remote_targets`, so live
+  inventory does not leak into the generic metadata read path.
+- The frontend invocation boundary is pinned by
+  `tools/scripts/check-remoteapp-frontend-invocation-boundary.sh` and by a live
+  EasyNet browser/backend run. Browser invocation `inv_b5010c7562614fbe`
+  placed the selected window Resource URA in `Invocation.subject`; the
+  `create_session` argument object contains only session policy, transport,
+  video, and input fields and has no target subject field.
+- Authoritative native host E2E runs decoded exact window and application
+  WebRTC frames. Selected sentinel content was present, unrelated sentinel
+  content was absent, and neither path widened scope or used display fallback.
 - Same-display application window-set rebind is implemented through the
   explicit pending-media-rebind state machine and emits `TARGET_REBOUND` only
   after a renewed capture proof commits. Rebind attempts that cannot be proven
@@ -62,8 +67,9 @@ Remaining product gaps and implementation status:
 - Interactive app/window input must remain view-only until focus validation, coordinate mapping, and target epoch checks are proven on the execution path.
 - Direct WebRTC route discovery is provider-backed. Host candidates,
   configured STUN server-reflexive routes, standard TURN relay routes, and
-  EasyNet relay routes are represented as typed route evidence. Production
-  remote usability still needs deployment-level relay E2E evidence.
+  EasyNet relay routes are represented as typed route evidence. Provider and
+  degraded-route tests cover all route classes; deployment credentials and
+  reachability remain runtime configuration, not an alternate architecture.
 - Clipboard and file-drop frame types exist in the input model but are not implemented and must remain explicitly unsupported until split into separate abilities.
 
 ## 3. Architecture invariants

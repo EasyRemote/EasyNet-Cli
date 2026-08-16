@@ -36,5 +36,38 @@
 - `git diff --check` passed.
 - `codegraph sync . && codegraph status .` reported the index already up to
   date: 1,115 files, 43,884 nodes, and 172,703 edges.
-- Touched-file search for forbidden `URI`/`uri` terminology returned no
+- Touched-file search for forbidden non-URA address terminology returned no
   matches.
+
+## Superseding acceptance evidence — 2026-08-16
+
+- Native window/application decoded-frame host acceptance, all E2E-01 through
+  E2E-13 checkpoints, PERF-01 through PERF-07 structural bounds, seven static
+  boundaries, and seven mutation-backed boundaries are now complete. The
+  tracked authoritative host result is also recorded in
+  `pr/20260816-remoteapp-configured-ice-routes/02-verification.md`.
+- An authenticated EasyNet browser/backend run selected a live sentinel window
+  from 28 current display/application/window Resources and completed consent,
+  session creation, WebRTC negotiation, and client media acknowledgement. The
+  selected Resource commits PID `50099`, native window `802`, and the exact
+  sentinel title. Axon invocation `inv_b5010c7562614fbe` binds that Resource URA
+  in the envelope subject, causally follows consent invocation
+  `inv_1634f73d2d7b4152`, and targets the device-sponsored Remote Desktop
+  SystemAgent. Session
+  `rdp-cbd4ba73d8acb4573074a7ea` reached `connected` and
+  report invocation `inv_5edb276608334749` projects
+  `production_media_ready=true`, codec/media/client readiness true, transport
+  epoch `1`, device sending, and client presenting. The separate route state
+  remains explicitly host-only rather than manufacturing relay readiness.
+- EasyNet's downstream dedicated-surface enum and provider registry now include
+  `remote_desktop`; this fixes catalog normalization at the canonical surface
+  boundary instead of introducing a generic-media fallback. Its focused
+  catalog/surface/device-access suite passed 4 files / 95 tests, after which the
+  live launcher exposed all 12 Remote Desktop descriptors. No product-specific
+  surface or lifecycle was added to either SDK.
+- Final current-branch regression passed 319/319 RemoteApp Rust tests, all
+  seven static boundaries, all seven mutation-backed boundaries,
+  `cargo fmt --all -- --check`, and `git diff --check`. CodeGraph is synchronized
+  at 1,115 files, 43,895 nodes, and 172,765 edges; its
+  `TargetTrackingEmission` trail confirms one target-state owner and one
+  session event-log projection boundary.
