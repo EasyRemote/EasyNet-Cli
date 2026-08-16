@@ -45,6 +45,23 @@ pub(in crate::daemon::plugins::remote_desktop) struct TargetMediaSourceLost {
     pub(in crate::daemon::plugins::remote_desktop) reason: TargetResolutionError,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::daemon::plugins::remote_desktop) struct TargetRebindDeadlineExpiration {
+    media_source_lost: Option<TargetMediaSourceLost>,
+}
+
+impl TargetRebindDeadlineExpiration {
+    fn new(media_source_lost: Option<TargetMediaSourceLost>) -> Self {
+        Self { media_source_lost }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn into_media_source_lost(
+        self,
+    ) -> Option<TargetMediaSourceLost> {
+        self.media_source_lost
+    }
+}
+
 /// Runtime state for one remote desktop session.
 ///
 /// Invariant 1: every lifecycle transition that changes `state`,
@@ -420,21 +437,13 @@ impl RemoteDesktopSession {
             }
             return None;
         };
-        let mut media_loss = None;
-        if target_loss_reason.is_some() {
+        let mut media_source_lost = None;
+        if let Some(reason) = target_loss_reason {
             if permission_revoked {
                 self.consent.revoke();
             }
             self.lifecycle.suspend();
-            if let (Some(reason), Some(epoch)) = (target_loss_reason, self.transport.active_epoch())
-            {
-                if self.transport.mark_media_source_lost(epoch) {
-                    media_loss = Some(TargetMediaSourceLost {
-                        transport_epoch: epoch,
-                        reason,
-                    });
-                }
-            }
+            media_source_lost = self.mark_active_media_source_lost(reason);
         } else if event.event_type() == "TARGET_REBIND_ATTEMPTED" {
             self.lifecycle.begin_rebinding();
         } else if event.event_type() == "TARGET_REBIND_FAILED" {
@@ -444,14 +453,8 @@ impl RemoteDesktopSession {
         }
         self.touch();
         self.push_target_tracking_event(event);
-        if let Some(media_loss) = media_loss {
-            self.push_projected_event(session_events::media_source_lost(
-                self.target.binding(),
-                media_loss.reason,
-                media_loss.transport_epoch.value(),
-            ));
-        }
-        media_loss
+        self.push_media_source_lost_event(media_source_lost);
+        media_source_lost
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn pending_media_rebind_binding(
@@ -506,6 +509,47 @@ impl RemoteDesktopSession {
         self.touch();
         self.push_target_tracking_event(event);
         true
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn expire_target_rebind_deadline(
+        &mut self,
+        observed_at_ms: u64,
+    ) -> Option<TargetRebindDeadlineExpiration> {
+        if self.lifecycle.is_terminal() {
+            return None;
+        }
+        let event = self.target.expire_rebind_deadline(observed_at_ms)?;
+        self.lifecycle.reject_rebinding();
+        let media_source_lost =
+            self.mark_active_media_source_lost(TargetResolutionError::TargetStale);
+        self.touch();
+        self.push_target_tracking_event(event);
+        self.push_media_source_lost_event(media_source_lost);
+        Some(TargetRebindDeadlineExpiration::new(media_source_lost))
+    }
+
+    fn mark_active_media_source_lost(
+        &mut self,
+        reason: TargetResolutionError,
+    ) -> Option<TargetMediaSourceLost> {
+        let epoch = self.transport.active_epoch()?;
+        self.transport
+            .mark_media_source_lost(epoch)
+            .then_some(TargetMediaSourceLost {
+                transport_epoch: epoch,
+                reason,
+            })
+    }
+
+    fn push_media_source_lost_event(&mut self, media_source_lost: Option<TargetMediaSourceLost>) {
+        let Some(media_source_lost) = media_source_lost else {
+            return;
+        };
+        self.push_projected_event(session_events::media_source_lost(
+            self.target.binding(),
+            media_source_lost.reason,
+            media_source_lost.transport_epoch.value(),
+        ));
     }
 
     fn touch(&mut self) {
@@ -2048,6 +2092,86 @@ mod tests {
         );
         assert_eq!(rebind_failed["payload"]["target_status"], json!("lost"));
         assert_eq!(rebind_failed["payload"]["input_enabled"], json!(false));
+    }
+
+    #[test]
+    fn target_rebind_deadline_expiry_rejects_session_rebinding() {
+        let mut session = RemoteDesktopSession::new(test_session_init(
+            "rd-target-rebind-deadline",
+            "easynet:///r/acme/resource/display.test",
+            vec!["webrtc".into()],
+        ));
+
+        session.record_target_observation(TargetObservation::Lost {
+            reason: TargetResolutionError::TargetNotFound,
+            detail: "target disappeared".into(),
+            observed_at_ms: 100,
+        });
+        session.record_target_observation(TargetObservation::Lost {
+            reason: TargetResolutionError::TargetNotFound,
+            detail: "target still disappeared".into(),
+            observed_at_ms: 1_200,
+        });
+        assert_eq!(session.target_tracking_state()["status"], json!("lost"));
+
+        assert!(
+            session
+                .record_target_observation(TargetObservation::VisibilityChanged {
+                    visibility_state: TargetVisibilityState::Visible,
+                    target_geometry_revision: 9,
+                    observed_at_ms: 1_300,
+                })
+                .is_none(),
+            "rebind attempt must not stop a media source when none is active"
+        );
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::Rebinding
+        );
+
+        assert!(
+            session.expire_target_rebind_deadline(31_299).is_none(),
+            "session must not reject rebinding before the published deadline"
+        );
+        let expiration = session
+            .expire_target_rebind_deadline(31_300)
+            .expect("session expires the bounded rebind attempt");
+        assert!(expiration.into_media_source_lost().is_none());
+
+        assert_eq!(
+            session.lifecycle_phase(),
+            RemoteDesktopSessionPhase::Suspended
+        );
+        assert_eq!(
+            session.target_tracking_state()["status"],
+            json!("lost"),
+            "deadline expiry must terminate the target projection"
+        );
+        assert_eq!(
+            session.target_tracking_state()["input_enabled"],
+            json!(false)
+        );
+        let events = session.events();
+        let rebind_failed = events
+            .iter()
+            .find(|event| event["event_type"] == json!("TARGET_REBIND_FAILED"))
+            .expect("deadline expiry emits target rebind failure");
+        assert_eq!(
+            rebind_failed["reason_code"],
+            json!("explicit_rebind_required")
+        );
+        assert_eq!(
+            rebind_failed["payload"]["detail"],
+            json!("rebind_window_expired")
+        );
+        assert_eq!(
+            rebind_failed["payload"]["rebind_deadline_ms"],
+            json!(31_300)
+        );
+        assert_eq!(
+            rebind_failed["event_type_proto"],
+            json!("REMOTE_DESKTOP_EVENT_TARGET_CHANGED")
+        );
     }
 
     #[test]

@@ -39,6 +39,7 @@ pub struct TargetTrackerSnapshot {
 }
 
 const TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS: u64 = 100;
+const AUTOMATIC_REBIND_WINDOW_MS: u64 = 30_000;
 
 struct TargetLifecycleEventCoalescer;
 
@@ -89,6 +90,10 @@ fn commit_pending_media_rebind_failed() {
     "TARGET_REBIND_FAILED";
 }
 
+fn expire_rebind_deadline() {
+    "rebind_window_expired";
+}
+
 fn geometry_event_type() -> &'static str {
     if moved() {
         "TARGET_MOVED"
@@ -123,6 +128,12 @@ mod tests {
 
     #[test]
     fn active_application_window_set_rebind_failure_is_typed() {}
+
+    #[test]
+    fn pending_media_rebind_expires_at_rebind_deadline() {}
+
+    #[test]
+    fn post_loss_rebind_attempt_expires_at_rebind_deadline() {}
 
     #[test]
     fn display_topology_loss_projects_target_failure_recovery() {
@@ -161,7 +172,7 @@ fn record_target_observation() {
     if target_loss_reason.is_some() {
         self.consent.revoke();
         self.lifecycle.suspend();
-        self.transport.mark_media_source_lost(epoch);
+        media_source_lost = self.mark_active_media_source_lost(reason);
         session_events::media_source_lost(self.target.binding());
     }
     self.push_target_tracking_event(event);
@@ -199,6 +210,16 @@ fn close() {
 
 fn revoke_consent() {
     self.lifecycle.suspend();
+    media_source_lost = self.mark_active_media_source_lost(reason);
+}
+
+fn expire_target_rebind_deadline() {
+    self.lifecycle.reject_rebinding();
+    self.mark_active_media_source_lost(reason);
+    self.push_target_tracking_event(event);
+}
+
+fn mark_active_media_source_lost() {
     self.transport.mark_media_source_lost(epoch);
 }
 
@@ -298,6 +319,9 @@ mod tests {
         assert_eq!(rebind_failed["target_identity_epoch"], json!(session.target_binding().target_identity_epoch()));
         assert_eq!(rebind_failed["media_source_epoch"], json!(session.target_binding().media_source_epoch()));
     }
+
+    #[test]
+    fn target_rebind_deadline_expiry_rejects_session_rebinding() {}
 
     #[test]
     fn pending_media_rebind_failure_rejects_session_rebinding() {}
@@ -800,6 +824,8 @@ fn mark_direct_webrtc_failed() {
 
 fn fail_pending_media_rebind_for_session() {}
 
+fn expire_target_rebind_deadline_for_session() {}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -818,6 +844,9 @@ mod tests {
         assert_eq!(event["payload"]["failure_domain"], json!("transport"));
         assert_eq!(event["payload"]["frontend_action"], json!("retry_session"));
     }
+
+    #[test]
+    fn session_store_expires_target_rebind_deadline_for_bound_session() {}
 }
 RS
 
@@ -1331,6 +1360,8 @@ fn observe_bound_session_target_once() {
     let Some(inputs) = sessions.target_observation_inputs_for_session(session_id) else {
         return TargetObservationPollResult::stop_tracking();
     };
+    sessions.expire_target_rebind_deadline_for_session();
+    TargetObservationPollResult::rebind_deadline_expired(media_source_lost);
     record_target_observation_for_session();
 }
 
@@ -1400,6 +1431,12 @@ mod tests {
 
     #[test]
     fn snapshot_observer_reappearance_requires_explicit_rebind_policy() {}
+
+    #[test]
+    fn no_observation_tick_expires_rebind_deadline_before_polling_provider() {}
+
+    #[test]
+    fn pending_media_rebind_deadline_expiry_stops_active_endpoint_by_epoch() {}
 
     #[test]
     fn unsupported_platform_observer_fails_app_window_targets_closed() {}

@@ -51,6 +51,13 @@ impl TargetObservationPollResult {
             media_source_lost: None,
         }
     }
+
+    fn rebind_deadline_expired(media_source_lost: Option<TargetMediaSourceLost>) -> Self {
+        Self {
+            keep_tracking: true,
+            media_source_lost,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -233,6 +240,16 @@ where
     let Some(inputs) = sessions.target_observation_inputs_for_session(session_id) else {
         return TargetObservationPollResult::stop_tracking();
     };
+    if let Some(expiration) = sessions.expire_target_rebind_deadline_for_session(
+        session_id,
+        &inputs.binding_id,
+        inputs.binding_epoch,
+        now_ms(),
+    ) {
+        return TargetObservationPollResult::rebind_deadline_expired(
+            expiration.into_media_source_lost(),
+        );
+    }
     let Some(observation) = provider.observe(&inputs.binding, &inputs.snapshot) else {
         return TargetObservationPollResult::keep_tracking();
     };
@@ -903,8 +920,8 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
     use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
     use crate::daemon::plugins::remote_desktop::target::{
-        RemoteAppTargetBinding, RemoteAppTargetResolver, ResourceEntryTargetResolver,
-        TargetGeometry, TargetResolutionError,
+        AppWindowSetProof, RemoteAppTargetBinding, RemoteAppTargetResolver,
+        ResourceEntryTargetResolver, TargetGeometry, TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::target_observer::{
         observe_bound_session_target_once, sample_host_target_observations,
@@ -915,7 +932,7 @@ mod tests {
         TargetVisibilityState,
     };
     use crate::daemon::plugins::remote_desktop::test_support::{
-        live_remote_target_metadata, test_session_init,
+        live_remote_target_metadata, test_application_session_init, test_session_init,
     };
 
     struct FakeGeometryProvider;
@@ -1512,6 +1529,169 @@ mod tests {
                 json!("refresh_targets")
             );
             assert_eq!(rebind_failed["payload"]["input_enabled"], json!(false));
+        });
+    }
+
+    #[test]
+    fn no_observation_tick_expires_rebind_deadline_before_polling_provider() {
+        let store = RemoteDesktopSessionStore::new();
+        let session_id = "rd-rebind-deadline-no-observation";
+        let session = RemoteDesktopSession::new(test_session_init(
+            session_id,
+            "easynet:///r/acme/resource/display.test",
+            vec!["webrtc".into()],
+        ));
+        store.with_sessions(|sessions| {
+            sessions.insert(session_id.to_string(), session);
+        });
+        let inputs = store
+            .target_observation_inputs_for_session(session_id)
+            .expect("target observation inputs");
+        let rebind_observed_at_ms = super::now_ms().saturating_sub(31_000);
+        store.record_target_observation_for_session(
+            session_id,
+            &inputs.binding_id,
+            inputs.binding_epoch,
+            TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "target disappeared".into(),
+                observed_at_ms: rebind_observed_at_ms.saturating_sub(1_200),
+            },
+        );
+        store.record_target_observation_for_session(
+            session_id,
+            &inputs.binding_id,
+            inputs.binding_epoch,
+            TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "target still disappeared".into(),
+                observed_at_ms: rebind_observed_at_ms.saturating_sub(100),
+            },
+        );
+        store.record_target_observation_for_session(
+            session_id,
+            &inputs.binding_id,
+            inputs.binding_epoch,
+            TargetObservation::VisibilityChanged {
+                visibility_state: TargetVisibilityState::Visible,
+                target_geometry_revision: 9,
+                observed_at_ms: rebind_observed_at_ms,
+            },
+        );
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = CountingObservationProvider {
+            calls: Arc::clone(&calls),
+        };
+        let result = observe_bound_session_target_once(&store, session_id, &provider);
+
+        assert!(result.keep_tracking);
+        assert!(result.media_source_lost.is_none());
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "deadline expiry is a state-machine tick and must not depend on provider observation"
+        );
+        store.with_sessions(|sessions| {
+            let session = sessions
+                .get(session_id)
+                .expect("session remains inspectable");
+            let event = session
+                .events()
+                .into_iter()
+                .find(|event| event["event_type"] == json!("TARGET_REBIND_FAILED"))
+                .expect("deadline expiry event");
+            assert_eq!(event["payload"]["detail"], json!("rebind_window_expired"));
+            assert_eq!(event["payload"]["target_status"], json!("lost"));
+            assert_eq!(event["payload"]["input_enabled"], json!(false));
+        });
+    }
+
+    #[test]
+    fn pending_media_rebind_deadline_expiry_stops_active_endpoint_by_epoch() {
+        let store = RemoteDesktopSessionStore::new();
+        let session_id = "rd-active-media-rebind-deadline";
+        let epoch = TransportEpoch::new(41);
+        let mut session = RemoteDesktopSession::new(test_application_session_init(
+            session_id,
+            vec!["webrtc".into()],
+        ));
+        session.begin_webrtc_negotiation(epoch);
+        session
+            .set_local_webrtc_answer(
+                epoch,
+                json!({"type": "answer", "sdp": "v=0"}),
+                "sck-native",
+                true,
+                direct_webrtc_endpoint_ura(session_id),
+            )
+            .expect("local answer records");
+        session.mark_webrtc_media_sending(epoch, direct_webrtc_endpoint_ura(session_id));
+        store.with_sessions(|sessions| {
+            sessions.insert(session_id.to_string(), session);
+        });
+
+        let inputs = store
+            .target_observation_inputs_for_session(session_id)
+            .expect("target observation inputs");
+        let rebind_observed_at_ms = super::now_ms().saturating_sub(31_000);
+        assert!(store
+            .record_target_observation_for_session(
+                session_id,
+                &inputs.binding_id,
+                inputs.binding_epoch,
+                TargetObservation::ApplicationWindowSetChanged {
+                    app_window_set: AppWindowSetProof::new(
+                        42,
+                        Some("com.example.Editor".to_string()),
+                        Some(9001),
+                        vec![10, 11, 12],
+                    ),
+                    geometry: TargetGeometry {
+                        x: Some(10.0),
+                        y: Some(20.0),
+                        width: Some(320.0),
+                        height: Some(120.0),
+                    },
+                    target_identity_epoch: 100,
+                    target_geometry_revision: 4,
+                    observed_at_ms: rebind_observed_at_ms,
+                },
+            )
+            .is_none());
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let provider = CountingObservationProvider {
+            calls: Arc::clone(&calls),
+        };
+        let result = observe_bound_session_target_once(&store, session_id, &provider);
+
+        assert!(result.keep_tracking);
+        let media_source_lost = result
+            .media_source_lost
+            .expect("deadline expiry returns a transport stop command");
+        assert_eq!(media_source_lost.transport_epoch, epoch);
+        assert_eq!(media_source_lost.reason, TargetResolutionError::TargetStale);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        store.with_sessions(|sessions| {
+            let session = sessions
+                .get(session_id)
+                .expect("session remains inspectable");
+            assert_eq!(
+                session.transport_state()["primary"],
+                json!("media_source_lost")
+            );
+            assert_eq!(session.transport_state()["device_sending"], json!(false));
+            let events = session.events();
+            let rebind_failed_index = events
+                .iter()
+                .position(|event| event["event_type"] == json!("TARGET_REBIND_FAILED"))
+                .expect("deadline emits target rebind failure");
+            let media_lost_index = events
+                .iter()
+                .position(|event| event["event_type"] == json!("MEDIA_SOURCE_LOST"))
+                .expect("deadline emits media-source loss");
+            assert!(rebind_failed_index < media_lost_index);
         });
     }
 

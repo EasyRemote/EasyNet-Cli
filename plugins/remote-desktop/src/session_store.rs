@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::daemon::plugins::remote_desktop::constants::direct_webrtc_endpoint_ura;
 use crate::daemon::plugins::remote_desktop::sdp::ice_candidate_text;
 use crate::daemon::plugins::remote_desktop::session::{
-    RemoteDesktopSession, TargetMediaSourceLost,
+    RemoteDesktopSession, TargetMediaSourceLost, TargetRebindDeadlineExpiration,
 };
 use crate::daemon::plugins::remote_desktop::session_events::{
     webrtc_transport_failure_context, WebRtcFailureEventKind,
@@ -230,6 +230,25 @@ impl RemoteDesktopSessionStore {
             return None;
         }
         session.record_target_observation(observation)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn expire_target_rebind_deadline_for_session(
+        &self,
+        session_id: &str,
+        binding_id: &str,
+        binding_epoch: u64,
+        observed_at_ms: u64,
+    ) -> Option<TargetRebindDeadlineExpiration> {
+        let mut sessions = self.lock();
+        let session = sessions.get_mut(session_id)?;
+        let binding = session.target_binding();
+        if session.is_terminal()
+            || binding.binding_id() != binding_id
+            || binding.binding_epoch() != binding_epoch
+        {
+            return None;
+        }
+        session.expire_target_rebind_deadline(observed_at_ms)
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn pending_media_rebind_binding_for_session(
@@ -787,6 +806,79 @@ mod tests {
             assert_eq!(event["payload"]["transport_kind"], json!(TRANSPORT_WEBRTC));
             assert_eq!(event["payload"]["media_transport_ready"], json!(false));
             assert_eq!(event["payload"]["transport_epoch"], json!(1));
+        });
+    }
+
+    #[test]
+    fn session_store_expires_target_rebind_deadline_for_bound_session() {
+        let store = RemoteDesktopSessionStore::new();
+        insert_test_session(&store, "rd-rebind-deadline");
+        let inputs = store
+            .target_observation_inputs_for_session("rd-rebind-deadline")
+            .expect("target observation inputs");
+
+        assert!(store
+            .record_target_observation_for_session(
+                "rd-rebind-deadline",
+                &inputs.binding_id,
+                inputs.binding_epoch,
+                TargetObservation::Lost {
+                    reason: TargetResolutionError::TargetNotFound,
+                    detail: "target disappeared".into(),
+                    observed_at_ms: 100,
+                },
+            )
+            .is_none());
+        store.record_target_observation_for_session(
+            "rd-rebind-deadline",
+            &inputs.binding_id,
+            inputs.binding_epoch,
+            TargetObservation::Lost {
+                reason: TargetResolutionError::TargetNotFound,
+                detail: "target still disappeared".into(),
+                observed_at_ms: 1_200,
+            },
+        );
+        store.record_target_observation_for_session(
+            "rd-rebind-deadline",
+            &inputs.binding_id,
+            inputs.binding_epoch,
+            TargetObservation::VisibilityChanged {
+                visibility_state:
+                    crate::daemon::plugins::remote_desktop::target_tracking::TargetVisibilityState::Visible,
+                target_geometry_revision: 9,
+                observed_at_ms: 1_300,
+            },
+        );
+
+        assert!(store
+            .expire_target_rebind_deadline_for_session(
+                "rd-rebind-deadline",
+                &inputs.binding_id,
+                inputs.binding_epoch,
+                31_299,
+            )
+            .is_none());
+        let expiration = store
+            .expire_target_rebind_deadline_for_session(
+                "rd-rebind-deadline",
+                &inputs.binding_id,
+                inputs.binding_epoch,
+                31_300,
+            )
+            .expect("store expires the bounded rebind attempt");
+        assert!(expiration.into_media_source_lost().is_none());
+
+        store.with_sessions(|sessions| {
+            let session = sessions.get("rd-rebind-deadline").unwrap();
+            let event = session
+                .events()
+                .into_iter()
+                .find(|event| event["event_type"] == json!("TARGET_REBIND_FAILED"))
+                .expect("deadline expiry event");
+            assert_eq!(event["payload"]["detail"], json!("rebind_window_expired"));
+            assert_eq!(event["payload"]["target_status"], json!("lost"));
+            assert_eq!(event["payload"]["input_enabled"], json!(false));
         });
     }
 

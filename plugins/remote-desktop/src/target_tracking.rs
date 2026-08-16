@@ -994,6 +994,28 @@ impl RemoteAppTargetBindingStateMachine {
         })
     }
 
+    pub(in crate::daemon::plugins::remote_desktop) fn expire_rebind_deadline(
+        &mut self,
+        observed_at_ms: u64,
+    ) -> Option<TargetTrackingEvent> {
+        if self.snapshot.status != TargetBindingPhase::Rebinding || self.rebind_failure_emitted {
+            return None;
+        }
+        let rebind_started_at_ms = self.rebind_started_at_ms?;
+        let rebind_deadline_ms = rebind_started_at_ms.saturating_add(AUTOMATIC_REBIND_WINDOW_MS);
+        if observed_at_ms < rebind_deadline_ms {
+            return None;
+        }
+        if self.pending_media_rebind.is_some() {
+            return self.commit_pending_media_rebind_failed(
+                TargetResolutionError::TargetStale,
+                "rebind_window_expired".to_string(),
+                observed_at_ms,
+            );
+        }
+        self.commit_rebind_failed("rebind_window_expired", observed_at_ms)
+    }
+
     fn commit_permission_revoked(
         &mut self,
         detail: String,
@@ -1435,7 +1457,7 @@ fn geometry_event_type(previous: &TargetGeometry, next: &TargetGeometry) -> &'st
 mod tests {
     use serde_json::{json, Value};
 
-    use super::TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS;
+    use super::{AUTOMATIC_REBIND_WINDOW_MS, TARGET_LIFECYCLE_EVENT_COALESCE_INTERVAL_MS};
 
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::target::{
@@ -1699,6 +1721,101 @@ mod tests {
             json!("screencapturekit_filter_failed")
         );
         assert!(tracker.pending_media_rebind_binding().is_none());
+    }
+
+    #[test]
+    fn pending_media_rebind_expires_at_rebind_deadline() {
+        let binding = application_binding();
+        let mut tracker = RemoteAppTargetBindingStateMachine::from_binding(binding);
+        let next_window_set = AppWindowSetProof::new(
+            42,
+            Some("com.example.Editor".to_string()),
+            Some(9001),
+            vec![10, 11, 12],
+        );
+
+        let attempted = tracker
+            .commit_observation_with_media_source_activity(
+                TargetObservation::ApplicationWindowSetChanged {
+                    app_window_set: next_window_set,
+                    geometry: TargetGeometry {
+                        x: Some(10.0),
+                        y: Some(20.0),
+                        width: Some(320.0),
+                        height: Some(120.0),
+                    },
+                    target_identity_epoch: 100,
+                    target_geometry_revision: 4,
+                    observed_at_ms: 10,
+                },
+                true,
+            )
+            .expect("active application window-set drift starts pending media rebind");
+        assert_eq!(attempted.event_type(), "TARGET_REBIND_ATTEMPTED");
+        assert!(tracker.pending_media_rebind_binding().is_some());
+
+        assert!(
+            tracker
+                .expire_rebind_deadline(10 + AUTOMATIC_REBIND_WINDOW_MS - 1)
+                .is_none(),
+            "deadline must not expire before the published rebind window"
+        );
+
+        let expired = tracker
+            .expire_rebind_deadline(10 + AUTOMATIC_REBIND_WINDOW_MS)
+            .expect("pending media rebind expires deterministically at deadline");
+        assert_eq!(expired.event_type(), "TARGET_REBIND_FAILED");
+        assert_eq!(expired.payload()["reason_code"], json!("target_stale"));
+        assert_eq!(expired.payload()["detail"], json!("rebind_window_expired"));
+        assert_eq!(
+            expired.payload()["rebind_started_at_ms"],
+            json!(10),
+            "expiry evidence must preserve the start of the bounded rebind window"
+        );
+        assert_eq!(
+            expired.payload()["rebind_deadline_ms"],
+            json!(10 + AUTOMATIC_REBIND_WINDOW_MS)
+        );
+        assert_eq!(expired.payload()["target_status"], json!("lost"));
+        assert_eq!(expired.payload()["input_enabled"], json!(false));
+        assert_eq!(tracker.snapshot().to_value()["status"], json!("lost"));
+        assert!(tracker.pending_media_rebind_binding().is_none());
+    }
+
+    #[test]
+    fn post_loss_rebind_attempt_expires_at_rebind_deadline() {
+        let mut tracker = lost_window_tracker();
+
+        let attempted = tracker
+            .commit_observation(TargetObservation::VisibilityChanged {
+                visibility_state: TargetVisibilityState::Visible,
+                target_geometry_revision: 5,
+                observed_at_ms: 30,
+            })
+            .expect("post-loss observation starts explicit rebind attempt");
+        assert_eq!(attempted.event_type(), "TARGET_REBIND_ATTEMPTED");
+        assert_eq!(tracker.snapshot().to_value()["status"], json!("rebinding"));
+
+        let expired = tracker
+            .expire_rebind_deadline(30 + AUTOMATIC_REBIND_WINDOW_MS)
+            .expect("post-loss rebind attempt expires deterministically at deadline");
+        assert_eq!(expired.event_type(), "TARGET_REBIND_FAILED");
+        assert_eq!(
+            expired.payload()["reason_code"],
+            json!("explicit_rebind_required")
+        );
+        assert_eq!(expired.payload()["detail"], json!("rebind_window_expired"));
+        assert_eq!(expired.payload()["rebind_started_at_ms"], json!(30));
+        assert_eq!(
+            expired.payload()["rebind_deadline_ms"],
+            json!(30 + AUTOMATIC_REBIND_WINDOW_MS)
+        );
+        assert_eq!(expired.payload()["target_status"], json!("lost"));
+        assert_eq!(expired.payload()["input_enabled"], json!(false));
+        assert_eq!(
+            tracker.snapshot().latest_diagnostic()["failure_domain"],
+            json!("target")
+        );
     }
 
     #[test]

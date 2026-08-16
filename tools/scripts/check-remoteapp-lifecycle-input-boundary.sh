@@ -228,7 +228,7 @@ require 'payload\["transport_epoch"\]' "$SESSION" \
   'target lifecycle event payloads must include current transport_epoch before event-log projection'
 require 'self\.transport\.active_epoch\(\)' "$SESSION" \
   'target lifecycle event transport_epoch must come from the session transport state'
-require 'self\.push_target_tracking_event\(event\)' "$SESSION" \
+require_multiline 'm/fn record_target_observation\((?:(?!\nfn push_target_tracking_event\()(?!fn pending_media_rebind_binding).)*self\.push_target_tracking_event\(event\)/s' "$SESSION" \
   'record_target_observation must write target events through the session aggregate projection boundary'
 require 'target_tracking_events_include_active_transport_epoch_at_session_boundary' "$SESSION" \
   'E2E-08 must prove target lifecycle events carry the active transport epoch'
@@ -270,8 +270,12 @@ require 'PrimaryMediaPhase::MediaSourceLost => matches!\(to, PrimaryMediaPhase::
   'media source loss must be absorbing until failure or a new epoch'
 require 'media_source_lost_is_absorbing_until_new_epoch_or_failure' "$SESSION_TRANSPORT_STATE" \
   'transport tests must prove media source loss cannot reopen readiness in the same epoch'
-require 'self\.transport\.mark_media_source_lost\(epoch\)' "$SESSION" \
-  'target loss must stop the active media source'
+require 'fn mark_active_media_source_lost\(' "$SESSION" \
+  'session aggregate must centralize active media-source loss projection'
+require 'media_source_lost = self\.mark_active_media_source_lost\(reason\)' "$SESSION" \
+  'target loss must stop the active media source through the session media-source helper'
+require '\.mark_media_source_lost\(epoch\)' "$SESSION" \
+  'session media-source helper must stop the active transport epoch'
 require 'session_events::media_source_lost' "$SESSION" \
   'target loss must project a media-source lost event'
 require_multiline 'm/media_source_lost\(\s*self\.target\.binding\(\)/s' "$SESSION" \
@@ -514,6 +518,34 @@ require 'commit_pending_media_rebind_failed' "$TARGET_TRACKING" \
   'target tracking must terminate failed pending media rebinds as typed target lifecycle events'
 require 'active_application_window_set_rebind_failure_is_typed' "$TARGET_TRACKING" \
   'target tracker must test pending media rebind failure as TARGET_REBIND_FAILED'
+require 'AUTOMATIC_REBIND_WINDOW_MS: u64 = 30_000' "$TARGET_TRACKING" \
+  'automatic target rebind windows must be bounded to the SPEC 30 second maximum'
+require 'fn expire_rebind_deadline\(' "$TARGET_TRACKING" \
+  'target state machine must own rebind deadline expiry instead of relying on incidental observations'
+require 'rebind_window_expired' "$TARGET_TRACKING" \
+  'rebind deadline expiry must publish a machine-readable lifecycle failure detail'
+require 'pending_media_rebind_expires_at_rebind_deadline' "$TARGET_TRACKING" \
+  'pending media rebinds must have deadline-expiry regression coverage'
+require 'post_loss_rebind_attempt_expires_at_rebind_deadline' "$TARGET_TRACKING" \
+  'post-loss rebind attempts must have deadline-expiry regression coverage'
+require 'fn expire_target_rebind_deadline\(' "$SESSION" \
+  'session aggregate must project target rebind deadline expiry through lifecycle events'
+require 'target_rebind_deadline_expiry_rejects_session_rebinding' "$SESSION" \
+  'session aggregate must test deadline expiry rejecting Rebinding'
+require 'expire_target_rebind_deadline_for_session' "$SESSION_STORE" \
+  'session store must expose binding-scoped target rebind deadline expiry'
+require 'session_store_expires_target_rebind_deadline_for_bound_session' "$SESSION_STORE" \
+  'session store must test binding-scoped rebind deadline expiry'
+require 'expire_target_rebind_deadline_for_session' "$TARGET_OBSERVER" \
+  'target observer tick must enforce deadline expiry before relying on platform observations'
+require 'no_observation_tick_expires_rebind_deadline_before_polling_provider' "$TARGET_OBSERVER" \
+  'target observer tests must prove no-observation ticks expire rebind deadlines'
+require 'pending_media_rebind_deadline_expiry_stops_active_endpoint_by_epoch' "$TARGET_OBSERVER" \
+  'rebind deadline expiry must project an epoch-fenced stop for an active media endpoint'
+require 'mark_active_media_source_lost' "$SESSION" \
+  'target loss and rebind expiry must share the session-owned media loss transition'
+require 'rebind_deadline_expired' "$TARGET_OBSERVER" \
+  'target observer expiry results must carry the typed media-source stop effect to the monitor'
 require 'fail_pending_media_rebind_for_session' "$SESSION_STORE" \
   'session store must expose a target-lifecycle failure projection for native pending media rebind failures'
 require 'pending_media_rebind_failure_rejects_session_rebinding' "$SESSION" \
@@ -805,8 +837,8 @@ require 'self\.consent\.revoke\(\)' "$SESSION" \
   'consent revocation must advance the consent state machine'
 require '"TARGET_PERMISSION_REVOKED"' "$TARGET_TRACKING" \
   'permission revocation must project TARGET_PERMISSION_REVOKED through target tracking'
-require 'self\.transport\.mark_media_source_lost\(epoch\)' "$SESSION" \
-  'consent revocation must mark active media source lost'
+require 'media_source_lost = self\.mark_active_media_source_lost\(reason\)' "$SESSION" \
+  'consent revocation must mark active media source lost through the session media-source helper'
 require 'self\.consent\.expire\(\)' "$SESSION" \
   'terminal session lifecycle must expire active consent'
 require 'consent_revocation_suspends_media_and_blocks_input_activation' "$SESSION" \
