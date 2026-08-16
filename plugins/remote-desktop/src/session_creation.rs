@@ -17,10 +17,11 @@ use crate::daemon::plugins::remote_desktop::consent_registry::{
     RemoteDesktopConsentRegistry, CONSENT_INTENT,
 };
 use crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION;
+use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy;
 use crate::daemon::plugins::remote_desktop::request::{
     mint_session_id, mint_session_token, parse_input_policy, parse_lease_ttl_ms, parse_mode,
     parse_optional_session_id, parse_transport_preferences, parse_video_constraints, require_str,
-    RemoteDesktopInputPolicy, RemoteDesktopVideoConstraints,
+    RemoteDesktopVideoConstraints,
 };
 use crate::daemon::plugins::remote_desktop::resource::resolve_screen_resource_from_envelope;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSessionInit;
@@ -164,7 +165,6 @@ impl RemoteDesktopSessionCreationWorkflow {
         )?;
         let capture_proof = verifier.verify_for_session(ABILITY_CREATE_SESSION, &target_binding)?;
         target_binding.commit_capture_proof(ABILITY_CREATE_SESSION, capture_proof)?;
-        self.input_policy = self.input_policy.constrained_for_binding(&target_binding);
         self.target_binding = Some(target_binding);
         self.state = RemoteDesktopSessionCreationState::ReadyToInsert;
         Ok(self)

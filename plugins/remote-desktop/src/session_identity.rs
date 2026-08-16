@@ -4,9 +4,8 @@
 // File: plugins/remote-desktop/src/session_identity.rs
 // Description: Immutable identity and caller-visible policy captured at session creation.
 
-use crate::daemon::plugins::remote_desktop::request::{
-    RemoteDesktopInputPolicy, RemoteDesktopVideoConstraints,
-};
+use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy;
+use crate::daemon::plugins::remote_desktop::request::RemoteDesktopVideoConstraints;
 use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;
 use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 

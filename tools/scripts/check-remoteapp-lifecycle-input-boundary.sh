@@ -49,6 +49,7 @@ TARGET_TRACKING="$REMOTE_ROOT/target_tracking.rs"
 TARGET_OBSERVER="$REMOTE_ROOT/target_observer.rs"
 TARGET_MONITOR="$REMOTE_ROOT/target_monitor.rs"
 LEASE_MONITOR="$REMOTE_ROOT/lease_monitor.rs"
+LIFECYCLE_WORKER="$REMOTE_ROOT/lifecycle_worker.rs"
 SESSION="$REMOTE_ROOT/session.rs"
 SESSION_CONSENT_STATE="$REMOTE_ROOT/session_consent_state.rs"
 SESSION_IDENTITY="$REMOTE_ROOT/session_identity.rs"
@@ -79,7 +80,7 @@ WEBRTC_NATIVE="$REMOTE_ROOT/transport/webrtc_native_media.rs"
 WEBRTC_NEGOTIATION="$REMOTE_ROOT/transport/webrtc_negotiation.rs"
 TRANSPORT_BLOCKER="$REMOTE_ROOT/transport_blocker.rs"
 
-for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$LEASE_MONITOR" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$NETWORK" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SET_DESCRIPTION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NATIVE" "$WEBRTC_NEGOTIATION" "$TRANSPORT_BLOCKER"; do
+for file in "$TARGET_TRACKING" "$TARGET_OBSERVER" "$TARGET_MONITOR" "$LEASE_MONITOR" "$LIFECYCLE_WORKER" "$SESSION" "$SESSION_CONSENT_STATE" "$SESSION_IDENTITY" "$RUNTIME" "$CONTRACT" "$SESSION_STATE" "$SESSION_TRANSPORT_STATE" "$SESSION_EVENTS" "$EVENT_LOG" "$VIEW_TRANSPORT" "$VIEW" "$VIEW_DEVICE" "$INPUT" "$TARGET" "$CONSTANTS" "$NETWORK" "$SCK" "$REQUEST" "$SESSION_STORE" "$CREATE_SESSION" "$SET_DESCRIPTION" "$SESSION_LIFECYCLE" "$SESSION_CREATION" "$INVOKE_BIDI" "$WEBRTC_ENDPOINT" "$WEBRTC_MEDIA" "$WEBRTC_NATIVE" "$WEBRTC_NEGOTIATION" "$TRANSPORT_BLOCKER"; do
   [[ -f "$file" ]] || fail "missing required source ${file#"$ROOT/"}"
 done
 
@@ -131,18 +132,18 @@ require 'current_session_input_policy_reapplies_session_input_scope_to_latest_sn
   'production input path must test reapplying session-owned input scope to the latest target snapshot'
 require 'current_session_input_policy_uses_same_geometry_revision_as_target_event' "$INPUT" \
   'E2E-08 must prove target event and input mapping consume the same committed geometry revision'
-require 'input_policy_for_target_snapshot\(' "$INPUT" \
+require 'fn pointer_target_from_snapshot\(' "$INPUT" \
   'input policy must be derivable from the latest target tracker snapshot'
-require 'fn current_session_input_policy\(' "$INPUT" \
-  'production input path must resolve current policy per frame'
+require 'fn current_session_effective_input_policy\(' "$INPUT" \
+  'production input path must resolve current typed policy per frame'
 require 'let snapshot = session\.target_snapshot\(\);' "$INPUT" \
   'production input path must read the latest session target snapshot'
 require 'let input_scope = session\.target_binding\(\)\.input_scope\(\);' "$INPUT" \
   'production input path must read input scope from the session-owned target binding'
 require 'if !snapshot\.input_enabled\(\)' "$INPUT" \
   'production input path must disable input after target loss'
-require 'input_policy_for_scope\(input_policy, input_scope\)' "$INPUT" \
-  'production input path must reapply input scope after deriving latest pointer target geometry'
+require 'base_policy\.for_current_target\(snapshot, input_scope\)' "$INPUT" \
+  'production input path must reapply input scope through the typed effective policy after deriving latest pointer target geometry'
 require 'policy\["pointer_target"\]\["target_geometry_revision"\]' "$INPUT" \
   'input policy test must assert pointer target geometry revision'
 require 'loose base policy reopen view-only pointer input' "$INPUT" \
@@ -197,6 +198,18 @@ reject 'expect\("spawn remote desktop lease monitor"\)' "$LEASE_MONITOR" \
   'lease monitor worker spawn must propagate errors instead of panicking'
 reject 'expect\("spawn remote desktop target monitor"\)' "$TARGET_MONITOR" \
   'target monitor worker spawn must propagate errors instead of panicking'
+require 'LifecycleWorker<TargetMonitorCommand>' "$TARGET_MONITOR" \
+  'target monitor must reuse the canonical lifecycle worker ownership primitive'
+require 'LifecycleWorker<LeaseMonitorCommand>' "$LEASE_MONITOR" \
+  'lease monitor must reuse the canonical lifecycle worker ownership primitive'
+require 'worker\.shutdown\(TargetMonitorCommand::Shutdown\)' "$TARGET_MONITOR" \
+  'target monitor drop must request typed worker shutdown'
+require 'worker\.shutdown\(LeaseMonitorCommand::Shutdown\)' "$LEASE_MONITOR" \
+  'lease monitor drop must request typed worker shutdown'
+require 'join\.thread\(\)\.id\(\) == thread::current\(\)\.id\(\)' "$LIFECYCLE_WORKER" \
+  'lifecycle worker must not join itself when the final owner drops on the worker thread'
+require 'shutdown_from_worker_detaches_instead_of_self_joining' "$LIFECYCLE_WORKER" \
+  'lifecycle worker must test worker-thread destruction without self-join panic'
 require 'fn apply_command\(command: TargetMonitorCommand, tracked: &mut HashSet<String>\) -> bool' "$TARGET_MONITOR" \
   'target monitor must centralize command state transitions'
 require 'TargetMonitorCommand::Track \{ session_id \}' "$TARGET_MONITOR" \
@@ -864,29 +877,33 @@ require 'application_interactive_downgrade_projects_input_scope_reason' "$TARGET
   'target binding tests must prove app/window interactive downgrade reason is visible'
 require 'display_interactive_without_input_consent_remains_view_only' "$INPUT" \
   'input policy tests must prove display interactive cannot enable key/pointer without input consent'
-require 'fn input_policy_for_scope\(' "$INPUT" \
-  'input policy must centralize scope-based disablement'
-require 'fn input_policy_reject_reason\(' "$INPUT" \
-  'input rejection reason must be centralized for datachannel and bidi paths'
+require 'struct EffectiveRemoteDesktopInputPolicy' "$INPUT" \
+  'input execution policy must be a typed core object, not raw JSON'
+require 'fn apply_scope\(&mut self, input_scope: InputScope\)' "$INPUT" \
+  'input policy must centralize scope-based disablement on the typed effective policy'
+require 'fn reject_reason\(' "$INPUT" \
+  'input rejection reason must be centralized on the typed effective policy'
+require 'fn current_session_effective_input_policy\(' "$INPUT" \
+  'input readiness must return the typed effective policy at the session aggregate boundary'
 require 'fn reject_unsupported_input_channel_frame\(' "$INPUT" \
   'unsupported rich input frames must be rejected at the input data-channel validation boundary'
 require_multiline 'm/fn validate_input_frame\([^}]+?reject_unsupported_input_channel_frame\(frame\)\?/s' "$INPUT" \
   'input frame validation must reject unsupported rich input before policy application'
-require 'fn apply_input_frame_with_policy\(' "$INPUT" \
+require 'fn apply_input_frame_with_effective_policy\(' "$INPUT" \
   'input frame application must expose a single policy-enforced application boundary'
-require_multiline 'm/fn apply_input_frame_with_policy\([^}]+?input_policy_reject_reason\(input_policy, frame\.kind\(\)\.as_policy_key\(\)\)/s' "$INPUT" \
-  'input frame application must enforce centralized input policy before OS injection'
-require 'apply_input_frame_with_policy_is_the_policy_enforcement_boundary' "$INPUT" \
-  'input tests must prove apply_input_frame_with_policy is the policy enforcement boundary'
+require_multiline 'm/fn apply_input_frame_with_effective_policy\([^}]+?input_policy\.reject_reason\(frame\.kind\(\)\.as_policy_key\(\)\)/s' "$INPUT" \
+  'input frame application must enforce typed effective input policy before OS injection'
+require 'effective_input_policy_is_the_core_policy_object' "$INPUT" \
+  'input tests must prove the typed effective input policy is the core policy object'
 require 'parse_input_frame_rejects_clipboard_and_file_drop_before_policy_application' "$INPUT" \
   'input parser tests must prove clipboard/file-drop fail before policy application'
 require 'InputScope::ViewOnly => \{' "$INPUT" \
   'view-only input policy branch must exist'
-require 'disable_input_policy_key\(&mut map, "keyboard_enabled"\)' "$INPUT" \
+require 'self\.keyboard_enabled = false' "$INPUT" \
   'view-only input policy must disable keyboard'
-require 'disable_input_policy_key\(&mut map, "pointer_enabled"\)' "$INPUT" \
+require 'self\.pointer_enabled = false' "$INPUT" \
   'view-only input policy must disable pointer'
-require_multiline 'm/fn input_policy_reject_reason\(.+?input_scope == Some\(InputScope::ViewOnly\.as_str\(\)\).+?return Some\("input_scope_unsupported"\)/s' "$INPUT" \
+require_multiline 'm/fn reject_reason\(\s*&self,.+?self\.input_scope == InputScope::ViewOnly.+?return Some\("input_scope_unsupported"\)/s' "$INPUT" \
   'view-only key/pointer rejection must report input_scope_unsupported'
 require_multiline 'm/InputRejectSample::new\(\s*outcome\.reason\.unwrap_or\("input_injection_failed"\),\s*rejected_count/s' "$INPUT" \
   'WebRTC input rejection diagnostics must use the policy-enforced apply outcome'
@@ -894,20 +911,18 @@ require 'BTreeMap<InputRejectSignature, PendingInputReject>' "$INPUT" \
   'input rejection coalescing must aggregate by signature instead of a single pending rejection'
 require 'input_reject_diagnostics_are_coalesced_across_interleaved_signatures' "$INPUT" \
   'PERF-07 must prove alternating invalid input signatures do not produce one diagnostic per frame'
-require 'fn current_session_input_policy\(' "$INPUT" \
-  'input readiness must be centralized at the session aggregate boundary'
 require 'InputTransportGuard::DirectWebRtc\(epoch\)' "$INPUT" \
   'production input path must guard frames by the current WebRTC transport epoch'
-require 'current_session_input_policy\(' "$INVOKE_BIDI" \
+require 'current_session_effective_input_policy\(' "$INVOKE_BIDI" \
   'diagnostic bidi input path must re-read session readiness for each input frame'
 require 'InputTransportGuard::DiagnosticPreview' "$INVOKE_BIDI" \
   'diagnostic bidi input path must guard frames by preview attachment state'
-require 'handle_parsed_bidi_input_frame\(&effective_input_policy' "$INVOKE_BIDI" \
+require 'handle_parsed_bidi_input_frame_with_policy\(&effective_input_policy' "$INVOKE_BIDI" \
   'diagnostic bidi input path must apply parsed input frames against refreshed policy'
-require 'apply_input_frame_with_policy\(input_policy, frame\)' "$INVOKE_BIDI" \
-  'diagnostic bidi input path must use the single policy-enforced input application boundary'
+require 'apply_input_frame_with_effective_policy\(input_policy, frame\)' "$INVOKE_BIDI" \
+  'diagnostic bidi input path must use the typed policy-enforced input application boundary'
 reject 'input_policy_reject_reason' "$INVOKE_BIDI" \
-  'diagnostic bidi path must not duplicate input policy checks outside apply_input_frame_with_policy'
+  'diagnostic bidi path must not duplicate input policy checks outside the typed effective policy'
 require 'diagnostic_bidi_view_only_input_reports_scope_unsupported' "$INVOKE_BIDI" \
   'E2E-11 must test bidi view-only input_scope_unsupported reporting'
 require 'diagnostic_bidi_input_rechecks_session_target_snapshot' "$INVOKE_BIDI" \
@@ -926,7 +941,9 @@ require 'input_policy_reports_clipboard_and_file_drop_unsupported_even_when_requ
   'input parser must report unsupported rich input types explicitly'
 require 'UNSUPPORTED_INPUT_CHANNEL_TYPES' "$INPUT" \
   'unsupported rich input types must have one input-domain source of truth'
-require 'unsupported_input_channel_types_value\(\)' "$REQUEST" \
+require 'use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy' "$REQUEST" \
+  'request parser must return the input-domain RemoteDesktopInputPolicy type'
+require_multiline 'm/impl RemoteDesktopInputPolicy.+?"unsupported_input_types": unsupported_input_channel_types_value\(\)/s' "$INPUT" \
   'request input policy projection must reuse the input-domain unsupported type set'
 require 'unsupported_input_channel_types_value\(\)' "$VIEW_DEVICE" \
   'device capability metadata must reuse the input-domain unsupported type set'

@@ -12,7 +12,9 @@ use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::daemon::plugins::remote_desktop::constants::{
     direct_webrtc_endpoint_ura, ABILITY_SET_DESCRIPTION, REASON_SESSION_NOT_FOUND,
 };
-use crate::daemon::plugins::remote_desktop::input::input_policy_for_binding;
+use crate::daemon::plugins::remote_desktop::input::{
+    EffectiveRemoteDesktopInputPolicy, RemoteDesktopInputPolicy,
+};
 use crate::daemon::plugins::remote_desktop::media::{
     webrtc_transport_backend_for_binding, MACOS_SCK_VIDEOTOOLBOX_BACKEND_ID,
 };
@@ -67,7 +69,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn negotiate_remote_offer(
     let options = capture_options_from_video_constraints(&video)?;
     let target_bitrate_kbps = bitrate_kbps_from_video_constraints(&video);
     let max_frame_queue_depth = frame_queue_depth_from_video_constraints(&video);
-    let input_policy = input_policy_for_binding(input_policy, &target_binding);
+    let input_policy =
+        EffectiveRemoteDesktopInputPolicy::for_binding(&input_policy, &target_binding);
     let epoch = request.plugin.transport_manager().allocate_epoch();
     request
         .plugin
@@ -129,7 +132,7 @@ fn collect_start_params(
     String,
     RemoteAppTargetBinding,
     RemoteDesktopVideoConstraints,
-    Value,
+    RemoteDesktopInputPolicy,
     String,
 )> {
     request
@@ -153,7 +156,7 @@ fn collect_start_params(
                 session.session_id().to_string(),
                 session.target_binding().clone(),
                 session.video().clone(),
-                session.input_policy().to_value(),
+                session.input_policy().clone(),
                 request.offer_sdp.clone(),
             ))
         })

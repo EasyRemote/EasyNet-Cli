@@ -26,6 +26,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crate::daemon::plugins::remote_desktop::lifecycle_worker::LifecycleWorker;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::TargetMediaSourceLost;
 use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
@@ -37,12 +38,7 @@ use crate::daemon::plugins::remote_desktop::transport::RemoteDesktopTransportMan
 const TARGET_MONITOR_INTERVAL: Duration = Duration::from_millis(250);
 
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopTargetMonitor {
-    worker: Mutex<TargetMonitorWorker>,
-}
-
-struct TargetMonitorWorker {
-    tx: Option<Sender<TargetMonitorCommand>>,
-    join: Option<JoinHandle<()>>,
+    worker: Mutex<LifecycleWorker<TargetMonitorCommand>>,
 }
 
 enum TargetMonitorCommand {
@@ -64,10 +60,7 @@ impl TargetMediaSourceStopper for RemoteDesktopTransportManager {
 impl RemoteDesktopTargetMonitor {
     pub(in crate::daemon::plugins::remote_desktop) fn new() -> Self {
         Self {
-            worker: Mutex::new(TargetMonitorWorker {
-                tx: None,
-                join: None,
-            }),
+            worker: Mutex::new(LifecycleWorker::new()),
         }
     }
 
@@ -94,7 +87,7 @@ impl RemoteDesktopTargetMonitor {
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn cancel(&self, session_id: &str) {
-        let tx = self.worker().tx.clone();
+        let tx = self.worker().sender();
         if let Some(tx) = tx {
             let _ = tx.send(TargetMonitorCommand::Cancel {
                 session_id: session_id.to_string(),
@@ -107,15 +100,12 @@ impl RemoteDesktopTargetMonitor {
         plugin: &Arc<RemoteDesktopPlugin>,
     ) -> anyhow::Result<Sender<TargetMonitorCommand>> {
         let mut worker = self.worker();
-        if let Some(tx) = &worker.tx {
-            return Ok(tx.clone());
+        if let Some(tx) = worker.sender() {
+            return Ok(tx);
         }
-        let (tx, rx) = mpsc::channel();
-        let join = spawn_target_monitor_worker(Arc::downgrade(plugin), rx)
-            .map_err(|err| anyhow::anyhow!("spawn remote desktop target monitor: {err}"))?;
-        worker.tx = Some(tx.clone());
-        worker.join = Some(join);
-        Ok(tx)
+        worker
+            .start(|| spawn_target_monitor_worker(Arc::downgrade(plugin)))
+            .map_err(|err| anyhow::anyhow!("spawn remote desktop target monitor: {err}"))
     }
 
     fn restart_worker(
@@ -123,18 +113,12 @@ impl RemoteDesktopTargetMonitor {
         plugin: &Arc<RemoteDesktopPlugin>,
     ) -> anyhow::Result<Sender<TargetMonitorCommand>> {
         let mut worker = self.worker();
-        if let Some(join) = worker.join.take() {
-            let _ = join.join();
-        }
-        let (tx, rx) = mpsc::channel();
-        let join = spawn_target_monitor_worker(Arc::downgrade(plugin), rx)
-            .map_err(|err| anyhow::anyhow!("spawn remote desktop target monitor: {err}"))?;
-        worker.tx = Some(tx.clone());
-        worker.join = Some(join);
-        Ok(tx)
+        worker
+            .start(|| spawn_target_monitor_worker(Arc::downgrade(plugin)))
+            .map_err(|err| anyhow::anyhow!("restart remote desktop target monitor: {err}"))
     }
 
-    fn worker(&self) -> MutexGuard<'_, TargetMonitorWorker> {
+    fn worker(&self) -> MutexGuard<'_, LifecycleWorker<TargetMonitorCommand>> {
         match self.worker.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -148,22 +132,18 @@ impl Drop for RemoteDesktopTargetMonitor {
             Ok(worker) => worker,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if let Some(tx) = worker.tx.take() {
-            let _ = tx.send(TargetMonitorCommand::Shutdown);
-        }
-        if let Some(join) = worker.join.take() {
-            let _ = join.join();
-        }
+        worker.shutdown(TargetMonitorCommand::Shutdown);
     }
 }
 
 fn spawn_target_monitor_worker(
     plugin: Weak<RemoteDesktopPlugin>,
-    rx: Receiver<TargetMonitorCommand>,
-) -> std::io::Result<JoinHandle<()>> {
-    thread::Builder::new()
+) -> std::io::Result<(Sender<TargetMonitorCommand>, JoinHandle<()>)> {
+    let (tx, rx) = mpsc::channel();
+    let join = thread::Builder::new()
         .name("easynet-rd-target-monitor".into())
-        .spawn(move || run_target_monitor(plugin, rx))
+        .spawn(move || run_target_monitor(plugin, rx))?;
+    Ok((tx, join))
 }
 
 fn run_target_monitor(plugin: Weak<RemoteDesktopPlugin>, rx: Receiver<TargetMonitorCommand>) {

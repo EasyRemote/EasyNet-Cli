@@ -166,6 +166,170 @@ impl InputApplyOutcome {
     }
 }
 
+/// Immutable pointer/key capabilities admitted at session creation.
+///
+/// Clipboard and file transfer are deliberately absent: the targeted-session
+/// contract keeps them unsupported until dedicated abilities own their consent
+/// and lifecycle.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RemoteDesktopInputPolicy {
+    keyboard_enabled: bool,
+    pointer_enabled: bool,
+}
+
+impl RemoteDesktopInputPolicy {
+    pub(crate) fn new(keyboard_enabled: bool, pointer_enabled: bool) -> Self {
+        Self {
+            keyboard_enabled,
+            pointer_enabled,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn to_test_value(&self) -> Value {
+        json!({
+            "keyboard_enabled": self.keyboard_enabled,
+            "pointer_enabled": self.pointer_enabled,
+            "clipboard_enabled": false,
+            "file_drop_enabled": false,
+            "unsupported_input_types": unsupported_input_channel_types_value(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(in crate::daemon::plugins::remote_desktop) struct EffectiveRemoteDesktopInputPolicy {
+    keyboard_enabled: bool,
+    pointer_enabled: bool,
+    clipboard_enabled: bool,
+    file_drop_enabled: bool,
+    input_scope: InputScope,
+    pointer_target: Option<PointerTargetGeometry>,
+}
+
+impl EffectiveRemoteDesktopInputPolicy {
+    pub(in crate::daemon::plugins::remote_desktop) fn for_binding(
+        requested_policy: &RemoteDesktopInputPolicy,
+        binding: &RemoteAppTargetBinding,
+    ) -> Self {
+        let snapshot = TargetTrackerSnapshot::from_binding(binding);
+        Self::for_target_state(requested_policy, &snapshot, binding.input_scope())
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn for_target_state(
+        requested_policy: &RemoteDesktopInputPolicy,
+        snapshot: &TargetTrackerSnapshot,
+        input_scope: InputScope,
+    ) -> Self {
+        let mut policy = Self {
+            keyboard_enabled: requested_policy.keyboard_enabled,
+            pointer_enabled: requested_policy.pointer_enabled,
+            clipboard_enabled: false,
+            file_drop_enabled: false,
+            input_scope,
+            pointer_target: pointer_target_from_snapshot(snapshot),
+        };
+        policy.apply_scope(input_scope);
+        policy
+    }
+
+    fn for_current_target(
+        &self,
+        snapshot: &TargetTrackerSnapshot,
+        input_scope: InputScope,
+    ) -> Self {
+        let mut policy = self.clone();
+        policy.pointer_target = pointer_target_from_snapshot(snapshot);
+        policy.apply_scope(input_scope);
+        policy
+    }
+
+    #[cfg(test)]
+    pub(in crate::daemon::plugins::remote_desktop) fn from_test_value(input_policy: Value) -> Self {
+        let map = input_policy_object(input_policy);
+        let input_scope = map
+            .get("input_scope")
+            .and_then(Value::as_str)
+            .and_then(input_scope_from_str)
+            .unwrap_or(InputScope::DisplayGlobal);
+        let mut policy = Self {
+            keyboard_enabled: bool_policy_key(&map, "keyboard_enabled"),
+            pointer_enabled: bool_policy_key(&map, "pointer_enabled"),
+            clipboard_enabled: bool_policy_key(&map, "clipboard_enabled"),
+            file_drop_enabled: bool_policy_key(&map, "file_drop_enabled"),
+            input_scope,
+            pointer_target: map
+                .get("pointer_target")
+                .and_then(pointer_target_geometry_from_value),
+        };
+        policy.apply_scope(input_scope);
+        policy
+    }
+
+    fn apply_scope(&mut self, input_scope: InputScope) {
+        self.input_scope = input_scope;
+        self.clipboard_enabled = false;
+        self.file_drop_enabled = false;
+        match input_scope {
+            InputScope::ViewOnly => {
+                self.keyboard_enabled = false;
+                self.pointer_enabled = false;
+            }
+            InputScope::TargetLocal => {
+                self.keyboard_enabled = false;
+            }
+            InputScope::DisplayGlobal => {}
+        }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn reject_reason(
+        &self,
+        frame_type: &str,
+    ) -> Option<&'static str> {
+        if let Some(reason) = unsupported_input_channel_reason(frame_type) {
+            return Some(reason);
+        }
+        if self.input_scope == InputScope::ViewOnly && matches!(frame_type, "key" | "pointer") {
+            return Some("input_scope_unsupported");
+        }
+        let enabled = match frame_type {
+            "key" => self.keyboard_enabled,
+            "pointer" => self.pointer_enabled,
+            _ => return Some("input_policy_denied"),
+        };
+        enabled
+            .then_some(())
+            .map_or(Some("input_policy_denied"), |_| None)
+    }
+
+    fn pointer_target(&self) -> Option<PointerTargetGeometry> {
+        self.pointer_target
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
+        let mut map = Map::new();
+        map.insert("keyboard_enabled".to_string(), json!(self.keyboard_enabled));
+        map.insert("pointer_enabled".to_string(), json!(self.pointer_enabled));
+        map.insert(
+            "clipboard_enabled".to_string(),
+            json!(self.clipboard_enabled),
+        );
+        map.insert(
+            "file_drop_enabled".to_string(),
+            json!(self.file_drop_enabled),
+        );
+        map.insert(
+            "unsupported_input_types".to_string(),
+            unsupported_input_channel_types_value(),
+        );
+        map.insert("input_scope".to_string(), json!(self.input_scope.as_str()));
+        if let Some(pointer_target) = self.pointer_target {
+            map.insert("pointer_target".to_string(), pointer_target.to_value());
+        }
+        Value::Object(map)
+    }
+}
+
 pub fn parse_input_frame(text: &str) -> anyhow::Result<RemoteDesktopInputFrame> {
     if text.len() > MAX_INPUT_FRAME_BYTES {
         anyhow::bail!("remote desktop input frame exceeds {MAX_INPUT_FRAME_BYTES} bytes")
@@ -175,16 +339,25 @@ pub fn parse_input_frame(text: &str) -> anyhow::Result<RemoteDesktopInputFrame> 
     Ok(frame)
 }
 
+#[cfg(test)]
 pub(in crate::daemon::plugins::remote_desktop) fn apply_input_frame_with_policy(
     input_policy: &Value,
     frame: &RemoteDesktopInputFrame,
 ) -> InputApplyOutcome {
-    if let Some(reason) = input_policy_reject_reason(input_policy, frame.kind().as_policy_key()) {
+    let effective_policy = EffectiveRemoteDesktopInputPolicy::from_test_value(input_policy.clone());
+    apply_input_frame_with_effective_policy(&effective_policy, frame)
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn apply_input_frame_with_effective_policy(
+    input_policy: &EffectiveRemoteDesktopInputPolicy,
+    frame: &RemoteDesktopInputFrame,
+) -> InputApplyOutcome {
+    if let Some(reason) = input_policy.reject_reason(frame.kind().as_policy_key()) {
         return InputApplyOutcome::rejected(reason);
     }
     match frame {
         RemoteDesktopInputFrame::Pointer(frame) => {
-            apply_pointer_frame(frame, pointer_target_from_policy(input_policy))
+            apply_pointer_frame(frame, input_policy.pointer_target())
         }
         RemoteDesktopInputFrame::Key(frame) => apply_key_frame(frame),
         RemoteDesktopInputFrame::Clipboard(_) => {
@@ -196,32 +369,25 @@ pub(in crate::daemon::plugins::remote_desktop) fn apply_input_frame_with_policy(
     }
 }
 
+#[cfg(test)]
 pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_binding(
     input_policy: Value,
     binding: &RemoteAppTargetBinding,
 ) -> Value {
     let snapshot = TargetTrackerSnapshot::from_binding(binding);
-    input_policy_for_target_state(input_policy, &snapshot, binding.input_scope())
+    let mut policy = EffectiveRemoteDesktopInputPolicy::from_test_value(input_policy);
+    policy = policy.for_current_target(&snapshot, binding.input_scope());
+    policy.to_value()
 }
 
+#[cfg(test)]
 pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_target_snapshot(
     input_policy: Value,
     snapshot: &TargetTrackerSnapshot,
 ) -> Value {
-    let mut map = input_policy_object(input_policy);
-    if let Some(pointer_target) = snapshot.pointer_target_value() {
-        map.insert("pointer_target".to_string(), pointer_target);
-    }
-    Value::Object(map)
-}
-
-pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_target_state(
-    input_policy: Value,
-    snapshot: &TargetTrackerSnapshot,
-    input_scope: InputScope,
-) -> Value {
-    let input_policy = input_policy_for_target_snapshot(input_policy, snapshot);
-    input_policy_for_scope(input_policy, input_scope)
+    let mut policy = EffectiveRemoteDesktopInputPolicy::from_test_value(input_policy);
+    policy.pointer_target = pointer_target_from_snapshot(snapshot);
+    policy.to_value()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -230,28 +396,7 @@ pub(in crate::daemon::plugins::remote_desktop) enum InputTransportGuard {
     DiagnosticPreview,
 }
 
-fn input_policy_for_scope(input_policy: Value, input_scope: InputScope) -> Value {
-    let mut map = input_policy_object(input_policy);
-    map.insert("input_scope".to_string(), json!(input_scope.as_str()));
-    disable_input_policy_key(&mut map, "clipboard_enabled");
-    disable_input_policy_key(&mut map, "file_drop_enabled");
-    map.insert(
-        "unsupported_input_types".to_string(),
-        unsupported_input_channel_types_value(),
-    );
-    match input_scope {
-        InputScope::ViewOnly => {
-            disable_input_policy_key(&mut map, "keyboard_enabled");
-            disable_input_policy_key(&mut map, "pointer_enabled");
-        }
-        InputScope::TargetLocal => {
-            disable_input_policy_key(&mut map, "keyboard_enabled");
-        }
-        InputScope::DisplayGlobal => {}
-    }
-    Value::Object(map)
-}
-
+#[cfg(test)]
 fn input_policy_object(input_policy: Value) -> Map<String, Value> {
     match input_policy {
         Value::Object(map) => map,
@@ -259,8 +404,19 @@ fn input_policy_object(input_policy: Value) -> Map<String, Value> {
     }
 }
 
-fn disable_input_policy_key(map: &mut Map<String, Value>, key: &'static str) {
-    map.insert(key.to_string(), json!(false));
+#[cfg(test)]
+fn bool_policy_key(map: &Map<String, Value>, key: &'static str) -> bool {
+    map.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+#[cfg(test)]
+fn input_scope_from_str(value: &str) -> Option<InputScope> {
+    match value {
+        "view_only" => Some(InputScope::ViewOnly),
+        "target_local" => Some(InputScope::TargetLocal),
+        "display_global" => Some(InputScope::DisplayGlobal),
+        _ => None,
+    }
 }
 
 pub fn input_injection_available() -> bool {
@@ -284,7 +440,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
     sessions: Arc<RemoteDesktopSessionStore>,
     session_id: String,
     epoch: TransportEpoch,
-    input_policy: Value,
+    input_policy: EffectiveRemoteDesktopInputPolicy,
     data_channel: Arc<dyn DataChannel>,
 ) {
     let mut accepted_count = 0_u64;
@@ -371,7 +527,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     }
                 };
                 let kind = frame.kind().as_policy_key();
-                let Some(effective_input_policy) = current_session_input_policy(
+                let Some(effective_input_policy) = current_session_effective_input_policy(
                     &sessions,
                     &session_id,
                     InputTransportGuard::DirectWebRtc(epoch),
@@ -389,7 +545,8 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_remote_desktop_input
                     );
                     continue;
                 };
-                let outcome = apply_input_frame_with_policy(&effective_input_policy, &frame);
+                let outcome =
+                    apply_input_frame_with_effective_policy(&effective_input_policy, &frame);
                 if outcome.applied {
                     accepted_count = accepted_count.saturating_add(1);
                     if accepted_count == 1 || accepted_count.is_multiple_of(120) {
@@ -444,9 +601,9 @@ fn input_activation_status(
     sessions: &RemoteDesktopSessionStore,
     session_id: &str,
     epoch: TransportEpoch,
-    base_policy: &Value,
+    base_policy: &EffectiveRemoteDesktopInputPolicy,
 ) -> InputActivationStatus {
-    let Some(effective_policy) = current_session_input_policy(
+    let Some(effective_policy) = current_session_effective_input_policy(
         sessions,
         session_id,
         InputTransportGuard::DirectWebRtc(epoch),
@@ -476,12 +633,14 @@ fn input_activation_status(
     }
 }
 
-fn input_activation_reject_reason(policy: &Value) -> Option<&'static str> {
+fn input_activation_reject_reason(
+    policy: &EffectiveRemoteDesktopInputPolicy,
+) -> Option<&'static str> {
     if !input_injection_available() {
         return Some("input_injection_unavailable");
     }
-    let key_reason = input_policy_reject_reason(policy, "key");
-    let pointer_reason = input_policy_reject_reason(policy, "pointer");
+    let key_reason = policy.reject_reason("key");
+    let pointer_reason = policy.reject_reason("pointer");
     if key_reason.is_none() || pointer_reason.is_none() {
         None
     } else {
@@ -673,28 +832,12 @@ pub(in crate::daemon::plugins::remote_desktop) fn input_policy_allows(
     input_policy_reject_reason(policy, frame_type).is_none()
 }
 
+#[cfg(test)]
 pub(in crate::daemon::plugins::remote_desktop) fn input_policy_reject_reason(
     policy: &Value,
     frame_type: &str,
 ) -> Option<&'static str> {
-    if let Some(reason) = unsupported_input_channel_reason(frame_type) {
-        return Some(reason);
-    }
-    let input_scope = policy.get("input_scope").and_then(Value::as_str);
-    if input_scope == Some(InputScope::ViewOnly.as_str()) && matches!(frame_type, "key" | "pointer")
-    {
-        return Some("input_scope_unsupported");
-    }
-    let key = match frame_type {
-        "key" => "keyboard_enabled",
-        "pointer" => "pointer_enabled",
-        _ => return Some("input_policy_denied"),
-    };
-    if policy.get(key).and_then(Value::as_bool).unwrap_or(false) {
-        None
-    } else {
-        Some("input_policy_denied")
-    }
+    EffectiveRemoteDesktopInputPolicy::from_test_value(policy.clone()).reject_reason(frame_type)
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn unsupported_input_channel_reason(
@@ -727,12 +870,24 @@ pub(in crate::daemon::plugins::remote_desktop) fn record_input_channel_event(
     session.record_input_channel_event(event_type, payload);
 }
 
+#[cfg(test)]
 pub(in crate::daemon::plugins::remote_desktop) fn current_session_input_policy(
     sessions: &RemoteDesktopSessionStore,
     session_id: &str,
     transport_guard: InputTransportGuard,
     base_policy: &Value,
 ) -> Option<Value> {
+    let base_policy = EffectiveRemoteDesktopInputPolicy::from_test_value(base_policy.clone());
+    current_session_effective_input_policy(sessions, session_id, transport_guard, &base_policy)
+        .map(|policy| policy.to_value())
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn current_session_effective_input_policy(
+    sessions: &RemoteDesktopSessionStore,
+    session_id: &str,
+    transport_guard: InputTransportGuard,
+    base_policy: &EffectiveRemoteDesktopInputPolicy,
+) -> Option<EffectiveRemoteDesktopInputPolicy> {
     let mut s = sessions.lock();
     let session = s.get_mut(session_id)?;
     if session.is_terminal() {
@@ -755,11 +910,14 @@ pub(in crate::daemon::plugins::remote_desktop) fn current_session_input_policy(
     if !snapshot.input_enabled() {
         return None;
     }
-    Some(input_policy_for_target_state(
-        base_policy.clone(),
-        snapshot,
-        input_scope,
-    ))
+    Some(base_policy.for_current_target(snapshot, input_scope))
+}
+
+fn pointer_target_from_snapshot(snapshot: &TargetTrackerSnapshot) -> Option<PointerTargetGeometry> {
+    snapshot
+        .pointer_target_value()
+        .as_ref()
+        .and_then(pointer_target_geometry_from_value)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -768,6 +926,25 @@ struct PointerTargetGeometry {
     origin_y: f64,
     width: Option<f64>,
     height: Option<f64>,
+    target_geometry_revision: Option<u64>,
+}
+
+impl PointerTargetGeometry {
+    fn to_value(self) -> Value {
+        let mut target = Map::new();
+        target.insert("origin_x".to_string(), json!(self.origin_x));
+        target.insert("origin_y".to_string(), json!(self.origin_y));
+        if let Some(width) = self.width {
+            target.insert("width".to_string(), json!(width));
+        }
+        if let Some(height) = self.height {
+            target.insert("height".to_string(), json!(height));
+        }
+        if let Some(revision) = self.target_geometry_revision {
+            target.insert("target_geometry_revision".to_string(), json!(revision));
+        }
+        Value::Object(target)
+    }
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -777,13 +954,21 @@ struct MappedPointerPoint {
     y: f64,
 }
 
+#[cfg(test)]
 fn pointer_target_from_policy(policy: &Value) -> Option<PointerTargetGeometry> {
     let target = policy.get("pointer_target")?;
+    pointer_target_geometry_from_value(target)
+}
+
+fn pointer_target_geometry_from_value(target: &Value) -> Option<PointerTargetGeometry> {
     Some(PointerTargetGeometry {
         origin_x: value_f64(target.get("origin_x")?)?,
         origin_y: value_f64(target.get("origin_y")?)?,
         width: target.get("width").and_then(value_f64),
         height: target.get("height").and_then(value_f64),
+        target_geometry_revision: target
+            .get("target_geometry_revision")
+            .and_then(Value::as_u64),
     })
 }
 
@@ -1812,6 +1997,44 @@ mod tests {
             clipboard_outcome.reason,
             Some("clipboard_input_unsupported")
         );
+    }
+
+    #[test]
+    fn effective_input_policy_is_the_core_policy_object() {
+        let pointer =
+            parse_input_frame(r#"{"type":"pointer","action":"move","x":10,"y":20}"#).unwrap();
+        let key = parse_input_frame(r#"{"type":"key","action":"down","code":"KeyA"}"#).unwrap();
+        let display_policy = EffectiveRemoteDesktopInputPolicy::from_test_value(json!({
+            "input_scope": "display_global",
+            "keyboard_enabled": true,
+            "pointer_enabled": false,
+            "clipboard_enabled": true,
+            "file_drop_enabled": true,
+        }));
+
+        assert_eq!(display_policy.reject_reason("key"), None);
+        assert_eq!(
+            display_policy.reject_reason("pointer"),
+            Some("input_policy_denied")
+        );
+        assert_eq!(
+            display_policy.reject_reason("clipboard"),
+            Some("clipboard_input_unsupported"),
+            "clipboard stays split-ability-only even when caller JSON asks for it"
+        );
+
+        let pointer_denied = apply_input_frame_with_effective_policy(&display_policy, &pointer);
+        assert!(!pointer_denied.applied);
+        assert_eq!(pointer_denied.reason, Some("input_policy_denied"));
+
+        let view_only_policy = EffectiveRemoteDesktopInputPolicy::from_test_value(json!({
+            "input_scope": "view_only",
+            "keyboard_enabled": true,
+            "pointer_enabled": true,
+        }));
+        let view_only_key = apply_input_frame_with_effective_policy(&view_only_policy, &key);
+        assert!(!view_only_key.applied);
+        assert_eq!(view_only_key.reason, Some("input_scope_unsupported"));
     }
 
     #[test]

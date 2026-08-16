@@ -16,7 +16,7 @@ use webrtc::runtime::Sender;
 
 use crate::daemon::plugins::remote_desktop::input::{
     input_injection_available, record_input_channel_event, run_remote_desktop_input_channel,
-    INPUT_DATA_CHANNEL_LABEL,
+    EffectiveRemoteDesktopInputPolicy, INPUT_DATA_CHANNEL_LABEL,
 };
 use crate::daemon::plugins::remote_desktop::sdp::remote_ice_candidate_inits;
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
@@ -35,7 +35,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcHandler {
     transports: Arc<RemoteDesktopTransportManager>,
     session_id: String,
     epoch: TransportEpoch,
-    input_policy: Value,
+    input_policy: EffectiveRemoteDesktopInputPolicy,
     gather_complete_tx: Sender<()>,
     connected_tx: Sender<()>,
     done_tx: Sender<()>,
@@ -47,7 +47,7 @@ impl DirectWebRtcHandler {
         transports: Arc<RemoteDesktopTransportManager>,
         session_id: String,
         epoch: TransportEpoch,
-        input_policy: Value,
+        input_policy: EffectiveRemoteDesktopInputPolicy,
         gather_complete_tx: Sender<()>,
         connected_tx: Sender<()>,
         done_tx: Sender<()>,
@@ -207,7 +207,7 @@ impl PeerConnectionEventHandler for DirectWebRtcHandler {
             "INPUT_CHANNEL_OPENING",
             json!({
                 "label": label,
-                "input_policy": self.input_policy.clone(),
+                "input_policy": self.input_policy.to_value(),
                 "input_injection_available": input_injection_available(),
             }),
         );

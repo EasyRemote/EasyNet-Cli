@@ -16,9 +16,8 @@ use crate::daemon::persistence::resources::{
     upsert_resource, ResourceBinding, ResourceEntry, ResourceType, ResourceUpsert, ResourcesFile,
 };
 use crate::daemon::plugins::remote_desktop::constants::DEFAULT_FRAME_QUEUE_DEPTH;
-use crate::daemon::plugins::remote_desktop::request::{
-    RemoteDesktopInputPolicy, RemoteDesktopVideoConstraints,
-};
+use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy;
+use crate::daemon::plugins::remote_desktop::request::RemoteDesktopVideoConstraints;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSessionInit;
 use crate::daemon::plugins::remote_desktop::session_consent::RemoteDesktopConsentGrant;

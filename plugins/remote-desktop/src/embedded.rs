@@ -21,6 +21,7 @@ pub(crate) mod handlers;
 pub(crate) mod input;
 pub(crate) mod invoke_bidi;
 pub(crate) mod lease_monitor;
+pub(crate) mod lifecycle_worker;
 pub(crate) mod media;
 pub(crate) mod network;
 pub(crate) mod permissions;

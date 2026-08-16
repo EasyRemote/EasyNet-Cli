@@ -50,6 +50,7 @@ use crate::daemon::plugins::remote_desktop::constants::{
     direct_webrtc_endpoint_ura, ABILITY_SET_DESCRIPTION, DIRECT_WEBRTC_H264_PREFERRED_PAYLOAD_TYPE,
     REASON_RESOURCE_TYPE_MISMATCH, TRANSPORT_WEBRTC,
 };
+use crate::daemon::plugins::remote_desktop::input::EffectiveRemoteDesktopInputPolicy;
 use crate::daemon::plugins::remote_desktop::media::encode::build_direct_webrtc_h264_config_for_binding;
 use crate::daemon::plugins::remote_desktop::network::{
     direct_webrtc_route_candidate_evidence, DirectWebRtcRouteCandidateProvider,
@@ -83,7 +84,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct StartDirectWebRtcEndpointR
     pub(in crate::daemon::plugins::remote_desktop) options: ScreenCaptureOptions,
     pub(in crate::daemon::plugins::remote_desktop) target_bitrate_kbps: u32,
     pub(in crate::daemon::plugins::remote_desktop) max_frame_queue_depth: usize,
-    pub(in crate::daemon::plugins::remote_desktop) input_policy: Value,
+    pub(in crate::daemon::plugins::remote_desktop) input_policy: EffectiveRemoteDesktopInputPolicy,
     pub(in crate::daemon::plugins::remote_desktop) offer_sdp: String,
 }
 
@@ -147,7 +148,7 @@ struct DirectWebRtcEndpointConfig {
     options: ScreenCaptureOptions,
     target_bitrate_kbps: u32,
     max_frame_queue_depth: usize,
-    input_policy: Value,
+    input_policy: EffectiveRemoteDesktopInputPolicy,
     offer_sdp: String,
     stop_rx: watch::Receiver<bool>,
 }

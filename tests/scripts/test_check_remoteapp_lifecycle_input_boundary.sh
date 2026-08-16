@@ -928,11 +928,47 @@ const UNSUPPORTED_INPUT_CHANNEL_TYPES: &[&str] = &["clipboard", "file_drop"];
 
 fn unsupported_input_channel_types_value() {}
 
-fn input_policy_for_target_snapshot() {
+struct RemoteDesktopInputPolicy;
+
+impl RemoteDesktopInputPolicy {
+    fn to_value(&self) {
+        json!({
+            "unsupported_input_types": unsupported_input_channel_types_value(),
+        });
+    }
+}
+
+fn pointer_target_from_snapshot() {
     let _ = policy["pointer_target"]["target_geometry_revision"];
 }
 
 fn input_policy_object() {}
+
+struct EffectiveRemoteDesktopInputPolicy {
+    keyboard_enabled: bool,
+    pointer_enabled: bool,
+    input_scope: InputScope,
+}
+
+impl EffectiveRemoteDesktopInputPolicy {
+    fn for_target_state() {}
+
+    fn apply_scope(&mut self, input_scope: InputScope) {
+        match input_scope {
+            InputScope::ViewOnly => {
+                self.keyboard_enabled = false;
+                self.pointer_enabled = false;
+            }
+        }
+    }
+
+    fn reject_reason(&self, frame_type: &str) -> Option<&'static str> {
+        if self.input_scope == InputScope::ViewOnly && matches!(frame_type, "key" | "pointer") {
+            return Some("input_scope_unsupported");
+        }
+        None
+    }
+}
 
 enum InputTransportGuard {
     DirectWebRtc(TransportEpoch),
@@ -940,26 +976,20 @@ enum InputTransportGuard {
 }
 
 fn current_session_input_policy() {
+    current_session_effective_input_policy();
+}
+
+fn current_session_effective_input_policy() {
     InputTransportGuard::DirectWebRtc(epoch);
     let snapshot = session.target_snapshot();
     let input_scope = session.target_binding().input_scope();
     if !snapshot.input_enabled() {
         return None;
     }
-    let input_policy = input_policy_for_target_snapshot(base_policy.clone(), snapshot);
-    input_policy_for_scope(input_policy, input_scope);
+    base_policy.for_current_target(snapshot, input_scope);
 }
 
 fn display_interactive_without_input_consent_remains_view_only() {}
-
-fn input_policy_for_scope() {
-    match scope {
-        InputScope::ViewOnly => {
-            disable_input_policy_key(&mut map, "keyboard_enabled");
-            disable_input_policy_key(&mut map, "pointer_enabled");
-        }
-    }
-}
 
 fn input_policy_reject_reason() -> Option<&'static str> {
     if input_scope == Some(InputScope::ViewOnly.as_str()) && matches!(frame_type, "key" | "pointer") {
@@ -974,8 +1004,8 @@ fn validate_input_frame() {
     reject_unsupported_input_channel_frame(frame)?;
 }
 
-fn apply_input_frame_with_policy() {
-    if let Some(reason) = input_policy_reject_reason(input_policy, frame.kind().as_policy_key()) {
+fn apply_input_frame_with_effective_policy() {
+    if let Some(reason) = input_policy.reject_reason(frame.kind().as_policy_key()) {
         return InputApplyOutcome::rejected(reason);
     }
 }
@@ -1032,7 +1062,7 @@ mod tests {
     fn current_session_input_policy_uses_same_geometry_revision_as_target_event() {}
 
     #[test]
-    fn apply_input_frame_with_policy_is_the_policy_enforcement_boundary() {
+    fn effective_input_policy_is_the_core_policy_object() {
         assert_eq!(outcome.reason, Some("input_policy_denied"));
         assert_eq!(view_only_pointer.reason, Some("input_scope_unsupported"));
         assert_eq!(view_only_key.reason, Some("input_scope_unsupported"));
@@ -1220,17 +1250,17 @@ RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/invoke_bidi.rs" <<'RS'
 fn handle_bidi_input_frame_for_session() {
-    current_session_input_policy(
+    current_session_effective_input_policy(
         session_store,
         session_id,
         InputTransportGuard::DiagnosticPreview,
         input_policy,
     );
-    handle_parsed_bidi_input_frame(&effective_input_policy, &frame);
+    handle_parsed_bidi_input_frame_with_policy(&effective_input_policy, &frame);
 }
 
 fn handle_bidi_input_frame() {
-    apply_input_frame_with_policy(input_policy, frame);
+    apply_input_frame_with_effective_policy(input_policy, frame);
 }
 
 #[cfg(test)]
@@ -1258,8 +1288,10 @@ fn select_application_for_binding() {
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/request.rs" <<'RS'
+use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy;
+
 fn request_projection() {
-    unsupported_input_channel_types_value();
+    let _policy: RemoteDesktopInputPolicy;
 }
 
 #[test]
@@ -1354,6 +1386,18 @@ mod platform {
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/lease_monitor.rs" <<'RS'
+struct RemoteDesktopLeaseMonitor {
+    worker: Mutex<LifecycleWorker<LeaseMonitorCommand>>,
+}
+
+enum LeaseMonitorCommand {
+    Shutdown,
+}
+
+fn shutdown(worker: &mut LifecycleWorker<LeaseMonitorCommand>) {
+    worker.shutdown(LeaseMonitorCommand::Shutdown);
+}
+
 fn spawn_lease_monitor_worker() -> std::io::Result<JoinHandle<()>> {
     thread::Builder::new()
         .name("easynet-rd-lease-monitor".into())
@@ -1368,6 +1412,14 @@ enum TargetMonitorCommand {
     Track { session_id: String },
     Cancel { session_id: String },
     Shutdown,
+}
+
+struct RemoteDesktopTargetMonitor {
+    worker: Mutex<LifecycleWorker<TargetMonitorCommand>>,
+}
+
+fn shutdown(worker: &mut LifecycleWorker<TargetMonitorCommand>) {
+    worker.shutdown(TargetMonitorCommand::Shutdown);
 }
 
 fn apply_command(command: TargetMonitorCommand, tracked: &mut HashSet<String>) -> bool {
@@ -1396,6 +1448,22 @@ fn spawn_target_monitor_worker() -> std::io::Result<JoinHandle<()>> {
 mod tests {
     #[test]
     fn target_monitor_command_state_machine_tracks_cancels_and_shuts_down() {}
+}
+RS
+
+  cat >"$SANDBOX/plugins/remote-desktop/src/lifecycle_worker.rs" <<'RS'
+fn shutdown(join: JoinHandle<()>) {
+    if join.thread().id() == thread::current().id() {
+        drop(join);
+        return;
+    }
+    let _ = join.join();
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn shutdown_from_worker_detaches_instead_of_self_joining() {}
 }
 RS
 
@@ -1680,6 +1748,16 @@ write_fixture
 perl -0pi -e 's/(\.spawn\(move \|\| run_target_monitor\(plugin, rx\)\))/$1\n        .expect("spawn remote desktop target monitor")/' \
   "$SANDBOX/plugins/remote-desktop/src/target_monitor.rs"
 run_fail 'target monitor worker spawn must propagate errors instead of panicking'
+
+write_fixture
+perl -0pi -e 's/join\.thread\(\)\.id\(\) == thread::current\(\)\.id\(\)/false/' \
+  "$SANDBOX/plugins/remote-desktop/src/lifecycle_worker.rs"
+run_fail 'lifecycle worker must not join itself when the final owner drops on the worker thread'
+
+write_fixture
+perl -0pi -e 's/shutdown_from_worker_detaches_instead_of_self_joining/shutdown_from_worker_joins_itself/' \
+  "$SANDBOX/plugins/remote-desktop/src/lifecycle_worker.rs"
+run_fail 'lifecycle worker must test worker-thread destruction without self-join panic'
 
 write_fixture
 perl -0pi -e 's/plugin\.cancel_session_target_tracking\(session_id\);//' \
@@ -2252,9 +2330,9 @@ perl -0pi -e 's/let input_scope = session\.target_binding\(\)\.input_scope\(\);/
 run_fail 'production input path must read input scope from the session-owned target binding'
 
 write_fixture
-perl -0pi -e 's/input_policy_for_scope\(input_policy, input_scope\);/input_policy;/' \
+perl -0pi -e 's/base_policy\.for_current_target\(snapshot, input_scope\);/base_policy;/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
-run_fail 'production input path must reapply input scope after deriving latest pointer target geometry'
+run_fail 'production input path must reapply input scope through the typed effective policy after deriving latest pointer target geometry'
 
 write_fixture
 perl -0pi -e 's/current_session_input_policy_uses_same_geometry_revision_as_target_event/current_session_input_policy_allows_stale_geometry_revision/' \
@@ -2262,14 +2340,14 @@ perl -0pi -e 's/current_session_input_policy_uses_same_geometry_revision_as_targ
 run_fail 'E2E-08 must prove target event and input mapping consume the same committed geometry revision'
 
 write_fixture
-perl -0pi -e 's/if let Some\(reason\) = input_policy_reject_reason\(input_policy, frame\.kind\(\)\.as_policy_key\(\)\) \{\n        return InputApplyOutcome::rejected\(reason\);\n    \}//' \
+perl -0pi -e 's/if let Some\(reason\) = input_policy\.reject_reason\(frame\.kind\(\)\.as_policy_key\(\)\) \{\n        return InputApplyOutcome::rejected\(reason\);\n    \}//' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
-run_fail 'input frame application must enforce centralized input policy before OS injection'
+run_fail 'input frame application must enforce typed effective input policy before OS injection'
 
 write_fixture
-perl -0pi -e 's/apply_input_frame_with_policy_is_the_policy_enforcement_boundary/apply_input_frame_policy_boundary_missing/' \
+perl -0pi -e 's/effective_input_policy_is_the_core_policy_object/effective_input_policy_boundary_missing/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
-run_fail 'input tests must prove apply_input_frame_with_policy is the policy enforcement boundary'
+run_fail 'input tests must prove the typed effective input policy is the core policy object'
 
 write_fixture
 perl -0pi -e 's/reject_unsupported_input_channel_frame\(frame\)\?;//' \
@@ -2282,14 +2360,14 @@ perl -0pi -e 's/parse_input_frame_rejects_clipboard_and_file_drop_before_policy_
 run_fail 'input parser tests must prove clipboard/file-drop fail before policy application'
 
 write_fixture
-perl -0pi -e 's/current_session_input_policy/static_input_policy/' \
+perl -0pi -e 's/current_session_effective_input_policy/static_input_policy/' \
   "$SANDBOX/plugins/remote-desktop/src/invoke_bidi.rs"
 run_fail 'diagnostic bidi input path must re-read session readiness for each input frame'
 
 write_fixture
-perl -0pi -e 's/apply_input_frame_with_policy\(input_policy, frame\)/input_policy_reject_reason(input_policy, kind)/' \
+perl -0pi -e 's/apply_input_frame_with_effective_policy\(input_policy, frame\)/input_policy_reject_reason(input_policy, kind)/' \
   "$SANDBOX/plugins/remote-desktop/src/invoke_bidi.rs"
-run_fail 'diagnostic bidi input path must use the single policy-enforced input application boundary'
+run_fail 'diagnostic bidi input path must use the typed policy-enforced input application boundary'
 
 write_fixture
 perl -0pi -e 's/json!\(false\)/json!(true)/' \
@@ -2307,12 +2385,12 @@ perl -0pi -e 's/target_identity_ambiguous/target_metadata_incomplete/' \
 run_fail 'weak target identity handler test must assert target_identity_ambiguous'
 
 write_fixture
-perl -0pi -e 's/disable_input_policy_key\(&mut map, "pointer_enabled"\);/enable_input_policy_key(&mut map, "pointer_enabled");/' \
+perl -0pi -e 's/self\.pointer_enabled = false;/self.pointer_enabled = true;/' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
 run_fail 'view-only input policy must disable pointer'
 
 write_fixture
-perl -0pi -e 's/Some\("input_scope_unsupported"\)/Some("input_disabled")/' \
+perl -0pi -e 's/Some\("input_scope_unsupported"\)/Some("input_disabled")/g' \
   "$SANDBOX/plugins/remote-desktop/src/input.rs"
 run_fail 'view-only key/pointer rejection must report input_scope_unsupported'
 
@@ -2377,8 +2455,8 @@ perl -0pi -e 's/device_capabilities_project_native_target_subject_matrix/device_
 run_fail 'device capability tests must prove the native target subject matrix is projected'
 
 write_fixture
-perl -0pi -e 's/unsupported_input_channel_types_value\(\);//' \
-  "$SANDBOX/plugins/remote-desktop/src/request.rs"
+perl -0pi -e 's/"unsupported_input_types": unsupported_input_channel_types_value\(\),/"unsupported_input_types": json!(["clipboard"]),/' \
+  "$SANDBOX/plugins/remote-desktop/src/input.rs"
 run_fail 'request input policy projection must reuse the input-domain unsupported type set'
 
 printf 'test_check_remoteapp_lifecycle_input_boundary.sh: all cases passed\n'

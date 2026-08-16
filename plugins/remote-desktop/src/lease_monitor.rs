@@ -10,7 +10,8 @@
 // Implementation Approach:
 // - Maintain one scheduler thread per plugin instance. Refreshes replace the
 //   session deadline in a bounded map instead of accumulating independent
-//   timers. Drop sends an explicit shutdown command and joins the worker.
+//   timers. Drop sends an explicit shutdown command; external owners join the
+//   worker while worker-thread destruction detaches to avoid self-join.
 //
 // Usage Contract:
 // - Schedule after session creation and lease refresh.
@@ -25,17 +26,13 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crate::daemon::plugins::remote_desktop::lifecycle_worker::LifecycleWorker;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::now_ms;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::expire_session_from_watchdog;
 
 pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopLeaseMonitor {
-    worker: Mutex<LeaseMonitorWorker>,
-}
-
-struct LeaseMonitorWorker {
-    tx: Option<Sender<LeaseMonitorCommand>>,
-    join: Option<JoinHandle<()>>,
+    worker: Mutex<LifecycleWorker<LeaseMonitorCommand>>,
 }
 
 enum LeaseMonitorCommand {
@@ -52,10 +49,7 @@ enum LeaseMonitorCommand {
 impl RemoteDesktopLeaseMonitor {
     pub(in crate::daemon::plugins::remote_desktop) fn new() -> Self {
         Self {
-            worker: Mutex::new(LeaseMonitorWorker {
-                tx: None,
-                join: None,
-            }),
+            worker: Mutex::new(LifecycleWorker::new()),
         }
     }
 
@@ -91,7 +85,7 @@ impl RemoteDesktopLeaseMonitor {
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn cancel(&self, session_id: &str) {
-        let tx = self.worker().tx.clone();
+        let tx = self.worker().sender();
         if let Some(tx) = tx {
             let _ = tx.send(LeaseMonitorCommand::Cancel {
                 session_id: session_id.to_string(),
@@ -104,15 +98,12 @@ impl RemoteDesktopLeaseMonitor {
         plugin: &Arc<RemoteDesktopPlugin>,
     ) -> anyhow::Result<Sender<LeaseMonitorCommand>> {
         let mut worker = self.worker();
-        if let Some(tx) = &worker.tx {
-            return Ok(tx.clone());
+        if let Some(tx) = worker.sender() {
+            return Ok(tx);
         }
-        let (tx, rx) = mpsc::channel();
-        let join = spawn_lease_monitor_worker(Arc::downgrade(plugin), rx)
-            .map_err(|err| anyhow::anyhow!("spawn remote desktop lease monitor: {err}"))?;
-        worker.tx = Some(tx.clone());
-        worker.join = Some(join);
-        Ok(tx)
+        worker
+            .start(|| spawn_lease_monitor_worker(Arc::downgrade(plugin)))
+            .map_err(|err| anyhow::anyhow!("spawn remote desktop lease monitor: {err}"))
     }
 
     fn restart_worker(
@@ -120,18 +111,12 @@ impl RemoteDesktopLeaseMonitor {
         plugin: &Arc<RemoteDesktopPlugin>,
     ) -> anyhow::Result<Sender<LeaseMonitorCommand>> {
         let mut worker = self.worker();
-        if let Some(join) = worker.join.take() {
-            let _ = join.join();
-        }
-        let (tx, rx) = mpsc::channel();
-        let join = spawn_lease_monitor_worker(Arc::downgrade(plugin), rx)
-            .map_err(|err| anyhow::anyhow!("spawn remote desktop lease monitor: {err}"))?;
-        worker.tx = Some(tx.clone());
-        worker.join = Some(join);
-        Ok(tx)
+        worker
+            .start(|| spawn_lease_monitor_worker(Arc::downgrade(plugin)))
+            .map_err(|err| anyhow::anyhow!("restart remote desktop lease monitor: {err}"))
     }
 
-    fn worker(&self) -> MutexGuard<'_, LeaseMonitorWorker> {
+    fn worker(&self) -> MutexGuard<'_, LifecycleWorker<LeaseMonitorCommand>> {
         match self.worker.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
@@ -145,22 +130,18 @@ impl Drop for RemoteDesktopLeaseMonitor {
             Ok(worker) => worker,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if let Some(tx) = worker.tx.take() {
-            let _ = tx.send(LeaseMonitorCommand::Shutdown);
-        }
-        if let Some(join) = worker.join.take() {
-            let _ = join.join();
-        }
+        worker.shutdown(LeaseMonitorCommand::Shutdown);
     }
 }
 
 fn spawn_lease_monitor_worker(
     plugin: Weak<RemoteDesktopPlugin>,
-    rx: Receiver<LeaseMonitorCommand>,
-) -> std::io::Result<JoinHandle<()>> {
-    thread::Builder::new()
+) -> std::io::Result<(Sender<LeaseMonitorCommand>, JoinHandle<()>)> {
+    let (tx, rx) = mpsc::channel();
+    let join = thread::Builder::new()
         .name("easynet-rd-lease-monitor".into())
-        .spawn(move || run_lease_monitor(plugin, rx))
+        .spawn(move || run_lease_monitor(plugin, rx))?;
+    Ok((tx, join))
 }
 
 fn run_lease_monitor(plugin: Weak<RemoteDesktopPlugin>, rx: Receiver<LeaseMonitorCommand>) {

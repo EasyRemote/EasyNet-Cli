@@ -19,9 +19,9 @@ use crate::daemon::plugins::remote_desktop::constants::{
     REASON_RESOURCE_UNAVAILABLE, TRANSPORT_INVOKE_BIDI,
 };
 use crate::daemon::plugins::remote_desktop::input::{
-    apply_input_frame_with_policy, current_session_input_policy, input_policy_for_binding,
-    parse_input_frame, unsupported_input_channel_reason, InputTransportGuard,
-    RemoteDesktopInputFrame,
+    apply_input_frame_with_effective_policy, current_session_effective_input_policy,
+    parse_input_frame, unsupported_input_channel_reason, EffectiveRemoteDesktopInputPolicy,
+    InputTransportGuard, RemoteDesktopInputFrame,
 };
 use crate::daemon::plugins::remote_desktop::media::encode::{
     spawn_builtin_h264_stream, BuiltinH264StreamTerminal, BuiltinH264TerminalCallback,
@@ -40,7 +40,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct BidiCaptureWorkerConfig {
     pub(in crate::daemon::plugins::remote_desktop) target_binding: RemoteAppTargetBinding,
     pub(in crate::daemon::plugins::remote_desktop) options: ScreenCaptureOptions,
     pub(in crate::daemon::plugins::remote_desktop) encoding: AttachEncoding,
-    pub(in crate::daemon::plugins::remote_desktop) input_policy: Value,
+    pub(in crate::daemon::plugins::remote_desktop) input_policy: EffectiveRemoteDesktopInputPolicy,
     pub(in crate::daemon::plugins::remote_desktop) from_client: mpsc::Receiver<Value>,
     pub(in crate::daemon::plugins::remote_desktop) to_client: mpsc::Sender<BidiOutputFrame>,
     pub(in crate::daemon::plugins::remote_desktop) stop_tx: watch::Sender<bool>,
@@ -52,14 +52,13 @@ pub(in crate::daemon::plugins::remote_desktop) fn spawn_bidi_capture_worker(
     config: BidiCaptureWorkerConfig,
 ) {
     let (latest_frame_tx, latest_frame_rx) = watch::channel::<Option<Vec<BidiOutputFrame>>>(None);
-    let input_policy = input_policy_for_binding(config.input_policy, &config.target_binding);
     let target_binding = config.target_binding;
     spawn_bidi_control_loop(
         Arc::clone(&config.session_store),
         config.session_id.clone(),
         config.from_client,
         config.to_client.clone(),
-        input_policy,
+        config.input_policy,
         config.stop_tx,
     );
     spawn_latest_frame_forwarder(
@@ -124,9 +123,18 @@ fn parse_bidi_input_frame(frame: Value) -> Result<RemoteDesktopInputFrame, Value
     }
 }
 
+#[cfg(test)]
 fn handle_parsed_bidi_input_frame(input_policy: &Value, frame: &RemoteDesktopInputFrame) -> Value {
+    let effective_policy = EffectiveRemoteDesktopInputPolicy::from_test_value(input_policy.clone());
+    handle_parsed_bidi_input_frame_with_policy(&effective_policy, frame)
+}
+
+fn handle_parsed_bidi_input_frame_with_policy(
+    input_policy: &EffectiveRemoteDesktopInputPolicy,
+    frame: &RemoteDesktopInputFrame,
+) -> Value {
     let kind = frame.kind().as_policy_key();
-    let outcome = apply_input_frame_with_policy(input_policy, frame);
+    let outcome = apply_input_frame_with_effective_policy(input_policy, frame);
     if outcome.applied {
         json!({
             "type": "input_applied",
@@ -158,7 +166,7 @@ fn handle_parsed_bidi_input_frame(input_policy: &Value, frame: &RemoteDesktopInp
 pub(in crate::daemon::plugins::remote_desktop) fn handle_bidi_input_frame_for_session(
     session_store: &RemoteDesktopSessionStore,
     session_id: &str,
-    input_policy: &Value,
+    input_policy: &EffectiveRemoteDesktopInputPolicy,
     frame: Value,
 ) -> Value {
     let frame = match parse_bidi_input_frame(frame) {
@@ -166,7 +174,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle_bidi_input_frame_for_se
         Err(err) => return err,
     };
     let kind = frame.kind().as_policy_key();
-    let Some(effective_input_policy) = current_session_input_policy(
+    let Some(effective_input_policy) = current_session_effective_input_policy(
         session_store,
         session_id,
         InputTransportGuard::DiagnosticPreview,
@@ -180,7 +188,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle_bidi_input_frame_for_se
             "message": "interactive input is disabled because the target is not ready for this diagnostic preview session",
         });
     };
-    handle_parsed_bidi_input_frame(&effective_input_policy, &frame)
+    handle_parsed_bidi_input_frame_with_policy(&effective_input_policy, &frame)
 }
 
 async fn capture_bidi_frame(
@@ -266,7 +274,7 @@ fn spawn_bidi_control_loop(
     session_id: String,
     mut from_client: mpsc::Receiver<Value>,
     to_client: mpsc::Sender<BidiOutputFrame>,
-    input_policy: Value,
+    input_policy: EffectiveRemoteDesktopInputPolicy,
     stop_tx: watch::Sender<bool>,
 ) {
     tokio::spawn(async move {
@@ -766,13 +774,14 @@ mod tests {
             );
         });
 
+        let input_policy = EffectiveRemoteDesktopInputPolicy::from_test_value(json!({
+            "input_scope": "display_global",
+            "pointer_enabled": true,
+        }));
         let response = handle_bidi_input_frame_for_session(
             &session_store,
             "rd-bidi-target-lost",
-            &json!({
-                "input_scope": "display_global",
-                "pointer_enabled": true,
-            }),
+            &input_policy,
             json!({"type": "pointer", "action": "move", "x": 10, "y": 20}),
         );
 

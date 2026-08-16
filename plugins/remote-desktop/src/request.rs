@@ -18,9 +18,8 @@ use crate::daemon::plugins::remote_desktop::constants::{
     MAX_VIDEO_DIMENSION, MIN_ATTACH_FPS, NATIVE_MAX_BITRATE_KBPS, NATIVE_MIN_BITRATE_KBPS,
     REASON_INVALID_ARGUMENT, TRANSPORT_INVOKE_BIDI, TRANSPORT_PREVIEW_STREAM, TRANSPORT_WEBRTC,
 };
-use crate::daemon::plugins::remote_desktop::input::unsupported_input_channel_types_value;
+use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy;
 use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
-use crate::daemon::plugins::remote_desktop::target::{InputScope, RemoteAppTargetBinding};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RemoteDesktopVideoConstraints {
@@ -91,48 +90,6 @@ impl Default for RemoteDesktopVideoConstraints {
             max_frame_queue_depth: DEFAULT_FRAME_QUEUE_DEPTH,
             drop_stale_frames: true,
         }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct RemoteDesktopInputPolicy {
-    keyboard_enabled: bool,
-    pointer_enabled: bool,
-    clipboard_enabled: bool,
-    file_drop_enabled: bool,
-}
-
-impl RemoteDesktopInputPolicy {
-    pub(in crate::daemon::plugins::remote_desktop) fn constrained_for_binding(
-        mut self,
-        binding: &RemoteAppTargetBinding,
-    ) -> Self {
-        self.clipboard_enabled = false;
-        self.file_drop_enabled = false;
-        match binding.input_scope() {
-            InputScope::ViewOnly => {
-                self.keyboard_enabled = false;
-                self.pointer_enabled = false;
-            }
-            InputScope::TargetLocal => {
-                // Target-local pointer input may become safe once platform focus
-                // and hit-test validation are implemented. Keyboard, clipboard,
-                // and file-drop are never target-local on macOS today.
-                self.keyboard_enabled = false;
-            }
-            InputScope::DisplayGlobal => {}
-        }
-        self
-    }
-
-    pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {
-        json!({
-            "keyboard_enabled": self.keyboard_enabled,
-            "pointer_enabled": self.pointer_enabled,
-            "clipboard_enabled": self.clipboard_enabled,
-            "file_drop_enabled": self.file_drop_enabled,
-            "unsupported_input_types": unsupported_input_channel_types_value(),
-        })
     }
 }
 
@@ -366,12 +323,10 @@ pub(crate) fn parse_input_policy(
     let _clipboard = read_bool("clipboard")?;
     let _file_drop_enabled = read_bool("file_drop_enabled")?;
     let _file_drop = read_bool("file_drop")?;
-    Ok(RemoteDesktopInputPolicy {
-        keyboard_enabled: interactive && keyboard_enabled,
-        pointer_enabled: interactive && pointer_enabled,
-        clipboard_enabled: false,
-        file_drop_enabled: false,
-    })
+    Ok(RemoteDesktopInputPolicy::new(
+        interactive && keyboard_enabled,
+        interactive && pointer_enabled,
+    ))
 }
 
 pub(crate) fn parse_optional_session_id(args: &Value) -> anyhow::Result<Option<String>> {
@@ -820,7 +775,7 @@ mod tests {
             "interactive",
         )
         .expect("well-formed interactive input policy parses");
-        let value = policy.to_value();
+        let value = policy.to_test_value();
 
         assert_eq!(value["keyboard_enabled"], json!(true));
         assert_eq!(value["pointer_enabled"], json!(true));

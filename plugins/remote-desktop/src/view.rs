@@ -7,7 +7,7 @@
 use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::input::{
-    input_injection_available, input_policy_for_target_state, INPUT_DATA_CHANNEL_LABEL,
+    input_injection_available, EffectiveRemoteDesktopInputPolicy, INPUT_DATA_CHANNEL_LABEL,
 };
 use crate::daemon::plugins::remote_desktop::media::{
     backend_catalog_view, production_gate_view, sdk_contract_view,
@@ -28,11 +28,12 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
 ) -> Value {
     let transport_view = RemoteDesktopTransportView::from_session(session);
     let video = session.video().to_value();
-    let input_policy = input_policy_for_target_state(
-        session.input_policy().to_value(),
+    let input_policy = EffectiveRemoteDesktopInputPolicy::for_target_state(
+        session.input_policy(),
         session.target_snapshot(),
         session.target_binding().input_scope(),
-    );
+    )
+    .to_value();
     let media_stats = session.media_stats();
     let production_media_ready = session.production_media_ready();
     let transport_route_state = transport_view.route_state();

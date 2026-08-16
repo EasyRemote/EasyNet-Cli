@@ -14,9 +14,8 @@ use crate::daemon::plugins::remote_desktop::constants::REASON_SESSION_EXPIRED;
 use crate::daemon::plugins::remote_desktop::event_log::{
     RemoteDesktopEventLog, RemoteDesktopEventReplay,
 };
-use crate::daemon::plugins::remote_desktop::request::{
-    RemoteDesktopInputPolicy, RemoteDesktopVideoConstraints,
-};
+use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy;
+use crate::daemon::plugins::remote_desktop::request::RemoteDesktopVideoConstraints;
 use crate::daemon::plugins::remote_desktop::session_events;
 pub(in crate::daemon::plugins::remote_desktop) use crate::daemon::plugins::remote_desktop::session_identity::RemoteDesktopSessionInit;
 use crate::daemon::plugins::remote_desktop::session_identity::RemoteDesktopSessionProfile;

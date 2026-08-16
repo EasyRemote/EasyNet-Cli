@@ -11,6 +11,7 @@ use crate::daemon::ability::dispatch::{
 };
 use crate::daemon::plugins::remote_desktop::constants::ABILITY_ATTACH_SESSION;
 use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
+use crate::daemon::plugins::remote_desktop::input::EffectiveRemoteDesktopInputPolicy;
 use crate::daemon::plugins::remote_desktop::invoke_bidi::{
     spawn_bidi_capture_worker, BidiCaptureWorkerConfig,
 };
@@ -42,7 +43,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                 let target_binding = session.target_binding().clone();
                 let options = parse_attach_capture_options(&args, session)?;
                 let encoding = parse_attach_encoding(&args)?;
-                let input_policy = session.input_policy().to_value();
+                let input_policy = EffectiveRemoteDesktopInputPolicy::for_binding(
+                    session.input_policy(),
+                    &target_binding,
+                );
                 let (stop_tx, stop_rx) = watch::channel(false);
                 if let Some(old_stop) = session.attach_preview_transport(stop_tx.clone()) {
                     let _ = old_stop.send(true);
@@ -101,9 +105,8 @@ mod tests {
         ABILITY_ATTACH_SESSION, ABILITY_CREATE_SESSION, ABILITY_GRANT_CONSENT,
         REASON_PREVIEW_CAPTURE_FAILED, REASON_PREVIEW_CLIENT_CLOSED, TRANSPORT_INVOKE_BIDI,
     };
-    use crate::daemon::plugins::remote_desktop::request::{
-        RemoteDesktopInputPolicy, RemoteDesktopVideoConstraints,
-    };
+    use crate::daemon::plugins::remote_desktop::input::RemoteDesktopInputPolicy;
+    use crate::daemon::plugins::remote_desktop::request::RemoteDesktopVideoConstraints;
     use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
     use crate::daemon::plugins::remote_desktop::session::{
         RemoteDesktopSession, RemoteDesktopSessionInit, RemoteDesktopState,
