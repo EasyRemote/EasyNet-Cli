@@ -29,7 +29,7 @@
 ## Executed verification — 2026-08-16
 
 - `cargo test --features remote-desktop,headless-media --lib remote_desktop -- --nocapture`
-  passed all 312 Remote Desktop tests on committed HEAD.
+  passed all 318 Remote Desktop tests on committed HEAD.
 - Every `tools/scripts/check-remoteapp-*.sh` gate passed (7/7), and
   `cargo test --features remote-desktop,headless-media --test script_checks remoteapp -- --nocapture`
   passed all seven mutation-backed script checks.
@@ -42,16 +42,27 @@
   catalog/descriptor/remote-routing baseline drift (for example, the isolated
   ability-layer classification test reports unrelated files/pages/resource
   abilities missing from its classification table).
-- EasyNet `Frontend` Remote Desktop/media-channel integration passed 9 files
-  and 45 tests without modifying its pre-existing dirty worktree.
+- EasyNet `Frontend` passed its full 79-file, 642-test suite without retaining
+  any additional change in its pre-existing dirty worktree. Its final focused
+  Remote Desktop/media-channel run also passed 4 files and 50 tests.
 - Go SDK `go test ./...` passed. Python SDK passed 614 tests plus 266 subtests.
   URA naming, product-neutrality, architecture convergence, and canonical
   public API gates passed against the current EasyNet-Axon source revision.
 - Fresh Go/Python live conformance reports passed all shared 52-case records
   and the parity matrix with source attestation
-  `198665f1ac65c32b0e7c5d061bf1d30e0c34e6fa898bee85c8764ca9ec3e1a48`.
-- CodeGraph synchronized 1,115 files, 43,855 nodes, and 172,504 edges. Its
-  caller trail proves `DirectWebRtcMediaExecution` is the shared boundary used
-  by recorder, polling, and native media strategies.
+  `b046c9584bc4352fbe910bfad0d5ed9cb053b8629b454d9e7258d85cbac771ee`.
+- CodeGraph synchronized 1,115 files, 43,884 nodes, and 172,703 edges. Its
+  caller trails prove `DirectWebRtcMediaExecution` is the shared boundary used
+  by recorder, polling, and native media strategies, and that rebind deadline
+  expiry flows from the target state machine through the session/store to the
+  observer result consumed by the target monitor.
+- Automatic target rebind now expires deterministically at the SPEC 30-second
+  bound even when the platform observer returns no observation. Active media
+  expiry emits `TARGET_REBIND_FAILED` before `MEDIA_SOURCE_LOST`, clears media
+  readiness, disables input, and projects an epoch-fenced endpoint stop.
+- Target inventory discovery outages now emit the typed
+  `target_inventory_unavailable` watch event. Availability participates in the
+  stable inventory hash, and the domain constructor guarantees that an outage
+  cannot fabricate `removed_resource_uras`.
 - Architecture-owned sources are clean for the forbidden `URI` term after
   excluding vendored dependencies; `git diff --check` and formatting pass.
