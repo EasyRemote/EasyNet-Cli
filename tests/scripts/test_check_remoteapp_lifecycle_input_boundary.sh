@@ -22,6 +22,8 @@ write_fixture() {
 | E2E-10 weak identity ambiguity | ambiguous weak native identity fails closed before stream start |
 | E2E-11 view-only input safety | app/window sessions remain view-only without a focus-safe input validator |
 relay_ready
+Same-display application window-set rebind is implemented through the explicit pending-media-rebind state machine and emits TARGET_REBOUND only after a renewed capture proof commits.
+Direct WebRTC route discovery is provider-backed. Host candidates, configured STUN server-reflexive routes, standard TURN relay routes, and EasyNet relay routes are represented as typed route evidence.
 MD
 
   cat >"$SANDBOX/plugins/remote-desktop/src/constants.rs" <<'RS'
@@ -1583,6 +1585,16 @@ run_fail() {
 
 write_fixture
 run_ok
+
+write_fixture
+perl -0pi -e 's/Same-display application window-set rebind is implemented/Same-display application rebind remains incomplete/' \
+  "$SANDBOX/docs/design/remoteapp-targeted-session-spec.md"
+run_fail 'SPEC status must acknowledge implemented same-display application rebind instead of preserving stale gap text'
+
+write_fixture
+perl -0pi -e 's/Direct WebRTC route discovery is provider-backed/Direct WebRTC route discovery is host-only/' \
+  "$SANDBOX/docs/design/remoteapp-targeted-session-spec.md"
+run_fail 'SPEC status must acknowledge configured provider-backed STUN/TURN/EasyNet relay route discovery'
 
 write_fixture
 perl -0pi -e 's/struct RemoteDesktopEventProjection/type RemoteDesktopEventProjection = (&'\''static str, Value);\nstruct RetiredRemoteDesktopEventProjection/' \

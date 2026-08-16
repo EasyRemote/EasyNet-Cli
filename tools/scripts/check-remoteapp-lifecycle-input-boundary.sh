@@ -516,6 +516,12 @@ require 'commit_pending_media_rebind' "$TARGET_TRACKING" \
   'target tracking must commit application window-set state only after pending media rebind proof'
 require 'commit_pending_media_rebind_failed' "$TARGET_TRACKING" \
   'target tracking must terminate failed pending media rebinds as typed target lifecycle events'
+require 'Same-display application window-set rebind is implemented' "$SPEC" \
+  'SPEC status must acknowledge implemented same-display application rebind instead of preserving stale gap text'
+require 'TARGET_REBOUND' "$SPEC" \
+  'SPEC status must keep successful rebind tied to the TARGET_REBOUND lifecycle event'
+reject 'Full rebind and multi-display application sessions are not complete' "$SPEC" \
+  'SPEC status must not collapse implemented same-display rebind with unsupported multi-display app capture'
 require 'active_application_window_set_rebind_failure_is_typed' "$TARGET_TRACKING" \
   'target tracker must test pending media rebind failure as TARGET_REBIND_FAILED'
 require 'AUTOMATIC_REBIND_WINDOW_MS: u64 = 30_000' "$TARGET_TRACKING" \
@@ -728,6 +734,10 @@ require 'srflx_without_relay_reports_typed_relay_unavailable_reason' "$VIEW_TRAN
   'transport tests must prove STUN-only candidates expose relay-unavailable degradation'
 require 'relay_ready' "$SPEC" \
   'SPEC must name relay_ready as the aggregate any-relay state instead of overloading TURN relay'
+require 'Direct WebRTC route discovery is provider-backed' "$SPEC" \
+  'SPEC status must acknowledge configured provider-backed STUN/TURN/EasyNet relay route discovery'
+reject 'Transport only has local host candidate discovery today' "$SPEC" \
+  'SPEC status must not preserve stale host-only route discovery after configured relay support lands'
 require 'trait DirectWebRtcRouteCandidateProvider' "$NETWORK" \
   'direct WebRTC endpoint route discovery must be provider-backed instead of a bare UDP address helper'
 require 'struct DirectWebRtcRouteCandidate' "$NETWORK" \
