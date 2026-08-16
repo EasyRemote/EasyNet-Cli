@@ -268,6 +268,20 @@ require 'window_observation_prioritizes_visibility_loss_over_title_or_focus_chan
   'target observer tests must prove hidden/minimized availability outranks title/focus updates'
 require 'MEDIA_SOURCE_LOST' "$SESSION_EVENTS" \
   'session events must project MEDIA_SOURCE_LOST'
+require 'struct RemoteDesktopEventProjection' "$SESSION_EVENTS" \
+  'session event projection must be a domain object, not a tuple alias'
+require "fn new\\(event_type: &'static str, payload: Value\\) -> Self" "$SESSION_EVENTS" \
+  'session event projection must centralize event_type/payload construction'
+require "fn event_type\\(&self\\) -> &'static str" "$SESSION_EVENTS" \
+  'session aggregate must read event_type through the projection domain object'
+require 'fn into_payload\(self\) -> Value' "$SESSION_EVENTS" \
+  'session aggregate must consume event payload through the projection domain object'
+reject "type RemoteDesktopEventProjection = \\(&'static str, Value\\)" "$SESSION_EVENTS" \
+  'session event projection must not regress to a tuple alias'
+require 'fn push_projected_event\(&mut self, event: session_events::RemoteDesktopEventProjection\)' "$SESSION" \
+  'session aggregate must only accept typed remote desktop event projections'
+reject "fn push_projected_event\\(&mut self, event: \\(&'static str, Value\\)\\)" "$SESSION" \
+  'session aggregate must not accept arbitrary event_type/payload tuples'
 require 'binding: &RemoteAppTargetBinding' "$SESSION_EVENTS" \
   'MEDIA_SOURCE_LOST event builder must require committed target binding context'
 require '"subject_ura": binding\.subject_ura\(\)' "$SESSION_EVENTS" \

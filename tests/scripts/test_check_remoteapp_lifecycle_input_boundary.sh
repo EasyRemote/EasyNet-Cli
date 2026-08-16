@@ -160,6 +160,10 @@ fn push_target_tracking_event() {
     payload["transport_epoch"] = self.transport.active_epoch();
 }
 
+fn push_projected_event(&mut self, event: session_events::RemoteDesktopEventProjection) {
+    self.push_event(event.event_type(), event.into_payload());
+}
+
 fn report_client_media_state() {
     session_events::client_media_state_changed(state, epoch.value());
     session_events::session_degraded(state, epoch.value(), "degraded");
@@ -393,6 +397,25 @@ mod tests {
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/session_events.rs" <<'RS'
+struct RemoteDesktopEventProjection {
+    event_type: &'static str,
+    payload: Value,
+}
+
+impl RemoteDesktopEventProjection {
+    fn new(event_type: &'static str, payload: Value) -> Self {
+        Self { event_type, payload }
+    }
+
+    fn event_type(&self) -> &'static str {
+        self.event_type
+    }
+
+    fn into_payload(self) -> Value {
+        self.payload
+    }
+}
+
 enum WebRtcFailureEventKind {
     MediaSourceLost,
     TransportFailed,
@@ -1288,6 +1311,11 @@ run_fail() {
 
 write_fixture
 run_ok
+
+write_fixture
+perl -0pi -e 's/struct RemoteDesktopEventProjection/type RemoteDesktopEventProjection = (&'\''static str, Value);\nstruct RetiredRemoteDesktopEventProjection/' \
+  "$SANDBOX/plugins/remote-desktop/src/session_events.rs"
+run_fail 'session event projection must be a domain object, not a tuple alias'
 
 write_fixture
 perl -0pi -e 's/direct_webrtc_endpoint_ura\(session\.session_id\(\)\)/legacy_endpoint(session.session_id())/' \

@@ -15,7 +15,33 @@ use crate::daemon::plugins::remote_desktop::target::{
 };
 use crate::daemon::plugins::remote_desktop::transport_blocker::RemoteDesktopTransportBlocker;
 
-type RemoteDesktopEventProjection = (&'static str, Value);
+#[derive(Debug, Clone, PartialEq)]
+pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopEventProjection {
+    event_type: &'static str,
+    payload: Value,
+}
+
+impl RemoteDesktopEventProjection {
+    fn new(event_type: &'static str, payload: Value) -> Self {
+        Self {
+            event_type,
+            payload,
+        }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn event_type(&self) -> &'static str {
+        self.event_type
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn into_payload(self) -> Value {
+        self.payload
+    }
+
+    #[cfg(test)]
+    fn into_parts(self) -> (&'static str, Value) {
+        (self.event_type, self.payload)
+    }
+}
 
 /// Domain event used when a production WebRTC worker reaches a terminal
 /// failure.
@@ -46,7 +72,7 @@ impl WebRtcFailureEventKind {
 /// reviewable in one place.
 pub(in crate::daemon::plugins::remote_desktop) fn session_created() -> RemoteDesktopEventProjection
 {
-    (
+    RemoteDesktopEventProjection::new(
         "SESSION_CREATED",
         json!({
             "transport_kind": TRANSPORT_WEBRTC,
@@ -63,7 +89,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn session_created() -> RemoteDes
 pub(in crate::daemon::plugins::remote_desktop) fn capture_target_resolved(
     binding: &RemoteAppTargetBinding,
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "CAPTURE_TARGET_RESOLVED",
         json!({
             "subject_ura": binding.subject_ura(),
@@ -89,7 +115,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn capture_target_resolved(
 pub(in crate::daemon::plugins::remote_desktop) fn target_bound(
     binding: &RemoteAppTargetBinding,
 ) -> RemoteDesktopEventProjection {
-    ("TARGET_BOUND", binding.target_bound_event_payload())
+    RemoteDesktopEventProjection::new("TARGET_BOUND", binding.target_bound_event_payload())
 }
 
 /// Build a generic SDP description-set payload.
@@ -97,7 +123,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn description_set(
     side: &str,
     media_transport_ready: bool,
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "DESCRIPTION_SET",
         json!({
             "side": side,
@@ -112,7 +138,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn local_webrtc_answer_set(
     production_ready: bool,
     transport_epoch: u64,
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "DESCRIPTION_SET",
         json!({
             "transport_kind": TRANSPORT_WEBRTC,
@@ -132,7 +158,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn remote_ice_candidate_added(
     transport_epoch: Option<u64>,
     media_transport_ready: bool,
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "ICE_CANDIDATE_ADDED",
         json!({
             "candidate_count": candidate_count,
@@ -147,7 +173,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn remote_ice_candidate_added(
 /// Build an InvokeBidi diagnostic preview-connected payload.
 pub(in crate::daemon::plugins::remote_desktop) fn preview_transport_connected(
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "TRANSPORT_CONNECTED",
         json!({
             "transport_kind": TRANSPORT_INVOKE_BIDI,
@@ -162,7 +188,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn preview_transport_connected(
 pub(in crate::daemon::plugins::remote_desktop) fn preview_transport_detached(
     reason: &str,
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "TRANSPORT_DETACHED",
         json!({
             "transport_kind": TRANSPORT_INVOKE_BIDI,
@@ -178,7 +204,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn preview_transport_failed(
     reason: &str,
     message: String,
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "DIAGNOSTIC_PREVIEW_FAILED",
         json!({
             "transport_kind": TRANSPORT_INVOKE_BIDI,
@@ -194,7 +220,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn preview_transport_failed(
 pub(in crate::daemon::plugins::remote_desktop) fn lease_refreshed(
     lease_expires_at_ms: u64,
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "LEASE_REFRESHED",
         json!({ "lease_expires_at_ms": lease_expires_at_ms }),
     )
@@ -206,7 +232,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn transport_blocked(
     required_backend: &str,
 ) -> RemoteDesktopEventProjection {
     let blocker = RemoteDesktopTransportBlocker::from_webrtc_error(reason);
-    (
+    RemoteDesktopEventProjection::new(
         "TRANSPORT_BLOCKED",
         json!({
             "transport_kind": TRANSPORT_WEBRTC,
@@ -228,7 +254,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn local_ice_candidate(
     candidate_count: usize,
     media_transport_ready: bool,
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "LOCAL_ICE_CANDIDATE",
         json!({
             "candidate": candidate,
@@ -272,7 +298,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn media_pipeline_stats(
     media_transport_ready: bool,
     stats: Value,
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "MEDIA_PIPELINE_STATS",
         json!({
             "media_transport_ready": media_transport_ready,
@@ -285,7 +311,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn media_pipeline_stats(
 pub(in crate::daemon::plugins::remote_desktop) fn session_closing(
     reason: &str,
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "SESSION_CLOSING",
         json!({
             "reason": reason,
@@ -299,7 +325,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn session_closing(
 pub(in crate::daemon::plugins::remote_desktop) fn session_closed(
     reason: &str,
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "SESSION_CLOSED",
         json!({
             "reason": reason,
@@ -314,7 +340,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn session_expired(
     reason: &str,
     lease_expires_at_ms: u64,
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "SESSION_CLOSED",
         json!({
             "reason": reason,
@@ -330,7 +356,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_sender_ready(
     endpoint_ura: String,
     transport_epoch: u64,
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "MEDIA_SENDER_READY",
         json!({
             "transport_kind": TRANSPORT_WEBRTC,
@@ -349,7 +375,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn client_media_state_changed(
     transport_epoch: u64,
 ) -> RemoteDesktopEventProjection {
     let reason_code = client_media_reason_code(state);
-    (
+    RemoteDesktopEventProjection::new(
         if state == "presenting" {
             "TRANSPORT_CONNECTED"
         } else {
@@ -373,7 +399,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn session_degraded(
     transport_epoch: u64,
     primary_phase: &str,
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "SESSION_DEGRADED",
         json!({
             "reason_code": client_media_reason_code(client_state),
@@ -412,7 +438,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn media_source_lost(
     reason: TargetResolutionError,
     transport_epoch: u64,
 ) -> RemoteDesktopEventProjection {
-    (
+    RemoteDesktopEventProjection::new(
         "MEDIA_SOURCE_LOST",
         json!({
             "subject_ura": binding.subject_ura(),
@@ -455,7 +481,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn webrtc_failed_with_context(
             payload.insert(key.clone(), value.clone());
         }
     }
-    (event_kind.event_type(), payload)
+    RemoteDesktopEventProjection::new(event_kind.event_type(), payload)
 }
 
 /// Default domain context for direct WebRTC failures whose selected target is
@@ -486,8 +512,9 @@ mod tests {
 
     #[test]
     fn remote_desktop_event_payloads_keep_transport_kind_explicit() {
-        let (_, preview_payload) = preview_transport_connected();
-        let (_, webrtc_payload) = webrtc_sender_ready(direct_webrtc_endpoint_ura("session"), 1);
+        let (_, preview_payload) = preview_transport_connected().into_parts();
+        let (_, webrtc_payload) =
+            webrtc_sender_ready(direct_webrtc_endpoint_ura("session"), 1).into_parts();
 
         assert_eq!(preview_payload["transport_kind"], json!("invoke_bidi"));
         assert_eq!(webrtc_payload["transport_kind"], json!("webrtc"));
@@ -495,14 +522,14 @@ mod tests {
 
     #[test]
     fn session_created_projects_remote_desktop_attach_as_preview_ability() {
-        let (_, payload) = session_created();
+        let (_, payload) = session_created().into_parts();
 
         assert_eq!(payload["preview_ability"], json!("remote_desktop.attach"));
     }
 
     #[test]
     fn session_closing_payload_projects_terminal_reason_code() {
-        let (event_type, payload) = session_closing("caller_ended");
+        let (event_type, payload) = session_closing("caller_ended").into_parts();
 
         assert_eq!(event_type, "SESSION_CLOSING");
         assert_eq!(payload["reason"], json!("caller_ended"));
@@ -512,7 +539,7 @@ mod tests {
 
     #[test]
     fn session_created_payload_projects_initial_reason_code() {
-        let (event_type, payload) = session_created();
+        let (event_type, payload) = session_created().into_parts();
 
         assert_eq!(event_type, "SESSION_CREATED");
         assert_eq!(payload["transport_kind"], json!("webrtc"));
@@ -528,7 +555,7 @@ mod tests {
             "easynet:///r/acme/resource/display.test",
             vec!["webrtc".into()],
         );
-        let (event_type, payload) = capture_target_resolved(&init.target_binding);
+        let (event_type, payload) = capture_target_resolved(&init.target_binding).into_parts();
 
         assert_eq!(event_type, "CAPTURE_TARGET_RESOLVED");
         assert_eq!(
@@ -570,7 +597,7 @@ mod tests {
 
     #[test]
     fn session_closed_payload_projects_terminal_reason_code() {
-        let (event_type, payload) = session_closed("caller_ended");
+        let (event_type, payload) = session_closed("caller_ended").into_parts();
 
         assert_eq!(event_type, "SESSION_CLOSED");
         assert_eq!(payload["reason"], json!("caller_ended"));
@@ -580,7 +607,7 @@ mod tests {
 
     #[test]
     fn session_expired_payload_projects_terminal_reason_code() {
-        let (event_type, payload) = session_expired("session_expired", 42);
+        let (event_type, payload) = session_expired("session_expired", 42).into_parts();
 
         assert_eq!(event_type, "SESSION_CLOSED");
         assert_eq!(payload["reason"], json!("session_expired"));
@@ -601,7 +628,8 @@ mod tests {
                 "frontend_action": "refresh_targets",
                 "binding_id": "tb_test",
             }),
-        );
+        )
+        .into_parts();
 
         assert_eq!(event_type, "MEDIA_SOURCE_LOST");
         assert_eq!(payload["reason"], json!("target_identity_changed"));
@@ -621,7 +649,8 @@ mod tests {
             "peer connection failed".to_string(),
             11,
             webrtc_transport_failure_context(),
-        );
+        )
+        .into_parts();
 
         assert_eq!(event_type, "TRANSPORT_FAILED");
         assert_eq!(payload["reason"], json!("webrtc_peer_connection_failed"));
@@ -644,7 +673,8 @@ mod tests {
             &init.target_binding,
             TargetResolutionError::TargetPermissionMissing,
             9,
-        );
+        )
+        .into_parts();
 
         assert_eq!(event_type, "MEDIA_SOURCE_LOST");
         assert_eq!(
@@ -687,7 +717,7 @@ mod tests {
 
     #[test]
     fn session_degraded_payload_projects_recovery_context() {
-        let (event_type, payload) = session_degraded("stalled", 13, "degraded");
+        let (event_type, payload) = session_degraded("stalled", 13, "degraded").into_parts();
 
         assert_eq!(event_type, "SESSION_DEGRADED");
         assert_eq!(payload["reason_code"], json!("client_media_stalled"));
@@ -705,7 +735,7 @@ mod tests {
     #[test]
     fn transport_blocked_projects_capture_backend_reason_code() {
         let (event_type, payload) =
-            transport_blocked("webrtc_transport_backend_unavailable", "native");
+            transport_blocked("webrtc_transport_backend_unavailable", "native").into_parts();
 
         assert_eq!(event_type, "TRANSPORT_BLOCKED");
         assert_eq!(

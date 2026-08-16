@@ -370,9 +370,8 @@ impl RemoteDesktopSession {
         );
     }
 
-    fn push_projected_event(&mut self, event: (&'static str, Value)) {
-        let (event_type, payload) = event;
-        self.push_event(event_type, payload);
+    fn push_projected_event(&mut self, event: session_events::RemoteDesktopEventProjection) {
+        self.push_event(event.event_type(), event.into_payload());
     }
 
     fn push_target_tracking_event(&mut self, event: TargetTrackingEvent) {
