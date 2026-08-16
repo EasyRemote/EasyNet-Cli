@@ -15,7 +15,9 @@ There are no public third-party ICE server defaults.
 | `EASYNET_REMOTE_DESKTOP_EASYNET_RELAY_CREDENTIAL` | EasyNet relay credential |
 
 TURN and EasyNet relay URL sets require both their username and credential.
-Malformed or incomplete configuration fails endpoint creation closed. Public
-route evidence reports whether credentials are configured but never projects
-their values. Production readiness remains derived from gathered ICE candidates
-and active media state, not from configuration presence.
+Credentials must be supplied through the dedicated credential variables, not
+embedded in the URL. Malformed or incomplete configuration fails endpoint
+creation closed. Public route evidence reports whether credentials are
+configured but never projects their values. Production readiness remains derived
+from gathered ICE candidates and active media state, not from configuration
+presence.

@@ -446,6 +446,14 @@ impl IceUrlScheme {
 }
 
 fn require_ice_url_scheme(url: &str, allowed: &[IceUrlScheme]) -> anyhow::Result<()> {
+    if url.chars().any(char::is_whitespace) {
+        bail!("direct WebRTC ICE route URL must not contain whitespace");
+    }
+    if url.contains('@') {
+        bail!(
+            "direct WebRTC ICE route credentials must use the dedicated username and credential fields"
+        );
+    }
     if allowed
         .iter()
         .any(|scheme| url.starts_with(scheme.prefix()))
@@ -622,6 +630,25 @@ mod tests {
             error
                 .to_string()
                 .contains("requires both username and credential"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn turn_route_config_rejects_inline_credentials_before_public_evidence() {
+        let mut config = DirectWebRtcRouteConfig::default();
+        let error = config
+            .add_turn_urls(
+                vec!["turn:embedded-user:embedded-secret@turn.example.test:3478".to_string()],
+                Some("turn-user".to_string()),
+                Some("turn-secret".to_string()),
+            )
+            .expect_err("TURN credentials embedded in a route URL must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("dedicated username and credential fields"),
             "unexpected error: {error}"
         );
     }
