@@ -116,6 +116,25 @@ fn watch_events_rejects_malformed_replay_cursor() {
 }
 RS
 
+cat >"$SB/plugins/remote-desktop/src/handlers/add_ice_candidate.rs" <<'RS'
+struct DirectWebRtcEndpoint;
+struct Value;
+
+enum RemoteIceAdmission {
+    Reserved(DirectWebRtcEndpoint),
+    Committed(Value),
+}
+
+fn apply(admission: RemoteIceAdmission) -> Value {
+    let endpoint = match admission {
+        RemoteIceAdmission::Committed(view) => return view,
+        RemoteIceAdmission::Reserved(endpoint) => endpoint,
+    };
+    let _ = endpoint;
+    Value
+}
+RS
+
 cat >"$SB/plugins/remote-desktop/src/session_signaling.rs" <<'RS'
 impl RemoteDesktopSessionDescription {
     fn new(value: Value) -> anyhow::Result<Self> {
@@ -258,6 +277,37 @@ RS
   cd "$SB"
   CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
 ) >/dev/null || fail "happy path should pass"
+
+perl -0pi -e 's/Reserved\(DirectWebRtcEndpoint\)/Reserved/' \
+  "$SB/plugins/remote-desktop/src/handlers/add_ice_candidate.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-ice-admission-type.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "untyped ICE admission should exit 1 (got $rc)"
+grep -q "reserved endpoint snapshot" /tmp/check-remoteapp-performance-boundary-ice-admission-type.out || fail "expected ICE admission endpoint snapshot failure"
+
+perl -0pi -e 's/Reserved/Reserved(DirectWebRtcEndpoint)/' \
+  "$SB/plugins/remote-desktop/src/handlers/add_ice_candidate.rs"
+perl -0pi -e 's/let endpoint = match admission/let endpoint = endpoint.expect("reserved admission requires an active endpoint");\n    let endpoint = match admission/' \
+  "$SB/plugins/remote-desktop/src/handlers/add_ice_candidate.rs"
+
+set +e
+(
+  cd "$SB"
+  CHECK_REMOTEAPP_PERFORMANCE_BOUNDARY_ROOT="$SB" bash tools/scripts/check-remoteapp-performance-boundary.sh
+) >/tmp/check-remoteapp-performance-boundary-ice-admission-expect.out 2>&1
+rc=$?
+set -e
+[[ "$rc" == "1" ]] || fail "expect-based ICE admission proof should exit 1 (got $rc)"
+grep -q "must not prove endpoint presence with expect" /tmp/check-remoteapp-performance-boundary-ice-admission-expect.out || fail "expected ICE admission expect failure"
+
+perl -0pi -e 's/    let endpoint = endpoint\.expect\("reserved admission requires an active endpoint"\);\n//' \
+  "$SB/plugins/remote-desktop/src/handlers/add_ice_candidate.rs"
 
 perl -0pi -e 's/const WINDOW_COUNT: usize = 2_000;/const WINDOW_COUNT: usize = 200;/' \
   "$SB/src/daemon/ability/builtins/resources/media/resource_bootstrap.rs"

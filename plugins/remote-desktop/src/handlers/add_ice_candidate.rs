@@ -15,11 +15,13 @@ use crate::daemon::plugins::remote_desktop::sdp::{
 };
 use crate::daemon::plugins::remote_desktop::session_lifecycle::ensure_session_control_access;
 use crate::daemon::plugins::remote_desktop::session_signaling::RemoteDesktopSignalingError;
-use crate::daemon::plugins::remote_desktop::transport::apply_remote_ice_candidate_values;
+use crate::daemon::plugins::remote_desktop::transport::{
+    apply_remote_ice_candidate_values, DirectWebRtcEndpoint,
+};
 use crate::daemon::plugins::remote_desktop::view::serialize_session;
 
 enum RemoteIceAdmission {
-    Reserved,
+    Reserved(DirectWebRtcEndpoint),
     Committed(Value),
 }
 
@@ -79,7 +81,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                 {
                     return Ok(None);
                 }
-                if endpoint.is_some() {
+                if let Some(endpoint) = endpoint.as_ref() {
                     let reserved = session
                         .reserve_remote_ice_candidate_slot()
                         .map_err(map_signaling_admission_error)?;
@@ -88,7 +90,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                             session,
                         ))));
                     }
-                    return Ok(Some(RemoteIceAdmission::Reserved));
+                    return Ok(Some(RemoteIceAdmission::Reserved(endpoint.clone())));
                 }
                 session
                     .add_remote_ice_candidate(candidate.clone(), "pending", None)
@@ -107,11 +109,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
             }
             continue;
         };
-        if let RemoteIceAdmission::Committed(view) = admission {
-            return Ok(view);
-        }
-
-        let endpoint = endpoint.expect("reserved admission requires an active endpoint");
+        let endpoint = match admission {
+            RemoteIceAdmission::Committed(view) => return Ok(view),
+            RemoteIceAdmission::Reserved(endpoint) => endpoint,
+        };
         if let Err(err) = apply_remote_ice_candidate_values(
             &plugin.transport_manager(),
             &endpoint.peer_connection,
@@ -172,7 +173,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
             );
         }
     }
-    unreachable!("bounded candidate application loop returns or errors")
+    anyhow::bail!("{ABILITY_ADD_ICE_CANDIDATE}: candidate application did not complete")
 }
 
 fn map_signaling_admission_error(error: anyhow::Error) -> RemoteDesktopError {

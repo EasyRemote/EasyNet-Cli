@@ -36,6 +36,7 @@ EVENT_LOG="$ROOT/plugins/remote-desktop/src/event_log.rs"
 REQUEST="$ROOT/plugins/remote-desktop/src/request.rs"
 HANDLERS="$ROOT/plugins/remote-desktop/src/handlers/mod.rs"
 WATCH_EVENTS="$ROOT/plugins/remote-desktop/src/handlers/watch_events.rs"
+ADD_ICE_CANDIDATE="$ROOT/plugins/remote-desktop/src/handlers/add_ice_candidate.rs"
 SESSION_SIGNALING="$ROOT/plugins/remote-desktop/src/session_signaling.rs"
 SESSION="$ROOT/plugins/remote-desktop/src/session.rs"
 SESSION_STORE="$ROOT/plugins/remote-desktop/src/session_store.rs"
@@ -165,6 +166,14 @@ require 'remote_ice_candidates_elided' "$SESSION_STORE" \
   'PERF-05 serialized session view test must assert remote candidate elision'
 require 'signaling_rejects_oversized_sdp_and_ice_rows' "$SDP" \
   'PERF-05 must reject oversized SDP and ICE rows before storage'
+require 'Reserved\(DirectWebRtcEndpoint\)' "$ADD_ICE_CANDIDATE" \
+  'Remote ICE admission must carry the reserved endpoint snapshot in the domain result'
+require 'RemoteIceAdmission::Reserved\(endpoint\) => endpoint' "$ADD_ICE_CANDIDATE" \
+  'Remote ICE candidate application must consume the typed reserved endpoint without panic proof'
+reject 'reserved admission requires an active endpoint' "$ADD_ICE_CANDIDATE" \
+  'Remote ICE admission must not prove endpoint presence with expect'
+reject 'unreachable!' "$ADD_ICE_CANDIDATE" \
+  'Remote ICE admission must fail closed instead of using unreachable panic paths'
 require 'MAX_TERMINAL_ROWS_PER_ACTIVE_SESSION: usize' "$SESSION_STORE" \
   'SPEC terminal row retention must encode T <= 4S as a store-level constant'
 require '^    4;$' "$SESSION_STORE" \
