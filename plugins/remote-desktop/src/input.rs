@@ -201,8 +201,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_binding(
     binding: &RemoteAppTargetBinding,
 ) -> Value {
     let snapshot = TargetTrackerSnapshot::from_binding(binding);
-    let input_policy = input_policy_for_target_snapshot(input_policy, &snapshot);
-    input_policy_for_scope(input_policy, binding.input_scope())
+    input_policy_for_target_state(input_policy, &snapshot, binding.input_scope())
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_target_snapshot(
@@ -214,6 +213,15 @@ pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_target_snapsh
         map.insert("pointer_target".to_string(), pointer_target);
     }
     Value::Object(map)
+}
+
+pub(in crate::daemon::plugins::remote_desktop) fn input_policy_for_target_state(
+    input_policy: Value,
+    snapshot: &TargetTrackerSnapshot,
+    input_scope: InputScope,
+) -> Value {
+    let input_policy = input_policy_for_target_snapshot(input_policy, snapshot);
+    input_policy_for_scope(input_policy, input_scope)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -747,8 +755,11 @@ pub(in crate::daemon::plugins::remote_desktop) fn current_session_input_policy(
     if !snapshot.input_enabled() {
         return None;
     }
-    let input_policy = input_policy_for_target_snapshot(base_policy.clone(), snapshot);
-    Some(input_policy_for_scope(input_policy, input_scope))
+    Some(input_policy_for_target_state(
+        base_policy.clone(),
+        snapshot,
+        input_scope,
+    ))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

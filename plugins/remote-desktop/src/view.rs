@@ -7,7 +7,7 @@
 use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::input::{
-    input_injection_available, input_policy_for_binding, INPUT_DATA_CHANNEL_LABEL,
+    input_injection_available, input_policy_for_target_state, INPUT_DATA_CHANNEL_LABEL,
 };
 use crate::daemon::plugins::remote_desktop::media::{
     backend_catalog_view, production_gate_view, sdk_contract_view,
@@ -28,8 +28,11 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
 ) -> Value {
     let transport_view = RemoteDesktopTransportView::from_session(session);
     let video = session.video().to_value();
-    let input_policy =
-        input_policy_for_binding(session.input_policy().to_value(), session.target_binding());
+    let input_policy = input_policy_for_target_state(
+        session.input_policy().to_value(),
+        session.target_snapshot(),
+        session.target_binding().input_scope(),
+    );
     let media_stats = session.media_stats();
     let production_media_ready = session.production_media_ready();
     let transport_route_state = transport_view.route_state();
@@ -148,8 +151,9 @@ mod tests {
     use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
     use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
     use crate::daemon::plugins::remote_desktop::target::{
-        RemoteAppTargetResolver, ResourceEntryTargetResolver,
+        RemoteAppTargetResolver, ResourceEntryTargetResolver, TargetGeometry,
     };
+    use crate::daemon::plugins::remote_desktop::target_tracking::TargetObservation;
     use crate::daemon::plugins::remote_desktop::test_support::{
         live_remote_target_metadata, test_session_init,
     };
@@ -201,6 +205,80 @@ mod tests {
         assert_eq!(
             view["input_plane"]["policy"]["input_scope"],
             json!("view_only")
+        );
+        assert_eq!(view["input_plane"]["policy"], view["input_policy"]);
+    }
+
+    #[test]
+    fn session_view_projects_latest_target_geometry_into_input_policy() {
+        let subject = "easynet:///r/acme/resource/window.view-geometry";
+        let entry = ResourceEntry {
+            resource_ura: subject.into(),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
+            kind: ResourceType::Window,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "window:macos:cgwindow:10:42".into(),
+            display_name: "Cursor".into(),
+            metadata: live_remote_target_metadata(json!({
+                "window_id": 42,
+                "pid": 10,
+                "app_name": "Cursor",
+                "x": 100,
+                "y": 200,
+                "width": 800,
+                "height": 600,
+                "geometry_revision": 1,
+            })),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        let mut init = test_session_init(
+            "rd-view-latest-input-policy",
+            subject,
+            vec!["webrtc".into()],
+        );
+        init.mode = "interactive".to_string();
+        init.target_binding = ResourceEntryTargetResolver
+            .resolve_for_session("remote_desktop.create_session", &entry, "interactive", 1)
+            .expect("window binding resolves");
+        let mut session = RemoteDesktopSession::new(init);
+
+        session.record_target_observation(TargetObservation::GeometryChanged {
+            geometry: TargetGeometry {
+                x: Some(240.0),
+                y: Some(320.0),
+                width: Some(1024.0),
+                height: Some(768.0),
+            },
+            target_geometry_revision: 2,
+            observed_at_ms: 100,
+        });
+
+        let view = serialize_session(&session);
+
+        assert_eq!(
+            view["target_tracking"]["target_geometry_revision"],
+            json!(2)
+        );
+        assert_eq!(
+            view["input_policy"]["pointer_target"]["target_geometry_revision"],
+            view["target_tracking"]["target_geometry_revision"],
+            "session view must expose the same live geometry revision to frontend input mapping as target tracking"
+        );
+        assert_eq!(
+            view["input_policy"]["pointer_target"]["origin_x"],
+            json!(240.0)
+        );
+        assert_eq!(
+            view["input_policy"]["pointer_target"]["origin_y"],
+            json!(320.0)
+        );
+        assert_eq!(
+            view["input_policy"]["pointer_target"]["width"],
+            json!(1024.0)
+        );
+        assert_eq!(
+            view["input_policy"]["pointer_target"]["height"],
+            json!(768.0)
         );
         assert_eq!(view["input_plane"]["policy"], view["input_policy"]);
     }
