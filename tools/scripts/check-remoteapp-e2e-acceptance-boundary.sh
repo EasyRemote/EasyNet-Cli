@@ -10,6 +10,7 @@ CREATE_FAILCLOSED="$ROOT/tools/scripts/host-remoteapp-create-session-failclosed-
 PERMISSION_SUBJECT="$ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
 DISPLAY_FALLBACK_FORBIDDEN="$ROOT/tools/scripts/host-remoteapp-display-fallback-forbidden-e2e.sh"
 WEAK_IDENTITY_AMBIGUITY="$ROOT/tools/scripts/host-remoteapp-weak-identity-ambiguity-e2e.sh"
+VIEW_ONLY_INPUT_SAFETY="$ROOT/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
 RECEIVER="$ROOT/examples/easynet-remoteapp-frame-receiver.rs"
 SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
 
@@ -33,6 +34,7 @@ require() {
 [[ -f "$PERMISSION_SUBJECT" ]] || fail "missing host permission subject E2E harness"
 [[ -f "$DISPLAY_FALLBACK_FORBIDDEN" ]] || fail "missing host display fallback forbidden E2E harness"
 [[ -f "$WEAK_IDENTITY_AMBIGUITY" ]] || fail "missing host weak identity ambiguity E2E harness"
+[[ -f "$VIEW_ONLY_INPUT_SAFETY" ]] || fail "missing host view-only input safety E2E harness"
 [[ -f "$RECEIVER" ]] || fail "missing bundled host decoded-frame receiver"
 [[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
 
@@ -56,6 +58,8 @@ require 'E2E-09 target loss vs transport failure' "$SPEC" \
   'SPEC must retain live target-loss acceptance'
 require 'E2E-10 weak identity ambiguity' "$SPEC" \
   'SPEC must retain weak identity ambiguity acceptance'
+require 'E2E-11 view-only input safety' "$SPEC" \
+  'SPEC must retain view-only input safety acceptance'
 
 require 'remote_desktop\.permission_status' "$PERMISSION_SUBJECT" \
   'host permission subject E2E must invoke remote_desktop.permission_status'
@@ -113,6 +117,31 @@ require 'session_failed_before_stream' "$WEAK_IDENTITY_AMBIGUITY" \
   'host weak identity E2E must bind decoded-frame absence to pre-stream session failure'
 require 'restore_resources|resource_registry_restored' "$WEAK_IDENTITY_AMBIGUITY" \
   'host weak identity E2E must restore the operator resource registry'
+
+require 'resource\.refresh_remote_targets' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must select a live app/window target through resource.refresh_remote_targets'
+require 'create-remote-desktop-session' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must invoke remote_desktop.create_session through the EasyNet CLI'
+require '--mode interactive' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must prove the request asked for interactive input'
+require 'show-remote-desktop-session' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must re-read the persisted public session view'
+require 'scope_audit\.input_mode.*view_only|input_mode.*view_only' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must require input_mode=view_only'
+require 'target_scoped_keyboard_pointer_dispatch_unsafe' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must require the target-scoped input unsafe downgrade reason'
+require 'keyboard_enabled.*false|keyboard_enabled.*False' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must require keyboard input disabled'
+require 'pointer_enabled.*false|pointer_enabled.*False' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must require pointer input disabled'
+require 'input_plane\.policy|input_plane.*policy' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must verify the WebRTC input plane policy'
+require 'input_scope_unsupported' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must prove key/pointer rejection uses input_scope_unsupported'
+require 'window\|application|window or application|window\\|application' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must cover the app/window target class'
+require 'create_session args must not carry subject identity' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must keep selected target identity in Invocation.subject, not args'
 
 require 'resource\.refresh_remote_targets' "$TARGET_FRESHNESS" \
   'host target picker freshness E2E must refresh through resource.refresh_remote_targets'

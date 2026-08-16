@@ -7,7 +7,7 @@
 use serde_json::{json, Value};
 
 use crate::daemon::plugins::remote_desktop::input::{
-    input_injection_available, INPUT_DATA_CHANNEL_LABEL,
+    input_injection_available, input_policy_for_binding, INPUT_DATA_CHANNEL_LABEL,
 };
 use crate::daemon::plugins::remote_desktop::media::{
     backend_catalog_view, production_gate_view, sdk_contract_view,
@@ -28,7 +28,8 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session(
 ) -> Value {
     let transport_view = RemoteDesktopTransportView::from_session(session);
     let video = session.video().to_value();
-    let input_policy = session.input_policy().to_value();
+    let input_policy =
+        input_policy_for_binding(session.input_policy().to_value(), session.target_binding());
     let media_stats = session.media_stats();
     let production_media_ready = session.production_media_ready();
     let transport_route_state = transport_view.route_state();
@@ -138,4 +139,69 @@ pub(in crate::daemon::plugins::remote_desktop) fn serialize_session_with_token(
         );
     }
     view
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::daemon::persistence::resources::{ResourceBinding, ResourceEntry, ResourceType};
+    use crate::daemon::plugins::remote_desktop::session::RemoteDesktopSession;
+    use crate::daemon::plugins::remote_desktop::target::{
+        RemoteAppTargetResolver, ResourceEntryTargetResolver,
+    };
+    use crate::daemon::plugins::remote_desktop::test_support::{
+        live_remote_target_metadata, test_session_init,
+    };
+    use crate::daemon::plugins::remote_desktop::view::serialize_session;
+
+    #[test]
+    fn session_view_projects_effective_view_only_input_scope() {
+        let subject = "easynet:///r/acme/resource/window.view-only-input";
+        let entry = ResourceEntry {
+            resource_ura: subject.into(),
+            owner_agent: "easynet:///r/acme/agent/device.dev-1.media".into(),
+            kind: ResourceType::Window,
+            binding: ResourceBinding::LocalDevice,
+            hardware_id: "window:macos:cgwindow:10:42".into(),
+            display_name: "Cursor".into(),
+            metadata: live_remote_target_metadata(json!({
+                "window_id": 42,
+                "pid": 10,
+                "app_name": "Cursor",
+                "x": 100,
+                "y": 200,
+                "width": 800,
+                "height": 600,
+                "geometry_revision": 1,
+            })),
+            first_seen_at: "2026-06-01T00:00:00Z".into(),
+        };
+        let mut init = test_session_init(
+            "rd-view-effective-input-policy",
+            subject,
+            vec!["webrtc".into()],
+        );
+        init.mode = "interactive".to_string();
+        init.target_binding = ResourceEntryTargetResolver
+            .resolve_for_session("remote_desktop.create_session", &entry, "interactive", 1)
+            .expect("window binding resolves");
+        let session = RemoteDesktopSession::new(init);
+
+        let view = serialize_session(&session);
+
+        assert_eq!(view["scope_audit"]["input_mode"], json!("view_only"));
+        assert_eq!(
+            view["scope_audit"]["input_scope_reason"],
+            json!("target_scoped_keyboard_pointer_dispatch_unsafe")
+        );
+        assert_eq!(view["input_policy"]["input_scope"], json!("view_only"));
+        assert_eq!(view["input_policy"]["keyboard_enabled"], json!(false));
+        assert_eq!(view["input_policy"]["pointer_enabled"], json!(false));
+        assert_eq!(
+            view["input_plane"]["policy"]["input_scope"],
+            json!("view_only")
+        );
+        assert_eq!(view["input_plane"]["policy"], view["input_policy"]);
+    }
 }
