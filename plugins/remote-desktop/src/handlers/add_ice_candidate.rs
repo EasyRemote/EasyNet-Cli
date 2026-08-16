@@ -131,15 +131,13 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
                             session_id: session_id.clone(),
                         }
                     })?;
-                    if let Err(err) = ensure_session_control_access(
+                    ensure_session_control_access(
                         &plugin,
                         ABILITY_ADD_ICE_CANDIDATE,
                         &env,
                         &args,
                         session,
-                    ) {
-                        return Err(err);
-                    }
+                    )?;
                     let current = plugin.endpoint(&session_id);
                     let stable = current
                         .as_ref()
@@ -192,7 +190,7 @@ fn map_signaling_admission_error(error: anyhow::Error) -> RemoteDesktopError {
 }
 
 fn release_reserved_remote_ice_candidate(plugin: &RemoteDesktopPlugin, session_id: &str) {
-    let _ = plugin.session_store().with_sessions(|sessions| {
+    plugin.session_store().with_sessions(|sessions| {
         if let Some(session) = sessions.get_mut(session_id) {
             session.release_remote_ice_candidate_slot();
         }
