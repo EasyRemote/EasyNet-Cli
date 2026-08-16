@@ -165,6 +165,20 @@ require 'remote_ice_candidates_elided' "$SESSION_STORE" \
   'PERF-05 serialized session view test must assert remote candidate elision'
 require 'signaling_rejects_oversized_sdp_and_ice_rows' "$SDP" \
   'PERF-05 must reject oversized SDP and ICE rows before storage'
+require 'MAX_TERMINAL_ROWS_PER_ACTIVE_SESSION: usize' "$SESSION_STORE" \
+  'SPEC terminal row retention must encode T <= 4S as a store-level constant'
+require '^    4;$' "$SESSION_STORE" \
+  'SPEC terminal row retention constant must be exactly four rows per active session'
+require 'prune_terminal_rows_to_active_bound_locked' "$SESSION_STORE" \
+  'SPEC terminal row retention must be enforced by the session store aggregate'
+require 'active_count\.saturating_mul\(MAX_TERMINAL_ROWS_PER_ACTIVE_SESSION\)' "$SESSION_STORE" \
+  'SPEC terminal row retention must use active session count S, not configured capacity'
+require 'terminal_rows_are_pruned_to_four_times_active_sessions' "$SESSION_STORE" \
+  'SPEC terminal row retention must prove T is pruned to 4S'
+require 'terminal_rows_are_removed_when_no_active_sessions_remain' "$SESSION_STORE" \
+  'SPEC terminal row retention must prove S=0 prunes all tombstone rows at maintenance boundary'
+reject 'max_sessions\(\)\.saturating_mul\(4\)' "$ROOT/plugins/remote-desktop/src/session_lifecycle.rs" \
+  'terminal row retention must not use configured capacity as S'
 
 require 'resolver_refuses_to_run_while_session_store_lock_is_held' "$TARGET" \
   'PERF-06 must reject target resolution while session store lock is held'

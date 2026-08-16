@@ -15,6 +15,7 @@ use crate::daemon::plugins::remote_desktop::session::{now_ms, RemoteDesktopSessi
 use crate::daemon::plugins::remote_desktop::session_access::{
     ensure_session_control_identity, ensure_session_resource_identity,
 };
+use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 
 pub(in crate::daemon::plugins::remote_desktop) fn ensure_session_access(
     plugin: &RemoteDesktopPlugin,
@@ -146,19 +147,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn prune_inactive_sessions(
         }
     }
 
-    let max_tombstones = plugin.config().max_sessions().saturating_mul(4).max(1);
-    let mut terminal_rows: Vec<(String, u64)> = sessions
-        .iter()
-        .filter(|(_, session)| session.is_terminal())
-        .map(|(session_id, session)| (session_id.clone(), session.updated_at_ms()))
-        .collect();
-    if terminal_rows.len() > max_tombstones {
-        let excess = terminal_rows.len() - max_tombstones;
-        terminal_rows.sort_by_key(|(_, updated_at_ms)| *updated_at_ms);
-        for (session_id, _) in terminal_rows.into_iter().take(excess) {
-            sessions.remove(&session_id);
-        }
-    }
+    let _ = RemoteDesktopSessionStore::prune_terminal_rows_to_active_bound_locked(sessions);
 }
 
 #[cfg(test)]
@@ -176,6 +165,7 @@ mod tests {
     use crate::daemon::plugins::remote_desktop::session::{
         RemoteDesktopSession, RemoteDesktopState,
     };
+    use crate::daemon::plugins::remote_desktop::session_store::MAX_TERMINAL_ROWS_PER_ACTIVE_SESSION;
     use crate::daemon::plugins::remote_desktop::test_support::{
         env_for, reset_store, seed_display, test_lock, test_plugin, test_session_init,
     };
@@ -370,7 +360,10 @@ mod tests {
                 .filter(|session| session.is_terminal())
                 .count();
             assert_eq!(active_sessions, 1);
-            assert!(terminal_rows <= plugin.config().max_sessions().saturating_mul(4));
+            assert!(
+                terminal_rows
+                    <= active_sessions.saturating_mul(MAX_TERMINAL_ROWS_PER_ACTIVE_SESSION)
+            );
             assert!(sessions.contains_key("rd-after-prune"));
         });
     }

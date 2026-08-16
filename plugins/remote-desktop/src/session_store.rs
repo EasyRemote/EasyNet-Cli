@@ -25,6 +25,9 @@ use crate::daemon::plugins::remote_desktop::target_tracking::{
     TargetObservation, TargetTrackerSnapshot,
 };
 
+pub(in crate::daemon::plugins::remote_desktop) const MAX_TERMINAL_ROWS_PER_ACTIVE_SESSION: usize =
+    4;
+
 pub(in crate::daemon::plugins::remote_desktop) struct TargetObservationInputs {
     pub(in crate::daemon::plugins::remote_desktop) binding: RemoteAppTargetBinding,
     pub(in crate::daemon::plugins::remote_desktop) snapshot: TargetTrackerSnapshot,
@@ -119,6 +122,42 @@ impl RemoteDesktopSessionStore {
     ) -> R {
         let mut sessions = self.lock();
         f(&mut *sessions)
+    }
+
+    /// Prune terminal/tombstone rows to the SPEC performance bound `T <= 4S`,
+    /// where `S` is the current number of non-terminal sessions.
+    ///
+    /// This is intentionally a store-level policy instead of a handler-local
+    /// cleanup: session lifecycle code decides when a maintenance boundary is
+    /// reached, while the session aggregate owns the retention math and oldest
+    /// terminal-row selection.
+    pub(in crate::daemon::plugins::remote_desktop) fn prune_terminal_rows_to_active_bound_locked(
+        sessions: &mut HashMap<String, RemoteDesktopSession>,
+    ) -> usize {
+        let active_count = sessions
+            .values()
+            .filter(|session| !session.is_terminal())
+            .count();
+        let terminal_limit = active_count.saturating_mul(MAX_TERMINAL_ROWS_PER_ACTIVE_SESSION);
+        let mut terminal_rows: Vec<(String, u64)> = sessions
+            .iter()
+            .filter(|(_, session)| session.is_terminal())
+            .map(|(session_id, session)| (session_id.clone(), session.updated_at_ms()))
+            .collect();
+        if terminal_rows.len() <= terminal_limit {
+            return 0;
+        }
+
+        let excess = terminal_rows.len() - terminal_limit;
+        terminal_rows.sort_by(|(left_id, left_updated_at), (right_id, right_updated_at)| {
+            left_updated_at
+                .cmp(right_updated_at)
+                .then_with(|| left_id.cmp(right_id))
+        });
+        for (session_id, _) in terminal_rows.into_iter().take(excess) {
+            sessions.remove(&session_id);
+        }
+        excess
     }
 
     /// Mark a direct WebRTC media plane ready for one non-terminal session.
@@ -369,6 +408,75 @@ mod tests {
 
         store.with_sessions(|sessions| {
             sessions.insert(session_id.to_string(), session);
+        });
+    }
+
+    fn test_session(session_id: &str) -> RemoteDesktopSession {
+        RemoteDesktopSession::new(test_session_init(
+            session_id,
+            "easynet:///r/acme/resource/display.01",
+            vec![TRANSPORT_WEBRTC.to_string()],
+        ))
+    }
+
+    #[test]
+    fn terminal_rows_are_pruned_to_four_times_active_sessions() {
+        let store = RemoteDesktopSessionStore::new();
+        let mut seeded_sessions = Vec::new();
+        for index in 0..2 {
+            let session_id = format!("active-{index}");
+            seeded_sessions.push((session_id.clone(), test_session(&session_id)));
+        }
+        for index in 0..10 {
+            let session_id = format!("terminal-{index:02}");
+            let mut session = test_session(&session_id);
+            session.close("test_terminal");
+            seeded_sessions.push((session_id, session));
+        }
+        store.with_sessions(|sessions| {
+            for (session_id, session) in seeded_sessions {
+                sessions.insert(session_id, session);
+            }
+
+            let removed =
+                RemoteDesktopSessionStore::prune_terminal_rows_to_active_bound_locked(sessions);
+            assert_eq!(removed, 2);
+
+            let active_count = sessions
+                .values()
+                .filter(|session| !session.is_terminal())
+                .count();
+            let terminal_count = sessions
+                .values()
+                .filter(|session| session.is_terminal())
+                .count();
+            assert_eq!(active_count, 2);
+            assert_eq!(
+                terminal_count,
+                active_count.saturating_mul(MAX_TERMINAL_ROWS_PER_ACTIVE_SESSION)
+            );
+        });
+    }
+
+    #[test]
+    fn terminal_rows_are_removed_when_no_active_sessions_remain() {
+        let store = RemoteDesktopSessionStore::new();
+        let mut seeded_sessions = Vec::new();
+        for index in 0..3 {
+            let session_id = format!("terminal-only-{index}");
+            let mut session = test_session(&session_id);
+            session.close("test_terminal");
+            seeded_sessions.push((session_id, session));
+        }
+        store.with_sessions(|sessions| {
+            for (session_id, session) in seeded_sessions {
+                sessions.insert(session_id, session);
+            }
+
+            let removed =
+                RemoteDesktopSessionStore::prune_terminal_rows_to_active_bound_locked(sessions);
+            assert_eq!(removed, 3);
+            assert!(sessions.is_empty());
         });
     }
 

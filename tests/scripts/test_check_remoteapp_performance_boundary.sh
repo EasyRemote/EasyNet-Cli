@@ -148,13 +148,31 @@ fn signaling_state_rejects_oversized_descriptions_before_storage() {}
 RS
 
 cat >"$SB/plugins/remote-desktop/src/session_store.rs" <<'RS'
+pub(in crate::daemon::plugins::remote_desktop) const MAX_TERMINAL_ROWS_PER_ACTIVE_SESSION: usize =
+    4;
+
+fn prune_terminal_rows_to_active_bound_locked() {
+    let terminal_limit = active_count.saturating_mul(MAX_TERMINAL_ROWS_PER_ACTIVE_SESSION);
+}
+
 #[test]
 fn serialized_session_view_remains_bounded_at_signaling_limits() {
     let _ = "remote_ice_candidates_elided";
 }
+
+#[test]
+fn terminal_rows_are_pruned_to_four_times_active_sessions() {}
+
+#[test]
+fn terminal_rows_are_removed_when_no_active_sessions_remain() {}
+
 fn assert_current_thread_unlocked(stage: &str) {
     assert_eq!(0, 0, "{stage} must not run while RemoteDesktopSessionStore is locked");
 }
+RS
+
+cat >"$SB/plugins/remote-desktop/src/session_lifecycle.rs" <<'RS'
+fn prune_inactive_sessions() {}
 RS
 
 cat >"$SB/plugins/remote-desktop/src/session.rs" <<'RS'
