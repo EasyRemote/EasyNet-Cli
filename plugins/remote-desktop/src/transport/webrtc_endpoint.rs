@@ -41,7 +41,8 @@ use tokio::sync::watch;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::media_stream::track_local::TrackLocal;
 use webrtc::peer_connection::{
-    PeerConnection, PeerConnectionBuilder, RTCConfigurationBuilder, RTCSessionDescription,
+    PeerConnection, PeerConnectionBuilder, RTCConfigurationBuilder, RTCIceServer,
+    RTCSessionDescription,
 };
 use webrtc::runtime::{channel, default_runtime};
 
@@ -53,8 +54,8 @@ use crate::daemon::plugins::remote_desktop::constants::{
 use crate::daemon::plugins::remote_desktop::input::EffectiveRemoteDesktopInputPolicy;
 use crate::daemon::plugins::remote_desktop::media::encode::build_direct_webrtc_h264_config_for_binding;
 use crate::daemon::plugins::remote_desktop::network::{
-    direct_webrtc_route_candidate_evidence, DirectWebRtcRouteCandidateProvider,
-    LocalInterfaceRouteCandidateProvider,
+    direct_webrtc_route_candidate_evidence, ConfiguredDirectWebRtcRouteProvider,
+    DirectWebRtcIceServerConfig, DirectWebRtcRouteCandidateProvider,
 };
 use crate::daemon::plugins::remote_desktop::sdp::{
     ensure_answer_sends_video, normalize_browser_answer_sdp, normalize_remote_offer_sdp,
@@ -64,7 +65,8 @@ use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEp
 use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetBinding;
 use crate::daemon::plugins::remote_desktop::transport::{
     apply_pending_remote_ice_candidates, run_direct_webrtc_media_loop, DirectWebRtcEndpoint,
-    DirectWebRtcHandler, DirectWebRtcSession, RemoteDesktopTransportManager,
+    DirectWebRtcHandler, DirectWebRtcHandlerConfig, DirectWebRtcSession,
+    RemoteDesktopTransportManager,
 };
 
 const DIRECT_WEBRTC_ICE_GATHER_TIMEOUT_MS: u64 = 2_500;
@@ -183,10 +185,21 @@ async fn create_direct_webrtc_endpoint(
     };
     media_engine.register_codec(video_codec.clone(), RtpCodecKind::Video)?;
     let registry = register_default_interceptors(Registry::new(), &mut media_engine)?;
-    // Local direct WebRTC starts host-first. Production deployments can add
-    // deployment-owned TURN policy at the signaling layer; this runtime path
-    // must not depend on a third-party STUN server to connect localhost/LAN.
-    let rtc_config = RTCConfigurationBuilder::new().build();
+    let route_candidate_provider = ConfiguredDirectWebRtcRouteProvider::from_env()?;
+    let route_candidates = route_candidate_provider.route_candidates();
+    let route_candidate_evidence =
+        direct_webrtc_route_candidate_evidence(&route_candidate_provider, &route_candidates);
+    let ice_servers = route_candidate_provider
+        .ice_servers()
+        .iter()
+        .map(rtc_ice_server_from_route_config)
+        .collect::<Vec<_>>();
+    // Local direct WebRTC starts host-first and never depends on a public
+    // STUN/TURN default. Deployment-owned STUN/TURN/EasyNet relay routes are
+    // explicit provider configuration and are fed into RTC only as ICE servers.
+    let rtc_config = RTCConfigurationBuilder::new()
+        .with_ice_servers(ice_servers)
+        .build();
     let mut setting_engine = SettingEngine::default();
     setting_engine.set_answering_dtls_role(RTCDtlsRole::Client)?;
     // QueryOnly accepts and resolves the browser's mDNS (.local) host
@@ -200,26 +213,22 @@ async fn create_direct_webrtc_endpoint(
     let (done_tx, done_rx) = channel::<()>(1);
     let runtime =
         default_runtime().ok_or_else(|| anyhow::anyhow!("no WebRTC async runtime available"))?;
-    let handler = Arc::new(DirectWebRtcHandler::new(
-        Arc::clone(&endpoint_config.sessions),
-        Arc::clone(&endpoint_config.transports),
-        endpoint_config.session_id.clone(),
-        endpoint_config.epoch,
-        endpoint_config.input_policy.clone(),
+    let handler = Arc::new(DirectWebRtcHandler::new(DirectWebRtcHandlerConfig {
+        sessions: Arc::clone(&endpoint_config.sessions),
+        transports: Arc::clone(&endpoint_config.transports),
+        session_id: endpoint_config.session_id.clone(),
+        epoch: endpoint_config.epoch,
+        input_policy: endpoint_config.input_policy.clone(),
         gather_complete_tx,
         connected_tx,
         done_tx,
-    ));
-    let route_candidate_provider = LocalInterfaceRouteCandidateProvider;
-    let route_candidates = route_candidate_provider.route_candidates();
-    let route_candidate_evidence =
-        direct_webrtc_route_candidate_evidence(&route_candidate_provider, &route_candidates);
+    }));
     let udp_addrs = route_candidates
         .iter()
-        .map(|candidate| candidate.endpoint().to_string())
+        .filter_map(|candidate| candidate.local_bind_endpoint().map(ToOwned::to_owned))
         .collect::<Vec<_>>();
     eprintln!(
-        "[remote-desktop-webrtc] session={} route_provider={} provider_state={} udp_addrs={}",
+        "[remote-desktop-webrtc] session={} route_provider={} provider_state={} local_bind_addrs={}",
         endpoint_config.session_id,
         route_candidate_provider.provider_id(),
         route_candidate_provider.provider_state(),
@@ -335,6 +344,14 @@ async fn create_direct_webrtc_endpoint(
         .map_err(|err| anyhow::anyhow!("spawn direct WebRTC media loop: {err}"))?;
 
     Ok((answer_value, peer_connection_for_endpoint, completion))
+}
+
+fn rtc_ice_server_from_route_config(config: &DirectWebRtcIceServerConfig) -> RTCIceServer {
+    RTCIceServer {
+        urls: config.urls().to_vec(),
+        username: config.username().to_string(),
+        credential: config.credential().to_string(),
+    }
 }
 
 #[cfg(test)]

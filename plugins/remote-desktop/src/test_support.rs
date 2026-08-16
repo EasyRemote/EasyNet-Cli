@@ -107,16 +107,17 @@ impl RemoteAppTargetBindingVerifier for TestRemoteAppTargetBindingVerifier {
         binding: &RemoteAppTargetBinding,
     ) -> Result<ResolvedCaptureTargetProof, RemoteAppTargetError> {
         let locator = binding.native_locator();
-        Ok(ResolvedCaptureTargetProof::new(
-            locator.capture_backend(),
-            binding.target_kind(),
-            locator.display_id(),
-            locator.window_id(),
-            locator.pid(),
-            locator.app_identity().map(ToOwned::to_owned),
-            locator.bundle_id().map(ToOwned::to_owned),
-            Some((1280, 720)),
-        ))
+        Ok(
+            ResolvedCaptureTargetProof::new(locator.capture_backend(), binding.target_kind())
+                .with_native_identity(
+                    locator.display_id(),
+                    locator.window_id(),
+                    locator.pid(),
+                    locator.app_identity().map(ToOwned::to_owned),
+                    locator.bundle_id().map(ToOwned::to_owned),
+                )
+                .with_native_dimensions(Some((1280, 720))),
+        )
     }
 }
 
@@ -244,13 +245,15 @@ pub(in crate::daemon::plugins::remote_desktop) fn test_application_target_bindin
     let proof = ResolvedCaptureTargetProof::new(
         binding.native_locator().capture_backend(),
         RemoteDesktopTargetKind::Application,
+    )
+    .with_native_identity(
         Some(42),
         None,
         Some(9001),
         Some("com.example.Editor".to_string()),
         Some("com.example.Editor".to_string()),
-        Some((200, 100)),
     )
+    .with_native_dimensions(Some((200, 100)))
     .with_app_window_set(app_window_set);
     binding
         .commit_capture_proof("test.ability", proof)

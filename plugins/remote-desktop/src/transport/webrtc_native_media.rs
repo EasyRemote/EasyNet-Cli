@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use rtc::media::Sample;
 use serde_json::json;
-use tokio::sync::watch;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 use webrtc::peer_connection::PeerConnection;
 
@@ -31,6 +30,7 @@ use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEp
 use crate::daemon::plugins::remote_desktop::target::{
     RemoteAppTargetBinding, RemoteAppTargetError,
 };
+use crate::daemon::plugins::remote_desktop::transport::webrtc_media::DirectWebRtcMediaExecution;
 use crate::daemon::plugins::remote_desktop::videotoolbox_encoder::VideoToolboxEncoder;
 
 /// Immutable inputs for the macOS native direct-WebRTC strategy.
@@ -66,14 +66,10 @@ impl<'a> NativeMediaInputs<'a> {
 }
 
 pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native_stream(
-    sessions: &RemoteDesktopSessionStore,
+    execution: &mut DirectWebRtcMediaExecution<'_>,
     peer_connection: &Arc<dyn PeerConnection>,
     inputs: &NativeMediaInputs<'_>,
-    session_id: &str,
-    epoch: TransportEpoch,
     target_binding: &RemoteAppTargetBinding,
-    done_rx: &mut webrtc::runtime::Receiver<()>,
-    stop_rx: &mut watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     use std::sync::Arc as StdArc;
 
@@ -133,14 +129,14 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
     let mut decoder_primed = false;
     let mut last_written_pts_ms: Option<u64> = None;
     loop {
-        if *stop_rx.borrow() || done_rx.try_recv().is_ok() {
+        if execution.should_stop() {
             break;
         }
         active_media_source_epoch = apply_pending_media_rebind(
-            sessions,
+            execution.sessions(),
             &capture,
-            session_id,
-            epoch,
+            execution.session_id(),
+            execution.epoch(),
             active_media_source_epoch,
         )?;
         let (units, stale_dropped) = latest_native_rtp_units(encoder.poll(), decoder_primed);
@@ -179,7 +175,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
             );
             if is_keyframe {
                 if !decoder_primed {
-                    sessions.mark_direct_webrtc_media_ready(session_id, epoch);
+                    execution.mark_media_ready();
                 }
                 decoder_primed = true;
             }
@@ -211,48 +207,40 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
                     );
                 }
             }
-            record_media_pipeline_stats(
-                sessions,
-                session_id,
-                epoch,
-                json!({
-                    "path": "native_webrtc",
-                    "backend_id": config.backend.backend_id(),
-                    "capture_api": config.backend.capture_api(),
-                    "encoder_name": config.backend.encoder(),
-                    "carrier": config.backend.carrier(),
-                    "target_fps": fps,
-                    "target_bitrate_kbps": config.bitrate_kbps,
-                    "width": req_width,
-                    "height": req_height,
-                    "adaptive_bitrate": {
-                        "current_kbps": bitrate_controller.current_kbps,
-                        "target_kbps": bitrate_controller.target_kbps,
-                        "min_kbps": bitrate_controller.min_kbps,
-                    },
-                    "webrtc_stats": webrtc_stats,
-                    "latency_stats": latency_stats.to_json(),
-                    "rtp_units_written": written_units,
-                    "rtp_keyframes_written": written_keyframes,
-                    "rtp_bytes_written": written_bytes,
-                    "rtp_stale_units_dropped": rtp_stale_units_dropped,
-                    "rtp_sender_backpressure_drops": rtp_sender_backpressure_drops,
-                    "encoder_stats": {
-                        "submitted_frames": stats.submitted_frames,
-                        "input_dropped_frames": stats.input_dropped_frames,
-                        "output_dropped_units": stats.output_dropped_units,
-                        "emitted_units": stats.emitted_units,
-                        "queued_units": stats.queued_units,
-                        "in_flight_frames": stats.in_flight_frames,
-                        "max_in_flight_frames": stats.max_in_flight_frames,
-                        "configured_bitrate_kbps": stats.configured_bitrate_kbps,
-                    },
-                }),
-            );
+            execution.record_pipeline_stats(json!({
+                "path": "native_webrtc",
+                "backend_id": config.backend.backend_id(),
+                "capture_api": config.backend.capture_api(),
+                "encoder_name": config.backend.encoder(),
+                "carrier": config.backend.carrier(),
+                "target_fps": fps,
+                "target_bitrate_kbps": config.bitrate_kbps,
+                "width": req_width,
+                "height": req_height,
+                "adaptive_bitrate": {
+                    "current_kbps": bitrate_controller.current_kbps,
+                    "target_kbps": bitrate_controller.target_kbps,
+                    "min_kbps": bitrate_controller.min_kbps,
+                },
+                "webrtc_stats": webrtc_stats,
+                "latency_stats": latency_stats.to_json(),
+                "rtp_units_written": written_units,
+                "rtp_keyframes_written": written_keyframes,
+                "rtp_bytes_written": written_bytes,
+                "rtp_stale_units_dropped": rtp_stale_units_dropped,
+                "rtp_sender_backpressure_drops": rtp_sender_backpressure_drops,
+                "encoder_stats": {
+                    "submitted_frames": stats.submitted_frames,
+                    "input_dropped_frames": stats.input_dropped_frames,
+                    "output_dropped_units": stats.output_dropped_units,
+                    "emitted_units": stats.emitted_units,
+                    "queued_units": stats.queued_units,
+                    "in_flight_frames": stats.in_flight_frames,
+                    "max_in_flight_frames": stats.max_in_flight_frames,
+                    "configured_bitrate_kbps": stats.configured_bitrate_kbps,
+                },
+            }));
             last_stats_at = Instant::now();
-        }
-        if stop_rx.has_changed().unwrap_or(false) && *stop_rx.borrow_and_update() {
-            break;
         }
         tokio::select! {
             _ = encoder_wakeup.notified() => {}
@@ -262,38 +250,33 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_native
     capture.stop();
     let stats = encoder.stats();
     let (webrtc_stats, _) = webrtc_stats_snapshot(peer_connection).await;
-    record_media_pipeline_stats(
-        sessions,
-        session_id,
-        epoch,
-        json!({
-            "path": "native_webrtc",
-            "backend_id": config.backend.backend_id(),
-            "terminal": true,
-            "rtp_units_written": written_units,
-            "rtp_keyframes_written": written_keyframes,
-            "rtp_bytes_written": written_bytes,
-            "rtp_stale_units_dropped": rtp_stale_units_dropped,
-            "rtp_sender_backpressure_drops": rtp_sender_backpressure_drops,
-            "adaptive_bitrate": {
-                "current_kbps": bitrate_controller.current_kbps,
-                "target_kbps": bitrate_controller.target_kbps,
-                "min_kbps": bitrate_controller.min_kbps,
-            },
-            "webrtc_stats": webrtc_stats,
-            "latency_stats": latency_stats.to_json(),
-            "encoder_stats": {
-                "submitted_frames": stats.submitted_frames,
-                "input_dropped_frames": stats.input_dropped_frames,
-                "output_dropped_units": stats.output_dropped_units,
-                "emitted_units": stats.emitted_units,
-                "queued_units": stats.queued_units,
-                "in_flight_frames": stats.in_flight_frames,
-                "max_in_flight_frames": stats.max_in_flight_frames,
-                "configured_bitrate_kbps": stats.configured_bitrate_kbps,
-            },
-        }),
-    );
+    execution.record_pipeline_stats(json!({
+        "path": "native_webrtc",
+        "backend_id": config.backend.backend_id(),
+        "terminal": true,
+        "rtp_units_written": written_units,
+        "rtp_keyframes_written": written_keyframes,
+        "rtp_bytes_written": written_bytes,
+        "rtp_stale_units_dropped": rtp_stale_units_dropped,
+        "rtp_sender_backpressure_drops": rtp_sender_backpressure_drops,
+        "adaptive_bitrate": {
+            "current_kbps": bitrate_controller.current_kbps,
+            "target_kbps": bitrate_controller.target_kbps,
+            "min_kbps": bitrate_controller.min_kbps,
+        },
+        "webrtc_stats": webrtc_stats,
+        "latency_stats": latency_stats.to_json(),
+        "encoder_stats": {
+            "submitted_frames": stats.submitted_frames,
+            "input_dropped_frames": stats.input_dropped_frames,
+            "output_dropped_units": stats.output_dropped_units,
+            "emitted_units": stats.emitted_units,
+            "queued_units": stats.queued_units,
+            "in_flight_frames": stats.in_flight_frames,
+            "max_in_flight_frames": stats.max_in_flight_frames,
+            "configured_bitrate_kbps": stats.configured_bitrate_kbps,
+        },
+    }));
     Ok(())
 }
 
@@ -342,15 +325,6 @@ fn fail_pending_media_rebind(
         err.to_string(),
     );
     err.clone()
-}
-
-fn record_media_pipeline_stats(
-    sessions: &RemoteDesktopSessionStore,
-    session_id: &str,
-    epoch: TransportEpoch,
-    stats: serde_json::Value,
-) {
-    sessions.record_media_pipeline_stats(session_id, epoch, stats);
 }
 
 #[cfg(test)]

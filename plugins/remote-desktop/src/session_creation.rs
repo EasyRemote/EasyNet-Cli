@@ -242,16 +242,17 @@ mod tests {
                 .as_str()
                 .expect("test binding must project backend");
             let locator = binding.native_locator();
-            Ok(ResolvedCaptureTargetProof::new(
-                backend,
-                binding.target_kind(),
-                locator.display_id(),
-                locator.window_id(),
-                locator.pid(),
-                None,
-                locator.bundle_id().map(ToOwned::to_owned),
-                Some((1280, 720)),
-            ))
+            Ok(
+                ResolvedCaptureTargetProof::new(backend, binding.target_kind())
+                    .with_native_identity(
+                        locator.display_id(),
+                        locator.window_id(),
+                        locator.pid(),
+                        None,
+                        locator.bundle_id().map(ToOwned::to_owned),
+                    )
+                    .with_native_dimensions(Some((1280, 720))),
+            )
         }
     }
 

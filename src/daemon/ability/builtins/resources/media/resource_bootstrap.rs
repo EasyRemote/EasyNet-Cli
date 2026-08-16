@@ -594,16 +594,18 @@ fn discover_screen_targets_with_xcap() -> anyhow::Result<Vec<DiscoveredResource>
         };
         let area = screen_target_area(width, height);
         let bounds = ScreenTargetBounds::new(x, y, width, height);
-        apps.entry(app_name.clone()).or_default().record_window(
-            id,
-            pid,
-            title.as_deref(),
-            area,
-            focused == Some(true),
-            bounds,
-            None,
-            None,
-        );
+        apps.entry(app_name.clone())
+            .or_default()
+            .record_window(AppWindowObservation {
+                window_id: id,
+                pid,
+                title: title.as_deref(),
+                area,
+                focused: focused == Some(true),
+                bounds,
+                display_id: None,
+                bundle_id: None,
+            });
         out.push(DiscoveredResource {
             kind: ResourceType::Window,
             hardware_id: format!("window:xcap:{}:{id}", pid.unwrap_or(0)),
@@ -686,18 +688,30 @@ struct AppAggregate {
     window_ids: Vec<u32>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct AppWindowObservation<'a> {
+    window_id: u32,
+    pid: Option<u32>,
+    title: Option<&'a str>,
+    area: u64,
+    focused: bool,
+    bounds: ScreenTargetBounds,
+    display_id: Option<u32>,
+    bundle_id: Option<&'a str>,
+}
+
 impl AppAggregate {
-    fn record_window(
-        &mut self,
-        window_id: u32,
-        pid: Option<u32>,
-        title: Option<&str>,
-        area: u64,
-        focused: bool,
-        bounds: ScreenTargetBounds,
-        display_id: Option<u32>,
-        bundle_id: Option<&str>,
-    ) {
+    fn record_window(&mut self, observation: AppWindowObservation<'_>) {
+        let AppWindowObservation {
+            window_id,
+            pid,
+            title,
+            area,
+            focused,
+            bounds,
+            display_id,
+            bundle_id,
+        } = observation;
         self.window_count += 1;
         self.window_ids.push(window_id);
         self.window_ids.sort_unstable();
@@ -745,7 +759,10 @@ mod macos_screen_targets {
     use std::ffi::{c_char, c_void, CStr, CString};
     use std::ptr;
 
-    use super::{screen_target_area, AppAggregate, DiscoveredResource, ScreenTargetBounds};
+    use super::{
+        screen_target_area, AppAggregate, AppWindowObservation, DiscoveredResource,
+        ScreenTargetBounds,
+    };
     use crate::daemon::persistence::resources::ResourceType;
     use objc2_app_kit::NSRunningApplication;
 
@@ -962,16 +979,16 @@ mod macos_screen_targets {
                 apps.entry(app_key)
                     .or_insert_with(|| (app_name.clone(), AppAggregate::default()))
                     .1
-                    .record_window(
+                    .record_window(AppWindowObservation {
                         window_id,
                         pid,
-                        title.as_deref(),
+                        title: title.as_deref(),
                         area,
-                        false,
+                        focused: false,
                         bounds,
                         display_id,
-                        app_identity,
-                    );
+                        bundle_id: app_identity,
+                    });
             }
             out.push(DiscoveredResource {
                 kind: ResourceType::Window,
@@ -1887,26 +1904,26 @@ mod tests {
     #[test]
     fn app_aggregate_preserves_primary_window_bounds() {
         let mut aggregate = AppAggregate::default();
-        aggregate.record_window(
-            10,
-            Some(100),
-            Some("Small"),
-            10_000,
-            false,
-            ScreenTargetBounds::new(Some(10), Some(20), Some(100), Some(100)),
-            Some(42),
-            Some("com.example.app"),
-        );
-        aggregate.record_window(
-            11,
-            Some(100),
-            Some("Focused"),
-            9_000,
-            true,
-            ScreenTargetBounds::new(Some(300), Some(400), Some(90), Some(100)),
-            Some(42),
-            Some("com.example.app"),
-        );
+        aggregate.record_window(AppWindowObservation {
+            window_id: 10,
+            pid: Some(100),
+            title: Some("Small"),
+            area: 10_000,
+            focused: false,
+            bounds: ScreenTargetBounds::new(Some(10), Some(20), Some(100), Some(100)),
+            display_id: Some(42),
+            bundle_id: Some("com.example.app"),
+        });
+        aggregate.record_window(AppWindowObservation {
+            window_id: 11,
+            pid: Some(100),
+            title: Some("Focused"),
+            area: 9_000,
+            focused: true,
+            bounds: ScreenTargetBounds::new(Some(300), Some(400), Some(90), Some(100)),
+            display_id: Some(42),
+            bundle_id: Some("com.example.app"),
+        });
 
         assert_eq!(aggregate.primary_window_id, Some(11));
         assert_eq!(aggregate.display_id, Some(42));

@@ -9,7 +9,6 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::watch;
 use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
 
 #[cfg(feature = "native-media")]
@@ -22,9 +21,8 @@ use crate::daemon::plugins::remote_desktop::media::encode::latest_recorder_frame
 use crate::daemon::plugins::remote_desktop::media::encode::{
     build_openh264_encoder, even_rgb_frame, write_h264_sample, BuiltinH264Config,
 };
-use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
-use crate::daemon::plugins::remote_desktop::session_transport_state::TransportEpoch;
 use crate::daemon::plugins::remote_desktop::target::DiagnosticCaptureSubject;
+use crate::daemon::plugins::remote_desktop::transport::webrtc_media::DirectWebRtcMediaExecution;
 
 #[cfg(feature = "native-media")]
 const RECORDER_FRAME_TIMEOUT_MS: u64 = 250;
@@ -44,14 +42,10 @@ pub(in crate::daemon::plugins::remote_desktop) struct BaselineMediaInputs<'a> {
 
 #[cfg(feature = "native-media")]
 pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_recorder_stream(
-    sessions: &RemoteDesktopSessionStore,
-    session_id: &str,
-    epoch: TransportEpoch,
+    execution: &mut DirectWebRtcMediaExecution<'_>,
     inputs: &BaselineMediaInputs<'_>,
     recorder: xcap::VideoRecorder,
     rx: std::sync::mpsc::Receiver<xcap::Frame>,
-    done_rx: &mut webrtc::runtime::Receiver<()>,
-    stop_rx: &mut watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let BaselineMediaInputs {
         track,
@@ -65,7 +59,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_record
     let mut seq = 0_u64;
     let mut media_ready_reported = false;
     loop {
-        if *stop_rx.borrow() || done_rx.try_recv().is_ok() {
+        if execution.should_stop() {
             break;
         }
         match rx.recv_timeout(Duration::from_millis(RECORDER_FRAME_TIMEOUT_MS)) {
@@ -84,7 +78,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_record
                 )
                 .await?;
                 if wrote_sample && !media_ready_reported {
-                    sessions.mark_direct_webrtc_media_ready(session_id, epoch);
+                    execution.mark_media_ready();
                     media_ready_reported = true;
                 }
                 seq = seq.saturating_add(1);
@@ -92,22 +86,15 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_record
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
-        if stop_rx.has_changed().unwrap_or(false) && *stop_rx.borrow_and_update() {
-            break;
-        }
     }
     let _ = recorder.stop();
     Ok(())
 }
 
 pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_polling_stream(
-    sessions: &RemoteDesktopSessionStore,
-    session_id: &str,
-    epoch: TransportEpoch,
+    execution: &mut DirectWebRtcMediaExecution<'_>,
     inputs: &BaselineMediaInputs<'_>,
     capture_subject: &DiagnosticCaptureSubject,
-    done_rx: &mut webrtc::runtime::Receiver<()>,
-    stop_rx: &mut watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let BaselineMediaInputs {
         track,
@@ -122,7 +109,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_pollin
     let mut seq = 0_u64;
     let mut media_ready_reported = false;
     loop {
-        if *stop_rx.borrow() || done_rx.try_recv().is_ok() {
+        if execution.should_stop() {
             break;
         }
         let started = Instant::now();
@@ -138,7 +125,7 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_pollin
         )
         .await?;
         if wrote_sample && !media_ready_reported {
-            sessions.mark_direct_webrtc_media_ready(session_id, epoch);
+            execution.mark_media_ready();
             media_ready_reported = true;
         }
         seq = seq.saturating_add(1);

@@ -750,7 +750,15 @@ impl DirectWebRtcRouteCandidate {
     fn endpoint(&self) -> &str {
         "127.0.0.1:0"
     }
+
+    fn local_bind_endpoint(&self) -> Option<&str> {
+        Some(self.endpoint())
+    }
 }
+
+struct DirectWebRtcIceServerConfig;
+
+struct DirectWebRtcRouteConfig;
 
 trait DirectWebRtcRouteCandidateProvider {
     fn route_candidates(&self) -> Vec<DirectWebRtcRouteCandidate>;
@@ -758,10 +766,26 @@ trait DirectWebRtcRouteCandidateProvider {
 
 struct LocalInterfaceRouteCandidateProvider;
 
+struct ConfiguredDirectWebRtcRouteProvider;
+
+impl ConfiguredDirectWebRtcRouteProvider {
+    fn from_env() -> Self {
+        Self
+    }
+}
+
 #[test]
 fn route_candidate_evidence_keeps_host_only_provider_explicit() {
     assert_eq!(evidence["provider_state"], json!("host_local_only"));
 }
+
+#[test]
+fn configured_route_provider_projects_ice_servers_without_credentials_in_evidence() {
+    assert_eq!(evidence["route_config"]["ice_servers"][0]["credential_configured"], json!(true));
+}
+
+#[test]
+fn configured_ice_routes_do_not_become_local_udp_bind_endpoints() {}
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/session_store.rs" <<'RS'
@@ -809,12 +833,16 @@ mod tests {
 RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/transport/webrtc_endpoint.rs" <<'RS'
+struct RTCIceServer;
+
 fn answer(endpoint_config: EndpointConfig) {
-    let route_candidate_provider = LocalInterfaceRouteCandidateProvider;
+    let route_candidate_provider = ConfiguredDirectWebRtcRouteProvider::from_env();
     let route_candidates = route_candidate_provider.route_candidates();
+    let ice_servers = vec![RTCIceServer];
+    RTCConfigurationBuilder::new().with_ice_servers(ice_servers);
     let udp_addrs = route_candidates
         .iter()
-        .map(|candidate| candidate.endpoint().to_string())
+        .filter_map(|candidate| candidate.local_bind_endpoint().map(ToOwned::to_owned))
         .collect::<Vec<_>>();
     json!({
         "endpoint_ura": direct_webrtc_endpoint_ura(&endpoint_config.session_id),
@@ -2200,6 +2228,36 @@ perl -0pi -e 's/assert_eq!\(evidence\["provider_state"\], json!\("host_local_onl
 run_fail 'local route candidate provider tests must prove host-only state is explicit'
 
 write_fixture
+perl -0pi -e 's/struct DirectWebRtcIceServerConfig;/struct DirectWebRtcRouteEndpoint;/g' \
+  "$SANDBOX/plugins/remote-desktop/src/network.rs"
+run_fail 'direct WebRTC route configuration must project typed ICE server config instead of raw endpoint strings'
+
+write_fixture
+perl -0pi -e 's/struct DirectWebRtcRouteConfig;/struct DirectWebRtcRouteBag;/g' \
+  "$SANDBOX/plugins/remote-desktop/src/network.rs"
+run_fail 'direct WebRTC route configuration must be a typed provider input'
+
+write_fixture
+perl -0pi -e 's/ConfiguredDirectWebRtcRouteProvider/StaticDirectWebRtcRouteProvider/g' \
+  "$SANDBOX/plugins/remote-desktop/src/network.rs"
+run_fail 'direct WebRTC route discovery must support configured STUN/TURN/EasyNet relay routes through the provider'
+
+write_fixture
+perl -0pi -e 's/credential_configured/credential/g' \
+  "$SANDBOX/plugins/remote-desktop/src/network.rs"
+run_fail 'direct WebRTC route evidence must redact credentials while proving relay credentials are configured'
+
+write_fixture
+perl -0pi -e 's/fn configured_ice_routes_do_not_become_local_udp_bind_endpoints/fn configured_routes_share_udp_bind_path/' \
+  "$SANDBOX/plugins/remote-desktop/src/network.rs"
+run_fail 'route tests must prove STUN/TURN/EasyNet relay URLs are never used as UDP bind addresses'
+
+write_fixture
+perl -0pi -e 's/fn configured_route_provider_projects_ice_servers_without_credentials_in_evidence/fn configured_route_provider_projects_ice_servers/' \
+  "$SANDBOX/plugins/remote-desktop/src/network.rs"
+run_fail 'route tests must prove configured ICE routes are represented without credential leakage'
+
+write_fixture
 perl -0pi -e 's/^/fn direct_webrtc_udp_addrs() {}\n/' \
   "$SANDBOX/plugins/remote-desktop/src/network.rs"
 run_fail 'direct WebRTC route discovery must not regress to an untyped UDP address helper'
@@ -2210,14 +2268,34 @@ perl -0pi -e 's/"route_candidate_evidence": route_candidate_evidence,//' \
 run_fail 'direct WebRTC answer must publish route candidate evidence for frontend/backend diagnosis'
 
 write_fixture
-perl -0pi -e 's/LocalInterfaceRouteCandidateProvider/DirectWebRtcUdpAddressProvider/g' \
+perl -0pi -e 's/ConfiguredDirectWebRtcRouteProvider::from_env\(\)/LocalInterfaceRouteCandidateProvider/g' \
   "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
-run_fail 'direct WebRTC endpoint must consume the typed local route candidate provider'
+run_fail 'direct WebRTC endpoint must consume the configured typed route provider'
 
 write_fixture
-perl -0pi -e 's/candidate\.endpoint\(\)\.to_string\(\)/candidate.to_string()/' \
+perl -0pi -e 's/with_ice_servers/without_ice_servers/g' \
   "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
-run_fail 'endpoint UDP bind addresses must be derived from typed route candidates'
+run_fail 'direct WebRTC endpoint must wire provider-backed ICE servers into RTC configuration'
+
+write_fixture
+perl -0pi -e 's/RTCIceServer/RawIceServer/g' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
+run_fail 'direct WebRTC endpoint must translate typed route config into WebRTC ICE server configuration'
+
+write_fixture
+perl -0pi -e 's/candidate\.local_bind_endpoint\(\)/candidate.endpoint()/g' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
+run_fail 'endpoint UDP bind addresses must be derived only from typed host bind candidates'
+
+write_fixture
+perl -0pi -e 's/filter_map/map/g' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
+run_fail 'endpoint UDP bind addresses must filter out configured STUN/TURN/EasyNet relay URLs'
+
+write_fixture
+perl -0pi -e 's/let udp_addrs =/let _bad_route_endpoint = candidate.endpoint().to_string();\n    let udp_addrs =/' \
+  "$SANDBOX/plugins/remote-desktop/src/transport/webrtc_endpoint.rs"
+run_fail 'endpoint UDP bind addresses must not treat every route candidate endpoint as a local bind address'
 
 write_fixture
 perl -0pi -e 's/"production_route_ready": transport_view\.production_route_ready\(\),//' \

@@ -41,17 +41,31 @@ pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcHandler {
     done_tx: Sender<()>,
 }
 
+pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcHandlerConfig {
+    pub(in crate::daemon::plugins::remote_desktop) sessions: Arc<RemoteDesktopSessionStore>,
+    pub(in crate::daemon::plugins::remote_desktop) transports: Arc<RemoteDesktopTransportManager>,
+    pub(in crate::daemon::plugins::remote_desktop) session_id: String,
+    pub(in crate::daemon::plugins::remote_desktop) epoch: TransportEpoch,
+    pub(in crate::daemon::plugins::remote_desktop) input_policy: EffectiveRemoteDesktopInputPolicy,
+    pub(in crate::daemon::plugins::remote_desktop) gather_complete_tx: Sender<()>,
+    pub(in crate::daemon::plugins::remote_desktop) connected_tx: Sender<()>,
+    pub(in crate::daemon::plugins::remote_desktop) done_tx: Sender<()>,
+}
+
 impl DirectWebRtcHandler {
     pub(in crate::daemon::plugins::remote_desktop) fn new(
-        sessions: Arc<RemoteDesktopSessionStore>,
-        transports: Arc<RemoteDesktopTransportManager>,
-        session_id: String,
-        epoch: TransportEpoch,
-        input_policy: EffectiveRemoteDesktopInputPolicy,
-        gather_complete_tx: Sender<()>,
-        connected_tx: Sender<()>,
-        done_tx: Sender<()>,
+        config: DirectWebRtcHandlerConfig,
     ) -> Self {
+        let DirectWebRtcHandlerConfig {
+            sessions,
+            transports,
+            session_id,
+            epoch,
+            input_policy,
+            gather_complete_tx,
+            connected_tx,
+            done_tx,
+        } = config;
         Self {
             sessions,
             transports,

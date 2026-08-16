@@ -402,16 +402,16 @@ fn resolve_target_for_binding(
         binding.target_kind(),
         selected_display.as_deref(),
     )?;
-    let mut capture_proof = ResolvedCaptureTargetProof::new(
-        "screencapturekit",
-        binding.target_kind(),
-        proof_display_id,
-        proof_window_id,
-        proof_pid,
-        proof_app_identity,
-        proof_bundle_id,
-        Some((native_width, native_height)),
-    );
+    let mut capture_proof =
+        ResolvedCaptureTargetProof::new("screencapturekit", binding.target_kind())
+            .with_native_identity(
+                proof_display_id,
+                proof_window_id,
+                proof_pid,
+                proof_app_identity,
+                proof_bundle_id,
+            )
+            .with_native_dimensions(Some((native_width, native_height)));
     if let Some(app_window_set) = proof_app_window_set {
         capture_proof = capture_proof.with_app_window_set(app_window_set);
     }

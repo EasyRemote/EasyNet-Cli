@@ -61,13 +61,13 @@ impl Deref for RemoteDesktopSessionStoreGuard<'_> {
     type Target = HashMap<String, RemoteDesktopSession>;
 
     fn deref(&self) -> &Self::Target {
-        &*self.guard
+        &self.guard
     }
 }
 
 impl DerefMut for RemoteDesktopSessionStoreGuard<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.guard
+        &mut self.guard
     }
 }
 
@@ -123,7 +123,7 @@ impl RemoteDesktopSessionStore {
         f: impl FnOnce(&mut HashMap<String, RemoteDesktopSession>) -> R,
     ) -> R {
         let mut sessions = self.lock();
-        f(&mut *sessions)
+        f(&mut sessions)
     }
 
     /// Prune terminal/tombstone rows to the SPEC performance bound `T <= 4S`,
@@ -221,9 +221,7 @@ impl RemoteDesktopSessionStore {
         observation: TargetObservation,
     ) -> Option<TargetMediaSourceLost> {
         let mut sessions = self.lock();
-        let Some(session) = sessions.get_mut(session_id) else {
-            return None;
-        };
+        let session = sessions.get_mut(session_id)?;
         let binding = session.target_binding();
         if session.is_terminal()
             || binding.binding_id() != binding_id

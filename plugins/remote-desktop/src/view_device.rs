@@ -187,6 +187,21 @@ pub(in crate::daemon::plugins::remote_desktop) fn device_capabilities_view() -> 
     })
 }
 
+/// Empty latest-metrics DTO used until runtime metrics arrive.
+pub(in crate::daemon::plugins::remote_desktop) fn empty_pipeline_metrics() -> Value {
+    json!({
+        "observed_fps": 0,
+        "capture_to_encode_ms": 0,
+        "encode_to_network_ms": 0,
+        "jitter_buffer_ms": 0,
+        "decode_to_present_ms": 0,
+        "estimated_glass_to_glass_ms": 0,
+        "frame_queue_depth": 0,
+        "packet_loss_ratio": 0.0,
+        "dropped_frames": 0,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -243,19 +258,4 @@ mod tests {
             .as_str()
             .is_some_and(|message| message.contains("display/window/application")));
     }
-}
-
-/// Empty latest-metrics DTO used until runtime metrics arrive.
-pub(in crate::daemon::plugins::remote_desktop) fn empty_pipeline_metrics() -> Value {
-    json!({
-        "observed_fps": 0,
-        "capture_to_encode_ms": 0,
-        "encode_to_network_ms": 0,
-        "jitter_buffer_ms": 0,
-        "decode_to_present_ms": 0,
-        "estimated_glass_to_glass_ms": 0,
-        "frame_queue_depth": 0,
-        "packet_loss_ratio": 0.0,
-        "dropped_frames": 0,
-    })
 }

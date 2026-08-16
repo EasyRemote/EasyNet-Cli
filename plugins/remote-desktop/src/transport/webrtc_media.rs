@@ -56,6 +56,69 @@ pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcSession {
     pub(in crate::daemon::plugins::remote_desktop) config: BuiltinH264Config,
 }
 
+/// Session-owned lifecycle and state projection shared by every direct-WebRTC
+/// media strategy.
+///
+/// Capture/encode strategies own only their media mechanics. Stop observation,
+/// readiness publication, transport-epoch fencing, and diagnostic projection
+/// remain identical regardless of the selected capture backend.
+pub(in crate::daemon::plugins::remote_desktop) struct DirectWebRtcMediaExecution<'a> {
+    sessions: &'a RemoteDesktopSessionStore,
+    session_id: &'a str,
+    epoch: TransportEpoch,
+    done_rx: &'a mut webrtc::runtime::Receiver<()>,
+    stop_rx: &'a mut watch::Receiver<bool>,
+}
+
+impl<'a> DirectWebRtcMediaExecution<'a> {
+    fn new(
+        sessions: &'a RemoteDesktopSessionStore,
+        session_id: &'a str,
+        epoch: TransportEpoch,
+        done_rx: &'a mut webrtc::runtime::Receiver<()>,
+        stop_rx: &'a mut watch::Receiver<bool>,
+    ) -> Self {
+        Self {
+            sessions,
+            session_id,
+            epoch,
+            done_rx,
+            stop_rx,
+        }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn should_stop(&mut self) -> bool {
+        if *self.stop_rx.borrow() || self.done_rx.try_recv().is_ok() {
+            return true;
+        }
+        self.stop_rx.has_changed().unwrap_or(false) && *self.stop_rx.borrow_and_update()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn sessions(
+        &self,
+    ) -> &RemoteDesktopSessionStore {
+        self.sessions
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn session_id(&self) -> &str {
+        self.session_id
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn epoch(&self) -> TransportEpoch {
+        self.epoch
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn mark_media_ready(&self) {
+        self.sessions
+            .mark_direct_webrtc_media_ready(self.session_id, self.epoch);
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn record_pipeline_stats(&self, stats: Value) {
+        self.sessions
+            .record_media_pipeline_stats(self.session_id, self.epoch, stats);
+    }
+}
+
 #[derive(Debug)]
 struct DirectWebRtcFailureProjection {
     event_kind: WebRtcFailureEventKind,
@@ -100,6 +163,8 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
         let _ = peer_connection.close().await;
         return;
     };
+    let mut execution =
+        DirectWebRtcMediaExecution::new(&sessions, &session_id, epoch, &mut done_rx, &mut stop_rx);
     let source = start_remote_app_media_source(
         &DirectWebRtcMediaSourceFactory,
         &target_binding,
@@ -112,14 +177,10 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
                 let native_inputs =
                     NativeMediaInputs::new(&track, ssrc, payload_type, &options, &config);
                 match run_direct_webrtc_native_stream(
-                    &sessions,
+                    &mut execution,
                     &peer_connection,
                     &native_inputs,
-                    &session_id,
-                    epoch,
                     &target_binding,
-                    &mut done_rx,
-                    &mut stop_rx,
                 )
                 .await
                 {
@@ -188,39 +249,17 @@ pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_media_
         let capture_subject = target_binding.diagnostic_capture_subject().clone();
         let recorder_entry = capture_subject.to_backend_resource_entry();
         if let Ok((recorder, rx)) = open_display_recorder_with_xcap(&recorder_entry) {
-            run_direct_webrtc_recorder_stream(
-                &sessions,
-                &session_id,
-                epoch,
-                &baseline_inputs,
-                recorder,
-                rx,
-                &mut done_rx,
-                &mut stop_rx,
-            )
-            .await
+            run_direct_webrtc_recorder_stream(&mut execution, &baseline_inputs, recorder, rx).await
         } else {
-            run_direct_webrtc_polling_stream(
-                &sessions,
-                &session_id,
-                epoch,
-                &baseline_inputs,
-                &capture_subject,
-                &mut done_rx,
-                &mut stop_rx,
-            )
-            .await
+            run_direct_webrtc_polling_stream(&mut execution, &baseline_inputs, &capture_subject)
+                .await
         }
     };
     #[cfg(not(feature = "native-media"))]
     let result = run_direct_webrtc_polling_stream(
-        &sessions,
-        &session_id,
-        epoch,
+        &mut execution,
         &baseline_inputs,
         target_binding.diagnostic_capture_subject(),
-        &mut done_rx,
-        &mut stop_rx,
     )
     .await;
     if let Err(err) = result {
@@ -290,6 +329,38 @@ mod tests {
         RemoteAppTargetResolver, ResourceEntryTargetResolver, TargetResolutionError,
     };
     use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
+
+    #[test]
+    fn media_execution_observes_transport_and_session_stop_signals() {
+        let sessions = RemoteDesktopSessionStore::new();
+        let (_done_tx, mut done_rx) = webrtc::runtime::channel::<()>(1);
+        let (stop_tx, mut stop_rx) = watch::channel(false);
+        let mut execution = DirectWebRtcMediaExecution::new(
+            &sessions,
+            "rd-media-execution",
+            TransportEpoch::new(1),
+            &mut done_rx,
+            &mut stop_rx,
+        );
+
+        assert!(!execution.should_stop());
+        stop_tx.send(true).expect("stop receiver remains active");
+        assert!(execution.should_stop());
+
+        let (_stop_tx, mut stop_rx) = watch::channel(false);
+        let (done_tx_2, mut done_rx) = webrtc::runtime::channel::<()>(1);
+        let mut execution = DirectWebRtcMediaExecution::new(
+            &sessions,
+            "rd-media-execution",
+            TransportEpoch::new(2),
+            &mut done_rx,
+            &mut stop_rx,
+        );
+        done_tx_2
+            .try_send(())
+            .expect("transport completion signal records");
+        assert!(execution.should_stop());
+    }
 
     #[test]
     fn native_target_failure_preserves_frontend_recovery_context() {

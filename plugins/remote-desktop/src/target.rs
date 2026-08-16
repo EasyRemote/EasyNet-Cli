@@ -77,6 +77,7 @@ impl TryFrom<ResourceType> for RemoteDesktopTargetKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)] // Canonical SPEC vocabulary uses the `*Surface` suffix.
 pub(in crate::daemon::plugins::remote_desktop) enum CaptureScope {
     DisplaySurface,
     WindowSurface,
@@ -610,29 +611,46 @@ impl ResolvedCaptureTargetProof {
     pub(in crate::daemon::plugins::remote_desktop) fn new(
         backend: impl Into<String>,
         target_kind: RemoteDesktopTargetKind,
+    ) -> Self {
+        Self {
+            backend: backend.into(),
+            target_kind,
+            display_id: None,
+            window_id: None,
+            pid: None,
+            app_identity: None,
+            bundle_id: None,
+            app_window_set: None,
+            native_width: None,
+            native_height: None,
+            verified_at_ms: unix_epoch_ms(),
+        }
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn with_native_identity(
+        mut self,
         display_id: Option<u64>,
         window_id: Option<u64>,
         pid: Option<i64>,
         app_identity: Option<String>,
         bundle_id: Option<String>,
+    ) -> Self {
+        self.display_id = display_id;
+        self.window_id = window_id;
+        self.pid = pid;
+        self.app_identity = app_identity;
+        self.bundle_id = bundle_id;
+        self
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn with_native_dimensions(
+        mut self,
         native_dimensions: Option<(usize, usize)>,
     ) -> Self {
-        let (native_width, native_height) = native_dimensions
+        (self.native_width, self.native_height) = native_dimensions
             .map(|(width, height)| (Some(width), Some(height)))
             .unwrap_or((None, None));
-        Self {
-            backend: backend.into(),
-            target_kind,
-            display_id,
-            window_id,
-            pid,
-            app_identity,
-            bundle_id,
-            app_window_set: None,
-            native_width,
-            native_height,
-            verified_at_ms: unix_epoch_ms(),
-        }
+        self
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn with_app_window_set(
@@ -1362,8 +1380,9 @@ mod platform_live_resolution {
             RemoteDesktopTargetKind::Display => Ok(ResolvedCaptureTargetProof::new(
                 binding.native_locator().capture_backend.clone(),
                 RemoteDesktopTargetKind::Display,
+            )
+            .with_native_identity(
                 binding.native_locator().display_id(),
-                None,
                 None,
                 None,
                 None,
@@ -2429,13 +2448,15 @@ mod tests {
         let wrong_window = ResolvedCaptureTargetProof::new(
             binding.native_locator().capture_backend.clone(),
             RemoteDesktopTargetKind::Window,
+        )
+        .with_native_identity(
             None,
             Some(8),
             Some(4242),
             Some("com.apple.Terminal".to_string()),
             Some("com.apple.Terminal".to_string()),
-            Some((1280, 720)),
-        );
+        )
+        .with_native_dimensions(Some((1280, 720)));
         let err = binding
             .commit_capture_proof("remote_desktop.create_session", wrong_window)
             .expect_err("proof must match the binding identity before it is stored");
@@ -2444,13 +2465,15 @@ mod tests {
         let proof = ResolvedCaptureTargetProof::new(
             binding.native_locator().capture_backend.clone(),
             RemoteDesktopTargetKind::Window,
+        )
+        .with_native_identity(
             None,
             Some(7),
             Some(4242),
             Some("com.apple.Terminal".to_string()),
             Some("com.apple.Terminal".to_string()),
-            Some((1280, 720)),
-        );
+        )
+        .with_native_dimensions(Some((1280, 720)));
         binding
             .commit_capture_proof("remote_desktop.create_session", proof.clone())
             .expect("matching proof commits");
@@ -2462,13 +2485,15 @@ mod tests {
         let drifted_pid = ResolvedCaptureTargetProof::new(
             binding.native_locator().capture_backend.clone(),
             RemoteDesktopTargetKind::Window,
+        )
+        .with_native_identity(
             None,
             Some(7),
             Some(5150),
             Some("com.apple.Terminal".to_string()),
             Some("com.apple.Terminal".to_string()),
-            Some((1280, 720)),
-        );
+        )
+        .with_native_dimensions(Some((1280, 720)));
         let err = binding
             .validate_reverified_capture_proof("remote_desktop.set_description", &drifted_pid)
             .expect_err("media path must fail if live target drifts from committed proof");
@@ -2497,13 +2522,15 @@ mod tests {
         let committed_from_app_identity = ResolvedCaptureTargetProof::new(
             binding.native_locator().capture_backend.clone(),
             RemoteDesktopTargetKind::Window,
+        )
+        .with_native_identity(
             None,
             Some(7),
             Some(4242),
             Some("com.example.Editor".to_string()),
             None,
-            Some((1280, 720)),
-        );
+        )
+        .with_native_dimensions(Some((1280, 720)));
         binding
             .commit_capture_proof("remote_desktop.create_session", committed_from_app_identity)
             .expect("proof may project bundle identity through app_identity");
@@ -2511,13 +2538,15 @@ mod tests {
         let reverified_from_bundle_id = ResolvedCaptureTargetProof::new(
             binding.native_locator().capture_backend.clone(),
             RemoteDesktopTargetKind::Window,
+        )
+        .with_native_identity(
             None,
             Some(7),
             Some(4242),
             None,
             Some("com.example.Editor".to_string()),
-            Some((1280, 720)),
-        );
+        )
+        .with_native_dimensions(Some((1280, 720)));
         binding
             .validate_reverified_capture_proof(
                 "remote_desktop.set_description",
@@ -2528,13 +2557,15 @@ mod tests {
         let mismatched_identity = ResolvedCaptureTargetProof::new(
             binding.native_locator().capture_backend.clone(),
             RemoteDesktopTargetKind::Window,
+        )
+        .with_native_identity(
             None,
             Some(7),
             Some(4242),
             None,
             Some("com.example.Other".to_string()),
-            Some((1280, 720)),
-        );
+        )
+        .with_native_dimensions(Some((1280, 720)));
         let err = binding
             .validate_reverified_capture_proof(
                 "remote_desktop.set_description",
@@ -2576,13 +2607,15 @@ mod tests {
         let proof = ResolvedCaptureTargetProof::new(
             binding.native_locator().capture_backend.clone(),
             RemoteDesktopTargetKind::Application,
+        )
+        .with_native_identity(
             Some(42),
             None,
             Some(9001),
             Some("com.example.Editor".to_string()),
             Some("com.example.Editor".to_string()),
-            Some((1440, 900)),
         )
+        .with_native_dimensions(Some((1440, 900)))
         .with_app_window_set(expected_window_set);
         binding
             .commit_capture_proof("remote_desktop.create_session", proof.clone())
@@ -2601,13 +2634,15 @@ mod tests {
         let drifted_proof = ResolvedCaptureTargetProof::new(
             binding.native_locator().capture_backend.clone(),
             RemoteDesktopTargetKind::Application,
+        )
+        .with_native_identity(
             Some(42),
             None,
             Some(9001),
             Some("com.example.Editor".to_string()),
             Some("com.example.Editor".to_string()),
-            Some((1440, 900)),
         )
+        .with_native_dimensions(Some((1440, 900)))
         .with_app_window_set(drifted_window_set);
         let err = binding
             .validate_reverified_capture_proof("remote_desktop.set_description", &drifted_proof)
@@ -2657,13 +2692,15 @@ mod tests {
         let live_proof = ResolvedCaptureTargetProof::new(
             binding.native_locator().capture_backend.clone(),
             RemoteDesktopTargetKind::Application,
+        )
+        .with_native_identity(
             Some(42),
             None,
             Some(9001),
             Some("com.example.Editor".to_string()),
             Some("com.example.Editor".to_string()),
-            Some((1440, 900)),
         )
+        .with_native_dimensions(Some((1440, 900)))
         .with_app_window_set(live_window_set.clone());
 
         binding
@@ -2686,13 +2723,15 @@ mod tests {
         let drifted_after_commit = ResolvedCaptureTargetProof::new(
             binding.native_locator().capture_backend.clone(),
             RemoteDesktopTargetKind::Application,
+        )
+        .with_native_identity(
             Some(42),
             None,
             Some(9001),
             Some("com.example.Editor".to_string()),
             Some("com.example.Editor".to_string()),
-            Some((1440, 900)),
         )
+        .with_native_dimensions(Some((1440, 900)))
         .with_app_window_set(AppWindowSetProof::new(
             42,
             Some("com.example.Editor".to_string()),

@@ -710,14 +710,34 @@ require 'DirectWebRtcRouteCandidateClass::EasyNetRelay' "$NETWORK" \
   'direct WebRTC route candidate model must reserve EasyNet relay evidence explicitly'
 require 'provider_state"\]\s*,\s*json!\("host_local_only"\)' "$NETWORK" \
   'local route candidate provider tests must prove host-only state is explicit'
+require 'struct DirectWebRtcIceServerConfig' "$NETWORK" \
+  'direct WebRTC route configuration must project typed ICE server config instead of raw endpoint strings'
+require 'struct DirectWebRtcRouteConfig' "$NETWORK" \
+  'direct WebRTC route configuration must be a typed provider input'
+require 'ConfiguredDirectWebRtcRouteProvider' "$NETWORK" \
+  'direct WebRTC route discovery must support configured STUN/TURN/EasyNet relay routes through the provider'
+require 'credential_configured' "$NETWORK" \
+  'direct WebRTC route evidence must redact credentials while proving relay credentials are configured'
+require 'configured_ice_routes_do_not_become_local_udp_bind_endpoints' "$NETWORK" \
+  'route tests must prove STUN/TURN/EasyNet relay URLs are never used as UDP bind addresses'
+require 'configured_route_provider_projects_ice_servers_without_credentials_in_evidence' "$NETWORK" \
+  'route tests must prove configured ICE routes are represented without credential leakage'
 reject 'fn direct_webrtc_udp_addrs' "$NETWORK" \
   'direct WebRTC route discovery must not regress to an untyped UDP address helper'
 require 'route_candidate_evidence' "$WEBRTC_ENDPOINT" \
   'direct WebRTC answer must publish route candidate evidence for frontend/backend diagnosis'
-require 'LocalInterfaceRouteCandidateProvider' "$WEBRTC_ENDPOINT" \
-  'direct WebRTC endpoint must consume the typed local route candidate provider'
-require 'candidate\.endpoint\(\)\.to_string\(\)' "$WEBRTC_ENDPOINT" \
-  'endpoint UDP bind addresses must be derived from typed route candidates'
+require 'ConfiguredDirectWebRtcRouteProvider::from_env\(\)' "$WEBRTC_ENDPOINT" \
+  'direct WebRTC endpoint must consume the configured typed route provider'
+require 'with_ice_servers\(ice_servers\)' "$WEBRTC_ENDPOINT" \
+  'direct WebRTC endpoint must wire provider-backed ICE servers into RTC configuration'
+require 'RTCIceServer' "$WEBRTC_ENDPOINT" \
+  'direct WebRTC endpoint must translate typed route config into WebRTC ICE server configuration'
+require 'local_bind_endpoint\(\)' "$WEBRTC_ENDPOINT" \
+  'endpoint UDP bind addresses must be derived only from typed host bind candidates'
+require 'filter_map\(\|candidate\| candidate\.local_bind_endpoint\(\)' "$WEBRTC_ENDPOINT" \
+  'endpoint UDP bind addresses must filter out configured STUN/TURN/EasyNet relay URLs'
+reject 'candidate\.endpoint\(\)\.to_string\(\)' "$WEBRTC_ENDPOINT" \
+  'endpoint UDP bind addresses must not treat every route candidate endpoint as a local bind address'
 
 # Public transport evidence must remain in the EasyNet URA model. WebRTC is a
 # transport kind/carrier, not a routable scheme, and tests must not preserve

@@ -196,16 +196,16 @@ mod tests {
 
     fn commit_test_capture_proof(binding: &mut RemoteAppTargetBinding) {
         let locator = binding.native_locator();
-        let proof = ResolvedCaptureTargetProof::new(
-            locator.capture_backend(),
-            binding.target_kind(),
-            locator.display_id(),
-            locator.window_id(),
-            locator.pid(),
-            locator.app_identity().map(ToOwned::to_owned),
-            locator.bundle_id().map(ToOwned::to_owned),
-            Some((1280, 720)),
-        );
+        let proof =
+            ResolvedCaptureTargetProof::new(locator.capture_backend(), binding.target_kind())
+                .with_native_identity(
+                    locator.display_id(),
+                    locator.window_id(),
+                    locator.pid(),
+                    locator.app_identity().map(ToOwned::to_owned),
+                    locator.bundle_id().map(ToOwned::to_owned),
+                )
+                .with_native_dimensions(Some((1280, 720)));
         let proof = if binding.target_kind() == RemoteDesktopTargetKind::Application {
             proof.with_app_window_set(AppWindowSetProof::new(
                 locator.display_id().expect("application display id"),
