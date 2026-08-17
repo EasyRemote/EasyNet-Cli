@@ -264,7 +264,7 @@ async fn main() -> anyhow::Result<()> {
     let tenant = TenantId::new(daemon_config.realm().to_string());
     boot_bus.emit_started("tenant-stores");
     let daemon_identity = ready_daemon_identity(&daemon_config)?;
-    if let Some(node_id) = daemon_identity.node_id {
+    if let Some(node_id) = daemon_identity.node_id.as_deref() {
         let runtime_node = NodeId::new(node_id);
         kernel
             .session_service()
@@ -287,21 +287,20 @@ async fn main() -> anyhow::Result<()> {
 
     boot_bus.emit_started("loop-controller");
     if media_resource_bootstrap_enabled() {
-        match config::load_credentials() {
-            Ok(creds) => {
-                let owner_agent = easynet_cli::core::ura::device_agent_ura(
-                    creds.realm_str(),
-                    &creds.node_id,
-                    easynet_cli::daemon::ability::names::resources::MEDIA_SYSTEM_AGENT_ID,
-                );
+        match media_resource_bootstrap_owner_agent(&daemon_config, &daemon_identity) {
+            Ok(Some(owner_agent)) => {
                 match easynet_cli::daemon::ability::builtins::resources::media::resource_bootstrap::seed_default_device_resources(
-                    creds.realm_str(),
+                    daemon_config.realm(),
                     &owner_agent,
                 ) {
                     Ok(count) => eprintln!("[daemon] media resources ready: {count} known"),
                     Err(err) => eprintln!("[daemon] media resource bootstrap failed: {err:#}"),
                 }
             }
+            Ok(None) => eprintln!(
+                "[daemon] media resource bootstrap skipped: {} mode has no device runtime identity",
+                daemon_config.mode().as_str()
+            ),
             Err(err) => {
                 eprintln!("[daemon] media resource bootstrap skipped: {err}");
             }
@@ -847,6 +846,38 @@ fn local_runtime_invocation_identity(
     LocalRuntimeInvocationIdentity::new(identity.realm, NodeId::new(node_id)).map(Some)
 }
 
+fn media_resource_bootstrap_owner_agent(
+    config: &DaemonConfig,
+    identity: &DaemonIdentity,
+) -> anyhow::Result<Option<String>> {
+    if matches!(config.mode(), DaemonMode::Hub) {
+        return Ok(None);
+    }
+    if identity.realm != config.realm() {
+        anyhow::bail!(
+            "media resource bootstrap identity realm `{}` does not match configured realm `{}`",
+            identity.realm,
+            config.realm()
+        );
+    }
+    let node_id = identity
+        .node_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{} media resource bootstrap requires daemon_identity.node_id",
+                config.mode().as_str()
+            )
+        })?;
+    Ok(Some(easynet_cli::core::ura::device_agent_ura(
+        config.realm(),
+        node_id,
+        easynet_cli::daemon::ability::names::resources::MEDIA_SYSTEM_AGENT_ID,
+    )))
+}
+
 fn media_resource_bootstrap_enabled() -> bool {
     match std::env::var(ENV_BOOTSTRAP_MEDIA_RESOURCES) {
         Ok(value) => !matches!(
@@ -1386,6 +1417,51 @@ tls_key_pem = "/tmp/key.pem"
         let identity = local_runtime_invocation_identity(&config).expect("runtime identity");
 
         assert!(identity.is_none());
+    }
+
+    #[test]
+    fn media_resource_bootstrap_owner_uses_ready_identity() {
+        let _home = TestHomeGuard::new();
+        std::env::set_var("EASYNET_NODE_ID", "stale-env-node");
+        write_daemon_config(
+            r#"[daemon]
+mode = "device"
+realm = "tenant-a"
+hub_endpoint = "https://hub.example:50443"
+"#,
+        );
+        config::save_credentials(&paired_credentials("tenant-a", "credential-node"))
+            .expect("save paired credentials");
+        let config = DaemonConfig::load(&default_config_path()).expect("load config");
+        let identity = ready_daemon_identity(&config).expect("ready identity");
+
+        let owner_agent = media_resource_bootstrap_owner_agent(&config, &identity)
+            .expect("media owner")
+            .expect("device media owner");
+
+        assert_eq!(
+            owner_agent,
+            "easynet:///r/tenant-a/agent/device.credential-node.media"
+        );
+        assert!(!owner_agent.contains("stale-env-node"));
+    }
+
+    #[test]
+    fn media_resource_bootstrap_owner_is_absent_for_hub() {
+        let _home = TestHomeGuard::new();
+        write_daemon_config(
+            r#"[daemon]
+mode = "hub"
+realm = "tenant-a"
+"#,
+        );
+        let config = DaemonConfig::load(&default_config_path()).expect("load config");
+        let identity = ready_daemon_identity(&config).expect("ready identity");
+
+        let owner_agent =
+            media_resource_bootstrap_owner_agent(&config, &identity).expect("media owner");
+
+        assert!(owner_agent.is_none());
     }
 
     #[test]
