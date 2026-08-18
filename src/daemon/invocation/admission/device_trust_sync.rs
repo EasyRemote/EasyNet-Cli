@@ -481,6 +481,23 @@ impl DeviceTrustSync {
             ) {
                 Ok(_) => {}
                 Err(status) if status.code() == tonic::Code::AlreadyExists => {}
+                // The hub attests a key that this daemon's local anchor has
+                // a permanent revocation tombstone for (e.g. an operator
+                // revoked it locally after the hub last synced, or the
+                // caller is presenting a stale cached key). The anchor's
+                // tombstone is authoritative and re-registering it will
+                // never succeed, so skip this one key rather than failing
+                // the whole caller's trust resolution — another key in the
+                // same hub-attested batch may still admit the caller.
+                Err(status) if status.code() == tonic::Code::FailedPrecondition => {
+                    crate::op_event!(
+                        component = device_trust_sync,
+                        kind = import_skipped_locally_revoked,
+                        caller_ura = caller_ura,
+                        role = role.register_role(),
+                        error = status.message(),
+                    );
+                }
                 Err(status) => {
                     crate::op_event!(
                         component = device_trust_sync,
@@ -562,7 +579,9 @@ mod tests {
     use ed25519_dalek::SigningKey;
 
     use super::*;
-    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole, TrustedAgent};
+    use crate::daemon::trust::anchor::{
+        RealmTrustAnchor, RevokedUserPubkey, TrustAnchorRole, TrustedAgent,
+    };
 
     fn empty_cell() -> SharedTrustAnchor {
         SharedTrustAnchor::new(Arc::new(
@@ -796,6 +815,76 @@ mod tests {
                 .await
                 .contains_key(&format!("device:{ura}:*")),
             "corrupt/import-rejected authority data must not activate negative cache"
+        );
+    }
+
+    /// Regression: a hub-attested key can carry a permanent local
+    /// revocation tombstone (e.g. an operator revoked it locally after the
+    /// hub last synced, as happened in production when a self-heal
+    /// rotation was tested against local state only). Re-registering a
+    /// tombstoned key always fails with FailedPrecondition; the import loop
+    /// must skip that one key instead of leaving the caller permanently
+    /// unresolvable when a later key in the same batch would admit it.
+    fn tombstoned_key_test_b64() -> String {
+        B64.encode(
+            SigningKey::from_bytes(&[0x71; 32])
+                .verifying_key()
+                .to_bytes(),
+        )
+    }
+
+    fn admitting_key_test_b64() -> String {
+        B64.encode(
+            SigningKey::from_bytes(&[0x72; 32])
+                .verifying_key()
+                .to_bytes(),
+        )
+    }
+
+    #[tokio::test]
+    async fn import_skips_locally_tombstoned_key_and_admits_via_other_hub_attested_key() {
+        fn resolver(_ura: &str) -> anyhow::Result<Vec<String>> {
+            Ok(vec![tombstoned_key_test_b64(), admitting_key_test_b64()])
+        }
+        let user_ura = "easynet:///r/test-realm/user/alice";
+        let tombstoned = tombstoned_key_test_b64();
+        let admits = admitting_key_test_b64();
+        let dir = tempfile::tempdir().expect("tmp");
+        let cell = SharedTrustAnchor::new(Arc::new(
+            RealmTrustAnchor::from_parts(
+                vec![],
+                vec![RevokedUserPubkey {
+                    agent_ura: user_ura.to_string(),
+                    public_key_b64: tombstoned.clone(),
+                    revoked_at_unix_ms: 1_700_000_000_000,
+                    rotation_epoch: 1,
+                }],
+            )
+            .expect("anchor with tombstone"),
+        ));
+        let sync = DeviceTrustSync::with_source(
+            "test-realm".into(),
+            dir.path().join("realm-trust.toml"),
+            cell,
+            KeySource::Static(resolver),
+            SharedHubAttestedCallerKeys::new(),
+        );
+
+        let status = sync.ensure_caller_key_status(user_ura, None).await;
+
+        assert_eq!(status, DeviceTrustSyncStatus::Synced);
+        let snapshot = sync.cell.snapshot();
+        assert!(
+            snapshot
+                .lookup_user_by_pubkey(user_ura, &admits)
+                .is_some(),
+            "the non-tombstoned hub-attested key must still be imported and admit the caller"
+        );
+        assert!(
+            snapshot
+                .lookup_user_by_pubkey(user_ura, &tombstoned)
+                .is_none(),
+            "the tombstoned key must never be re-admitted"
         );
     }
 
