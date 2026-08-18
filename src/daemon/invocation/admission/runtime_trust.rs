@@ -165,6 +165,29 @@ impl<'a> RuntimeTrust<'a> {
         role: TrustAnchorRole,
         owner: Option<TrustedPrincipalOwner>,
     ) -> Result<(), Status> {
+        self.register_pubkey_protecting(principal_ura, public_key_b64, role, owner, None)
+    }
+
+    /// `register_pubkey_with_owner`, plus one caller-nominated public key
+    /// that the user-key cap's LRU eviction must never select while making
+    /// room for this registration.
+    ///
+    /// A multi-key import loop (hub trust-sync replaying every key it
+    /// resolved for a user) calls this once per key. Each call independently
+    /// runs cap eviction, so without a protected key, importing keys 2..N of
+    /// the same loop can evict a key imported by an earlier iteration in
+    /// that very loop — including the daemon's own active runtime signer,
+    /// which self-registers through this path at boot. Callers doing a
+    /// simple, single, operator-driven key registration pass `None` and get
+    /// the plain LRU behaviour from `register_pubkey_with_owner`.
+    pub(crate) fn register_pubkey_protecting(
+        &self,
+        principal_ura: String,
+        public_key_b64: String,
+        role: TrustAnchorRole,
+        owner: Option<TrustedPrincipalOwner>,
+        protected_public_key_b64: Option<&str>,
+    ) -> Result<(), Status> {
         validate_public_key_b64("identity.register_pubkey", &public_key_b64)?;
         self.validate_register_realm(&principal_ura, role)?;
         if let Some(owner) = owner.as_ref() {
@@ -205,6 +228,7 @@ impl<'a> RuntimeTrust<'a> {
                         next_anchor,
                         &principal_ura,
                         now_unix_ms(),
+                        protected_public_key_b64,
                     )?;
                     next_anchor.append_agent(entry)?;
                     changed = true;
@@ -223,11 +247,13 @@ impl<'a> RuntimeTrust<'a> {
         anchor: &mut RealmTrustAnchor,
         user_ura: &str,
         now_ms: u64,
+        protected_public_key_b64: Option<&str>,
     ) -> Result<(), RealmTrustError> {
         while anchor.lookup_user_all(user_ura).len() >= MAX_KEYS_PER_AGENT_URA {
             let Some(oldest_key) = anchor
                 .lookup_user_all(user_ura)
                 .iter()
+                .filter(|entry| Some(entry.public_key_b64.as_str()) != protected_public_key_b64)
                 .min_by(|left, right| {
                     left.added_at_unix_ms
                         .cmp(&right.added_at_unix_ms)
@@ -569,6 +595,61 @@ mod tests {
             .lookup_user_by_pubkey(&user_ura, &newest)
             .is_some());
         assert!(from_disk.is_user_pubkey_revoked(&user_ura, &oldest));
+    }
+
+    /// Regression for the incident that motivated
+    /// `register_pubkey_protecting`: a multi-key import loop (hub trust-sync
+    /// replaying every key it resolved for a user) registers keys one at a
+    /// time, and each call independently runs cap eviction. Without a
+    /// protected key, importing a batch of stale/historical keys can evict
+    /// the daemon's own active runtime signer key — which the loop itself
+    /// registered first — before the loop finishes, bricking the next boot.
+    #[test]
+    fn register_protecting_never_evicts_the_protected_key_even_when_it_is_oldest() {
+        let (_dir, ctx) = context();
+        let user_ura = "easynet:///r/realm/user/alice".to_string();
+        let protected = b64_pubkey(1);
+
+        // The protected key lands first, so by insertion order it is the
+        // "oldest" and would normally be the first eviction candidate.
+        ctx.writer()
+            .register_pubkey_protecting(
+                user_ura.clone(),
+                protected.clone(),
+                TrustAnchorRole::User,
+                None,
+                Some(protected.as_str()),
+            )
+            .expect("register protected key");
+
+        // Fill the bucket past capacity with newer keys, all naming the same
+        // protected key — simulating the rest of one import loop.
+        for seed in 2..=9u8 {
+            ctx.writer()
+                .register_pubkey_protecting(
+                    user_ura.clone(),
+                    b64_pubkey(seed),
+                    TrustAnchorRole::User,
+                    None,
+                    Some(protected.as_str()),
+                )
+                .expect("register batch key");
+        }
+
+        let snapshot = ctx.reader().user_snapshot(&user_ura);
+        assert_eq!(
+            snapshot.keys.len(),
+            axon_sdk::invocation::MAX_KEYS_PER_AGENT_URA
+        );
+        let from_disk =
+            RealmTrustAnchor::try_load_strict(&ctx.trust_anchor_path).expect("disk load");
+        assert!(
+            from_disk
+                .lookup_user_by_pubkey(&user_ura, &protected)
+                .is_some(),
+            "protected key must survive cap eviction across the whole import loop"
+        );
+        assert!(!from_disk.is_user_pubkey_revoked(&user_ura, &protected));
     }
 
     #[test]

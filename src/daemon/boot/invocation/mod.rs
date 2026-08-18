@@ -1666,7 +1666,12 @@ fn register_paired_user_runtime_signer_if_bound(
     .map_err(|error| {
         anyhow::anyhow!("ensure managed signing key for paired User `{user_ura}`: {error}")
     })?;
-    let projection = ensured.projection;
+    let projection = rotate_paired_user_signer_if_revoked(
+        trust_anchor_cell.snapshot().as_ref(),
+        &user_ura,
+        ensured.projection,
+        |key_id| client.inventory_rotate(key_id),
+    )?;
     crate::daemon::identity::self_identity::prove_user_runtime_signing_projection_custody(
         &client,
         &user_ura,
@@ -1715,6 +1720,47 @@ fn register_paired_user_runtime_signer_if_bound(
         key_id = projection.key_id.as_str(),
     );
     Ok(true)
+}
+
+/// Self-heal a paired-user signing key whose public projection has a
+/// revocation tombstone in the local trust anchor.
+///
+/// The trust anchor's user-key cap eviction (or an explicit revoke) can
+/// tombstone the key-service's active managed key while the vault still
+/// considers it live. `identity.register_pubkey` fail-closes on tombstoned
+/// keys, so booting with the stale projection would abort the
+/// `daemon-invocation-transport` stage on every start. Rotating to a fresh
+/// keypair here keeps revocation semantics intact (the tombstoned key stays
+/// unusable) while letting the daemon come up with a registrable identity.
+fn rotate_paired_user_signer_if_revoked(
+    anchor: &crate::daemon::trust::anchor::RealmTrustAnchor,
+    user_ura: &str,
+    projection: crate::daemon::keyring::ManagedSigningKeyProjection,
+    rotate: impl FnOnce(
+        &str,
+    ) -> Result<
+        crate::daemon::keyring::ManagedSigningKeyProjection,
+        crate::daemon::identity::self_identity::SelfIdentityError,
+    >,
+) -> anyhow::Result<crate::daemon::keyring::ManagedSigningKeyProjection> {
+    if !anchor.is_user_pubkey_revoked(user_ura, &projection.public_key_b64) {
+        return Ok(projection);
+    }
+    let rotated = rotate(&projection.key_id).map_err(|error| {
+        anyhow::anyhow!(
+            "managed signing key `{}` for paired User `{user_ura}` is tombstoned in the \
+             realm trust anchor and rotating it failed: {error}",
+            projection.key_id
+        )
+    })?;
+    crate::op_event!(
+        component = daemon_invocation,
+        kind = paired_user_runtime_signer_rotated_after_revocation,
+        user_ura = user_ura,
+        retired_key_id = projection.key_id.as_str(),
+        key_id = rotated.key_id.as_str(),
+    );
+    Ok(rotated)
 }
 
 fn transport_daemon_ura(

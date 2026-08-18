@@ -1328,6 +1328,24 @@ async fn sync_paired_user_trust_prelude(
         };
         let response = match invoke_prelude_unary(client, request, "federation.resolve_key").await {
             Ok(resp) => resp,
+            // A locally-trusted key the hub does not know is stale local
+            // state (hub-side cap eviction or debris from an earlier
+            // pairing), not a session-fatal condition. Only the active
+            // signer key is required to resolve; without this tolerance a
+            // single stale trust-anchor row keeps the device offline
+            // forever.
+            Err(status)
+                if status.code() == tonic::Code::NotFound
+                    && presented_pubkey_b64 != &signer_public_key_b64 =>
+            {
+                crate::op_event!(
+                    component = session,
+                    kind = user_trust_sync_stale_local_key_skipped,
+                    user_ura = user_ura,
+                    presented_pubkey_b64 = presented_pubkey_b64.as_str(),
+                );
+                continue;
+            }
             Err(status) => {
                 let code = status.code();
                 let msg = status.message();
@@ -1371,11 +1389,12 @@ async fn sync_paired_user_trust_prelude(
                 Ok(v) => v,
                 Err(_) => continue,
             };
-        match crate::daemon::invocation::admission::register_device_pubkey::handle(
+        match crate::daemon::invocation::admission::register_device_pubkey::handle_protecting(
             &register_args,
             &sync.daemon_realm,
             &sync.trust_anchor_path,
             &sync.cell,
+            Some(signer_public_key_b64.as_str()),
         ) {
             Ok(_) => {
                 accepted_key_count += 1;

@@ -317,14 +317,29 @@ pub fn handle(
     trust_anchor_path: &Path,
     cell: &SharedTrustAnchor,
 ) -> Result<Vec<u8>, Status> {
+    handle_protecting(arguments, daemon_realm, trust_anchor_path, cell, None)
+}
+
+/// `handle`, plus one public key the user-key cap's LRU eviction must not
+/// select while making room for this registration. See
+/// `RuntimeTrust::register_pubkey_protecting` for why a multi-key import
+/// loop needs this.
+pub fn handle_protecting(
+    arguments: &[u8],
+    daemon_realm: &str,
+    trust_anchor_path: &Path,
+    cell: &SharedTrustAnchor,
+    protected_public_key_b64: Option<&str>,
+) -> Result<Vec<u8>, Status> {
     let (args, role) = decode_register_args(arguments)?;
 
     let owner = trusted_principal_owner_from_args(&args)?;
-    RuntimeTrust::new(daemon_realm, trust_anchor_path, cell).register_pubkey_with_owner(
+    RuntimeTrust::new(daemon_realm, trust_anchor_path, cell).register_pubkey_protecting(
         args.principal_ura,
         args.public_key_b64,
         role,
         owner,
+        protected_public_key_b64,
     )?;
 
     serde_json::to_vec(&RegisterResponse { ok: true }).map_err(|err| {
