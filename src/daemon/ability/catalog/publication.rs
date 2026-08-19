@@ -193,6 +193,27 @@ impl LocalAbilityPublicationSnapshot {
             .collect()
     }
 
+    /// Return every committed local owner that is a user-scoped Service.
+    ///
+    /// Service surfaces (Pages, Files) are independently routable owner
+    /// projections executed on a hosting Device. The federation publisher
+    /// must enumerate them alongside SystemAgents: a Service that is absent
+    /// from the Hub owner projection cannot serve public routes (e.g.
+    /// `/web/<user>/<project>/` resolving `<user>.<project>.page.fetch`)
+    /// even though local dispatch works.
+    #[must_use]
+    pub(crate) fn service_owner_uras(&self) -> Vec<String> {
+        self.publications_by_owner
+            .keys()
+            .filter(|owner_ura| {
+                crate::core::ura::parse_ura(owner_ura)
+                    .ok()
+                    .is_some_and(|parsed| parsed.kind == crate::core::ura::URAKind::Service)
+            })
+            .cloned()
+            .collect()
+    }
+
     /// Select the unique callable SystemAgent owner that this live snapshot
     /// proves for one Device placement and public ability. This is the dynamic
     /// plugin/deployment counterpart to the deterministic system registry:

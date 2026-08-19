@@ -1324,6 +1324,24 @@ async fn publish_local_runtime_federation(
         }
     }
 
+    // Service owners (Pages, Files) are routable projections in their own
+    // right; without this pass the Hub can never resolve their abilities
+    // (e.g. a freshly published project's `<user>.<project>.page.fetch`),
+    // so public `/web/` routes fail NODATA while local dispatch works.
+    for service_ura in snapshot.service_owner_uras() {
+        if !publish_owner_projection_from_snapshot(
+            &snapshot,
+            Arc::clone(&escalation),
+            &service_ura,
+            &host_device_ura,
+            Arc::clone(&connection_state_sink),
+        )
+        .await
+        {
+            converged = false;
+        }
+    }
+
     for agent_ura in hosted_agent_uras {
         let Some(catalog_epoch) = hosted_catalog_epochs.get(&agent_ura).copied() else {
             converged = false;
