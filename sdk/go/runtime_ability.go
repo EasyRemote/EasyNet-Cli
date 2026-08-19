@@ -11,13 +11,22 @@ import (
 // context needed to address one runtime ability. The SDK never manufactures a
 // caller, nonce or causal context on behalf of a product.
 type RuntimeCallContext struct {
-	CallerURA         string         `json:"caller_ura"`
-	CalleeURA         string         `json:"callee_ura"`
-	SubjectURA        string         `json:"subject_ura"`
-	DescriptorVersion string         `json:"descriptor_version,omitempty"`
-	NonceBase64       string         `json:"nonce_base64"`
-	CausalContext     map[string]any `json:"causal_context"`
-	Metadata          map[string]any `json:"metadata,omitempty"`
+	CallerURA         string `json:"caller_ura"`
+	CalleeURA         string `json:"callee_ura"`
+	SubjectURA        string `json:"subject_ura"`
+	DescriptorVersion string `json:"descriptor_version,omitempty"`
+	// SelectedDescriptorRef carries a resolver-selected descriptor identity
+	// for callees that are not descriptor-resolvable from this runtime's
+	// committed catalog (e.g. Service-owned abilities placed on a remote
+	// device, where the product boundary already resolved an executable
+	// route). When set, RuntimeAbilityClient binds it verbatim instead of
+	// calling ResolveDescriptorRef; canonical projection and authority
+	// validation still apply. It cannot override a governance descriptor
+	// provider.
+	SelectedDescriptorRef string         `json:"selected_descriptor_ref,omitempty"`
+	NonceBase64           string         `json:"nonce_base64"`
+	CausalContext         map[string]any `json:"causal_context"`
+	Metadata              map[string]any `json:"metadata,omitempty"`
 	// Authority is the typed authority half of this complete Invocation
 	// transaction. RuntimeAbilityClient binds it to the projected tuple and
 	// materializes its metadata atomically; products must not lower it by hand.
@@ -289,15 +298,24 @@ func (c *RuntimeAbilityClient) buildWithCallModePolicy(ctx context.Context, call
 	if err != nil {
 		return InvocationDraft{}, err
 	}
-	descriptorRef, err := c.runtime.ResolveDescriptorRef(ctx, RuntimeDescriptorRefRequest{
-		CalleeURA:         target.calleeURA,
-		Ability:           abilityName,
-		CallMode:          mode,
-		CallerURA:         strings.TrimSpace(call.CallerURA),
-		SubjectURA:        descriptorSubjectURA,
-		AuthorityMetadata: descriptorResolutionAuthorityMetadata(metadata),
-		Provider:          policy.descriptorProvider,
-	})
+	descriptorRef := strings.TrimSpace(call.SelectedDescriptorRef)
+	if descriptorRef != "" && strings.TrimSpace(policy.descriptorProvider) != "" {
+		return InvocationDraft{}, invalidRuntimePayload(
+			"selected descriptor_ref cannot override a governance descriptor provider",
+			nil,
+		)
+	}
+	if descriptorRef == "" {
+		descriptorRef, err = c.runtime.ResolveDescriptorRef(ctx, RuntimeDescriptorRefRequest{
+			CalleeURA:         target.calleeURA,
+			Ability:           abilityName,
+			CallMode:          mode,
+			CallerURA:         strings.TrimSpace(call.CallerURA),
+			SubjectURA:        descriptorSubjectURA,
+			AuthorityMetadata: descriptorResolutionAuthorityMetadata(metadata),
+			Provider:          policy.descriptorProvider,
+		})
+	}
 	if err != nil {
 		return InvocationDraft{}, err
 	}
