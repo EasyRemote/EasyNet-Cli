@@ -438,7 +438,7 @@ fn render_grouped(filtered: &[Value]) {
     }
 
     let term_width = console::Term::stderr().size().1 as usize;
-    let headers = ["ABILITY", "KIND", "DESCRIPTION"];
+    let headers = ["ABILITY", "MODE", "HASH", "KIND", "DESCRIPTION"];
 
     eprintln!();
     for ((_, key), entries) in &groups {
@@ -459,7 +459,7 @@ fn render_grouped(filtered: &[Value]) {
         // Per-section column widths: ability + kind only;
         // description reflows against the terminal so long
         // single-line descriptions don't wrap mid-row.
-        let mut rows: Vec<[String; 3]> = Vec::with_capacity(entries.len());
+        let mut rows: Vec<[String; 5]> = Vec::with_capacity(entries.len());
         for entry in entries {
             let name = entry
                 .get("name")
@@ -467,15 +467,37 @@ fn render_grouped(filtered: &[Value]) {
                 .unwrap_or("-")
                 .to_string();
             let (_d, _a, _u, kind) = extract_columns(entry);
+            // MODE + HASH disambiguate sibling invocation contracts that
+            // share one public name (e.g. `chat` publishes both an rpc and
+            // a stream descriptor with distinct hashes). The short hash
+            // prefix lets an operator match a resolved descriptor_ref to
+            // its catalogue row at a glance while debugging admission
+            // mismatches.
+            let mode = entry
+                .get("call_mode")
+                .and_then(Value::as_str)
+                .unwrap_or("-")
+                .to_string();
+            let hash = entry
+                .get("descriptor_hash")
+                .and_then(Value::as_str)
+                .map(|h| {
+                    h.strip_prefix("sha256:")
+                        .unwrap_or(h)
+                        .chars()
+                        .take(8)
+                        .collect::<String>()
+                })
+                .unwrap_or_else(|| "-".to_string());
             let description = entry
                 .get("description")
                 .and_then(Value::as_str)
                 .map(|s| s.lines().next().unwrap_or(s).to_string())
                 .unwrap_or_default();
-            rows.push([name, kind, description]);
+            rows.push([name, mode, hash, kind, description]);
         }
         let widths = column_widths(&headers, &rows);
-        let total_fixed: usize = widths[..2].iter().sum::<usize>() + 2 * 2; // 2-space gutters
+        let total_fixed: usize = widths[..4].iter().sum::<usize>() + 4 * 2; // 2-space gutters
         let desc_budget = term_width
             .saturating_sub(4 + total_fixed) // leading 4-space indent for grouped rows
             .max(20);
@@ -484,21 +506,25 @@ fn render_grouped(filtered: &[Value]) {
         // beyond the section title so the visual hierarchy reads
         // clearly even on a narrow terminal.
         eprintln!(
-            "    {}  {}  {}",
+            "    {}  {}  {}  {}  {}",
             style(pad(headers[0], widths[0])).dim(),
             style(pad(headers[1], widths[1])).dim(),
-            style(headers[2]).dim(),
+            style(pad(headers[2], widths[2])).dim(),
+            style(pad(headers[3], widths[3])).dim(),
+            style(headers[4]).dim(),
         );
-        let rule_width: usize = (widths[..2].iter().sum::<usize>() + 2 * 2 + desc_budget)
+        let rule_width: usize = (widths[..4].iter().sum::<usize>() + 4 * 2 + desc_budget)
             .min(term_width.saturating_sub(4).max(40));
         eprintln!("    {}", style("─".repeat(rule_width)).dim());
 
         for row in &rows {
-            let desc = truncate_display(&row[2], desc_budget);
+            let desc = truncate_display(&row[4], desc_budget);
             eprintln!(
-                "    {}  {}  {}",
+                "    {}  {}  {}  {}  {}",
                 style(pad(&row[0], widths[0])).cyan(),
-                style(pad(&row[1], widths[1])).dim(),
+                style(pad(&row[1], widths[1])).yellow(),
+                style(pad(&row[2], widths[2])).dim(),
+                style(pad(&row[3], widths[3])).dim(),
                 desc,
             );
         }
@@ -506,8 +532,8 @@ fn render_grouped(filtered: &[Value]) {
     }
 }
 
-fn column_widths(headers: &[&str; 3], rows: &[[String; 3]]) -> [usize; 3] {
-    let mut w = [0usize; 3];
+fn column_widths(headers: &[&str; 5], rows: &[[String; 5]]) -> [usize; 5] {
+    let mut w = [0usize; 5];
     for (i, h) in headers.iter().enumerate() {
         w[i] = measure_text_width(h);
     }
