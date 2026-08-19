@@ -987,6 +987,23 @@ fn combined_registry_binds_local_introspection_to_distinct_device_and_realm_auth
             );
         }
     }
+
+    // The control-plane record checked above is not what
+    // `DaemonRouteResolver`'s local-authority fast path consults for
+    // self-invocations: that path resolves through
+    // `LocalAbilityPublicationSnapshot::capture()`, which applies its own
+    // owner/execution-host/runtime-binding/authority/implementation gates on
+    // top of the control-plane row. A device resolving its own
+    // `runtime-introspection.meta.list_abilities` must find it here too, or
+    // route resolution falls through to the presence/projection path and
+    // fails with NXDOMAIN "owner is not online" even though the daemon is
+    // its own owner.
+    let publication_snapshot = LocalAbilityPublicationSnapshot::capture(&registry);
+    assert!(
+        publication_snapshot.resolves(&runtime_introspection_ura, "meta.list_abilities"),
+        "runtime-introspection.meta.list_abilities must resolve from the local publication \
+         snapshot so self-invocations never need presence"
+    );
 }
 
 #[test]
