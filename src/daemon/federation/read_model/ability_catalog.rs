@@ -321,6 +321,48 @@ impl AbilityCatalogStore {
         }
     }
 
+    /// Select the unique live device-sponsored SystemAgent owner that this
+    /// hub's advertised projections prove for one Device placement and
+    /// public ability. Federation counterpart of
+    /// `LocalAbilityPublicationSnapshot::unique_system_agent_owner_for_device_ability`:
+    /// a remote Device's plugin abilities (e.g. `browser.open_session`) are
+    /// neither registry-owned on this hub nor locally published here, so the
+    /// advertised owner projection is the only canonical owner evidence a
+    /// Device-placement route query can normalize against.
+    pub(crate) fn unique_system_agent_owner_for_device_ability_at(
+        &self,
+        device_ura: &str,
+        public_name: &str,
+        now_unix_ms: i64,
+    ) -> Option<String> {
+        let public_name = public_name.trim();
+        if public_name.is_empty() {
+            return None;
+        }
+        let mut owners: Vec<String> = self
+            .inner
+            .iter()
+            .filter_map(|entry| {
+                let row = entry.value();
+                if !row.is_live_at(now_unix_ms) || row.host_device_ura() != device_ura {
+                    return None;
+                }
+                let owner = crate::core::ura::parse_ura(row.owner_ura()).ok()?;
+                owner.device_agent_ids()?;
+                row.ability_summaries
+                    .iter()
+                    .any(|summary| summary.callable_summary.public_name == public_name)
+                    .then(|| row.owner_ura().to_string())
+            })
+            .collect();
+        owners.sort();
+        owners.dedup();
+        match owners.as_slice() {
+            [owner] => Some(owner.clone()),
+            _ => None,
+        }
+    }
+
     /// Return the full live stored row for a specific owner.
     pub(crate) fn projection_for_owner_at(
         &self,

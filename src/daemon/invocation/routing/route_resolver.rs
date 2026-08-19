@@ -1439,6 +1439,7 @@ impl<'a> DaemonRouteResolver<'a> {
             query_name,
             ability_name,
             self.device_local.as_ref().map(|source| &source.authority),
+            Some((self.catalog, self.now_unix_ms)),
         )?
         .ok_or_else(|| {
             ResolveRouteFailure::new(
@@ -1728,6 +1729,7 @@ impl<'a> DaemonRouteResolver<'a> {
             query_name,
             ability_name,
             self.device_local.as_ref().map(|source| &source.authority),
+            Some((self.catalog, self.now_unix_ms)),
         )?
         .ok_or_else(|| {
             ResolveRouteFailure::new(
@@ -2188,6 +2190,7 @@ fn executable_route_selector_from_query(
     query_name: &str,
     ability_name: &str,
     local_authority: Option<&LocalAbilityPublicationSnapshot>,
+    federation_catalog: Option<(&AbilityCatalogStore, i64)>,
 ) -> Result<Option<RouteSelector>, ResolveRouteFailure> {
     let Some(selector) = route_selector_from_query(query_name, ability_name)? else {
         return Ok(None);
@@ -2219,11 +2222,24 @@ fn executable_route_selector_from_query(
                 )
             })
         })
+        // Federation evidence: a hub resolving a placement on a REMOTE
+        // Device has neither a registry-owned mapping nor a local
+        // publication for that device's plugin abilities. The device's
+        // advertised owner projection is the canonical owner proof there.
+        .or_else(|| {
+            federation_catalog.and_then(|(catalog, now_unix_ms)| {
+                catalog.unique_system_agent_owner_for_device_ability_at(
+                    &selector.owner_ura,
+                    &selector.public_name,
+                    now_unix_ms,
+                )
+            })
+        })
         .ok_or_else(|| {
             ResolveRouteFailure::new(
                 selector.query_name.clone(),
                 NegativeReason::Refused,
-                format!("Device placement cannot select a unique registry-owned or locally published SystemAgent owner for ability `{}`", selector.public_name),
+                format!("Device placement cannot select a unique registry-owned, locally published, or federation-advertised SystemAgent owner for ability `{}`", selector.public_name),
             )
         })?;
     let ability_ura = crate::core::ura::owner_ability_ura(&owner_ura, &selector.public_name)
@@ -3390,6 +3406,45 @@ mod tests {
     }
 
     #[test]
+    fn device_placement_normalizes_plugin_owner_from_federation_projection() {
+        // Hub-side resolve of a REMOTE device placement: the hub has no
+        // device_local snapshot and the plugin ability is not in the static
+        // registry ownership table. The device's advertised owner projection
+        // (plugin-management SystemAgent publishing browser.*) must be
+        // accepted as the third owner-normalization evidence source instead
+        // of REFUSED "cannot select a unique ... SystemAgent owner".
+        let registry = PresenceRegistry::default();
+        let advertised_agents = AdvertisedAgentStore::default();
+        let catalog = AbilityCatalogStore::default();
+        let host_device_ura = device_owner_ura();
+        let owner_ura = crate::core::ura::device_agent_ura(
+            "test-realm",
+            "test-daemon",
+            "plugin-management",
+        );
+        mark_online(&registry, &host_device_ura);
+        advertise_hosted_agent(&advertised_agents, &owner_ura, &host_device_ura);
+        publish_ability_with_route_summary(
+            &catalog,
+            &owner_ura,
+            &host_device_ura,
+            "browser",
+            "open_session",
+            true,
+        );
+        let resolver = DaemonRouteResolver::new(&registry, Some(&advertised_agents), &catalog);
+
+        let route = resolver
+            .resolve_route(&host_device_ura, "browser.open_session")
+            .expect("device placement must normalize to the advertised plugin SystemAgent");
+
+        assert_eq!(route.owner_ura, owner_ura);
+        assert_eq!(route.callee_ura, owner_ura);
+        assert_eq!(route.execution_host_ura, host_device_ura);
+        assert_eq!(route.dispatch_name, "browser.open_session");
+    }
+
+    #[test]
     fn hub_final_route_answer_rehydrates_selected_route_facts() {
         let registry = PresenceRegistry::default();
         let advertised_agents = AdvertisedAgentStore::default();
@@ -3962,7 +4017,7 @@ mod tests {
             ("fs.transfer", "locomotion"),
             ("meta.list_abilities", "runtime-introspection"),
         ] {
-            let selector = executable_route_selector_from_query(&device_ura, ability, None)
+            let selector = executable_route_selector_from_query(&device_ura, ability, None, None)
                 .expect("Device placement projection")
                 .expect("executable selector");
             let expected_owner =
@@ -3997,11 +4052,11 @@ mod tests {
 
         for ability in ["plugin.demo.open_session", "plugin.demo.create_session"] {
             assert!(
-                executable_route_selector_from_query(&device_ura, ability, None).is_err(),
+                executable_route_selector_from_query(&device_ura, ability, None, None).is_err(),
                 "{ability} must not be inferred when the deterministic registry omits it"
             );
             let selector =
-                executable_route_selector_from_query(&device_ura, ability, Some(&authority))
+                executable_route_selector_from_query(&device_ura, ability, Some(&authority), None)
                     .expect("live publication projection")
                     .expect("plugin selector");
             assert_eq!(selector.owner_ura, plugin_owner, "{ability}");
