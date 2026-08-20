@@ -372,6 +372,7 @@ struct PendingMediaRebind {
     previous_target_identity_epoch: u64,
     previous_target_geometry_revision: u64,
     previous_media_source_epoch: u64,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     detail: &'static str,
     observed_at_ms: u64,
 }
@@ -438,6 +439,7 @@ impl RemoteAppTargetBindingStateMachine {
         &self.snapshot
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn pending_media_rebind_binding(
         &self,
     ) -> Option<&RemoteAppTargetBinding> {
@@ -895,6 +897,7 @@ impl RemoteAppTargetBindingStateMachine {
         ))
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn commit_pending_media_rebind(
         &mut self,
         binding_epoch: u64,

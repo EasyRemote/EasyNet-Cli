@@ -458,6 +458,7 @@ impl RemoteDesktopSession {
         media_source_lost
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn pending_media_rebind_binding(
         &self,
     ) -> Option<&RemoteAppTargetBinding> {
@@ -467,6 +468,7 @@ impl RemoteDesktopSession {
         self.target.pending_media_rebind_binding()
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn commit_pending_media_rebind(
         &mut self,
         epoch: TransportEpoch,
@@ -491,6 +493,7 @@ impl RemoteDesktopSession {
         true
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn fail_pending_media_rebind(
         &mut self,
         epoch: TransportEpoch,
@@ -838,7 +841,7 @@ impl RemoteDesktopSession {
     }
 
     /// Store latest media stats and emit a bounded event-log row.
-    #[cfg(target_os = "macos")]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn record_media_stats(
         &mut self,
         epoch: TransportEpoch,

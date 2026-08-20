@@ -38,8 +38,9 @@ pub(in crate::daemon::plugins::remote_desktop) fn test_lock() -> MutexGuard<'sta
 }
 
 pub(in crate::daemon::plugins::remote_desktop) fn test_plugin() -> Arc<RemoteDesktopPlugin> {
-    RemoteDesktopPlugin::new(
+    RemoteDesktopPlugin::with_target_binding_verifier(
         Arc::new(SyntheticScreenBackend),
+        Arc::new(TestRemoteAppTargetBindingVerifier),
         test_runtime_limits().into(),
     )
 }
@@ -90,15 +91,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn create_test_session(
     args: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
     let args = with_consent_ticket(&plugin, &env, args);
-    crate::daemon::plugins::remote_desktop::handlers::create_session::handle_with_target_verifier(
-        plugin,
-        env,
-        args,
-        &TestRemoteAppTargetBindingVerifier,
-    )
+    crate::daemon::plugins::remote_desktop::handlers::create_session::handle(plugin, env, args)
 }
 
-struct TestRemoteAppTargetBindingVerifier;
+pub(in crate::daemon::plugins::remote_desktop) struct TestRemoteAppTargetBindingVerifier;
 
 impl RemoteAppTargetBindingVerifier for TestRemoteAppTargetBindingVerifier {
     fn verify_for_session(

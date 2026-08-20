@@ -80,7 +80,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopMediaStats {
 }
 
 impl RemoteDesktopMediaStats {
-    #[cfg(target_os = "macos")]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn new(value: Value) -> Self {
         Self { value }
     }
@@ -242,7 +242,7 @@ impl RemoteDesktopTransportState {
             .map(RemoteDesktopMediaStats::to_value)
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn record_media_stats(
         &mut self,
         epoch: TransportEpoch,

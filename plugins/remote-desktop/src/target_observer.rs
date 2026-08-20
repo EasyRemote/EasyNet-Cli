@@ -66,6 +66,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct PlatformTargetObservationS
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 enum PlatformTargetObservationSampleState {
     HostSnapshot(HostTargetSnapshot),
     SnapshotFailed {
@@ -98,6 +99,7 @@ struct HostTargetSnapshot {
     display_ids: BTreeSet<u64>,
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 trait HostTargetSnapshotProvider {
     fn snapshot(&self) -> anyhow::Result<HostTargetSnapshot>;
 }
@@ -112,6 +114,7 @@ where
 }
 
 impl PlatformTargetObservationSample {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn from_snapshot_result(result: anyhow::Result<HostTargetSnapshot>) -> Self {
         match result {
             Ok(snapshot) => Self {
@@ -126,6 +129,7 @@ impl PlatformTargetObservationSample {
         }
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn permission_revoked(detail: impl Into<String>) -> Self {
         Self {
             state: PlatformTargetObservationSampleState::PermissionRevoked {
@@ -176,6 +180,7 @@ impl TargetObservationProvider for PlatformTargetObservationSample {
     }
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn sample_host_target_observations<P>(source: &P) -> PlatformTargetObservationSample
 where
     P: HostTargetSnapshotProvider,

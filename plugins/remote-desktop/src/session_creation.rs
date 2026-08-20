@@ -71,7 +71,9 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopSessionCreati
     target_binding: Option<RemoteAppTargetBinding>,
 }
 
-pub(in crate::daemon::plugins::remote_desktop) trait RemoteAppTargetBindingVerifier {
+pub(in crate::daemon::plugins::remote_desktop) trait RemoteAppTargetBindingVerifier:
+    Send + Sync
+{
     fn verify_for_session(
         &self,
         ability: &'static str,
@@ -148,13 +150,9 @@ impl RemoteDesktopSessionCreationWorkflow {
         Ok(self)
     }
 
-    pub(in crate::daemon::plugins::remote_desktop) fn resolve_target(self) -> anyhow::Result<Self> {
-        self.resolve_target_with_verifier(&PlatformRemoteAppTargetBindingVerifier)
-    }
-
     pub(in crate::daemon::plugins::remote_desktop) fn resolve_target_with_verifier(
         mut self,
-        verifier: &impl RemoteAppTargetBindingVerifier,
+        verifier: &dyn RemoteAppTargetBindingVerifier,
     ) -> anyhow::Result<Self> {
         self.ensure_state(RemoteDesktopSessionCreationState::ResolvingTarget)?;
         let mut target_binding = ResourceEntryTargetResolver.resolve_for_session(

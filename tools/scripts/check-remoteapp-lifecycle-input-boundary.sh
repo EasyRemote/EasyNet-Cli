@@ -893,8 +893,14 @@ require '!sessions\.contains_key\("rd-weak-window"\)' "$CREATE_SESSION" \
   'weak target identity failure must not insert a session row'
 require 'RemoteDesktopSessionCreationWorkflow::start' "$CREATE_SESSION" \
   'create_session must use the pre-row creation workflow'
-require '\.resolve_target\(\)\?' "$CREATE_SESSION" \
-  'create_session must resolve target before constructing an active session'
+require 'let target_binding_verifier = plugin\.target_binding_verifier\(\);' "$CREATE_SESSION" \
+  'create_session must obtain target verification through the plugin-owned platform service boundary'
+require '\.resolve_target_with_verifier\(target_binding_verifier\.as_ref\(\)\)\?' "$CREATE_SESSION" \
+  'create_session must resolve target with the plugin-owned verifier before constructing an active session'
+require 'target_binding_verifier: Arc<dyn RemoteAppTargetBindingVerifier>' "$RUNTIME" \
+  'remote desktop runtime must own target binding verification as an injected platform service'
+require 'Arc::new\(PlatformRemoteAppTargetBindingVerifier\)' "$RUNTIME" \
+  'production remote desktop runtime must default to the platform target binding verifier'
 require 'RemoteDesktopSession::new\(workflow\.into_session_init\(\)\?\)' "$CREATE_SESSION" \
   'create_session must construct the session only after fallible ready-to-insert conversion'
 require 'RemoteDesktopSessionCreationState::ReadyToInsert' "$SESSION_CREATION" \

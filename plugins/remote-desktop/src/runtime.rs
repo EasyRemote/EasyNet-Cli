@@ -35,6 +35,9 @@ use crate::daemon::ability::builtins::resources::media::screen_snapshot::ScreenS
 use crate::daemon::plugins::remote_desktop::config::RemoteDesktopRuntimeConfig;
 use crate::daemon::plugins::remote_desktop::consent_registry::RemoteDesktopConsentRegistry;
 use crate::daemon::plugins::remote_desktop::lease_monitor::RemoteDesktopLeaseMonitor;
+use crate::daemon::plugins::remote_desktop::session_creation::{
+    PlatformRemoteAppTargetBindingVerifier, RemoteAppTargetBindingVerifier,
+};
 use crate::daemon::plugins::remote_desktop::session_store::RemoteDesktopSessionStore;
 use crate::daemon::plugins::remote_desktop::target_monitor::RemoteDesktopTargetMonitor;
 use crate::daemon::plugins::remote_desktop::transport::{
@@ -56,12 +59,25 @@ pub(in crate::daemon::plugins::remote_desktop) struct RemoteDesktopPlugin {
     target_monitor: Arc<RemoteDesktopTargetMonitor>,
     transports: Arc<RemoteDesktopTransportManager>,
     screen_backend: Arc<dyn ScreenSnapshotBackend>,
+    target_binding_verifier: Arc<dyn RemoteAppTargetBindingVerifier>,
     config: RemoteDesktopRuntimeConfig,
 }
 
 impl RemoteDesktopPlugin {
     pub(in crate::daemon::plugins::remote_desktop) fn new(
         screen_backend: Arc<dyn ScreenSnapshotBackend>,
+        config: RemoteDesktopRuntimeConfig,
+    ) -> Arc<Self> {
+        Self::with_target_binding_verifier(
+            screen_backend,
+            Arc::new(PlatformRemoteAppTargetBindingVerifier),
+            config,
+        )
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn with_target_binding_verifier(
+        screen_backend: Arc<dyn ScreenSnapshotBackend>,
+        target_binding_verifier: Arc<dyn RemoteAppTargetBindingVerifier>,
         config: RemoteDesktopRuntimeConfig,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -73,6 +89,7 @@ impl RemoteDesktopPlugin {
             target_monitor: Arc::new(RemoteDesktopTargetMonitor::new()),
             transports: Arc::new(RemoteDesktopTransportManager::new()),
             screen_backend,
+            target_binding_verifier,
             config,
         })
     }
@@ -143,5 +160,11 @@ impl RemoteDesktopPlugin {
         &self,
     ) -> Arc<dyn ScreenSnapshotBackend> {
         Arc::clone(&self.screen_backend)
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn target_binding_verifier(
+        &self,
+    ) -> Arc<dyn RemoteAppTargetBindingVerifier> {
+        Arc::clone(&self.target_binding_verifier)
     }
 }

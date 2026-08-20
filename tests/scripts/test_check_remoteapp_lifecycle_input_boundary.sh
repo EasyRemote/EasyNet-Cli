@@ -1256,9 +1256,10 @@ RS
 
   cat >"$SANDBOX/plugins/remote-desktop/src/handlers/create_session.rs" <<'RS'
 fn handle() {
+    let target_binding_verifier = plugin.target_binding_verifier();
     let workflow = RemoteDesktopSessionCreationWorkflow::start(&env, &args)?
         .consume_consent(&registry, &env)?
-        .resolve_target()?;
+        .resolve_target_with_verifier(target_binding_verifier.as_ref())?;
     let session = RemoteDesktopSession::new(workflow.into_session_init()?);
     if let Err(err) =
         RemoteDesktopPlugin::schedule_session_lease(&plugin, watchdog_session_id.clone(), lease_expires_at_ms)
@@ -1547,6 +1548,11 @@ RS
 struct RemoteDesktopRuntime {
     lease_monitor: RemoteDesktopLeaseMonitor,
     target_monitor: RemoteDesktopTargetMonitor,
+    target_binding_verifier: Arc<dyn RemoteAppTargetBindingVerifier>,
+}
+
+fn new() {
+    Arc::new(PlatformRemoteAppTargetBindingVerifier);
 }
 
 fn schedule_session_lease(

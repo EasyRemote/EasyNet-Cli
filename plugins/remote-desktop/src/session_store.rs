@@ -251,6 +251,7 @@ impl RemoteDesktopSessionStore {
         session.expire_target_rebind_deadline(observed_at_ms)
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn pending_media_rebind_binding_for_session(
         &self,
         session_id: &str,
@@ -266,6 +267,7 @@ impl RemoteDesktopSessionStore {
         (pending.media_source_epoch() > active_media_source_epoch).then(|| pending.clone())
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn commit_pending_media_rebind_for_session(
         &self,
         session_id: &str,
@@ -281,6 +283,7 @@ impl RemoteDesktopSessionStore {
         session.commit_pending_media_rebind(epoch, binding_epoch, media_source_epoch, capture_proof)
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn fail_pending_media_rebind_for_session(
         &self,
         session_id: &str,
@@ -380,7 +383,7 @@ impl RemoteDesktopSessionStore {
     }
 
     /// Store latest media stats for one non-terminal session.
-    #[cfg(target_os = "macos")]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn record_media_pipeline_stats(
         &self,
         session_id: &str,

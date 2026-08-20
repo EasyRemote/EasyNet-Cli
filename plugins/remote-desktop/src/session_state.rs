@@ -274,6 +274,7 @@ impl RemoteDesktopSessionStateMachine {
         )
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn complete_rebinding(&mut self) -> bool {
         if self.phase != RemoteDesktopSessionPhase::Rebinding || self.is_terminal() {
             return false;

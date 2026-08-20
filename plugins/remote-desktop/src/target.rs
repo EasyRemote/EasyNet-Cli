@@ -643,6 +643,7 @@ impl ResolvedCaptureTargetProof {
         self
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn with_native_dimensions(
         mut self,
         native_dimensions: Option<(usize, usize)>,
@@ -778,6 +779,7 @@ impl ResolvedCaptureTargetProof {
         Ok(())
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn matches_committed_identity(&self, committed: &Self) -> bool {
         self.backend == committed.backend
             && self.target_kind == committed.target_kind
@@ -790,6 +792,7 @@ impl ResolvedCaptureTargetProof {
             && self.app_window_set == committed.app_window_set
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     fn native_app_identity_expectation(&self) -> NativeAppIdentityExpectation<'_> {
         NativeAppIdentityExpectation {
             expected_pid: self.pid,
@@ -810,6 +813,7 @@ impl ResolvedCaptureTargetProof {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CaptureProofValidationPhase {
     InitialCommit,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     ReverifyCommitted,
 }
 
@@ -897,12 +901,14 @@ impl NativeAppIdentityMatch {
         self.matched
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) const fn any_expected_field_seen(self) -> bool {
         self.any_expected_field_seen
     }
 }
 
 impl NativeTargetLocator {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn primary_display(&self) -> bool {
         self.primary_display
     }
@@ -1192,6 +1198,7 @@ impl RemoteAppTargetBinding {
         Ok(())
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn validate_reverified_capture_proof(
         &self,
         ability: &'static str,

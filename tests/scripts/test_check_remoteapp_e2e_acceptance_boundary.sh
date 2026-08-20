@@ -742,10 +742,26 @@ JSON
 
 if EASYNET_HOST_REMOTEAPP_DECODED_FRAME_E2E=1 \
   EASYNET_REMOTEAPP_CONTROL_DISCOVERY_JSON="$SANDBOX/control.json" \
+  EASYNET_REMOTEAPP_EASYNET_COMMAND_TIMEOUT_SEC=1 \
   "$SANDBOX/tools/scripts/host-remoteapp-decoded-frame-e2e.sh" \
     --run \
     --out-dir "$SANDBOX/missing-receiver" >/dev/null 2>&1; then
   echo "remoteapp e2e harness accepted bundled probe without a frame receiver" >&2
+  exit 1
+fi
+
+FAKE_EASYNET_HANGS="$SANDBOX/fake-easynet-hangs"
+cat >"$FAKE_EASYNET_HANGS" <<'SH'
+#!/usr/bin/env bash
+python3 -c 'import time; time.sleep(10)'
+SH
+chmod +x "$FAKE_EASYNET_HANGS"
+if EASYNET_REMOTEAPP_EASYNET_BIN="$FAKE_EASYNET_HANGS" \
+  EASYNET_REMOTEAPP_EASYNET_COMMAND_TIMEOUT_SEC=1 \
+  "$SANDBOX/tools/scripts/host-remoteapp-permission-subject-e2e.sh" \
+    --run \
+    --out-dir "$SANDBOX/permission-timeout" >/dev/null 2>&1; then
+  echo "remoteapp permission preflight accepted a hanging easynet command" >&2
   exit 1
 fi
 
@@ -758,6 +774,11 @@ case "$*" in
   "runtime status --json")
     cat <<'JSON'
 {
+  "daemon": {
+    "control_accepting": true,
+    "invocation_accepting": true,
+    "pid_alive": true
+  },
   "connection": {
     "device_ura": "easynet:///r/localhost/device/dev",
     "node_id": "dev",
