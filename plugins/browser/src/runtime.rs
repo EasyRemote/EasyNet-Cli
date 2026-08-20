@@ -564,9 +564,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn open_request_defaults_to_headed_current_browser() {
+    fn open_request_defaults_to_headless_remote_browser() {
+        // Remote sessions render into the screencast/attach pipeline; a
+        // visible window on the target desktop is the explicit exception
+        // (browser.show_session), never the default.
         let request = OpenSessionRequest::parse(json!({"url": "https://example.com"})).unwrap();
-        assert!(!request.headless);
+        assert!(request.headless);
         assert_eq!(request.viewport_width, DEFAULT_VIEWPORT_WIDTH);
         assert_eq!(request.idle_timeout_seconds, DEFAULT_IDLE_TIMEOUT_SECONDS);
     }
