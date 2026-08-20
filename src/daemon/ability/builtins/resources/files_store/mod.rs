@@ -132,6 +132,24 @@ fn list_input_schema() -> Value {
     })
 }
 
+pub(crate) fn description_for(name: &str) -> Option<&'static str> {
+    match name {
+        "files.put" => Some("Write a content-addressed file blob for the user account."),
+        "files.get" => Some("Read a content-addressed file blob for the user account."),
+        "files.list" => Some("List content-addressed file blobs for the user account."),
+        _ => None,
+    }
+}
+
+pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
+    match name {
+        "files.put" => Some(put_input_schema()),
+        "files.get" => Some(get_input_schema()),
+        "files.list" => Some(list_input_schema()),
+        _ => None,
+    }
+}
+
 fn register_files_rpc(
     reg: &mut AxonAbilityCatalog,
     ability: &'static str,

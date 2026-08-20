@@ -7,7 +7,7 @@
 
 use thiserror::Error;
 
-use axon_sdk::invocation::AuthorityBinding;
+use axon_sdk::invocation::{AuthorityEvidence, AuthorityOrBootstrap, AuthorityRelation};
 use axon_sdk::pb::axon::v1::Envelope;
 
 use crate::core::ura::{parse_ura, URAKind};
@@ -25,7 +25,7 @@ impl OwnerProjectionPublicationAuthority {
         advertised_agents: &AdvertisedAgentStore,
         trust_anchor: &RealmTrustAnchor,
         daemon_ura: Option<&str>,
-        authority_binding: Option<&AuthorityBinding>,
+        authority_binding: Option<&AuthorityOrBootstrap>,
     ) -> Result<(), OwnerProjectionPublicationError> {
         let caller_ura = envelope
             .caller
@@ -86,7 +86,7 @@ impl OwnerProjectionPublicationAuthority {
         advertised_agents: &AdvertisedAgentStore,
         trust_anchor: &RealmTrustAnchor,
         daemon_ura: Option<&str>,
-        authority_binding: Option<&AuthorityBinding>,
+        authority_binding: Option<&AuthorityOrBootstrap>,
     ) -> Result<(), OwnerProjectionPublicationError> {
         publication
             .validate_integrity()
@@ -169,12 +169,9 @@ impl OwnerProjectionPublicationAuthority {
                     }
                     Ok(())
                 }
-                URAKind::Service => verify_user_service_delegation(
-                    &owner,
-                    caller_ura,
-                    callee_ura,
-                    authority_binding,
-                ),
+                URAKind::Service => {
+                    verify_user_service_delegation(&owner, callee_ura, authority_binding)
+                }
                 _ => Err(OwnerProjectionPublicationError::OwnerMismatch),
             },
             (_, URAKind::Authority)
@@ -193,24 +190,37 @@ impl OwnerProjectionPublicationAuthority {
 
 fn verify_user_service_delegation(
     owner: &crate::core::ura::ParsedURA,
-    caller_ura: &str,
     callee_ura: &str,
-    authority_binding: Option<&AuthorityBinding>,
+    authority_binding: Option<&AuthorityOrBootstrap>,
 ) -> Result<(), OwnerProjectionPublicationError> {
     let owner_user_ura = owner
         .service_ids()
         .map(|(principal_id, _)| crate::core::ura::user_ura(&owner.realm, principal_id))
         .ok_or(OwnerProjectionPublicationError::ServiceDelegationRequired)?;
-    let Some(AuthorityBinding::Delegated(proof)) = authority_binding else {
+    let Some(AuthorityOrBootstrap::Binding(binding)) = authority_binding else {
         return Err(OwnerProjectionPublicationError::ServiceDelegationRequired);
     };
-    let scope_matches = proof.scopes.iter().any(|scope| {
+    let (AuthorityRelation::DelegatedBy, AuthorityEvidence::Delegation(evidence)) =
+        (&binding.relation, &binding.evidence)
+    else {
+        return Err(OwnerProjectionPublicationError::ServiceDelegationRequired);
+    };
+    let scope_matches = evidence.scopes.iter().any(|scope| {
         scope == crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES
     });
-    if proof.issuer_ura != owner_user_ura
-        || proof.subject_ura != owner.raw
-        || proof.caller_ura != caller_ura
-        || proof.audience != callee_ura
+    // Issuer authenticity (signature really from evidence.issuer) is the
+    // SDK's job, proven before this call. This is the issuer AUTHORITY
+    // check: is evidence.issuer actually entitled to vouch for
+    // binding.authority (the service)? Here: issuer must be the user
+    // whose principal ID the service's own URA embeds — the same
+    // ownership-derivation pattern used elsewhere in this daemon (see
+    // RFC doc "Issuer authenticity vs. issuer authority"). The old
+    // caller_ura equality check is removed (field no longer exists — the
+    // SDK's signature verification binds envelope.caller as delegatee
+    // directly into the signed claim bytes instead).
+    if evidence.issuer.ura != owner_user_ura
+        || binding.authority.ura != owner.raw
+        || evidence.audience != callee_ura
         || !scope_matches
     {
         return Err(OwnerProjectionPublicationError::ServiceDelegationMismatch);
@@ -274,7 +284,6 @@ mod tests {
         prepare_and_persist, prepare_hosted_and_persist_for_test,
     };
     use crate::daemon::trust::anchor::TrustedPrincipalOwner;
-    use axon_sdk::invocation::DelegationProofBody;
     use axon_sdk::pb::axon::v1::{
         AgentIdentity as PbAgentIdentity, SubjectIdentity as PbSubjectIdentity,
     };
@@ -342,19 +351,27 @@ mod tests {
         }
     }
 
-    fn service_delegation(issuer_ura: &str) -> AuthorityBinding {
-        AuthorityBinding::Delegated(DelegationProofBody {
-            issuer_ura: issuer_ura.to_string(),
-            subject_ura: SERVICE_URA.to_string(),
-            caller_ura: DEVICE_URA.to_string(),
-            audience: HUB_URA.to_string(),
-            scopes: vec![
-                crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES
-                    .to_string(),
-            ],
-            issued_at_ms: 1,
-            expires_at_ms: 2,
-            signature: vec![0x51; 64],
+    fn service_delegation(issuer_ura: &str) -> AuthorityOrBootstrap {
+        AuthorityOrBootstrap::Binding(axon_sdk::invocation::AuthorityBinding {
+            authority: axon_sdk::invocation::axiom::AgentIdentity::new(
+                SERVICE_URA,
+                axon_sdk::invocation::axiom::UraProfile::StrictV2,
+            ),
+            relation: AuthorityRelation::DelegatedBy,
+            evidence: AuthorityEvidence::Delegation(axon_sdk::invocation::DelegationEvidence {
+                issuer: axon_sdk::invocation::axiom::AgentIdentity::new(
+                    issuer_ura,
+                    axon_sdk::invocation::axiom::UraProfile::StrictV2,
+                ),
+                scopes: vec![
+                    crate::daemon::ability::conformance::ABILITY_FEDERATION_ADVERTISE_ABILITIES
+                        .to_string(),
+                ],
+                audience: HUB_URA.to_string(),
+                issued_at_ms: 1,
+                expires_at_ms: 2,
+                signature: vec![0x51; 64],
+            }),
         })
     }
 

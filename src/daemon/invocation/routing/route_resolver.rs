@@ -63,6 +63,7 @@ const MAX_DIRECTORY_CURSOR_LEN: usize = 4096;
 pub(crate) struct NamespaceResolveQuery {
     query_name: String,
     ability_name: String,
+    call_mode: CallMode,
     qtype: ResolveType,
     include_abilities: bool,
     limit: Option<u64>,
@@ -85,17 +86,42 @@ impl NamespaceResolveQuery {
             return Err("namespace.resolve qtype must not be RESOLVE_TYPE_UNSPECIFIED".to_string());
         }
         let ability_name = optional_string(object, "ability_name")?.unwrap_or_default();
+        let call_mode = optional_string(object, "call_mode")?
+            .map(|value| parse_namespace_call_mode(&value))
+            .transpose()?
+            .unwrap_or(CallMode::Rpc);
         let include_abilities = optional_bool(object, "include_abilities")?.unwrap_or(true);
         let limit = optional_u64(object, "limit")?;
         let cursor = optional_string(object, "cursor")?;
         Ok(Self {
             query_name,
             ability_name,
+            call_mode,
             qtype,
             include_abilities,
             limit,
             cursor,
         })
+    }
+}
+
+fn parse_namespace_call_mode(value: &str) -> Result<CallMode, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" => Err("namespace.resolve call_mode must not be empty".to_string()),
+        "rpc" => Ok(CallMode::Rpc),
+        "stream" => Ok(CallMode::Stream),
+        "bidi" => Ok(CallMode::Bidi),
+        other => Err(format!(
+            "namespace.resolve call_mode {other:?} is unsupported; expected rpc, stream, or bidi"
+        )),
+    }
+}
+
+fn descriptor_call_mode(call_mode: CallMode) -> crate::daemon::ability::CallMode {
+    match call_mode {
+        CallMode::Rpc => crate::daemon::ability::CallMode::Rpc,
+        CallMode::Stream => crate::daemon::ability::CallMode::Stream,
+        CallMode::Bidi => crate::daemon::ability::CallMode::Bidi,
     }
 }
 
@@ -108,6 +134,8 @@ impl NamespaceResolveQuery {
 /// owner-canonical.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LocalRuntimeAbility {
+    pub callee_ura: String,
+    pub execution_host_ura: String,
     pub dispatch_name: String,
     pub descriptor_ref: String,
 }
@@ -208,13 +236,11 @@ impl SelectedInvokeRoute {
         let ability_ura = crate::core::ura::owner_ability_ura(callee_ura, ability)
             .expect("test ability URA must be canonical");
         let route_ura = format!("route-ref::{ability_ura}");
-        let descriptor_ref =
-            crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
-                callee_ura,
-                ability,
-                crate::daemon::ability::CallMode::Rpc,
-            )
-            .expect("test descriptor_ref must be canonical");
+        let descriptor_ref = axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
+            "{ability_ura}@1.0.0#{}!invoke",
+            "a".repeat(64)
+        ))
+        .expect("test descriptor_ref must be canonical");
         let now_unix_ms = 0;
         Self {
             query_name: ability.to_string(),
@@ -1188,11 +1214,17 @@ impl LocalNamespaceAuthoritySource {
         &self,
         owner_ura: &str,
         public_name: &str,
+        call_mode: CallMode,
     ) -> Option<LocalRuntimeAbility> {
-        let published = self.authority.resolve(owner_ura, public_name)?;
-        let dispatch_name = crate::core::ura::local_dispatch_ability_key(owner_ura, public_name);
-        (!dispatch_name.is_empty()).then_some(LocalRuntimeAbility {
-            dispatch_name,
+        let published = self.authority.resolve_with_call_mode(
+            owner_ura,
+            public_name,
+            descriptor_call_mode(call_mode),
+        )?;
+        (!published.dispatch_name.trim().is_empty()).then_some(LocalRuntimeAbility {
+            callee_ura: published.callee_ura,
+            execution_host_ura: published.execution_host_ura,
+            dispatch_name: published.dispatch_name,
             descriptor_ref: published.descriptor_ref,
         })
     }
@@ -1407,11 +1439,15 @@ impl<'a> DaemonRouteResolver<'a> {
                 {
                     answer
                 } else {
-                    self.resolve_route(&query.query_name, &query.ability_name)
-                        .map_or_else(
-                            |failure| failure.answer_json(),
-                            |route| route.final_route_answer_json(),
-                        )
+                    self.resolve_route_with_call_mode(
+                        &query.query_name,
+                        &query.ability_name,
+                        query.call_mode,
+                    )
+                    .map_or_else(
+                        |failure| failure.answer_json(),
+                        |route| route.final_route_answer_json(),
+                    )
                 }
             }
             ResolveType::DirectoryListing | ResolveType::CanonicalIdentity | ResolveType::Owner => {
@@ -1430,10 +1466,20 @@ impl<'a> DaemonRouteResolver<'a> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn resolve_route(
         &self,
         query_name: &str,
         ability_name: &str,
+    ) -> Result<SelectedInvokeRoute, ResolveRouteFailure> {
+        self.resolve_route_with_call_mode(query_name, ability_name, CallMode::Rpc)
+    }
+
+    pub(crate) fn resolve_route_with_call_mode(
+        &self,
+        query_name: &str,
+        ability_name: &str,
+        call_mode: CallMode,
     ) -> Result<SelectedInvokeRoute, ResolveRouteFailure> {
         let selector = executable_route_selector_from_query(
             query_name,
@@ -1458,23 +1504,23 @@ impl<'a> DaemonRouteResolver<'a> {
                 return self.resolve_route_from_local_runtime(
                     &selector,
                     device_local,
-                    device_local.local_authority_ura.as_str(),
                     None,
                     SelectedRouteKind::RealmAuthorityOwned,
+                    call_mode,
                 );
             }
 
             if selector.owner_kind == RouteOwnerKind::Authority
                 && device_local
-                    .resolve_owner_ability(&selector.owner_ura, &selector.public_name)
+                    .resolve_owner_ability(&selector.owner_ura, &selector.public_name, call_mode)
                     .is_some()
             {
                 return self.resolve_route_from_local_runtime(
                     &selector,
                     device_local,
-                    selector.owner_ura.as_str(),
                     None,
                     SelectedRouteKind::RealmAuthorityOwned,
+                    call_mode,
                 );
             }
 
@@ -1484,9 +1530,9 @@ impl<'a> DaemonRouteResolver<'a> {
                 return self.resolve_route_from_local_runtime(
                     &selector,
                     device_local,
-                    device_local.local_authority_ura.as_str(),
                     host_node_id.as_deref(),
                     SelectedRouteKind::RoutableAgentOwned,
+                    call_mode,
                 );
             }
 
@@ -1494,20 +1540,20 @@ impl<'a> DaemonRouteResolver<'a> {
                 selector.owner_kind,
                 RouteOwnerKind::Agent | RouteOwnerKind::SystemAgent | RouteOwnerKind::Service
             ) && device_local
-                .resolve_owner_ability(&selector.owner_ura, &selector.public_name)
+                .resolve_owner_ability(&selector.owner_ura, &selector.public_name, call_mode)
                 .is_some()
             {
                 return self.resolve_route_from_local_runtime(
                     &selector,
                     device_local,
-                    device_local.local_authority_ura.as_str(),
                     None,
                     SelectedRouteKind::RoutableAgentOwned,
+                    call_mode,
                 );
             }
         }
 
-        self.resolve_route_from_projection(&selector)
+        self.resolve_route_from_projection(&selector, Some(call_mode))
     }
 
     /// Resolve an ability from this daemon's live runtime dispatch table.
@@ -1517,9 +1563,9 @@ impl<'a> DaemonRouteResolver<'a> {
         &self,
         selector: &RouteSelector,
         device_local: &LocalNamespaceAuthoritySource,
-        execution_host_ura: &str,
         host_node_id: Option<&str>,
         kind: SelectedRouteKind,
+        call_mode: CallMode,
     ) -> Result<SelectedInvokeRoute, ResolveRouteFailure> {
         if !crate::daemon::ability::catalog::is_local_runtime_routable_catalog_name(
             &selector.public_name,
@@ -1531,7 +1577,7 @@ impl<'a> DaemonRouteResolver<'a> {
             ));
         }
         let ability = device_local
-            .resolve_owner_ability(&selector.owner_ura, &selector.public_name)
+            .resolve_owner_ability(&selector.owner_ura, &selector.public_name, call_mode)
             .ok_or_else(|| {
                 ResolveRouteFailure::new(
                     selector.query_name.clone(),
@@ -1540,12 +1586,23 @@ impl<'a> DaemonRouteResolver<'a> {
                 )
             })?;
 
+        if ability.callee_ura != selector.owner_ura {
+            return Err(ResolveRouteFailure::new(
+                selector.query_name.clone(),
+                NegativeReason::Refused,
+                format!(
+                    "local publication callee `{}` does not match selected owner `{}`",
+                    ability.callee_ura, selector.owner_ura
+                ),
+            ));
+        }
+
         let route_ura = format!("route-ref::{}", selector.ability_ura);
         let descriptor_ref = ability.descriptor_ref.clone();
         let owner_record = id_record(&selector.owner_ura, self.now_unix_ms);
         let ability_record = local_runtime_ability_record(
             &selector.ability_ura,
-            &selector.owner_ura,
+            &ability.callee_ura,
             &selector.public_name,
             self.now_unix_ms,
         );
@@ -1553,8 +1610,8 @@ impl<'a> DaemonRouteResolver<'a> {
             &route_ura,
             &selector.ability_ura,
             &ability.dispatch_name,
-            &selector.owner_ura,
-            execution_host_ura,
+            &ability.callee_ura,
+            &ability.execution_host_ura,
             host_node_id,
             self.now_unix_ms,
         );
@@ -1562,8 +1619,8 @@ impl<'a> DaemonRouteResolver<'a> {
         Ok(SelectedInvokeRoute {
             query_name: selector.query_name.clone(),
             owner_ura: selector.owner_ura.clone(),
-            callee_ura: selector.owner_ura.clone(),
-            execution_host_ura: execution_host_ura.to_string(),
+            callee_ura: ability.callee_ura,
+            execution_host_ura: ability.execution_host_ura,
             host_node_id: host_node_id.map(ToOwned::to_owned),
             ability_ura: selector.ability_ura.clone(),
             route_ura,
@@ -1620,6 +1677,7 @@ impl<'a> DaemonRouteResolver<'a> {
     fn resolve_route_from_projection(
         &self,
         selector: &RouteSelector,
+        call_mode: Option<CallMode>,
     ) -> Result<SelectedInvokeRoute, ResolveRouteFailure> {
         let directory = federation_wrappers::handle_resolve_at(
             &ResolveRequest::with_filter(Some(selector.owner_ura.clone()), true),
@@ -1641,7 +1699,12 @@ impl<'a> DaemonRouteResolver<'a> {
             .agents
             .iter()
             .find(|agent| agent.ura == selector.owner_ura)
-            .ok_or_else(|| {
+            .or_else(|| None);
+        let Some(owner) = owner else {
+            if selector.owner_kind == RouteOwnerKind::Service {
+                return self.resolve_service_route_from_projection(selector, call_mode);
+            }
+            return Err({
                 let reason =
                     if advertised_agent_host_ura(self.advertised_agents, &selector.owner_ura)
                         .is_some()
@@ -1651,7 +1714,8 @@ impl<'a> DaemonRouteResolver<'a> {
                         NegativeReason::Nxdomain
                     };
                 ResolveRouteFailure::owner_offline(selector.query_name.clone(), reason)
-            })?;
+            });
+        };
 
         let summary = owner
             .abilities
@@ -1676,6 +1740,7 @@ impl<'a> DaemonRouteResolver<'a> {
             &selector.query_name,
             &selector.owner_ura,
             &selector.public_name,
+            call_mode,
             owner.host_node_id.as_deref(),
             summary,
             self.advertised_agents,
@@ -1702,6 +1767,104 @@ impl<'a> DaemonRouteResolver<'a> {
         // authoritative for, so a successfully built route is
         // `AuthoritativeLocal`. Cross-realm targets never reach here — they
         // are answered as `Delegation`/`PeerHub` before route building.
+        Ok(SelectedInvokeRoute {
+            query_name: selector.query_name.clone(),
+            owner_ura: selector.owner_ura.clone(),
+            callee_ura: selected.callee_ura,
+            execution_host_ura: selected.execution_host_ura,
+            host_node_id: selected.host_node_id,
+            ability_ura: selected.ability_ura,
+            route_ura: selected.route_ura,
+            descriptor_ref: selected.descriptor_ref,
+            dispatch_name: selected.dispatch_name,
+            release_profile: ResolverReleaseProfile::AuthoritativeLocal,
+            kind: selected.kind,
+            ability_record,
+            route_record,
+            owner_record,
+        })
+    }
+
+    fn resolve_service_route_from_projection(
+        &self,
+        selector: &RouteSelector,
+        call_mode: Option<CallMode>,
+    ) -> Result<SelectedInvokeRoute, ResolveRouteFailure> {
+        let row = self
+            .catalog
+            .projection_for_owner_at(&selector.owner_ura, self.now_unix_ms)
+            .ok_or_else(|| {
+                ResolveRouteFailure::owner_offline(
+                    selector.query_name.clone(),
+                    NegativeReason::Nxdomain,
+                )
+            })?;
+        if !self.registry.contains(row.host_device_ura()) {
+            return Err(ResolveRouteFailure::owner_offline(
+                selector.query_name.clone(),
+                NegativeReason::Noroute,
+            ));
+        }
+        let host = crate::core::ura::parse_ura(row.host_device_ura()).map_err(|err| {
+            ResolveRouteFailure::new(
+                selector.query_name.clone(),
+                NegativeReason::Refused,
+                format!("service owner host Device URA is invalid: {err}"),
+            )
+        })?;
+        if host.kind != crate::core::ura::URAKind::Device {
+            return Err(ResolveRouteFailure::new(
+                selector.query_name.clone(),
+                NegativeReason::Refused,
+                "service owner projection host must be a Device",
+            ));
+        }
+        let host_node_id = host.device_id().ok_or_else(|| {
+            ResolveRouteFailure::new(
+                selector.query_name.clone(),
+                NegativeReason::Refused,
+                "service owner projection host Device is missing canonical node id",
+            )
+        })?;
+        let summaries = row.summaries_as_json();
+        let summary = summaries
+            .iter()
+            .find(|summary| {
+                summary
+                    .get("ability_ura")
+                    .and_then(Value::as_str)
+                    .is_some_and(|ura| ura == selector.ability_ura)
+                    || summary_public_name(summary).as_deref()
+                        == Some(selector.public_name.as_str())
+            })
+            .ok_or_else(|| {
+                ResolveRouteFailure::new(
+                    selector.query_name.clone(),
+                    NegativeReason::Nodata,
+                    "service owner projection does not publish the requested ability",
+                )
+            })?;
+        let selected = SelectedAbilityRoute::from_owner_summary(
+            &selector.query_name,
+            &selector.owner_ura,
+            &selector.public_name,
+            call_mode,
+            Some(host_node_id),
+            summary,
+            self.advertised_agents,
+            self.catalog,
+            self.now_unix_ms,
+        )?;
+        let owner_record = id_record(&selector.owner_ura, self.now_unix_ms);
+        let ability_record =
+            ability_record_from_summary(summary, self.now_unix_ms).map_err(|detail| {
+                ResolveRouteFailure::new(
+                    selector.query_name.clone(),
+                    NegativeReason::Noroute,
+                    detail,
+                )
+            })?;
+        let route_record = selected.route_record(self.now_unix_ms);
         Ok(SelectedInvokeRoute {
             query_name: selector.query_name.clone(),
             owner_ura: selector.owner_ura.clone(),
@@ -1808,7 +1971,7 @@ impl<'a> DaemonRouteResolver<'a> {
         }
 
         let canonical_query = selector.ability_ura.clone();
-        match self.resolve_route(&canonical_query, "") {
+        match self.resolve_route_with_call_mode(&canonical_query, "", call_mode) {
             Ok(selected_route) => {
                 let target_matches = selected_route.owner_ura == target_ura
                     || selected_route.execution_host_ura == target_ura;
@@ -1928,6 +2091,7 @@ impl<'a> DaemonRouteResolver<'a> {
                     query_name,
                     &agent.ura,
                     &public_name,
+                    None,
                     agent.host_node_id.as_deref(),
                     summary,
                     self.advertised_agents,
@@ -2461,6 +2625,7 @@ impl SelectedAbilityRoute {
         query_name: &str,
         owner_ura: &str,
         public_name: &str,
+        call_mode: Option<CallMode>,
         owner_host_node_id: Option<&str>,
         summary: &Value,
         advertised_agents: Option<&AdvertisedAgentStore>,
@@ -2491,7 +2656,7 @@ impl SelectedAbilityRoute {
                 )
             })?
             .to_string();
-        let descriptor_ref = descriptor_ref_from_summary_rpc(query_name, summary)?;
+        let descriptor_ref = descriptor_ref_from_summary(query_name, summary, call_mode)?;
         let (kind, callee_ura, execution_host_ura, host_node_id) = selected_execution_for_owner(
             query_name,
             owner_ura,
@@ -2525,9 +2690,10 @@ impl SelectedAbilityRoute {
     }
 }
 
-fn descriptor_ref_from_summary_rpc(
+fn descriptor_ref_from_summary(
     query_name: &str,
     summary: &Value,
+    call_mode: Option<CallMode>,
 ) -> Result<String, ResolveRouteFailure> {
     let ability_ura = summary
         .get("ability_ura")
@@ -2544,22 +2710,39 @@ fn descriptor_ref_from_summary_rpc(
             "ability projection is missing descriptor mode geometry",
         ));
     };
-    let rpc = geometry
-        .iter()
-        .find(|variant| {
-            variant
-                .get("call_mode")
-                .and_then(Value::as_str)
-                .is_some_and(|mode| mode.eq_ignore_ascii_case("rpc"))
-        })
-        .ok_or_else(|| {
+    let selected = match call_mode {
+        Some(mode) => geometry
+            .iter()
+            .find(|variant| {
+                variant
+                    .get("call_mode")
+                    .and_then(Value::as_str)
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(mode.as_str()))
+            })
+            .ok_or_else(|| {
+                ResolveRouteFailure::new(
+                    query_name,
+                    NegativeReason::Nodata,
+                    format!(
+                        "ability projection has no {} descriptor geometry",
+                        mode.as_str()
+                    ),
+                )
+            })?,
+        None => geometry.first().ok_or_else(|| {
             ResolveRouteFailure::new(
                 query_name,
                 NegativeReason::Nodata,
-                "ability projection has no RPC descriptor geometry",
+                "ability projection has no descriptor geometry",
             )
-        })?;
-    let version = rpc
+        })?,
+    };
+    let mode_label = selected
+        .get("call_mode")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("selected");
+    let version = selected
         .get("descriptor_version")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
@@ -2567,10 +2750,10 @@ fn descriptor_ref_from_summary_rpc(
             ResolveRouteFailure::new(
                 query_name,
                 NegativeReason::Noroute,
-                "RPC descriptor geometry is missing descriptor_version",
+                format!("{mode_label} descriptor geometry is missing descriptor_version"),
             )
         })?;
-    let revision = rpc
+    let revision = selected
         .get("descriptor_revision")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
@@ -2578,10 +2761,10 @@ fn descriptor_ref_from_summary_rpc(
             ResolveRouteFailure::new(
                 query_name,
                 NegativeReason::Noroute,
-                "RPC descriptor geometry is missing descriptor_revision",
+                format!("{mode_label} descriptor geometry is missing descriptor_revision"),
             )
         })?;
-    let action = rpc
+    let action = selected
         .get("admission_action")
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
@@ -2589,7 +2772,7 @@ fn descriptor_ref_from_summary_rpc(
             ResolveRouteFailure::new(
                 query_name,
                 NegativeReason::Noroute,
-                "RPC descriptor geometry is missing admission_action",
+                format!("{mode_label} descriptor geometry is missing admission_action"),
             )
         })?;
     let descriptor_hash =
@@ -2598,7 +2781,9 @@ fn descriptor_ref_from_summary_rpc(
                 ResolveRouteFailure::new(
                     query_name,
                     NegativeReason::Noroute,
-                    format!("RPC descriptor geometry has invalid descriptor_revision: {err}"),
+                    format!(
+                        "{mode_label} descriptor geometry has invalid descriptor_revision: {err}"
+                    ),
                 )
             })?;
     let descriptor_binding =
@@ -2611,7 +2796,7 @@ fn descriptor_ref_from_summary_rpc(
             ResolveRouteFailure::new(
                 query_name,
                 NegativeReason::Noroute,
-                format!("RPC descriptor binding is invalid: {err}"),
+                format!("{mode_label} descriptor binding is invalid: {err}"),
             )
         })?;
     crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
@@ -2628,7 +2813,7 @@ fn descriptor_ref_from_summary_rpc(
         ResolveRouteFailure::new(
             query_name,
             NegativeReason::Noroute,
-            format!("RPC descriptor_ref is invalid: {err}"),
+            format!("{mode_label} descriptor_ref is invalid: {err}"),
         )
     })
 }
@@ -2673,7 +2858,7 @@ fn descriptor_ref_from_route_evidence(
                 "Hub final route omitted descriptor_ref and ability summary evidence",
             )
         })?;
-    descriptor_ref_from_summary_rpc(query_name, ability)
+    descriptor_ref_from_summary(query_name, ability, None)
 }
 
 fn is_ability_ura(value: &str) -> bool {
@@ -3257,13 +3442,68 @@ mod tests {
 
     impl FakeLocalRuntimeAuthority {
         fn with_owner_keys(owner_ura: &str, keys: &[&str]) -> LocalAbilityPublicationSnapshot {
+            if crate::core::ura::parse_ura(owner_ura)
+                .ok()
+                .is_some_and(|parsed| parsed.kind == crate::core::ura::URAKind::Agent)
+            {
+                return LocalAbilityPublicationSnapshot::from_owner_public_names_on_host(
+                    owner_ura,
+                    &device_owner_ura(),
+                    keys,
+                );
+            }
             LocalAbilityPublicationSnapshot::from_owner_public_names(owner_ura, keys)
+        }
+
+        fn with_owner_keys_on_host(
+            owner_ura: &str,
+            execution_host_ura: &str,
+            keys: &[&str],
+        ) -> LocalAbilityPublicationSnapshot {
+            LocalAbilityPublicationSnapshot::from_owner_public_names_on_host(
+                owner_ura,
+                execution_host_ura,
+                keys,
+            )
+        }
+
+        fn with_owner_key_modes(
+            owner_ura: &str,
+            key: &str,
+            call_modes: &[CallMode],
+        ) -> LocalAbilityPublicationSnapshot {
+            let descriptors = call_modes
+                .iter()
+                .map(|call_mode| {
+                    let admission_action = match call_mode {
+                        CallMode::Rpc => {
+                            crate::daemon::ability::descriptors::AdmissionAction::Invoke
+                        }
+                        CallMode::Stream | CallMode::Bidi => {
+                            crate::daemon::ability::descriptors::AdmissionAction::Stream
+                        }
+                    };
+                    crate::daemon::ability::descriptors::AbilityDescriptor::new(
+                        key,
+                        owner_ura,
+                        crate::daemon::ability::descriptors::Visibility::Scoped,
+                        admission_action,
+                    )
+                    .expect("test descriptor")
+                    .with_call_mode(descriptor_call_mode(*call_mode))
+                })
+                .collect();
+            LocalAbilityPublicationSnapshot::from_descriptors(descriptors)
         }
     }
 
     fn descriptor_ref_for_test(ability_ura: &str) -> String {
+        descriptor_ref_for_test_action(ability_ura, "invoke")
+    }
+
+    fn descriptor_ref_for_test_action(ability_ura: &str, action: &str) -> String {
         axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
-            "{ability_ura}@1.0.0#{}!invoke",
+            "{ability_ura}@1.0.0#{}!{action}",
             "a".repeat(64)
         ))
         .expect("test descriptor ref")
@@ -3293,6 +3533,42 @@ mod tests {
                 input_fields: Vec::new(),
                 flags: crate::daemon::federation::read_model::owner_projection::AbilityCallableFlags::default(),
                 tags: vec!["class:unary".to_string()],
+            },
+        );
+        callable_summary
+    }
+
+    fn callable_summary_for_mode_test(
+        public_name: &str,
+        ability_ura: &str,
+        descriptor_revision: &str,
+        call_mode: CallMode,
+        admission_action: &str,
+    ) -> crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary {
+        let mut callable_summary =
+            crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
+                public_name,
+            );
+        let catalog_call_mode = match call_mode {
+            CallMode::Rpc => crate::daemon::ability::CallMode::Rpc,
+            CallMode::Stream => crate::daemon::ability::CallMode::Stream,
+            CallMode::Bidi => crate::daemon::ability::CallMode::Bidi,
+        };
+        callable_summary.mode_geometry.push(
+            crate::daemon::federation::read_model::owner_projection::AbilityCallModeGeometry {
+                call_mode: catalog_call_mode,
+                descriptor_ref: descriptor_ref_for_test_action(ability_ura, admission_action),
+                descriptor_version: "1.0.0".to_string(),
+                descriptor_revision: descriptor_revision.to_string(),
+                admission_action: admission_action.to_string(),
+                schema_hash: format!("sha256:{}", "b".repeat(64)),
+                policy_ref: "visibility:SCOPED".to_string(),
+                policy_hash: format!("sha256:{}", "c".repeat(64)),
+                description: public_name.to_string(),
+                receipt_semantics: crate::daemon::ability::ReceiptSemantics::Operational,
+                input_fields: Vec::new(),
+                flags: crate::daemon::federation::read_model::owner_projection::AbilityCallableFlags::default(),
+                tags: vec![format!("class:{}", call_mode.as_str())],
             },
         );
         callable_summary
@@ -3364,6 +3640,55 @@ mod tests {
         ability_ura
     }
 
+    fn publish_ability_with_call_mode(
+        catalog: &AbilityCatalogStore,
+        owner_ura: &str,
+        host_device_ura: &str,
+        namespace: &str,
+        local_name: &str,
+        call_mode: CallMode,
+        admission_action: &str,
+    ) -> String {
+        let public_name = if namespace.is_empty() {
+            local_name.to_string()
+        } else {
+            format!("{namespace}.{local_name}")
+        };
+        let ability_ura = crate::core::ura::owner_ability_ura(owner_ura, &public_name)
+            .expect("owner ability ura");
+        let descriptor_revision = format!("sha256:{}", "a".repeat(64));
+        catalog.upsert_projection(OwnerAbilityProjectionRow::new(
+            owner_ura.to_string(),
+            host_device_ura.to_string(),
+            1,
+            1,
+            "sha256:test".to_string(),
+            LEASE_EXPIRES_MS,
+            vec![
+                crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
+                    ability_ura: ability_ura.clone(),
+                    owner_ura: owner_ura.to_string(),
+                    namespace: namespace.to_string(),
+                    local_name: local_name.to_string(),
+                    descriptor_revision: descriptor_revision.clone(),
+                    schema_ref: None,
+                    schema_hash: None,
+                    policy_ref: "visibility:SCOPED".to_string(),
+                    route_summary_ref: Some(format!("route-ref::{ability_ura}")),
+                    tags: vec![format!("class:{}", call_mode.as_str())],
+                    callable_summary: callable_summary_for_mode_test(
+                        &public_name,
+                        &ability_ura,
+                        &descriptor_revision,
+                        call_mode,
+                        admission_action,
+                    ),
+                },
+            ],
+        ));
+        ability_ura
+    }
+
     fn publish_ability_with_descriptor_revision(
         catalog: &AbilityCatalogStore,
         owner_ura: &str,
@@ -3417,11 +3742,8 @@ mod tests {
         let advertised_agents = AdvertisedAgentStore::default();
         let catalog = AbilityCatalogStore::default();
         let host_device_ura = device_owner_ura();
-        let owner_ura = crate::core::ura::device_agent_ura(
-            "test-realm",
-            "test-daemon",
-            "plugin-management",
-        );
+        let owner_ura =
+            crate::core::ura::device_agent_ura("test-realm", "test-daemon", "plugin-management");
         mark_online(&registry, &host_device_ura);
         advertise_hosted_agent(&advertised_agents, &owner_ura, &host_device_ura);
         publish_ability_with_route_summary(
@@ -3717,14 +4039,18 @@ mod tests {
     }
 
     #[test]
-    fn canonical_policy_selects_identical_local_route_for_every_carrier() {
+    fn canonical_policy_selects_identical_local_route_for_each_published_carrier() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
         let host_device_ura = device_owner_ura();
         let owner_ura = system_agent_owner_ura_for("agent.list");
         let ability_ura =
             crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
-        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&owner_ura, &["agent.list"]);
+        let authority = FakeLocalRuntimeAuthority::with_owner_key_modes(
+            &owner_ura,
+            "agent.list",
+            &[CallMode::Rpc, CallMode::Stream, CallMode::Bidi],
+        );
         let resolver = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(host_device_ura, authority)
             .at(TEST_NOW_MS);
@@ -3751,6 +4077,79 @@ mod tests {
         }
 
         assert!(fingerprints.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
+    fn namespace_resolve_route_honors_explicit_bidi_call_mode() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let host_device_ura = device_owner_ura();
+        let owner_ura = system_agent_owner_ura_for("terminal.attach");
+        mark_online(&registry, &owner_ura);
+        let ability_ura = publish_ability_with_call_mode(
+            &catalog,
+            &owner_ura,
+            &host_device_ura,
+            "terminal",
+            "attach",
+            CallMode::Bidi,
+            "stream",
+        );
+
+        let answer = DaemonRouteResolver::new(&registry, None, &catalog)
+            .at(TEST_NOW_MS)
+            .resolve_query_json(&json!({
+                "query_name": host_device_ura,
+                "ability_name": "terminal.attach",
+                "call_mode": "bidi",
+                "qtype": "RESOLVE_TYPE_ROUTE"
+            }));
+
+        assert_eq!(
+            answer["answer_kind"], "RESOLVE_ANSWER_KIND_FINAL_ROUTE",
+            "bidi route should resolve, answer={answer}"
+        );
+        assert_eq!(answer["ability_ura"], ability_ura);
+        assert!(
+            answer["descriptor_ref"]
+                .as_str()
+                .is_some_and(|value| value.ends_with("!stream")),
+            "terminal.attach descriptor must come from bidi geometry, answer={answer}"
+        );
+    }
+
+    #[test]
+    fn directory_listing_emits_stream_only_route_records() {
+        let registry = PresenceRegistry::new();
+        let catalog = AbilityCatalogStore::new();
+        let host_device_ura = device_owner_ura();
+        let owner_ura = system_agent_owner_ura_for("mic.subscribe");
+        mark_online(&registry, &owner_ura);
+        let ability_ura = publish_ability_with_call_mode(
+            &catalog,
+            &owner_ura,
+            &host_device_ura,
+            "mic",
+            "subscribe",
+            CallMode::Stream,
+            "stream",
+        );
+
+        let answer = DaemonRouteResolver::new(&registry, None, &catalog)
+            .at(TEST_NOW_MS)
+            .resolve_query_json(&json!({
+                "query_name": owner_ura,
+                "qtype": "RESOLVE_TYPE_DIRECTORY_LISTING"
+            }));
+
+        let records = answer["records"].as_array().expect("records array");
+        assert!(
+            records.iter().any(|record| {
+                record["kind"] == "route"
+                    && record["ability_ura"].as_str() == Some(ability_ura.as_str())
+            }),
+            "directory listing must keep stream-only route records, answer={answer}"
+        );
     }
 
     #[test]
@@ -4187,7 +4586,7 @@ mod tests {
         mark_online(&registry, &host_device_ura);
         let terminal_owner_ura = crate::core::ura::device_agent_ura(
             "test-realm",
-            "device-a",
+            "test-daemon",
             crate::daemon::ability::names::device_control::TERMINAL_SYSTEM_AGENT_ID,
         );
         let authority =
@@ -4223,7 +4622,7 @@ mod tests {
         mark_online(&registry, &host_device_ura);
         let session_owner_ura = crate::core::ura::device_agent_ura(
             "test-realm",
-            "device-a",
+            "test-daemon",
             crate::daemon::ability::names::device_control::SESSION_SYSTEM_AGENT_ID,
         );
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(
@@ -4265,7 +4664,7 @@ mod tests {
         mark_online(&registry, &host_device_ura);
         let governance_owner_ura = crate::core::ura::device_agent_ura(
             "test-realm",
-            "device-a",
+            "test-daemon",
             crate::daemon::ability::names::governance::RUNTIME_GOVERNANCE_SYSTEM_AGENT_ID,
         );
         let ability = crate::daemon::ability::names::governance::AUTHORITY_BINDING_LIST;
@@ -4300,7 +4699,7 @@ mod tests {
         mark_online(&registry, &host_device_ura);
         let health_owner_ura = crate::core::ura::device_agent_ura(
             "test-realm",
-            "device-a",
+            "test-daemon",
             crate::daemon::ability::names::governance::RUNTIME_HEALTH_SYSTEM_AGENT_ID,
         );
         let ability = crate::daemon::ability::names::governance::OBSERVE_HEALTH;
@@ -4331,7 +4730,7 @@ mod tests {
         mark_online(&registry, &host_device_ura);
         let introspection_owner_ura = crate::core::ura::device_agent_ura(
             "test-realm",
-            "device-a",
+            "test-daemon",
             crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
         );
         let ability = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
@@ -4366,7 +4765,7 @@ mod tests {
         mark_online(&registry, &host_device_ura);
         let descriptor_transfer_owner_ura = crate::core::ura::device_agent_ura(
             "test-realm",
-            "device-a",
+            "test-daemon",
             crate::daemon::ability::names::governance::DESCRIPTOR_TRANSFER_SYSTEM_AGENT_ID,
         );
         let ability = crate::daemon::ability::names::governance::META_ACQUIRE;
@@ -4401,7 +4800,7 @@ mod tests {
         mark_online(&registry, &host_device_ura);
         let node_management_owner_ura = crate::core::ura::device_agent_ura(
             "test-realm",
-            "device-a",
+            "test-daemon",
             crate::daemon::ability::names::device_control::NODE_MANAGEMENT_SYSTEM_AGENT_ID,
         );
         let ability = crate::daemon::ability::names::device_control::NODE_DESCRIBE;
@@ -4434,7 +4833,7 @@ mod tests {
         mark_online(&registry, &host_device_ura);
         let governance_owner_ura = crate::core::ura::device_agent_ura(
             "test-realm",
-            "device-a",
+            "test-daemon",
             crate::daemon::ability::names::governance::RUNTIME_GOVERNANCE_SYSTEM_AGENT_ID,
         );
         let ability = crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST;
@@ -4469,7 +4868,7 @@ mod tests {
         mark_online(&registry, &host_device_ura);
         let ability_management_owner_ura = crate::core::ura::device_agent_ura(
             "test-realm",
-            "device-a",
+            "test-daemon",
             crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
         );
         let ability = crate::daemon::ability::names::federation::ABILITY_DEPLOY;
@@ -4504,7 +4903,7 @@ mod tests {
         mark_online(&registry, &host_device_ura);
         let openai_owner_ura = crate::core::ura::device_agent_ura(
             "test-realm",
-            "device-a",
+            "test-daemon",
             crate::daemon::ability::names::integrations::OPENAI_COMPAT_SYSTEM_AGENT_ID,
         );
         let ability = crate::daemon::ability::names::integrations::OPENAI_LIST_MODELS;
@@ -4535,7 +4934,7 @@ mod tests {
         mark_online(&registry, &host_device_ura);
         let api_key_owner_ura = crate::core::ura::device_agent_ura(
             "test-realm",
-            "device-a",
+            "test-daemon",
             crate::daemon::ability::names::governance::API_KEY_MANAGEMENT_SYSTEM_AGENT_ID,
         );
         let ability = "alice.api_key.list";
@@ -4568,7 +4967,7 @@ mod tests {
         mark_online(&registry, &host_device_ura);
         let keyring_owner_ura = crate::core::ura::device_agent_ura(
             "test-realm",
-            "device-a",
+            "test-daemon",
             crate::daemon::ability::names::governance::KEYRING_MANAGEMENT_SYSTEM_AGENT_ID,
         );
         let ability = "device.keyring.list";
@@ -4601,7 +5000,7 @@ mod tests {
         mark_online(&registry, &host_device_ura);
         let a2a_owner_ura = crate::core::ura::device_agent_ura(
             "test-realm",
-            "device-a",
+            "test-daemon",
             crate::daemon::ability::names::integrations::A2A_INTEGRATION_SYSTEM_AGENT_ID,
         );
         let ability = crate::daemon::ability::names::integrations::A2A_CLIENT_SEND_TASK;
@@ -4632,7 +5031,7 @@ mod tests {
         mark_online(&registry, &host_device_ura);
         let locomotion_owner_ura = crate::core::ura::device_agent_ura(
             "test-realm",
-            "device-a",
+            "test-daemon",
             crate::daemon::ability::names::device_control::LOCOMOTION_SYSTEM_AGENT_ID,
         );
         let authority = FakeLocalRuntimeAuthority::with_owner_keys(
@@ -5033,7 +5432,8 @@ mod tests {
         let catalog = AbilityCatalogStore::new();
         let host_ura = device_owner_ura();
         let agent_ura = crate::core::ura::agent_ura("test-realm", "alice", "assistant");
-        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["chat"]);
+        let authority =
+            FakeLocalRuntimeAuthority::with_owner_keys_on_host(&agent_ura, &host_ura, &["chat"]);
 
         let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(host_ura.clone(), authority)
@@ -5115,7 +5515,11 @@ mod tests {
         let catalog = AbilityCatalogStore::new();
         let host_ura = device_owner_ura();
         let agent_ura = crate::core::ura::agent_ura("test-realm", "dev", "docs");
-        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["project_list"]);
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys_on_host(
+            &agent_ura,
+            &host_ura,
+            &["project_list"],
+        );
 
         let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(host_ura.clone(), authority)
@@ -5134,18 +5538,22 @@ mod tests {
     }
 
     #[test]
-    fn hub_local_authority_can_route_builtin_pages_service_without_projection() {
+    fn device_local_authority_can_route_builtin_pages_service_without_projection() {
         let registry = PresenceRegistry::new();
         let catalog = AbilityCatalogStore::new();
-        let host_ura = crate::core::ura::hub_ura("test-realm");
+        let host_ura = device_owner_ura();
         let service_ura = crate::core::ura::service_ura("test-realm", "dev", "pages");
-        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&service_ura, &["project_list"]);
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys_on_host(
+            &service_ura,
+            &host_ura,
+            &["project_list"],
+        );
 
         let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(host_ura.clone(), authority)
             .at(TEST_NOW_MS)
             .resolve_route(&service_ura, "project_list")
-            .expect("hub-mode local runtime authority must route built-in Pages Service");
+            .expect("device-local runtime authority must route built-in Pages Service");
 
         assert_eq!(route.kind(), SelectedRouteKind::RoutableAgentOwned);
         assert_eq!(route.execution_host_ura, host_ura);
@@ -5222,7 +5630,11 @@ mod tests {
         let ability_ura = crate::core::ura::owner_ability_ura(&agent_ura, "project_list")
             .expect("agent ability ura");
         let descriptor_ref = descriptor_ref_for_test(&ability_ura);
-        let authority = FakeLocalRuntimeAuthority::with_owner_keys(&agent_ura, &["project_list"]);
+        let authority = FakeLocalRuntimeAuthority::with_owner_keys_on_host(
+            &agent_ura,
+            &host_ura,
+            &["project_list"],
+        );
 
         let route = DaemonRouteResolver::new(&registry, None, &catalog)
             .with_local_catalog_authority(host_ura.clone(), authority)
@@ -5819,20 +6231,9 @@ mod tests {
         }));
         let records = answer["records"].as_array().expect("records array");
         assert!(
-            records.iter().any(|record| {
-                record["record_type"] == RecordType::Id.as_str_name() && record["name"] == owner_ura
-            }),
-            "{answer:#}"
+            records.is_empty(),
+            "Service route resolution must not project the Service as a generic Agent directory row: {answer:#}"
         );
-        assert!(records.iter().any(|record| {
-            record["record_type"] == RecordType::Ability.as_str_name()
-                && record["name"] == ability_ura
-        }));
-        assert!(records.iter().any(|record| {
-            record["record_type"] == RecordType::Route.as_str_name()
-                && record["owner_ura"] == owner_ura
-                && record["value"]["route"]["execute_on"]["target_ura"] == host_device_ura
-        }));
     }
 
     #[test]

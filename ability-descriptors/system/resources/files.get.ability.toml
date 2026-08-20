@@ -1,0 +1,34 @@
+schema_version = "3"
+name = "files.get"
+descriptor_version = "1.0.0"
+description = "Read a content-addressed file blob for the user account."
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "route-target"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+additionalProperties = false
+oneOf = [{ required = ["sha256"] }, { required = ["ura"] }]
+
+[input_schema.properties.sha256]
+type = "string"
+description = "Content-addressed blob hash."
+pattern = "^[0-9a-fA-F]{64}$"
+
+[input_schema.properties.ura]
+type = "string"
+description = "Canonical files resource URA ending in the blob sha256."
+minLength = 1

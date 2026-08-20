@@ -24,8 +24,9 @@ use axon_sdk::invocation::AxonError;
 #[cfg(test)]
 use axon_sdk::invocation::{
     authority_proof_expected_hash, canonical_host_attestation_bytes, sha256, AgentIdentity,
-    AuthorityBinding, CalleeSignature, DescriptorBoundEnvelope, InvocationAuthorityProof,
-    ReceiptSigningAuthority, UraProfile, VerifiedAdmissionPolicy,
+    AuthorityBinding, AuthorityEvidence, AuthorityOrBootstrap, AuthorityRelation, CalleeSignature,
+    DescriptorBoundEnvelope, InvocationAuthorityProof, ReceiptSigningAuthority, UraProfile,
+    VerifiedAdmissionPolicy,
 };
 use axon_sdk::invocation::{
     AxiomBinding, CanonicalReceiptProvider, InvocationLedger, KeyResolver, LedgerSink, LocalRuntime,
@@ -465,9 +466,14 @@ impl CanonicalReceiptProvider for EphemeralTestCanonicalReceiptProvider {
         &self,
         envelope: &DescriptorBoundEnvelope,
     ) -> Result<VerifiedAdmissionPolicy, AxonError> {
-        let binding = AuthorityBinding::Self_ {
-            principal_ura: envelope.envelope().caller.ura.clone(),
-        };
+        let binding = AuthorityOrBootstrap::Binding(AuthorityBinding {
+            authority: AgentIdentity::new(
+                envelope.envelope().caller.ura.clone(),
+                UraProfile::StrictV2,
+            ),
+            relation: AuthorityRelation::Self_,
+            evidence: AuthorityEvidence::Identity,
+        });
         let mut proof = InvocationAuthorityProof::new(
             "test-self-admission",
             Some(binding.clone()),
@@ -704,9 +710,11 @@ mod tests {
             signer_binding: None,
             host_attestation: Vec::new(),
             ability_binding: "liangbing.chat".to_string(),
-            authority_binding: AuthorityBinding::Self_ {
-                principal_ura: caller.ura.clone(),
-            },
+            authority_binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: caller.clone(),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            }),
         };
 
         assert_eq!(
@@ -748,9 +756,11 @@ mod tests {
             signer_binding: None,
             host_attestation: Vec::new(),
             ability_binding: "system.chat".to_string(),
-            authority_binding: AuthorityBinding::Self_ {
-                principal_ura: fallback_caller.ura.clone(),
-            },
+            authority_binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: fallback_caller.clone(),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            }),
         };
         assert_eq!(
             ledger_route_ura("system.chat", &fallback_binding),
@@ -776,9 +786,11 @@ mod tests {
             signer_binding: None,
             host_attestation: Vec::new(),
             ability_binding: "chat".to_string(),
-            authority_binding: AuthorityBinding::Self_ {
-                principal_ura: caller.ura.clone(),
-            },
+            authority_binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: caller.clone(),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            }),
         };
 
         let _ = ledger_route_ura("chat", &binding);
@@ -805,9 +817,11 @@ mod tests {
             signer_binding: None,
             host_attestation: Vec::new(),
             ability_binding: "chat".to_string(),
-            authority_binding: AuthorityBinding::Self_ {
-                principal_ura: caller.ura.clone(),
-            },
+            authority_binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: caller.clone(),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            }),
         };
         let caller_ability =
             crate::core::ura::owner_ability_ura(&binding.caller.ura, "chat").expect("ability URA");
@@ -836,9 +850,11 @@ mod tests {
             signer_binding: None,
             host_attestation: Vec::new(),
             ability_binding: "chat".to_string(),
-            authority_binding: AuthorityBinding::Self_ {
-                principal_ura: caller.ura.clone(),
-            },
+            authority_binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: caller.clone(),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            }),
         };
         let caller_ability =
             crate::core::ura::owner_ability_ura(&binding.caller.ura, "chat").expect("ability URA");
@@ -862,9 +878,11 @@ mod tests {
             signer_binding: None,
             host_attestation: Vec::new(),
             ability_binding: "chat".to_string(),
-            authority_binding: AuthorityBinding::Self_ {
-                principal_ura: caller.ura.clone(),
-            },
+            authority_binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: caller.clone(),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            }),
         };
 
         let _ = ledger_route_ura("chat", &binding);
@@ -885,9 +903,11 @@ mod tests {
             signer_binding: None,
             host_attestation: Vec::new(),
             ability_binding: "chat".to_string(),
-            authority_binding: AuthorityBinding::Self_ {
-                principal_ura: caller.ura.clone(),
-            },
+            authority_binding: AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: caller.clone(),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            }),
         };
 
         let _ = ledger_invocation_ura("inv_123", &binding);

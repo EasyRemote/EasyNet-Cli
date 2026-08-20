@@ -507,6 +507,22 @@ fn select_window(entry: &ResourceEntry) -> anyhow::Result<xcap::Window> {
     }
 }
 
+/// Resolve the resource-entry's remembered window against the live window
+/// list.
+///
+/// `window_id` is preferred but not load-bearing on its own: macOS recycles
+/// window IDs across close/reopen and Space changes, so an exact ID match is
+/// a fast-path hit, not a correctness requirement. The fallback identifies a
+/// window by the stable pair `(pid, app_name)` — the process and app name
+/// cannot change without the window itself closing. `title` is excluded
+/// from the fallback's match requirement: it is the most volatile field a
+/// window exposes (a browser tab, a terminal prompt, or an editor's
+/// unsaved-changes marker can all change it between `meta.list_resources`
+/// discovery and this snapshot), and requiring it verbatim made every
+/// window with a dynamic title falsely report "no longer available" even
+/// though the window was still open. When more than one window shares a
+/// `(pid, app_name)`, `title` still breaks the tie among live candidates —
+/// it just no longer disqualifies a window outright when it has moved on.
 #[cfg(feature = "native-media")]
 fn select_window_by_id_or_name(
     windows: Vec<xcap::Window>,
@@ -516,19 +532,19 @@ fn select_window_by_id_or_name(
     let expected_pid = entry.metadata.get("pid").and_then(Value::as_u64);
     let expected_title = entry.metadata.get("title").and_then(Value::as_str);
     let expected_app = entry.metadata.get("app_name").and_then(Value::as_str);
-    windows
+
+    if let Some(id) = expected_id {
+        if let Some(window) = windows
+            .iter()
+            .find(|window| window.id().ok().is_some_and(|actual| actual as u64 == id))
+        {
+            return Ok(window.clone());
+        }
+    }
+
+    let mut candidates: Vec<xcap::Window> = windows
         .into_iter()
-        .find(|window| {
-            let id_matches = expected_id.is_some_and(|id| {
-                window
-                    .id()
-                    .ok()
-                    .map(|actual| actual as u64 == id)
-                    .unwrap_or(false)
-            });
-            if id_matches {
-                return true;
-            }
+        .filter(|window| {
             let pid_matches = expected_pid.is_some_and(|pid| {
                 window
                     .pid()
@@ -543,21 +559,27 @@ fn select_window_by_id_or_name(
                     .map(|actual| actual == app)
                     .unwrap_or(false)
             });
-            let title_matches = expected_title.is_some_and(|title| {
-                window
-                    .title()
-                    .ok()
-                    .map(|actual| actual == title)
-                    .unwrap_or(false)
-            });
-            pid_matches && app_matches && title_matches
+            pid_matches && app_matches
         })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "{ABILITY_SCREEN_SNAPSHOT}: requested window is no longer available; \
-                 reason={REASON_RESOURCE_UNAVAILABLE}"
-            )
-        })
+        .collect();
+
+    if candidates.is_empty() {
+        anyhow::bail!(
+            "{ABILITY_SCREEN_SNAPSHOT}: requested window is no longer available; \
+             reason={REASON_RESOURCE_UNAVAILABLE}"
+        );
+    }
+    if candidates.len() > 1 {
+        if let Some(title) = expected_title {
+            if let Some(index) = candidates
+                .iter()
+                .position(|window| window.title().ok().as_deref() == Some(title))
+            {
+                return Ok(candidates.swap_remove(index));
+            }
+        }
+    }
+    Ok(candidates.remove(0))
 }
 
 #[cfg(feature = "native-media")]

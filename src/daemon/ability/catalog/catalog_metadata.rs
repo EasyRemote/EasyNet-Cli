@@ -45,8 +45,8 @@ use crate::daemon::ability::builtins::{
     },
     resources::{
         context::ability as context_ability,
-        list as list_resources_ability, media,
-        refresh_remote_targets as refresh_remote_targets_ability,
+        files_store as files_store_ability, list as list_resources_ability, media,
+        pages as pages_ability, refresh_remote_targets as refresh_remote_targets_ability,
         skills::{install as skill_install_ability, publish as skill_publish_ability},
         voice as voice_call_ability, watch_remote_targets as watch_remote_targets_ability,
     },
@@ -696,6 +696,19 @@ pub fn description_for(name: &str) -> &'static str {
         list_resources_ability::ABILITY_META_LIST_RESOURCES => {
             list_resources_ability::description()
         }
+        n if files_store_ability::description_for(n).is_some() => {
+            files_store_ability::description_for(n).unwrap()
+        }
+        n if pages_ability::management_ability_specs()
+            .iter()
+            .any(|spec| spec.relative_name == n) =>
+        {
+            pages_ability::management_ability_specs()
+                .into_iter()
+                .find(|spec| spec.relative_name == n)
+                .expect("pages spec checked above")
+                .description
+        }
         refresh_remote_targets_ability::ABILITY_RESOURCE_REFRESH_REMOTE_TARGETS => {
             refresh_remote_targets_ability::description()
         }
@@ -1012,6 +1025,21 @@ fn authored_static_input_schema(name: &str) -> Option<serde_json::Value> {
         list_resources_ability::ABILITY_META_LIST_RESOURCES => {
             list_resources_ability::input_schema()
         }
+        n if files_store_ability::input_schema_for(n).is_some() => {
+            return files_store_ability::input_schema_for(n)
+        }
+        n if pages_ability::management_ability_specs()
+            .iter()
+            .any(|spec| spec.relative_name == n) =>
+        {
+            return Some(
+                pages_ability::management_ability_specs()
+                    .into_iter()
+                    .find(|spec| spec.relative_name == n)
+                    .expect("pages spec checked above")
+                    .input_schema,
+            )
+        }
         refresh_remote_targets_ability::ABILITY_RESOURCE_REFRESH_REMOTE_TARGETS => {
             refresh_remote_targets_ability::input_schema()
         }
@@ -1280,6 +1308,10 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | resource_names::SKILL_LIST
         | resource_names::SKILL_TREE
         | resource_names::SKILL_READ_FILE
+        | "files.get"
+        | "files.list"
+        | "project_list"
+        | "pages.get"
         // chat.history.* — pure reads of persisted chat
         // transcripts (JSONL under the agent workspace). Same
         // Introspection class as invocation.history.*.
@@ -1322,6 +1354,7 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         governance_names::OBSERVE_HEALTH
         | governance_names::OBSERVE_NETWORK_HEALTH
         | governance_names::ADMIN_STATUS
+        | "pages.health"
         | "plugin.status"
         | "plugin.companion_status" => Some(AbilityLayer::Observation),
         // ── Operational (per-feature business verbs) ────────
@@ -1424,6 +1457,11 @@ pub(crate) fn classify_ability(name: &str) -> Option<AbilityLayer> {
         | resource_names::SKILL_PUBLISH
         | resource_names::SKILL_UNPUBLISH
         | resource_names::SKILL_WRITE_FILE
+        | "files.put"
+        | "pages.publish"
+        | "pages.unpublish"
+        | resource_names::RESOURCE_REFRESH_REMOTE_TARGETS
+        | resource_names::RESOURCE_WATCH_REMOTE_TARGETS
         // AXIOM §"Tier 2.5" Baseline Locomotion Profile,
         // filesystem half. fs.read is technically read-only
         // but it returns business content, not just metadata

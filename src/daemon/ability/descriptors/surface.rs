@@ -2078,7 +2078,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("canonical Agent or Authority URA"),
+                .contains("canonical Agent, Service, or Authority URA"),
             "{error}"
         );
     }

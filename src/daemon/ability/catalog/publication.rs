@@ -9,18 +9,153 @@ use std::collections::{BTreeMap, HashSet};
 use serde_json::Value;
 
 use crate::daemon::ability::descriptors::AbilityDescriptor;
-use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, CatalogRuntimeBindingState, OwnerKind};
+use crate::daemon::ability::{AbilityImplBinding, AuthorityBinding};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LocalAbilityPublicationSnapshot {
-    descriptors_by_owner: BTreeMap<String, Vec<AbilityDescriptor>>,
+    publications_by_owner: BTreeMap<String, Vec<AbilityPublication>>,
     ability_uras: HashSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LocalPublishedAbility {
     pub public_name: String,
+    pub callee_ura: String,
+    pub execution_host_ura: String,
     pub descriptor_ref: String,
+    pub dispatch_name: String,
+}
+
+/// Complete local publication read model for one committed ability row.
+///
+/// Descriptor contract, owner/callee binding, authority binding,
+/// implementation binding, and route binding remain distinct facets. Keeping
+/// them together here prevents route and directory code from rebuilding public
+/// ability identity from flat registry names or treating the execution host as
+/// the callee.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct AbilityPublication {
+    descriptor_contract: AbilityDescriptor,
+    owner_binding: OwnerBinding,
+    authority_binding: AuthorityBinding,
+    implementation_binding: AbilityImplBinding,
+    route_binding: PublicationRouteBinding,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OwnerBinding {
+    owner: OwnerKind,
+    owner_ura: String,
+    ability_ura: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PublicationRouteBinding {
+    callee_ura: String,
+    execution_host_ura: String,
+    descriptor_ref: String,
+    dispatch_key: String,
+}
+
+impl AbilityPublication {
+    fn from_catalog_row(
+        row: crate::daemon::ability::dispatch::AuthorityAbilityCatalogSnapshotRow,
+    ) -> Option<Self> {
+        let descriptor = row.descriptor;
+        let ability_ura = descriptor.canonical_ability_ura()?;
+        let descriptor_ref = descriptor.descriptor_ref().ok()?;
+        let owner_ura = descriptor.owner_ura.clone();
+        if !row.owner.matches_owner_ura(&owner_ura) {
+            return None;
+        }
+        if !row
+            .owner
+            .execution_host_matches_owner_ura(&owner_ura, &row.execution_host_ura)
+        {
+            return None;
+        }
+        if row.runtime_binding.state != CatalogRuntimeBindingState::Bound {
+            return None;
+        }
+        if !authority_binding_matches_publication(
+            &row.authority,
+            &row.owner,
+            &owner_ura,
+            &descriptor,
+            &row.name,
+        ) {
+            return None;
+        }
+        if !implementation_binding_matches_publication(&row.implementation, &descriptor, &row.name)
+        {
+            return None;
+        }
+        Some(Self {
+            descriptor_contract: descriptor,
+            owner_binding: OwnerBinding {
+                owner: row.owner,
+                owner_ura: owner_ura.clone(),
+                ability_ura,
+            },
+            authority_binding: row.authority,
+            implementation_binding: row.implementation,
+            route_binding: PublicationRouteBinding {
+                callee_ura: owner_ura,
+                execution_host_ura: row.execution_host_ura,
+                descriptor_ref,
+                dispatch_key: row.name,
+            },
+        })
+    }
+
+    fn descriptor(&self) -> &AbilityDescriptor {
+        &self.descriptor_contract
+    }
+
+    fn owner_ura(&self) -> &str {
+        &self.owner_binding.owner_ura
+    }
+
+    fn ability_ura(&self) -> &str {
+        &self.owner_binding.ability_ura
+    }
+
+    fn descriptor_ref(&self) -> &str {
+        &self.route_binding.descriptor_ref
+    }
+
+    fn dispatch_key(&self) -> &str {
+        &self.route_binding.dispatch_key
+    }
+
+    fn is_routable_local_publication(&self) -> bool {
+        super::is_local_runtime_routable_catalog_name(self.dispatch_key())
+    }
+}
+
+fn authority_binding_matches_publication(
+    authority: &AuthorityBinding,
+    owner: &OwnerKind,
+    owner_ura: &str,
+    descriptor: &AbilityDescriptor,
+    dispatch_key: &str,
+) -> bool {
+    authority.ability() == dispatch_key
+        && authority.descriptor_version() == descriptor.version
+        && authority.call_mode() == descriptor.call_mode()
+        && authority.scope().authority_root() == owner_ura
+        && authority.scope().owner_projection() == owner.authority_projection()
+}
+
+fn implementation_binding_matches_publication(
+    implementation: &AbilityImplBinding,
+    descriptor: &AbilityDescriptor,
+    dispatch_key: &str,
+) -> bool {
+    implementation.ability() == dispatch_key
+        && implementation.descriptor_version() == descriptor.version
+        && implementation.call_mode() == descriptor.call_mode()
 }
 
 impl LocalAbilityPublicationSnapshot {
@@ -28,66 +163,87 @@ impl LocalAbilityPublicationSnapshot {
     pub(crate) fn capture(catalog: &AxonAbilityCatalog) -> Self {
         let mut snapshot = Self::default();
         for row in catalog.authority_ability_catalog_snapshot() {
-            if !super::is_local_runtime_routable_catalog_name(&row.name) {
-                continue;
-            }
-            let descriptor = row.descriptor;
-            let Some(ability_ura) = descriptor.canonical_ability_ura() else {
+            let Some(publication) = AbilityPublication::from_catalog_row(row) else {
                 continue;
             };
-            snapshot.ability_uras.insert(ability_ura);
+            if !publication.is_routable_local_publication() {
+                continue;
+            }
             snapshot
-                .descriptors_by_owner
-                .entry(descriptor.owner_ura.clone())
+                .ability_uras
+                .insert(publication.ability_ura().to_string());
+            snapshot
+                .publications_by_owner
+                .entry(publication.owner_ura().to_string())
                 .or_default()
-                .push(descriptor);
+                .push(publication);
         }
         snapshot
     }
 
-    pub(crate) fn resolve(
+    pub(crate) fn resolve_with_call_mode(
         &self,
         owner_ura: &str,
         public_name: &str,
+        call_mode: crate::daemon::ability::CallMode,
     ) -> Option<LocalPublishedAbility> {
         let ability_ura = crate::core::ura::owner_ability_ura(owner_ura, public_name)?;
         if !self.ability_uras.contains(&ability_ura) {
             return None;
         }
-        let descriptor = self
-            .descriptors_by_owner
-            .get(owner_ura)?
-            .iter()
-            .find(|descriptor| {
-                descriptor.public_name() == public_name
-                    && descriptor.call_mode() == crate::daemon::ability::CallMode::Rpc
-            })?;
-        let descriptor_ref = descriptor.descriptor_ref().ok()?;
+        let publication =
+            self.publications_by_owner
+                .get(owner_ura)?
+                .iter()
+                .find(|publication| {
+                    publication.descriptor().public_name() == public_name
+                        && publication.descriptor().call_mode() == call_mode
+                })?;
         Some(LocalPublishedAbility {
             public_name: public_name.to_string(),
-            descriptor_ref,
+            callee_ura: publication.route_binding.callee_ura.clone(),
+            execution_host_ura: publication.route_binding.execution_host_ura.clone(),
+            descriptor_ref: publication.descriptor_ref().to_string(),
+            dispatch_name: publication.dispatch_key().to_string(),
         })
     }
 
     #[must_use]
     #[cfg(test)]
     pub(crate) fn resolves(&self, owner_ura: &str, public_name: &str) -> bool {
-        self.resolve(owner_ura, public_name).is_some()
+        self.resolve_with_call_mode(
+            owner_ura,
+            public_name,
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .is_some()
+    }
+
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn resolves_with_call_mode(
+        &self,
+        owner_ura: &str,
+        public_name: &str,
+        call_mode: crate::daemon::ability::CallMode,
+    ) -> bool {
+        self.resolve_with_call_mode(owner_ura, public_name, call_mode)
+            .is_some()
     }
 
     pub(crate) fn owner_projection_values(&self, owner_ura: &str) -> Result<Vec<Value>, String> {
-        self.descriptors_by_owner
+        self.publications_by_owner
             .get(owner_ura)
             .into_iter()
             .flatten()
-            .map(|descriptor| {
+            .map(|publication| {
                 crate::daemon::federation::read_model::owner_projection::summary_from_descriptor(
-                    descriptor,
+                    publication.descriptor(),
                 )
                 .map_err(|error| {
                     format!(
                         "local ability publication for owner `{owner_ura}` descriptor `{}` is invalid: {error}",
-                        descriptor.name
+                        publication.descriptor().name
                     )
                 })
             })
@@ -105,10 +261,12 @@ impl LocalAbilityPublicationSnapshot {
 
     #[must_use]
     pub(crate) fn owner_descriptors(&self, owner_ura: &str) -> Vec<AbilityDescriptor> {
-        self.descriptors_by_owner
+        self.publications_by_owner
             .get(owner_ura)
-            .cloned()
-            .unwrap_or_default()
+            .into_iter()
+            .flatten()
+            .map(|publication| publication.descriptor().clone())
+            .collect()
     }
 
     /// Return committed descriptors for one locally-hosted Agent id.
@@ -121,7 +279,7 @@ impl LocalAbilityPublicationSnapshot {
     #[must_use]
     pub(crate) fn hosted_agent_descriptors(&self, agent_id: &str) -> Vec<AbilityDescriptor> {
         let matching_owners = self
-            .descriptors_by_owner
+            .publications_by_owner
             .iter()
             .filter(|(owner_ura, _)| {
                 crate::core::ura::parse_ura(owner_ura)
@@ -134,8 +292,11 @@ impl LocalAbilityPublicationSnapshot {
         if matching_owners.len() != 1 {
             return Vec::new();
         }
-        let owner_descriptors = matching_owners[0].1;
-        let mut descriptors = owner_descriptors.to_vec();
+        let mut descriptors = matching_owners[0]
+            .1
+            .iter()
+            .map(|publication| publication.descriptor().clone())
+            .collect::<Vec<_>>();
         descriptors.sort_by(|left, right| {
             left.public_name()
                 .cmp(&right.public_name())
@@ -155,7 +316,7 @@ impl LocalAbilityPublicationSnapshot {
     /// MCP must not maintain separate recovery paths.
     #[must_use]
     pub(crate) fn hosted_agent_owner_uras(&self) -> Vec<String> {
-        self.descriptors_by_owner
+        self.publications_by_owner
             .keys()
             .filter(|owner_ura| {
                 crate::core::ura::parse_ura(owner_ura)
@@ -179,7 +340,7 @@ impl LocalAbilityPublicationSnapshot {
     /// owners directly instead of collapsing them into a Device projection.
     #[must_use]
     pub(crate) fn system_agent_owner_uras(&self) -> Vec<String> {
-        self.descriptors_by_owner
+        self.publications_by_owner
             .keys()
             .filter(|owner_ura| {
                 crate::core::ura::parse_ura(owner_ura)
@@ -233,16 +394,16 @@ impl LocalAbilityPublicationSnapshot {
         }
 
         let mut owners = self
-            .descriptors_by_owner
+            .publications_by_owner
             .iter()
-            .filter_map(|(owner_ura, descriptors)| {
+            .filter_map(|(owner_ura, publications)| {
                 let owner = crate::core::ura::parse_ura(owner_ura).ok()?;
                 let (owner_device_id, _) = owner.device_agent_ids()?;
                 if owner.realm != device.realm
                     || owner_device_id != device_id
-                    || !descriptors
+                    || !publications
                         .iter()
-                        .any(|descriptor| descriptor.public_name() == public_name)
+                        .any(|publication| publication.descriptor().public_name() == public_name)
                 {
                     return None;
                 }
@@ -259,15 +420,25 @@ impl LocalAbilityPublicationSnapshot {
 
     #[must_use]
     pub(crate) fn all_descriptors(&self) -> Vec<AbilityDescriptor> {
-        self.descriptors_by_owner
+        self.publications_by_owner
             .values()
             .flatten()
-            .cloned()
+            .map(|publication| publication.descriptor().clone())
             .collect()
     }
 
     #[cfg(test)]
     pub(crate) fn from_owner_public_names(owner_ura: &str, public_names: &[&str]) -> Self {
+        let execution_host_ura = default_test_execution_host_for_owner(owner_ura);
+        Self::from_owner_public_names_on_host(owner_ura, &execution_host_ura, public_names)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_owner_public_names_on_host(
+        owner_ura: &str,
+        execution_host_ura: &str,
+        public_names: &[&str],
+    ) -> Self {
         use crate::daemon::ability::descriptors::{AdmissionAction, Visibility};
 
         let mut snapshot = Self::default();
@@ -279,15 +450,8 @@ impl LocalAbilityPublicationSnapshot {
                 AdmissionAction::Invoke,
             )
             .expect("test publication descriptor");
-            let ability_ura = descriptor
-                .canonical_ability_ura()
-                .expect("test canonical ability URA");
-            snapshot.ability_uras.insert(ability_ura);
-            snapshot
-                .descriptors_by_owner
-                .entry(owner_ura.to_string())
-                .or_default()
-                .push(descriptor);
+            let dispatch_key = crate::core::ura::local_dispatch_ability_key(owner_ura, public_name);
+            snapshot.insert_test_descriptor(descriptor, execution_host_ura, &dispatch_key);
         }
         snapshot
     }
@@ -296,17 +460,137 @@ impl LocalAbilityPublicationSnapshot {
     pub(crate) fn from_descriptors(descriptors: Vec<AbilityDescriptor>) -> Self {
         let mut snapshot = Self::default();
         for descriptor in descriptors {
-            let ability_ura = descriptor
-                .canonical_ability_ura()
-                .expect("test descriptor must derive a canonical Ability URA");
-            snapshot.ability_uras.insert(ability_ura);
-            snapshot
-                .descriptors_by_owner
-                .entry(descriptor.owner_ura.clone())
-                .or_default()
-                .push(descriptor);
+            let dispatch_key = crate::core::ura::local_dispatch_ability_key(
+                &descriptor.owner_ura,
+                &descriptor.public_name(),
+            );
+            let execution_host_ura = default_test_execution_host_for_owner(&descriptor.owner_ura);
+            snapshot.insert_test_descriptor(descriptor, &execution_host_ura, &dispatch_key);
         }
         snapshot
+    }
+
+    #[cfg(test)]
+    fn insert_test_descriptor(
+        &mut self,
+        descriptor: AbilityDescriptor,
+        execution_host_ura: &str,
+        dispatch_key: &str,
+    ) {
+        let ability_ura = descriptor
+            .canonical_ability_ura()
+            .expect("test descriptor must derive a canonical Ability URA");
+        let owner_ura = descriptor.owner_ura.clone();
+        let owner = test_owner_kind_for_owner_ura(&owner_ura);
+        let authority_scope = crate::daemon::ability::AuthorityScope::new(
+            owner.authority_projection(),
+            owner_ura.clone(),
+        )
+        .expect("test authority scope");
+        let authority_binding =
+            crate::daemon::ability::AuthorityBinding::local_self_for_descriptor(
+                dispatch_key.to_string(),
+                authority_scope,
+                &descriptor,
+            )
+            .expect("test authority binding");
+        let implementation_binding = crate::daemon::ability::AbilityImplBinding::new(
+            dispatch_key.to_string(),
+            descriptor.version.clone(),
+            descriptor.call_mode(),
+            crate::daemon::ability::RuntimeEnv::daemon_native(),
+            crate::daemon::ability::AbilityImplSource::Test,
+        )
+        .expect("test implementation binding");
+        let owner_matches = owner.matches_owner_ura(&owner_ura);
+        let host_matches = owner.execution_host_matches_owner_ura(&owner_ura, execution_host_ura);
+        let authority_matches = authority_binding_matches_publication(
+            &authority_binding,
+            &owner,
+            &owner_ura,
+            &descriptor,
+            dispatch_key,
+        );
+        let implementation_matches = implementation_binding_matches_publication(
+            &implementation_binding,
+            &descriptor,
+            dispatch_key,
+        );
+        let publication = AbilityPublication::from_catalog_row(
+            crate::daemon::ability::dispatch::AuthorityAbilityCatalogSnapshotRow {
+                name: dispatch_key.to_string(),
+                owner,
+                execution_host_ura: execution_host_ura.to_string(),
+                descriptor,
+                authority: authority_binding,
+                implementation: implementation_binding,
+                runtime_binding: crate::daemon::ability::dispatch::CatalogRuntimeBinding {
+                    state: crate::daemon::ability::dispatch::CatalogRuntimeBindingState::Bound,
+                    implementation_source: "test".to_string(),
+                    runtime_env: "daemon-native".to_string(),
+                },
+            },
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "test descriptor `{dispatch_key}` for owner `{owner_ura}` on host `{execution_host_ura}` must materialize through the same publication gate: owner_matches={owner_matches} host_matches={host_matches} authority_matches={authority_matches} implementation_matches={implementation_matches}"
+            )
+        });
+        self.ability_uras.insert(ability_ura);
+        self.publications_by_owner
+            .entry(owner_ura)
+            .or_default()
+            .push(publication);
+    }
+}
+
+#[cfg(test)]
+fn test_owner_kind_for_owner_ura(owner_ura: &str) -> OwnerKind {
+    let parsed = crate::core::ura::parse_ura(owner_ura)
+        .expect("test publication owner must be a canonical URA");
+    match parsed.kind {
+        crate::core::ura::URAKind::Device => OwnerKind::DeviceProfileProjection,
+        crate::core::ura::URAKind::Authority => OwnerKind::RealmAuthority,
+        crate::core::ura::URAKind::Service => {
+            let (principal_id, service_id) = parsed
+                .service_ids()
+                .expect("canonical service owner must expose service ids");
+            OwnerKind::Service {
+                principal_id: principal_id.to_string(),
+                service_id: service_id.to_string(),
+            }
+        }
+        crate::core::ura::URAKind::Agent => {
+            if let Some((_device_id, agent_id)) = parsed.device_agent_ids() {
+                OwnerKind::SystemAgent(agent_id.to_string())
+            } else {
+                let (_user_id, agent_id) = parsed
+                    .agent_ids()
+                    .expect("canonical hosted Agent owner must expose agent ids");
+                OwnerKind::Agent(agent_id.to_string())
+            }
+        }
+        other => panic!("unsupported test publication owner kind: {other:?}"),
+    }
+}
+
+#[cfg(test)]
+fn default_test_execution_host_for_owner(owner_ura: &str) -> String {
+    let Ok(parsed) = crate::core::ura::parse_ura(owner_ura) else {
+        return owner_ura.to_string();
+    };
+    match parsed.kind {
+        crate::core::ura::URAKind::Agent => {
+            if let Some((device_id, _)) = parsed.device_agent_ids() {
+                crate::core::ura::device_ura(&parsed.realm, device_id)
+            } else {
+                crate::core::ura::device_ura(&parsed.realm, "test-host")
+            }
+        }
+        crate::core::ura::URAKind::Service => {
+            crate::core::ura::device_ura(&parsed.realm, "test-host")
+        }
+        _ => owner_ura.to_string(),
     }
 }
 
@@ -316,6 +600,58 @@ mod tests {
 
     use super::*;
     use crate::daemon::ability::dispatch::{AbilityAuthorityContext, OwnerKind};
+
+    #[test]
+    fn resolve_selects_descriptor_by_call_mode_not_public_name_only() {
+        let owner_ura =
+            crate::core::ura::device_agent_ura("acme", "node-a", "runtime-introspection");
+        let rpc = AbilityDescriptor::new(
+            "runtime.events",
+            owner_ura.clone(),
+            crate::daemon::ability::descriptors::Visibility::Scoped,
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+        )
+        .expect("rpc descriptor");
+        let stream = AbilityDescriptor::new(
+            "runtime.events",
+            owner_ura.clone(),
+            crate::daemon::ability::descriptors::Visibility::Scoped,
+            crate::daemon::ability::descriptors::AdmissionAction::Stream,
+        )
+        .expect("stream descriptor")
+        .with_call_mode(crate::daemon::ability::CallMode::Stream);
+        let rpc_ref = rpc.descriptor_ref().expect("rpc descriptor ref");
+        let stream_ref = stream.descriptor_ref().expect("stream descriptor ref");
+        let snapshot = LocalAbilityPublicationSnapshot::from_descriptors(vec![rpc, stream]);
+
+        assert_eq!(
+            snapshot
+                .resolve_with_call_mode(
+                    &owner_ura,
+                    "runtime.events",
+                    crate::daemon::ability::CallMode::Rpc,
+                )
+                .expect("rpc publication")
+                .descriptor_ref,
+            rpc_ref
+        );
+        assert_eq!(
+            snapshot
+                .resolve_with_call_mode(
+                    &owner_ura,
+                    "runtime.events",
+                    crate::daemon::ability::CallMode::Stream,
+                )
+                .expect("stream publication")
+                .descriptor_ref,
+            stream_ref
+        );
+        assert!(!snapshot.resolves_with_call_mode(
+            &owner_ura,
+            "runtime.events",
+            crate::daemon::ability::CallMode::Bidi,
+        ));
+    }
 
     #[test]
     fn capture_tracks_system_agent_commits_without_mutating_prior_snapshot() {
@@ -357,6 +693,444 @@ mod tests {
             summary.get("namespace").and_then(Value::as_str) == Some("runtime")
                 && summary.get("local_name").and_then(Value::as_str) == Some("cursor")
         }));
+    }
+
+    #[test]
+    fn capture_materializes_complete_ability_publication_facets() {
+        let device_profile_owner_ura = "easynet:///r/acme/device/node-a";
+        let system_agent_owner_ura =
+            crate::core::ura::device_agent_ura("acme", "node-a", "runtime-introspection");
+        let catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            AbilityAuthorityContext::for_device_authority_root(device_profile_owner_ura)
+                .expect("device authority context"),
+        );
+        catalog
+            .hot_register_rpc_with_spec(
+                "runtime.cursor",
+                OwnerKind::runtime_introspection_system(),
+                crate::daemon::ability::manifest::AbilityManifest::new(
+                    "dynamic",
+                    "test complete publication facets",
+                    serde_json::json!({"type": "object"}),
+                )
+                .and_then(|manifest| manifest.with_admission_action("invoke"))
+                .expect("test manifest"),
+                Arc::new(|_args| Ok(serde_json::json!({"ok": true}))),
+            )
+            .expect("hot-register dynamic ability");
+
+        let snapshot = LocalAbilityPublicationSnapshot::capture(&catalog);
+        let publication = snapshot
+            .publications_by_owner
+            .get(&system_agent_owner_ura)
+            .and_then(|publications| {
+                publications
+                    .iter()
+                    .find(|publication| publication.descriptor().public_name() == "runtime.cursor")
+            })
+            .expect("complete publication");
+
+        assert_eq!(
+            publication.descriptor_contract.owner_ura,
+            system_agent_owner_ura
+        );
+        assert_eq!(
+            publication.owner_binding.owner,
+            OwnerKind::runtime_introspection_system()
+        );
+        assert_eq!(publication.owner_binding.owner_ura, system_agent_owner_ura);
+        assert_eq!(publication.route_binding.callee_ura, system_agent_owner_ura);
+        assert_eq!(
+            publication.route_binding.execution_host_ura,
+            device_profile_owner_ura
+        );
+        assert_eq!(publication.route_binding.dispatch_key, "runtime.cursor");
+        assert_eq!(
+            publication.authority_binding.scope().authority_root(),
+            system_agent_owner_ura
+        );
+        assert_eq!(
+            publication.implementation_binding.ability(),
+            "runtime.cursor"
+        );
+    }
+
+    #[test]
+    fn publication_row_rejects_owner_kind_ura_mismatch() {
+        let device_profile_owner_ura = "easynet:///r/acme/device/node-a";
+        let system_agent_owner_ura =
+            crate::core::ura::device_agent_ura("acme", "node-a", "runtime-introspection");
+        let descriptor = AbilityDescriptor::new(
+            "runtime.cursor",
+            system_agent_owner_ura.clone(),
+            crate::daemon::ability::descriptors::Visibility::Scoped,
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+        )
+        .expect("test descriptor");
+        let authority_scope = crate::daemon::ability::AuthorityScope::new(
+            "system-agent:runtime-introspection",
+            system_agent_owner_ura.clone(),
+        )
+        .expect("test authority scope");
+        let authority = crate::daemon::ability::AuthorityBinding::local_self_for_descriptor(
+            "runtime.cursor",
+            authority_scope,
+            &descriptor,
+        )
+        .expect("test authority binding");
+        let implementation = crate::daemon::ability::AbilityImplBinding::new(
+            "runtime.cursor",
+            descriptor.version.clone(),
+            descriptor.call_mode(),
+            crate::daemon::ability::RuntimeEnv::daemon_native(),
+            crate::daemon::ability::AbilityImplSource::Test,
+        )
+        .expect("test implementation binding");
+        let row = crate::daemon::ability::dispatch::AuthorityAbilityCatalogSnapshotRow {
+            name: "runtime.cursor".to_string(),
+            owner: OwnerKind::Service {
+                principal_id: "alice".to_string(),
+                service_id: "pages".to_string(),
+            },
+            execution_host_ura: device_profile_owner_ura.to_string(),
+            descriptor,
+            authority,
+            implementation,
+            runtime_binding: crate::daemon::ability::dispatch::CatalogRuntimeBinding {
+                state: crate::daemon::ability::dispatch::CatalogRuntimeBindingState::Bound,
+                implementation_source: "test".to_string(),
+                runtime_env: "daemon-native".to_string(),
+            },
+        };
+
+        assert!(
+            AbilityPublication::from_catalog_row(row).is_none(),
+            "publication must fail closed when OwnerKind and descriptor owner URA diverge"
+        );
+    }
+
+    #[test]
+    fn publication_row_rejects_authority_binding_scope_mismatch() {
+        let device_profile_owner_ura = "easynet:///r/acme/device/node-a";
+        let system_agent_owner_ura =
+            crate::core::ura::device_agent_ura("acme", "node-a", "runtime-introspection");
+        let descriptor = AbilityDescriptor::new(
+            "runtime.cursor",
+            system_agent_owner_ura.clone(),
+            crate::daemon::ability::descriptors::Visibility::Scoped,
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+        )
+        .expect("test descriptor");
+        let authority_scope =
+            crate::daemon::ability::AuthorityScope::new("device", device_profile_owner_ura)
+                .expect("test authority scope");
+        let authority = crate::daemon::ability::AuthorityBinding::local_self_for_descriptor(
+            "runtime.cursor",
+            authority_scope,
+            &descriptor,
+        )
+        .expect("test authority binding");
+        let implementation = crate::daemon::ability::AbilityImplBinding::new(
+            "runtime.cursor",
+            descriptor.version.clone(),
+            descriptor.call_mode(),
+            crate::daemon::ability::RuntimeEnv::daemon_native(),
+            crate::daemon::ability::AbilityImplSource::Test,
+        )
+        .expect("test implementation binding");
+        let row = crate::daemon::ability::dispatch::AuthorityAbilityCatalogSnapshotRow {
+            name: "runtime.cursor".to_string(),
+            owner: OwnerKind::runtime_introspection_system(),
+            execution_host_ura: device_profile_owner_ura.to_string(),
+            descriptor,
+            authority,
+            implementation,
+            runtime_binding: crate::daemon::ability::dispatch::CatalogRuntimeBinding {
+                state: crate::daemon::ability::dispatch::CatalogRuntimeBindingState::Bound,
+                implementation_source: "test".to_string(),
+                runtime_env: "daemon-native".to_string(),
+            },
+        };
+
+        assert!(
+            AbilityPublication::from_catalog_row(row).is_none(),
+            "publication must fail closed when AuthorityBinding scope is not the callable owner"
+        );
+    }
+
+    #[test]
+    fn publication_row_rejects_implementation_binding_mismatch() {
+        let device_profile_owner_ura = "easynet:///r/acme/device/node-a";
+        let system_agent_owner_ura =
+            crate::core::ura::device_agent_ura("acme", "node-a", "runtime-introspection");
+        let descriptor = AbilityDescriptor::new(
+            "runtime.cursor",
+            system_agent_owner_ura.clone(),
+            crate::daemon::ability::descriptors::Visibility::Scoped,
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+        )
+        .expect("test descriptor");
+        let authority_scope = crate::daemon::ability::AuthorityScope::new(
+            "system-agent:runtime-introspection",
+            system_agent_owner_ura.clone(),
+        )
+        .expect("test authority scope");
+        let authority = crate::daemon::ability::AuthorityBinding::local_self_for_descriptor(
+            "runtime.cursor",
+            authority_scope,
+            &descriptor,
+        )
+        .expect("test authority binding");
+        let implementation = crate::daemon::ability::AbilityImplBinding::new(
+            "runtime.cursor.stale",
+            descriptor.version.clone(),
+            descriptor.call_mode(),
+            crate::daemon::ability::RuntimeEnv::daemon_native(),
+            crate::daemon::ability::AbilityImplSource::Test,
+        )
+        .expect("test implementation binding");
+        let row = crate::daemon::ability::dispatch::AuthorityAbilityCatalogSnapshotRow {
+            name: "runtime.cursor".to_string(),
+            owner: OwnerKind::runtime_introspection_system(),
+            execution_host_ura: device_profile_owner_ura.to_string(),
+            descriptor,
+            authority,
+            implementation,
+            runtime_binding: crate::daemon::ability::dispatch::CatalogRuntimeBinding {
+                state: crate::daemon::ability::dispatch::CatalogRuntimeBindingState::Bound,
+                implementation_source: "test".to_string(),
+                runtime_env: "daemon-native".to_string(),
+            },
+        };
+
+        assert!(
+            AbilityPublication::from_catalog_row(row).is_none(),
+            "publication must fail closed when AbilityImplBinding targets a different handler key"
+        );
+    }
+
+    #[test]
+    fn publication_row_rejects_system_agent_callee_as_execution_host() {
+        let device_profile_owner_ura = "easynet:///r/acme/device/node-a";
+        let system_agent_owner_ura =
+            crate::core::ura::device_agent_ura("acme", "node-a", "runtime-introspection");
+        let descriptor = AbilityDescriptor::new(
+            "runtime.cursor",
+            system_agent_owner_ura.clone(),
+            crate::daemon::ability::descriptors::Visibility::Scoped,
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+        )
+        .expect("test descriptor");
+        let authority_scope = crate::daemon::ability::AuthorityScope::new(
+            "system-agent:runtime-introspection",
+            system_agent_owner_ura.clone(),
+        )
+        .expect("test authority scope");
+        let authority = crate::daemon::ability::AuthorityBinding::local_self_for_descriptor(
+            "runtime.cursor",
+            authority_scope,
+            &descriptor,
+        )
+        .expect("test authority binding");
+        let implementation = crate::daemon::ability::AbilityImplBinding::new(
+            "runtime.cursor",
+            descriptor.version.clone(),
+            descriptor.call_mode(),
+            crate::daemon::ability::RuntimeEnv::daemon_native(),
+            crate::daemon::ability::AbilityImplSource::Test,
+        )
+        .expect("test implementation binding");
+        let row = crate::daemon::ability::dispatch::AuthorityAbilityCatalogSnapshotRow {
+            name: "runtime.cursor".to_string(),
+            owner: OwnerKind::runtime_introspection_system(),
+            execution_host_ura: system_agent_owner_ura,
+            descriptor,
+            authority,
+            implementation,
+            runtime_binding: crate::daemon::ability::dispatch::CatalogRuntimeBinding {
+                state: crate::daemon::ability::dispatch::CatalogRuntimeBindingState::Bound,
+                implementation_source: "test".to_string(),
+                runtime_env: "daemon-native".to_string(),
+            },
+        };
+
+        assert!(
+            AbilityPublication::from_catalog_row(row).is_none(),
+            "SystemAgent callee must not be published as its own execution host; the Device hosts it"
+        );
+        assert!(
+            OwnerKind::runtime_introspection_system().execution_host_matches_owner_ura(
+                &crate::core::ura::device_agent_ura("acme", "node-a", "runtime-introspection"),
+                device_profile_owner_ura,
+            ),
+            "matching sponsoring Device remains the valid execution host"
+        );
+    }
+
+    #[test]
+    fn publication_row_rejects_service_callee_as_execution_host() {
+        let device_profile_owner_ura = "easynet:///r/acme/device/node-a";
+        let pages_service_owner_ura = crate::core::ura::service_ura("acme", "alice", "pages");
+        let descriptor = AbilityDescriptor::new(
+            "project_list",
+            pages_service_owner_ura.clone(),
+            crate::daemon::ability::descriptors::Visibility::Scoped,
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+        )
+        .expect("test descriptor");
+        let owner = OwnerKind::Service {
+            principal_id: "alice".to_string(),
+            service_id: "pages".to_string(),
+        };
+        let authority_scope = crate::daemon::ability::AuthorityScope::new(
+            "service:alice.pages",
+            pages_service_owner_ura.clone(),
+        )
+        .expect("test authority scope");
+        let authority = crate::daemon::ability::AuthorityBinding::local_self_for_descriptor(
+            "project_list",
+            authority_scope,
+            &descriptor,
+        )
+        .expect("test authority binding");
+        let implementation = crate::daemon::ability::AbilityImplBinding::new(
+            "project_list",
+            descriptor.version.clone(),
+            descriptor.call_mode(),
+            crate::daemon::ability::RuntimeEnv::daemon_native(),
+            crate::daemon::ability::AbilityImplSource::Test,
+        )
+        .expect("test implementation binding");
+        let row = crate::daemon::ability::dispatch::AuthorityAbilityCatalogSnapshotRow {
+            name: "project_list".to_string(),
+            owner: owner.clone(),
+            execution_host_ura: pages_service_owner_ura.clone(),
+            descriptor,
+            authority,
+            implementation,
+            runtime_binding: crate::daemon::ability::dispatch::CatalogRuntimeBinding {
+                state: crate::daemon::ability::dispatch::CatalogRuntimeBindingState::Bound,
+                implementation_source: "test".to_string(),
+                runtime_env: "daemon-native".to_string(),
+            },
+        };
+
+        assert!(
+            AbilityPublication::from_catalog_row(row).is_none(),
+            "Service callee must not be published as its own execution host; a Device hosts the Service surface implementation"
+        );
+        assert!(
+            owner.execution_host_matches_owner_ura(
+                &pages_service_owner_ura,
+                device_profile_owner_ura,
+            ),
+            "same-realm Device remains a valid local execution host for Service-owned publication"
+        );
+    }
+
+    #[test]
+    fn publication_snapshot_excludes_descriptor_only_rows_from_callable_projection() {
+        let device_profile_owner_ura = "easynet:///r/acme/device/node-a";
+        let hosted_agent_owner_ura = crate::core::ura::agent_ura("acme", "alice", "agent");
+        let catalog = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+                device_profile_owner_ura,
+                [hosted_agent_owner_ura.clone()],
+            )
+            .expect("device authority context"),
+        );
+        let owner = OwnerKind::Agent("agent".to_string());
+        let authority_scope =
+            crate::daemon::ability::AuthorityScope::new("agent:agent", hosted_agent_owner_ura)
+                .expect("hosted Agent authority scope");
+        catalog
+            .hot_register_descriptor_only_with_authority_scope(
+                "agent.declared-only",
+                owner,
+                authority_scope,
+                crate::daemon::ability::manifest::AbilityManifest::new(
+                    "declared-only",
+                    "Discoverable declaration without an executor.",
+                    serde_json::json!({"type": "object"}),
+                )
+                .and_then(|manifest| manifest.with_admission_action("read"))
+                .expect("descriptor-only manifest"),
+            )
+            .expect("descriptor-only catalog registration");
+
+        let row = catalog
+            .authority_ability_catalog_snapshot()
+            .into_iter()
+            .find(|row| row.name == "agent.declared-only")
+            .expect("descriptor-only row is still visible in the control-plane catalog");
+        assert_eq!(
+            row.runtime_binding.state,
+            crate::daemon::ability::dispatch::CatalogRuntimeBindingState::DescriptorOnly
+        );
+        assert!(
+            !LocalAbilityPublicationSnapshot::capture(&catalog)
+                .resolves("easynet:///r/acme/agent/alice.agent", "declared-only"),
+            "descriptor-only rows must not enter the callable local publication projection"
+        );
+    }
+
+    #[test]
+    fn publication_row_rejects_unbound_runtime_binding() {
+        let device_profile_owner_ura = "easynet:///r/acme/device/node-a";
+        let system_agent_owner_ura =
+            crate::core::ura::device_agent_ura("acme", "node-a", "runtime-introspection");
+        let descriptor = AbilityDescriptor::new(
+            "runtime.cursor",
+            system_agent_owner_ura.clone(),
+            crate::daemon::ability::descriptors::Visibility::Scoped,
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+        )
+        .expect("test descriptor");
+        let authority_scope = crate::daemon::ability::AuthorityScope::new(
+            "system-agent:runtime-introspection",
+            system_agent_owner_ura,
+        )
+        .expect("test authority scope");
+        let authority = crate::daemon::ability::AuthorityBinding::local_self_for_descriptor(
+            "runtime.cursor",
+            authority_scope,
+            &descriptor,
+        )
+        .expect("test authority binding");
+        let implementation = crate::daemon::ability::AbilityImplBinding::new(
+            "runtime.cursor",
+            descriptor.version.clone(),
+            descriptor.call_mode(),
+            crate::daemon::ability::RuntimeEnv::daemon_native(),
+            crate::daemon::ability::AbilityImplSource::Test,
+        )
+        .expect("test implementation binding");
+        let row = crate::daemon::ability::dispatch::AuthorityAbilityCatalogSnapshotRow {
+            name: "runtime.cursor".to_string(),
+            owner: OwnerKind::runtime_introspection_system(),
+            execution_host_ura: device_profile_owner_ura.to_string(),
+            descriptor,
+            authority,
+            implementation,
+            runtime_binding: crate::daemon::ability::dispatch::CatalogRuntimeBinding {
+                state: crate::daemon::ability::dispatch::CatalogRuntimeBindingState::Unbound,
+                implementation_source: "test".to_string(),
+                runtime_env: "daemon-native".to_string(),
+            },
+        };
+
+        assert!(
+            AbilityPublication::from_catalog_row(row).is_none(),
+            "unbound rows must not become callable AbilityPublication records"
+        );
     }
 
     #[test]
@@ -505,13 +1279,48 @@ mod tests {
             crate::daemon::ability::descriptors::AdmissionAction::Invoke,
         )
         .expect("test descriptor");
+        let authority_scope =
+            crate::daemon::ability::AuthorityScope::new("device", owner_ura).unwrap();
+        let authority_binding =
+            crate::daemon::ability::AuthorityBinding::local_self_for_descriptor(
+                "device_profile.cursor",
+                authority_scope,
+                &descriptor,
+            )
+            .unwrap();
+        let implementation_binding = crate::daemon::ability::AbilityImplBinding::new(
+            "device_profile.cursor",
+            descriptor.version.clone(),
+            descriptor.call_mode(),
+            crate::daemon::ability::RuntimeEnv::daemon_native(),
+            crate::daemon::ability::AbilityImplSource::Test,
+        )
+        .unwrap();
         descriptor.owner_ura = "not-a-canonical-owner".to_string();
+        let publication = AbilityPublication {
+            descriptor_contract: descriptor,
+            owner_binding: OwnerBinding {
+                owner: OwnerKind::DeviceProfileProjection,
+                owner_ura: "not-a-canonical-owner".to_string(),
+                ability_ura:
+                    "easynet:///r/acme/ability/device.node-a.runtime-introspection.device_profile.cursor"
+                        .to_string(),
+            },
+            authority_binding,
+            implementation_binding,
+            route_binding: PublicationRouteBinding {
+                callee_ura: "not-a-canonical-owner".to_string(),
+                execution_host_ura: owner_ura.to_string(),
+                descriptor_ref: "test-descriptor-ref".to_string(),
+                dispatch_key: "device_profile.cursor".to_string(),
+            },
+        };
         let mut snapshot = LocalAbilityPublicationSnapshot::default();
         snapshot
-            .descriptors_by_owner
+            .publications_by_owner
             .entry("not-a-canonical-owner".to_string())
             .or_default()
-            .push(descriptor);
+            .push(publication);
 
         let err = snapshot
             .owner_projection_values("not-a-canonical-owner")
@@ -531,8 +1340,8 @@ mod tests {
         let bob_snapshot =
             LocalAbilityPublicationSnapshot::from_owner_public_names(&bob, &["chat"]);
         snapshot
-            .descriptors_by_owner
-            .extend(bob_snapshot.descriptors_by_owner);
+            .publications_by_owner
+            .extend(bob_snapshot.publications_by_owner);
 
         let projected = snapshot.hosted_agent_descriptors("alice");
         assert_eq!(projected.len(), 2);
@@ -548,24 +1357,24 @@ mod tests {
         let alice = crate::core::ura::agent_ura("acme", "user-1", "alice");
         let bob = crate::core::ura::agent_ura("acme", "user-1", "bob");
         let mut snapshot = LocalAbilityPublicationSnapshot::default();
-        snapshot.descriptors_by_owner.entry(device).or_default();
-        snapshot.descriptors_by_owner.extend(
+        snapshot.publications_by_owner.entry(device).or_default();
+        snapshot.publications_by_owner.extend(
             LocalAbilityPublicationSnapshot::from_owner_public_names(
                 &device_agent,
                 &["mcp-default.search"],
             )
-            .descriptors_by_owner,
+            .publications_by_owner,
         );
-        snapshot.descriptors_by_owner.extend(
+        snapshot.publications_by_owner.extend(
             LocalAbilityPublicationSnapshot::from_owner_public_names(&bob, &["chat"])
-                .descriptors_by_owner,
+                .publications_by_owner,
         );
-        snapshot.descriptors_by_owner.extend(
+        snapshot.publications_by_owner.extend(
             LocalAbilityPublicationSnapshot::from_owner_public_names(&alice, &["chat"])
-                .descriptors_by_owner,
+                .publications_by_owner,
         );
         snapshot
-            .descriptors_by_owner
+            .publications_by_owner
             .entry("not-a-ura".to_string())
             .or_default();
 
@@ -613,8 +1422,8 @@ mod tests {
         let duplicate =
             LocalAbilityPublicationSnapshot::from_owner_public_names(&second, &["search"]);
         snapshot
-            .descriptors_by_owner
-            .extend(duplicate.descriptors_by_owner);
+            .publications_by_owner
+            .extend(duplicate.publications_by_owner);
 
         assert!(snapshot.hosted_agent_descriptors("alice").is_empty());
     }

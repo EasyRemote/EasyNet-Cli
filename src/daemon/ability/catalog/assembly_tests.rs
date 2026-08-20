@@ -607,7 +607,25 @@ fn contract_inventory_retains_voice_without_leaking_it_into_live_inventory() {
 #[test]
 fn every_published_ability_resolves_to_a_handler() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let agents = AgentRegistry::default();
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+            crate::core::ura::device_ura(
+                crate::core::ura::REALM_EASYNET,
+                "ability-catalog-snapshot",
+            ),
+        )
+        .expect("build explicit assembly-test Device authority");
+    let mut config = registry_config_for_agents_with_authority(&agents, authority_context);
+    config.pages_identity = crate::daemon::ability::builtins::resources::pages::PagesIdentity {
+        user: Some("catalog-pages".to_string()),
+        owner_user_id: Some("catalog-pages-owner".to_string()),
+        realm: Some(crate::core::ura::REALM_EASYNET.to_string()),
+        listener_port: Some(8787),
+    };
+    let reg = build_registry_with_services_result(config)
+        .expect("assemble executable system registry with deterministic Pages identity")
+        .catalog;
     let daemon_invocation_surface: std::collections::BTreeSet<&'static str> =
         crate::daemon::ability::conformance::HubBaseline::required_abilities()
             .iter()
