@@ -275,6 +275,47 @@ async fn run_attachment(
     let latest_frame: Arc<std::sync::Mutex<Option<Value>>> =
         Arc::new(std::sync::Mutex::new(None));
     let frame_notify = Arc::new(tokio::sync::Notify::new());
+    // Producer-side pacing (plugin QoS, not consumer backpressure): Chrome
+    // keeps exactly one un-acked frame in flight, so the ack cadence IS the
+    // capture rate. Acking instantly lets Chrome outrun the downstream
+    // pipe; frames then queue FIFO inside bidi/hub/WS and the viewer sees
+    // pipeline-depth-old frames — worse perceived latency than the old
+    // consumer-driven ack. Pace acks to a target frame interval instead so
+    // at most one frame is ever in flight end to end.
+    const VIEWPORT_FRAME_INTERVAL: std::time::Duration =
+        std::time::Duration::from_millis(66);
+    let pending_ack: Arc<std::sync::Mutex<Option<Value>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let ack_notify = Arc::new(tokio::sync::Notify::new());
+    let ack_pacer = {
+        let pending_ack = Arc::clone(&pending_ack);
+        let ack_notify = Arc::clone(&ack_notify);
+        let session = Arc::clone(&session);
+        tokio::spawn(async move {
+            let mut last_ack = tokio::time::Instant::now() - VIEWPORT_FRAME_INTERVAL;
+            loop {
+                ack_notify.notified().await;
+                loop {
+                    let session_id = pending_ack
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .take();
+                    let Some(session_id) = session_id else { break };
+                    let elapsed = last_ack.elapsed();
+                    if elapsed < VIEWPORT_FRAME_INTERVAL {
+                        tokio::time::sleep(VIEWPORT_FRAME_INTERVAL - elapsed).await;
+                    }
+                    last_ack = tokio::time::Instant::now();
+                    let _ = session
+                        .command(
+                            "Page.screencastFrameAck",
+                            Some(json!({"sessionId": session_id})),
+                        )
+                        .await;
+                }
+            }
+        })
+    };
     let mirror_sender = {
         let latest_frame = Arc::clone(&latest_frame);
         let frame_notify = Arc::clone(&frame_notify);
@@ -396,15 +437,11 @@ async fn run_attachment(
                     {
                         let params = &event.params;
                         if let Some(session_id) = params.get("sessionId").cloned() {
-                            let ack_session = Arc::clone(&session);
-                            tokio::spawn(async move {
-                                let _ = ack_session
-                                    .command(
-                                        "Page.screencastFrameAck",
-                                        Some(json!({"sessionId": session_id})),
-                                    )
-                                    .await;
-                            });
+                            *pending_ack
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                                Some(session_id);
+                            ack_notify.notify_one();
                         }
                         let data = params.get("data").and_then(Value::as_str).unwrap_or("");
                         if !data.is_empty() {
@@ -482,6 +519,7 @@ async fn run_attachment(
         }
     }
     mirror_sender.abort();
+    ack_pacer.abort();
     concurrent_lane.abort_all();
     input_lane.abort_all();
     if !detached_sent {
