@@ -15280,7 +15280,7 @@ for retired in (
 for required in (
     "enum AttachedDescriptorCatalogRoute",
     "RemoteCatalogueReadIssuer::catalogue_read_plan(",
-    "load_remote_invocation_caller_signer(",
+    "load_remote_invocation_caller_signer_at_endpoint(",
     "invoke_remote_target_with_signer_at_endpoint(",
 ):
     if required not in combined_production:
@@ -21931,36 +21931,36 @@ required_runtime_fragments = {
     "go": (
         go_runtime,
         [
+            'requiredRuntimeReceiptObjectText(value, "authority_ura", field+".authority_ura")',
             'requiredRuntimeReceiptObjectText(value, "issuer_ura", field+".issuer_ura")',
-            'requiredRuntimeReceiptObjectText(value, "subject_ura", field+".subject_ura")',
         ],
     ),
     "python": (
         py_runtime,
         [
+            'value.get("authority_ura")',
             'value.get("issuer_ura")',
-            'value.get("subject_ura")',
         ],
     ),
     "node": (
         node_runtime,
         [
+            "binding.authority_ura",
             "binding.issuer_ura",
-            "binding.subject_ura",
         ],
     ),
     "java": (
         java_proof,
         [
+            'requiredString(binding, "authority_ura")',
             'requiredString(binding, "issuer_ura")',
-            'requiredString(binding, "subject_ura")',
         ],
     ),
     "swift": (
         swift_runtime,
         [
+            'runtimeRequiredText(object, "authority_ura"',
             'runtimeRequiredText(object, "issuer_ura"',
-            'runtimeRequiredText(object, "subject_ura"',
         ],
     ),
 }
@@ -21975,18 +21975,19 @@ for language, source, required, forbidden in [
     (
         "go-direct",
         go_direct,
-        ['"issuer_ura":       value.GetIssuerUra()', '"subject_ura":      value.GetSubjectUra()'],
+        ['"authority_ura":    directAgentURA(value.GetAuthority())', '"issuer_ura":       directAgentURA(delegation.GetIssuer())', '"issuer_ura":       directAgentURA(session.GetIssuer())'],
         [
             '"backend_ura":      value.GetBackendUra()',
             '"user_ura":         value.GetUserUra()',
             '"issuer_ura":       value.GetBackendUra()',
             '"subject_ura":      value.GetUserUra()',
+            '"subject_ura":      value.GetSubjectUra()',
         ],
     ),
     (
         "python-direct",
         py_direct,
-        ['"issuer_ura": value.issuer_ura', '"subject_ura": value.subject_ura'],
+        ['"authority_ura": authority_ura', '"issuer_ura": issuer_ura'],
         [
             '"backend_ura": value.backend_ura',
             '"user_ura": value.user_ura',
@@ -22008,8 +22009,8 @@ for language, source, required, forbidden in [
             )
 
 for fragment in (
-    '"issuer_ura": value.issuer_ura',
-    '"subject_ura": value.subject_ura',
+    '"authority_ura": authority_ura',
+    '"issuer_ura": issuer_ura',
     "session_authority_summary_uses_public_generic_fields",
 ):
     if fragment not in daemon_dispatch_client:

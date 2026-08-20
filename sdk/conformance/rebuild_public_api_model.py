@@ -156,6 +156,10 @@ SEMANTIC_RULES: list[tuple[str, str]] = [
         "unary_invoke",
     ),
     (
+        r"(authority(binding|evidence|relation|orbootstrap)|bootstrap(binding|json)|delegationevidence|sessionevidence|authorityorbootstrapjson|canonical(authority|bootstrap|delegation|session).*bytes|.*proofhash)",
+        "receipt_verification",
+    ),
+    (
         r"(sdkerror|axonerror|errorcode|errorclass|retryhint|failure|errorstage|err[a-z]|mapprotocode)",
         "typed_errors",
     ),

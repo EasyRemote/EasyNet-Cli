@@ -11,16 +11,17 @@ from typing import Any, Mapping, Optional, Protocol, cast, runtime_checkable
 from axon_sdk.invocation import (
     AgentIdentity as _AxonAgentIdentity,
     AuthorityBinding as _AxonAuthorityBinding,
+    AuthorityOrBootstrap as _AxonAuthorityOrBootstrap,
     AxonError as _AxonError,
-    BootstrapAuthorityBody as _AxonBootstrapAuthorityBody,
+    BootstrapBinding as _AxonBootstrapBinding,
     CalleeSignature as _AxonCalleeSignature,
-    DelegationProofBody as _AxonDelegationProofBody,
+    DelegationEvidence as _AxonDelegationEvidence,
     EntityRef as _AxonEntityRef,
     EntityRefKind as _AxonEntityRefKind,
     InvocationAuthorityProof as _AxonInvocationAuthorityProof,
     ReceiptProofFacts as _AxonReceiptProofFacts,
     ReceiptRef as _AxonReceiptRef,
-    SessionAuthorityBody as _AxonSessionAuthorityBody,
+    SessionEvidence as _AxonSessionEvidence,
     UraProfile as _AxonUraProfile,
 )
 
@@ -2074,17 +2075,16 @@ def _validate_runtime_receipt_authority_binding_shape(
     field_name: str,
 ) -> None:
     kind = _required_receipt_text(value.get("kind"), f"{field_name}.kind")
-    if kind == "self":
-        _require_runtime_receipt_exact_keys(value, field_name, "kind", "principal_ura")
+    if kind == "self+identity":
+        _require_runtime_receipt_exact_keys(value, field_name, "kind", "authority_ura")
         return
-    if kind == "delegation":
+    if kind == "delegated_by+delegation":
         _require_runtime_receipt_exact_keys(
             value,
             field_name,
             "kind",
+            "authority_ura",
             "issuer_ura",
-            "subject_ura",
-            "caller_ura",
             "audience",
             "scopes",
             "issued_at_ms",
@@ -2092,19 +2092,13 @@ def _validate_runtime_receipt_authority_binding_shape(
             "signature_base64",
         )
         return
-    if kind == "capability":
-        _require_runtime_receipt_exact_keys(value, field_name, "kind", "capability_ura")
-        return
-    if kind == "policy":
-        _require_runtime_receipt_exact_keys(value, field_name, "kind", "policy_ura")
-        return
-    if kind == "session":
+    if kind == "session_of+session":
         _require_runtime_receipt_exact_keys(
             value,
             field_name,
             "kind",
+            "authority_ura",
             "issuer_ura",
-            "subject_ura",
             "session_id",
             "scopes",
             "audiences",
@@ -2347,110 +2341,110 @@ def _validate_runtime_receipt_canonical_proof_facts(
 def _runtime_receipt_authority_binding(
     value: Optional[Mapping[str, object]],
     field_name: str,
-) -> _AxonAuthorityBinding:
+) -> _AxonAuthorityOrBootstrap:
     if value is None:
         raise _invalid_runtime(f"runtime receipt summary is missing {field_name}")
     kind = _required_receipt_text(value.get("kind"), f"{field_name}.kind")
-    if kind == "self":
-        return _AxonAuthorityBinding.self_(
-            _required_receipt_text(
-                value.get("principal_ura"),
-                f"{field_name}.principal_ura",
+    if kind == "self+identity":
+        return _AxonAuthorityOrBootstrap.from_binding(
+            _AxonAuthorityBinding.self_authority(
+                _required_receipt_text(
+                    value.get("authority_ura"),
+                    f"{field_name}.authority_ura",
+                )
             )
         )
-    if kind == "delegation":
-        return _AxonAuthorityBinding.delegated(
-            _AxonDelegationProofBody(
-                issuer_ura=_required_receipt_text(
-                    value.get("issuer_ura"),
-                    f"{field_name}.issuer_ura",
+    if kind == "delegated_by+delegation":
+        return _AxonAuthorityOrBootstrap.from_binding(
+            _AxonAuthorityBinding.delegated_authority(
+                _AxonAgentIdentity(
+                    _required_receipt_text(
+                        value.get("authority_ura"),
+                        f"{field_name}.authority_ura",
+                    ),
+                    _AxonUraProfile.STRICT_V2,
                 ),
-                subject_ura=_required_receipt_text(
-                    value.get("subject_ura"),
-                    f"{field_name}.subject_ura",
-                ),
-                caller_ura=_required_receipt_text(
-                    value.get("caller_ura"),
-                    f"{field_name}.caller_ura",
-                ),
-                audience=_required_receipt_text(
-                    value.get("audience"),
-                    f"{field_name}.audience",
-                ),
-                scopes=_runtime_receipt_text_tuple(
-                    value.get("scopes"),
-                    f"{field_name}.scopes",
-                ),
-                issued_at_ms=_runtime_receipt_required_non_negative_int(
-                    value.get("issued_at_ms"),
-                    f"{field_name}.issued_at_ms",
-                ),
-                expires_at_ms=_runtime_receipt_required_non_negative_int(
-                    value.get("expires_at_ms"),
-                    f"{field_name}.expires_at_ms",
-                ),
-                signature=_runtime_receipt_base64(
-                    value.get("signature_base64"),
-                    f"{field_name}.signature_base64",
-                    expected_length=64,
+                _AxonDelegationEvidence(
+                    issuer=_AxonAgentIdentity(
+                        _required_receipt_text(
+                            value.get("issuer_ura"),
+                            f"{field_name}.issuer_ura",
+                        ),
+                        _AxonUraProfile.STRICT_V2,
+                    ),
+                    scopes=_runtime_receipt_text_tuple(
+                        value.get("scopes"),
+                        f"{field_name}.scopes",
+                    ),
+                    audience=_required_receipt_text(
+                        value.get("audience"),
+                        f"{field_name}.audience",
+                    ),
+                    issued_at_ms=_runtime_receipt_required_non_negative_int(
+                        value.get("issued_at_ms"),
+                        f"{field_name}.issued_at_ms",
+                    ),
+                    expires_at_ms=_runtime_receipt_required_non_negative_int(
+                        value.get("expires_at_ms"),
+                        f"{field_name}.expires_at_ms",
+                    ),
+                    signature=_runtime_receipt_base64(
+                        value.get("signature_base64"),
+                        f"{field_name}.signature_base64",
+                        expected_length=64,
+                    ),
                 ),
             )
         )
-    if kind == "capability":
-        return _AxonAuthorityBinding.capability(
-            _required_receipt_text(
-                value.get("capability_ura"),
-                f"{field_name}.capability_ura",
-            )
-        )
-    if kind == "policy":
-        return _AxonAuthorityBinding.policy(
-            _required_receipt_text(
-                value.get("policy_ura"),
-                f"{field_name}.policy_ura",
-            )
-        )
-    if kind == "session":
-        return _AxonAuthorityBinding.session(
-            _AxonSessionAuthorityBody(
-                issuer_ura=_required_receipt_text(
-                    value.get("issuer_ura"),
-                    f"{field_name}.issuer_ura",
+    if kind == "session_of+session":
+        return _AxonAuthorityOrBootstrap.from_binding(
+            _AxonAuthorityBinding.session_authority(
+                _AxonAgentIdentity(
+                    _required_receipt_text(
+                        value.get("authority_ura"),
+                        f"{field_name}.authority_ura",
+                    ),
+                    _AxonUraProfile.STRICT_V2,
                 ),
-                subject_ura=_required_receipt_text(
-                    value.get("subject_ura"),
-                    f"{field_name}.subject_ura",
-                ),
-                session_id=_required_receipt_text(
-                    value.get("session_id"),
-                    f"{field_name}.session_id",
-                ),
-                scopes=_runtime_receipt_text_tuple(
-                    value.get("scopes"),
-                    f"{field_name}.scopes",
-                ),
-                audiences=_runtime_receipt_text_tuple(
-                    value.get("audiences"),
-                    f"{field_name}.audiences",
-                ),
-                issued_at_ms=_runtime_receipt_required_non_negative_int(
-                    value.get("issued_at_ms"),
-                    f"{field_name}.issued_at_ms",
-                ),
-                expires_at_ms=_runtime_receipt_required_non_negative_int(
-                    value.get("expires_at_ms"),
-                    f"{field_name}.expires_at_ms",
-                ),
-                signature=_runtime_receipt_base64(
-                    value.get("signature_base64"),
-                    f"{field_name}.signature_base64",
-                    expected_length=64,
+                _AxonSessionEvidence(
+                    issuer=_AxonAgentIdentity(
+                        _required_receipt_text(
+                            value.get("issuer_ura"),
+                            f"{field_name}.issuer_ura",
+                        ),
+                        _AxonUraProfile.STRICT_V2,
+                    ),
+                    session_id=_required_receipt_text(
+                        value.get("session_id"),
+                        f"{field_name}.session_id",
+                    ),
+                    scopes=_runtime_receipt_text_tuple(
+                        value.get("scopes"),
+                        f"{field_name}.scopes",
+                    ),
+                    audiences=_runtime_receipt_text_tuple(
+                        value.get("audiences"),
+                        f"{field_name}.audiences",
+                    ),
+                    issued_at_ms=_runtime_receipt_required_non_negative_int(
+                        value.get("issued_at_ms"),
+                        f"{field_name}.issued_at_ms",
+                    ),
+                    expires_at_ms=_runtime_receipt_required_non_negative_int(
+                        value.get("expires_at_ms"),
+                        f"{field_name}.expires_at_ms",
+                    ),
+                    signature=_runtime_receipt_base64(
+                        value.get("signature_base64"),
+                        f"{field_name}.signature_base64",
+                        expected_length=64,
+                    ),
                 ),
             )
         )
     if kind == "bootstrap":
-        return _AxonAuthorityBinding.bootstrap(
-            _AxonBootstrapAuthorityBody(
+        return _AxonAuthorityOrBootstrap.from_bootstrap(
+            _AxonBootstrapBinding(
                 principal_ura=_required_receipt_text(
                     value.get("principal_ura"),
                     f"{field_name}.principal_ura",

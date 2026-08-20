@@ -34,8 +34,8 @@ export const canonicalRuntimeReceipt = (invocationId, receiptType, state, index)
       key_id_hint: "callee-receipt-key",
     },
     signer_binding: agentBinding(TEST_CALLEE),
-    authority_binding_kind: "self",
-    authority_binding: { kind: "self", principal_ura: TEST_CALLEE },
+    authority_binding_kind: "self+identity",
+    authority_binding: { kind: "self+identity", authority_ura: TEST_CALLEE },
     ability_binding: TEST_DESCRIPTOR,
     host_attestation_base64: "",
     usage: {
@@ -51,8 +51,8 @@ export const canonicalRuntimeReceipt = (invocationId, receiptType, state, index)
     runtime_env: "node-test",
     authority_proof: {
       proof_type: "self",
-      binding_kind: "self",
-      binding: { kind: "self", principal_ura: TEST_CALLEE },
+      binding_kind: "self+identity",
+      binding: { kind: "self+identity", authority_ura: TEST_CALLEE },
       proof_payload_base64: proofPayload.toString("base64"),
       proof_hash_hex: createHash("sha256").update(proofPayload).digest("hex"),
       issuer: agentBinding(TEST_CALLEE),

@@ -36234,6 +36234,10 @@
         },
         {
           "item": "AuthorityBinding",
+          "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+        },
+        {
+          "item": "AuthorityEvidence",
           "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
         },
         {
@@ -36241,11 +36245,23 @@
           "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
         },
         {
+          "item": "AuthorityOrBootstrap",
+          "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+        },
+        {
+          "item": "AuthorityOrBootstrapJson",
+          "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+        },
+        {
           "item": "AuthorityProof",
           "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
         },
         {
-          "item": "DelegationProofBody",
+          "item": "AuthorityRelation",
+          "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+        },
+        {
+          "item": "DelegationEvidence",
           "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
         },
         {
@@ -36273,12 +36289,12 @@
           "sha256": "e017fdf556a74c48d247119a1c28a33ea6290333057e3936561d0e9a452832c4"
         },
         {
-          "item": "SessionAuthorityBody",
-          "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-        },
-        {
           "item": "authority_binding_proof_hash",
           "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+        },
+        {
+          "item": "authority_or_bootstrap_proof_hash",
+          "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
         },
         {
           "item": "authority_proof_expected_hash",
@@ -36289,12 +36305,20 @@
           "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
         },
         {
+          "item": "canonical_authority_or_bootstrap_bytes",
+          "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+        },
+        {
           "item": "canonical_authority_proof_bytes",
           "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
         },
         {
           "item": "canonical_authority_proof_signature_payload",
           "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+        },
+        {
+          "item": "canonical_delegation_claim_bytes",
+          "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
         },
         {
           "item": "canonical_host_attestation_bytes",
@@ -36330,10 +36354,22 @@
         },
         {
           "item": "axiom.AuthorityBinding",
+          "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+        },
+        {
+          "item": "axiom.AuthorityEvidence",
           "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
         },
         {
-          "item": "axiom.DelegationProofBody",
+          "item": "axiom.AuthorityOrBootstrap",
+          "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+        },
+        {
+          "item": "axiom.AuthorityRelation",
+          "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+        },
+        {
+          "item": "axiom.DelegationEvidence",
           "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
         },
         {
@@ -36345,12 +36381,12 @@
           "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
         },
         {
-          "item": "axiom.SessionAuthorityBody",
-          "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-        },
-        {
           "item": "axiom.authority_binding_proof_hash",
           "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+        },
+        {
+          "item": "axiom.authority_or_bootstrap_proof_hash",
+          "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
         },
         {
           "item": "axiom.authority_proof_expected_hash",
@@ -36361,12 +36397,20 @@
           "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
         },
         {
+          "item": "axiom.canonical_authority_or_bootstrap_bytes",
+          "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+        },
+        {
           "item": "axiom.canonical_authority_proof_bytes",
           "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
         },
         {
           "item": "axiom.canonical_authority_proof_signature_payload",
           "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+        },
+        {
+          "item": "axiom.canonical_delegation_claim_bytes",
+          "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
         },
         {
           "item": "axiom.canonical_host_attestation_bytes",
@@ -36390,6 +36434,10 @@
         },
         {
           "item": "bundle.AuthorityJson",
+          "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+        },
+        {
+          "item": "bundle.AuthorityOrBootstrapJson",
           "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
         },
         {
@@ -36425,6 +36473,10 @@
             },
             {
               "item": "AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -36432,11 +36484,23 @@
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
+              "item": "AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "AuthorityOrBootstrapJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
               "item": "AuthorityProof",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "DelegationProofBody",
+              "item": "AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -36464,12 +36528,12 @@
               "sha256": "e017fdf556a74c48d247119a1c28a33ea6290333057e3936561d0e9a452832c4"
             },
             {
-              "item": "SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "authority_proof_expected_hash",
@@ -36480,12 +36544,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "canonical_host_attestation_bytes",
@@ -36521,10 +36593,22 @@
             },
             {
               "item": "axiom.AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "axiom.AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "axiom.DelegationProofBody",
+              "item": "axiom.AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -36536,12 +36620,12 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "axiom.SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "axiom.authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "axiom.authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "axiom.authority_proof_expected_hash",
@@ -36552,12 +36636,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "axiom.canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "axiom.canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "axiom.canonical_host_attestation_bytes",
@@ -36581,6 +36673,10 @@
             },
             {
               "item": "bundle.AuthorityJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "bundle.AuthorityOrBootstrapJson",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -36616,6 +36712,10 @@
             },
             {
               "item": "AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -36623,11 +36723,23 @@
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
+              "item": "AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "AuthorityOrBootstrapJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
               "item": "AuthorityProof",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "DelegationProofBody",
+              "item": "AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -36655,12 +36767,12 @@
               "sha256": "e017fdf556a74c48d247119a1c28a33ea6290333057e3936561d0e9a452832c4"
             },
             {
-              "item": "SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "authority_proof_expected_hash",
@@ -36671,12 +36783,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "canonical_host_attestation_bytes",
@@ -36712,10 +36832,22 @@
             },
             {
               "item": "axiom.AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "axiom.AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "axiom.DelegationProofBody",
+              "item": "axiom.AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -36727,12 +36859,12 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "axiom.SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "axiom.authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "axiom.authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "axiom.authority_proof_expected_hash",
@@ -36743,12 +36875,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "axiom.canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "axiom.canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "axiom.canonical_host_attestation_bytes",
@@ -36772,6 +36912,10 @@
             },
             {
               "item": "bundle.AuthorityJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "bundle.AuthorityOrBootstrapJson",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -36807,6 +36951,10 @@
             },
             {
               "item": "AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -36814,11 +36962,23 @@
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
+              "item": "AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "AuthorityOrBootstrapJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
               "item": "AuthorityProof",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "DelegationProofBody",
+              "item": "AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -36846,12 +37006,12 @@
               "sha256": "e017fdf556a74c48d247119a1c28a33ea6290333057e3936561d0e9a452832c4"
             },
             {
-              "item": "SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "authority_proof_expected_hash",
@@ -36862,12 +37022,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "canonical_host_attestation_bytes",
@@ -36903,10 +37071,22 @@
             },
             {
               "item": "axiom.AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "axiom.AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "axiom.DelegationProofBody",
+              "item": "axiom.AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -36918,12 +37098,12 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "axiom.SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "axiom.authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "axiom.authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "axiom.authority_proof_expected_hash",
@@ -36934,12 +37114,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "axiom.canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "axiom.canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "axiom.canonical_host_attestation_bytes",
@@ -36963,6 +37151,10 @@
             },
             {
               "item": "bundle.AuthorityJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "bundle.AuthorityOrBootstrapJson",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -36998,6 +37190,10 @@
             },
             {
               "item": "AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -37005,11 +37201,23 @@
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
+              "item": "AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "AuthorityOrBootstrapJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
               "item": "AuthorityProof",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "DelegationProofBody",
+              "item": "AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -37037,12 +37245,12 @@
               "sha256": "e017fdf556a74c48d247119a1c28a33ea6290333057e3936561d0e9a452832c4"
             },
             {
-              "item": "SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "authority_proof_expected_hash",
@@ -37053,12 +37261,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "canonical_host_attestation_bytes",
@@ -37094,10 +37310,22 @@
             },
             {
               "item": "axiom.AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "axiom.AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "axiom.DelegationProofBody",
+              "item": "axiom.AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -37109,12 +37337,12 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "axiom.SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "axiom.authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "axiom.authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "axiom.authority_proof_expected_hash",
@@ -37125,12 +37353,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "axiom.canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "axiom.canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "axiom.canonical_host_attestation_bytes",
@@ -37154,6 +37390,10 @@
             },
             {
               "item": "bundle.AuthorityJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "bundle.AuthorityOrBootstrapJson",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -37189,6 +37429,10 @@
             },
             {
               "item": "AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -37196,11 +37440,23 @@
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
+              "item": "AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "AuthorityOrBootstrapJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
               "item": "AuthorityProof",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "DelegationProofBody",
+              "item": "AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -37228,12 +37484,12 @@
               "sha256": "e017fdf556a74c48d247119a1c28a33ea6290333057e3936561d0e9a452832c4"
             },
             {
-              "item": "SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "authority_proof_expected_hash",
@@ -37244,12 +37500,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "canonical_host_attestation_bytes",
@@ -37285,10 +37549,22 @@
             },
             {
               "item": "axiom.AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "axiom.AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "axiom.DelegationProofBody",
+              "item": "axiom.AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -37300,12 +37576,12 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "axiom.SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "axiom.authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "axiom.authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "axiom.authority_proof_expected_hash",
@@ -37316,12 +37592,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "axiom.canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "axiom.canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "axiom.canonical_host_attestation_bytes",
@@ -37345,6 +37629,10 @@
             },
             {
               "item": "bundle.AuthorityJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "bundle.AuthorityOrBootstrapJson",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -37380,6 +37668,10 @@
             },
             {
               "item": "AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -37387,11 +37679,23 @@
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
+              "item": "AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "AuthorityOrBootstrapJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
               "item": "AuthorityProof",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "DelegationProofBody",
+              "item": "AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -37419,12 +37723,12 @@
               "sha256": "e017fdf556a74c48d247119a1c28a33ea6290333057e3936561d0e9a452832c4"
             },
             {
-              "item": "SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "authority_proof_expected_hash",
@@ -37435,12 +37739,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "canonical_host_attestation_bytes",
@@ -37476,10 +37788,22 @@
             },
             {
               "item": "axiom.AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "axiom.AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "axiom.DelegationProofBody",
+              "item": "axiom.AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -37491,12 +37815,12 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "axiom.SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "axiom.authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "axiom.authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "axiom.authority_proof_expected_hash",
@@ -37507,12 +37831,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "axiom.canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "axiom.canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "axiom.canonical_host_attestation_bytes",
@@ -37536,6 +37868,10 @@
             },
             {
               "item": "bundle.AuthorityJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "bundle.AuthorityOrBootstrapJson",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -37571,6 +37907,10 @@
             },
             {
               "item": "AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -37578,11 +37918,23 @@
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
+              "item": "AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "AuthorityOrBootstrapJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
               "item": "AuthorityProof",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "DelegationProofBody",
+              "item": "AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -37610,12 +37962,12 @@
               "sha256": "e017fdf556a74c48d247119a1c28a33ea6290333057e3936561d0e9a452832c4"
             },
             {
-              "item": "SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "authority_proof_expected_hash",
@@ -37626,12 +37978,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "canonical_host_attestation_bytes",
@@ -37667,10 +38027,22 @@
             },
             {
               "item": "axiom.AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "axiom.AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "axiom.DelegationProofBody",
+              "item": "axiom.AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -37682,12 +38054,12 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "axiom.SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "axiom.authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "axiom.authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "axiom.authority_proof_expected_hash",
@@ -37698,12 +38070,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "axiom.canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "axiom.canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "axiom.canonical_host_attestation_bytes",
@@ -37727,6 +38107,10 @@
             },
             {
               "item": "bundle.AuthorityJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "bundle.AuthorityOrBootstrapJson",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -37762,6 +38146,10 @@
             },
             {
               "item": "AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -37769,11 +38157,23 @@
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
+              "item": "AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "AuthorityOrBootstrapJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
               "item": "AuthorityProof",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "DelegationProofBody",
+              "item": "AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -37801,12 +38201,12 @@
               "sha256": "e017fdf556a74c48d247119a1c28a33ea6290333057e3936561d0e9a452832c4"
             },
             {
-              "item": "SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "authority_proof_expected_hash",
@@ -37817,12 +38217,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "canonical_host_attestation_bytes",
@@ -37858,10 +38266,22 @@
             },
             {
               "item": "axiom.AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "axiom.AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "axiom.DelegationProofBody",
+              "item": "axiom.AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -37873,12 +38293,12 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "axiom.SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "axiom.authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "axiom.authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "axiom.authority_proof_expected_hash",
@@ -37889,12 +38309,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "axiom.canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "axiom.canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "axiom.canonical_host_attestation_bytes",
@@ -37918,6 +38346,10 @@
             },
             {
               "item": "bundle.AuthorityJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "bundle.AuthorityOrBootstrapJson",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -37953,6 +38385,10 @@
             },
             {
               "item": "AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -37960,11 +38396,23 @@
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
+              "item": "AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "AuthorityOrBootstrapJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
               "item": "AuthorityProof",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "DelegationProofBody",
+              "item": "AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -37992,12 +38440,12 @@
               "sha256": "e017fdf556a74c48d247119a1c28a33ea6290333057e3936561d0e9a452832c4"
             },
             {
-              "item": "SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "authority_proof_expected_hash",
@@ -38008,12 +38456,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "canonical_host_attestation_bytes",
@@ -38049,10 +38505,22 @@
             },
             {
               "item": "axiom.AuthorityBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "axiom.AuthorityEvidence",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
-              "item": "axiom.DelegationProofBody",
+              "item": "axiom.AuthorityOrBootstrap",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.AuthorityRelation",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "axiom.DelegationEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -38064,12 +38532,12 @@
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
-              "item": "axiom.SessionAuthorityBody",
-              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
-            },
-            {
               "item": "axiom.authority_binding_proof_hash",
               "sha256": "0143674f7f0a40313a2d4c992fd3b95d4e848da708df075225e3119ccc8f7999"
+            },
+            {
+              "item": "axiom.authority_or_bootstrap_proof_hash",
+              "sha256": "aee2c4be7af4e0359ba4fe5769b65960b68c68525a6f64d3afc94e880d668efe"
             },
             {
               "item": "axiom.authority_proof_expected_hash",
@@ -38080,12 +38548,20 @@
               "sha256": "f23a76efe062fd4a30129d425e06dfaaaa6490eeb0a6c7e7a7810b385a5954c7"
             },
             {
+              "item": "axiom.canonical_authority_or_bootstrap_bytes",
+              "sha256": "ded6d8bc4014194927dc48a3426e5efc5374b1f17017c795634e46b6ab6ebed1"
+            },
+            {
               "item": "axiom.canonical_authority_proof_bytes",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
             },
             {
               "item": "axiom.canonical_authority_proof_signature_payload",
               "sha256": "c8b11559772267bb759fa03f096c00d01b62075ea15faf1d1c74156bb02510a2"
+            },
+            {
+              "item": "axiom.canonical_delegation_claim_bytes",
+              "sha256": "dda6bc30a9b08bfe5dd31606ca3e07538318a1ddc6f8e4a61405a976c70a13cc"
             },
             {
               "item": "axiom.canonical_host_attestation_bytes",
@@ -38109,6 +38585,10 @@
             },
             {
               "item": "bundle.AuthorityJson",
+              "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
+            },
+            {
+              "item": "bundle.AuthorityOrBootstrapJson",
               "sha256": "a73b4f20780155e8fdaa92e5ffc8740e5ddfff56837db7e15ed9e1d16bb1fb31"
             },
             {
@@ -126901,7 +127381,7 @@
         },
         {
           "item": "DirectoryResolveRequest",
-          "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
+          "sha256": "a1a2fff403fb831d2aa5c6c7ff7f43a2c171e3c632aeed7a5b22e0926a0177e7"
         },
         {
           "item": "DirectoryResolveRoute",
@@ -127160,6 +127640,10 @@
           "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
         },
         {
+          "item": "DirectoryResolveRequest.CallMode",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
           "item": "DirectoryResolveRequest.Cursor",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
@@ -127304,7 +127788,7 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
+              "sha256": "a1a2fff403fb831d2aa5c6c7ff7f43a2c171e3c632aeed7a5b22e0926a0177e7"
             },
             {
               "item": "DirectoryResolveRoute",
@@ -127561,6 +128045,10 @@
             {
               "item": "DirectoryResolveRequest.Call",
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
+            },
+            {
+              "item": "DirectoryResolveRequest.CallMode",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.Cursor",
@@ -127707,7 +128195,7 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
+              "sha256": "a1a2fff403fb831d2aa5c6c7ff7f43a2c171e3c632aeed7a5b22e0926a0177e7"
             },
             {
               "item": "DirectoryResolveRoute",
@@ -127964,6 +128452,10 @@
             {
               "item": "DirectoryResolveRequest.Call",
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
+            },
+            {
+              "item": "DirectoryResolveRequest.CallMode",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.Cursor",
@@ -128110,7 +128602,7 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
+              "sha256": "a1a2fff403fb831d2aa5c6c7ff7f43a2c171e3c632aeed7a5b22e0926a0177e7"
             },
             {
               "item": "DirectoryResolveRoute",
@@ -128367,6 +128859,10 @@
             {
               "item": "DirectoryResolveRequest.Call",
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
+            },
+            {
+              "item": "DirectoryResolveRequest.CallMode",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.Cursor",
@@ -128513,7 +129009,7 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
+              "sha256": "a1a2fff403fb831d2aa5c6c7ff7f43a2c171e3c632aeed7a5b22e0926a0177e7"
             },
             {
               "item": "DirectoryResolveRoute",
@@ -128770,6 +129266,10 @@
             {
               "item": "DirectoryResolveRequest.Call",
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
+            },
+            {
+              "item": "DirectoryResolveRequest.CallMode",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.Cursor",
@@ -128916,7 +129416,7 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
+              "sha256": "a1a2fff403fb831d2aa5c6c7ff7f43a2c171e3c632aeed7a5b22e0926a0177e7"
             },
             {
               "item": "DirectoryResolveRoute",
@@ -129173,6 +129673,10 @@
             {
               "item": "DirectoryResolveRequest.Call",
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
+            },
+            {
+              "item": "DirectoryResolveRequest.CallMode",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.Cursor",
@@ -129319,7 +129823,7 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
+              "sha256": "a1a2fff403fb831d2aa5c6c7ff7f43a2c171e3c632aeed7a5b22e0926a0177e7"
             },
             {
               "item": "DirectoryResolveRoute",
@@ -129576,6 +130080,10 @@
             {
               "item": "DirectoryResolveRequest.Call",
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
+            },
+            {
+              "item": "DirectoryResolveRequest.CallMode",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.Cursor",
@@ -129722,7 +130230,7 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
+              "sha256": "a1a2fff403fb831d2aa5c6c7ff7f43a2c171e3c632aeed7a5b22e0926a0177e7"
             },
             {
               "item": "DirectoryResolveRoute",
@@ -129979,6 +130487,10 @@
             {
               "item": "DirectoryResolveRequest.Call",
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
+            },
+            {
+              "item": "DirectoryResolveRequest.CallMode",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.Cursor",
@@ -130125,7 +130637,7 @@
             },
             {
               "item": "DirectoryResolveRequest",
-              "sha256": "3be2df8941cada05c56267b2e43038ae4cc2c1ad3dc3284237eee6a29bfd978c"
+              "sha256": "a1a2fff403fb831d2aa5c6c7ff7f43a2c171e3c632aeed7a5b22e0926a0177e7"
             },
             {
               "item": "DirectoryResolveRoute",
@@ -130382,6 +130894,10 @@
             {
               "item": "DirectoryResolveRequest.Call",
               "sha256": "05dd9f715946c7c4bf1ef4859588e30b9bd985f4c9a0070224f872bd90ecd972"
+            },
+            {
+              "item": "DirectoryResolveRequest.CallMode",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
               "item": "DirectoryResolveRequest.Cursor",
@@ -188219,6 +188735,14 @@
       "unproven_requirement_ids": [],
       "shape_evidence": [
         {
+          "item": "BootstrapBinding",
+          "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+        },
+        {
+          "item": "BootstrapJson",
+          "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+        },
+        {
           "item": "ChainCheckResult",
           "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
         },
@@ -188228,6 +188752,10 @@
         },
         {
           "item": "InvocationReceiptChainSummary",
+          "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+        },
+        {
+          "item": "SessionEvidence",
           "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
         },
         {
@@ -188245,6 +188773,18 @@
         {
           "item": "VerifiedReceiptChain",
           "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+        },
+        {
+          "item": "bootstrap_binding_proof_hash",
+          "sha256": "146e0f07709b0a990fe59978d14201ed16ffbdda42fd664002433d24abf62944"
+        },
+        {
+          "item": "canonical_bootstrap_bytes",
+          "sha256": "6ec9ae1a33369d67638f8e4023c6162ce65496c2a571aa44c911645cd1ffa4ff"
+        },
+        {
+          "item": "canonical_session_claim_bytes",
+          "sha256": "a932f3a77a022df491771b343f12fdf06fd904fd8964f0427bfd08d28f171432"
         },
         {
           "item": "compute_receipt_hash",
@@ -188295,12 +188835,36 @@
           "sha256": "0529d89c602b6b8df91b91f7b08d146283a1dda458c534649397b43203923f78"
         },
         {
+          "item": "axiom.BootstrapBinding",
+          "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+        },
+        {
+          "item": "axiom.SessionEvidence",
+          "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+        },
+        {
+          "item": "axiom.bootstrap_binding_proof_hash",
+          "sha256": "146e0f07709b0a990fe59978d14201ed16ffbdda42fd664002433d24abf62944"
+        },
+        {
+          "item": "axiom.canonical_bootstrap_bytes",
+          "sha256": "6ec9ae1a33369d67638f8e4023c6162ce65496c2a571aa44c911645cd1ffa4ff"
+        },
+        {
+          "item": "axiom.canonical_session_claim_bytes",
+          "sha256": "a932f3a77a022df491771b343f12fdf06fd904fd8964f0427bfd08d28f171432"
+        },
+        {
           "item": "axiom.verify_receipt_signature",
           "sha256": "e74428e999b8301bb2136bd9a09048731873d7ab780ec3ed078863f5519de3de"
         },
         {
           "item": "axiom.verify_receipt_signature_with_hosted",
           "sha256": "c2af63c92e3ae6d186c41e3418f4c75f26a68e9f6ce5560b061f36a5d39228d0"
+        },
+        {
+          "item": "bundle.BootstrapJson",
+          "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
         },
         {
           "item": "ledger.InvocationReceiptChainSummary",
@@ -188314,6 +188878,14 @@
           "execution_case_bound": false,
           "items": [
             {
+              "item": "BootstrapBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "BootstrapJson",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
               "item": "ChainCheckResult",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
@@ -188323,6 +188895,10 @@
             },
             {
               "item": "InvocationReceiptChainSummary",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "SessionEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -188340,6 +188916,18 @@
             {
               "item": "VerifiedReceiptChain",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
+              "item": "bootstrap_binding_proof_hash",
+              "sha256": "146e0f07709b0a990fe59978d14201ed16ffbdda42fd664002433d24abf62944"
+            },
+            {
+              "item": "canonical_bootstrap_bytes",
+              "sha256": "6ec9ae1a33369d67638f8e4023c6162ce65496c2a571aa44c911645cd1ffa4ff"
+            },
+            {
+              "item": "canonical_session_claim_bytes",
+              "sha256": "a932f3a77a022df491771b343f12fdf06fd904fd8964f0427bfd08d28f171432"
             },
             {
               "item": "compute_receipt_hash",
@@ -188390,12 +188978,36 @@
               "sha256": "0529d89c602b6b8df91b91f7b08d146283a1dda458c534649397b43203923f78"
             },
             {
+              "item": "axiom.BootstrapBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "axiom.SessionEvidence",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "axiom.bootstrap_binding_proof_hash",
+              "sha256": "146e0f07709b0a990fe59978d14201ed16ffbdda42fd664002433d24abf62944"
+            },
+            {
+              "item": "axiom.canonical_bootstrap_bytes",
+              "sha256": "6ec9ae1a33369d67638f8e4023c6162ce65496c2a571aa44c911645cd1ffa4ff"
+            },
+            {
+              "item": "axiom.canonical_session_claim_bytes",
+              "sha256": "a932f3a77a022df491771b343f12fdf06fd904fd8964f0427bfd08d28f171432"
+            },
+            {
               "item": "axiom.verify_receipt_signature",
               "sha256": "e74428e999b8301bb2136bd9a09048731873d7ab780ec3ed078863f5519de3de"
             },
             {
               "item": "axiom.verify_receipt_signature_with_hosted",
               "sha256": "c2af63c92e3ae6d186c41e3418f4c75f26a68e9f6ce5560b061f36a5d39228d0"
+            },
+            {
+              "item": "bundle.BootstrapJson",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
               "item": "ledger.InvocationReceiptChainSummary",
@@ -188409,6 +189021,14 @@
           "execution_case_bound": false,
           "items": [
             {
+              "item": "BootstrapBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "BootstrapJson",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
               "item": "ChainCheckResult",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
@@ -188418,6 +189038,10 @@
             },
             {
               "item": "InvocationReceiptChainSummary",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "SessionEvidence",
               "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
@@ -188435,6 +189059,18 @@
             {
               "item": "VerifiedReceiptChain",
               "sha256": "7c2415f6d13d888ecec063c05f71f0d74d33072688eeb38d0dfc559cb0c6c092"
+            },
+            {
+              "item": "bootstrap_binding_proof_hash",
+              "sha256": "146e0f07709b0a990fe59978d14201ed16ffbdda42fd664002433d24abf62944"
+            },
+            {
+              "item": "canonical_bootstrap_bytes",
+              "sha256": "6ec9ae1a33369d67638f8e4023c6162ce65496c2a571aa44c911645cd1ffa4ff"
+            },
+            {
+              "item": "canonical_session_claim_bytes",
+              "sha256": "a932f3a77a022df491771b343f12fdf06fd904fd8964f0427bfd08d28f171432"
             },
             {
               "item": "compute_receipt_hash",
@@ -188485,12 +189121,36 @@
               "sha256": "0529d89c602b6b8df91b91f7b08d146283a1dda458c534649397b43203923f78"
             },
             {
+              "item": "axiom.BootstrapBinding",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "axiom.SessionEvidence",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
+            },
+            {
+              "item": "axiom.bootstrap_binding_proof_hash",
+              "sha256": "146e0f07709b0a990fe59978d14201ed16ffbdda42fd664002433d24abf62944"
+            },
+            {
+              "item": "axiom.canonical_bootstrap_bytes",
+              "sha256": "6ec9ae1a33369d67638f8e4023c6162ce65496c2a571aa44c911645cd1ffa4ff"
+            },
+            {
+              "item": "axiom.canonical_session_claim_bytes",
+              "sha256": "a932f3a77a022df491771b343f12fdf06fd904fd8964f0427bfd08d28f171432"
+            },
+            {
               "item": "axiom.verify_receipt_signature",
               "sha256": "e74428e999b8301bb2136bd9a09048731873d7ab780ec3ed078863f5519de3de"
             },
             {
               "item": "axiom.verify_receipt_signature_with_hosted",
               "sha256": "c2af63c92e3ae6d186c41e3418f4c75f26a68e9f6ce5560b061f36a5d39228d0"
+            },
+            {
+              "item": "bundle.BootstrapJson",
+              "sha256": "800c964e008b93e6d947ef76377114b0da97bbdc5c60c1964dcd154440b02d29"
             },
             {
               "item": "ledger.InvocationReceiptChainSummary",
@@ -188552,7 +189212,7 @@
         },
         {
           "item": "InvocationReceipt",
-          "sha256": "21f14df2587bf99e711fdbbc4a3ba47606484d2b2fad338af05d05388d996168"
+          "sha256": "3d6562db245bdcb1c2308750b7b2dd48803ca2728736ffe476f7842d900ee9d3"
         },
         {
           "item": "InvocationReceiptAnchor",
@@ -188724,7 +189384,7 @@
         },
         {
           "item": "InvocationReceipt.prove_authority",
-          "sha256": "244500349a8a59d46e73f2bc4447690f920098139296ae04e03f65d741af5ffb"
+          "sha256": "651f0fb44048328331af01c231641a5c609bf72cf794b013f82f86a28728e607"
         },
         {
           "item": "InvocationReceipt.proven",
@@ -188863,7 +189523,7 @@
             },
             {
               "item": "InvocationReceipt",
-              "sha256": "21f14df2587bf99e711fdbbc4a3ba47606484d2b2fad338af05d05388d996168"
+              "sha256": "3d6562db245bdcb1c2308750b7b2dd48803ca2728736ffe476f7842d900ee9d3"
             },
             {
               "item": "InvocationReceiptAnchor",
@@ -189035,7 +189695,7 @@
             },
             {
               "item": "InvocationReceipt.prove_authority",
-              "sha256": "244500349a8a59d46e73f2bc4447690f920098139296ae04e03f65d741af5ffb"
+              "sha256": "651f0fb44048328331af01c231641a5c609bf72cf794b013f82f86a28728e607"
             },
             {
               "item": "InvocationReceipt.proven",
@@ -189174,7 +189834,7 @@
             },
             {
               "item": "InvocationReceipt",
-              "sha256": "21f14df2587bf99e711fdbbc4a3ba47606484d2b2fad338af05d05388d996168"
+              "sha256": "3d6562db245bdcb1c2308750b7b2dd48803ca2728736ffe476f7842d900ee9d3"
             },
             {
               "item": "InvocationReceiptAnchor",
@@ -189346,7 +190006,7 @@
             },
             {
               "item": "InvocationReceipt.prove_authority",
-              "sha256": "244500349a8a59d46e73f2bc4447690f920098139296ae04e03f65d741af5ffb"
+              "sha256": "651f0fb44048328331af01c231641a5c609bf72cf794b013f82f86a28728e607"
             },
             {
               "item": "InvocationReceipt.proven",
@@ -282403,7 +283063,7 @@
         },
         {
           "item": "RuntimeCallContext",
-          "sha256": "b0fe5b923efee19ed89929e49d901101ea29b0e02dc75db901b852ebd46cfcc2"
+          "sha256": "ef882af9e7f9011d562f2e7bb86941ba4d7f5045ff2a222246e2ae5cb785b46c"
         },
         {
           "item": "RuntimeClient",
@@ -282583,6 +283243,10 @@
         },
         {
           "item": "RuntimeCallContext.NonceBase64",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
+          "item": "RuntimeCallContext.SelectedDescriptorRef",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
@@ -282794,7 +283458,7 @@
             },
             {
               "item": "RuntimeCallContext",
-              "sha256": "b0fe5b923efee19ed89929e49d901101ea29b0e02dc75db901b852ebd46cfcc2"
+              "sha256": "ef882af9e7f9011d562f2e7bb86941ba4d7f5045ff2a222246e2ae5cb785b46c"
             },
             {
               "item": "RuntimeClient",
@@ -282974,6 +283638,10 @@
             },
             {
               "item": "RuntimeCallContext.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeCallContext.SelectedDescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -283185,7 +283853,7 @@
             },
             {
               "item": "RuntimeCallContext",
-              "sha256": "b0fe5b923efee19ed89929e49d901101ea29b0e02dc75db901b852ebd46cfcc2"
+              "sha256": "ef882af9e7f9011d562f2e7bb86941ba4d7f5045ff2a222246e2ae5cb785b46c"
             },
             {
               "item": "RuntimeClient",
@@ -283365,6 +284033,10 @@
             },
             {
               "item": "RuntimeCallContext.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeCallContext.SelectedDescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -283576,7 +284248,7 @@
             },
             {
               "item": "RuntimeCallContext",
-              "sha256": "b0fe5b923efee19ed89929e49d901101ea29b0e02dc75db901b852ebd46cfcc2"
+              "sha256": "ef882af9e7f9011d562f2e7bb86941ba4d7f5045ff2a222246e2ae5cb785b46c"
             },
             {
               "item": "RuntimeClient",
@@ -283756,6 +284428,10 @@
             },
             {
               "item": "RuntimeCallContext.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeCallContext.SelectedDescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -283967,7 +284643,7 @@
             },
             {
               "item": "RuntimeCallContext",
-              "sha256": "b0fe5b923efee19ed89929e49d901101ea29b0e02dc75db901b852ebd46cfcc2"
+              "sha256": "ef882af9e7f9011d562f2e7bb86941ba4d7f5045ff2a222246e2ae5cb785b46c"
             },
             {
               "item": "RuntimeClient",
@@ -284147,6 +284823,10 @@
             },
             {
               "item": "RuntimeCallContext.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeCallContext.SelectedDescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -284358,7 +285038,7 @@
             },
             {
               "item": "RuntimeCallContext",
-              "sha256": "b0fe5b923efee19ed89929e49d901101ea29b0e02dc75db901b852ebd46cfcc2"
+              "sha256": "ef882af9e7f9011d562f2e7bb86941ba4d7f5045ff2a222246e2ae5cb785b46c"
             },
             {
               "item": "RuntimeClient",
@@ -284538,6 +285218,10 @@
             },
             {
               "item": "RuntimeCallContext.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeCallContext.SelectedDescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -284749,7 +285433,7 @@
             },
             {
               "item": "RuntimeCallContext",
-              "sha256": "b0fe5b923efee19ed89929e49d901101ea29b0e02dc75db901b852ebd46cfcc2"
+              "sha256": "ef882af9e7f9011d562f2e7bb86941ba4d7f5045ff2a222246e2ae5cb785b46c"
             },
             {
               "item": "RuntimeClient",
@@ -284929,6 +285613,10 @@
             },
             {
               "item": "RuntimeCallContext.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeCallContext.SelectedDescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -285140,7 +285828,7 @@
             },
             {
               "item": "RuntimeCallContext",
-              "sha256": "b0fe5b923efee19ed89929e49d901101ea29b0e02dc75db901b852ebd46cfcc2"
+              "sha256": "ef882af9e7f9011d562f2e7bb86941ba4d7f5045ff2a222246e2ae5cb785b46c"
             },
             {
               "item": "RuntimeClient",
@@ -285320,6 +286008,10 @@
             },
             {
               "item": "RuntimeCallContext.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeCallContext.SelectedDescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -285531,7 +286223,7 @@
             },
             {
               "item": "RuntimeCallContext",
-              "sha256": "b0fe5b923efee19ed89929e49d901101ea29b0e02dc75db901b852ebd46cfcc2"
+              "sha256": "ef882af9e7f9011d562f2e7bb86941ba4d7f5045ff2a222246e2ae5cb785b46c"
             },
             {
               "item": "RuntimeClient",
@@ -285711,6 +286403,10 @@
             },
             {
               "item": "RuntimeCallContext.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeCallContext.SelectedDescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -285922,7 +286618,7 @@
             },
             {
               "item": "RuntimeCallContext",
-              "sha256": "b0fe5b923efee19ed89929e49d901101ea29b0e02dc75db901b852ebd46cfcc2"
+              "sha256": "ef882af9e7f9011d562f2e7bb86941ba4d7f5045ff2a222246e2ae5cb785b46c"
             },
             {
               "item": "RuntimeClient",
@@ -286102,6 +286798,10 @@
             },
             {
               "item": "RuntimeCallContext.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeCallContext.SelectedDescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -286313,7 +287013,7 @@
             },
             {
               "item": "RuntimeCallContext",
-              "sha256": "b0fe5b923efee19ed89929e49d901101ea29b0e02dc75db901b852ebd46cfcc2"
+              "sha256": "ef882af9e7f9011d562f2e7bb86941ba4d7f5045ff2a222246e2ae5cb785b46c"
             },
             {
               "item": "RuntimeClient",
@@ -286493,6 +287193,10 @@
             },
             {
               "item": "RuntimeCallContext.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeCallContext.SelectedDescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -286704,7 +287408,7 @@
             },
             {
               "item": "RuntimeCallContext",
-              "sha256": "b0fe5b923efee19ed89929e49d901101ea29b0e02dc75db901b852ebd46cfcc2"
+              "sha256": "ef882af9e7f9011d562f2e7bb86941ba4d7f5045ff2a222246e2ae5cb785b46c"
             },
             {
               "item": "RuntimeClient",
@@ -286884,6 +287588,10 @@
             },
             {
               "item": "RuntimeCallContext.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeCallContext.SelectedDescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -287095,7 +287803,7 @@
             },
             {
               "item": "RuntimeCallContext",
-              "sha256": "b0fe5b923efee19ed89929e49d901101ea29b0e02dc75db901b852ebd46cfcc2"
+              "sha256": "ef882af9e7f9011d562f2e7bb86941ba4d7f5045ff2a222246e2ae5cb785b46c"
             },
             {
               "item": "RuntimeClient",
@@ -287275,6 +287983,10 @@
             },
             {
               "item": "RuntimeCallContext.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeCallContext.SelectedDescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
@@ -287486,7 +288198,7 @@
             },
             {
               "item": "RuntimeCallContext",
-              "sha256": "b0fe5b923efee19ed89929e49d901101ea29b0e02dc75db901b852ebd46cfcc2"
+              "sha256": "ef882af9e7f9011d562f2e7bb86941ba4d7f5045ff2a222246e2ae5cb785b46c"
             },
             {
               "item": "RuntimeClient",
@@ -287666,6 +288378,10 @@
             },
             {
               "item": "RuntimeCallContext.NonceBase64",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
+              "item": "RuntimeCallContext.SelectedDescriptorRef",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {

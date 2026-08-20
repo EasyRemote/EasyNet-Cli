@@ -5,7 +5,13 @@ import unittest
 from dataclasses import fields, replace
 from types import MappingProxyType
 
-from axon_sdk.invocation import AuthorityBinding, authority_binding_proof_hash
+from axon_sdk.invocation import (
+    AgentIdentity,
+    AuthorityBinding,
+    SessionEvidence,
+    UraProfile,
+    authority_binding_proof_hash,
+)
 from easynet_sdk import (
     BidiStreamDescriptor,
     ErrorCode,
@@ -269,10 +275,10 @@ def canonical_runtime_receipt(
             "ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
             "profile": "axon-strict-v2",
         },
-        "authority_binding_kind": "self",
+        "authority_binding_kind": "self+identity",
         "authority_binding": {
-            "kind": "self",
-            "principal_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+            "kind": "self+identity",
+            "authority_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
         },
         "ability_binding": (
             "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
@@ -295,10 +301,10 @@ def canonical_runtime_receipt(
         "runtime_env": "python-test",
         "authority_proof": {
             "proof_type": "self",
-            "binding_kind": "self",
+            "binding_kind": "self+identity",
             "binding": {
-                "kind": "self",
-                "principal_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+                "kind": "self+identity",
+                "authority_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
             },
             "proof_payload_base64": base64.b64encode(proof_payload).decode(),
             "proof_hash_hex": hashlib.sha256(proof_payload).hexdigest(),
@@ -328,26 +334,21 @@ def _runtime_length_prefixed_text(value: str) -> bytes:
 
 
 def session_authority_binding_hash(binding: dict[str, object]) -> str:
-    scopes = list(binding["scopes"])
-    audiences = list(binding["audiences"])
     signature = base64.b64decode(str(binding["signature_base64"]))
-    canonical = b"".join(
-        [
-            bytes([0x05]),
-            _runtime_length_prefixed_text(str(binding["issuer_ura"])),
-            _runtime_length_prefixed_text(str(binding["subject_ura"])),
-            _runtime_length_prefixed_text(str(binding["session_id"])),
-            _runtime_u32(len(scopes)),
-            *( _runtime_length_prefixed_text(str(scope)) for scope in scopes ),
-            _runtime_u32(len(audiences)),
-            *( _runtime_length_prefixed_text(str(audience)) for audience in audiences ),
-            int(binding["issued_at_ms"]).to_bytes(8, byteorder="big", signed=True),
-            int(binding["expires_at_ms"]).to_bytes(8, byteorder="big", signed=True),
-            _runtime_u32(len(signature)),
-            signature,
-        ]
-    )
-    return hashlib.sha256(canonical).hexdigest()
+    return authority_binding_proof_hash(
+        AuthorityBinding.session_authority(
+            AgentIdentity(str(binding["authority_ura"]), UraProfile.STRICT_V2),
+            SessionEvidence(
+                issuer=AgentIdentity(str(binding["issuer_ura"]), UraProfile.STRICT_V2),
+                session_id=str(binding["session_id"]),
+                scopes=tuple(str(scope) for scope in binding["scopes"]),
+                audiences=tuple(str(audience) for audience in binding["audiences"]),
+                issued_at_ms=int(binding["issued_at_ms"]),
+                expires_at_ms=int(binding["expires_at_ms"]),
+                signature=signature,
+            ),
+        )
+    ).hex()
 
 
 def canonical_runtime_receipt_pair(
@@ -1011,7 +1012,7 @@ class RuntimeTests(unittest.TestCase):
         receipt = canonical_runtime_receipt("inv-1", "completed", "Completed", 1)
         proof = receipt["authority_proof"]
         assert isinstance(proof, dict)
-        proof["binding_kind"] = "delegation"
+        proof["binding_kind"] = "delegated_by+delegation"
         with self.assertRaises(SDKError, msg="mismatched authority kind"):
             RuntimeReceipt.from_mapping(receipt)
 
@@ -1022,8 +1023,8 @@ class RuntimeTests(unittest.TestCase):
                 lambda value: value.update(
                     {
                         "binding": {
-                            "kind": "self",
-                            "principal_ura": "easynet:///r/example/device/other",
+                            "kind": "self+identity",
+                            "authority_ura": "easynet:///r/example/device/other",
                         }
                     }
                 ),
@@ -1277,10 +1278,9 @@ class RuntimeTests(unittest.TestCase):
         delegation_signature = base64.b64encode(bytes([0x73]) * 64).decode()
         strict_profile = "axon-strict-v2"
         delegation_binding = {
-            "kind": "delegation",
+            "kind": "delegated_by+delegation",
+            "authority_ura": "easynet:///r/local/resource/subject",
             "issuer_ura": "easynet:///r/local/agent/issuer",
-            "subject_ura": "easynet:///r/local/resource/subject",
-            "caller_ura": "easynet:///r/local/agent/caller",
             "audience": "runtime",
             "scopes": ["invoke"],
             "issued_at_ms": 1,
@@ -1323,7 +1323,7 @@ class RuntimeTests(unittest.TestCase):
                 "host_attestation_base64": base64.b64encode(
                     bytes([0x74]) * 64
                 ).decode(),
-                "authority_binding_kind": "delegation",
+                "authority_binding_kind": "delegated_by+delegation",
                 "authority_binding": delegation_binding,
                 "ability_binding": "easynet:///r/local/ability/example.run",
                 "failure": {
@@ -1350,7 +1350,7 @@ class RuntimeTests(unittest.TestCase):
                 "runtime_env": "native",
                 "authority_proof": {
                     "proof_type": "admission",
-                    "binding_kind": "delegation",
+                    "binding_kind": "delegated_by+delegation",
                     "binding": delegation_binding,
                     "proof_payload_base64": base64.b64encode(proof_payload).decode(),
                     "proof_hash_hex": hashlib.sha256(proof_payload).hexdigest(),
@@ -1394,9 +1394,9 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(receipt.causal_binding_kind, "scalar")
         assert receipt.causal_binding is not None
         self.assertEqual(receipt.causal_binding["form"], "scalar")
-        self.assertEqual(receipt.authority_binding_kind, "delegation")
+        self.assertEqual(receipt.authority_binding_kind, "delegated_by+delegation")
         assert receipt.authority_binding is not None
-        self.assertEqual(receipt.authority_binding["kind"], "delegation")
+        self.assertEqual(receipt.authority_binding["kind"], "delegated_by+delegation")
         self.assertEqual(receipt.authority_binding["scopes"], ["invoke"])
         self.assertEqual(receipt.failure.code, "DENIED")
         self.assertEqual(receipt.usage.tokens_out, 20)
@@ -1417,7 +1417,7 @@ class RuntimeTests(unittest.TestCase):
         assert isinstance(proof, dict)
         proof["proof_payload_base64"] = ""
         proof["proof_hash_hex"] = authority_binding_proof_hash(
-            AuthorityBinding.self_(
+            AuthorityBinding.self_authority(
                 "easynet:///r/example/agent/device.dev-a.runtime-health"
             )
         ).hex()
@@ -1447,9 +1447,9 @@ class RuntimeTests(unittest.TestCase):
         self,
     ) -> None:
         session_binding: dict[str, object] = {
-            "kind": "session",
+            "kind": "session_of+session",
+            "authority_ura": "easynet:///r/example/agent/alice",
             "issuer_ura": "easynet:///r/example/agent/backend",
-            "subject_ura": "easynet:///r/example/agent/alice",
             "session_id": "session-1",
             "scopes": ["invoke"],
             "audiences": [
@@ -1462,12 +1462,12 @@ class RuntimeTests(unittest.TestCase):
         receipt = canonical_runtime_receipt(
             "inv-session-authority", "completed", "Completed", 1
         )
-        receipt["authority_binding_kind"] = "session"
+        receipt["authority_binding_kind"] = "session_of+session"
         receipt["authority_binding"] = session_binding
         proof = receipt["authority_proof"]
         assert isinstance(proof, dict)
         proof["proof_type"] = "session"
-        proof["binding_kind"] = "session"
+        proof["binding_kind"] = "session_of+session"
         proof["binding"] = session_binding
         proof["proof_payload_base64"] = ""
         proof["proof_hash_hex"] = session_authority_binding_hash(session_binding)
@@ -1475,7 +1475,7 @@ class RuntimeTests(unittest.TestCase):
         RuntimeReceipt.from_mapping(receipt)
 
         retired_binding: dict[str, object] = {
-            "kind": "session",
+            "kind": "session_of+session",
             "backend_ura": "easynet:///r/example/agent/backend",
             "user_ura": "easynet:///r/example/agent/alice",
             "session_id": "session-1",
@@ -1490,12 +1490,12 @@ class RuntimeTests(unittest.TestCase):
         retired = canonical_runtime_receipt(
             "inv-retired-session-authority", "completed", "Completed", 1
         )
-        retired["authority_binding_kind"] = "session"
+        retired["authority_binding_kind"] = "session_of+session"
         retired["authority_binding"] = retired_binding
         retired_proof = retired["authority_proof"]
         assert isinstance(retired_proof, dict)
         retired_proof["proof_type"] = "session"
-        retired_proof["binding_kind"] = "session"
+        retired_proof["binding_kind"] = "session_of+session"
         retired_proof["binding"] = retired_binding
         retired_proof["proof_payload_base64"] = ""
         with self.assertRaises(SDKError) as raised:

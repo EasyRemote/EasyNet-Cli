@@ -3735,7 +3735,8 @@ mod tests {
         // Hub-side resolve of a REMOTE device placement: the hub has no
         // device_local snapshot and the plugin ability is not in the static
         // registry ownership table. The device's advertised owner projection
-        // (plugin-management SystemAgent publishing browser.*) must be
+        // (plugin-management SystemAgent publishing a package-owned ability)
+        // must be
         // accepted as the third owner-normalization evidence source instead
         // of REFUSED "cannot select a unique ... SystemAgent owner".
         let registry = PresenceRegistry::default();
@@ -3750,20 +3751,20 @@ mod tests {
             &catalog,
             &owner_ura,
             &host_device_ura,
-            "browser",
+            "plugin_example",
             "open_session",
             true,
         );
         let resolver = DaemonRouteResolver::new(&registry, Some(&advertised_agents), &catalog);
 
         let route = resolver
-            .resolve_route(&host_device_ura, "browser.open_session")
+            .resolve_route(&host_device_ura, "plugin_example.open_session")
             .expect("device placement must normalize to the advertised plugin SystemAgent");
 
         assert_eq!(route.owner_ura, owner_ura);
         assert_eq!(route.callee_ura, owner_ura);
         assert_eq!(route.execution_host_ura, host_device_ura);
-        assert_eq!(route.dispatch_name, "browser.open_session");
+        assert_eq!(route.dispatch_name, "plugin_example.open_session");
     }
 
     #[test]

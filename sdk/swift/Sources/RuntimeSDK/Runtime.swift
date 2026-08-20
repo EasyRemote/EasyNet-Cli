@@ -723,19 +723,21 @@ private struct RuntimeAuthorityBinding {
         kind = try runtimeRequiredText(object, "kind", "runtime_receipt")
         var bytes = Data()
         switch kind {
-        case "self":
-            try runtimeRequireExactKeys(object, field, ["kind", "principal_ura"])
+        case "self+identity":
+            try runtimeRequireExactKeys(object, field, ["kind", "authority_ura"])
+            bytes.appendRuntimeAgentBinding(
+                try runtimeRequiredText(object, "authority_ura", "runtime_receipt")
+            )
             bytes.append(0x01)
-            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "principal_ura", "runtime_receipt"))
-        case "delegation":
+            bytes.append(0x01)
+        case "delegated_by+delegation":
             try runtimeRequireExactKeys(
                 object,
                 field,
                 [
                     "kind",
+                    "authority_ura",
                     "issuer_ura",
-                    "subject_ura",
-                    "caller_ura",
                     "audience",
                     "scopes",
                     "issued_at_ms",
@@ -743,16 +745,20 @@ private struct RuntimeAuthorityBinding {
                     "signature_base64",
                 ]
             )
+            bytes.appendRuntimeAgentBinding(
+                try runtimeRequiredText(object, "authority_ura", "runtime_receipt")
+            )
             bytes.append(0x02)
-            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "issuer_ura", "runtime_receipt"))
-            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "subject_ura", "runtime_receipt"))
-            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "caller_ura", "runtime_receipt"))
-            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "audience", "runtime_receipt"))
+            bytes.append(0x02)
+            bytes.appendRuntimeAgentBinding(
+                try runtimeRequiredText(object, "issuer_ura", "runtime_receipt")
+            )
             let scopes = try runtimeStringList(object["scopes"], "\(field).scopes")
             bytes.appendUInt32(UInt32(scopes.count))
             for scope in scopes {
                 bytes.appendLengthPrefixed(scope)
             }
+            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "audience", "runtime_receipt"))
             bytes.appendInt64(try runtimeNonNegativeInt64(object["issued_at_ms"], "\(field).issued_at_ms"))
             bytes.appendInt64(try runtimeNonNegativeInt64(object["expires_at_ms"], "\(field).expires_at_ms"))
             bytes.appendLengthPrefixed(
@@ -763,22 +769,14 @@ private struct RuntimeAuthorityBinding {
                     allowEmpty: false
                 )
             )
-        case "capability":
-            try runtimeRequireExactKeys(object, field, ["kind", "capability_ura"])
-            bytes.append(0x03)
-            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "capability_ura", "runtime_receipt"))
-        case "policy":
-            try runtimeRequireExactKeys(object, field, ["kind", "policy_ura"])
-            bytes.append(0x04)
-            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "policy_ura", "runtime_receipt"))
-        case "session":
+        case "session_of+session":
             try runtimeRequireExactKeys(
                 object,
                 field,
                 [
                     "kind",
+                    "authority_ura",
                     "issuer_ura",
-                    "subject_ura",
                     "session_id",
                     "scopes",
                     "audiences",
@@ -787,9 +785,14 @@ private struct RuntimeAuthorityBinding {
                     "signature_base64",
                 ]
             )
-            bytes.append(0x05)
-            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "issuer_ura", "runtime_receipt"))
-            bytes.appendLengthPrefixed(try runtimeRequiredText(object, "subject_ura", "runtime_receipt"))
+            bytes.appendRuntimeAgentBinding(
+                try runtimeRequiredText(object, "authority_ura", "runtime_receipt")
+            )
+            bytes.append(0x03)
+            bytes.append(0x03)
+            bytes.appendRuntimeAgentBinding(
+                try runtimeRequiredText(object, "issuer_ura", "runtime_receipt")
+            )
             bytes.appendLengthPrefixed(try runtimeRequiredText(object, "session_id", "runtime_receipt"))
             let scopes = try runtimeStringList(object["scopes"], "\(field).scopes")
             bytes.appendUInt32(UInt32(scopes.count))
@@ -1064,6 +1067,11 @@ private func runtimeCanonicalTerminalState(_ terminalState: InvocationTerminalSt
 }
 
 private extension Data {
+    mutating func appendRuntimeAgentBinding(_ ura: String) {
+        appendLengthPrefixed(ura)
+        appendLengthPrefixed("axon-strict-v2")
+    }
+
     mutating func appendLengthPrefixed(_ string: String) {
         appendLengthPrefixed(Data(string.utf8))
     }

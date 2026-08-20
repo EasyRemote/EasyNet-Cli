@@ -984,27 +984,41 @@ fn authority_binding_summary(
                     "kind": "self+identity",
                     "authority_ura": authority_ura,
                 }),
-                Some(Evidence::Delegation(value)) => serde_json::json!({
-                    "kind": "delegated_by+delegation",
-                    "authority_ura": authority_ura,
-                    "issuer_ura": value.issuer.as_ref().map(|i| i.ura.as_str()).unwrap_or_default(),
-                    "audience": value.audience,
-                    "scopes": value.scopes,
-                    "issued_at_ms": value.issued_at_ms,
-                    "expires_at_ms": value.expires_at_ms,
-                    "signature_base64": base64_bytes(&value.signature),
-                }),
-                Some(Evidence::Session(value)) => serde_json::json!({
-                    "kind": "session_of+session",
-                    "authority_ura": authority_ura,
-                    "issuer_ura": value.issuer.as_ref().map(|i| i.ura.as_str()).unwrap_or_default(),
-                    "session_id": value.session_id,
-                    "scopes": value.scopes,
-                    "audiences": value.audiences,
-                    "issued_at_ms": value.issued_at_ms,
-                    "expires_at_ms": value.expires_at_ms,
-                    "signature_base64": base64_bytes(&value.signature),
-                }),
+                Some(Evidence::Delegation(value)) => {
+                    let issuer_ura = value
+                        .issuer
+                        .as_ref()
+                        .map(|identity| identity.ura.as_str())
+                        .unwrap_or_default();
+                    serde_json::json!({
+                        "kind": "delegated_by+delegation",
+                        "authority_ura": authority_ura,
+                        "issuer_ura": issuer_ura,
+                        "audience": value.audience,
+                        "scopes": value.scopes,
+                        "issued_at_ms": value.issued_at_ms,
+                        "expires_at_ms": value.expires_at_ms,
+                        "signature_base64": base64_bytes(&value.signature),
+                    })
+                }
+                Some(Evidence::Session(value)) => {
+                    let issuer_ura = value
+                        .issuer
+                        .as_ref()
+                        .map(|identity| identity.ura.as_str())
+                        .unwrap_or_default();
+                    serde_json::json!({
+                        "kind": "session_of+session",
+                        "authority_ura": authority_ura,
+                        "issuer_ura": issuer_ura,
+                        "session_id": value.session_id,
+                        "scopes": value.scopes,
+                        "audiences": value.audiences,
+                        "issued_at_ms": value.issued_at_ms,
+                        "expires_at_ms": value.expires_at_ms,
+                        "signature_base64": base64_bytes(&value.signature),
+                    })
+                }
                 Some(Evidence::Attestation(_)) => serde_json::json!({
                     "kind": "credential_of+attestation",
                     "authority_ura": authority_ura,

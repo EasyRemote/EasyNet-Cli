@@ -8,6 +8,7 @@
     {"fixture": "health.ready.v4.json", "schema": "health.schema.json"},
     {"fixture": "invocation.complete.v4.json", "schema": "invocation.schema.json"},
     {"fixture": "prepared.signing-material.v4.json", "schema": "prepared-invocation.schema.json"},
+    {"fixture": "runtime-catalogue-read-target.v1.json", "schema": "runtime-catalogue-read-target.schema.json"},
     {"fixture": "runtime.error.v4.json", "schema": "error.schema.json"}
   ]
 }

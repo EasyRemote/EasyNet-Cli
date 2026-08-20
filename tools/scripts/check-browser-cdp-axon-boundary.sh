@@ -52,8 +52,8 @@ require_fixed 'crate::daemon::plugins::browser::provider()' src/daemon/plugins/m
 require_fixed 'OwnerKind::plugin_management_system()' src/daemon/plugins/contribution.rs
 
 descriptor_count="$(find "$ABILITY_DIR" -maxdepth 1 -name 'browser.*.ability.toml' -type f | wc -l | tr -d '[:space:]')"
-[[ "$descriptor_count" == "6" ]] \
-  || fail "browser package must own exactly 6 descriptors, found $descriptor_count"
+[[ "$descriptor_count" == "7" ]] \
+  || fail "browser package must own exactly 7 descriptors, found $descriptor_count"
 
 for descriptor in "$ABILITY_DIR"/browser.*.ability.toml; do
   require_fixed 'schema_version = "3"' "$descriptor"

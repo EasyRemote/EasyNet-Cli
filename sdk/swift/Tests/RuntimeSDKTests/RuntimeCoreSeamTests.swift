@@ -213,12 +213,12 @@ final class RuntimeCoreSeamTests: XCTestCase {
             XCTFail("InvocationResult terminalReceiptProjection must retain authority_proof.binding")
             return
         }
-        XCTAssertEqual(projectedProofBinding["principal_ura"], .string(callee))
+        XCTAssertEqual(projectedProofBinding["authority_ura"], .string(callee))
         guard case let .object(projectedAuthorityBinding)? = canonical.terminalReceiptProjection["authority_binding"] else {
             XCTFail("InvocationResult terminalReceiptProjection must retain authority_binding")
             return
         }
-        XCTAssertEqual(projectedAuthorityBinding["principal_ura"], .string(callee))
+        XCTAssertEqual(projectedAuthorityBinding["authority_ura"], .string(callee))
 
         for retiredState in ["completed", "COMPLETED", "TIMED_OUT", " Completed "] {
             var legacyStateReceipt = terminal
@@ -426,9 +426,9 @@ final class RuntimeCoreSeamTests: XCTestCase {
         }
 
         let sessionBinding: [String: Any] = [
-            "kind": "session",
+            "kind": "session_of+session",
+            "authority_ura": "easynet:///r/example/agent/alice",
             "issuer_ura": "easynet:///r/example/agent/backend",
-            "subject_ura": "easynet:///r/example/agent/alice",
             "session_id": "session-1",
             "scopes": ["invoke"],
             "audiences": [descriptor],
@@ -437,11 +437,11 @@ final class RuntimeCoreSeamTests: XCTestCase {
             "signature_base64": Data(repeating: 0x73, count: 64).base64EncodedString(),
         ]
         var sessionReceipt = terminal
-        sessionReceipt["authority_binding_kind"] = "session"
+        sessionReceipt["authority_binding_kind"] = "session_of+session"
         sessionReceipt["authority_binding"] = sessionBinding
         var sessionProof = sessionReceipt["authority_proof"] as! [String: Any]
         sessionProof["proof_type"] = "session"
-        sessionProof["binding_kind"] = "session"
+        sessionProof["binding_kind"] = "session_of+session"
         sessionProof["binding"] = sessionBinding
         sessionProof["proof_payload_base64"] = ""
         sessionProof["proof_hash_hex"] = authorityBindingProofHashSession(sessionBinding)
@@ -453,7 +453,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
                 "terminal_receipt": sessionReceipt,
             ])
         )
-        XCTAssertEqual(sessionResult.terminalReceipt["authority_binding_kind"], "session")
+        XCTAssertEqual(sessionResult.terminalReceipt["authority_binding_kind"], "session_of+session")
         guard case let .object(sessionProjection)? = sessionResult.terminalReceiptProjection["authority_binding"] else {
             XCTFail("InvocationResult terminalReceiptProjection must retain session authority_binding")
             return
@@ -461,7 +461,7 @@ final class RuntimeCoreSeamTests: XCTestCase {
         XCTAssertEqual(sessionProjection["session_id"], .string("session-1"))
 
         let retiredSessionBinding: [String: Any] = [
-            "kind": "session",
+            "kind": "session_of+session",
             "backend_ura": "easynet:///r/example/agent/backend",
             "user_ura": "easynet:///r/example/agent/alice",
             "session_id": "session-1",
@@ -472,11 +472,11 @@ final class RuntimeCoreSeamTests: XCTestCase {
             "signature_base64": Data(repeating: 0x73, count: 64).base64EncodedString(),
         ]
         var retiredSessionReceipt = terminal
-        retiredSessionReceipt["authority_binding_kind"] = "session"
+        retiredSessionReceipt["authority_binding_kind"] = "session_of+session"
         retiredSessionReceipt["authority_binding"] = retiredSessionBinding
         var retiredSessionProof = retiredSessionReceipt["authority_proof"] as! [String: Any]
         retiredSessionProof["proof_type"] = "session"
-        retiredSessionProof["binding_kind"] = "session"
+        retiredSessionProof["binding_kind"] = "session_of+session"
         retiredSessionProof["binding"] = retiredSessionBinding
         retiredSessionProof["proof_payload_base64"] = ""
         retiredSessionReceipt["authority_proof"] = retiredSessionProof
@@ -1907,8 +1907,8 @@ private func canonicalRuntimeReceipt(
             "key_id_hint": "callee-receipt-key",
         ],
         "signer_binding": agentBinding(callee),
-        "authority_binding_kind": "self",
-        "authority_binding": ["kind": "self", "principal_ura": callee],
+        "authority_binding_kind": "self+identity",
+        "authority_binding": ["kind": "self+identity", "authority_ura": callee],
         "ability_binding": descriptor,
         "host_attestation_base64": "",
         "usage": [
@@ -1924,8 +1924,8 @@ private func canonicalRuntimeReceipt(
         "runtime_env": "swift-test",
         "authority_proof": [
             "proof_type": "self",
-            "binding_kind": "self",
-            "binding": ["kind": "self", "principal_ura": callee],
+            "binding_kind": "self+identity",
+            "binding": ["kind": "self+identity", "authority_ura": callee],
             "proof_payload_base64": proofPayload.base64EncodedString(),
             "proof_hash_hex": sha256Hex(proofPayload),
             "issuer": agentBinding(callee),
@@ -1948,16 +1948,21 @@ private func agentBinding(_ ura: String) -> [String: String] {
 
 private func authorityBindingProofHashSelf(_ principalURA: String) -> String {
     var canonical = Data()
-    canonical.append(0x01)
     canonical.appendLengthPrefixed(Data(principalURA.utf8))
+    canonical.appendLengthPrefixed(Data("axon-strict-v2".utf8))
+    canonical.append(0x01)
+    canonical.append(0x01)
     return sha256Hex(canonical)
 }
 
 private func authorityBindingProofHashSession(_ binding: [String: Any]) -> String {
     var canonical = Data()
-    canonical.append(0x05)
+    canonical.appendLengthPrefixed(Data((binding["authority_ura"] as! String).utf8))
+    canonical.appendLengthPrefixed(Data("axon-strict-v2".utf8))
+    canonical.append(0x03)
+    canonical.append(0x03)
     canonical.appendLengthPrefixed(Data((binding["issuer_ura"] as! String).utf8))
-    canonical.appendLengthPrefixed(Data((binding["subject_ura"] as! String).utf8))
+    canonical.appendLengthPrefixed(Data("axon-strict-v2".utf8))
     canonical.appendLengthPrefixed(Data((binding["session_id"] as! String).utf8))
     let scopes = binding["scopes"] as! [String]
     canonical.appendUInt32(UInt32(scopes.count))
