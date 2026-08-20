@@ -2,8 +2,8 @@
   "profile": "runtime-catalogue-read-target.v1",
   "cases": [
     {
-      "name": "device target projects catalogue read to runtime introspection",
-      "callee_ura": "easynet:///r/example/device/dev-a",
+      "name": "runtime introspection target projects user catalogue read subject",
+      "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-introspection",
       "subject_ura": "easynet:///r/example/user/alice",
       "ability": "meta.list_resources",
       "provider": "ability_descriptor",

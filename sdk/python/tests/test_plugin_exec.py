@@ -23,7 +23,7 @@ def _frame() -> dict[str, object]:
         "call_id": "call-1",
         "invocation": {
             "caller_ura": "easynet:///r/hub/user/alice",
-            "callee_ura": "easynet:///r/hub/device/provider",
+            "callee_ura": "easynet:///r/hub/service/alice.provider",
             "ability_ura": "demo.echo",
             "subject_ura": "easynet:///r/hub/resource/demo",
             "invocation_nonce": CANONICAL_NONCE.copy(),
@@ -45,7 +45,7 @@ class PluginExecTests(unittest.TestCase):
 
         self.assertEqual(invocation.call_id, "call-1")
         self.assertEqual(invocation.caller_ura, "easynet:///r/hub/user/alice")
-        self.assertEqual(invocation.callee_ura, "easynet:///r/hub/device/provider")
+        self.assertEqual(invocation.callee_ura, "easynet:///r/hub/service/alice.provider")
         self.assertEqual(invocation.ability_ura, "demo.echo")
         self.assertEqual(invocation.subject_ura, "easynet:///r/hub/resource/demo")
         self.assertEqual(invocation.invocation_nonce, tuple(CANONICAL_NONCE))
