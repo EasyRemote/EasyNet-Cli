@@ -263,6 +263,59 @@ async fn run_attachment(
     let mut input_lane = JoinSet::new();
     let mut queued_input = VecDeque::new();
     let command_permits = Arc::new(Semaphore::new(ATTACH_OPERATION_BOUND));
+
+    // Viewport mirror: protocol invariant — the viewport stream never
+    // propagates consumer backpressure into the browser capture producer.
+    // Chrome's screencast ack is Chrome-side flow control and is owned
+    // HERE: every Page.screencastFrame is acked immediately, decoupled
+    // from downstream delivery. Downstream gets latest-wins delivery: a
+    // single latest-frame slot plus a dedicated sender task, so a slow
+    // consumer skips stale frames instead of accumulating perceptual
+    // latency (frame_101..103 pending -> only 103 matters).
+    let latest_frame: Arc<std::sync::Mutex<Option<Value>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    let frame_notify = Arc::new(tokio::sync::Notify::new());
+    let mirror_sender = {
+        let latest_frame = Arc::clone(&latest_frame);
+        let frame_notify = Arc::clone(&frame_notify);
+        let outbound = outbound.clone();
+        tokio::spawn(async move {
+            loop {
+                frame_notify.notified().await;
+                loop {
+                    let frame = latest_frame
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .take();
+                    let Some(frame) = frame else { break };
+                    if send_json(&outbound, frame).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        })
+    };
+    let mut render_sequence: u64 = 0;
+    {
+        // The plugin owns the screencast lifecycle: start immediately so
+        // consumers only ever observe frames. Bounded capture size — every
+        // frame crosses bidi as one payload, so size caps effective rate.
+        let session = Arc::clone(&session);
+        tokio::spawn(async move {
+            let _ = session
+                .command(
+                    "Page.startScreencast",
+                    Some(json!({
+                        "format": "jpeg",
+                        "quality": 60,
+                        "maxWidth": 1440,
+                        "maxHeight": 900,
+                        "everyNthFrame": 1,
+                    })),
+                )
+                .await;
+        });
+    }
     loop {
         tokio::select! {
             completed = concurrent_lane.join_next(), if !concurrent_lane.is_empty() => {
@@ -337,7 +390,67 @@ async fn run_attachment(
                             .await;
                         break;
                     }
+                    Ok(event)
+                        if session.event_belongs_to_session(&event)
+                            && event.method == "Page.screencastFrame" =>
+                    {
+                        let params = &event.params;
+                        if let Some(session_id) = params.get("sessionId").cloned() {
+                            let ack_session = Arc::clone(&session);
+                            tokio::spawn(async move {
+                                let _ = ack_session
+                                    .command(
+                                        "Page.screencastFrameAck",
+                                        Some(json!({"sessionId": session_id})),
+                                    )
+                                    .await;
+                            });
+                        }
+                        let data = params.get("data").and_then(Value::as_str).unwrap_or("");
+                        if !data.is_empty() {
+                            render_sequence += 1;
+                            let metadata = params.get("metadata").cloned().unwrap_or(Value::Null);
+                            let number = |key: &str, fallback: f64| {
+                                metadata.get(key).and_then(Value::as_f64).unwrap_or(fallback)
+                            };
+                            let frame = json!({
+                                "type": "browser.render_frame",
+                                "sequence": render_sequence,
+                                "data": data,
+                                "encoding": "base64",
+                                "content_type": "image/jpeg",
+                                "url": "",
+                                "title": "",
+                                "captured_at_ms": super::session::now_ms(),
+                                "interactive": true,
+                                "viewport": {
+                                    "width_px": number("deviceWidth", 1280.0),
+                                    "height_px": number("deviceHeight", 800.0),
+                                    "device_scale_factor": 1.0,
+                                },
+                                "scroll": {
+                                    "x": number("scrollOffsetX", 0.0),
+                                    "y": number("scrollOffsetY", 0.0),
+                                    "max_x": 0,
+                                    "max_y": 0,
+                                },
+                            });
+                            *latest_frame
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(frame);
+                            frame_notify.notify_one();
+                        }
+                    }
                     Ok(event) if session.event_belongs_to_session(&event) => {
+                        if event.method == "Page.screencastVisibilityChanged"
+                            && event
+                                .params
+                                .get("visible")
+                                .and_then(Value::as_bool)
+                                == Some(false)
+                        {
+                            session.clear_foreground();
+                        }
                         if send_json(&outbound, json!({
                             "type": "cdp.event",
                             "method": event.method,
@@ -368,6 +481,7 @@ async fn run_attachment(
             }
         }
     }
+    mirror_sender.abort();
     concurrent_lane.abort_all();
     input_lane.abort_all();
     if !detached_sent {
