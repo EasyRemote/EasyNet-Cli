@@ -292,13 +292,26 @@ impl BrowserSession {
             });
         }
         self.touch();
-        self.client
+        crate::op_event!(component = browser_plugin, kind = cdp_command_begin, method = method);
+        let started = std::time::Instant::now();
+        let result = self
+            .client
             .send_command(method, params, Some(&self.cdp_session_id))
             .await
             .map_err(|error| BrowserError::Cdp {
                 ability: "browser.cdp",
                 detail: error.to_string(),
-            })
+            });
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        let ok = result.is_ok();
+        crate::op_event!(
+            component = browser_plugin,
+            kind = cdp_command_end,
+            method = method,
+            elapsed_ms = elapsed_ms,
+            ok = ok,
+        );
+        result
     }
 
     pub async fn raw_command(
