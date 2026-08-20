@@ -44,6 +44,10 @@ pub fn attach_session_description() -> &'static str {
     "Attach one bounded Axon InvokeBidi channel to the browser session. Agent CDP commands may be sent individually or in batches of up to 32 that amortize Axon framing; commands share a bounded concurrent lane and may respond out of order by correlation id, while high-level input remains arrival-ordered. Responses, target events, ping, and detach control all travel as JSON frames inside the canonical Axon session. The plugin injects the bound CDP session id and rejects caller-supplied session routing or browser-wide destructive methods."
 }
 
+pub fn capture_page_description() -> &'static str {
+    "Capture one structural snapshot of the session's current page as a self-contained MHTML document (Page.captureSnapshot). This is the structural observation plane: it returns the page's semantic state for agent reasoning, indexing, and archival — not pixels (browser.capture_viewport) and not live control (browser.attach_session). The invocation subject MUST be the session resource URA and the caller MUST be the session creator. Snapshots above the bounded size limit fail rather than truncate."
+}
+
 pub fn close_session_description() -> &'static str {
     "Idempotently close a browser session. The target is closed, pending CDP calls are drained, an owned Chrome process is terminated, and session/profile capacity is released. A caller-supplied existing browser process is never terminated. The invocation subject MUST be the browser session resource URA."
 }
@@ -155,6 +159,10 @@ pub fn capture_viewport_input_schema() -> Value {
 }
 
 pub fn attach_session_input_schema() -> Value {
+    empty_object_schema()
+}
+
+pub fn capture_page_input_schema() -> Value {
     empty_object_schema()
 }
 

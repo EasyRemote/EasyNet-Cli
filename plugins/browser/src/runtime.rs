@@ -428,13 +428,7 @@ impl OpenSessionRequest {
             // Physical-pixel ratio of the viewer's display. Screencast is
             // captured at viewport * scale so a HiDPI viewer gets crisp
             // frames instead of a 1x image upscaled in the browser.
-            device_scale_factor: optional_f64(
-                object,
-                "device_scale_factor",
-                1.0,
-                1.0,
-                4.0,
-            )?,
+            device_scale_factor: optional_f64(object, "device_scale_factor", 1.0, 1.0, 4.0)?,
             idle_timeout_seconds: optional_u64(
                 object,
                 "idle_timeout_seconds",
@@ -580,10 +574,12 @@ fn optional_f64(
     let Some(value) = object.get(key) else {
         return Ok(default);
     };
-    let value = value.as_f64().ok_or_else(|| BrowserError::InvalidArgument {
-        ability: ABILITY_OPEN_SESSION,
-        detail: format!("`{key}` must be a number"),
-    })?;
+    let value = value
+        .as_f64()
+        .ok_or_else(|| BrowserError::InvalidArgument {
+            ability: ABILITY_OPEN_SESSION,
+            detail: format!("`{key}` must be a number"),
+        })?;
     if value.is_finite() && (min..=max).contains(&value) {
         Ok(value)
     } else {

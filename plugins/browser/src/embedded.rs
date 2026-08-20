@@ -99,7 +99,7 @@ mod tests {
             .package_for_ability(constants::ABILITY_OPEN_SESSION)
             .expect("browser package");
         assert_eq!(package.id().as_str(), "easynet.browser");
-        assert_eq!(package.ability_descriptors().count(), 6);
+        assert_eq!(package.ability_descriptors().count(), 7);
         for ability in constants::PUBLIC_ABILITIES {
             assert!(
                 package.ability_descriptor(ability).is_some(),

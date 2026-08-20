@@ -34,6 +34,11 @@ layer = "observation"
 call_mode = "stream"
 
 [[ability_metadata]]
+name = "browser.capture_page"
+layer = "observation"
+call_mode = "rpc"
+
+[[ability_metadata]]
 name = "browser.attach_session"
 layer = "operational"
 call_mode = "bidi"
