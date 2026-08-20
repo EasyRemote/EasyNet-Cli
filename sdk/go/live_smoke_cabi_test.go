@@ -32,7 +32,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	} else if err := os.MkdirAll(home, 0o700); err != nil {
 		t.Fatalf("create smoke home: %v", err)
 	}
-	realm, deviceID, deviceURA, trustPath := writeGoLiveSmokeIdentity(t, home)
+	realm, deviceID, deviceURA, userURA, trustPath := writeGoLiveSmokeIdentity(t, home)
 	t.Setenv("HOME", home)
 	t.Setenv("EASYNET_REALM_TRUST_PATH", trustPath)
 	t.Setenv("EASYNET_PAGES_PORT", strconv.Itoa(19000+os.Getpid()%1000))
@@ -113,7 +113,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 		t.Fatalf("runtime health is not ready: %#v", health)
 	}
 
-	duplicateDraft := goLiveSmokeDraft(t, runtime, deviceURA, "observe.health", map[string]any{"smoke": "duplicate-prepare"}, 2)
+	duplicateDraft := goLiveSmokeDraft(t, runtime, realm, deviceID, userURA, deviceURA, "observe.health", map[string]any{"smoke": "duplicate-prepare"}, 2)
 	firstPrepared, _, err := runtime.Prepare(ctx, duplicateDraft, PrepareOptions{})
 	if err != nil {
 		t.Fatalf("first duplicate-draft prepare: %v", err)
@@ -136,7 +136,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	}
 	t.Log("duplicate draft allocated independent prepared and request ids")
 
-	unary, err := runtime.Invoke(ctx, goLiveSmokeDraft(t, runtime, deviceURA, "observe.health", map[string]any{"smoke": "go-sdk"}, 1))
+	unary, err := runtime.Invoke(ctx, goLiveSmokeDraft(t, runtime, realm, deviceID, userURA, deviceURA, "observe.health", map[string]any{"smoke": "go-sdk"}, 1))
 	if err != nil {
 		t.Fatalf("RuntimeClient.Invoke: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	}
 	t.Log("unary RuntimeClient.Invoke OK")
 
-	prepared, _, err := runtime.Prepare(ctx, goLiveSmokeDraft(t, runtime, deviceURA, "observe.health", map[string]any{"smoke": "go-sdk-terminal-failure"}, 65), PrepareOptions{})
+	prepared, _, err := runtime.Prepare(ctx, goLiveSmokeDraft(t, runtime, realm, deviceID, userURA, deviceURA, "observe.health", map[string]any{"smoke": "go-sdk-terminal-failure"}, 65), PrepareOptions{})
 	if err != nil {
 		t.Fatalf("typed terminal failure prepare: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestGoSDKLiveDaemonSmoke(t *testing.T) {
 	}
 	t.Log("RuntimeEventClient read live daemon handle events")
 
-	stream, err := runtime.InvokeStream(ctx, goLiveSmokeDraft(t, runtime, deviceURA, "session.attach", map[string]any{"session_id": "go-sdk-live-smoke-no-such-session"}, 33, "stream"))
+	stream, err := runtime.InvokeStream(ctx, goLiveSmokeDraft(t, runtime, realm, deviceID, userURA, deviceURA, "session.attach", map[string]any{"session_id": "go-sdk-live-smoke-no-such-session"}, 33, "stream"))
 	if err != nil {
 		t.Fatalf("session.attach stream: %v", err)
 	}
@@ -242,7 +242,7 @@ func requireLiveSmokeEnv(t *testing.T, name string) string {
 	return value
 }
 
-func writeGoLiveSmokeIdentity(t *testing.T, home string) (string, string, string, string) {
+func writeGoLiveSmokeIdentity(t *testing.T, home string) (string, string, string, string, string) {
 	t.Helper()
 	stateDir := filepath.Join(home, ".easynet")
 	if err := os.RemoveAll(stateDir); err != nil {
@@ -253,11 +253,13 @@ func writeGoLiveSmokeIdentity(t *testing.T, home string) (string, string, string
 	}
 	realm := "cli"
 	deviceID := "local"
+	userID := "go-sdk-smoke-user-id"
 	deviceURA := "easynet:///r/cli/device/local"
+	userURA := "easynet:///r/cli/user/" + userID
 	writeGoLiveSmokeJSON(t, filepath.Join(stateDir, "credentials.json"), map[string]any{
 		"node_id": deviceID, "credential_token": "go-sdk-smoke-token",
 		"hub_endpoint": "https://127.0.0.1:50443", "realm": realm,
-		"username": "go-sdk-smoke-user", "user_id": "go-sdk-smoke-user-id",
+		"username": "go-sdk-smoke-user", "user_id": userID,
 	})
 	daemonConfig := `[daemon]
 mode = "device"
@@ -279,7 +281,7 @@ added_at_unix_ms = 0
 	if err := os.WriteFile(trustPath, []byte(trust), 0o600); err != nil {
 		t.Fatalf("write realm trust: %v", err)
 	}
-	return realm, deviceID, deviceURA, trustPath
+	return realm, deviceID, deviceURA, userURA, trustPath
 }
 
 func writeGoLiveSmokeJSON(t *testing.T, path string, value any) {
@@ -293,16 +295,17 @@ func writeGoLiveSmokeJSON(t *testing.T, path string, value any) {
 	}
 }
 
-func goLiveSmokeDraft(t *testing.T, runtime *RuntimeClient, deviceURA, ability string, args map[string]any, nonceStart byte, callMode ...string) InvocationDraft {
+func goLiveSmokeDraft(t *testing.T, runtime *RuntimeClient, realm, deviceID, userURA, deviceURA, ability string, args map[string]any, nonceStart byte, callMode ...string) InvocationDraft {
 	t.Helper()
 	mode := "rpc"
 	if len(callMode) > 0 {
 		mode = callMode[0]
 	}
-	descriptorRef := goLiveSmokeDescriptorRef(t, runtime, deviceURA, ability, mode)
+	calleeURA := goLiveSmokeSystemAgentCallee(t, realm, deviceID, ability)
+	descriptorRef := goLiveSmokeDescriptorRef(t, runtime, userURA, calleeURA, deviceURA, ability, mode)
 	draft, err := NewInvocationBuilder().
-		WithCallerURA(deviceURA).
-		WithCalleeURA(deviceURA).
+		WithCallerURA(userURA).
+		WithCalleeURA(calleeURA).
 		WithDescriptorRef(descriptorRef).
 		WithSubjectURA(deviceURA).
 		WithNonceBase64(goLiveSmokeNonce(nonceStart)).
@@ -316,15 +319,29 @@ func goLiveSmokeDraft(t *testing.T, runtime *RuntimeClient, deviceURA, ability s
 	return draft
 }
 
-func goLiveSmokeDescriptorRef(t *testing.T, runtime *RuntimeClient, deviceURA, ability, callMode string) string {
+func goLiveSmokeSystemAgentCallee(t *testing.T, realm, deviceID, ability string) string {
+	t.Helper()
+	systemAgentID := ""
+	switch ability {
+	case "observe.health":
+		systemAgentID = "runtime-health"
+	case "session.attach":
+		systemAgentID = "session"
+	default:
+		t.Fatalf("Go SDK smoke does not know SystemAgent owner for %s", ability)
+	}
+	return "easynet:///r/" + realm + "/agent/device." + deviceID + "." + systemAgentID
+}
+
+func goLiveSmokeDescriptorRef(t *testing.T, runtime *RuntimeClient, callerURA, calleeURA, subjectURA, ability, callMode string) string {
 	t.Helper()
 	if runtime == nil {
 		t.Fatalf("live-smoke RuntimeClient missing from test context")
 	}
 	descriptorRef, err := runtime.ResolveDescriptorRef(context.Background(), RuntimeDescriptorRefRequest{
-		CalleeURA:  deviceURA,
-		CallerURA:  deviceURA,
-		SubjectURA: deviceURA,
+		CalleeURA:  calleeURA,
+		CallerURA:  callerURA,
+		SubjectURA: subjectURA,
 		Ability:    ability,
 		CallMode:   callMode,
 	})

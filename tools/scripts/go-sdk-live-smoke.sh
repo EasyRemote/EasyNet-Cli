@@ -31,6 +31,11 @@ if [[ "${1:-}" == "--self-test" ]]; then
   grep -q "generic C ABI v7" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   grep -q "typed terminal failure decoded" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   grep -q "RuntimeEventClient read live daemon handle events" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q "goLiveSmokeSystemAgentCallee" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q "WithCallerURA(userURA)" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  grep -q "WithCalleeURA(calleeURA)" "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  awk 'BEGIN { needle = "WithCalleeURA(deviceURA)" } index($0, needle) { found = 1 } END { exit found ? 1 : 0 }' "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
+  awk 'BEGIN { needle = "CalleeURA:  deviceURA" } index($0, needle) { found = 1 } END { exit found ? 1 : 0 }' "$REPO_ROOT/sdk/go/live_smoke_cabi_test.go"
   echo "go-sdk-live-smoke self-test ok"
   exit 0
 fi
