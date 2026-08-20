@@ -420,6 +420,33 @@ class RuntimeTests(unittest.TestCase):
             },
         )
 
+    def test_descriptor_resolution_projects_catalogue_device_target_to_system_agent(
+        self,
+    ) -> None:
+        transport = MemoryRuntimeTransport()
+        client = RuntimeClient(transport)
+
+        client.resolve_descriptor_ref(
+            callee_ura="easynet:///r/example/device/dev-a",
+            ability="meta.list_abilities",
+            call_mode="rpc",
+            caller_ura="easynet:///r/example/user/alice",
+            subject_ura="easynet:///r/example/user/alice",
+            provider="ability_descriptor",
+        )
+
+        self.assertEqual(
+            transport.seen_descriptor_request,
+            {
+                "ability": "meta.list_abilities",
+                "call_mode": "rpc",
+                "callee_ura": "easynet:///r/example/agent/device.dev-a.runtime-introspection",
+                "caller_ura": "easynet:///r/example/user/alice",
+                "subject_ura": "easynet:///r/example/resource/user.alice/runtime-state/read",
+                "provider": "ability_descriptor",
+            },
+        )
+
     def test_descriptor_resolution_rejects_incomplete_request_before_transport(
         self,
     ) -> None:

@@ -309,6 +309,48 @@ def test_runtime_ability_catalogue_read_resolves_descriptor_with_governance_read
     )
 
 
+def test_runtime_ability_catalogue_read_projects_device_target_to_system_agent() -> (
+    None
+):
+    class CatalogueDescriptorTransport(RuntimeTransportFake):
+        def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+            request = json.loads(request_json)
+            self.descriptor_requests.append(request)
+            return json.dumps(
+                {
+                    "descriptor_ref": (
+                        "easynet:///r/example/ability/system-agent.device-1.runtime-introspection.meta.list_abilities@1.0.0#"
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        "!read"
+                    )
+                }
+            ).encode()
+
+    transport = CatalogueDescriptorTransport()
+    client = RuntimeAbilityClient(
+        RuntimeClient(transport),  # type: ignore[arg-type]
+        AddressingClient(AxonAddressingTransport()),
+    )
+    call = replace(
+        _call(),
+        callee_ura="easynet:///r/example/device/device-1",
+        subject_ura="easynet:///r/example/user/alice",
+    )
+
+    draft = client._build_catalogue_read(call, "meta.list_abilities", {})
+
+    assert (
+        draft.callee_ura
+        == "easynet:///r/example/agent/device.device-1.runtime-introspection"
+    )
+    assert (
+        draft.subject_ura
+        == "easynet:///r/example/resource/user.alice/runtime-state/read"
+    )
+    assert transport.descriptor_requests[-1]["callee_ura"] == draft.callee_ura
+    assert transport.descriptor_requests[-1]["subject_ura"] == draft.subject_ura
+
+
 def test_runtime_ability_catalogue_read_uses_session_owner_for_governance_subject() -> (
     None
 ):

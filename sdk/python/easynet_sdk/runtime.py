@@ -34,6 +34,8 @@ from ._runtime_governance import (
     governance_descriptor_provider_for_ability,
 )
 from ._runtime_subjects import is_runtime_governance_read_subject_ura
+from ._runtime_subjects import runtime_governance_read_subject_ura
+from .axon_addressing import authority_ura, device_agent_ura, device_ura, parse_ura
 from .bidi import BidiSession, BidiStreamDescriptor, BidiTransport
 from .invocation import InvocationBuilder, InvocationDraft
 from .invocation_state import InvocationLifecycleState
@@ -468,6 +470,12 @@ class _DecodedRuntimeReceipt:
     input_hash_hex: str = ""
     output_hash_hex: str = ""
     parent_receipts: tuple[RuntimeReceiptRef, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
+class _RuntimeCatalogueReadTarget:
+    callee_ura: str
+    subject_ura: str
 
 
 @dataclass(frozen=True)
@@ -1613,6 +1621,14 @@ def _admitted_descriptor_ref_request(
                 raise _invalid_runtime_client(
                     f"descriptor_ref provider request {field_name} must not be all-zero"
                 )
+        target = _runtime_catalogue_read_target(
+            callee_ura=callee_ura,
+            subject_ura=subject_ura,
+            ability=ability,
+            provider=provider,
+        )
+        callee_ura = target.callee_ura
+        subject_ura = target.subject_ura
         _admit_descriptor_ref_provider_subject(
             provider=provider,
             callee_ura=callee_ura,
@@ -1631,6 +1647,109 @@ def _admitted_descriptor_ref_request(
     if provider:
         request["provider"] = provider
     return request
+
+
+def _runtime_catalogue_read_target(
+    *,
+    callee_ura: str,
+    subject_ura: str,
+    ability: str,
+    provider: str,
+) -> _RuntimeCatalogueReadTarget:
+    clean_callee = callee_ura.strip()
+    clean_subject = subject_ura.strip()
+    if (
+        provider != ABILITY_DESCRIPTOR_PROVIDER
+        or governance_descriptor_provider_for_ability(ability) != ABILITY_DESCRIPTOR_PROVIDER
+    ):
+        return _RuntimeCatalogueReadTarget(clean_callee, clean_subject)
+    projected_callee = _runtime_catalogue_read_callee_ura(clean_callee)
+    projected_subject = _runtime_catalogue_read_subject_ura(
+        clean_subject, projected_callee
+    )
+    return _RuntimeCatalogueReadTarget(projected_callee, projected_subject)
+
+
+def _runtime_catalogue_read_callee_ura(callee_ura: str) -> str:
+    try:
+        projection = parse_ura(callee_ura.strip())
+    except SDKError as exc:
+        raise _invalid_runtime_client(
+            f"descriptor_ref provider callee_ura must be canonical: {exc}"
+        ) from exc
+    if projection.kind == "device":
+        device_id = str(projection.components.get("device_id", "")).strip()
+        if device_id:
+            return device_agent_ura(projection.realm, device_id, "runtime-introspection")
+    if projection.kind == "agent":
+        device_id = str(projection.components.get("device_id", "")).strip()
+        if device_id:
+            return device_agent_ura(projection.realm, device_id, "runtime-introspection")
+    return callee_ura.strip()
+
+
+def _runtime_catalogue_read_subject_ura(subject_ura: str, callee_ura: str) -> str:
+    try:
+        return runtime_governance_read_subject_ura(subject_ura, callee_ura)
+    except SDKError as exc:
+        owner_subject = _runtime_catalogue_resource_owner_subject_ura(
+            subject_ura, callee_ura
+        )
+        if owner_subject:
+            return owner_subject
+        raise _invalid_runtime_client(
+            "descriptor_ref provider ability_descriptor subject_ura must be a runtime governance read subject"
+        ) from exc
+
+
+def _runtime_owner_read_subject_ura(callee_ura: str) -> str:
+    try:
+        projection = parse_ura(callee_ura.strip())
+    except SDKError as exc:
+        raise _invalid_runtime_client(
+            "runtime governance read callee_ura must be canonical"
+        ) from exc
+    if projection.kind == "authority":
+        return authority_ura(projection.realm)
+    if projection.kind == "device":
+        device_id = str(projection.components.get("device_id", "")).strip()
+        if device_id:
+            return device_ura(projection.realm, device_id)
+    if projection.kind == "agent":
+        device_id = str(projection.components.get("device_id", "")).strip()
+        if device_id:
+            return device_ura(projection.realm, device_id)
+    raise _invalid_runtime(
+        "runtime governance read callee_ura has no runtime-owner subject"
+    )
+
+
+def _runtime_catalogue_resource_owner_subject_ura(
+    subject_ura: str, callee_ura: str
+) -> str:
+    try:
+        subject = parse_ura(subject_ura.strip())
+    except SDKError:
+        return ""
+    if subject.kind != "resource":
+        return ""
+    owner_id = str(subject.components.get("owner_id", "")).strip()
+    device_id = owner_id.removeprefix("device.")
+    if (
+        not owner_id.startswith("device.")
+        or not device_id.strip()
+        or "/" in device_id
+        or "." in device_id
+    ):
+        return ""
+    owner_subject = device_ura(subject.realm, device_id)
+    try:
+        callee_owner = _runtime_owner_read_subject_ura(callee_ura)
+    except SDKError:
+        return ""
+    if owner_subject != callee_owner:
+        return ""
+    return owner_subject
 
 
 def _admit_descriptor_ref_provider_subject(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Mapping, TypeAlias
 
 from ._identity_guards import contains_all_zero_principal
@@ -35,6 +35,7 @@ from .runtime import (
     RuntimeRecoveryReport,
     RuntimeRecoveryRequest,
     RuntimeClient,
+    _runtime_catalogue_read_target,
 )
 from .runtime_authority import DraftAuthorityProvider
 from ._session_authority_subjects import session_authority_admits_subject
@@ -177,6 +178,18 @@ class RuntimeAbilityClient:
         ):
             raise _invalid(
                 "runtime governance receipt/history/catalogue abilities must use RuntimeReceiptProvider or RuntimeAbilityDescriptorProvider"
+            )
+        target = _runtime_catalogue_read_target(
+            callee_ura=call.callee_ura,
+            subject_ura=call.subject_ura,
+            ability=ability_name,
+            provider=policy.descriptor_provider,
+        )
+        if target.callee_ura != call.callee_ura or target.subject_ura != call.subject_ura:
+            call = replace(
+                call,
+                callee_ura=target.callee_ura,
+                subject_ura=target.subject_ura,
             )
         subject_ura = self._subject_ura(call, ability_name, policy)
         descriptor_ref = self._runtime.resolve_descriptor_ref(
