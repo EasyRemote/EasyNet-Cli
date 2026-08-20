@@ -2243,8 +2243,24 @@ fn admit_remote_descriptor_catalog_caller(
             "remote descriptor catalogue SessionAuthority shape is invalid: {error}"
         ))
     })?;
-    let callee_ura = context.callee_ura().unwrap_or_default();
-    let subject_ura = context.subject_ura().unwrap_or_default();
+    let callee_ura = context
+        .callee_ura()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            DescriptorResolutionError::runtime_attachment_unavailable(
+                "remote descriptor catalogue SessionAuthority requires descriptor request callee_ura",
+            )
+        })?;
+    let subject_ura = context
+        .subject_ura()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            DescriptorResolutionError::runtime_attachment_unavailable(
+                "remote descriptor catalogue SessionAuthority requires descriptor request subject_ura",
+            )
+        })?;
     if wire.payload.issuer_ura != caller_ura
         || wire.payload.callee_ura != callee_ura
         || wire.payload.subject_ura != subject_ura
@@ -8178,6 +8194,64 @@ mod tests {
         )
         .expect_err("SessionAuthority subject mismatch must fail closed");
         assert!(error.to_string().contains("does not bind"), "{error}");
+
+        let missing_callee_request = serde_json::json!({
+            "caller_ura": caller_ura,
+            "subject_ura": subject_ura,
+            "authority_metadata": {
+                crate::daemon::invocation::admission::authority_metadata::SESSION_AUTHORITY_METADATA_KEY: raw_authority,
+            },
+        });
+        let missing_callee_context = DescriptorCatalogReadContext::from_request(
+            missing_callee_request
+                .as_object()
+                .expect("missing-callee descriptor request object"),
+            "",
+        );
+        let error = admit_remote_descriptor_catalog_caller(
+            &session,
+            &runtime_owner_ura,
+            &caller_ura,
+            &missing_callee_context,
+            &query,
+            &signer,
+        )
+        .expect_err("SessionAuthority catalogue reads must require explicit callee_ura");
+        assert!(
+            error
+                .to_string()
+                .contains("requires descriptor request callee_ura"),
+            "{error}"
+        );
+
+        let missing_subject_request = serde_json::json!({
+            "caller_ura": caller_ura,
+            "callee_ura": caller_ura,
+            "authority_metadata": {
+                crate::daemon::invocation::admission::authority_metadata::SESSION_AUTHORITY_METADATA_KEY: raw_authority,
+            },
+        });
+        let missing_subject_context = DescriptorCatalogReadContext::from_request(
+            missing_subject_request
+                .as_object()
+                .expect("missing-subject descriptor request object"),
+            &caller_ura,
+        );
+        let error = admit_remote_descriptor_catalog_caller(
+            &session,
+            &runtime_owner_ura,
+            &caller_ura,
+            &missing_subject_context,
+            &query,
+            &signer,
+        )
+        .expect_err("SessionAuthority catalogue reads must require explicit subject_ura");
+        assert!(
+            error
+                .to_string()
+                .contains("requires descriptor request subject_ura"),
+            "{error}"
+        );
     }
 
     fn write_runtime_discovery(
