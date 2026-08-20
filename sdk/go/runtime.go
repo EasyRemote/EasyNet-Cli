@@ -1699,7 +1699,7 @@ func validateRuntimeReceiptAuthorityBindingShape(binding map[string]any, field s
 		return err
 	}
 	// Kind is the compound "<relation>+<evidence>" tag produced by the
-	// daemon's authority-binding JSON projection — see RFC
+	// runtime host's authority-binding JSON projection — see RFC
 	// 001-authority-binding-relation-evidence.md in EasyNet-Axon.
 	// "credential_of+attestation" is deliberately NOT a recognized kind
 	// here: it is reserved/inadmissible in v1, so it falls through to
@@ -1987,14 +1987,14 @@ func validateRuntimeReceiptCanonicalProofFacts(r RuntimeReceipt) error {
 	return nil
 }
 
-// runtimeReceiptAuthorityBinding parses the daemon's authority-binding JSON
+// runtimeReceiptAuthorityBinding parses the runtime host's authority-binding JSON
 // projection into the Axon Go SDK's AuthorityOrBootstrap shape. The "kind"
 // discriminator is the compound "<relation>+<evidence>" tag (e.g. "self+identity",
 // "delegated_by+delegation", "session_of+session"); Bootstrap stays a
 // separate top-level "bootstrap" kind — see RFC
 // 001-authority-binding-relation-evidence.md in EasyNet-Axon. Bare URA
 // strings on the wire (no profile sibling key) are parsed with
-// axoninv.ProfileStrictV2, matching axoninv.SelfAuthority's own
+// axoninv.ProfileStrictV2, matching the self+identity authority projection's
 // convention for the same case.
 func runtimeReceiptAuthorityBinding(value map[string]any, field string) (axoninv.AuthorityOrBootstrap, error) {
 	if value == nil {

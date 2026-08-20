@@ -1379,8 +1379,8 @@ if '"presented_pubkey_b64"' not in production:
 if "presented_pubkey_hex" in production:
     raise SystemExit("daemon catalog schema must not expose retired presented_pubkey_hex pin")
 PY
-  if ! rg -q 'canonical Agent, Device, or Authority URA' "$surface"; then
-    fail "descriptor validation error must describe canonical Authority owners"
+  if ! rg -q 'canonical Agent, Service, or Authority URA' "$surface"; then
+    fail "descriptor validation error must describe canonical Agent, Service, or Authority owners"
   fi
 }
 
