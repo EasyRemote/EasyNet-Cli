@@ -9,11 +9,17 @@ import pytest
 import easynet_sdk
 import easynet_sdk.runtime_ability as runtime_ability_module
 from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
-from easynet_sdk.authority import SESSION_AUTHORITY_METADATA_KEY, SessionAuthority
+from easynet_sdk.authority import (
+    DELEGATION_METADATA_KEY,
+    SESSION_AUTHORITY_METADATA_KEY,
+    DelegationProof,
+    SessionAuthority,
+)
 from easynet_sdk.errors import SDKError
 from easynet_sdk.bidi import BidiStreamDescriptor
 from easynet_sdk.runtime import RuntimeClient, RuntimeRecoveryRequest
 from easynet_sdk.runtime_ability import RuntimeAbilityClient, RuntimeCallContext
+from easynet_sdk.runtime_authority import LocalRuntimeAuthorityProvider
 
 from test_runtime import canonical_runtime_receipt_pair
 
@@ -189,6 +195,21 @@ def _client() -> tuple[RuntimeAbilityClient, RuntimeTransportFake]:
     )
 
 
+class _Signer:
+    def sign_canonical(self, canonical_bytes: bytes) -> bytes:
+        assert canonical_bytes
+        return bytes(range(64))
+
+
+def _authority() -> LocalRuntimeAuthorityProvider:
+    return LocalRuntimeAuthorityProvider(
+        AddressingClient(AxonAddressingTransport()),
+        signer_loader=lambda owner_ura: _Signer(),
+        clock_ms=lambda: 10_000,
+        authority_ttl_ms=60_000,
+    )
+
+
 def _call() -> RuntimeCallContext:
     return RuntimeCallContext(
         caller_ura="easynet:///r/example/agent/alice.client",
@@ -221,6 +242,32 @@ def test_runtime_ability_builds_complete_canonical_draft() -> None:
         == "easynet:///r/example/resource/user.alice/invoke/namespace.resolve"
     )
     assert draft.metadata == {"request_id": "call-1"}
+
+
+def test_runtime_ability_binds_local_user_authority_metadata() -> None:
+    transport = RuntimeTransportFake()
+    client = RuntimeAbilityClient(
+        RuntimeClient(transport),  # type: ignore[arg-type]
+        AddressingClient(AxonAddressingTransport()),
+        _authority(),
+    )
+    call = replace(
+        _call(),
+        caller_ura="easynet:///r/example/user/alice",
+        callee_ura="easynet:///r/example/agent/device.dev-a.runtime-introspection",
+        subject_ura="easynet:///r/example/user/alice",
+        metadata={},
+    )
+
+    draft = client.build(call, "namespace.resolve", {})
+
+    proof = DelegationProof.from_metadata(draft.metadata[DELEGATION_METADATA_KEY])
+    assert proof.caller_ura == call.caller_ura
+    assert proof.subject_ura == (
+        "easynet:///r/example/resource/user.alice/invoke/namespace.resolve"
+    )
+    assert proof.audience == call.callee_ura
+    assert proof.scopes == ("namespace.resolve",)
 
 
 def test_runtime_ability_descriptor_binds_authority_subject() -> None:

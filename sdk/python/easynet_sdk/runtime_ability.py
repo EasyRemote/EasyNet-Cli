@@ -36,6 +36,7 @@ from .runtime import (
     RuntimeRecoveryRequest,
     RuntimeClient,
 )
+from .runtime_authority import DraftAuthorityProvider
 from ._session_authority_subjects import session_authority_admits_subject
 from .signing import SignedInvocation
 from .stream import StreamHandle
@@ -141,13 +142,19 @@ class _RuntimeAbilityProjection:
 class RuntimeAbilityClient:
     """Single generic Addressing-to-Invocation lowering path."""
 
-    def __init__(self, runtime: RuntimeClient, addressing: AddressingClient) -> None:
+    def __init__(
+        self,
+        runtime: RuntimeClient,
+        addressing: AddressingClient,
+        authority: DraftAuthorityProvider | None = None,
+    ) -> None:
         if runtime is None:
             raise _invalid("runtime client is required")
         if addressing is None:
             raise _invalid("Addressing provider is required")
         self._runtime = runtime
         self._addressing = addressing
+        self._authority = authority
 
     def build(
         self, call: RuntimeCallContext, ability_name: str, arguments: object
@@ -193,7 +200,7 @@ class RuntimeAbilityClient:
             self._addressing.parse_ura(subject_ura),
             ability,
         )
-        return (
+        draft = (
             InvocationBuilder()
             .with_caller_ura(call.caller_ura.strip())
             .with_callee_ura(call.callee_ura.strip())
@@ -206,6 +213,7 @@ class RuntimeAbilityClient:
             .with_metadata(metadata)
             .build()
         )
+        return self._authority.bind(draft) if self._authority is not None else draft
 
     def _build_governance_read(
         self,
@@ -238,7 +246,12 @@ class RuntimeAbilityClient:
     def invoke(
         self, call: RuntimeCallContext, ability_name: str, arguments: object
     ) -> dict[str, object]:
-        result = self._runtime.invoke(self.build(call, ability_name, arguments))
+        return self.invoke_draft(self.build(call, ability_name, arguments))
+
+    def invoke_draft(self, draft: InvocationDraft) -> dict[str, object]:
+        """Submit one already-finalized draft without descriptor re-resolution."""
+
+        result = self._runtime.invoke(draft)
         if not result.ok:
             raise _invocation_failure(result)
         return _runtime_ability_object_output(result)
