@@ -570,7 +570,7 @@ pub fn list_abilities_input_schema() -> Value {
                 "type": "string",
                 "enum": ["local", "realm"],
                 "description":
-                    "`local` (default) returns device-owned abilities only. \
+                    "`local` (default) returns this runtime's SystemAgent- and Service-owned abilities. \
                      `realm` adds realm Authority-published abilities the realm Authority \
                      broadcast at join + heartbeat (RFC-001 v4.1.7)."
             },

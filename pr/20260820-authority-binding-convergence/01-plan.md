@@ -76,6 +76,12 @@ Close the remaining runtime authority/descriptor seams across EasyNet-Cli daemon
 - Fix: SDK canonical addressing now fails closed for Device-owned Ability URAs and directs callers to SystemAgent or Service owners. Low-level runtime parsing/migration behavior is not removed here; only the public SDK construction/projection seam is retired.
 - The same fixture now covers Service URA and Service-owned ability projection, so Pages-style `service.<principal>.pages.project.list` remains a first-class callable owner path.
 
+## Catalogue descriptor wording seam
+
+- Follow-up catalogue review found `meta.list_abilities` still described local catalogue scope as returning "device-owned abilities" in the committed TOML contract and the runtime input schema helper.
+- That wording was semantically wrong after the callable-owner migration: local catalogue rows are published by runtime SystemAgents and projected Services; Device remains host/custody/execution substrate.
+- Fix: both descriptor sources now describe local catalogue scope as SystemAgent- and Service-owned, and the convergence gate rejects the retired "device-owned abilities only" wording from the runtime schema.
+
 ## Verification
 
 - `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
@@ -106,6 +112,8 @@ Close the remaining runtime authority/descriptor seams across EasyNet-Cli daemon
 - `cargo test -q prune_stale_auto_screen_targets --features axon-pb`
 - `cargo test -q remote_target_refresh --features axon-pb`
 - `cargo test -q --test script_checks remoteapp`
+- `cargo test -q meta_list_abilities --features axon-pb`
+- `rg -n "device-owned abilities only|hub-published abilities|Device-owned metadata|Device-owned system ability" src ability-descriptors sdk tools/scripts/check-canonical-runtime-convergence-v2.sh tests/scripts/test_check_canonical_runtime_convergence_v2.sh -S` (only the convergence-gate rejection remains)
 - `cargo build --bin easynet --bin easynet-daemon`
 - restarted local daemon with rebuilt binaries and confirmed `runtime_status=running`, `connection.state=FRONTEND_CONNECTED`, `product_presence.directory_status=online`, `session_admitted=true`
 - parallel live decoded-frame E2E:

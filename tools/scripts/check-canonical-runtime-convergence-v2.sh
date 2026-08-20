@@ -15987,6 +15987,10 @@ if 'Value::String("authority:broadcast".to_string())' in realm_body:
     raise SystemExit("meta_list_abilities:descriptor_source_hash_mutation")
 if 'Value::String("hub:broadcast".to_string())' in realm_body:
     raise SystemExit("meta_list_abilities:retired_hub_broadcast_source")
+if "device-owned abilities only" in meta_production:
+    raise SystemExit("meta_list_abilities:retired_device_owned_scope_description")
+if "SystemAgent- and Service-owned abilities" not in meta_production:
+    raise SystemExit("meta_list_abilities:callable_owner_scope_description_missing")
 if "fn describe_hosted_agent_count(" not in meta_production:
     raise SystemExit("meta_describe:hosted_agent_count_helper_missing")
 if re.search(
