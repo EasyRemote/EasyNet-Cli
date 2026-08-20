@@ -3062,6 +3062,20 @@ fn real_browser_plugin_abilities_reach_handlers_without_launching_chrome() {
         "browser.capture_viewport must route to browser session gate; got {capture}"
     );
 
+    let capture_page = d
+        .execute_rpc(target_for_subject(
+            "browser.capture_page",
+            json!({}),
+            missing_session,
+        ))
+        .expect_err("browser.capture_page with a missing session must reach session gate");
+    assert!(
+        capture_page
+            .to_string()
+            .contains("browser_session_not_found"),
+        "browser.capture_page must route to browser session gate; got {capture_page}"
+    );
+
     let mut attach = target_for_subject("browser.attach_session", json!({}), missing_session);
     attach.call_mode = CallMode::Bidi;
     let attach = d
