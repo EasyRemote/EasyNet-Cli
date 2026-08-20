@@ -565,13 +565,13 @@ where
             output::info("Visit https://easynet.run or your Hub to create a pairing token,");
             output::info("then run 'easynet device join <token>' to pair this device.");
             output::info("If you're running a Hub, use 'easynet runtime start --as-hub' instead.");
-            anyhow::bail!("no credentials — cannot start device agent");
+            anyhow::bail!("no credentials — cannot start device runtime");
         }
         StartCredentialReadiness::Invalid { reason } => {
             output::info("Credentials invalid.");
             output::info("Run 'easynet device join <token>' to re-pair this device.");
             output::info("If you're running a Hub, use 'easynet runtime start --as-hub' instead.");
-            anyhow::bail!("invalid credentials — cannot start device agent: {reason}");
+            anyhow::bail!("invalid credentials — cannot start device runtime: {reason}");
         }
     };
 

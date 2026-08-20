@@ -17,6 +17,11 @@ if [[ "${1:-}" == "--self-test" ]]; then
   grep -q "generic C ABI v7" "$0"
   grep -q "typed terminal failure decoded" "$0"
   grep -q "RuntimeEventClient read live daemon handle events" "$0"
+  grep -q "def system_agent_callee(" "$0"
+  grep -q "with_callee_ura(callee_ura)" "$0"
+  grep -q "with_caller_ura(user_ura)" "$0"
+  awk 'BEGIN { needle = "callee_ura=" "device_ura," } NR > 35 && index($0, needle) { found = 1 } END { exit found ? 1 : 0 }' "$0"
+  awk 'BEGIN { needle = "caller_ura=" "device_ura," } NR > 35 && index($0, needle) { found = 1 } END { exit found ? 1 : 0 }' "$0"
   grep -q "select_python_bin" "$0"
   grep -q "using Python interpreter" "$0"
   grep -q "install uv/python3" "$0"
@@ -137,7 +142,9 @@ def write_hermetic_identity(smoke_home):
     state_dir.mkdir(parents=True, exist_ok=True)
     realm = "cli"
     device_id = "local"
+    user_id = "python-sdk-smoke-user-id"
     device_ura = f"easynet:///r/{realm}/device/{device_id}"
+    user_ura = f"easynet:///r/{realm}/user/{user_id}"
     invocation_socket = "~/.easynet/custom-invocation.sock"
 
     (state_dir / "credentials.json").write_text(
@@ -148,7 +155,7 @@ def write_hermetic_identity(smoke_home):
                 "hub_endpoint": "https://127.0.0.1:50443",
                 "realm": realm,
                 "username": "python-sdk-smoke-user",
-                "user_id": "python-sdk-smoke-user-id",
+                "user_id": user_id,
             },
             indent=2,
         )
@@ -175,25 +182,38 @@ added_at_unix_ms = 0
 ''',
         encoding="utf-8",
     )
-    return realm, device_id, device_ura, str(trust_path)
+    return realm, device_id, device_ura, user_ura, str(trust_path)
 
 
 def nonce(start):
     return base64.b64encode(bytes(range(start, start + 16))).decode("ascii")
 
 
-def draft(runtime, device_ura, ability, args, nonce_start, call_mode="rpc"):
+def system_agent_callee(realm, device_id, system_agent_id):
+    return f"easynet:///r/{realm}/agent/device.{device_id}.{system_agent_id}"
+
+
+def system_agent_id_for_ability(ability):
+    if ability == "observe.health":
+        return "runtime-health"
+    if ability == "session.attach":
+        return "session"
+    raise AssertionError(f"python SDK smoke does not know SystemAgent owner for {ability}")
+
+
+def draft(runtime, realm, device_id, user_ura, device_ura, ability, args, nonce_start, call_mode="rpc"):
+    callee_ura = system_agent_callee(realm, device_id, system_agent_id_for_ability(ability))
     descriptor_ref = runtime.resolve_descriptor_ref(
-        callee_ura=device_ura,
+        callee_ura=callee_ura,
         ability=ability,
         call_mode=call_mode,
-        caller_ura=device_ura,
+        caller_ura=user_ura,
         subject_ura=device_ura,
     )
     return (
         runtime.new_invocation()
-        .with_caller_ura(device_ura)
-        .with_callee_ura(device_ura)
+        .with_caller_ura(user_ura)
+        .with_callee_ura(callee_ura)
         .with_descriptor_ref(descriptor_ref)
         .with_subject_ura(device_ura)
         .with_nonce_base64(nonce(nonce_start))
@@ -205,7 +225,7 @@ def draft(runtime, device_ura, ability, args, nonce_start, call_mode="rpc"):
 
 
 smoke_home = os.environ["SMOKE_HOME"]
-realm, device_id, device_ura, trust_path = write_hermetic_identity(smoke_home)
+realm, device_id, device_ura, user_ura, trust_path = write_hermetic_identity(smoke_home)
 os.environ["HOME"] = smoke_home
 os.environ["EASYNET_REALM_TRUST_PATH"] = trust_path
 os.environ["EASYNET_PAGES_PORT"] = str(19000 + (os.getpid() % 1000))
@@ -238,7 +258,7 @@ try:
     assert health.ready(), health
 
     unary = runtime.invoke(
-        draft(runtime, device_ura, "observe.health", {"smoke": "python-sdk"}, 1)
+        draft(runtime, realm, device_id, user_ura, device_ura, "observe.health", {"smoke": "python-sdk"}, 1)
     )
     assert unary.ok is True, unary
     assert unary.terminal_state == "Completed", unary
@@ -249,10 +269,10 @@ try:
 
     try:
         runtime.resolve_descriptor_ref(
-            callee_ura=device_ura,
+            callee_ura=system_agent_callee(realm, device_id, "runtime-health"),
             ability="sdk.live_smoke_missing",
             call_mode="rpc",
-            caller_ura=device_ura,
+            caller_ura=user_ura,
             subject_ura=device_ura,
         )
         raise AssertionError("unknown ability unexpectedly resolved descriptor_ref")
@@ -263,6 +283,9 @@ try:
     prepared_failure, _ = runtime.prepare(
         draft(
             runtime,
+            realm,
+            device_id,
+            user_ura,
             device_ura,
             "observe.health",
             {"smoke": "python-sdk-terminal-failure"},
@@ -305,6 +328,9 @@ try:
     stream = runtime.invoke_stream(
         draft(
             runtime,
+            realm,
+            device_id,
+            user_ura,
             device_ura,
             "session.attach",
             {"session_id": "python-sdk-live-smoke-no-such-session"},

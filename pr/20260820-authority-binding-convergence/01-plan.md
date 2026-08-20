@@ -27,6 +27,12 @@ Close the remaining runtime authority/descriptor seams across EasyNet-Cli daemon
 - Rebuilt SDK conformance/public API models after authority-binding API migration.
 - Tightened convergence gates for callable owner kind projection, browser CDP descriptor count, package metadata, and authority binding facade consistency.
 - Fixed daemon boot/admission seams found while running gates.
+- Aligned Python SDK and FFI live smokes with the canonical invocation tuple:
+  - `callee_ura` resolves to the device-sponsored SystemAgent owner, not the Device.
+  - `caller_ura` uses the paired User principal for ordinary abilities, not the Device substrate.
+  - descriptor refs are resolved through `runtime_resolve_descriptor_ref` instead of hand-built ability URAs.
+- Updated FFI smoke for generic C ABI v7 lifecycle inputs (`edge`, `runtime_instance_id`, `runtime_bin`) and canonical stream frame projections.
+- Updated FFI `fs.transfer` bidi smoke to construct ResourceRefs against the daemon's actual `tmp` virtual root instead of smuggling host absolute paths.
 
 ## RemoteApp/parallel dirty-file review
 
@@ -42,12 +48,31 @@ Close the remaining runtime authority/descriptor seams across EasyNet-Cli daemon
 - Root cause: `resource.refresh_remote_targets` performed `load -> prune/upsert -> save` without a single resources-table transaction, and stale auto-prune rows ignored the declared live target freshness lease.
 - Fix: resource-table mutations now use an exclusive local file transaction, and remote target prune keeps recently observed live-refresh rows until their freshness TTL expires. This keeps frontend-selected application/window subjects stable through consent and session creation while still pruning expired stale rows.
 
+## SDK/FFI invocation tuple seam
+
+- Additional live smoke review found that both Python SDK and FFI smoke tests still encoded retired runtime assumptions:
+  - Device as ordinary ability callee.
+  - Device as ordinary ability caller.
+  - manual descriptor refs such as `ability/device.<id>.<ability>@1.0.0`.
+  - stale C ABI host-start field names.
+  - hand-built host filesystem ResourceRefs that did not share the daemon's virtual-root environment.
+- These were architecture seams because they would have preserved the old “Device owns/calls abilities” model in executable contract tests even after daemon/runtime enforcement had moved to Principal + SystemAgent semantics.
+- Fix: executable smoke tests now prove the canonical tuple end-to-end:
+  - User principal caller.
+  - device-sponsored SystemAgent callee.
+  - Device only as subject/resource owner/execution host where appropriate.
+  - descriptor refs resolved from the committed runtime catalog.
+  - `fs.transfer` ResourceRefs scoped through the daemon-local `tmp` virtual root.
+
 ## Verification
 
 - `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
 - `bash tools/scripts/check-sdk-product-neutrality.sh`
 - `bash tools/scripts/check-sdk-canonical-public-api.sh`
 - `bash tools/scripts/check-sdk-package-metadata.sh`
+- `bash tools/scripts/python-sdk-live-smoke.sh --self-test`
+- `bash tools/scripts/python-sdk-live-smoke.sh`
+- `bash tools/scripts/ffi-smoke.sh`
 - `bash tools/scripts/check-sdk-package-metadata.sh --self-test`
 - `bash tests/scripts/test_check_sdk_cutover_readiness.sh`
 - `bash tests/scripts/test_check_browser_cdp_axon_boundary.sh`
