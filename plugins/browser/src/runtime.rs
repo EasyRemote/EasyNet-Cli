@@ -397,7 +397,10 @@ impl OpenSessionRequest {
         }
         Ok(Self {
             url,
-            headless: optional_bool(object, "headless", false)?,
+            // Remote sessions render into the screencast/attach pipeline; popping a
+            // visible window on the target machine's desktop is the exception
+            // (browser.show_session exists for that), not the default.
+            headless: optional_bool(object, "headless", true)?,
             cdp_endpoint: optional_string(object, "cdp_endpoint")?,
             executable_path: optional_string(object, "executable_path")?,
             profile: optional_string(object, "profile")?,

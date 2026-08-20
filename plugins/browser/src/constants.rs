@@ -34,7 +34,12 @@ pub const PUBLIC_ABILITIES: [&str; 6] = [
 
 pub const DEFAULT_VIEWPORT_WIDTH: u32 = 1280;
 pub const DEFAULT_VIEWPORT_HEIGHT: u32 = 800;
-pub const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 1800;
+// Two minutes, not thirty: every session owns a real Chrome process tree on
+// the host. Abandoned sessions (page reloads, retries, crashed viewers)
+// accumulate fast during interactive use, and dozens of idle Chromes starve
+// the machine long before a 30-minute reaper would fire. Callers that need
+// long-lived sessions pass idle_timeout_seconds explicitly.
+pub const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 120;
 pub const MIN_IDLE_TIMEOUT_SECONDS: u64 = 60;
 pub const MAX_IDLE_TIMEOUT_SECONDS: u64 = 7200;
 pub const CDP_PENDING_BOUND: usize = 256;
