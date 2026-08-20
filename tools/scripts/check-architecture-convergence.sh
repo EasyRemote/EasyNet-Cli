@@ -51,7 +51,7 @@ required_roots = (
     cli_root / "src/daemon/ability/builtins/automation",
     cli_root / "src/daemon/ability/builtins/agents/chat.rs",
     cli_root / "sdk",
-    axon_root / "core/runtime-rs/src/services/invocation",
+    axon_root / "core/runtime-rs/src",
     axon_root / "sdk/rust/src",
 )
 missing = [str(path) for path in required_roots if not path.exists()]
@@ -597,11 +597,16 @@ if not all(owner_contract):
         "InvocationCore must own proof emission and terminal side effects",
     )
 
-axon_invocation = axon_root / "core/runtime-rs/src/services/invocation"
+axon_invocation_candidates = (
+    axon_root / "core/runtime-rs/src/services/invocation",
+    axon_root / "core/runtime-rs/src/services",
+)
 receipt_factory = axon_root / "sdk/rust/src/invocation/receipt_provider.rs"
 terminal_scan_files = production_files(cli_root / "src/daemon/invocation", {".rs"})
-if axon_invocation.exists():
-    terminal_scan_files += production_files(axon_invocation, {".rs"})
+for axon_invocation_root in axon_invocation_candidates:
+    if axon_invocation_root.exists():
+        terminal_scan_files += production_files(axon_invocation_root, {".rs"})
+        break
 writer_name = re.compile(
     r"\bfn\s+(?:build|emit|mint|write|persist|commit)_[A-Za-z0-9_]*terminal[A-Za-z0-9_]*receipt[A-Za-z0-9_]*\s*\("
 )
