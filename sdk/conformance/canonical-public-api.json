@@ -1144,6 +1144,7 @@
       "DirectorySubscription",
       "DirectorySubscriptionState",
       "DiscoveryTransport",
+      "DraftAuthorityProvider",
       "Endpoints",
       "EnrollmentCapability",
       "ErrorClass",
@@ -1176,6 +1177,7 @@
       "InvocationWireProjector",
       "IssueEnrollmentRequest",
       "IssueGrantRequest",
+      "LocalRuntimeAuthorityProvider",
       "MAX_BIDI_BUFFERED_FRAMES",
       "MAX_DIRECTORY_PAGE_LIMIT",
       "MAX_MANAGED_SIGNING_AUTO_ITEMS",
@@ -1350,6 +1352,7 @@
       "profile_source_ref",
       "project_ability_descriptor",
       "project_descriptor_ref",
+      "read_paired_runtime_identity_projection",
       "read_runtime_control_discovery",
       "read_runtime_identity_projection",
       "receipt_read_call_context",
@@ -3504,6 +3507,7 @@
       "AbilityDescriptorRef.raw",
       "AbilityDescriptorRef.version",
       "AbilityInvocationClient.addressing",
+      "AbilityInvocationClient.authority",
       "AbilityInvocationClient.await_result",
       "AbilityInvocationClient.bidi",
       "AbilityInvocationClient.bidi_target",
@@ -4128,6 +4132,7 @@
       "DirectorySubscriptionState.SNAPSHOTTING",
       "DiscoveryTransport.close",
       "DiscoveryTransport.feature_discovery",
+      "DraftAuthorityProvider.bind",
       "Endpoints.control_endpoint",
       "Endpoints.from_json",
       "Endpoints.invocation_endpoint",
@@ -4411,6 +4416,7 @@
       "IssueGrantRequest.command",
       "IssueGrantRequest.expires_unix_ms",
       "IssueGrantRequest.principal_ura",
+      "LocalRuntimeAuthorityProvider.bind",
       "ManagedSigner.key",
       "ManagedSigner.key_id",
       "ManagedSigner.public_key",
@@ -4419,6 +4425,7 @@
       "ManagedSigner.signing_public_key",
       "ManagedSigner.socket_path",
       "ManagedSigner.timeout_seconds",
+      "ManagedSigningClient.active_signer_for_subject",
       "ManagedSigningClient.add_peer",
       "ManagedSigningClient.bind_subject",
       "ManagedSigningClient.create",
@@ -4645,6 +4652,7 @@
       "RuntimeAbilityClient.close_handle",
       "RuntimeAbilityClient.events",
       "RuntimeAbilityClient.invoke",
+      "RuntimeAbilityClient.invoke_draft",
       "RuntimeAbilityClient.open_bidi",
       "RuntimeAbilityClient.open_stream",
       "RuntimeAbilityClient.recover",
@@ -4824,6 +4832,7 @@
       "RuntimeHostStartRequest.validate",
       "RuntimeIdentityProjection.control_plane_endpoint",
       "RuntimeIdentityProjection.principal",
+      "RuntimeIdentityProjection.principal_display_name",
       "RuntimeIdentityProjection.realm",
       "RuntimeIdentityProjection.runtime_instance_id",
       "RuntimeInvocationTransport.bidi",
@@ -5063,7 +5072,9 @@
       "SdkEnvironment.invocation_transport",
       "SdkEnvironment.invocation_transport_direct",
       "SdkEnvironment.library_path",
+      "SdkEnvironment.local_runtime_authority_provider",
       "SdkEnvironment.native_runtime",
+      "SdkEnvironment.paired_runtime_identity_projection",
       "SdkEnvironment.resolved_control_path",
       "SdkEnvironment.runtime_client",
       "SdkEnvironment.runtime_client_direct",
@@ -7784,6 +7795,7 @@
           "AbilityChildContext.stream_target",
           "AbilityChildContext.target_request",
           "AbilityInvocationClient.addressing",
+          "AbilityInvocationClient.authority",
           "AbilityInvocationClient.await_result",
           "AbilityInvocationClient.bidi",
           "AbilityInvocationClient.bidi_target",
@@ -7838,6 +7850,7 @@
           "RuntimeAbilityClient.cancel",
           "RuntimeAbilityClient.close_handle",
           "RuntimeAbilityClient.events",
+          "RuntimeAbilityClient.invoke_draft",
           "RuntimeAbilityClient.open_bidi",
           "RuntimeAbilityClient.recover",
           "RuntimeAbilityClient.submit_signed",
@@ -8723,6 +8736,8 @@
           "DELEGATION_METADATA_KEY",
           "DelegationProof",
           "DelegationRequest",
+          "DraftAuthorityProvider",
+          "LocalRuntimeAuthorityProvider",
           "ReceiptHistoryAuthorityScopeProvider",
           "RuntimeInvocationAuthority",
           "SESSION_AUTHORITY_METADATA_KEY",
@@ -8784,6 +8799,8 @@
           "DelegationRequest.metadata",
           "DelegationRequest.scopes",
           "DelegationRequest.subject_ura",
+          "DraftAuthorityProvider.bind",
+          "LocalRuntimeAuthorityProvider.bind",
           "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
           "SessionAuthority.allowed_actions",
           "SessionAuthority.allowed_followup_abilities",
@@ -10532,6 +10549,7 @@
           "ManagedSigner.signing_public_key",
           "ManagedSigner.socket_path",
           "ManagedSigner.timeout_seconds",
+          "ManagedSigningClient.active_signer_for_subject",
           "ManagedSigningClient.add_peer",
           "ManagedSigningClient.bind_subject",
           "ManagedSigningClient.create",
@@ -12496,7 +12514,9 @@
           "SdkEnvironment.invocation_transport",
           "SdkEnvironment.invocation_transport_direct",
           "SdkEnvironment.library_path",
+          "SdkEnvironment.local_runtime_authority_provider",
           "SdkEnvironment.native_runtime",
+          "SdkEnvironment.paired_runtime_identity_projection",
           "SdkEnvironment.resolved_control_path",
           "SdkEnvironment.runtime_client",
           "SdkEnvironment.runtime_client_direct",
@@ -12959,6 +12979,7 @@
           "RuntimeIdentityProjection",
           "SignerHandle",
           "StaticCallerIdentityProvider",
+          "read_paired_runtime_identity_projection",
           "read_runtime_identity_projection",
           "runtime_credentials_path",
           "runtime_identity_projection_from_json",
@@ -12969,6 +12990,7 @@
           "IdentityProvider.caller_identity",
           "RuntimeIdentityProjection.control_plane_endpoint",
           "RuntimeIdentityProjection.principal",
+          "RuntimeIdentityProjection.principal_display_name",
           "RuntimeIdentityProjection.realm",
           "RuntimeIdentityProjection.runtime_instance_id",
           "SignerHandle.algorithm",
@@ -14924,7 +14946,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "879ea1f5b03a9178389ecbaf91403699cd5dfe569a0fc9aa69af81320760b7e5",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -14976,7 +14998,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "40579d1752829b206c9b7c254e83265bb748de0116497ce34772b35bb030d858",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -15030,7 +15052,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "879ea1f5b03a9178389ecbaf91403699cd5dfe569a0fc9aa69af81320760b7e5",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -15072,7 +15094,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "40579d1752829b206c9b7c254e83265bb748de0116497ce34772b35bb030d858",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -15116,7 +15138,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "879ea1f5b03a9178389ecbaf91403699cd5dfe569a0fc9aa69af81320760b7e5",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -15168,7 +15190,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "40579d1752829b206c9b7c254e83265bb748de0116497ce34772b35bb030d858",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -15222,7 +15244,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "879ea1f5b03a9178389ecbaf91403699cd5dfe569a0fc9aa69af81320760b7e5",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -15299,7 +15321,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "40579d1752829b206c9b7c254e83265bb748de0116497ce34772b35bb030d858",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -15378,7 +15400,7 @@
           "path": "sdk/go/cabi_runtime.go",
           "sha256": "80d04099685bd8a4cfaab1b0867a4b3ed489ee2cb6005e15a5d5ee8eac423245",
           "interface": "RuntimeTransport",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -15475,7 +15497,7 @@
           "path": "sdk/python/easynet_sdk/_cabi.py",
           "sha256": "e044f0f41ccb3b3ffb695bbcfb41fd60fdbbc864faae547b1dd2c22a6841b54c",
           "interface": "CABIRuntimeTransport",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -15574,7 +15596,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "879ea1f5b03a9178389ecbaf91403699cd5dfe569a0fc9aa69af81320760b7e5",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -15651,7 +15673,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "40579d1752829b206c9b7c254e83265bb748de0116497ce34772b35bb030d858",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -15730,7 +15752,7 @@
           "path": "sdk/go/cabi_runtime.go",
           "sha256": "80d04099685bd8a4cfaab1b0867a4b3ed489ee2cb6005e15a5d5ee8eac423245",
           "interface": "RuntimeTransport",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -15852,7 +15874,7 @@
           "path": "sdk/python/easynet_sdk/_cabi.py",
           "sha256": "e044f0f41ccb3b3ffb695bbcfb41fd60fdbbc864faae547b1dd2c22a6841b54c",
           "interface": "CABIRuntimeTransport",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -15976,7 +15998,7 @@
           "path": "sdk/go/runtime_ability.go",
           "sha256": "0b2a775b473f000e50136c0a312d088e078c3842d96d2db35c59c74acce8648b",
           "interface": "RuntimeAbilityClient",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -16101,9 +16123,9 @@
           "identity": "ability_invocation_facade",
           "owner_path": "sdk/python/easynet_sdk/",
           "path": "sdk/python/easynet_sdk/ability_invocation.py",
-          "sha256": "11780406d28b1086b065fb9a38856e3b66666814b6b938164176b808c153f028",
+          "sha256": "def7a13e8df98d5b60651d3928784eb20444846e0bfe28d81568bad19f3694fb",
           "interface": "AbilityInvocationClient",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -16232,7 +16254,7 @@
           "path": "sdk/go/direct_runtime.go",
           "sha256": "879ea1f5b03a9178389ecbaf91403699cd5dfe569a0fc9aa69af81320760b7e5",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -16274,7 +16296,7 @@
           "path": "sdk/python/easynet_sdk/providers/runtime/direct.py",
           "sha256": "40579d1752829b206c9b7c254e83265bb748de0116497ce34772b35bb030d858",
           "interface": "RuntimeConnector",
-          "revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+          "revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
         },
         "step_evidence": [
           {
@@ -19162,13 +19184,14 @@
       "AbilityDescriptorRef.descriptor_hash": "86836a48aae0ad14a6efb4476b17a31454e89a3df57477faf4338abf7fde6b27",
       "AbilityDescriptorRef.raw": "f575b575d8f4875502c1f79820ccb96cbacc838e2c4c7ede57cea69a0c47b428",
       "AbilityDescriptorRef.version": "5e6df7a0b7e0469f5ce1cf5cef7a691a203348de3d6fb02287ae361f9294620d",
-      "AbilityInvocationClient": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf",
+      "AbilityInvocationClient": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3",
       "AbilityInvocationClient.addressing": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c",
+      "AbilityInvocationClient.authority": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0",
       "AbilityInvocationClient.await_result": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab",
       "AbilityInvocationClient.bidi": "f66ea52e5a80ddaf0aa90ed28b7be9af285132d481f9938f4f7fc6452c2d8440",
       "AbilityInvocationClient.bidi_target": "85ae5de42f7f96b2ab9a727a54923bdc505a3cb98b5b689ffd070eaa42576335",
-      "AbilityInvocationClient.build_invocation": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a",
-      "AbilityInvocationClient.build_target_invocation": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a",
+      "AbilityInvocationClient.build_invocation": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81",
+      "AbilityInvocationClient.build_target_invocation": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f",
       "AbilityInvocationClient.cancel": "8d0f58b6d7519bcf73064c6cec1d87a1cb1369542ea3047ed1c5a404e462779b",
       "AbilityInvocationClient.child_context": "b196cf57f11368f820d182e65216deec4614a0e2f9c193c711b22c01ce042ce2",
       "AbilityInvocationClient.close": "083587c038ab5217171e8b97a83957341013b6091d144f85d274f08f48b1689f",
@@ -19886,6 +19909,8 @@
       "DiscoveryTransport": "1d2aeeb921289f7df6875b5c928d88b0d829452d9a630f13f037274e68162e46",
       "DiscoveryTransport.close": "1a4f81a57310e03d2e36556a2a6644d05b6c80c70462552c49c9368e7c7fa2c0",
       "DiscoveryTransport.feature_discovery": "6be4ab626397820324d792c03106905779402abd7a3502718580520f0177f2db",
+      "DraftAuthorityProvider": "e607cb4b7a986781fa631f87c9ad2007a51ed43b7cb9bc0b797bd6df8fbba4a0",
+      "DraftAuthorityProvider.bind": "3536761904f9f519193251805f71dc71f4ffcfbd56e25db6d455aacb41e5ae23",
       "Endpoints": "503ecfd4b97c7472618e8eda4814976d26f9de7c6adaabecf94aed7170f65283",
       "Endpoints.control_endpoint": "381451626c1ef403bbd12dd4928693f36e56f0efc0796690870193ebaeab3544",
       "Endpoints.from_json": "6cb577564d8723bf18e1830044cbec884c48591d078e8154caea15cc4d388a61",
@@ -20201,6 +20226,8 @@
       "IssueGrantRequest.command": "2a7eb00639ba9b5d88f0c748b5502d8db1c99dd2f18641baedfdee4d55974b1c",
       "IssueGrantRequest.expires_unix_ms": "e9d63ea032f56dfde0cecf5b4af15665fe101db8f82482b2b2e636fbd48630ab",
       "IssueGrantRequest.principal_ura": "4bb3bb8f0394d8fd3b826b391ab9cf57c98a4daed72f82a5bce1518a3593aff7",
+      "LocalRuntimeAuthorityProvider": "adfb1431a081349f9ed768e5e7a0781e7a4131b6edd2670e52e6d4ed4f6a669b",
+      "LocalRuntimeAuthorityProvider.bind": "69273a4881cd3c1ae6cf606a8fc89c7c89bfad9d36b4cce21cdec540eb3cde68",
       "MAX_BIDI_BUFFERED_FRAMES": "2a098da7e45d6beefb6d8368e6535768339b10aeb0b208c39f4dd1b565182d22",
       "MAX_DIRECTORY_PAGE_LIMIT": "00b2d0e4e4ad2aea620e8a4b35abd1915344305aa3aedf2c3bd30fb6678941b7",
       "MAX_MANAGED_SIGNING_AUTO_ITEMS": "773ffc8dc1eaf771b63cf8f239ea05af570521cae3d8de7019e72fb836f19f94",
@@ -20218,7 +20245,8 @@
       "ManagedSigner.signing_public_key": "b2f01cf3874f596afc1df58aedf32108dbfa8d6250bcdc5a87d7908468d092cf",
       "ManagedSigner.socket_path": "7932d97cc804ad5e044dc95896ec964113b4deca2ca98b73ae12f2e1a073f46a",
       "ManagedSigner.timeout_seconds": "e7ae5d4664552e5b66b88593a70dc1a9253ce75cc03643960b1ccbed84deb0af",
-      "ManagedSigningClient": "67514d0b83f70306b5144ec19f7440b12482892c2b87d00ece3014e695fcda9d",
+      "ManagedSigningClient": "b8f3cb4ac1c2ae4d3bc48b8579bc84f660ea4ff92f8ab058ae93b2183f08a63c",
+      "ManagedSigningClient.active_signer_for_subject": "6d7cafb1a5d0b4b26c1f324d69d4437cafef917841eab0d4d18ab7fe5b5e83bb",
       "ManagedSigningClient.add_peer": "083502670edd47d5ad727d7baa3f07bbe0bebeb1a582c6cceaa92d8618f948b1",
       "ManagedSigningClient.bind_subject": "a9a5c3959c3c41c0decd877f56c6e71d6606c774ffd40e9a54928252b78ed70b",
       "ManagedSigningClient.create": "6f1710f263f363a2bdfc50f41298cedb37b694aa4e6d2bf1445b9f87f80634e1",
@@ -20277,8 +20305,8 @@
       "ManagedSigningStatus.ACTIVE": "802aeefed026a472b61a600a181eb1d6588759a8511b6abb384f38981b01fe96",
       "ManagedSigningStatus.RETIRED": "f61443635dc2185a4b636dc8e4e99a9c2e19787eec22aa696f27da1a51c05eb0",
       "ManagedSigningStatus.REVOKED": "6cc71dd5a06ac8f514e7207845939fad7bcd725482da21b652888e93f076fc76",
-      "NativeRuntimeHandle": "ac233c1cb5141e3b64d5ad0aff3d8d4aadb1254010198f35d6bad77eb81b2d7e",
-      "NativeRuntimeHandle.ability_client": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0",
+      "NativeRuntimeHandle": "c56127d9b6f408575e114f5124a8be3214554b9dce0a907446bb3307d9af9b84",
+      "NativeRuntimeHandle.ability_client": "05990fa2656245b17f090e3f04b0647afd8abcf9157aad435cacfd9474829182",
       "NativeRuntimeHandle.addressing": "fb557bf3087230dfc317e3696f60449a7d04ac5b706de8e4cec08d1239f9abcf",
       "NativeRuntimeHandle.client": "1efdf56bf9d9847ad3f9b64e41bfdc33a08c2778e6596e576d9e73fcb9b3d04b",
       "NativeRuntimeHandle.close": "1e4366611790877a3ea6d4704439ee92e1375251d1fb7239e9e79aad09104279",
@@ -20482,13 +20510,14 @@
       "RotatePrincipalKeyRequest.command": "2a7eb00639ba9b5d88f0c748b5502d8db1c99dd2f18641baedfdee4d55974b1c",
       "RotatePrincipalKeyRequest.principal_ura": "4bb3bb8f0394d8fd3b826b391ab9cf57c98a4daed72f82a5bce1518a3593aff7",
       "RotatePrincipalKeyRequest.replacement": "c59f920234088b53e9f54c134505c6f01222a0c6d7de1fdc0b2e7d294436240a",
-      "RuntimeAbilityClient": "028d41fed8ed475b2d856ef926458e212037815ff5b9d0a70fe0d0f35947a02d",
+      "RuntimeAbilityClient": "31434b21f9d99b95cfabc2af439cf56aba33bd57de15d6c3f623c7ce68f85d79",
       "RuntimeAbilityClient.await_result": "c24f91cdaf2e1391f583015307f694a74688998ed98c83baa59367826f6b2c36",
       "RuntimeAbilityClient.build": "f4964e82331e4ec224b518a3a4b23163946d1549e82cf41b26a8b118695bc038",
       "RuntimeAbilityClient.cancel": "94a3aa890b237a5b9a67496ae4af74f6109ab571363a20aa7d4b584d6405eae5",
       "RuntimeAbilityClient.close_handle": "d4707f1d80fea0ae1060eb4be3a6de62f5cb7d0dc07ef8e26dcbc44b13525213",
       "RuntimeAbilityClient.events": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d",
-      "RuntimeAbilityClient.invoke": "b75bb0a59af4240abc0f73417bdbbcc526741fcb6ad8168e62461bc319929484",
+      "RuntimeAbilityClient.invoke": "94560b28a67c8221eed47d8e6f5d9b3f6184c8f4401dd2ca8931856bff265e88",
+      "RuntimeAbilityClient.invoke_draft": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876",
       "RuntimeAbilityClient.open_bidi": "c111906126409bc2e862355026efa42053afa73aa9aa2b9ec7e10b954717c858",
       "RuntimeAbilityClient.open_stream": "baf7120016f3e61f5861cc5850f68af57904009f1fd1e52b584601106d20b729",
       "RuntimeAbilityClient.recover": "90ce1c57dd73c2d7f277519583751695a90c8a4dd9db648fc4c053c7a1ddf4ee",
@@ -20699,9 +20728,10 @@
       "RuntimeHostStartRequest": "0bcb88d9e4020b925a954b108205d29f487408067a1d8508284a43e5846f6f0e",
       "RuntimeHostStartRequest.to_json_bytes": "41323189167c1252a3e10d47f15191351f644bd6132aea429694c237b7311de8",
       "RuntimeHostStartRequest.validate": "949fde048c2b1f2ef78ceaf28c2f1fd7de7185d2b8deb1230ec4ac316f74180d",
-      "RuntimeIdentityProjection": "029857a0acb9ae5ec05ddecbd54662a99abf94842d1b17fcef07864bcf17299a",
+      "RuntimeIdentityProjection": "34a2e7e9c737ca5ab59518e828fc81e914b7f6c44b566f49421d8a8bdb5ace1a",
       "RuntimeIdentityProjection.control_plane_endpoint": "be5195182f2d28412dd4946fb1c181a5560c2bfb8978b878de191d916daa8988",
       "RuntimeIdentityProjection.principal": "78d8aa7d857a0d411ebb292db83ce7185fea83624011ca06e517f38b4c07dec8",
+      "RuntimeIdentityProjection.principal_display_name": "e54d37cdbc37d875ca2e35430d978f52d3077a83b157b7ec4e33f1dca7573b74",
       "RuntimeIdentityProjection.realm": "0a3d7b981b82a1edb44838b24f850004aa388144dac7bb232b9ce89150822d77",
       "RuntimeIdentityProjection.runtime_instance_id": "5e8da839f8063ae2bc96c1aa382338fe83ac8535fd2b293fd9038f5f59df3acd",
       "RuntimeInvocationAuthority": "c10f6f372783544cd3c2ba186fbd994b2b1d54060757c0aa7c567e1dd0658939",
@@ -20946,7 +20976,7 @@
       "RuntimeTransport.open_stream": "070194a4538da6f0072f5af93385ab9a1cc2d24ea35be197bfe0d9929cea4c82",
       "RuntimeTransport.prepare": "4e164ac20489c4dcae5817d8f6f69039f948732e32eec1d1541d2801310f4ecf",
       "RuntimeTransport.submit_signed": "3e2bedd8582d6a283a1fa02d191316c06956b72a4165b62a6af5dd9bc7725869",
-      "SDKError": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743",
+      "SDKError": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6",
       "SDKError.cause": "0b68b21e058bb77b2102ae80cf509507d6e0a43319e77f8fe0edba39d2e705c8",
       "SDKError.code": "6964dd07158b78475373a6e214cc4a6b3e428792c525697af05451cc0879fd45",
       "SDKError.details": "9904f4302123f7b3e3932325bb3137137c30f32ba3922064f7c84b9138066109",
@@ -20962,8 +20992,8 @@
       "SDKError.source_ref": "fa58a379b962fc590c976789c8fb8cbb968f0a1305b24f6623f16567984e9bd1",
       "SDKError.stage": "8de6c67a6a5fce1debb9a33593857a48da49a61b26d4a3e08b61d3d4f5621cd7",
       "SESSION_AUTHORITY_METADATA_KEY": "68e4a16e5b13c9e5bfae50b1e42182d6b777a5e96474049841f2d15c736ada6e",
-      "SdkEnvironment": "365e3b8955d8e386542b251c40f4d959716ccf34a4c03f70c3a93683ff27054b",
-      "SdkEnvironment.ability_invocation_client": "f47b3671b4b8b8e41b688b74212a584bc462f52d9696c21e12fd3de3524a2afb",
+      "SdkEnvironment": "68bf1822dd2bec503b52fc97e7999f7f2e77217152247273d48ddc4ab362416c",
+      "SdkEnvironment.ability_invocation_client": "1f68d2bb3a195919b03b4916b9b461e4f72804d42ddb18f7b59ab15f91ef99fe",
       "SdkEnvironment.addressing_client": "a0c9cf052c5d9c91d2f52045681ae7e54e155492d263dd68fed3c585e2a5d046",
       "SdkEnvironment.client": "86f07d3aaedda3ccf88479a9b921acbf0f657f0c482bfe911ffeb1dfdc4c4ccf",
       "SdkEnvironment.close": "671c4534682c492f1c3cb0544b56a74cc69fe5eedd7e0c47c368a123f1b36fcd",
@@ -20974,7 +21004,9 @@
       "SdkEnvironment.invocation_transport": "8379abfc80df250f0d8dc75fc4363a032ac1ba2bb4caa4f6bb680c287ca63903",
       "SdkEnvironment.invocation_transport_direct": "cb90364f633a5508271ce1a186f0a41f90c453853a7d8535582bfd35264c880a",
       "SdkEnvironment.library_path": "1a560110d65f07c5ff70c428d1bc68b0268046e632b77809001b6fcb070ac342",
-      "SdkEnvironment.native_runtime": "860a69d6291c505472e0bc1daa2f274256bc7deb3111340f4522aac163c0cfce",
+      "SdkEnvironment.local_runtime_authority_provider": "6fc42374757db95976d7bad1ad5d370bfff1b57f9d8c0def965fec9b649960fd",
+      "SdkEnvironment.native_runtime": "49000c736eba3bca0fc3b7ab5f9c6441b81ca45dc42ace25defe25b9635a539a",
+      "SdkEnvironment.paired_runtime_identity_projection": "0405ffaab63679887c945b33626fbe3a6b686b0e7c1fd83644dc49eba6182da0",
       "SdkEnvironment.resolved_control_path": "478fd8dfd7f90136169cfc1c56bbbe921ea6541965672ef5f6a44a7ea98eff9e",
       "SdkEnvironment.runtime_client": "5709ee3c5aea42588d89cfeedc553880d371eff5886c4c2424f803702ef84634",
       "SdkEnvironment.runtime_client_direct": "59c35f3594fffa6c97e596539c1f2e222b64e67b9d38280f43006775899c692f",
@@ -21191,6 +21223,7 @@
       "profile_source_ref": "da6b1b2f0f183291bfc844994a060602d341d7ebc468e9d0c8997cffd8f2936c",
       "project_ability_descriptor": "c649b07990bd1b8d743797435dda81d4c1a5abf1be6d149b55b1397d69942511",
       "project_descriptor_ref": "2049bd597bc2126054ec2d65688332af034698ea65643594c0e9fa8c7e996178",
+      "read_paired_runtime_identity_projection": "9bea6ab6855eeb1addbfe7b6fe291cb1094c2163c51a5e2dbc8c750276e56bc4",
       "read_runtime_control_discovery": "e782a15fa33b528dba74c6313e3282f7109d5a24946f3a3543a624ac6698287a",
       "read_runtime_identity_projection": "2cb1ed29c80c0cc687a2aad79d30279cd4477cd4adcc7c9c5375662a3d74ba72",
       "receipt_read_call_context": "ff2ff7c8618f590977dc2c4933fdadde368722b5840c98dc6d41ef6651b02333",
@@ -21198,7 +21231,7 @@
       "retryable_for_hint": "a40a2da8049667e10c4c894f7520a59e71afbfce282f40eb308cb9968d49a6cd",
       "runtime_credentials_path": "6c1ae4611dddb961afae5da922282a2cd85bf764e353fc97e164267305969291",
       "runtime_governance_read_subject_ura": "46ea4c5f3934db8d9d5e224244669693d76a31b38d95b7b78c8af55daec94890",
-      "runtime_identity_projection_from_json": "6d22b91fad55114822714b056418dd320d66c714ae81ac824d11d045c70fa5ce",
+      "runtime_identity_projection_from_json": "3dca1a22ee237fc6176c65cf0f218d41b1ade7bb283826aa5a2529c4bf9e1d0c",
       "runtime_state_read_subject_ura": "01f174c86edc9af06c5588ef3ce964604b1f52d0e8b5fe7172ee4bfcd2c3ca99",
       "runtime_state_root": "11d059c666917fdd1c911d85554303f9280be712e3daa81967c7965acf3648e0",
       "service_ability_ura": "bc27fa2534b518e751e7a1fefabebe1cb8bdb5eef41bb5d57efa15c0de251bd6",
@@ -23594,7 +23627,7 @@
     }
   ],
   "dependency_revisions": {
-    "axon_sdk": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+    "axon_sdk": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
   },
   "provider_implementations": [
     {
@@ -23615,7 +23648,7 @@
         "terminal_receipt_facts",
         "unary_invoke"
       ],
-      "axon_revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+      "axon_revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
     },
     {
       "language": "python",
@@ -23635,7 +23668,7 @@
         "terminal_receipt_facts",
         "unary_invoke"
       ],
-      "axon_revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+      "axon_revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
     },
     {
       "language": "go",
@@ -23651,7 +23684,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+      "axon_revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
     },
     {
       "language": "python",
@@ -23667,7 +23700,7 @@
         "stream",
         "bidi"
       ],
-      "axon_revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+      "axon_revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
     },
     {
       "language": "go",
@@ -23682,7 +23715,7 @@
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+      "axon_revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
     },
     {
       "language": "python",
@@ -23690,21 +23723,21 @@
       "production_owner": "canonical runtime provider",
       "owner_path": "sdk/python/easynet_sdk/",
       "path": "sdk/python/easynet_sdk/ability_invocation.py",
-      "sha256": "11780406d28b1086b065fb9a38856e3b66666814b6b938164176b808c153f028",
+      "sha256": "def7a13e8df98d5b60651d3928784eb20444846e0bfe28d81568bad19f3694fb",
       "interface": "AbilityInvocationClient",
       "interface_path": "sdk/python/easynet_sdk/ability_invocation.py",
-      "interface_sha256": "11780406d28b1086b065fb9a38856e3b66666814b6b938164176b808c153f028",
+      "interface_sha256": "def7a13e8df98d5b60651d3928784eb20444846e0bfe28d81568bad19f3694fb",
       "capability_ids": [
         "ability_invocation_facade"
       ],
-      "axon_revision": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2"
+      "axon_revision": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a"
     }
   ],
   "inventory_source_revisions": {
-    "rust": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2",
+    "rust": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a",
     "c_abi": "current_checkout",
     "go": "current_checkout",
-    "python": "working_tree:abf718cbc3ce23c182185fdf0e574f5e36a1fc4e0dc5442a936a3ba225876af2",
+    "python": "e6e84299c9a0ea52c5f1fa04c2a46d1119a0096a",
     "node": "current_checkout",
     "java": "current_checkout",
     "swift": "current_checkout"

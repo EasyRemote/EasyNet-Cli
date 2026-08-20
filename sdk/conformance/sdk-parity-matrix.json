@@ -10159,7 +10159,7 @@
         },
         {
           "item": "AbilityInvocationClient",
-          "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+          "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
         },
         {
           "item": "AbilityTargetRequest",
@@ -10294,6 +10294,10 @@
           "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
         },
         {
+          "item": "AbilityInvocationClient.authority",
+          "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+        },
+        {
           "item": "AbilityInvocationClient.await_result",
           "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
         },
@@ -10307,11 +10311,11 @@
         },
         {
           "item": "AbilityInvocationClient.build_invocation",
-          "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+          "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
         },
         {
           "item": "AbilityInvocationClient.build_target_invocation",
-          "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+          "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
         },
         {
           "item": "AbilityInvocationClient.cancel",
@@ -10510,6 +10514,10 @@
           "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
         },
         {
+          "item": "RuntimeAbilityClient.invoke_draft",
+          "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
+        },
+        {
           "item": "RuntimeAbilityClient.open_bidi",
           "sha256": "c111906126409bc2e862355026efa42053afa73aa9aa2b9ec7e10b954717c858"
         },
@@ -10590,7 +10598,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -10725,6 +10733,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -10738,11 +10750,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -10939,6 +10951,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -11021,7 +11037,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -11156,6 +11172,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -11169,11 +11189,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -11370,6 +11390,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -11452,7 +11476,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -11587,6 +11611,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -11600,11 +11628,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -11801,6 +11829,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -11883,7 +11915,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -12018,6 +12050,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -12031,11 +12067,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -12232,6 +12268,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -12314,7 +12354,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -12449,6 +12489,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -12462,11 +12506,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -12663,6 +12707,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -12745,7 +12793,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -12880,6 +12928,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -12893,11 +12945,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -13094,6 +13146,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -13176,7 +13232,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -13311,6 +13367,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -13324,11 +13384,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -13525,6 +13585,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -13607,7 +13671,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -13742,6 +13806,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -13755,11 +13823,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -13956,6 +14024,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -14038,7 +14110,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -14173,6 +14245,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -14186,11 +14262,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -14387,6 +14463,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -14469,7 +14549,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -14604,6 +14684,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -14617,11 +14701,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -14818,6 +14902,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -14900,7 +14988,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -15035,6 +15123,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -15048,11 +15140,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -15249,6 +15341,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -15331,7 +15427,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -15466,6 +15562,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -15479,11 +15579,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -15680,6 +15780,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -15762,7 +15866,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -15897,6 +16001,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -15910,11 +16018,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -16111,6 +16219,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -16193,7 +16305,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -16328,6 +16440,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -16341,11 +16457,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -16542,6 +16658,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -16624,7 +16744,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -16759,6 +16879,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -16772,11 +16896,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -16973,6 +17097,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -17055,7 +17183,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -17190,6 +17318,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -17203,11 +17335,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -17404,6 +17536,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -17486,7 +17622,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -17621,6 +17757,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -17634,11 +17774,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -17835,6 +17975,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -17917,7 +18061,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -18052,6 +18196,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -18065,11 +18213,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -18266,6 +18414,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -18348,7 +18500,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -18483,6 +18635,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -18496,11 +18652,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -18697,6 +18853,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -18779,7 +18939,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -18914,6 +19074,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -18927,11 +19091,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -19128,6 +19292,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -19210,7 +19378,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -19345,6 +19513,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -19358,11 +19530,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -19559,6 +19731,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -19641,7 +19817,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -19776,6 +19952,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -19789,11 +19969,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -19990,6 +20170,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -20072,7 +20256,7 @@
             },
             {
               "item": "AbilityInvocationClient",
-              "sha256": "a0ed165dfb9b37fa181859c7235467ad82a5d21bd309669cd833049843926aaf"
+              "sha256": "75dafbbeaecf54275a532f2d044f0ffdf98aeb7952d073d6a61c05e0b97d28d3"
             },
             {
               "item": "AbilityTargetRequest",
@@ -20207,6 +20391,10 @@
               "sha256": "61370a6586cebee31ee89cd7025cf4d2fdff5dbe8d615e523d199bd87637f26c"
             },
             {
+              "item": "AbilityInvocationClient.authority",
+              "sha256": "6031d551fba593fd7d0f377c9d1b651df631f598432cc996d14188be6b2807c0"
+            },
+            {
               "item": "AbilityInvocationClient.await_result",
               "sha256": "f80372a4014414a4356e497d0bada25a15cc36530f5eabf579b3cdbd03786aab"
             },
@@ -20220,11 +20408,11 @@
             },
             {
               "item": "AbilityInvocationClient.build_invocation",
-              "sha256": "bec5e0056af18ddcf72d030f5573cd6ba59f2c9963ab2b049e70826181de1d1a"
+              "sha256": "dfded550189aa349dccf6250bb592abef8687ade67ad6f77407a3c42919a6d81"
             },
             {
               "item": "AbilityInvocationClient.build_target_invocation",
-              "sha256": "e74963cd8b6e4bfd88b118ab0908793385046e0b51501cca70f2a90b0decc64a"
+              "sha256": "69e47bed0be39d5bc1ef4b44947740094aa64c3ecf7fc1d3e030be7e0131026f"
             },
             {
               "item": "AbilityInvocationClient.cancel",
@@ -20421,6 +20609,10 @@
             {
               "item": "RuntimeAbilityClient.events",
               "sha256": "25d1c905c675372187040aa45d119a04725dcbf9f5afd4cea9510c6b54334b1d"
+            },
+            {
+              "item": "RuntimeAbilityClient.invoke_draft",
+              "sha256": "bd25ad1f21fcaf2df56e74f36c37023c4eb0c3b77cc9084863071868aa75c876"
             },
             {
               "item": "RuntimeAbilityClient.open_bidi",
@@ -44449,6 +44641,14 @@
           "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
         },
         {
+          "item": "DraftAuthorityProvider",
+          "sha256": "e607cb4b7a986781fa631f87c9ad2007a51ed43b7cb9bc0b797bd6df8fbba4a0"
+        },
+        {
+          "item": "LocalRuntimeAuthorityProvider",
+          "sha256": "adfb1431a081349f9ed768e5e7a0781e7a4131b6edd2670e52e6d4ed4f6a669b"
+        },
+        {
           "item": "ReceiptHistoryAuthorityScopeProvider",
           "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
         },
@@ -44685,6 +44885,14 @@
           "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
         },
         {
+          "item": "DraftAuthorityProvider.bind",
+          "sha256": "3536761904f9f519193251805f71dc71f4ffcfbd56e25db6d455aacb41e5ae23"
+        },
+        {
+          "item": "LocalRuntimeAuthorityProvider.bind",
+          "sha256": "69273a4881cd3c1ae6cf606a8fc89c7c89bfad9d36b4cce21cdec540eb3cde68"
+        },
+        {
           "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
           "sha256": "b5b162cf8e7f5c9ff817e28129e53c9b7cffe35130cdf9fa40f5f298db98bcc5"
         },
@@ -44886,6 +45094,14 @@
             {
               "item": "DelegationRequest",
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
+            },
+            {
+              "item": "DraftAuthorityProvider",
+              "sha256": "e607cb4b7a986781fa631f87c9ad2007a51ed43b7cb9bc0b797bd6df8fbba4a0"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider",
+              "sha256": "adfb1431a081349f9ed768e5e7a0781e7a4131b6edd2670e52e6d4ed4f6a669b"
             },
             {
               "item": "ReceiptHistoryAuthorityScopeProvider",
@@ -45122,6 +45338,14 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "DraftAuthorityProvider.bind",
+              "sha256": "3536761904f9f519193251805f71dc71f4ffcfbd56e25db6d455aacb41e5ae23"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider.bind",
+              "sha256": "69273a4881cd3c1ae6cf606a8fc89c7c89bfad9d36b4cce21cdec540eb3cde68"
             },
             {
               "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
@@ -45327,6 +45551,14 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "DraftAuthorityProvider",
+              "sha256": "e607cb4b7a986781fa631f87c9ad2007a51ed43b7cb9bc0b797bd6df8fbba4a0"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider",
+              "sha256": "adfb1431a081349f9ed768e5e7a0781e7a4131b6edd2670e52e6d4ed4f6a669b"
+            },
+            {
               "item": "ReceiptHistoryAuthorityScopeProvider",
               "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
             },
@@ -45561,6 +45793,14 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "DraftAuthorityProvider.bind",
+              "sha256": "3536761904f9f519193251805f71dc71f4ffcfbd56e25db6d455aacb41e5ae23"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider.bind",
+              "sha256": "69273a4881cd3c1ae6cf606a8fc89c7c89bfad9d36b4cce21cdec540eb3cde68"
             },
             {
               "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
@@ -45766,6 +46006,14 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "DraftAuthorityProvider",
+              "sha256": "e607cb4b7a986781fa631f87c9ad2007a51ed43b7cb9bc0b797bd6df8fbba4a0"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider",
+              "sha256": "adfb1431a081349f9ed768e5e7a0781e7a4131b6edd2670e52e6d4ed4f6a669b"
+            },
+            {
               "item": "ReceiptHistoryAuthorityScopeProvider",
               "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
             },
@@ -46000,6 +46248,14 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "DraftAuthorityProvider.bind",
+              "sha256": "3536761904f9f519193251805f71dc71f4ffcfbd56e25db6d455aacb41e5ae23"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider.bind",
+              "sha256": "69273a4881cd3c1ae6cf606a8fc89c7c89bfad9d36b4cce21cdec540eb3cde68"
             },
             {
               "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
@@ -46205,6 +46461,14 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "DraftAuthorityProvider",
+              "sha256": "e607cb4b7a986781fa631f87c9ad2007a51ed43b7cb9bc0b797bd6df8fbba4a0"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider",
+              "sha256": "adfb1431a081349f9ed768e5e7a0781e7a4131b6edd2670e52e6d4ed4f6a669b"
+            },
+            {
               "item": "ReceiptHistoryAuthorityScopeProvider",
               "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
             },
@@ -46439,6 +46703,14 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "DraftAuthorityProvider.bind",
+              "sha256": "3536761904f9f519193251805f71dc71f4ffcfbd56e25db6d455aacb41e5ae23"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider.bind",
+              "sha256": "69273a4881cd3c1ae6cf606a8fc89c7c89bfad9d36b4cce21cdec540eb3cde68"
             },
             {
               "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
@@ -46644,6 +46916,14 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "DraftAuthorityProvider",
+              "sha256": "e607cb4b7a986781fa631f87c9ad2007a51ed43b7cb9bc0b797bd6df8fbba4a0"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider",
+              "sha256": "adfb1431a081349f9ed768e5e7a0781e7a4131b6edd2670e52e6d4ed4f6a669b"
+            },
+            {
               "item": "ReceiptHistoryAuthorityScopeProvider",
               "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
             },
@@ -46878,6 +47158,14 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "DraftAuthorityProvider.bind",
+              "sha256": "3536761904f9f519193251805f71dc71f4ffcfbd56e25db6d455aacb41e5ae23"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider.bind",
+              "sha256": "69273a4881cd3c1ae6cf606a8fc89c7c89bfad9d36b4cce21cdec540eb3cde68"
             },
             {
               "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
@@ -47083,6 +47371,14 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "DraftAuthorityProvider",
+              "sha256": "e607cb4b7a986781fa631f87c9ad2007a51ed43b7cb9bc0b797bd6df8fbba4a0"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider",
+              "sha256": "adfb1431a081349f9ed768e5e7a0781e7a4131b6edd2670e52e6d4ed4f6a669b"
+            },
+            {
               "item": "ReceiptHistoryAuthorityScopeProvider",
               "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
             },
@@ -47317,6 +47613,14 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "DraftAuthorityProvider.bind",
+              "sha256": "3536761904f9f519193251805f71dc71f4ffcfbd56e25db6d455aacb41e5ae23"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider.bind",
+              "sha256": "69273a4881cd3c1ae6cf606a8fc89c7c89bfad9d36b4cce21cdec540eb3cde68"
             },
             {
               "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
@@ -47522,6 +47826,14 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "DraftAuthorityProvider",
+              "sha256": "e607cb4b7a986781fa631f87c9ad2007a51ed43b7cb9bc0b797bd6df8fbba4a0"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider",
+              "sha256": "adfb1431a081349f9ed768e5e7a0781e7a4131b6edd2670e52e6d4ed4f6a669b"
+            },
+            {
               "item": "ReceiptHistoryAuthorityScopeProvider",
               "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
             },
@@ -47756,6 +48068,14 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "DraftAuthorityProvider.bind",
+              "sha256": "3536761904f9f519193251805f71dc71f4ffcfbd56e25db6d455aacb41e5ae23"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider.bind",
+              "sha256": "69273a4881cd3c1ae6cf606a8fc89c7c89bfad9d36b4cce21cdec540eb3cde68"
             },
             {
               "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
@@ -47961,6 +48281,14 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "DraftAuthorityProvider",
+              "sha256": "e607cb4b7a986781fa631f87c9ad2007a51ed43b7cb9bc0b797bd6df8fbba4a0"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider",
+              "sha256": "adfb1431a081349f9ed768e5e7a0781e7a4131b6edd2670e52e6d4ed4f6a669b"
+            },
+            {
               "item": "ReceiptHistoryAuthorityScopeProvider",
               "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
             },
@@ -48195,6 +48523,14 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "DraftAuthorityProvider.bind",
+              "sha256": "3536761904f9f519193251805f71dc71f4ffcfbd56e25db6d455aacb41e5ae23"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider.bind",
+              "sha256": "69273a4881cd3c1ae6cf606a8fc89c7c89bfad9d36b4cce21cdec540eb3cde68"
             },
             {
               "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
@@ -48400,6 +48736,14 @@
               "sha256": "e11689f3946f64f3112391528fa8ea5beafeb08f0f863392cca2aca80bae4f10"
             },
             {
+              "item": "DraftAuthorityProvider",
+              "sha256": "e607cb4b7a986781fa631f87c9ad2007a51ed43b7cb9bc0b797bd6df8fbba4a0"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider",
+              "sha256": "adfb1431a081349f9ed768e5e7a0781e7a4131b6edd2670e52e6d4ed4f6a669b"
+            },
+            {
               "item": "ReceiptHistoryAuthorityScopeProvider",
               "sha256": "339c90fba4d3b32d503d91a50861bb7151b4c391bb2ecead5c21353ead689361"
             },
@@ -48634,6 +48978,14 @@
             {
               "item": "DelegationRequest.subject_ura",
               "sha256": "458a4d776e207c5e7d5a8c08f8fdd9afd1fe9913615163f64d844cae217c125e"
+            },
+            {
+              "item": "DraftAuthorityProvider.bind",
+              "sha256": "3536761904f9f519193251805f71dc71f4ffcfbd56e25db6d455aacb41e5ae23"
+            },
+            {
+              "item": "LocalRuntimeAuthorityProvider.bind",
+              "sha256": "69273a4881cd3c1ae6cf606a8fc89c7c89bfad9d36b4cce21cdec540eb3cde68"
             },
             {
               "item": "ReceiptHistoryAuthorityScopeProvider.receipt_history_list_authority_scope",
@@ -136630,7 +136982,7 @@
         },
         {
           "item": "ManagedSigningClient",
-          "sha256": "67514d0b83f70306b5144ec19f7440b12482892c2b87d00ece3014e695fcda9d"
+          "sha256": "b8f3cb4ac1c2ae4d3bc48b8579bc84f660ea4ff92f8ab058ae93b2183f08a63c"
         },
         {
           "item": "ManagedSigningCreateRequest",
@@ -136695,6 +137047,10 @@
         {
           "item": "ManagedSigner.timeout_seconds",
           "sha256": "e7ae5d4664552e5b66b88593a70dc1a9253ce75cc03643960b1ccbed84deb0af"
+        },
+        {
+          "item": "ManagedSigningClient.active_signer_for_subject",
+          "sha256": "6d7cafb1a5d0b4b26c1f324d69d4437cafef917841eab0d4d18ab7fe5b5e83bb"
         },
         {
           "item": "ManagedSigningClient.add_peer",
@@ -136909,7 +137265,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "67514d0b83f70306b5144ec19f7440b12482892c2b87d00ece3014e695fcda9d"
+              "sha256": "b8f3cb4ac1c2ae4d3bc48b8579bc84f660ea4ff92f8ab058ae93b2183f08a63c"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -136974,6 +137330,10 @@
             {
               "item": "ManagedSigner.timeout_seconds",
               "sha256": "e7ae5d4664552e5b66b88593a70dc1a9253ce75cc03643960b1ccbed84deb0af"
+            },
+            {
+              "item": "ManagedSigningClient.active_signer_for_subject",
+              "sha256": "6d7cafb1a5d0b4b26c1f324d69d4437cafef917841eab0d4d18ab7fe5b5e83bb"
             },
             {
               "item": "ManagedSigningClient.add_peer",
@@ -137188,7 +137548,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "67514d0b83f70306b5144ec19f7440b12482892c2b87d00ece3014e695fcda9d"
+              "sha256": "b8f3cb4ac1c2ae4d3bc48b8579bc84f660ea4ff92f8ab058ae93b2183f08a63c"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -137253,6 +137613,10 @@
             {
               "item": "ManagedSigner.timeout_seconds",
               "sha256": "e7ae5d4664552e5b66b88593a70dc1a9253ce75cc03643960b1ccbed84deb0af"
+            },
+            {
+              "item": "ManagedSigningClient.active_signer_for_subject",
+              "sha256": "6d7cafb1a5d0b4b26c1f324d69d4437cafef917841eab0d4d18ab7fe5b5e83bb"
             },
             {
               "item": "ManagedSigningClient.add_peer",
@@ -137467,7 +137831,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "67514d0b83f70306b5144ec19f7440b12482892c2b87d00ece3014e695fcda9d"
+              "sha256": "b8f3cb4ac1c2ae4d3bc48b8579bc84f660ea4ff92f8ab058ae93b2183f08a63c"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -137532,6 +137896,10 @@
             {
               "item": "ManagedSigner.timeout_seconds",
               "sha256": "e7ae5d4664552e5b66b88593a70dc1a9253ce75cc03643960b1ccbed84deb0af"
+            },
+            {
+              "item": "ManagedSigningClient.active_signer_for_subject",
+              "sha256": "6d7cafb1a5d0b4b26c1f324d69d4437cafef917841eab0d4d18ab7fe5b5e83bb"
             },
             {
               "item": "ManagedSigningClient.add_peer",
@@ -137746,7 +138114,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "67514d0b83f70306b5144ec19f7440b12482892c2b87d00ece3014e695fcda9d"
+              "sha256": "b8f3cb4ac1c2ae4d3bc48b8579bc84f660ea4ff92f8ab058ae93b2183f08a63c"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -137811,6 +138179,10 @@
             {
               "item": "ManagedSigner.timeout_seconds",
               "sha256": "e7ae5d4664552e5b66b88593a70dc1a9253ce75cc03643960b1ccbed84deb0af"
+            },
+            {
+              "item": "ManagedSigningClient.active_signer_for_subject",
+              "sha256": "6d7cafb1a5d0b4b26c1f324d69d4437cafef917841eab0d4d18ab7fe5b5e83bb"
             },
             {
               "item": "ManagedSigningClient.add_peer",
@@ -138025,7 +138397,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "67514d0b83f70306b5144ec19f7440b12482892c2b87d00ece3014e695fcda9d"
+              "sha256": "b8f3cb4ac1c2ae4d3bc48b8579bc84f660ea4ff92f8ab058ae93b2183f08a63c"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -138090,6 +138462,10 @@
             {
               "item": "ManagedSigner.timeout_seconds",
               "sha256": "e7ae5d4664552e5b66b88593a70dc1a9253ce75cc03643960b1ccbed84deb0af"
+            },
+            {
+              "item": "ManagedSigningClient.active_signer_for_subject",
+              "sha256": "6d7cafb1a5d0b4b26c1f324d69d4437cafef917841eab0d4d18ab7fe5b5e83bb"
             },
             {
               "item": "ManagedSigningClient.add_peer",
@@ -138304,7 +138680,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "67514d0b83f70306b5144ec19f7440b12482892c2b87d00ece3014e695fcda9d"
+              "sha256": "b8f3cb4ac1c2ae4d3bc48b8579bc84f660ea4ff92f8ab058ae93b2183f08a63c"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -138369,6 +138745,10 @@
             {
               "item": "ManagedSigner.timeout_seconds",
               "sha256": "e7ae5d4664552e5b66b88593a70dc1a9253ce75cc03643960b1ccbed84deb0af"
+            },
+            {
+              "item": "ManagedSigningClient.active_signer_for_subject",
+              "sha256": "6d7cafb1a5d0b4b26c1f324d69d4437cafef917841eab0d4d18ab7fe5b5e83bb"
             },
             {
               "item": "ManagedSigningClient.add_peer",
@@ -138583,7 +138963,7 @@
             },
             {
               "item": "ManagedSigningClient",
-              "sha256": "67514d0b83f70306b5144ec19f7440b12482892c2b87d00ece3014e695fcda9d"
+              "sha256": "b8f3cb4ac1c2ae4d3bc48b8579bc84f660ea4ff92f8ab058ae93b2183f08a63c"
             },
             {
               "item": "ManagedSigningCreateRequest",
@@ -138648,6 +139028,10 @@
             {
               "item": "ManagedSigner.timeout_seconds",
               "sha256": "e7ae5d4664552e5b66b88593a70dc1a9253ce75cc03643960b1ccbed84deb0af"
+            },
+            {
+              "item": "ManagedSigningClient.active_signer_for_subject",
+              "sha256": "6d7cafb1a5d0b4b26c1f324d69d4437cafef917841eab0d4d18ab7fe5b5e83bb"
             },
             {
               "item": "ManagedSigningClient.add_peer",
@@ -140791,7 +141175,7 @@
       "shape_evidence": [
         {
           "item": "NativeRuntimeHandle",
-          "sha256": "ac233c1cb5141e3b64d5ad0aff3d8d4aadb1254010198f35d6bad77eb81b2d7e"
+          "sha256": "c56127d9b6f408575e114f5124a8be3214554b9dce0a907446bb3307d9af9b84"
         },
         {
           "item": "RuntimeControlDiscovery",
@@ -140827,7 +141211,7 @@
         },
         {
           "item": "NativeRuntimeHandle.ability_client",
-          "sha256": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0"
+          "sha256": "05990fa2656245b17f090e3f04b0647afd8abcf9157aad435cacfd9474829182"
         },
         {
           "item": "NativeRuntimeHandle.addressing",
@@ -140978,7 +141362,7 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "ac233c1cb5141e3b64d5ad0aff3d8d4aadb1254010198f35d6bad77eb81b2d7e"
+              "sha256": "c56127d9b6f408575e114f5124a8be3214554b9dce0a907446bb3307d9af9b84"
             },
             {
               "item": "RuntimeControlDiscovery",
@@ -141014,7 +141398,7 @@
             },
             {
               "item": "NativeRuntimeHandle.ability_client",
-              "sha256": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0"
+              "sha256": "05990fa2656245b17f090e3f04b0647afd8abcf9157aad435cacfd9474829182"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -141165,7 +141549,7 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "ac233c1cb5141e3b64d5ad0aff3d8d4aadb1254010198f35d6bad77eb81b2d7e"
+              "sha256": "c56127d9b6f408575e114f5124a8be3214554b9dce0a907446bb3307d9af9b84"
             },
             {
               "item": "RuntimeControlDiscovery",
@@ -141201,7 +141585,7 @@
             },
             {
               "item": "NativeRuntimeHandle.ability_client",
-              "sha256": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0"
+              "sha256": "05990fa2656245b17f090e3f04b0647afd8abcf9157aad435cacfd9474829182"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -141352,7 +141736,7 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "ac233c1cb5141e3b64d5ad0aff3d8d4aadb1254010198f35d6bad77eb81b2d7e"
+              "sha256": "c56127d9b6f408575e114f5124a8be3214554b9dce0a907446bb3307d9af9b84"
             },
             {
               "item": "RuntimeControlDiscovery",
@@ -141388,7 +141772,7 @@
             },
             {
               "item": "NativeRuntimeHandle.ability_client",
-              "sha256": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0"
+              "sha256": "05990fa2656245b17f090e3f04b0647afd8abcf9157aad435cacfd9474829182"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -141539,7 +141923,7 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "ac233c1cb5141e3b64d5ad0aff3d8d4aadb1254010198f35d6bad77eb81b2d7e"
+              "sha256": "c56127d9b6f408575e114f5124a8be3214554b9dce0a907446bb3307d9af9b84"
             },
             {
               "item": "RuntimeControlDiscovery",
@@ -141575,7 +141959,7 @@
             },
             {
               "item": "NativeRuntimeHandle.ability_client",
-              "sha256": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0"
+              "sha256": "05990fa2656245b17f090e3f04b0647afd8abcf9157aad435cacfd9474829182"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -141726,7 +142110,7 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "ac233c1cb5141e3b64d5ad0aff3d8d4aadb1254010198f35d6bad77eb81b2d7e"
+              "sha256": "c56127d9b6f408575e114f5124a8be3214554b9dce0a907446bb3307d9af9b84"
             },
             {
               "item": "RuntimeControlDiscovery",
@@ -141762,7 +142146,7 @@
             },
             {
               "item": "NativeRuntimeHandle.ability_client",
-              "sha256": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0"
+              "sha256": "05990fa2656245b17f090e3f04b0647afd8abcf9157aad435cacfd9474829182"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -141913,7 +142297,7 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "ac233c1cb5141e3b64d5ad0aff3d8d4aadb1254010198f35d6bad77eb81b2d7e"
+              "sha256": "c56127d9b6f408575e114f5124a8be3214554b9dce0a907446bb3307d9af9b84"
             },
             {
               "item": "RuntimeControlDiscovery",
@@ -141949,7 +142333,7 @@
             },
             {
               "item": "NativeRuntimeHandle.ability_client",
-              "sha256": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0"
+              "sha256": "05990fa2656245b17f090e3f04b0647afd8abcf9157aad435cacfd9474829182"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -142100,7 +142484,7 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "ac233c1cb5141e3b64d5ad0aff3d8d4aadb1254010198f35d6bad77eb81b2d7e"
+              "sha256": "c56127d9b6f408575e114f5124a8be3214554b9dce0a907446bb3307d9af9b84"
             },
             {
               "item": "RuntimeControlDiscovery",
@@ -142136,7 +142520,7 @@
             },
             {
               "item": "NativeRuntimeHandle.ability_client",
-              "sha256": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0"
+              "sha256": "05990fa2656245b17f090e3f04b0647afd8abcf9157aad435cacfd9474829182"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -142287,7 +142671,7 @@
           "items": [
             {
               "item": "NativeRuntimeHandle",
-              "sha256": "ac233c1cb5141e3b64d5ad0aff3d8d4aadb1254010198f35d6bad77eb81b2d7e"
+              "sha256": "c56127d9b6f408575e114f5124a8be3214554b9dce0a907446bb3307d9af9b84"
             },
             {
               "item": "RuntimeControlDiscovery",
@@ -142323,7 +142707,7 @@
             },
             {
               "item": "NativeRuntimeHandle.ability_client",
-              "sha256": "24706d4ede596e53b45de01828504483198cc0aa6550781c52e2bb81ac9ea9b0"
+              "sha256": "05990fa2656245b17f090e3f04b0647afd8abcf9157aad435cacfd9474829182"
             },
             {
               "item": "NativeRuntimeHandle.addressing",
@@ -195976,7 +196360,7 @@
       "shape_evidence": [
         {
           "item": "SdkEnvironment",
-          "sha256": "365e3b8955d8e386542b251c40f4d959716ccf34a4c03f70c3a93683ff27054b"
+          "sha256": "68bf1822dd2bec503b52fc97e7999f7f2e77217152247273d48ddc4ab362416c"
         },
         {
           "item": "default_environment",
@@ -195984,7 +196368,7 @@
         },
         {
           "item": "SdkEnvironment.ability_invocation_client",
-          "sha256": "f47b3671b4b8b8e41b688b74212a584bc462f52d9696c21e12fd3de3524a2afb"
+          "sha256": "1f68d2bb3a195919b03b4916b9b461e4f72804d42ddb18f7b59ab15f91ef99fe"
         },
         {
           "item": "SdkEnvironment.addressing_client",
@@ -196027,8 +196411,16 @@
           "sha256": "1a560110d65f07c5ff70c428d1bc68b0268046e632b77809001b6fcb070ac342"
         },
         {
+          "item": "SdkEnvironment.local_runtime_authority_provider",
+          "sha256": "6fc42374757db95976d7bad1ad5d370bfff1b57f9d8c0def965fec9b649960fd"
+        },
+        {
           "item": "SdkEnvironment.native_runtime",
-          "sha256": "860a69d6291c505472e0bc1daa2f274256bc7deb3111340f4522aac163c0cfce"
+          "sha256": "49000c736eba3bca0fc3b7ab5f9c6441b81ca45dc42ace25defe25b9635a539a"
+        },
+        {
+          "item": "SdkEnvironment.paired_runtime_identity_projection",
+          "sha256": "0405ffaab63679887c945b33626fbe3a6b686b0e7c1fd83644dc49eba6182da0"
         },
         {
           "item": "SdkEnvironment.resolved_control_path",
@@ -196071,7 +196463,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "365e3b8955d8e386542b251c40f4d959716ccf34a4c03f70c3a93683ff27054b"
+              "sha256": "68bf1822dd2bec503b52fc97e7999f7f2e77217152247273d48ddc4ab362416c"
             },
             {
               "item": "default_environment",
@@ -196079,7 +196471,7 @@
             },
             {
               "item": "SdkEnvironment.ability_invocation_client",
-              "sha256": "f47b3671b4b8b8e41b688b74212a584bc462f52d9696c21e12fd3de3524a2afb"
+              "sha256": "1f68d2bb3a195919b03b4916b9b461e4f72804d42ddb18f7b59ab15f91ef99fe"
             },
             {
               "item": "SdkEnvironment.addressing_client",
@@ -196122,8 +196514,16 @@
               "sha256": "1a560110d65f07c5ff70c428d1bc68b0268046e632b77809001b6fcb070ac342"
             },
             {
+              "item": "SdkEnvironment.local_runtime_authority_provider",
+              "sha256": "6fc42374757db95976d7bad1ad5d370bfff1b57f9d8c0def965fec9b649960fd"
+            },
+            {
               "item": "SdkEnvironment.native_runtime",
-              "sha256": "860a69d6291c505472e0bc1daa2f274256bc7deb3111340f4522aac163c0cfce"
+              "sha256": "49000c736eba3bca0fc3b7ab5f9c6441b81ca45dc42ace25defe25b9635a539a"
+            },
+            {
+              "item": "SdkEnvironment.paired_runtime_identity_projection",
+              "sha256": "0405ffaab63679887c945b33626fbe3a6b686b0e7c1fd83644dc49eba6182da0"
             },
             {
               "item": "SdkEnvironment.resolved_control_path",
@@ -196166,7 +196566,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "365e3b8955d8e386542b251c40f4d959716ccf34a4c03f70c3a93683ff27054b"
+              "sha256": "68bf1822dd2bec503b52fc97e7999f7f2e77217152247273d48ddc4ab362416c"
             },
             {
               "item": "default_environment",
@@ -196174,7 +196574,7 @@
             },
             {
               "item": "SdkEnvironment.ability_invocation_client",
-              "sha256": "f47b3671b4b8b8e41b688b74212a584bc462f52d9696c21e12fd3de3524a2afb"
+              "sha256": "1f68d2bb3a195919b03b4916b9b461e4f72804d42ddb18f7b59ab15f91ef99fe"
             },
             {
               "item": "SdkEnvironment.addressing_client",
@@ -196217,8 +196617,16 @@
               "sha256": "1a560110d65f07c5ff70c428d1bc68b0268046e632b77809001b6fcb070ac342"
             },
             {
+              "item": "SdkEnvironment.local_runtime_authority_provider",
+              "sha256": "6fc42374757db95976d7bad1ad5d370bfff1b57f9d8c0def965fec9b649960fd"
+            },
+            {
               "item": "SdkEnvironment.native_runtime",
-              "sha256": "860a69d6291c505472e0bc1daa2f274256bc7deb3111340f4522aac163c0cfce"
+              "sha256": "49000c736eba3bca0fc3b7ab5f9c6441b81ca45dc42ace25defe25b9635a539a"
+            },
+            {
+              "item": "SdkEnvironment.paired_runtime_identity_projection",
+              "sha256": "0405ffaab63679887c945b33626fbe3a6b686b0e7c1fd83644dc49eba6182da0"
             },
             {
               "item": "SdkEnvironment.resolved_control_path",
@@ -196261,7 +196669,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "365e3b8955d8e386542b251c40f4d959716ccf34a4c03f70c3a93683ff27054b"
+              "sha256": "68bf1822dd2bec503b52fc97e7999f7f2e77217152247273d48ddc4ab362416c"
             },
             {
               "item": "default_environment",
@@ -196269,7 +196677,7 @@
             },
             {
               "item": "SdkEnvironment.ability_invocation_client",
-              "sha256": "f47b3671b4b8b8e41b688b74212a584bc462f52d9696c21e12fd3de3524a2afb"
+              "sha256": "1f68d2bb3a195919b03b4916b9b461e4f72804d42ddb18f7b59ab15f91ef99fe"
             },
             {
               "item": "SdkEnvironment.addressing_client",
@@ -196312,8 +196720,16 @@
               "sha256": "1a560110d65f07c5ff70c428d1bc68b0268046e632b77809001b6fcb070ac342"
             },
             {
+              "item": "SdkEnvironment.local_runtime_authority_provider",
+              "sha256": "6fc42374757db95976d7bad1ad5d370bfff1b57f9d8c0def965fec9b649960fd"
+            },
+            {
               "item": "SdkEnvironment.native_runtime",
-              "sha256": "860a69d6291c505472e0bc1daa2f274256bc7deb3111340f4522aac163c0cfce"
+              "sha256": "49000c736eba3bca0fc3b7ab5f9c6441b81ca45dc42ace25defe25b9635a539a"
+            },
+            {
+              "item": "SdkEnvironment.paired_runtime_identity_projection",
+              "sha256": "0405ffaab63679887c945b33626fbe3a6b686b0e7c1fd83644dc49eba6182da0"
             },
             {
               "item": "SdkEnvironment.resolved_control_path",
@@ -196356,7 +196772,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "365e3b8955d8e386542b251c40f4d959716ccf34a4c03f70c3a93683ff27054b"
+              "sha256": "68bf1822dd2bec503b52fc97e7999f7f2e77217152247273d48ddc4ab362416c"
             },
             {
               "item": "default_environment",
@@ -196364,7 +196780,7 @@
             },
             {
               "item": "SdkEnvironment.ability_invocation_client",
-              "sha256": "f47b3671b4b8b8e41b688b74212a584bc462f52d9696c21e12fd3de3524a2afb"
+              "sha256": "1f68d2bb3a195919b03b4916b9b461e4f72804d42ddb18f7b59ab15f91ef99fe"
             },
             {
               "item": "SdkEnvironment.addressing_client",
@@ -196407,8 +196823,16 @@
               "sha256": "1a560110d65f07c5ff70c428d1bc68b0268046e632b77809001b6fcb070ac342"
             },
             {
+              "item": "SdkEnvironment.local_runtime_authority_provider",
+              "sha256": "6fc42374757db95976d7bad1ad5d370bfff1b57f9d8c0def965fec9b649960fd"
+            },
+            {
               "item": "SdkEnvironment.native_runtime",
-              "sha256": "860a69d6291c505472e0bc1daa2f274256bc7deb3111340f4522aac163c0cfce"
+              "sha256": "49000c736eba3bca0fc3b7ab5f9c6441b81ca45dc42ace25defe25b9635a539a"
+            },
+            {
+              "item": "SdkEnvironment.paired_runtime_identity_projection",
+              "sha256": "0405ffaab63679887c945b33626fbe3a6b686b0e7c1fd83644dc49eba6182da0"
             },
             {
               "item": "SdkEnvironment.resolved_control_path",
@@ -196451,7 +196875,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "365e3b8955d8e386542b251c40f4d959716ccf34a4c03f70c3a93683ff27054b"
+              "sha256": "68bf1822dd2bec503b52fc97e7999f7f2e77217152247273d48ddc4ab362416c"
             },
             {
               "item": "default_environment",
@@ -196459,7 +196883,7 @@
             },
             {
               "item": "SdkEnvironment.ability_invocation_client",
-              "sha256": "f47b3671b4b8b8e41b688b74212a584bc462f52d9696c21e12fd3de3524a2afb"
+              "sha256": "1f68d2bb3a195919b03b4916b9b461e4f72804d42ddb18f7b59ab15f91ef99fe"
             },
             {
               "item": "SdkEnvironment.addressing_client",
@@ -196502,8 +196926,16 @@
               "sha256": "1a560110d65f07c5ff70c428d1bc68b0268046e632b77809001b6fcb070ac342"
             },
             {
+              "item": "SdkEnvironment.local_runtime_authority_provider",
+              "sha256": "6fc42374757db95976d7bad1ad5d370bfff1b57f9d8c0def965fec9b649960fd"
+            },
+            {
               "item": "SdkEnvironment.native_runtime",
-              "sha256": "860a69d6291c505472e0bc1daa2f274256bc7deb3111340f4522aac163c0cfce"
+              "sha256": "49000c736eba3bca0fc3b7ab5f9c6441b81ca45dc42ace25defe25b9635a539a"
+            },
+            {
+              "item": "SdkEnvironment.paired_runtime_identity_projection",
+              "sha256": "0405ffaab63679887c945b33626fbe3a6b686b0e7c1fd83644dc49eba6182da0"
             },
             {
               "item": "SdkEnvironment.resolved_control_path",
@@ -196546,7 +196978,7 @@
           "items": [
             {
               "item": "SdkEnvironment",
-              "sha256": "365e3b8955d8e386542b251c40f4d959716ccf34a4c03f70c3a93683ff27054b"
+              "sha256": "68bf1822dd2bec503b52fc97e7999f7f2e77217152247273d48ddc4ab362416c"
             },
             {
               "item": "default_environment",
@@ -196554,7 +196986,7 @@
             },
             {
               "item": "SdkEnvironment.ability_invocation_client",
-              "sha256": "f47b3671b4b8b8e41b688b74212a584bc462f52d9696c21e12fd3de3524a2afb"
+              "sha256": "1f68d2bb3a195919b03b4916b9b461e4f72804d42ddb18f7b59ab15f91ef99fe"
             },
             {
               "item": "SdkEnvironment.addressing_client",
@@ -196597,8 +197029,16 @@
               "sha256": "1a560110d65f07c5ff70c428d1bc68b0268046e632b77809001b6fcb070ac342"
             },
             {
+              "item": "SdkEnvironment.local_runtime_authority_provider",
+              "sha256": "6fc42374757db95976d7bad1ad5d370bfff1b57f9d8c0def965fec9b649960fd"
+            },
+            {
               "item": "SdkEnvironment.native_runtime",
-              "sha256": "860a69d6291c505472e0bc1daa2f274256bc7deb3111340f4522aac163c0cfce"
+              "sha256": "49000c736eba3bca0fc3b7ab5f9c6441b81ca45dc42ace25defe25b9635a539a"
+            },
+            {
+              "item": "SdkEnvironment.paired_runtime_identity_projection",
+              "sha256": "0405ffaab63679887c945b33626fbe3a6b686b0e7c1fd83644dc49eba6182da0"
             },
             {
               "item": "SdkEnvironment.resolved_control_path",
@@ -203882,7 +204322,7 @@
         },
         {
           "item": "RuntimeIdentityProjection",
-          "sha256": "029857a0acb9ae5ec05ddecbd54662a99abf94842d1b17fcef07864bcf17299a"
+          "sha256": "34a2e7e9c737ca5ab59518e828fc81e914b7f6c44b566f49421d8a8bdb5ace1a"
         },
         {
           "item": "SignerHandle",
@@ -203891,6 +204331,10 @@
         {
           "item": "StaticCallerIdentityProvider",
           "sha256": "a4f562290dced6176ef4016f4e2a954f40809e4386679510f9e1bbb03184a26a"
+        },
+        {
+          "item": "read_paired_runtime_identity_projection",
+          "sha256": "9bea6ab6855eeb1addbfe7b6fe291cb1094c2163c51a5e2dbc8c750276e56bc4"
         },
         {
           "item": "read_runtime_identity_projection",
@@ -203902,7 +204346,7 @@
         },
         {
           "item": "runtime_identity_projection_from_json",
-          "sha256": "6d22b91fad55114822714b056418dd320d66c714ae81ac824d11d045c70fa5ce"
+          "sha256": "3dca1a22ee237fc6176c65cf0f218d41b1ade7bb283826aa5a2529c4bf9e1d0c"
         },
         {
           "item": "runtime_state_root",
@@ -203923,6 +204367,10 @@
         {
           "item": "RuntimeIdentityProjection.principal",
           "sha256": "78d8aa7d857a0d411ebb292db83ce7185fea83624011ca06e517f38b4c07dec8"
+        },
+        {
+          "item": "RuntimeIdentityProjection.principal_display_name",
+          "sha256": "e54d37cdbc37d875ca2e35430d978f52d3077a83b157b7ec4e33f1dca7573b74"
         },
         {
           "item": "RuntimeIdentityProjection.realm",
@@ -203977,7 +204425,7 @@
             },
             {
               "item": "RuntimeIdentityProjection",
-              "sha256": "029857a0acb9ae5ec05ddecbd54662a99abf94842d1b17fcef07864bcf17299a"
+              "sha256": "34a2e7e9c737ca5ab59518e828fc81e914b7f6c44b566f49421d8a8bdb5ace1a"
             },
             {
               "item": "SignerHandle",
@@ -203986,6 +204434,10 @@
             {
               "item": "StaticCallerIdentityProvider",
               "sha256": "a4f562290dced6176ef4016f4e2a954f40809e4386679510f9e1bbb03184a26a"
+            },
+            {
+              "item": "read_paired_runtime_identity_projection",
+              "sha256": "9bea6ab6855eeb1addbfe7b6fe291cb1094c2163c51a5e2dbc8c750276e56bc4"
             },
             {
               "item": "read_runtime_identity_projection",
@@ -203997,7 +204449,7 @@
             },
             {
               "item": "runtime_identity_projection_from_json",
-              "sha256": "6d22b91fad55114822714b056418dd320d66c714ae81ac824d11d045c70fa5ce"
+              "sha256": "3dca1a22ee237fc6176c65cf0f218d41b1ade7bb283826aa5a2529c4bf9e1d0c"
             },
             {
               "item": "runtime_state_root",
@@ -204018,6 +204470,10 @@
             {
               "item": "RuntimeIdentityProjection.principal",
               "sha256": "78d8aa7d857a0d411ebb292db83ce7185fea83624011ca06e517f38b4c07dec8"
+            },
+            {
+              "item": "RuntimeIdentityProjection.principal_display_name",
+              "sha256": "e54d37cdbc37d875ca2e35430d978f52d3077a83b157b7ec4e33f1dca7573b74"
             },
             {
               "item": "RuntimeIdentityProjection.realm",
@@ -204072,7 +204528,7 @@
             },
             {
               "item": "RuntimeIdentityProjection",
-              "sha256": "029857a0acb9ae5ec05ddecbd54662a99abf94842d1b17fcef07864bcf17299a"
+              "sha256": "34a2e7e9c737ca5ab59518e828fc81e914b7f6c44b566f49421d8a8bdb5ace1a"
             },
             {
               "item": "SignerHandle",
@@ -204081,6 +204537,10 @@
             {
               "item": "StaticCallerIdentityProvider",
               "sha256": "a4f562290dced6176ef4016f4e2a954f40809e4386679510f9e1bbb03184a26a"
+            },
+            {
+              "item": "read_paired_runtime_identity_projection",
+              "sha256": "9bea6ab6855eeb1addbfe7b6fe291cb1094c2163c51a5e2dbc8c750276e56bc4"
             },
             {
               "item": "read_runtime_identity_projection",
@@ -204092,7 +204552,7 @@
             },
             {
               "item": "runtime_identity_projection_from_json",
-              "sha256": "6d22b91fad55114822714b056418dd320d66c714ae81ac824d11d045c70fa5ce"
+              "sha256": "3dca1a22ee237fc6176c65cf0f218d41b1ade7bb283826aa5a2529c4bf9e1d0c"
             },
             {
               "item": "runtime_state_root",
@@ -204113,6 +204573,10 @@
             {
               "item": "RuntimeIdentityProjection.principal",
               "sha256": "78d8aa7d857a0d411ebb292db83ce7185fea83624011ca06e517f38b4c07dec8"
+            },
+            {
+              "item": "RuntimeIdentityProjection.principal_display_name",
+              "sha256": "e54d37cdbc37d875ca2e35430d978f52d3077a83b157b7ec4e33f1dca7573b74"
             },
             {
               "item": "RuntimeIdentityProjection.realm",
@@ -259026,7 +259490,7 @@
         },
         {
           "item": "SDKError",
-          "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+          "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
         },
         {
           "item": "canonical_failure_code",
@@ -259377,7 +259841,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -259728,7 +260192,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -260079,7 +260543,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -260430,7 +260894,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -260781,7 +261245,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -261132,7 +261596,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -261483,7 +261947,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -261834,7 +262298,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -262185,7 +262649,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -262536,7 +263000,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -262887,7 +263351,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -263238,7 +263702,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -263589,7 +264053,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -263940,7 +264404,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -264291,7 +264755,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -264642,7 +265106,7 @@
             },
             {
               "item": "SDKError",
-              "sha256": "6e1c4d850ad3ba77d03f6a74163848a497310da136c6ca4770fdef5d31b3c743"
+              "sha256": "42a5c3a807b7a1d9b38785fe964adb1627c6bbeee58112f2c46e9ec6ffeb1bd6"
             },
             {
               "item": "canonical_failure_code",
@@ -288560,7 +289024,7 @@
         },
         {
           "item": "RuntimeAbilityClient",
-          "sha256": "028d41fed8ed475b2d856ef926458e212037815ff5b9d0a70fe0d0f35947a02d"
+          "sha256": "31434b21f9d99b95cfabc2af439cf56aba33bd57de15d6c3f623c7ce68f85d79"
         },
         {
           "item": "RuntimeCallContext",
@@ -288820,7 +289284,7 @@
         },
         {
           "item": "RuntimeAbilityClient.invoke",
-          "sha256": "b75bb0a59af4240abc0f73417bdbbcc526741fcb6ad8168e62461bc319929484"
+          "sha256": "94560b28a67c8221eed47d8e6f5d9b3f6184c8f4401dd2ca8931856bff265e88"
         },
         {
           "item": "RuntimeCallContext.authority",
@@ -288999,7 +289463,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "028d41fed8ed475b2d856ef926458e212037815ff5b9d0a70fe0d0f35947a02d"
+              "sha256": "31434b21f9d99b95cfabc2af439cf56aba33bd57de15d6c3f623c7ce68f85d79"
             },
             {
               "item": "RuntimeCallContext",
@@ -289259,7 +289723,7 @@
             },
             {
               "item": "RuntimeAbilityClient.invoke",
-              "sha256": "b75bb0a59af4240abc0f73417bdbbcc526741fcb6ad8168e62461bc319929484"
+              "sha256": "94560b28a67c8221eed47d8e6f5d9b3f6184c8f4401dd2ca8931856bff265e88"
             },
             {
               "item": "RuntimeCallContext.authority",
@@ -289438,7 +289902,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "028d41fed8ed475b2d856ef926458e212037815ff5b9d0a70fe0d0f35947a02d"
+              "sha256": "31434b21f9d99b95cfabc2af439cf56aba33bd57de15d6c3f623c7ce68f85d79"
             },
             {
               "item": "RuntimeCallContext",
@@ -289698,7 +290162,7 @@
             },
             {
               "item": "RuntimeAbilityClient.invoke",
-              "sha256": "b75bb0a59af4240abc0f73417bdbbcc526741fcb6ad8168e62461bc319929484"
+              "sha256": "94560b28a67c8221eed47d8e6f5d9b3f6184c8f4401dd2ca8931856bff265e88"
             },
             {
               "item": "RuntimeCallContext.authority",
@@ -289877,7 +290341,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "028d41fed8ed475b2d856ef926458e212037815ff5b9d0a70fe0d0f35947a02d"
+              "sha256": "31434b21f9d99b95cfabc2af439cf56aba33bd57de15d6c3f623c7ce68f85d79"
             },
             {
               "item": "RuntimeCallContext",
@@ -290137,7 +290601,7 @@
             },
             {
               "item": "RuntimeAbilityClient.invoke",
-              "sha256": "b75bb0a59af4240abc0f73417bdbbcc526741fcb6ad8168e62461bc319929484"
+              "sha256": "94560b28a67c8221eed47d8e6f5d9b3f6184c8f4401dd2ca8931856bff265e88"
             },
             {
               "item": "RuntimeCallContext.authority",
@@ -290316,7 +290780,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "028d41fed8ed475b2d856ef926458e212037815ff5b9d0a70fe0d0f35947a02d"
+              "sha256": "31434b21f9d99b95cfabc2af439cf56aba33bd57de15d6c3f623c7ce68f85d79"
             },
             {
               "item": "RuntimeCallContext",
@@ -290576,7 +291040,7 @@
             },
             {
               "item": "RuntimeAbilityClient.invoke",
-              "sha256": "b75bb0a59af4240abc0f73417bdbbcc526741fcb6ad8168e62461bc319929484"
+              "sha256": "94560b28a67c8221eed47d8e6f5d9b3f6184c8f4401dd2ca8931856bff265e88"
             },
             {
               "item": "RuntimeCallContext.authority",
@@ -290755,7 +291219,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "028d41fed8ed475b2d856ef926458e212037815ff5b9d0a70fe0d0f35947a02d"
+              "sha256": "31434b21f9d99b95cfabc2af439cf56aba33bd57de15d6c3f623c7ce68f85d79"
             },
             {
               "item": "RuntimeCallContext",
@@ -291015,7 +291479,7 @@
             },
             {
               "item": "RuntimeAbilityClient.invoke",
-              "sha256": "b75bb0a59af4240abc0f73417bdbbcc526741fcb6ad8168e62461bc319929484"
+              "sha256": "94560b28a67c8221eed47d8e6f5d9b3f6184c8f4401dd2ca8931856bff265e88"
             },
             {
               "item": "RuntimeCallContext.authority",
@@ -291194,7 +291658,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "028d41fed8ed475b2d856ef926458e212037815ff5b9d0a70fe0d0f35947a02d"
+              "sha256": "31434b21f9d99b95cfabc2af439cf56aba33bd57de15d6c3f623c7ce68f85d79"
             },
             {
               "item": "RuntimeCallContext",
@@ -291454,7 +291918,7 @@
             },
             {
               "item": "RuntimeAbilityClient.invoke",
-              "sha256": "b75bb0a59af4240abc0f73417bdbbcc526741fcb6ad8168e62461bc319929484"
+              "sha256": "94560b28a67c8221eed47d8e6f5d9b3f6184c8f4401dd2ca8931856bff265e88"
             },
             {
               "item": "RuntimeCallContext.authority",
@@ -291633,7 +292097,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "028d41fed8ed475b2d856ef926458e212037815ff5b9d0a70fe0d0f35947a02d"
+              "sha256": "31434b21f9d99b95cfabc2af439cf56aba33bd57de15d6c3f623c7ce68f85d79"
             },
             {
               "item": "RuntimeCallContext",
@@ -291893,7 +292357,7 @@
             },
             {
               "item": "RuntimeAbilityClient.invoke",
-              "sha256": "b75bb0a59af4240abc0f73417bdbbcc526741fcb6ad8168e62461bc319929484"
+              "sha256": "94560b28a67c8221eed47d8e6f5d9b3f6184c8f4401dd2ca8931856bff265e88"
             },
             {
               "item": "RuntimeCallContext.authority",
@@ -292072,7 +292536,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "028d41fed8ed475b2d856ef926458e212037815ff5b9d0a70fe0d0f35947a02d"
+              "sha256": "31434b21f9d99b95cfabc2af439cf56aba33bd57de15d6c3f623c7ce68f85d79"
             },
             {
               "item": "RuntimeCallContext",
@@ -292332,7 +292796,7 @@
             },
             {
               "item": "RuntimeAbilityClient.invoke",
-              "sha256": "b75bb0a59af4240abc0f73417bdbbcc526741fcb6ad8168e62461bc319929484"
+              "sha256": "94560b28a67c8221eed47d8e6f5d9b3f6184c8f4401dd2ca8931856bff265e88"
             },
             {
               "item": "RuntimeCallContext.authority",
@@ -292511,7 +292975,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "028d41fed8ed475b2d856ef926458e212037815ff5b9d0a70fe0d0f35947a02d"
+              "sha256": "31434b21f9d99b95cfabc2af439cf56aba33bd57de15d6c3f623c7ce68f85d79"
             },
             {
               "item": "RuntimeCallContext",
@@ -292771,7 +293235,7 @@
             },
             {
               "item": "RuntimeAbilityClient.invoke",
-              "sha256": "b75bb0a59af4240abc0f73417bdbbcc526741fcb6ad8168e62461bc319929484"
+              "sha256": "94560b28a67c8221eed47d8e6f5d9b3f6184c8f4401dd2ca8931856bff265e88"
             },
             {
               "item": "RuntimeCallContext.authority",
@@ -292950,7 +293414,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "028d41fed8ed475b2d856ef926458e212037815ff5b9d0a70fe0d0f35947a02d"
+              "sha256": "31434b21f9d99b95cfabc2af439cf56aba33bd57de15d6c3f623c7ce68f85d79"
             },
             {
               "item": "RuntimeCallContext",
@@ -293210,7 +293674,7 @@
             },
             {
               "item": "RuntimeAbilityClient.invoke",
-              "sha256": "b75bb0a59af4240abc0f73417bdbbcc526741fcb6ad8168e62461bc319929484"
+              "sha256": "94560b28a67c8221eed47d8e6f5d9b3f6184c8f4401dd2ca8931856bff265e88"
             },
             {
               "item": "RuntimeCallContext.authority",
@@ -293389,7 +293853,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "028d41fed8ed475b2d856ef926458e212037815ff5b9d0a70fe0d0f35947a02d"
+              "sha256": "31434b21f9d99b95cfabc2af439cf56aba33bd57de15d6c3f623c7ce68f85d79"
             },
             {
               "item": "RuntimeCallContext",
@@ -293649,7 +294113,7 @@
             },
             {
               "item": "RuntimeAbilityClient.invoke",
-              "sha256": "b75bb0a59af4240abc0f73417bdbbcc526741fcb6ad8168e62461bc319929484"
+              "sha256": "94560b28a67c8221eed47d8e6f5d9b3f6184c8f4401dd2ca8931856bff265e88"
             },
             {
               "item": "RuntimeCallContext.authority",
@@ -293828,7 +294292,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "028d41fed8ed475b2d856ef926458e212037815ff5b9d0a70fe0d0f35947a02d"
+              "sha256": "31434b21f9d99b95cfabc2af439cf56aba33bd57de15d6c3f623c7ce68f85d79"
             },
             {
               "item": "RuntimeCallContext",
@@ -294088,7 +294552,7 @@
             },
             {
               "item": "RuntimeAbilityClient.invoke",
-              "sha256": "b75bb0a59af4240abc0f73417bdbbcc526741fcb6ad8168e62461bc319929484"
+              "sha256": "94560b28a67c8221eed47d8e6f5d9b3f6184c8f4401dd2ca8931856bff265e88"
             },
             {
               "item": "RuntimeCallContext.authority",
@@ -294267,7 +294731,7 @@
             },
             {
               "item": "RuntimeAbilityClient",
-              "sha256": "028d41fed8ed475b2d856ef926458e212037815ff5b9d0a70fe0d0f35947a02d"
+              "sha256": "31434b21f9d99b95cfabc2af439cf56aba33bd57de15d6c3f623c7ce68f85d79"
             },
             {
               "item": "RuntimeCallContext",
@@ -294527,7 +294991,7 @@
             },
             {
               "item": "RuntimeAbilityClient.invoke",
-              "sha256": "b75bb0a59af4240abc0f73417bdbbcc526741fcb6ad8168e62461bc319929484"
+              "sha256": "94560b28a67c8221eed47d8e6f5d9b3f6184c8f4401dd2ca8931856bff265e88"
             },
             {
               "item": "RuntimeCallContext.authority",

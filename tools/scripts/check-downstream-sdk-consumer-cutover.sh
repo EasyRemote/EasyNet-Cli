@@ -328,10 +328,15 @@ def check_easyremote() -> None:
         "easynet_sdk.SdkEnvironment",
         "easynet_sdk.read_runtime_control_discovery",
         "runtime_identity_projection",
-        "sdk_environment().runtime_identity_projection",
+        "sdk_environment().paired_runtime_identity_projection",
     ]:
         require_contains(config, required, "easyremote:config")
     forbid_contains(config, "json.loads", "easyremote:config")
+    forbid_contains(
+        config,
+        "sdk_environment().runtime_identity_projection(",
+        "easyremote:config",
+    )
 
     local_identity = require_file(easyremote, "easyremote/identity.py", "easyremote:local_identity")
     for required in [
@@ -638,7 +643,7 @@ ROOT = easynet_sdk.runtime_state_root()
 ENV = easynet_sdk.SdkEnvironment
 READ = easynet_sdk.read_runtime_control_discovery
 PROJECTION = "runtime_identity_projection"
-LOAD = "sdk_environment().runtime_identity_projection"
+LOAD = "sdk_environment().paired_runtime_identity_projection"
 def runtime_identity_projection(): pass
 def read_credentials(): pass
 read_credentials = read_credentials

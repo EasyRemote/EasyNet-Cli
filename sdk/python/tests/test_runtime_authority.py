@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 import easynet_sdk
@@ -85,6 +87,45 @@ def test_local_runtime_authority_leaves_device_subject_unbound() -> None:
     draft = _draft(
         caller="easynet:///r/example/user/alice",
         subject="easynet:///r/example/resource/device.dev-a/streams/display.main",
+    )
+
+    assert _provider().bind(draft) is draft
+
+
+def test_local_runtime_authority_binds_same_user_agent_subject() -> None:
+    draft = _provider().bind(
+        _draft(
+            caller="easynet:///r/example/user/alice",
+            subject="easynet:///r/example/agent/alice.worker",
+        )
+    )
+
+    proof = DelegationProof.from_metadata(
+        draft.metadata[DELEGATION_METADATA_KEY]
+    )
+    assert proof.subject_ura == "easynet:///r/example/agent/alice.worker"
+    assert proof.scopes == ("meta.list_resources",)
+
+
+def test_local_runtime_authority_rejects_foreign_user_agent_subject() -> None:
+    with pytest.raises(easynet_sdk.SDKError) as exc_info:
+        _provider().bind(
+            _draft(
+                caller="easynet:///r/example/user/alice",
+                subject="easynet:///r/example/agent/bob.worker",
+            )
+        )
+
+    assert exc_info.value.code == easynet_sdk.ErrorCode.AUTHORITY_SUBJECT_MISMATCH
+
+
+def test_local_runtime_authority_preserves_existing_authority_metadata() -> None:
+    draft = replace(
+        _draft(
+            caller="easynet:///r/example/user/alice",
+            subject="easynet:///r/example/agent/alice.worker",
+        ),
+        metadata={DELEGATION_METADATA_KEY: "already-bound"},
     )
 
     assert _provider().bind(draft) is draft
