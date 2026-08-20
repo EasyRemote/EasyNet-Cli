@@ -72,7 +72,20 @@ pub struct PagesConfig {
 /// daemon-local form to `pages_dev_listener_url_root`, surfaced
 /// only by `pages.get` for debugging.
 pub fn pages_public_url_root(realm: &str, user: &str, project_id: &str) -> String {
-    format!("https://{realm}/web/{user}/{project_id}/")
+    // The realm label is an identity, not necessarily a reachable hostname
+    // (dev realms are literally "localhost", where https://localhost/ has
+    // no listener). Prefer the hub API base this device actually paired
+    // against — the same origin that serves /web/ — and fall back to the
+    // historical https://{realm} form only when no credentials exist
+    // (production realms are DNS names).
+    let base = crate::daemon::persistence::config::load_credentials_optional()
+        .ok()
+        .flatten()
+        .map(|credentials| credentials.api_base());
+    match base {
+        Some(base) if !base.is_empty() => format!("{base}/web/{user}/{project_id}/"),
+        _ => format!("https://{realm}/web/{user}/{project_id}/"),
+    }
 }
 
 /// Dev-only URL of the daemon's in-process HTTP listener for this
