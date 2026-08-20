@@ -8,7 +8,7 @@
 //! - Bind browser behavior to canonical Axon call modes and subject scopes.
 //!
 //! Implementation Approach:
-//! - Compile six descriptor/handler rows and project them through the generic
+//! - Compile seven descriptor/handler rows and project them through the generic
 //!   daemon-owned plugin contribution builder.
 //!
 //! Usage Contract:
@@ -244,7 +244,7 @@ mod tests {
             .map(|row| row.spec.name)
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(names.len(), rows.len());
-        assert_eq!(names.len(), 6);
+        assert_eq!(names.len(), super::super::constants::PUBLIC_ABILITIES.len());
     }
 
     #[test]

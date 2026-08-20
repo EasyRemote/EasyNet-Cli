@@ -210,7 +210,7 @@ mod tests {
             .iter()
             .filter(|descriptor| descriptor.name.starts_with("browser."))
             .collect::<Vec<_>>();
-        assert_eq!(browser.len(), 6);
+        assert_eq!(browser.len(), 7);
         for descriptor in browser {
             assert_eq!(
                 descriptor.exposure,
