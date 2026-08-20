@@ -242,16 +242,21 @@ fn remoteapp_target_binding_boundary_script_holds() {
 fn remoteapp_lifecycle_input_boundary_script_holds() {
     // Pins app/window lifecycle and input safety to target-owned move/resize
     // revisions, target-loss media-source degradation, weak native identity
-    // ambiguity, and view-only input until focus-safe dispatch exists.
-    run_bash_script("tests/scripts/test_check_remoteapp_lifecycle_input_boundary.sh");
+    // ambiguity, and view-only input until focus-safe dispatch exists. The
+    // exhaustive mutation self-test lives under tests/scripts; this normal
+    // aggregate gate runs the production checker so `script_checks remoteapp`
+    // stays bounded.
+    run_bash_script("tools/scripts/check-remoteapp-lifecycle-input-boundary.sh");
 }
 
 #[test]
 fn remoteapp_e2e_acceptance_boundary_script_holds() {
     // Pins host decoded-frame acceptance to live inventory, exact target
     // binding, WebRTC/H.264 evidence, and independently scanned artifact
-    // pixels for window/application sessions.
-    run_bash_script("tests/scripts/test_check_remoteapp_e2e_acceptance_boundary.sh");
+    // pixels for window/application sessions. The exhaustive harness mutation
+    // self-test lives under tests/scripts; this normal aggregate gate runs the
+    // production checker so `script_checks remoteapp` stays bounded.
+    run_bash_script("tools/scripts/check-remoteapp-e2e-acceptance-boundary.sh");
 }
 
 #[test]

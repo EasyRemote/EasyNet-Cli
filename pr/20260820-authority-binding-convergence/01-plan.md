@@ -88,6 +88,11 @@ Close the remaining runtime authority/descriptor seams across EasyNet-Cli daemon
 - That contradicted the product contract: these are user/operator-facing Pages surface abilities. Treating them as internal route-target abilities leaves frontend discovery and subject construction underspecified.
 - Fix: Pages management descriptors now declare `exposure = "operator"`, `dedicated_surface = "pages"`, and `subject_contract_kind = "dedicated-surface"`. The execution-surface matrix and frontend contract gate now pin this mapping.
 
+## RemoteApp aggregate gate boundedness seam
+
+- Follow-up RemoteApp verification found the production lifecycle/input and E2E-acceptance checkers complete quickly, but the Cargo aggregate `script_checks remoteapp` executed their exhaustive mutation/self-test wrappers. Those wrappers run many negative fixtures and can stay silent for minutes, so the normal architecture gate was not bounded even though the runtime RemoteApp implementation checks were healthy.
+- Fix: the normal Cargo aggregate now runs the production RemoteApp lifecycle/input and E2E-acceptance checkers directly. The exhaustive mutation wrappers remain under `tests/scripts/` for targeted checker self-tests, but they no longer block the regular RemoteApp architecture gate.
+
 ## Verification
 
 - `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
@@ -118,6 +123,8 @@ Close the remaining runtime authority/descriptor seams across EasyNet-Cli daemon
 - `cargo test -q prune_stale_auto_screen_targets --features axon-pb`
 - `cargo test -q remote_target_refresh --features axon-pb`
 - `cargo test -q --test script_checks remoteapp`
+- `bash tools/scripts/check-remoteapp-lifecycle-input-boundary.sh`
+- `bash tools/scripts/check-remoteapp-e2e-acceptance-boundary.sh`
 - `cargo test -q meta_list_abilities --features axon-pb`
 - `cargo test -q --test ability_execution_surface_matrix --features axon-pb`
 - `bash tests/scripts/test_check_frontend_ability_contract_boundary.sh`
