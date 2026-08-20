@@ -572,7 +572,11 @@ async fn remote_bidi_open_frame_is_canonical_and_fail_closed() {
         .target_gate()
         .route_resolver()
         .await
-        .resolve_route(&target_callee_ura, "remote_desktop.attach")
+        .resolve_route_with_call_mode(
+            &target_callee_ura,
+            "remote_desktop.attach",
+            axon_sdk::invocation::CallMode::Bidi,
+        )
         .expect("published route resolves");
 
     let initial_args = br#"{"session_id":"rd-9"}"#.to_vec();
@@ -658,7 +662,11 @@ async fn remote_bidi_rejects_governance_catalogue_route_before_carrier_frame() {
         .target_gate()
         .route_resolver()
         .await
-        .resolve_route(&target_callee_ura, CATALOGUE_READ)
+        .resolve_route_with_call_mode(
+            &target_callee_ura,
+            CATALOGUE_READ,
+            axon_sdk::invocation::CallMode::Bidi,
+        )
         .expect("published bidi catalogue route resolves before governance gate");
 
     let initial_args = br#"{"scope":"local"}"#.to_vec();

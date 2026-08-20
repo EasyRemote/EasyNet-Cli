@@ -422,10 +422,13 @@ call_mode = "rpc"
 
     fn ability_toml(&self) -> String {
         format!(
-            r#"schema_version = "2"
+            r#"schema_version = "3"
 name = "{ability_name}"
 descriptor_version = "{descriptor_version}"
 description = "Echo one message from a Hello World plugin."
+exposure = "task"
+dedicated_surface = "none"
+subject_contract_kind = "authenticated-user"
 admission_action = "invoke"
 
 [input_schema]

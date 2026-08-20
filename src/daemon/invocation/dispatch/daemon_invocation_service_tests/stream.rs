@@ -694,6 +694,7 @@ async fn invoke_stream_dispatches_non_default_descriptor_version() {
 async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() {
     use crate::daemon::invocation::bidi::state::pending_dispatch::PendingStreamDispatchMap;
     use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+    use ed25519_dalek::Signer;
     use futures::StreamExt;
 
     const TARGET_DEVICE_URA: &str = "easynet:///r/test-realm/device/stream-target";
@@ -706,8 +707,11 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
     let target_system_agent_ura =
         test_device_system_agent_ura(TARGET_DEVICE_URA, TEST_DISPATCH_SYSTEM_AGENT_ID);
     let subject_owner = format!("user.{OWNER_USER_ID}");
-    let subject_ura =
-        crate::core::ura::resource_dot_ura("test-realm", &subject_owner, "stream/dev-semop-chat");
+    let subject_ura = crate::core::ura::resource_dot_ura(
+        "test-realm",
+        &subject_owner,
+        &format!("invoke/{ABILITY}"),
+    );
     let receipt_anchor = Arc::new(
         RealmTrustAnchor::from_entries(vec![
             TrustedAgent {
@@ -735,19 +739,53 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
     let receipt_runtime_assembly =
         test_runtime_assembly(SharedTrustAnchor::new(Arc::clone(&receipt_anchor)));
     let receipt_runtime = receipt_runtime_assembly.runtime();
-    let receipt_catalog = catalog_with_json_echo_on_runtime(
+    let receipt_catalog = catalog_with_json_echo_on_runtime_for_mode(
         &target_system_agent_ura,
         ABILITY,
         "fixture",
         "receipt",
         Arc::clone(&receipt_runtime),
+        crate::daemon::ability::CallMode::Stream,
     );
     let descriptor_ref = catalog_test_descriptor_ref(
         receipt_catalog.as_ref(),
         &target_system_agent_ura,
         ABILITY,
-        crate::daemon::ability::CallMode::Rpc,
+        crate::daemon::ability::CallMode::Stream,
     );
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("test clock")
+        .as_millis() as i64;
+    let authority =
+        crate::daemon::invocation::admission::authority_metadata::CanonicalSessionAuthorityIssuer::issue(
+            crate::daemon::invocation::admission::authority_metadata::SessionAuthorityRequest {
+                issuer_ura: TEST_DISCOVER_USER_URA.to_string(),
+                session_id: "session-remote-stream-dispatch".to_string(),
+                session_owner_user_id: OWNER_USER_ID.to_string(),
+                creator_principal_id: TEST_DISCOVER_USER_URA.to_string(),
+                callee_ura: target_system_agent_ura.clone(),
+                subject_ura: subject_ura.clone(),
+                audience: target_system_agent_ura.clone(),
+                scopes: vec![ABILITY.to_string()],
+                allowed_actions: vec![
+                    axon_sdk::invocation::admission_action_from_descriptor_ref(&descriptor_ref)
+                        .expect("stream descriptor action")
+                        .to_string(),
+                ],
+                allowed_followup_abilities: vec![ABILITY.to_string()],
+                issued_at_ms: now_ms - 1_000,
+                expires_at_ms: now_ms + 60_000,
+            },
+            TEST_DISCOVER_USER_URA,
+            |canonical| {
+                Ok::<_, std::convert::Infallible>(
+                    signing_key.sign(canonical).to_bytes().to_vec(),
+                )
+            },
+        )
+        .expect("issue exact User stream authority");
+    let authority_metadata = authority.into_map();
     let envelope = signed_test_envelope_with_descriptor_ref(
         TEST_DISCOVER_USER_URA,
         &target_system_agent_ura,
@@ -770,7 +808,7 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
             callee_ura: &target_system_agent_ura,
             subject_ura: &subject_ura,
             ability_ura: &test_owner_ability_ura(&target_system_agent_ura, ABILITY),
-            action: AccessAction::Invoke,
+            action: AccessAction::Stream,
         },
     );
 
@@ -788,30 +826,38 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
             .with_hub_signer(test_hub_signer("test-realm"))
             .with_local_ability_catalog(Arc::clone(&receipt_catalog))
             .with_daemon_runtime(receipt_runtime_assembly);
-    publish_test_route_hosted_by(
+    publish_test_projected_route(
         &receipt_service,
         &target_system_agent_ura,
         ABILITY,
         TARGET_DEVICE_URA,
+        crate::daemon::ability::CallMode::Stream,
     );
     let receipt_response = receipt_service
-        .invoke(Request::new(InvokeRequest {
+        .invoke_stream(Request::new(InvokeServerStreamRequest {
             envelope: Some(envelope.clone()),
             target: Some(
                 wire_invocation_target(&descriptor_ref, ABILITY).expect("typed descriptor target"),
             ),
             arguments: arguments.clone(),
-            ..InvokeRequest::default()
+            metadata: authority_metadata.clone(),
+            ..InvokeServerStreamRequest::default()
         }))
         .await
-        .expect("target runtime produces canonical receipt pair")
-        .into_inner();
-    let admission_receipt = receipt_response
-        .admission_receipt
-        .expect("target runtime produces admission receipt");
-    let terminal_receipt = receipt_response
-        .terminal_receipt
-        .expect("target runtime produces terminal receipt");
+        .expect("target runtime produces canonical stream receipt pair");
+    let mut receipt_stream = receipt_response.into_inner();
+    let mut admission_receipt = None;
+    let mut terminal_receipt = None;
+    while let Some(chunk) = receipt_stream.next().await {
+        let chunk = chunk.expect("target stream frame is Ok");
+        admission_receipt = admission_receipt.or(chunk.admission_receipt);
+        terminal_receipt = terminal_receipt.or(chunk.terminal_receipt);
+        if terminal_receipt.is_some() {
+            break;
+        }
+    }
+    let admission_receipt = admission_receipt.expect("target runtime produces admission receipt");
+    let terminal_receipt = terminal_receipt.expect("target runtime produces terminal receipt");
     let expected_terminal_payload = terminal_receipt.payload.clone();
     let canonical_invocation_id = admission_receipt.invocation_id.clone();
     assert_eq!(terminal_receipt.invocation_id, canonical_invocation_id);
@@ -866,7 +912,13 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
             },
         )
         .expect("canonical presence key");
-    publish_test_route_hosted_by(&svc, &target_system_agent_ura, ABILITY, TARGET_DEVICE_URA);
+    publish_test_projected_route(
+        &svc,
+        &target_system_agent_ura,
+        ABILITY,
+        TARGET_DEVICE_URA,
+        crate::daemon::ability::CallMode::Stream,
+    );
 
     let resp = svc
         .invoke_stream(Request::new(InvokeServerStreamRequest {
@@ -875,6 +927,7 @@ async fn invoke_stream_dispatches_remote_selected_route_over_presence_session() 
                 wire_invocation_target(&descriptor_ref, ABILITY).expect("typed descriptor target"),
             ),
             arguments: arguments.clone(),
+            metadata: authority_metadata,
             ..InvokeServerStreamRequest::default()
         }))
         .await

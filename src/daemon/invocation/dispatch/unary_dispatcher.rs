@@ -734,7 +734,7 @@ impl UnaryDispatcher {
         &self,
         arguments: &[u8],
         envelope: Option<&Envelope>,
-        authority_binding: Option<&axon_sdk::invocation::AuthorityBinding>,
+        authority_binding: Option<&axon_sdk::invocation::AuthorityOrBootstrap>,
     ) -> Result<Vec<u8>, Status> {
         let _transition = self
             .directory

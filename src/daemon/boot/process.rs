@@ -576,6 +576,37 @@ impl DaemonHandle {
     /// process.
     pub fn attach_current() -> Result<Self> {
         let endpoints = DaemonEndpoints::try_current()?;
+        Self::attach_endpoints_with_process_facts(
+            endpoints,
+            discover_existing_daemon_pid(),
+            config::try_easynet_daemon_pid_path().map_err(|source| {
+                DaemonError::DaemonStateRootUnavailable {
+                    context: "daemon pidfile discovery",
+                    source,
+                }
+            })?,
+        )
+    }
+
+    /// Attach to an explicitly discovered daemon endpoint pair.
+    ///
+    /// SDK embeddings may manage more than one daemon state root in the same
+    /// process. This path therefore must not consult process-default HOME or
+    /// pidfile state after the caller has supplied concrete endpoints.
+    pub(crate) fn attach_endpoints(endpoints: DaemonEndpoints) -> Result<Self> {
+        let pid_path = endpoints
+            .control
+            .parent()
+            .map(|parent| parent.join("easynet-daemon.pid"))
+            .unwrap_or_else(|| PathBuf::from("easynet-daemon.pid"));
+        Self::attach_endpoints_with_process_facts(endpoints, None, pid_path)
+    }
+
+    fn attach_endpoints_with_process_facts(
+        endpoints: DaemonEndpoints,
+        pid: Option<u32>,
+        pid_path: PathBuf,
+    ) -> Result<Self> {
         let control_accepting = local_daemon_grpc::probe_accepting(&endpoints.control);
         let invocation_accepting = local_daemon_grpc::probe_accepting(&endpoints.invocation);
         if control_accepting && !invocation_accepting {
@@ -591,14 +622,9 @@ impl DaemonHandle {
         }
         Ok(Self {
             child: None,
-            pid: discover_existing_daemon_pid(),
+            pid,
+            pid_path,
             endpoints,
-            pid_path: config::try_easynet_daemon_pid_path().map_err(|source| {
-                DaemonError::DaemonStateRootUnavailable {
-                    context: "daemon pidfile discovery",
-                    source,
-                }
-            })?,
         })
     }
 
@@ -682,6 +708,15 @@ impl DaemonStatus {
     pub fn try_current() -> Result<Self> {
         let endpoints = DaemonEndpoints::try_current()?;
         Ok(Self::from_parts(discover_existing_daemon_pid(), endpoints))
+    }
+
+    /// Snapshot liveness for an explicitly selected daemon endpoint pair.
+    ///
+    /// C ABI lifecycle callers can attach to non-default state roots; their
+    /// discovery/status path must therefore avoid process-default pidfile and
+    /// HOME-derived endpoint resolution.
+    pub(crate) fn from_explicit_endpoints(endpoints: DaemonEndpoints) -> Self {
+        Self::from_parts(None, endpoints)
     }
 
     fn from_parts(pid: Option<u32>, endpoints: DaemonEndpoints) -> Self {

@@ -5,9 +5,10 @@ use std::sync::{Arc, Mutex};
 
 use axon_sdk::invocation::axiom::authority_proof_expected_hash;
 use axon_sdk::invocation::{
-    sha256, AgentIdentity, AuthorityBinding, AxonError, CalleeSignature, CanonicalReceiptProvider,
+    sha256, AgentIdentity, AuthorityBinding, AuthorityEvidence, AuthorityOrBootstrap,
+    AuthorityRelation, AxonError, CalleeSignature, CanonicalReceiptProvider,
     DescriptorBoundEnvelope, InvocationAuthorityProof, KeyResolver, LocalRuntime,
-    ReceiptSigningAuthority, VerifiedAdmissionPolicy,
+    ReceiptSigningAuthority, UraProfile, VerifiedAdmissionPolicy,
 };
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 
@@ -79,9 +80,14 @@ impl CanonicalReceiptProvider for DeterministicReceiptProvider {
         &self,
         envelope: &DescriptorBoundEnvelope,
     ) -> Result<VerifiedAdmissionPolicy, AxonError> {
-        let binding = AuthorityBinding::Self_ {
-            principal_ura: envelope.envelope().caller.ura.clone(),
-        };
+        let binding = AuthorityOrBootstrap::Binding(AuthorityBinding {
+            authority: AgentIdentity::new(
+                envelope.envelope().caller.ura.clone(),
+                UraProfile::StrictV2,
+            ),
+            relation: AuthorityRelation::Self_,
+            evidence: AuthorityEvidence::Identity,
+        });
         let mut proof = InvocationAuthorityProof::new(
             "integration-test-verified-admission",
             Some(binding.clone()),

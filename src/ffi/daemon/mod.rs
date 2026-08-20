@@ -24,10 +24,11 @@
 //   the complete Invocation ABI in `ffi::invocation`.
 
 use std::os::raw::c_char;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use crate::daemon::{DaemonHandle, DaemonStartConfig};
+use crate::daemon::{DaemonEndpoints, DaemonHandle, DaemonStartConfig};
 use crate::ffi::client::handle::{alloc, ClientSession, RuntimeHandle};
 use crate::ffi::errors::{
     clear_last_error, set_last_error_code, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_ARG,
@@ -141,25 +142,11 @@ pub unsafe extern "C" fn runtime_host_attach(
         return ERR_NULL_POINTER;
     }
     unsafe { *out_host_handle = 0 };
-    if !options_json.is_null() {
-        match read_cstr(options_json) {
-            Ok(raw) => {
-                if let Err(err) = validate_attach_options(raw) {
-                    set_last_error_code(ERR_INVALID_ARG, format!("runtime_host_attach: {err}"));
-                    return ERR_INVALID_ARG;
-                }
-            }
-            Err(StringError::NotUtf8) => {
-                set_last_error_code(
-                    ERR_INVALID_UTF8,
-                    "runtime_host_attach: options_json is not valid UTF-8",
-                );
-                return ERR_INVALID_UTF8;
-            }
-            Err(StringError::Null) => {}
-        }
-    }
-    let handle = match DaemonHandle::attach_current() {
+    let options = match read_attach_options(options_json, "runtime_host_attach") {
+        Ok(options) => options,
+        Err(code) => return code,
+    };
+    let handle = match attach_daemon_from_options(&options) {
         Ok(handle) => handle,
         Err(err) => {
             set_last_error_code(ERR_DAEMON_DOWN, format!("runtime_host_attach: {err}"));
@@ -194,25 +181,11 @@ pub unsafe extern "C" fn runtime_host_discover(
         return ERR_NULL_POINTER;
     }
     unsafe { *out_discovery_json = std::ptr::null_mut() };
-    if !options_json.is_null() {
-        match read_cstr(options_json) {
-            Ok(raw) => {
-                if let Err(err) = validate_attach_options(raw) {
-                    set_last_error_code(ERR_INVALID_ARG, format!("runtime_host_discover: {err}"));
-                    return ERR_INVALID_ARG;
-                }
-            }
-            Err(StringError::NotUtf8) => {
-                set_last_error_code(
-                    ERR_INVALID_UTF8,
-                    "runtime_host_discover: options_json is not valid UTF-8",
-                );
-                return ERR_INVALID_UTF8;
-            }
-            Err(StringError::Null) => {}
-        }
-    }
-    let status = match crate::daemon::DaemonStatus::try_current() {
+    let options = match read_attach_options(options_json, "runtime_host_discover") {
+        Ok(options) => options,
+        Err(code) => return code,
+    };
+    let status = match daemon_status_from_options(&options) {
         Ok(status) => status,
         Err(err) => {
             set_last_error_code(ERR_GENERIC, format!("runtime_host_discover: {err}"));
@@ -720,14 +693,143 @@ fn daemon_endpoints_json(endpoints: &crate::daemon::DaemonEndpoints) -> serde_js
     })
 }
 
-fn validate_attach_options(raw: &str) -> Result<(), DaemonStartConfigError> {
+#[derive(Debug, Default)]
+struct DaemonAttachOptions {
+    control_path: Option<PathBuf>,
+    control_endpoint: Option<PathBuf>,
+    invocation_endpoint: Option<PathBuf>,
+}
+
+fn read_attach_options(
+    options_json: *const c_char,
+    function_name: &'static str,
+) -> Result<DaemonAttachOptions, i32> {
+    if options_json.is_null() {
+        return Ok(DaemonAttachOptions::default());
+    }
+    let raw = match read_cstr(options_json) {
+        Ok(raw) => raw,
+        Err(StringError::NotUtf8) => {
+            set_last_error_code(
+                ERR_INVALID_UTF8,
+                format!("{function_name}: options_json is not valid UTF-8"),
+            );
+            return Err(ERR_INVALID_UTF8);
+        }
+        Err(StringError::Null) => return Ok(DaemonAttachOptions::default()),
+    };
+    parse_attach_options(raw).map_err(|err| {
+        set_last_error_code(ERR_INVALID_ARG, format!("{function_name}: {err}"));
+        ERR_INVALID_ARG
+    })
+}
+
+fn parse_attach_options(raw: &str) -> Result<DaemonAttachOptions, DaemonStartConfigError> {
     let value: serde_json::Value = serde_json::from_str(raw)?;
     if value.is_null() {
-        return Ok(());
+        return Ok(DaemonAttachOptions::default());
     }
-    value
+    let object = value
         .as_object()
         .ok_or(DaemonStartConfigError::ExpectedObject)?;
+    let string_path = |key: &str| {
+        object
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(normalize_local_endpoint_path)
+    };
+    Ok(DaemonAttachOptions {
+        control_path: string_path("control_path"),
+        control_endpoint: string_path("control_endpoint"),
+        invocation_endpoint: string_path("invocation_endpoint"),
+    })
+}
+
+fn normalize_local_endpoint_path(raw: &str) -> PathBuf {
+    let normalized = raw.strip_prefix("unix://").unwrap_or(raw);
+    PathBuf::from(normalized)
+}
+
+fn daemon_status_from_options(
+    options: &DaemonAttachOptions,
+) -> crate::daemon::Result<crate::daemon::DaemonStatus> {
+    match daemon_endpoints_from_options(options)? {
+        Some(endpoints) => Ok(crate::daemon::DaemonStatus::from_explicit_endpoints(
+            endpoints,
+        )),
+        None => crate::daemon::DaemonStatus::try_current(),
+    }
+}
+
+fn attach_daemon_from_options(
+    options: &DaemonAttachOptions,
+) -> crate::daemon::Result<DaemonHandle> {
+    match daemon_endpoints_from_options(options)? {
+        Some(endpoints) => DaemonHandle::attach_endpoints(endpoints),
+        None => DaemonHandle::attach_current(),
+    }
+}
+
+fn daemon_endpoints_from_options(
+    options: &DaemonAttachOptions,
+) -> crate::daemon::Result<Option<DaemonEndpoints>> {
+    let Some(control_path) = options
+        .control_path
+        .as_ref()
+        .or(options.control_endpoint.as_ref())
+    else {
+        return Ok(None);
+    };
+    let discovery_path = crate::daemon::control::discovery::resolve_control_json_path(control_path)
+        .map_err(
+            |source| crate::daemon::DaemonError::DaemonStateRootUnavailable {
+                context: "explicit daemon attach discovery",
+                source,
+            },
+        )?;
+    let discovery = crate::daemon::control::discovery::read(&discovery_path)
+        .map_err(
+            |source| crate::daemon::DaemonError::DaemonStateRootUnavailable {
+                context: "explicit daemon attach discovery read",
+                source,
+            },
+        )?
+        .ok_or_else(|| crate::daemon::DaemonError::DaemonStateRootUnavailable {
+            context: "explicit daemon attach discovery missing",
+            source: anyhow::anyhow!(
+                "control discovery {} does not exist",
+                discovery_path.display()
+            ),
+        })?;
+    let control = options
+        .control_endpoint
+        .clone()
+        .or(discovery.socket_path)
+        .unwrap_or_else(|| control_path.to_path_buf());
+    let invocation = options
+        .invocation_endpoint
+        .clone()
+        .or(discovery.invocation_endpoint)
+        .ok_or_else(|| crate::daemon::DaemonError::InvocationEndpointMissing {
+            control: discovery_path.clone(),
+        })?;
+    require_absolute_endpoint(&control, "explicit daemon control endpoint")?;
+    require_absolute_endpoint(&invocation, "explicit daemon invocation endpoint")?;
+    Ok(Some(DaemonEndpoints {
+        control,
+        invocation,
+    }))
+}
+
+fn require_absolute_endpoint(path: &Path, label: &'static str) -> crate::daemon::Result<()> {
+    if !path.is_absolute() {
+        return Err(crate::daemon::DaemonError::DaemonStateRootUnavailable {
+            context: label,
+            source: anyhow::anyhow!("{} must be absolute: {}", label, path.display()),
+        });
+    }
     Ok(())
 }
 
@@ -811,6 +913,50 @@ mod tests {
         let code = unsafe { runtime_host_attach(raw.as_ptr(), &mut handle) };
         assert_eq!(code, ERR_INVALID_ARG);
         assert_eq!(handle, 0);
+    }
+
+    #[test]
+    fn daemon_attach_options_select_explicit_control_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_json = dir.path().join("control.json");
+        let control_sock = dir.path().join("selected-control.sock");
+        let invocation_sock = dir.path().join("selected-daemon.sock");
+        crate::daemon::control::discovery::write(
+            &control_json,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(control_sock.clone()),
+                pipe_name: None,
+                invocation_endpoint: Some(dir.path().join("discovered-daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "hub".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: None,
+                }),
+                pid: 9_999,
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write control discovery");
+
+        let options = parse_attach_options(
+            &serde_json::json!({
+                "control_path": control_sock,
+                "invocation_endpoint": format!("unix://{}", invocation_sock.display()),
+            })
+            .to_string(),
+        )
+        .expect("parse attach options");
+        let endpoints = daemon_endpoints_from_options(&options)
+            .expect("resolve explicit endpoints")
+            .expect("explicit endpoint selection");
+
+        assert_eq!(endpoints.control(), control_sock);
+        assert_eq!(endpoints.invocation(), invocation_sock);
     }
 
     #[test]

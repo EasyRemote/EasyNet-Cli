@@ -962,9 +962,14 @@ mod tests {
     };
     use futures::{stream, StreamExt as _};
     use rand::random;
+    use rcgen::{
+        BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa,
+        KeyPair, KeyUsagePurpose,
+    };
     use serde_json::Value;
     use tokio::net::TcpListener;
     use tokio_stream::wrappers::TcpListenerStream;
+    use tonic::transport::{Identity, ServerTlsConfig};
     use tonic::{Request, Response};
 
     /// Upper bound for "did the supervisor's async machinery make
@@ -1772,6 +1777,72 @@ mod tests {
                 .expect("notifying session hub server");
         });
         (opened_rx, super::tasks::AbortOnDrop(handle))
+    }
+
+    async fn spawn_tls_notifying_session_hub_on(
+        addr: SocketAddr,
+        cert_pem: String,
+        key_pem: String,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        super::tasks::AbortOnDrop,
+    ) {
+        let listener = TcpListener::bind(addr)
+            .await
+            .expect("bind tls notifying session hub");
+        let incoming = TcpListenerStream::new(listener);
+        let (opened_tx, opened_rx) = tokio::sync::oneshot::channel();
+        let hub = NotifyingSessionHub {
+            opened: Arc::new(std::sync::Mutex::new(Some(opened_tx))),
+        };
+        let identity = Identity::from_pem(cert_pem, key_pem);
+        let tls_config = ServerTlsConfig::new().identity(identity);
+        let handle = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .tls_config(tls_config)
+                .expect("tls config")
+                .add_service(InvocationServer::new(hub))
+                .serve_with_incoming(incoming)
+                .await
+                .expect("tls notifying session hub server");
+        });
+        (opened_rx, super::tasks::AbortOnDrop(handle))
+    }
+
+    fn test_ca_and_leaf() -> (Certificate, String, String) {
+        let mut ca_params = CertificateParams::new(Vec::<String>::new()).expect("ca params");
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca_params
+            .distinguished_name
+            .push(DnType::CommonName, "EasyNet session test CA");
+        ca_params.key_usages.push(KeyUsagePurpose::DigitalSignature);
+        ca_params.key_usages.push(KeyUsagePurpose::KeyCertSign);
+        ca_params.key_usages.push(KeyUsagePurpose::CrlSign);
+        let ca_key = KeyPair::generate().expect("ca key");
+        let ca = ca_params.self_signed(&ca_key).expect("ca cert");
+
+        let mut leaf_params =
+            CertificateParams::new(vec!["127.0.0.1".to_string(), "localhost".to_string()])
+                .expect("leaf params");
+        leaf_params
+            .distinguished_name
+            .push(DnType::CommonName, "localhost");
+        leaf_params
+            .key_usages
+            .push(KeyUsagePurpose::DigitalSignature);
+        leaf_params
+            .extended_key_usages
+            .push(ExtendedKeyUsagePurpose::ServerAuth);
+        let leaf_key = KeyPair::generate().expect("leaf key");
+        let leaf = leaf_params
+            .signed_by(&leaf_key, &ca, &ca_key)
+            .expect("leaf cert");
+        let ca_pem = ca.pem();
+        (
+            ca,
+            format!("{}{}", leaf.pem(), ca_pem),
+            leaf_key.serialize_pem(),
+        )
     }
 
     async fn spawn_clean_close_session_hub() -> (SocketAddr, super::tasks::AbortOnDrop) {
@@ -2928,6 +2999,67 @@ mod tests {
             .await
             .expect("supervisor reconnects after Hub starts")
             .expect("notifying Hub observes session.open");
+
+        let _ = cancel_tx.send(());
+        tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, supervisor_handle)
+            .await
+            .expect("supervisor exits promptly after cancel")
+            .expect("supervisor task did not panic");
+        drop(hub_handle);
+    }
+
+    #[tokio::test]
+    async fn session_channel_connects_to_tls_hub_with_pinned_ca() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        seed_device_only_session_credentials();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ca_path = temp.path().join("ca.pem");
+        let (ca, cert_pem, key_pem) = test_ca_and_leaf();
+        std::fs::write(&ca_path, ca.pem()).expect("write ca");
+
+        let hub_addr = reserve_loopback_addr();
+        let (_opened_rx, hub_handle) =
+            spawn_tls_notifying_session_hub_on(hub_addr, cert_pem, key_pem).await;
+
+        transport::connect_session_channel(&format!("https://{hub_addr}"), Some(&ca_path))
+            .await
+            .expect("session channel must connect to TLS hub with pinned CA");
+
+        drop(hub_handle);
+    }
+
+    #[tokio::test]
+    async fn supervisor_opens_session_to_tls_hub_with_pinned_ca() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        seed_device_only_session_credentials();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let ca_path = temp.path().join("ca.pem");
+        let (ca, cert_pem, key_pem) = test_ca_and_leaf();
+        std::fs::write(&ca_path, ca.pem()).expect("write ca");
+
+        let hub_addr = reserve_loopback_addr();
+        let (opened_rx, hub_handle) =
+            spawn_tls_notifying_session_hub_on(hub_addr, cert_pem, key_pem).await;
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let supervisor_handle = tokio::spawn(run_session_supervisor(SessionSupervisorRunConfig {
+            hub_endpoint: format!("https://{hub_addr}"),
+            signer: TestSessionSigner::random("easynet:///r/realm/device/n1"),
+            hub_ca_pem_path: Some(ca_path),
+            dispatcher: Arc::new(RecordingDispatcher::default()),
+            escalation_outbox: None,
+            ability_inventory: SessionAbilityDescriptorInventory::fixed(Vec::new()),
+            authority_published_abilities: authority_store(),
+            initial_admission: None,
+            user_trust_sync: None,
+            connection_state_sink: isolated_connection_state_sink(),
+            cancel: cancel_rx,
+        }));
+
+        tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, opened_rx)
+            .await
+            .expect("supervisor opens TLS session")
+            .expect("notifying TLS Hub observes session.open");
 
         let _ = cancel_tx.send(());
         tokio::time::timeout(TEST_SUPERVISOR_PROGRESS_TIMEOUT, supervisor_handle)

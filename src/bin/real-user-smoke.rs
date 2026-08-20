@@ -33,9 +33,10 @@
 
 use axon_sdk::invocation::axiom::authority_proof_expected_hash;
 use axon_sdk::invocation::{
-    sha256, AgentIdentity, AuthorityBinding, AxonError, CalleeSignature, CanonicalReceiptProvider,
+    sha256, AgentIdentity, AuthorityBinding, AuthorityEvidence, AuthorityOrBootstrap,
+    AuthorityRelation, AxonError, CalleeSignature, CanonicalReceiptProvider,
     DescriptorBoundEnvelope, InvocationAuthorityProof, KeyResolver, LocalRuntime,
-    ReceiptSigningAuthority, StreamingInvocationHandle, VerifiedAdmissionPolicy,
+    ReceiptSigningAuthority, StreamingInvocationHandle, UraProfile, VerifiedAdmissionPolicy,
 };
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -93,9 +94,14 @@ impl CanonicalReceiptProvider for SmokeCanonicalReceiptProvider {
         &self,
         envelope: &DescriptorBoundEnvelope,
     ) -> Result<VerifiedAdmissionPolicy, AxonError> {
-        let binding = AuthorityBinding::Self_ {
-            principal_ura: envelope.envelope().caller.ura.clone(),
-        };
+        let binding = AuthorityOrBootstrap::Binding(AuthorityBinding {
+            authority: AgentIdentity::new(
+                envelope.envelope().caller.ura.clone(),
+                UraProfile::StrictV2,
+            ),
+            relation: AuthorityRelation::Self_,
+            evidence: AuthorityEvidence::Identity,
+        });
         let mut proof = InvocationAuthorityProof::new(
             "smoke-verified-admission",
             Some(binding.clone()),
