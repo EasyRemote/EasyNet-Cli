@@ -1,0 +1,1740 @@
+# Canonical Runtime Convergence V2 - Architecture
+
+## Layering
+
+Axon owns canonical invocation, descriptor-bound proof, admission, lifecycle,
+and receipt semantics. EasyNet-Cli owns daemon policy, local resources,
+providers, and product execution surfaces. Backend code submits complete
+invocations and does not become a proof or receipt authority.
+
+## Current Slice: Descriptor Governed Schema Projection
+
+Owner: EasyNet-Cli daemon ability control plane.
+
+The governed schema hash projection is a daemon descriptor fact. It is not an
+Axon protocol primitive and it is not a public SDK compatibility surface.
+
+The projection must keep all hash inputs explicit:
+
+- input schema;
+- output receipt schema;
+- access policy;
+- hints;
+- receipt semantics;
+- admission action;
+- description;
+- source; and
+- metadata.
+
+Those fields now move as one semantic projection object instead of as a loose
+parameter list. This keeps the descriptor hash boundary cohesive while
+preserving the exact JSON projection used by existing hash computation.
+
+## Current Slice: Mission Terminal Transition Facts
+
+Owner: EasyNet-Cli daemon Mission/EAL orchestration.
+
+Mission/EAL remains a daemon-owned composite `AbilityImpl` strategy, not an
+Axon invocation ontology. Its persisted run lifecycle still needs a real state
+machine: `running` may transition to exactly one terminal state, and terminal
+states are immutable.
+
+The terminal transition now separates:
+
+- run context: mission name, source file, trace id, start timestamp, duration,
+  and parent invocation context;
+- completion facts: total/completed/failed step counts and ability graph
+  traces; and
+- failure facts: total step count and error text.
+
+This keeps the mission lifecycle transition explicit without turning Mission
+state into a second invocation/proof model.
+
+## Current Slice: Kernel Default Lifecycle Construction
+
+Owner: EasyNet-Cli daemon boot/runtime kernel.
+
+`Kernel` is the daemon-local execution entry point that owns admission,
+permission gating, LocalRuntime dispatch, and receipt projection for internal
+kernel calls. The default kernel lifecycle is the fresh-subservice,
+allow-all-broker variant already exposed as `Kernel::new()`.
+
+`Default` now delegates to `Kernel::new()` so generic lifecycle construction
+uses the same domain constructor instead of leaving `new()` as an isolated
+custom path. The subscriber-broker constructor remains explicit because it is a
+daemon boot policy choice, not the object default.
+
+## Current Slice: Bidi Event Payload Ownership
+
+Owner: EasyNet-Cli daemon invocation stream/bidi dispatch.
+
+Pending stream and bidi carrier events are bounded lifecycle signals: admission,
+data chunks, and exactly one terminal result. Large protobuf receipt/result
+payloads should not inflate every queued event variant because these events
+flow through bounded channels and session drain loops.
+
+The large admission, terminal, and local-bidi down-frame payloads now use boxed
+ownership at the event boundary. This preserves the event state machine while
+keeping queue element size bounded by pointer-sized large variants.
+
+## Current Slice: Session Escalation Reply Ownership
+
+Owner: EasyNet-Cli daemon reverse session escalation.
+
+Session escalation correlates one device-originated request with exactly one
+hub reply. Canonical product replies carry full `InvokeResponse` proof material,
+while daemon-control replies carry a smaller control outcome. The enum now boxes
+the canonical response so the correlation table and oneshot channel do not make
+every reply slot the size of the largest proof-carrying variant.
+
+The session outbox ready-hook list is named as `SessionReadyHook` and
+`SessionReadyHooks`; the outbox still owns hook execution after a live sender is
+published, but the public lifecycle field no longer exposes nested collection
+mechanics as its type identity.
+
+## Current Slice: Dispatch Result Projection
+
+Owner: EasyNet-Cli daemon Axon bridge and local session dispatch.
+
+Axon finalization and carrier-v1 session results project the same canonical
+result facts: call identity, terminal state, completion payload, failure text,
+and admission/terminal receipts. Those facts must be explicit at the projection
+boundary so a result literal cannot silently inherit default receipt or failure
+fields.
+
+The bridge now expresses completion payload selection as an explicit terminal
+state branch, and session dispatch result literals enumerate every carrier
+field without no-op default tails. This is a local projection cleanup only; it
+does not change the canonical result model or introduce a compatibility path.
+
+## Current Slice: Resolver Ingress Tuple Source
+
+Owner: EasyNet-Cli daemon invocation routing.
+
+Target resolution is the first daemon policy boundary that can distinguish a
+daemon-local system call from a public ingress call. Those sources cannot share
+an `Option<subject>` shape because absence means different things: system calls
+may use a named descriptor-derived subject policy, while public ingress must
+already carry the signed subject and causal context.
+
+`InvocationPlanIngress` now models that source as a closed enum:
+
+- `DaemonSystem` maps to the explicit daemon-system subject and root causal
+  derivation policy.
+- `PublicIngress` requires an inspectable subject and causal context recovered
+  from signed ingress material before target resolution.
+
+The resolver validates public-ingress subjects as URAs and refuses to interpret
+an invalid or absent public subject as daemon-system derivation. This narrows
+RF-8 at the resolver boundary; direct `InvocationTarget` construction sites
+remain to migrate before the fork is closed.
+
+## Current Slice: Invocation Target Construction Boundary
+
+Owner: EasyNet-Cli daemon invocation routing.
+
+`InvocationTarget` is the daemon-local target value that all local ability
+adapters eventually submit to the shared registry and Axon `LocalRuntime`.
+Direct struct literals duplicated the same policy tuple at many adapters:
+local scope, daemon-system subject derivation, root causal context, and empty
+transport metadata. That made it too easy for public ingress and system calls
+to look structurally identical.
+
+The target type now owns named constructors for the common states:
+
+- `local_daemon_system` for descriptor-derived daemon-system calls;
+- `local_daemon_system_with_subject` for daemon-system calls with an explicit
+  acted-on subject; and
+- `local_explicit_tuple` for callers that already hold explicit subject and
+  causal-context facts.
+
+The first production migration covers agent discover/invoke and edge
+integration adapters for MCP, A2A, and OpenAI compatibility. Remaining direct
+`InvocationTarget` literals are still inventory for RF-8/RF-7 migration.
+
+## Current Slice: Plugin Host Target Test Boundary
+
+Owner: EasyNet-Cli daemon plugin host.
+
+Plugin host tests exercise declarative plugin execution through the same local
+registry target shape that production plugin dispatch uses. Those tests should
+not preserve hand-assembled target literals because they become copyable
+examples of the obsolete assembly style.
+
+The plugin host tests now construct daemon-system and explicit-subject local
+targets through `InvocationTarget` constructors. This keeps plugin execution
+fixtures aligned with the canonical routing target boundary while preserving
+the tested plugin load, hot-register, hot-unregister, and rejection behavior.
+
+## Current Slice: Resource and Governance Target Boundary
+
+Owner: EasyNet-Cli daemon resource and governance adapters.
+
+Ability-backed page APIs and governance health dispatch both route through the
+daemon local registry. They should not hand-assemble local routing targets
+because the adapter's responsibility is selecting the product ability and
+subject, not restating routing target state.
+
+The pages ability adapter now uses the explicit-subject daemon-system target
+constructor when forwarding a page API request to a selected ability. The
+governance health test fixture uses the daemon-system constructor for its local
+smoke dispatch. This continues the RF-8/RF-7 migration without claiming that
+all local target construction has moved.
+
+## Current Slice: Media Subject Target Fixtures
+
+Owner: EasyNet-Cli daemon media resource adapters.
+
+Media resource handlers are important subject-boundary tests because they
+reject missing subjects, subject-in-args fallback, wrong resource type, corrupt
+resource tables, and unknown resource URAs. Their tests should therefore
+exercise subject policy through the same routing target constructors as other
+daemon adapters rather than retaining local target literals.
+
+The mic.subscribe and screen.snapshot/screen.subscribe fixtures now construct
+local daemon-system targets through `InvocationTarget` constructors for both
+explicit resource subjects and derived-system missing-subject cases. Camera
+fixtures remain in the direct-literal inventory for a separate slice.
+
+## Current Slice: Camera Subject Target Fixtures
+
+Owner: EasyNet-Cli daemon camera media adapter.
+
+Camera media tests cover the broadest media subject surface: snapshot,
+subscribe, recording start/stop, duplicate recording rejection, missing
+subject, unknown subject, wrong resource type, and subject-in-args rejection.
+Those fixtures must use the same routing target construction boundary as the
+mic and screen tests so media subject policy is exercised consistently.
+
+The camera fixtures now construct explicit resource-subject targets and
+missing-subject daemon-system targets through `InvocationTarget` constructors.
+This closes the media fixture portion of the direct target construction
+inventory while leaving non-media target literals for later RF-8/RF-7 slices.
+
+## Current Slice: LocalRuntime Subject Derivation Ownership
+
+Owner: EasyNet-Cli daemon invocation routing.
+
+The target resolver already distinguishes public ingress from daemon-system
+calls, but `local_runtime_invoker` still carried a second subject derivation
+policy for descriptor defaults. That duplicated the RF-8 decision point: the
+same missing subject could be interpreted by the target domain and again by
+the LocalRuntime adapter.
+
+`InvocationTarget` now owns resolution of its subject binding against the
+selected callee. Explicit subjects are validated as URAs, daemon-system calls
+resolve through the named descriptor-default policy, and hub-owned abilities
+use the Ability URA as subject because Hub identities are not valid Axon
+subjects. The LocalRuntime adapter consumes the resolved subject and causal
+context; it no longer defines a separate fallback subject state machine.
+
+## Current Slice: Mission Catalog Gateway Target Boundary
+
+Owner: EasyNet-Cli daemon Mission/EAL test gateway.
+
+Production Mission child dispatch already enters Axon through the admitted
+parent `AbilityContext`, `ChildInvocationRequest`, descriptor-bound target,
+parent subject, and runtime-managed causal chain. The cfg-test catalog gateway
+is not the production proof path, but it is the Mission/EAL test port used by
+orchestration tests; it should not preserve a hand-written local target
+literal that copies routing policy.
+
+The catalog gateway now uses `InvocationTarget::local_daemon_system` for its
+daemon-system test dispatch. This keeps Mission/EAL test adapters aligned with
+the canonical target construction boundary while preserving the production
+child-invocation architecture.
+
+## Current Slice: Ability Dispatch Target Fixture Boundary
+
+Owner: EasyNet-Cli daemon ability registry dispatch tests.
+
+`AxonAbilityCatalog` is the daemon registry boundary that forwards local RPC,
+stream, and bidi calls into the attached Axon `LocalRuntime`. Its tests cover
+the core envelope-aware behavior: explicit subjects, derived system subjects,
+remote-route rejection, stream/RPC mode separation, and bidi lifecycle guards.
+Those tests should exercise routing target construction through the target
+value object instead of restating local or remote scope, system subject policy,
+root causal context, and empty metadata literals.
+
+`InvocationTarget` now also owns the remote daemon-system constructor, backed
+by the same internal scoped binding constructor as local targets. Ability
+dispatch fixtures now use named constructors for local RPC, stream, bidi, and
+remote guard targets. This removes a high-visibility set of obsolete tuple
+assembly examples from the registry tests while leaving protobuf transport
+targets and other remaining inventory for separate RF-8/RF-7 slices.
+
+## Current Slice: LocalRuntime Invoker Target Fixture Boundary
+
+Owner: EasyNet-Cli daemon Axon bridge tests.
+
+`local_runtime_invoker` is the daemon adapter that lowers routing targets into
+descriptor-bound Axon `LocalRuntime` requests. Its production path now consumes
+resolved target tuple facts, but the module tests still used a hand-written
+`InvocationTarget` fixture that repeated local scope, daemon-system subject
+policy, root causal context, and empty metadata.
+
+The test helper now constructs explicit-subject and daemon-system targets
+through the `InvocationTarget` constructors. This keeps the LocalRuntime
+adapter tests focused on envelope lowering and finalized result projection
+rather than preserving a second example of target assembly.
+
+## Current Slice: Builtins Smoke Target Fixture Boundary
+
+Owner: EasyNet-Cli daemon built-in ability test fixtures.
+
+`real_invoke_tests` and catalog assembly tests are broad smoke coverage for
+daemon built-in abilities and registry assembly. Their local invocation helpers
+are copied into many tests, so a hand-written `InvocationTarget` literal there
+keeps the obsolete tuple assembly style highly visible.
+
+The shared smoke helper and catalog assembly loop now use
+`InvocationTarget::local_daemon_system`. Per-test subject and metadata
+overrides still attach through the target value object's builder methods, but
+the default system/root tuple policy is no longer repeated in these fixtures.
+
+## Current Slice: CLI Agent Command Target Fixture Boundary
+
+Owner: EasyNet-Cli CLI agent command tests.
+
+The CLI agent command fixture builds an in-process daemon ability catalog and
+invokes agent-management abilities through the same local routing target shape
+used by the daemon. The fixture is not a public daemon invocation surface, but
+it is a command-layer adapter test; keeping a hand-written local
+`InvocationTarget` literal there preserves a second target assembly idiom at
+the CLI/daemon boundary.
+
+The fixture now calls `InvocationTarget::local_daemon_system` when it dispatches
+ordinary agent command abilities. The special envelope-aware branch still uses
+its explicit `EnvelopeContext` helper because that path tests envelope handler
+behavior, not routing target construction.
+
+## Current Slice: Protobuf Transport Target Projection Boundary
+
+Owner: EasyNet-Cli daemon Invocation protobuf wire facade.
+
+Bidi `EnvelopeOpen.target` is a protobuf transport selector, not the canonical
+Invocation tuple owner. The signed envelope still owns caller, callee, subject,
+nonce, causal context, and descriptor-bound proof material. However, SDK bidi
+frame construction, `session.open`, the local daemon gRPC bidi adapter, and
+crate-internal service test helpers were each hand-building the same
+`InvocationTarget { ability_name, ..Default::default() }` projection. That
+kept transport frame assembly duplicated at the exact boundary where the daemon
+should have one wire-shape construction point.
+
+`invocation_wire::wire_invocation_target` now owns that protobuf selector
+projection and rejects empty selectors before frame construction. Production
+callers pass either the descriptor ref or route-local ability name required by
+their ingress contract, but they no longer construct the proto target literal
+themselves. External integration tests may still hand-build raw protobuf input
+when they intentionally model an outside client; that is fixture input, not an
+internal construction path.
+
+## Current Slice: RF-5 Rust Public Surface Signer Fallback Removal
+
+Owner: EasyNet-Axon Rust SDK runtime-admin public surface and EasyNet-Cli SDK
+conformance model.
+
+The canonical SDK capability matrix must not count process-local signer
+fallback helpers as evidence for a generic runtime capability, and the canonical
+Rust Axon SDK must not expose process-local generated auth as public runtime
+administration.
+
+The Axon Rust SDK no longer exports `GeneratedSubjectAuth`,
+`generate_subject_auth`, `generate_private_agent_auth`, or
+`generate_private_hub_auth` from `invocation::runtime_admin`. The remaining
+runtime-admin subject helpers are pure identifier helpers; they do not mint
+secret material or define a local signing authority.
+
+The EasyNet-Cli public-surface policy now classifies default/generated subject
+auth, generated private agent/hub auth, process-local signer, and private-key
+authenticator symbols as RF-5 non-canonical signer fallback defects. The
+regenerated manifest and parity matrix contain no generated auth symbols. If
+any SDK reintroduces this class of helper, the V2 gate fails before the symbol
+can be counted as canonical capability evidence.
+
+This slice removes the Rust public fallback root and closes its conformance
+evidence path. Full RF-5 remains open until all SDK languages converge on the
+same explicit signer-handle/daemon KeyService authority model and the remaining
+plain proof helper cutover is complete.
+
+## Current Slice: RF-3 Public Plain Proof Helper Removal
+
+Owner: EasyNet-Axon Rust/Python invocation public surface and EasyNet-Cli SDK
+conformance gates.
+
+The descriptor-bound envelope is the only canonical admission/proof boundary.
+The plain encoder and plain admission helpers remain useful only as internal
+test fixtures for historical vector stability; they must not be public SDK
+entry points because they sign or admit an envelope without binding an
+`AbilityDescriptorRef` and derived `EntityRef`.
+
+The Axon Rust SDK no longer exports the plain helper group from
+`invocation::*`, and the underlying Rust helpers are crate-internal
+`#[cfg(test)]` functions instead of rustdoc-visible public API:
+`canonical_invocation_bytes`, `sign_invocation`,
+`verify_invocation_signature`, `verify_phase`, `verify_signature`, and
+`run_admission`. Runtime-admin resolver tests were migrated to
+`DescriptorBoundEnvelope`, `sign_descriptor_bound_invocation`, and
+`verify_descriptor_bound_invocation_signature` so test fixtures no longer
+teach the obsolete proof boundary.
+
+The Axon Python invocation package root no longer exports the same plain helper
+group. It instead exposes descriptor-bound admission replacements:
+`run_descriptor_bound_admission` and `verify_descriptor_bound_signature`,
+alongside the existing descriptor-bound canonical bytes and signature helpers.
+
+The EasyNet-Cli V2 conformance gate now rejects plain proof helpers anywhere in
+the public manifest, including `non_canonical` quarantine. This changes RF-3
+from "legacy public export is documented" to "legacy public export is a gate
+failure." Full RF-3 remains open until all language packages and old
+vectors/examples are audited against the same descriptor-bound-only public
+contract.
+
+## Current Slice: RF-3 Python Submodule Plain Proof Hardening
+
+Owner: EasyNet-Axon Python invocation implementation and EasyNet-Cli V2 source
+gate.
+
+Removing package-root exports was not sufficient for Python because SDK users
+can still import non-underscore functions from submodules. The plain proof
+helpers in `easynet_axon.invocation.axiom` and
+`easynet_axon.invocation.admission` therefore remained discoverable as normal
+Python module API even though the canonical proof boundary is descriptor-bound.
+
+The Python plain helper group is now private by name:
+`_canonical_invocation_bytes`, `_sign_invocation`,
+`_verify_invocation_signature`, `_verify_signature`, and `_run_admission`.
+Runtime admission tests no longer import the plain helpers. Historical axiom
+vector tests and cross-language bundle producer tests use the private fixtures
+explicitly, which documents that they are vector fixtures rather than public
+SDK proof APIs.
+
+The V2 convergence script now performs a direct Axon source scan for public
+Rust and Python plain proof/admission helpers. This closes the gap where the
+manifest proved the EasyNet-Cli facade surface was clean but could not detect
+an Axon Python submodule exposing the obsolete proof boundary.
+
+## Current Slice: RF-6 Java LocalRuntime Receipt Proof Facts
+
+Owner: EasyNet-Axon Java LocalRuntime receipt binding and EasyNet-Cli V2
+conformance gate.
+
+Java receipt constructors already reject omitted authority and proof facts, but
+the production `LocalRuntime` binding path still created receipts with
+`ReceiptProofFacts.empty()`. That preserved the exact RF-6 defect after the
+constructor cleanup: the runtime could produce canonical receipts whose proof
+facts did not identify the descriptor version, subject, authority proof,
+runtime environment, input hash, output hash, or causal parents.
+
+The Java LocalRuntime now constructs receipt proof facts at the admission
+binding boundary. Signed descriptor-bound calls derive proof facts from the
+descriptor-bound envelope and caller authority. Plain `invokeAsync` calls use a
+separate system-local proof identity, `system-local.invoke.v1`, so internal
+SystemAgent receipts remain auditable without pretending to be external
+descriptor-bound calls.
+
+`InvocationReceipt.AxiomBinding.withPayloadDigest` now carries per-event proof
+facts forward by replacing the immutable proof-fact output hash with the event
+payload hash. This keeps output facts attached to the receipt event that is
+actually emitted instead of leaving the binding with an admission-time empty
+output fact.
+
+This slice removes the Java LocalRuntime empty proof-fact production path and
+adds an EasyNet-Cli V2 source gate for that exact regression. It does not close
+RF-6 globally: Java still needs full descriptor proof-binding metadata parity
+with Rust, and the remaining language examples/tests/constructors must be
+audited before receipt proof-fact convergence is complete.
+
+## Current Slice: RF-6 Python LocalRuntime Receipt Proof Facts
+
+Owner: EasyNet-Axon Python LocalRuntime receipt binding and EasyNet-Cli V2
+conformance gate.
+
+The Python LocalRuntime had the same RF-6 production defect as Java: signed
+descriptor-bound invocations and system-local `invoke_async` both created
+`AxiomBinding` values with default `ReceiptProofFacts()`. Because
+`_InvocationCore.emit` refreshed only `payload_digest`, every emitted receipt
+could still carry an admission-time empty proof-fact block even when the
+receipt payload digest changed per event.
+
+The Python LocalRuntime now constructs receipt proof facts at the binding
+boundary through `_LocalReceiptProofFacts`. Signed invocations derive facts
+from the descriptor-bound envelope, caller authority, subject, causal parent
+receipts, and runtime admission hook. System-local calls use the separate
+`system-local.invoke.v1` proof identity so infrastructure-originated local
+calls are auditable without being mislabelled as external descriptor-bound
+signed calls.
+
+`ReceiptProofFacts.with_output_hash` and `_InvocationCore.emit` now keep each
+receipt's proof output hash aligned with the event payload hash. This mirrors
+the Java correction and prevents terminal receipts from combining a refreshed
+payload digest with stale empty proof output facts.
+
+This slice removes the Python LocalRuntime empty proof-fact production path and
+adds a V2 source gate for that regression. RF-6 remains open for Go, Node,
+remaining examples/tests, and full descriptor proof-binding parity.
+
+## Current Slice: RF-6 Go LocalRuntime Receipt Proof Facts
+
+Owner: EasyNet-Axon Go LocalRuntime receipt binding and EasyNet-Cli V2
+conformance gate.
+
+The Go LocalRuntime carried the same production RF-6 defect: descriptor-bound
+signed invocations and system-local `InvokeAsync` calls built `AxiomBinding`
+values with `EmptyReceiptProofFacts()`. The receipt constructor was already
+able to carry complete facts, but the runtime binding boundary still admitted
+empty descriptor, subject, authority, runtime, input, output, and parent
+receipt facts.
+
+The Go LocalRuntime now constructs receipt proof facts where the runtime
+creates the admitted `AxiomBinding`. Signed invocations derive proof facts
+from the descriptor-bound envelope and caller authority. System-local
+`InvokeAsync` uses the separate `system-local.invoke.v1` proof identity, so
+internal runtime-originated calls remain auditable without being represented
+as externally signed descriptor-bound requests.
+
+Full Go invocation-package verification exposed a second Go/Rust fork: Go
+accepted `ability_ura@version` descriptor refs while the Rust verifier requires
+`ability_ura@version#descriptor_hash!admission_action`. The Go invocation
+parser now uses the Rust canonical descriptor-ref shape, canonicalizes the
+descriptor hash casing, validates the admission action, and signs
+cross-language bundle fixtures with descriptor-bound bytes.
+
+`ReceiptProofFacts.WithOutputHash` and `InvocationCore.emit` now refresh the
+proof output hash with each emitted event payload digest. This matches the
+Java and Python RF-6 shape: admission owns descriptor/input/authority facts,
+while event emission owns output facts.
+
+This slice removes the Go LocalRuntime empty proof-fact production path and
+adds a V2 gate/self-test for that exact regression. RF-6 remains open for
+Node, remaining examples/tests, and full descriptor proof-binding parity.
+
+## Current Slice: RF-4 Go Runtime Lifecycle Facade
+
+Owner: EasyNet-Axon Go LocalRuntime lifecycle/control surface.
+
+The Go LocalRuntime already had an internal lifecycle state machine for
+generation-checked cancellation, bounded message inbox delivery, event
+sequencing, parent-child cancellation propagation, and receipt-chain audit
+inspection. The public runtime facade, however, only exposed those controls
+through `InvocationHandle`. Industrial lifecycle vectors also exercise
+runtime-level control by invocation id, so the missing public methods left Go
+with a facade gap even though the internal state machine existed.
+
+The Go LocalRuntime now exposes `CoreOf`, `SendMessage`, and `Cancel` as
+runtime-level methods. `SendMessage` and `Cancel` do not create a second
+control path: they resolve the current generation token and delegate into the
+same `sendWithControl` and `cancelWithControl` paths used by handles. That
+keeps ABA protection, idempotent cancel intent latching, bounded inbox
+delivery, cleanup-before-terminal-receipt ordering, and child cancellation
+propagation under one lifecycle owner.
+
+`CoreOf` is explicitly inspection-oriented. Runtime mutation still goes
+through `LocalRuntime` or `InvocationHandle` control methods, while
+`InvocationCore` provides snapshot/current-state evidence for audit and
+industrial lifecycle vectors.
+
+This slice removes the Go lifecycle facade gap that prevented the Go
+industrial audit/cancel/message vectors from compiling. RF-4 remains open for
+the shared machine-readable transition vectors and cross-language provider
+status cutover.
+
+## Current Slice: RF-6 Node LocalRuntime Receipt Proof Facts
+
+Owner: EasyNet-Axon Node LocalRuntime receipt binding and EasyNet-Cli V2
+conformance gate.
+
+The Node LocalRuntime had the same RF-6 production defect previously removed
+from Java, Python, and Go: descriptor-bound signed invocations and
+system-local `invokeAsync` calls built `AxiomBinding` values with
+`EMPTY_RECEIPT_PROOF_FACTS`. Because `InvocationCore.emit` refreshed only the
+event payload digest, terminal receipts could still carry an admission-time
+empty proof-fact block even when the emitted payload hash changed.
+
+The Node LocalRuntime now constructs receipt proof facts at the admitted
+binding boundary. Signed descriptor-bound calls derive subject, descriptor
+version, authority proof, input hash, parent receipts, and runtime environment
+from the admitted envelope and caller authority. System-local calls use the
+separate `system-local.invoke.v1` proof identity so infrastructure-originated
+local calls remain auditable without being represented as external signed
+descriptor-bound calls.
+
+`receiptProofFactsWithOutputHash` and `InvocationCore.emit` now refresh the
+proof output hash with each emitted event payload digest. This matches the
+Java/Python/Go ownership model: admission owns descriptor/input/authority
+facts, while event emission owns output facts.
+
+This slice removes the Node LocalRuntime empty proof-fact production path and
+adds a V2 gate/self-test for that exact regression. RF-6 remains open for
+remaining examples/tests and full descriptor proof-binding parity.
+
+## Current Slice: RF-5 Rust Local-Fast Signer Feature Removal
+
+Owner: EasyNet-Axon Rust SDK signer boundary and EasyNet-Cli V2 conformance
+gate.
+
+The Rust SDK still exposed a public `local-fast-probes` Cargo feature that
+made process-local receipt and invocation signing helpers available outside
+crate tests. That feature was a convenience probe, but architecturally it
+kept a public path where consumers could build receipt authority and
+invocation signing state without an explicit provider or downstream
+KeyService boundary.
+
+The Rust SDK now removes the `local-fast-probes` feature entirely. Local-fast
+constructors and process-local signer helpers are restricted to `cfg(test)`
+crate internals, while integration tests and examples construct explicit
+test/example signing providers at their own boundary. This preserves test
+ergonomics without publishing a canonical fallback authority model.
+
+The `receipt_closure` example now demonstrates the intended provider-backed
+shape by passing an explicit receipt signing authority provider into
+`LocalRuntime`. Integration fixtures use `descriptor_bound_support` test
+providers rather than SDK public fallback helpers. The EasyNet-Cli V2 gate now
+rejects reintroducing the feature, public feature cfg, or external
+example/test consumption of the fallback helper group.
+
+EasyNet-Cli no longer requests a downstream `local-fast-probes` feature from
+Axon. The maintainer `real-user-smoke` binary now owns an explicit local smoke
+receipt provider, and the Pages integration test owns a bounded Pages test
+provider. Both callers construct providers directly at their own test/probe
+boundary instead of depending on SDK-published fallback constructors.
+The V2 gate now checks both sides of this boundary: Axon must not publish the
+feature/helper consumption path, and EasyNet-Cli must not request or consume
+it downstream.
+
+This slice removes one Rust public fallback signer seam. RF-5 remains open for
+cross-language signer-handle parity and daemon KeyService authority cutover.
+
+## Current Slice: RF-5 Runtime Client Subject Auth Generator Removal
+
+Owner: EasyNet-Axon runtime client SDK signing boundary and EasyNet-Cli V2
+conformance gate.
+
+The Axon runtime client SDK still exposed `AxonClient::generate_subject_auth`,
+which created process-local Ed25519 secret material and returned it as
+`EasyNetUserAuth`. Even though authenticated calls already fail closed without
+`AbilityCallOptions::auth`, this helper made the SDK a signing-material
+generator instead of a consumer of host-managed authority.
+
+The generator is removed. `EasyNetUserAuth` remains as an explicit
+host-supplied DTO because current authenticated call paths still need a
+concrete signing input while signer-handle parity is unfinished. Tests now use
+a local `host_auth_fixture` with fixed material so fixture ownership is
+visible and cannot be mistaken for SDK authority generation.
+
+The V2 gate now performs a source-level RF-5 scan across Axon runtime client
+SDK, canonical SDK packages, and runtime source so process-local fallback
+helpers such as `generate_subject_auth`, `default_auth_for_subject`, generated
+private agent/hub auth, `ProcessLocalSigner`, and `PrivateKeyAuthenticator`
+cannot re-enter outside tests.
+
+This slice removes another public process-local signer fallback. RF-5 remains
+open until host auth DTOs converge to signer handles or daemon KeyService
+authority across language facades.
+
+## Current Slice: RF-3 Go Public Plain Proof Helper Removal
+
+Owner: EasyNet-Axon Go invocation facade and EasyNet-Cli V2 conformance gate.
+
+The Go invocation package still exported the plain proof helper group:
+`CanonicalInvocationBytes`, `SignInvocation`, `VerifyInvocationSignature`,
+`VerifySignature`, and `RunAdmission`. These helpers sign or verify the legacy
+plain envelope bytes and therefore expose the second proof model that RF-3 is
+removing.
+
+The Go package now keeps those helpers as package-private fixture functions.
+Existing Go package tests can still use them for historical plain vector
+stability, but downstream callers cannot import them as SDK proof APIs. The
+descriptor-bound public proof path remains exported through
+`CanonicalDescriptorBoundInvocationBytes`, `SignDescriptorBoundInvocation`,
+`VerifyDescriptorBoundInvocationSignature`, `VerifyDescriptorBoundSignature`,
+and `RunDescriptorBoundAdmission`.
+
+`sdk/API_MAPPING.md` now documents the descriptor-bound public names instead
+of the legacy plain proof names. The V2 source gate now rejects the Go
+capitalized plain helper group in both the Go invocation package and the SDK
+API mapping document.
+
+This slice closes the Go public plain proof helper surface. RF-3 remains open
+for remaining language package/vector/example audit and any other public
+plain proof surfaces.
+
+## Current Slice: RF-3 Node Public Plain Proof Helper Removal
+
+Owner: EasyNet-Axon Node invocation facade and EasyNet-Cli V2 conformance
+gate.
+
+The Node SDK still exposed the plain proof helper group from its root and
+invocation entry points: `canonicalInvocationBytes`, `signInvocation`,
+`verifyInvocationSignature`, `verifySignature`, and `runAdmission`. Those
+helpers signed or verified the legacy plain envelope bytes and therefore made
+the Node facade another public entry into the second proof model.
+
+The Node public surface now exports only the descriptor-bound proof/admission
+helpers. Historical plain vector and admission tests use explicitly named
+`legacyPlain*` internal fixture helpers, and generated declarations no longer
+publish those fixture names. This keeps old byte-layout regression tests
+available without presenting the plain path as the SDK runtime proof API.
+
+The Node cross-language bundle producer now signs invocation JSON with
+`signDescriptorBoundInvocation` and descriptor-ref ability names, so Rust
+`easynet-verify` accepts the Node bundle through the descriptor-bound verifier
+instead of rejecting it as missing descriptor binding. The V2 source gate now
+rejects the old Node plain helper names in Node source, generated JS, and
+generated declarations.
+
+This slice closes the Node public plain proof helper surface. RF-3 remains
+open for remaining language surfaces, package export audits, and vector/example
+documentation cleanup.
+
+## Current Slice: RF-3 Java Public Plain Proof Helper Removal
+
+Owner: EasyNet-Axon Java invocation facade and EasyNet-Cli V2 conformance
+gate.
+
+The Java SDK still exposed the plain proof helper group as public static
+methods on the invocation facade: `canonicalInvocationBytes`,
+`signInvocation`, `verifyInvocationSignature`, `verifySignature`, and
+`runAdmission`. Those methods signed or verified the legacy plain envelope and
+therefore gave downstream Java callers a public route around the
+descriptor-bound admission model.
+
+The Java facade now keeps the plain helper group as package-private
+`legacyPlain*` fixture methods. Existing same-package vector and admission
+tests can still assert historical byte-layout stability, but downstream SDK
+callers cannot consume the plain proof path as public API. The public Java
+proof/admission surface remains descriptor-bound through
+`canonicalDescriptorBoundInvocationBytes`, `signDescriptorBoundInvocation`,
+`verifyDescriptorBoundInvocationSignature`, `verifyDescriptorBoundSignature`,
+and `runDescriptorBoundAdmission`.
+
+The Java cross-language bundle producer now signs invocation JSON with
+`signDescriptorBoundInvocation` and descriptor-ref ability names, so Rust
+`easynet-verify` validates the Java bundle through descriptor-bound signature
+verification. The V2 gate now rejects Java production invocation classes that
+reintroduce public static plain proof/admission helpers.
+
+This slice closes the Java public plain proof helper surface. RF-3 remains open
+for Swift and any remaining package/export/vector/example cleanup.
+
+## Current Slice: RF-3 Swift Public Plain Proof Helper Removal
+
+Owner: EasyNet-Axon Swift SDK invocation facade and EasyNet-Cli V2
+conformance gate.
+
+Swift public API must expose only descriptor-bound invocation proof and
+admission helpers. Plain canonical bytes, plain invocation signing, plain
+signature verification, and plain admission are not canonical SDK surfaces
+because they omit descriptor binding from the proof boundary.
+
+The Swift facade now keeps the plain helper group as internal `legacyPlain*`
+fixture functions. Same-module `@testable` vector and admission tests can
+still assert historical byte-layout stability, but downstream SDK callers
+cannot consume the plain proof path as public API. The public Swift
+proof/admission surface remains descriptor-bound through
+`canonicalDescriptorBoundInvocationBytes`, `signDescriptorBoundInvocation`,
+`verifyDescriptorBoundInvocationSignature`, `verifyDescriptorBoundSignature`,
+and `runDescriptorBoundAdmission`.
+
+The Swift cross-language bundle producer now signs invocation JSON with
+`signDescriptorBoundInvocation` and descriptor-ref ability names. Public
+examples and README snippets now demonstrate descriptor-bound signing. The V2
+gate now rejects Swift production invocation source, README examples, and
+runnable examples that reintroduce public plain proof/admission helpers or old
+helper usage.
+
+This slice closes the Swift public plain proof helper surface. It does not
+complete RF-3 globally until the remaining public-surface manifest and
+language/package audits are clean across all SDKs.
+
+## Current Slice: RF-3 Go Legacy Plain Fixture Naming Hardening
+
+Owner: EasyNet-Axon Go invocation package and EasyNet-Cli V2 conformance gate.
+
+The Go public plain proof helper removal made the helpers package-private, but
+the production invocation package still named the retired plain byte/sign/verify
+and admission functions as if they were ordinary package internals:
+`canonicalInvocationBytes`, `signInvocation`, `verifyInvocationSignature`,
+`verifySignature`, and `runAdmission`. That left the wrong proof model
+semantically normalized inside the canonical package even though it was no
+longer exported.
+
+The Go package now uses explicit `legacyPlain*` names for the retired fixture
+path. Descriptor-bound helpers remain the public proof/admission boundary.
+Historical Go tests can still cover old plain vector stability, but production
+source can no longer reintroduce the retired helper names without failing the
+V2 gate.
+
+This slice removes a Go-internal RF-3 naming seam. It does not complete RF-3
+globally because remaining package/export/vector/example audit and final
+legacy deletion still require separate closure evidence.
+
+## Current Slice: RF-3 Rust Legacy Plain Fixture Naming Hardening
+
+Owner: EasyNet-Axon Rust invocation package and EasyNet-Cli V2 conformance
+gate.
+
+The Rust public plain proof helper removal restricted plain helpers to
+`cfg(test)`, but the production invocation modules still carried retired names
+such as `canonical_invocation_bytes`, `sign_invocation`,
+`verify_invocation_signature`, `verify_signature`, `verify_phase`, and
+`run_admission`. Even test-only helpers inside the canonical Rust package
+should not read as the normal proof/admission model.
+
+The Rust package now names the retired plain path as `legacy_plain_*`,
+`sign_legacy_plain_invocation`, `verify_legacy_plain_invocation_signature`,
+`verify_legacy_plain_signature`, `verify_phase_legacy_plain`, and
+`run_legacy_plain_admission`. Descriptor-bound helpers remain the normal
+runtime proof/admission boundary, and the common signature-bytes verifier keeps
+a neutral name because it is shared by descriptor-bound verification.
+
+The V2 gate now rejects retired Rust plain helper names anywhere in the Rust
+invocation source. This removes another RF-3 semantic naming seam; it does not
+complete RF-3 because final legacy deletion and remaining package/vector audit
+still require closure evidence.
+
+## Current Slice: RF-3 Python Legacy Plain Fixture Naming and Producer Hardening
+
+Owner: EasyNet-Axon Python invocation package and EasyNet-Cli V2 conformance
+gate.
+
+The Python public plain proof helper hardening removed direct public exports,
+but private invocation modules and vector tests still used retired names such
+as `_canonical_invocation_bytes`, `_sign_invocation`,
+`_verify_invocation_signature`, `_verify_signature`, and `_run_admission`.
+Those names kept plain proof vocabulary normalized inside the canonical Python
+package.
+
+The Python package now names the retired private fixture path as
+`_legacy_plain_invocation_bytes`, `_sign_legacy_plain_invocation`,
+`_verify_legacy_plain_invocation_signature`,
+`_verify_legacy_plain_signature`, and `_run_legacy_plain_admission`.
+Descriptor-bound signing and admission remain the public proof boundary.
+
+The Python cross-language bundle producer now signs invocation JSON with
+`sign_descriptor_bound_invocation` over `DescriptorBoundEnvelope` and uses
+descriptor-ref ability names. Receipt proof facts derive their subject ref and
+descriptor version from the same descriptor-bound invocation fields. The V2
+gate now rejects retired Python private plain helper names anywhere under the
+Python SDK source.
+
+This slice removes another RF-3 semantic naming seam and converts the Python
+cross-language producer away from plain signatures. It does not complete RF-3
+because final package/export/vector/example audit and legacy implementation
+deletion still require closure evidence.
+
+## Current Slice: RF-3 Node Production Legacy Plain Export Removal
+
+Owner: EasyNet-Axon Node invocation package and EasyNet-Cli V2 conformance
+gate.
+
+The Node public plain proof helper removal renamed the retired path to
+`legacyPlain*`, but the legacy encoder, signer, verifier, and admission
+pipeline still lived in production `sdk/node/src/invocation` modules. Since
+Node module exports are public within the SDK package source, this preserved a
+second proof/admission model even though the root package surface pointed users
+toward descriptor-bound helpers.
+
+The Node production invocation source now contains only descriptor-bound
+signing, verification, and admission. Historical plain vector coverage moved
+to an explicit test/vector fixture under `sdk/node/scripts`, and Node admission
+tests now exercise `runDescriptorBoundAdmission` with descriptor-ref ability
+names. The V2 gate rejects `legacyPlain*` proof/admission names in Node
+production invocation source while allowing the explicit fixture boundary.
+
+This slice removes a production legacy implementation from the Node SDK. It
+does not complete RF-3 because other language fixture boundaries, package
+exports, examples, and final legacy deletion still require closure evidence.
+
+## Current Slice: RF-3 Go Production Legacy Plain Implementation Removal
+
+Owner: EasyNet-Axon Go invocation package and EasyNet-Cli V2 conformance gate.
+
+The Go public plain proof helper removal and fixture renaming still left the
+retired plain encoder, signer, verifier, and admission runner in production
+`sdk/go/easynet/invocation` files under explicit `legacyPlain*` names. That
+kept a second proof/admission implementation inside the canonical runtime
+package even though the public facade had moved to descriptor-bound helpers.
+
+The Go production invocation source now contains descriptor-bound signing,
+verification, and admission only. Historical plain vector coverage is isolated
+to `legacy_plain_fixtures_test.go`, so the old byte layout can still be
+verified as a fixture without remaining in the SDK runtime build. Go admission
+tests now construct `DescriptorBoundEnvelope` values and call
+`RunDescriptorBoundAdmission` with descriptor-ref ability names.
+
+The V2 gate now rejects Go `legacyPlain*` proof/admission names in non-test
+production invocation source, with a self-test that reintroduces
+`legacyPlainInvocationBytes` in a fake Go production package. This slice
+removes the Go production legacy plain implementation. It does not complete
+RF-3 globally because final package/export/vector/example audit and legacy
+fixture closure still require separate evidence.
+
+## Current Slice: RF-9 Protocol-Pack URA Vector Naming
+
+Owner: EasyNet-Axon protocol-pack conformance artifacts and EasyNet-Cli V2
+conformance gate.
+
+The protocol-pack URA grammar vector was still published as
+`easynet-uri-v1.json` and used `input_uri` / `canonical_uri` fields with a
+`URI canonicalization` description. That artifact is active conformance data,
+not a historical note, so it taught downstream SDKs and generated protocol
+packs the retired address vocabulary even though the architecture has URA
+only.
+
+The vector is now `easynet-ura-v1.json` with `input_ura` and `canonical_ura`
+fields. The vector semantics and concrete `easynet:///` values are unchanged;
+only the active protocol vocabulary was corrected. The protocol-pack release
+plan now references the URA-named vector.
+
+The V2 gate now checks Axon's protocol-pack conformance vectors for the retired
+URI-named artifact, `input_uri` / `canonical_uri` fields, and `URI
+canonicalization` descriptions. This slice closes one RF-9 active artifact
+defect. It does not complete RF-9 because broader Axon normative documents,
+wire compatibility naming, and generated-schema ownership still require
+separate closure evidence.
+
+## Current Slice: RF-9 Active Invocation Normative Document URA Naming
+
+Owner: EasyNet-Axon invocation normative documents and EasyNet-Cli V2
+conformance gate.
+
+`document/concepts/AXIOM.tex` and RFC-001 are active normative invocation
+documents. They already depend on proto fields named `ura`, but their prose
+and pseudocode still described identity composites as `URI + profile`,
+`string uri`, `caller.uri`, and `resolver.resolve(uri)`. That creates a
+normative fork: generated schemas and SDKs say URA, while the documents that
+define the invocation axiom teach URI vocabulary.
+
+The active invocation documents now use URA vocabulary for identity composite
+fields, signing bytes, causal receipt references, admission replay keys, and
+resolver interfaces. This aligns the normative text with the existing
+`AgentIdentity.ura` and `SubjectIdentity.ura` proto contract without changing
+wire field numbers, canonical byte semantics, or invocation architecture.
+
+The V2 gate now rejects retired URI identity vocabulary in `AXIOM.tex` and
+RFC-001, with a self-test that reintroduces `string uri`, `URI + profile`, and
+`caller.uri`. This slice closes an RF-9 active normative document defect. It
+does not complete RF-9 because RFC-002/keyring terminology, historical
+documents, and generated-schema ownership still require separate closure
+evidence.
+
+## Current Slice: RF-9 Keyring Resolver URA Naming
+
+Owner: EasyNet-Axon RFC-002 keyring/keyresolver contract and EasyNet-Cli V2
+conformance gate.
+
+RFC-002 defines the keyring and KeyResolver boundary that feeds admission's
+caller-key resolution. It still used `string uri` in the AgentIdentity proto
+example, `peer_uri` in the keyring projection schema and ability surface, and
+`find_peer_by_uri` in the PeerKeyringResolver pseudocode. That kept the
+retired address vocabulary in an active key-custody contract, even though the
+canonical schema and admission code use URA.
+
+The RFC-002 examples now use `string ura`, `peer_ura`, and
+`find_peer_by_ura`. The KeyResolver responsibility is unchanged: admission
+resolves an agent URA to the corresponding public verification key without
+seeing private key material.
+
+The V2 normative-document gate now includes RFC-002 and rejects `peer_uri` and
+`find_peer_by_uri` in addition to the earlier invocation-document URI patterns.
+This slice closes another RF-9 active-document defect. It does not complete
+RF-9 because historical document classification and generated-schema ownership
+remain separate closure work.
+
+## Current Slice: RF-1 React Tool Adapter Product Surface Removal
+
+Owner: EasyNet-Axon React SDK and EasyNet-Cli V2 conformance gate.
+
+The React SDK still exported `useAbilityTools` from `tool_adapter` as a public
+hook. That hook delegated to the Node `AbilityToolAdapter`, which is a product
+tool-provider bridge rather than a canonical runtime primitive. Keeping it in
+React preserved RF-1 through a second public SDK surface even after other
+language packages started removing tool-adapter files.
+
+The React package now exposes ability invocation and receipt audit hooks only.
+The `tool_adapter` source, generated declaration, public root exports,
+export-surface test expectation, README example, and agent skill entry were
+removed together so the package no longer teaches or publishes the product
+tool-adapter contract. The type build now clears stale declaration output
+before regeneration so deleted public declarations cannot survive locally.
+
+The V2 gate now covers React alongside Go, Python, Node, Java, Swift, and Rust
+for RF-1 product-surface scans. It rejects tracked React `tool_adapter`
+artifacts and public React source/docs that reintroduce `useAbilityTools` or
+the `AbilityTool*` family. This slice does not complete RF-1 because package
+renaming, remaining product-flavoured SDK docs, audio/MCP/preset inventory, and
+downstream provider extraction remain separate closure work.
+
+## Current Slice: RF-9 Active Proto URA Vocabulary
+
+Owner: EasyNet-Axon canonical proto source and generated proto mirrors, with
+EasyNet-Cli V2 conformance gate enforcement.
+
+Axon proto definitions are active schema contracts, not historical prose. The
+canonical `federation.proto` and its two checked-in mirrors still described
+`federation.list_user_devices` as enumerating canonical device `URIs`. That
+kept the retired address vocabulary inside the schema source even though the
+field is a URA realm and the architecture has URA only.
+
+The canonical proto comment now says device `URAs`, and the mirror copies were
+updated through `scripts/proto/sync_axon_v1.sh --write` rather than independent
+manual edits. No field names, field numbers, messages, services, or wire
+semantics changed.
+
+The V2 gate now scans Axon active proto roots for URI terminology tied to URA
+identity data, and the self-test reintroduces `canonical device URIs` in a
+fake proto mirror set to prove the gate fails. This slice closes one RF-9
+active-schema terminology defect. It does not complete RF-9 because historical
+document classification, broader active source vocabulary, and final
+generated-schema ownership closure remain separate work.
+
+## Current Slice: Product-Neutral SDK URA Error Contract
+
+Owner: EasyNet-Axon language SDK facades and EasyNet-Cli V2 conformance gate.
+
+Canonical SDK error contracts are part of the runtime model. Several language
+facades rejected invalid `subject_ura` and legacy private `principal_id`
+values with `EasyNet URA` wording. That preserved product-specific naming in
+public SDK behavior even though the SDK should expose generic runtime concepts.
+Swift also kept a local-runtime constant named `SYSTEM_URI`, which violated the
+URA-only naming constraint inside active source.
+
+The Go, Java, Node, Python, Rust, and Swift SDKs now use product-neutral
+messages such as `canonical URA` and `URA syntax`. The Swift system-local
+constant is renamed to `SYSTEM_URA`. This does not change the URA scheme,
+validation rules, invocation fields, or wire behavior; it removes product
+branding and retired URI terminology from the SDK contract surface.
+
+The V2 gate now scans active SDK source roots for `EasyNet URA`,
+`EasyNet URA syntax`, `must be an EasyNet`, `must use EasyNet`, and
+`SYSTEM_URI`, with a self-test that reintroduces both Node error text and the
+Swift constant. This slice advances RF-1 product-neutral SDK surface and RF-9
+URA-only source vocabulary. It does not complete either fork because package
+renaming, broader docs/examples, historical classification, and remaining
+product-owned SDK capabilities still require separate closure work.
+
+## Current Slice: RF-6 Go Empty Receipt Proof Helper Removal
+
+Owner: EasyNet-Axon Go SDK receipt model and EasyNet-Cli V2 conformance gate.
+
+The Go SDK had already moved LocalRuntime receipt emission to descriptor-bound
+proof facts, but the production invocation package still exported
+`EmptyReceiptProofFacts()`. Go receipt verb, authority-anchor, and signature
+roundtrip tests used that helper, so the SDK continued to publish and teach an
+empty-proof receipt construction path even though canonical receipt
+construction requires complete proof facts.
+
+The helper is deleted from production Go source. Go tests now construct
+explicit receipt proof facts through test-owned fixture builders. The
+authority-anchor test uses the same language-neutral
+`axon-receipt-anchor-v2` proof-facts pins as Rust, Java, Python, Node, and
+Swift; ordinary Go receipt tests use a local test fixture that binds subject,
+descriptor version, schema hash, implementation hash, runtime environment,
+authority proof, input hash, output hash, and causal parent receipts.
+
+The V2 gate now rejects `EmptyReceiptProofFacts()` anywhere in the Go
+invocation package, not only in `LocalRuntime`. This closes one more RF-6
+fallback surface. RF-6 remains open for the remaining language helpers,
+constructors, examples, and final descriptor proof-binding parity audit.
+
+## Current Slice: RF-6 Swift Empty Receipt Proof Helper Removal
+
+Owner: EasyNet-Axon Swift SDK invocation model, Swift LocalRuntime, Swift
+receipt examples/tests, and EasyNet-Cli V2 convergence gate.
+
+Swift retained the same RF-6 defect previously removed from Java and Go:
+`ReceiptProofFacts.empty` and defaulted `ReceiptProofFacts(...)` parameters
+allowed any receipt producer, example, or test to construct a valid-looking
+signed receipt with no descriptor/runtime/authority/input/output facts. The
+production `LocalRuntime` and signed invocation path also needed a single
+local proof-facts owner so output-hash refresh stayed aligned with the emitted
+receipt payload digest.
+
+The Swift invocation model now requires explicit `ReceiptProofFacts`
+constructor arguments. The public empty helper and unchecked receipt-facts
+initializer are removed. Swift LocalRuntime constructs descriptor-bound and
+system-local proof facts at the binding boundary through
+`LocalReceiptProofFacts`, and `AxiomBinding.withPayloadDigest` refreshes the
+proof-fact output hash with each emitted receipt digest.
+
+Swift examples and tests now construct receipt proof facts at the receipt
+signing boundary. Fixture builders bind subject ref, descriptor version,
+schema hash, implementation hash, runtime env, normalized authority proof,
+input/output hash, and causal parent receipts where applicable. Authority
+method tests no longer infer self authority when a fixture omits authority;
+callers pass the intended authority binding explicitly.
+
+The V2 RF-6 gate now rejects Swift `ReceiptProofFacts.empty`,
+`proofFacts: .empty`, empty `try ReceiptProofFacts()` construction, and
+receipt authority fallback patterns across Swift invocation source, examples,
+and tests. This closes the Swift empty receipt proof helper path. RF-6 remains
+open for final cross-language constructor hardening and any remaining
+language/package surfaces not yet proven by the shared capability matrix.
+
+## Current Slice: RF-6 Node Empty Receipt Proof Helper Removal
+
+Owner: EasyNet-Axon Node SDK invocation model, Node receipt/verifier fixtures,
+and EasyNet-Cli V2 convergence gate.
+
+After Node LocalRuntime moved to explicit descriptor-bound and system-local
+receipt proof facts, the Node SDK still exported
+`EMPTY_RECEIPT_PROOF_FACTS` from the invocation package and root package. That
+kept a public no-proof receipt construction value available to downstream
+callers and preserved the obsolete RF-6 model in generated declaration/build
+artifacts. A tracked but excluded TypeScript authority-anchor test also kept
+the old empty-proof receipt pins beside the newer shared
+`axon-receipt-anchor-v2` anchor suite.
+
+The Node public empty helper is removed from source exports. The cross-language
+verifier fixture now constructs a normalized authority proof explicitly and
+projects scalar/list causal parents into receipt proof facts. The excluded
+legacy TypeScript authority-anchor test is deleted because
+`tests/receipt-authority-anchor.test.mjs` is the active shared anchor suite and
+already uses complete receipt proof facts.
+
+The V2 RF-6 gate now rejects `EMPTY_RECEIPT_PROOF_FACTS` anywhere under Node
+SDK source or tests, not only in LocalRuntime. This closes the Node empty
+receipt proof helper path. RF-6 remains open for final cross-language
+constructor hardening, remaining package/example audit, and descriptor
+proof-binding parity closure.
+
+## Current Slice: RF-6 Python Receipt Proof Constructor Hardening
+
+Owner: EasyNet-Axon Python SDK invocation model, Python receipt
+tests/examples, and EasyNet-Cli V2 convergence gate.
+
+Python LocalRuntime had already moved receipt emission to explicit
+descriptor-bound and system-local proof facts, but the `ReceiptProofFacts`
+dataclass itself still carried defaults for every field. That meant
+`ReceiptProofFacts()` remained a valid construction path in Python tests and
+callers, preserving the same omitted-proof model RF-6 is removing from the
+other SDK languages.
+
+The Python invocation model now requires every receipt proof-fact field at
+construction time: subject ref, descriptor version, schema hash,
+implementation hash, runtime environment, authority proof, input hash, output
+hash, and parent receipts. Python audit, fluent, projection, cross-language,
+and example fixtures were migrated to pass explicit facts. The shared
+authority-anchor suite keeps the existing cross-language
+`axon-receipt-anchor-v2` fixture values as explicit fields rather than
+silently constructing them through dataclass defaults.
+
+The V2 RF-6 gate now runs an AST scan over Python SDK source, tests, and
+examples to reject empty `ReceiptProofFacts()` calls, including multiline
+forms that a grep-only gate could miss. This closes the Python omitted
+constructor path. RF-6 remains open for final cross-language constructor
+hardening, remaining package/example audit, and descriptor proof-binding
+parity closure.
+
+## Current Slice: RF-6 Rust Receipt Proof Default Constructor Removal
+
+Owner: EasyNet-Axon Rust SDK invocation model, InvocationCore construction,
+Rust LocalRuntime descriptor-bound admission, and EasyNet-Cli V2 convergence
+gate.
+
+Rust still exposed the strongest omitted-proof path after the previous RF-6
+slices: `ReceiptProofFacts` derived `Default`, `InvocationCore::new_with_policy`
+fed that default into every source-compatible core constructor, and the
+LocalRuntime receipt normalizer used `unwrap_or_default()` before patching
+fields from the admitted descriptor-bound envelope. That preserved an empty
+receipt proof object as the root lifecycle state even when the final receipt
+looked complete.
+
+The Rust invocation model now requires explicit `ReceiptProofFacts`
+construction. `ReceiptProofFacts::new(...)` is the named constructor for the
+complete receipt proof-fact tuple, and `Default` is no longer implemented for
+the type. `InvocationCore::new_with_policy` preserves its public behavior by
+deriving complete local proof facts from the provided `AxiomBinding` before
+building the core; it no longer inserts empty facts. Descriptor-bound
+LocalRuntime normalization now has two explicit states: caller-supplied facts
+must already be complete and matching, while omitted runtime-owned facts are
+constructed directly from the admitted envelope plus registered descriptor
+proof binding.
+
+The V2 RF-6 gate now rejects Rust `ReceiptProofFacts::default()`,
+`proof_facts: Default::default()`, and a `Default` derive on
+`ReceiptProofFacts`. This closes the Rust default receipt proof constructor
+path. RF-6 remains open for the remaining authority-proof default audit,
+package/example audit, and descriptor proof-binding parity closure.
+
+## Current Slice: RF-6 Python Authority Proof Constructor Hardening
+
+Owner: EasyNet-Axon Python SDK invocation model, Python receipt
+tests/examples, and EasyNet-Cli V2 convergence gate.
+
+After Python receipt proof facts became mandatory, the nested
+`InvocationAuthorityProof` dataclass still carried defaults for every field.
+That preserved an omitted-authority constructor path:
+`InvocationAuthorityProof()` or a partial proof object could still be
+embedded inside an otherwise explicit receipt proof-facts object.
+
+The Python invocation model now requires every authority-proof field at
+construction time: proof type, authority binding, proof payload, proof hash,
+issuer, signature, and admission hook. Runtime, bundle, test, and example
+callers now spell out empty payload and absent signature explicitly. The
+shared authority-anchor fixture keeps the current cross-language empty
+authority proof as an explicit object rather than relying on dataclass
+defaults.
+
+The V2 RF-6 gate now rejects Python authority-proof dataclass field defaults
+and incomplete `InvocationAuthorityProof(...)` calls across SDK source, tests,
+and examples. This closes the Python omitted authority-proof constructor path.
+RF-6 remains open for Node/Java/Swift empty authority helpers, Go/Rust
+authority-proof zero-struct audits, and descriptor proof-binding parity
+closure.
+
+## Current Slice: RF-6 Node Empty Authority Proof Helper Removal
+
+Owner: EasyNet-Axon Node SDK invocation model, Node receipt-anchor fixture,
+and EasyNet-Cli V2 convergence gate.
+
+After Node receipt proof facts and LocalRuntime facts moved to explicit
+construction, the Node SDK still exported `EMPTY_AUTHORITY_PROOF` from the
+invocation package and root package. That kept a reusable no-authority proof
+value in the public SDK surface and let callers build a complete-looking
+receipt proof-facts object while omitting the authority proof itself.
+
+The Node public empty authority helper is removed from TypeScript source and
+the generated JavaScript/declaration artifacts. The shared receipt-authority
+anchor test keeps the current cross-language empty authority proof as a
+file-local explicit fixture, so anchor parity remains visible without
+publishing the empty proof model as SDK API.
+
+The V2 RF-6 gate now rejects `EMPTY_AUTHORITY_PROOF` anywhere under Node SDK
+source or tests. This closes the Node empty authority-proof helper path. RF-6
+remains open for Java/Swift empty authority helpers, Go/Rust authority-proof
+zero-struct audits, and descriptor proof-binding parity closure.
+
+## Current Slice: RF-6 Java Empty Authority Proof Helper Removal
+
+Owner: EasyNet-Axon Java SDK invocation model, Java receipt examples/tests,
+and EasyNet-Cli V2 convergence gate.
+
+After Java receipt bodies and proof facts became explicit, `Axiom` still
+published `InvocationAuthorityProof.empty()`. That factory preserved an
+omitted-authority construction path inside the canonical SDK public model: a
+caller could build complete-looking receipt proof facts while importing the
+authority tail from a reusable empty SDK value.
+
+The Java invocation model no longer exposes that empty authority-proof
+factory. The receipt-closure example now owns its anchor authority proof as a
+file-local explicit fixture, and receipt authority/cross-language tests use a
+package-private test fixture. This keeps shared anchor parity readable without
+teaching downstream callers that the SDK has a canonical no-authority proof
+object.
+
+The V2 RF-6 gate now rejects `InvocationAuthorityProof.empty()` anywhere under
+Java SDK source, examples, or tests. This closes the Java empty
+authority-proof helper path. RF-6 remains open for Swift empty authority
+helper removal, Go/Rust authority-proof zero-struct audits, final
+cross-language constructor hardening, and descriptor proof-binding parity
+closure.
+
+## Current Slice: RF-6 Swift Authority Proof Constructor Hardening
+
+Owner: EasyNet-Axon Swift SDK invocation model, Swift receipt
+examples/tests, and EasyNet-Cli V2 convergence gate.
+
+Swift still exposed the broadest authority-proof omission path after receipt
+proof facts became explicit: `InvocationAuthorityProof.empty` published an
+empty SDK value, and the public initializer defaulted every field. That meant
+callers could omit authority proof facts either by importing `.empty` or by
+partially constructing an authority proof while relying on default payload,
+hash, issuer, signature, and admission-hook values.
+
+The Swift invocation model now requires every authority-proof field at
+construction time. LocalRuntime proof facts, receipt examples, bundle tests,
+cross-language verifier tests, and authority-method tests pass explicit
+payload, hash, issuer, signature, and hook values. The shared authority-anchor
+suite keeps the current empty authority proof only as a test-local explicit
+fixture, so anchor parity remains visible without keeping an SDK-level empty
+object.
+
+The V2 RF-6 gate now rejects Swift empty authority-proof helpers, `.empty`
+receipt usage, zero-argument authority-proof construction, and defaulted
+authority-proof initializer parameters. This closes the Swift empty/default
+authority-proof constructor path. RF-6 remains open for Go/Rust
+authority-proof zero-struct audits, final cross-language constructor
+hardening, and descriptor proof-binding parity closure.
+
+## Current Slice: RF-6 Go Zero Authority Proof Fixture Removal
+
+Owner: EasyNet-Axon Go SDK invocation tests and EasyNet-Cli V2 convergence
+gate.
+
+Go cannot make a struct zero value unconstructable, so the root convergence
+problem is narrower than Python/Swift constructor defaults: active receipt
+fixtures must not treat `InvocationAuthorityProof{}` as the canonical way to
+represent an empty authority proof. The authority-anchor and cross-language
+verifier tests still embedded that bare zero struct inside otherwise explicit
+receipt proof facts.
+
+The Go authority-anchor suite now defines a named `anchorAuthorityProof()`
+fixture that lists proof type, binding, payload, hash, issuer, signature, and
+admission hook explicitly. Cross-language verifier fixtures reuse that value,
+preserving the current shared anchor bytes while making the omitted-authority
+state visible as test data rather than a zero-value construction shortcut.
+
+The V2 RF-6 gate now rejects bare `InvocationAuthorityProof{}` in the Go
+invocation package, excluding `bundle.go` error returns where Go convention
+uses zero values only as discarded return slots. This closes the active Go
+zero authority-proof fixture path. RF-6 remains open for Rust authority-proof
+zero-struct audit, final cross-language constructor hardening, and descriptor
+proof-binding parity closure.
+
+## Current Slice: RF-6 Rust Authority Proof Default Removal
+
+Owner: EasyNet-Axon Rust invocation model, Rust LocalRuntime/audit/verifier
+tests, and EasyNet-Cli V2 convergence gate.
+
+Rust still preserved authority-proof omission through `InvocationAuthorityProof:
+Default` and struct-update defaults. That made an empty authority proof a
+first-class SDK construction state even after receipt proof facts themselves
+became explicit. Two verifier integration tests also still used
+`ReceiptProofFacts { ..Default::default() }`, which no longer compiled after
+the receipt proof default removal.
+
+The Rust invocation model now requires explicit authority-proof construction
+through `InvocationAuthorityProof::new(...)`. Runtime-owned proof facts still
+allow a zero proof hash as an explicit "normalize this hash" input, but the
+constructor boundary requires proof type, binding, payload, hash, issuer,
+signature, and admission hook to be spelled out. Shared anchor fixtures keep
+the current empty authority proof as explicit fixture data rather than a
+defaulted SDK value.
+
+The V2 RF-6 gate now rejects Rust `InvocationAuthorityProof` Default derive,
+default constructor calls, authority-proof struct update defaults, and
+`ReceiptProofFacts { ..Default::default() }`. This closes the active Rust
+authority/proof default construction path. RF-6 remains open for final
+cross-language constructor hardening, remaining package/example audit, and
+descriptor proof-binding parity closure.
+
+## Current Slice: RF-6/RF-3 Runtime Client Receipt Proof Adapter Hardening
+
+Owner: EasyNet-Axon runtime client SDK protobuf transport adapter, runtime
+receipt emitter/admission wire conversion, offline verifier, and EasyNet-Cli
+V2 convergence gate.
+
+After the Rust canonical SDK removed `InvocationAuthorityProof: Default`, the
+runtime client transport adapter still carried its own weaker receipt proof
+model: `ReceiptProofFacts` derived `Default`, represented `authority_proof` as
+`Option<pb::InvocationAuthorityProof>`, and converted a missing proof into an
+empty canonical `InvocationAuthorityProof`. That kept a second proof-fact
+construction path alive outside the canonical SDK domain and broke
+`core/runtime-rs/client-sdk` compilation once the canonical default was
+removed.
+
+The runtime client adapter now treats authority proof as required transport
+data. Protobuf-to-canonical conversion accepts only an explicit
+`pb::InvocationAuthorityProof`, builds the canonical proof through
+`InvocationAuthorityProof::new(...)`, and fails closed when an admission
+receipt omits the authority proof. Runtime admission and terminal receipts
+emit the required proof directly from descriptor-bound proof facts, and
+offline verifier fixtures construct required proof facts without an optional
+tail.
+
+The V2 gate now scans the runtime client adapter as part of the RF-6 receipt
+proof-fact contract and rejects `ReceiptProofFacts: Default`,
+`authority_proof: Option<...>`, and `InvocationAuthorityProof::default()` in
+that adapter. This removes the duplicate transport-level omitted-proof model;
+RF-3 remains open for the broader descriptor-bound-only public proof audit,
+and RF-6 remains open for final cross-language constructor/package/vector
+closure.
+
+## Current Slice: RF-3 Rust Legacy Plain Proof Implementation Removal
+
+Owner: EasyNet-Axon Rust invocation proof/admission model and EasyNet-Cli V2
+convergence gate.
+
+The Rust SDK still carried a private legacy plain invocation encoder and
+legacy plain signing/verification/admission test pipeline after the public
+proof boundary moved to descriptor-bound invocation bytes. Keeping that code
+inside the invocation module preserved a second proof model even though it was
+not exported, because same-module tests and future maintenance work could
+still use plain bytes as an example for signing or admission.
+
+The Rust invocation model now has one proof path for caller signatures:
+`DescriptorBoundEnvelope` canonical bytes. Admission tests, JSON bundle
+round-trip tests, and proof-boundary tests construct descriptor-bound
+envelopes and sign/verify descriptor-bound bytes. Historical plain encoder,
+plain signer, plain verifier, legacy admission verify phase, and legacy
+admission runner implementations were deleted instead of retained as
+compatibility fixtures.
+
+The V2 RF-3 gate now rejects Rust legacy plain proof/admission helper names in
+addition to the earlier public plain helper names. This closes the Rust
+private legacy plain proof implementation path. RF-3 remains open for the
+remaining package/vector/example audit across SDK languages before the
+descriptor-bound-only proof boundary can be declared globally complete.
+
+## Current Slice: RF-3 Java Legacy Plain Proof Implementation Removal
+
+Owner: EasyNet-Axon Java invocation proof/admission model and EasyNet-Cli V2
+convergence gate.
+
+The Java SDK still kept package-private legacy plain invocation bytes,
+legacy plain signing, legacy plain signature verification, and a legacy plain
+admission runner in production invocation source. That implementation was not
+public API, but it was still a second proof/admission model inside the
+canonical SDK domain. Java admission and axiom-vector tests were also using
+those helpers, which made the obsolete path look like normal internal
+architecture.
+
+Java invocation now has one caller-signature proof path:
+`DescriptorBoundEnvelope` canonical bytes. The admission tests run the
+descriptor-bound admission pipeline, and the axiom-vector tests sign, verify,
+and compare descriptor-bound canonical bytes using the descriptor refs already
+present in the conformance vectors. The legacy plain encoder, signer,
+verifier, and admission runner were deleted instead of retained as
+package-private compatibility fixtures.
+
+The V2 RF-3 gate now rejects Java legacy plain proof/admission helper names in
+production invocation source. This closes the Java production legacy plain
+proof implementation path. RF-3 remains open for the remaining
+package/vector/example audit and any other language-local historical fixtures
+that still preserve a second proof model.
+
+## Current Slice: RF-3 Python Legacy Plain Proof Implementation Removal
+
+Owner: EasyNet-Axon Python invocation proof/admission model and EasyNet-Cli V2
+convergence gate.
+
+The Python SDK still carried `_legacy_plain_invocation_bytes`, legacy plain
+signing, legacy plain signature verification, a legacy plain admission
+verification wrapper, and `_run_legacy_plain_admission` in production
+invocation modules. Even with private names, those functions formed a second
+proof/admission implementation inside the canonical SDK package and were still
+used by the Python axiom-vector driver.
+
+Python invocation now has one caller-signature proof path:
+`DescriptorBoundEnvelope` canonical bytes. The vector driver signs, verifies,
+and compares descriptor-bound canonical bytes for the relational axiom vectors,
+using the descriptor refs already present in the shared conformance vectors.
+The production legacy plain encoder, signer, verifier, and admission runner
+were deleted rather than preserved as private compatibility fixtures.
+
+The V2 RF-3 gate now rejects Python legacy plain proof/admission helper names
+across Python SDK source, tests, and examples. This closes the Python
+production legacy plain proof implementation path. RF-3 remains open for the
+remaining package, script, historical-vector, and example audits across all
+SDKs before descriptor-bound-only proof can be declared complete.
+
+## Current Slice: RF-3 Swift Legacy Plain Proof Implementation Removal
+
+Owner: EasyNet-Axon Swift invocation proof/admission model and EasyNet-Cli V2
+convergence gate.
+
+The Swift SDK still kept `legacyPlainInvocationBytes`, legacy plain signing,
+legacy plain signature verification, and a legacy plain admission runner in
+production invocation source. Those functions were internal rather than public,
+but they were still a second proof/admission model in the canonical SDK domain
+and the Swift admission/vector tests used them as normal fixtures.
+
+Swift invocation now has one caller-signature proof path:
+`DescriptorBoundEnvelope` canonical bytes. Admission tests enter
+`runDescriptorBoundAdmission`, and vector tests sign, verify, and compare
+descriptor-bound canonical bytes using the descriptor refs already carried by
+the shared conformance vectors. The legacy plain encoder, signer, verifier,
+signature wrapper, and admission runner were deleted instead of retained as
+test-only or internal compatibility helpers.
+
+The V2 RF-3 gate now rejects Swift production legacy plain proof/admission
+helper names in addition to public plain helper names. This closes the Swift
+production legacy plain proof implementation path. RF-3 remains open for the
+remaining package, script, historical-vector, and example audits across SDKs
+before descriptor-bound-only proof can be declared complete.
+
+## Current Slice: RF-3 Go Legacy Plain Proof Test Fixture Removal
+
+Owner: EasyNet-Axon Go invocation proof/admission test model and EasyNet-Cli
+V2 convergence gate.
+
+The Go SDK production invocation package had already moved runtime signing and
+admission onto descriptor-bound canonical bytes, but Go tests still carried a
+`legacy_plain_fixtures_test.go` encoder/signer/verifier and used it in axiom
+and vector tests. That fixture preserved a second proof model as executable
+SDK package code, even though it was test-scoped.
+
+Go invocation tests now use the same proof boundary as production:
+`DescriptorBoundEnvelope` canonical bytes. The axiom tests use valid
+descriptor refs and subject URAs, and the vector tests sign, verify, and
+compare descriptor-bound canonical bytes using the descriptor refs already in
+the shared conformance vectors. The legacy plain Go fixture file was deleted
+instead of retained for historical vector compatibility.
+
+The V2 RF-3 gate now rejects Go legacy plain proof/admission helper names
+across the invocation package, including test files. This closes the Go
+invocation test-fixture legacy plain proof path. RF-3 remains open for
+remaining Node scripts/tests and any broader package, historical-vector, and
+example audits before descriptor-bound-only proof can be declared complete.
+
+## Current Slice: RF-3 Node Legacy Plain Proof Script Removal
+
+Owner: EasyNet-Axon Node invocation proof/admission test and vector-runner
+model, plus the EasyNet-Cli V2 convergence gate.
+
+The Node SDK still carried `scripts/legacy-plain-fixtures.mjs`, and both the
+Node axiom-vector test and the standalone vector runner imported its plain
+encoder, signer, and verifier. That script was not production runtime code,
+but it was executable SDK package proof code and preserved a second canonical
+signature model beside descriptor-bound invocation bytes.
+
+Node tests and vector scripts now use the production descriptor-bound proof
+helpers: `canonicalDescriptorBoundInvocationBytes`,
+`signDescriptorBoundInvocation`, and
+`verifyDescriptorBoundInvocationSignature`. The old legacy fixture module was
+deleted rather than retained as a historical vector adapter.
+
+The V2 RF-3 gate now rejects Node legacy plain proof/admission helper names
+across the full Node SDK package outside `node_modules`. This closes the Node
+script/test legacy plain proof path. RF-3 remains open for broader package,
+historical-vector, and example audit before descriptor-bound-only proof can be
+declared complete.
+
+## Current Slice: RF-3/RF-9 Active Proof Vocabulary Gate
+
+Owner: EasyNet-Axon active SDK/RFC/conformance documentation and the
+EasyNet-Cli V2 convergence gate.
+
+After the executable plain proof helpers were removed, several active Axon
+documents and comments still described the old architecture as if it were the
+normal model: RFC 001 SDK impact named plain invocation bytes and plain
+sign/verify helpers, the PR2 checklist referenced `caller.uri` and
+`verify_invocation_signature`, Go/Python comments described byte parity
+against plain canonical encoders, and conformance metadata named
+`verify_signature` as the admission step. Those are architectural defects even
+when no production helper remains, because active specifications teach future
+work to reintroduce the retired proof model and retired URI vocabulary.
+
+The active materials now describe descriptor-bound canonical invocation bytes,
+descriptor-bound signing/verification, and URA identity fields. The V2 gate
+now scans the active proof documentation/comment set for retired plain
+proof/admission vocabulary and expands the active normative URA document scan
+to include the PR2 checklist plus SDK federation interface documents. The
+self-test injects both regression classes and proves the gate rejects them.
+
+This slice closes one active-text RF-3/RF-9 regression path. It does not
+complete RF-3 because final package, historical-vector, and example audits are
+still required, and it does not complete RF-9 because historical document
+classification and generated-schema ownership still need closure.
+
+## Current Slice: RF-9 Active Ontology and Axiom Vector URA Naming
+
+Owner: EasyNet-Axon active ontology/conformance vocabulary and the
+EasyNet-Cli V2 convergence gate.
+
+The active ontology document `ONTOLOGY_AGENT_ABILITY.md` was not marked
+historical and explicitly described the EasyNet-wide ontology. It still used
+`AgentUri` pseudo-types and stated that addressability means every
+`(Agent, Ability)` has a URI. The axiom conformance vector and README also
+described identity inputs as byte-identical URIs. These are RF-9 defects
+because they sit in active architecture and conformance material, not in
+archived historical notes.
+
+The ontology now uses `AgentURA` pseudo-types and states addressability in
+terms of URA. The axiom vector/README descriptions use URA for caller,
+callee, and subject identity inputs. A Java lifecycle test method that used
+`AxonUri` in its name was renamed to endpoint terminology because the tested
+value is an endpoint adapter scheme, not routable identity architecture.
+
+The V2 RF-9 active normative document gate now includes the ontology document
+and axiom conformance README/vector. Its self-test injects `AgentUri`, URI
+addressability, and conformance-vector URI wording to prove the gate rejects
+the regression. This slice closes one active ontology/conformance vocabulary
+defect. RF-9 remains open for broader historical document classification and
+schema-source ownership closure.
+
+## Current Slice: RF-9 Axon Document-Wide URA Vocabulary Gate
+
+Owner: EasyNet-Axon active document corpus and the EasyNet-Cli V2 convergence
+gate.
+
+After the ontology/conformance slice, a repository-wide document scan still
+found retired URI terminology in brand and ecosystem planning documents:
+ability-addressing claims, release-plan conformance-vector descriptions, and
+object-centric examples such as `ability_uri`. These documents are not
+protocol implementations, but they remain checked-in architecture and strategy
+material. Leaving them outside the active terminology gate would preserve a
+parallel vocabulary path that future SDK or protocol work could copy.
+
+The active documents now use URA terminology for ability addressing,
+conformance vectors, ability identity, and invocation examples. `axon://` is
+described as an endpoint where it appears beside `easynet:///` URAs, keeping
+transport endpoint language separate from routable identity terminology.
+
+The V2 RF-9 gate now scans every Markdown and TeX file under Axon's
+`document/` tree, plus the active SDK/conformance interface files already
+covered by prior slices. This removes the manually curated active-document
+allowlist for Axon documents and makes new retired address vocabulary fail by
+default. RF-9 remains open for generated-schema ownership and any remaining
+non-document source/test terminology gaps.
+
+## Current Slice: RF-9 Dendrite Active Source/Test URA Vocabulary
+
+Owner: EasyNet-Axon Dendrite bridge active contract documentation and Go SDK
+tests, plus the EasyNet-Cli V2 convergence gate.
+
+The document-wide RF-9 gate intentionally covers Axon `document/`, but the
+Dendrite authenticated invocation contract lives under
+`core/runtime-rs/dendrite-bridge/docs`. That active contract still used
+`resourceURI` and `CallerURI` in the representative Go surface and stated the
+legacy path was permanent. Go tests also retained function names such as
+`RejectsEmptyCalleeURI` and `ConvertsAxonURI`. These were not transport API
+uses; they were active caller vocabulary and test contract names.
+
+The Dendrite contract now uses `resourceURA` and `CallerURA` in the
+representative Go surface and describes the legacy FFI path as a legacy edge
+adapter until callers move to descriptor-bound signed invocation entry points,
+not as a canonical runtime proof path. Go tests use URA or endpoint language
+according to the semantic object under test.
+
+The V2 RF-9 gate now covers this Dendrite document and the Go SDK test files
+with the same active URA classifier used elsewhere. Its self-test injects
+`CallerURI`, `resourceURI`, and URI-suffixed Go test names to prove the gate
+rejects this regression. This slice closes one active source/test terminology
+defect; RF-9 remains open for broader non-document source/test audits and
+generated-schema ownership.
+
+## Current Slice: RF-9 Axon Active Source-Wide URA Vocabulary Gate
+
+Owner: EasyNet-Axon active source/test vocabulary and the EasyNet-Cli V2
+convergence gate.
+
+After the Dendrite/Go slice, a broad active source scan across Axon `core`,
+`sdk`, `scripts`, and `packaging` found three remaining semantic test names:
+two hub-profile join tests used `membership_uri` / `canonical_device_uri`, and
+a Rust SDK runtime-admin test used `same_node_uri`. These tests exercised URA
+fields, not transport URI APIs, so the names preserved retired architecture
+vocabulary.
+
+The test names now use `membership_ura`, `canonical_device_ura`, and
+`same_node_ura`. The V2 active source/test classifier now scans the Axon
+active roots by default instead of only the earlier Dendrite/Go file list.
+It excludes build outputs, virtual environments, package metadata, and caches,
+and it explicitly permits transport-library APIs such as
+`http::uri::PathAndQuery`.
+
+This slice closes the current semantic source/test RF-9 findings from the
+broad scan. RF-9 remains open for generated-schema ownership and any future
+source roots not covered by the active-root gate.
+
+## Current Slice: RF-9 Proto Schema Source Derivation Self-Test Hardening
+
+Owner: EasyNet-Axon canonical `core/proto/axon/v1` source, generated proto
+mirrors, Dendrite protocol catalog parity, and the EasyNet-Cli V2 convergence
+gate.
+
+The production schema-source contract already delegates to Axon's real
+`scripts/proto/sync_axon_v1.sh --check`, which makes `core/proto/axon/v1` the
+single canonical proto source and treats the runtime client-sdk and Rust SDK
+proto trees as derived mirrors. It also verifies that the Dendrite protocol
+catalog matches canonical proto services/RPCs and that prost/prost-types/tonic
+codegen versions stay aligned between the two Rust consumers.
+
+The V2 self-test previously used a fake syncer that failed only when a marker
+file existed. That proved failure propagation, but not the schema ownership
+invariants required by RF-9. The self-test now builds a minimal Axon fixture
+with the real syncer copied from the live Axon checkout, the full canonical
+proto filename set, derived mirror trees, a Dendrite catalog, and codegen
+version pins/locks. It proves the good fixture passes, then mutates separate
+fixtures to verify that mirror drift, product proto declarations, catalog RPC
+drift, and codegen version drift all fail through the same production
+`check_schema_source_derivation_contract` path.
+
+This hardens RF-9 regression coverage without introducing a second schema
+model in EasyNet-Cli. The CLI gate remains an ownership verifier; Axon remains
+the owner of proto canonicalization, mirror derivation, catalog parity, and
+codegen version alignment. RF-9 remains open until all remaining schema-source
+and generated-artifact ownership requirements in the SPEC are audited against
+the current checkout.
+
+## Current Slice: RF-4 Acceptance Benchmark Coverage Harness
+
+Owner: EasyNet-Axon Rust `LocalRuntime` benchmark harness and the
+EasyNet-Cli V2 convergence gate.
+
+The V2 acceptance gates require fixed-baseline benchmark evidence for
+unary/stream/bidi latency, cancellation cleanup, bounded concurrency, and
+allocation behavior. Existing Axon Rust benches already covered unary
+`LocalRuntime::invoke_async`, signed parallel invocation, registry read
+contention, invocation-core contention, message inbox contention, and
+admission replay/pipeline behavior. They did not include executable
+`LocalRuntime` scenarios for server-stream open/drain, bidi open/input/output
+round-trip, or cooperative cancellation cleanup.
+
+The Axon `local_runtime` benchmark now includes three additional user-visible
+runtime scenarios: `invoke_stream/two_frames`, `invoke_bidi/echo_round_trip`,
+and `cancel/cooperative_cleanup`. Each scenario uses public `LocalRuntime`
+entry points and an explicit benchmark `ReceiptSigningAuthorityProvider`, so
+the benchmark measures the provider-backed receipt path instead of relying on
+the fail-closed zero-argument runtime constructor or a hidden process-local
+fallback. The benchmark documentation records quick-mode medians from the
+current checkout and explicitly keeps allocation baseline coverage open until
+an allocator-counting harness exists.
+
+The V2 gate now verifies that the Axon benchmark harness and baseline document
+retain unary, bounded-concurrency, stream, bidi, and cancellation cleanup
+scenarios. This is a coverage-hardening slice, not full RF-4 or acceptance
+gate 9 closure: allocation baselines and complete cross-language lifecycle
+cutover remain open.
+
+## Current Slice: RF-4 LocalRuntime Allocation Baseline Harness
+
+Owner: EasyNet-Axon Rust `LocalRuntime` benchmark harness and the
+EasyNet-Cli V2 convergence gate.
+
+The previous benchmark slice made stream, bidi, and cancellation cleanup
+latency executable, but the V2 acceptance gate also requires allocation
+baselines. Treating allocation count as a Criterion timing unit would blur
+measurement semantics, and duplicating runtime setup between latency and
+allocation benches would create a second fixture model.
+
+The Axon Rust benchmarks now use `local_runtime_support.rs` as a shared
+bench-only fixture module for descriptor-bound envelope construction, explicit
+receipt authority setup, and reusable `LocalRuntime` scenario builders. The
+new `local_runtime_allocations` bench installs a counting allocator, resets
+the counters after scenario setup, runs provider-backed unary, stream, bidi,
+cooperative cancel, and bounded-concurrency operations, and prints allocation
+count plus allocated bytes. The allocation baseline rows are recorded in
+`sdk/rust/benches/BASELINE.md`.
+
+The V2 gate now verifies both the timing harness and allocation harness, plus
+their baseline rows. This closes the Rust `LocalRuntime` benchmark coverage
+gap for acceptance gate 9, but it does not complete RF-4 globally because full
+cross-language lifecycle transition-vector cutover remains open.
+
+## Current Slice: Canonical Session Stability And Lifecycle Control
+
+The live device session has one state-machine owner. `run_session_preludes`
+publishes the baseline directory facts and commits the online projection. The
+ability-catalogue readiness hook is limited to later dynamic catalogue
+refreshes; replaying baseline publication from that hook creates a second
+session side effect and can displace a newly opened carrier.
+
+Cancellation follows the canonical runtime path:
+
+```text
+provider cancel request
+  -> descriptor-bound invocation.cancel draft
+  -> explicit caller signer / daemon KeyService
+  -> LocalRuntime admission as generic lifecycle control
+  -> InvocationCancellationRegistry ownership check
+  -> Axon lifecycle handle cancel
+  -> cancellation acknowledgement + target terminal receipt
+```
+
+The policy engine classifies only the exact `invocation.cancel` + `manage`
+pair as lifecycle control. This classification does not grant cancellation by
+itself: the handler's registry lookup binds the command to the target canonical
+lifecycle hash and rejects caller, authority, and invocation-id mismatches.
+Product scopes such as `terminal.*` therefore remain product policy and do not
+grow a duplicated list of generic runtime controls.
+
+The cancellation registry is assembled once with the daemon ability catalogue
+and is injected into both the invocation gRPC service and every
+`LocalAxonSessionDispatcher`. The dispatcher has no `Default` implementation
+and its constructor requires that registry explicitly. This makes a second
+process-local lifecycle authority unrepresentable: BIDI admission registers
+the target lifecycle in the same registry later queried by
+`invocation.cancel`.

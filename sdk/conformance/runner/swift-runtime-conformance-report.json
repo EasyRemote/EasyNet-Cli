@@ -1,0 +1,183 @@
+{
+  "report_kind": "swift_runtime_core_seam_tests",
+  "language": "swift",
+  "records": [
+    {
+      "case_id": "authority/mutual_exclusion",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "bidi/close_send_not_cancel",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "bidi/frame0_required",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "error/retry_hint",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "error/typed_json",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "health/api_vs_runtime",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "health"
+    },
+    {
+      "case_id": "invocation/canonical_material",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/complete_tuple",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/prepared_not_submittable",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/presigned_submit",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/terminal_receipt_facts",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "runtime_core/feature_discovery",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "stream/backpressure_bound",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "stream/order_terminal",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "version/abi_compatible",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "version/abi_incompatible",
+      "evidence": [
+        {
+          "kind": "swift_test",
+          "ref_path": "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift",
+          "sha256": "4d6e329899b92ce9d40984afe4239dbb8f995d59771292f5b553bd59763b2db2"
+        }
+      ],
+      "profile": "runtime_core"
+    }
+  ],
+  "schema_version": 2
+}

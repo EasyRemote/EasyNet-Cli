@@ -7,15 +7,14 @@
 // =============================
 //
 // File: src/eal/interpreter.rs
-// Description: Client-side execution engine for Mission IR v2 (temporary — target: MissionControl v2).
+// Description: Daemon-owned execution engine for Mission IR v2.
 //
 // Execution Model:
 //   Phases execute sequentially (data-flow barriers between them).
-//   Steps within a phase execute in parallel via rayon work-stealing threadpool.
-//   When a dispatcher cannot be cloned across worker threads, falls back to sequential.
+//   Steps within a phase execute under the dispatcher's declared concurrency policy.
 //
 // Core Capabilities:
-//   1. True parallel dispatch — rayon::scope + clone_for_thread() per step.
+//   1. Declared parallel dispatch — rayon::scope + clone_for_thread() per step.
 //   2. Structured ExecutionTrace — per-step audit log with timestamps, result hashes, retry history.
 //   3. Retry with exponential backoff — delay = min(base * 2^attempt, max) + deterministic jitter.
 //   4. Cross-phase data flow — results captured in HashMap, substituted into downstream input_refs.
@@ -41,7 +40,7 @@ use super::retry::{
 };
 use super::trace::{CappedTraceBuffer, CapturedResult};
 use super::*;
-use crate::eal::runtime::ir::{IrFailurePolicy, IrLoop, IrStep as RealIrStep};
+use crate::eal::runtime::ir::{IrCall, IrFailurePolicy, IrLoop, IrStep as RealIrStep};
 
 pub(super) struct PhaseRunState<'a> {
     pub global_step: &'a mut usize,
@@ -59,7 +58,7 @@ pub(super) struct PhaseRunState<'a> {
 struct BatchDispatchRequest<'a> {
     dispatcher: &'a dyn StepDispatcher,
     run: RunContext<'a>,
-    steps: &'a [IrStep],
+    steps: &'a [IrCall],
     indices: &'a [usize],
     captured: &'a HashMap<String, CapturedResult>,
     receipt_graph: &'a [Value],
@@ -137,14 +136,12 @@ pub(super) fn calls_from_partition(steps: &[RealIrStep]) -> Vec<IrCall> {
 /// an EAL user value). Steps that don't ask don't pay.
 const RECEIPT_GRAPH_SENTINEL: &str = "__runner_receipt_graph__";
 
-/// Collect the causal-parent receipt anchors for one step from the
-/// producers named in its `input_refs`. A producer that ran through a
-/// receipt-less path contributes no anchor — the edge is omitted, not
-/// fabricated.
-fn causal_parents_from_captured(
-    step: &IrStep,
+/// Collect verified dependency receipt anchors for one step from the
+/// producers named in its `input_refs`.
+fn dependency_receipts_from_captured(
+    step: &IrCall,
     captured: &HashMap<String, CapturedResult>,
-) -> Vec<Value> {
+) -> Vec<crate::daemon::execution::child_invocation::ChildInvocationReceiptAnchor> {
     let mut seen = std::collections::HashSet::new();
     let mut parents = Vec::new();
     for binding in step.input_refs.values() {
@@ -154,19 +151,7 @@ fn causal_parents_from_captured(
         let Some(produced) = captured.get(binding) else {
             continue;
         };
-        let Some(meta) = produced.invocation.as_ref() else {
-            continue;
-        };
-        let anchor = meta
-            .pointer("/receipt/anchor")
-            .cloned()
-            .unwrap_or(Value::Null);
-        parents.push(serde_json::json!({
-            "node": meta.get("ability").cloned().unwrap_or(Value::Null),
-            "invocation_ura": meta.get("invocation_ura").cloned().unwrap_or(Value::Null),
-            "receipt_ura": anchor.get("receipt_ura").cloned().unwrap_or(Value::Null),
-            "receipt_hash": anchor.get("receipt_hash").cloned().unwrap_or(Value::Null),
-        }));
+        parents.push(produced.invocation.terminal_receipt().clone());
     }
     parents
 }
@@ -210,7 +195,12 @@ fn dispatch_batch(request: BatchDispatchRequest<'_>) -> Vec<(usize, StepExecResu
     if parallel && indices.len() > 1 {
         // Pre-resolve arguments and pre-clone dispatchers on the main thread,
         // so the rayon closure only captures Send types (no &dyn StepDispatcher).
-        type PreparedTask = (usize, Box<dyn StepDispatcher + Send>, Value, Vec<Value>);
+        type PreparedTask = (
+            usize,
+            Box<dyn StepDispatcher + Send>,
+            Value,
+            Vec<crate::daemon::execution::child_invocation::ChildInvocationReceiptAnchor>,
+        );
         let mut tasks: Vec<PreparedTask> = Vec::new();
         // Lock-free result queue — each rayon task pushes without contention.
         let collector = SegQueue::new();
@@ -252,12 +242,11 @@ fn dispatch_batch(request: BatchDispatchRequest<'_>) -> Vec<(usize, StepExecResu
             let thread_dispatcher = match dispatcher.clone_for_thread() {
                 Ok(d) => d,
                 Err(e) => {
-                    // Non-cloneable dispatchers return `EalError::Internal`
-                    // to signal "fall back to sequential". Reaching that
-                    // branch here means a structural setup error: a dispatcher
-                    // that cannot cross worker threads reached the parallel path.
-                    // Render to display form (preserves error_code in
-                    // the trace) and surface it as a step error.
+                    // Reaching this branch means a structural setup error: a
+                    // dispatcher declared `Parallel` but could not produce a
+                    // worker-local dispatcher. Render to display form
+                    // (preserves error_code in the trace) and surface it as
+                    // a step error.
                     collector.push((
                         local_idx,
                         StepExecResult::Error {
@@ -273,8 +262,13 @@ fn dispatch_batch(request: BatchDispatchRequest<'_>) -> Vec<(usize, StepExecResu
             };
             let mut merged_args = merged_args;
             substitute_receipt_graph(&mut merged_args, receipt_graph);
-            let causal_parents = causal_parents_from_captured(step, captured);
-            tasks.push((local_idx, thread_dispatcher, merged_args, causal_parents));
+            let dependency_receipts = dependency_receipts_from_captured(step, captured);
+            tasks.push((
+                local_idx,
+                thread_dispatcher,
+                merged_args,
+                dependency_receipts,
+            ));
         }
         // Mission context handoff (F-028 / T5.4): rayon workers carry
         // their own thread-locals, so the orchestrating thread's
@@ -285,7 +279,7 @@ fn dispatch_batch(request: BatchDispatchRequest<'_>) -> Vec<(usize, StepExecResu
         let parent_ctx = crate::daemon::execution::mission::context::current();
         // Spawn rayon tasks — closure captures only Send types.
         rayon::scope(|scope| {
-            for (local_idx, thread_dispatcher, merged_args, causal_parents) in tasks {
+            for (local_idx, thread_dispatcher, merged_args, dependency_receipts) in tasks {
                 let step = &steps[local_idx];
                 let collector_ref = &collector;
                 let parent_ctx = parent_ctx.clone();
@@ -297,7 +291,7 @@ fn dispatch_batch(request: BatchDispatchRequest<'_>) -> Vec<(usize, StepExecResu
                         run,
                         step,
                         &merged_args,
-                        &causal_parents,
+                        &dependency_receipts,
                     );
                     collector_ref.push((local_idx, result));
                 });
@@ -343,9 +337,9 @@ fn dispatch_batch(request: BatchDispatchRequest<'_>) -> Vec<(usize, StepExecResu
             };
             let mut merged_args = merged_args;
             substitute_receipt_graph(&mut merged_args, receipt_graph);
-            let causal_parents = causal_parents_from_captured(step, captured);
+            let dependency_receipts = dependency_receipts_from_captured(step, captured);
             let result =
-                execute_step_with_retry(dispatcher, run, step, &merged_args, &causal_parents);
+                execute_step_with_retry(dispatcher, run, step, &merged_args, &dependency_receipts);
             results.push((local_idx, result));
         }
         results
@@ -353,14 +347,14 @@ fn dispatch_batch(request: BatchDispatchRequest<'_>) -> Vec<(usize, StepExecResu
 }
 
 /// Process a batch of dispatch results: update counters, capture outputs, build traces.
-fn process_batch(steps: &[IrStep], request: BatchProcessRequest, state: &mut PhaseRunState<'_>) {
+fn process_batch(steps: &[IrCall], request: BatchProcessRequest, state: &mut PhaseRunState<'_>) {
     let BatchProcessRequest { phase_idx, results } = request;
 
     for (local_idx, exec_result) in results {
         *state.global_step += 1;
         let step = &steps[local_idx];
 
-        let (outcome, trace, result_bytes) = process_step_result(
+        let (outcome, trace, result_bytes, invocation) = process_step_result(
             step,
             exec_result,
             *state.global_step,
@@ -371,16 +365,16 @@ fn process_batch(steps: &[IrStep], request: BatchProcessRequest, state: &mut Pha
         match outcome {
             StepOutcome::Completed => {
                 *state.completed += 1;
-                if let Some(invocation) = trace.invocation.as_ref() {
-                    state.receipt_graph.push(invocation.clone());
-                }
+                let invocation = invocation
+                    .expect("completed EAL step must carry its canonical child Invocation record");
+                state.receipt_graph.push(invocation.projection());
                 if let Some(ref binding) = step.output_binding {
                     if let Some(bytes) = result_bytes {
                         state.captured.insert(
                             binding.clone(),
                             CapturedResult {
                                 value: bytes,
-                                invocation: trace.invocation.clone(),
+                                invocation,
                             },
                         );
                     }
@@ -426,7 +420,8 @@ pub(super) fn execute_calls_phase_partition(
         return;
     }
     let wants_parallel = steps.len() > 1;
-    let can_parallel = wants_parallel && dispatcher.clone_for_thread().is_ok();
+    let can_parallel =
+        wants_parallel && dispatcher.dispatch_concurrency() == StepDispatchConcurrency::Parallel;
     let phase_label = if can_parallel {
         format!("phase {phase_idx}  parallel")
     } else {
@@ -666,9 +661,8 @@ pub(super) fn execute_loop(
             if let Some(ref rb) = lp.result_binding {
                 // The loop result IS the winning iteration's final
                 // verify output, so that step's invocation record is
-                // the binding's producer — downstream steps name it as
-                // their causal parent, keeping the receipt chain
-                // connected across the loop boundary.
+                // the binding's producer. Downstream joins retain its
+                // verified terminal receipt across the loop boundary.
                 state.captured.insert(
                     rb.clone(),
                     CapturedResult {
@@ -824,15 +818,15 @@ fn run_loop_block_sequentially(
         let mut merged_args = merged_args;
         substitute_receipt_graph(&mut merged_args, outer_state.receipt_graph);
 
-        // Within an iteration, causal parents follow `input_refs`
-        // exactly as in flat phases — the receipt chain stays
-        // connected through loop bodies. Cross-iteration receipt
+        // Within an iteration, dependency receipts follow `input_refs`
+        // exactly as in flat phases. Cross-iteration receipt
         // joins are out of scope until the loop-semantics RFC pins
         // how iteration receipts should join (iteration scopes are
         // hermetic per RFC §3.1 v1, so no binding can reference a
         // prior iteration today anyway).
-        let causal_parents = causal_parents_from_captured(step, iter_captured);
-        let result = execute_step_with_retry(dispatcher, run, step, &merged_args, &causal_parents);
+        let dependency_receipts = dependency_receipts_from_captured(step, iter_captured);
+        let result =
+            execute_step_with_retry(dispatcher, run, step, &merged_args, &dependency_receipts);
 
         // Mirror the "capture under synthetic binding for last step"
         // side-effect by copying result_bytes into iter_captured
@@ -850,7 +844,7 @@ fn run_loop_block_sequentially(
                     LOOP_VERIFY_SYNTHETIC_BINDING.to_string(),
                     CapturedResult {
                         value: result_bytes.clone(),
-                        invocation: invocation.clone(),
+                        invocation: (**invocation).clone(),
                     },
                 );
             }

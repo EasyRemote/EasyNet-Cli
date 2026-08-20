@@ -1,5 +1,4 @@
-//! Receipt records, ledger projection, and receipt observation.
+//! Axon receipt verification adapters.
 
-pub(crate) mod ledger_projection;
-pub mod receipt_subscriber;
-pub mod runtime_record;
+#[cfg(feature = "axon-pb")]
+pub(crate) mod finalization_projection;

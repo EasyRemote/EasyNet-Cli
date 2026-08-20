@@ -1,0 +1,108 @@
+{
+  "profile": "axon-strict-v2",
+  "grammar_owner": "axon",
+  "ura_cases": [
+    {
+      "name": "user",
+      "request": {"kind": "user", "realm": "example", "user_id": "alice"},
+      "ura": "easynet:///r/example/user/alice",
+      "components": {"realm": "example", "user_id": "alice"}
+    },
+    {
+      "name": "device",
+      "request": {"kind": "device", "realm": "example", "device_id": "dev-a"},
+      "ura": "easynet:///r/example/device/dev-a",
+      "components": {"realm": "example", "device_id": "dev-a"}
+    },
+    {
+      "name": "user_agent",
+      "request": {"kind": "agent", "owner_kind": "user", "realm": "example", "user_id": "alice", "agent_id": "assistant"},
+      "ura": "easynet:///r/example/agent/alice.assistant",
+      "components": {"realm": "example", "owner_kind": "user", "user_id": "alice", "agent_id": "assistant"}
+    },
+    {
+      "name": "device_agent",
+      "request": {"kind": "agent", "owner_kind": "device", "realm": "example", "device_id": "dev-a", "agent_id": "terminal"},
+      "ura": "easynet:///r/example/agent/device.dev-a.terminal",
+      "components": {"realm": "example", "owner_kind": "device", "device_id": "dev-a", "agent_id": "terminal"}
+    },
+    {
+      "name": "authority",
+      "request": {"kind": "authority", "realm": "example"},
+      "ura": "easynet:///r/example/authority",
+      "components": {"realm": "example"}
+    },
+    {
+      "name": "device_ability_grammar_migration_only",
+      "request": {"kind": "ability", "owner_ura": "easynet:///r/example/device/dev-a", "ability_name": "observe.health"},
+      "ura": "easynet:///r/example/ability/device.dev-a.observe.health",
+      "components": {
+        "realm": "example",
+        "owner_ura": "easynet:///r/example/device/dev-a",
+        "owner_kind": "device",
+        "ability_name": "observe.health",
+        "public_name": "observe.health",
+        "local_registry_ability": "observe.health",
+        "namespace": "observe",
+        "local_name": "health"
+      }
+    },
+    {
+      "name": "system_agent_ability",
+      "request": {"kind": "ability", "owner_ura": "easynet:///r/example/agent/device.dev-a.runtime-health", "ability_name": "observe.health"},
+      "ura": "easynet:///r/example/ability/system-agent.dev-a.runtime-health.observe.health",
+      "components": {
+        "realm": "example",
+        "owner_ura": "easynet:///r/example/agent/device.dev-a.runtime-health",
+        "owner_kind": "system-agent",
+        "ability_name": "observe.health",
+        "public_name": "observe.health",
+        "local_registry_ability": "observe.health",
+        "namespace": "observe",
+        "local_name": "health"
+      }
+    },
+    {
+      "name": "authority_ability",
+      "request": {"kind": "ability", "owner_ura": "easynet:///r/example/authority", "ability_name": "federation.resolve"},
+      "ura": "easynet:///r/example/ability/authority.federation.resolve",
+      "components": {
+        "realm": "example",
+        "owner_ura": "easynet:///r/example/authority",
+        "owner_kind": "authority",
+        "ability_name": "federation.resolve",
+        "public_name": "federation.resolve",
+        "local_registry_ability": "federation.resolve",
+        "namespace": "federation",
+        "local_name": "resolve"
+      }
+    },
+    {
+      "name": "user_resource",
+      "request": {"kind": "resource", "owner_ura": "easynet:///r/example/user/alice", "path": "invoke/observe.health"},
+      "ura": "easynet:///r/example/resource/user.alice/invoke/observe.health",
+      "components": {"realm": "example", "owner_id": "user.alice", "path": "invoke/observe.health"}
+    }
+  ],
+  "descriptor": {
+    "raw": "easynet:///r/example/ability/authority.federation.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!read",
+    "components": {
+      "ability_ura": "easynet:///r/example/ability/authority.federation.resolve",
+      "descriptor_version": "1.0.0",
+      "descriptor_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "action": "read",
+      "owner_ura": "easynet:///r/example/authority",
+      "owner_kind": "authority",
+      "public_name": "federation.resolve",
+      "local_registry_ability": "federation.resolve"
+    }
+  },
+  "invalid_uras": [
+    "easynet:///r/example/device/dev/a",
+    "easynet:///r/example/user/alice.extra",
+    "easynet:///r/example/agent/alice.extra.agent",
+    "easynet:///r/example/agent/device.justone",
+    "easynet:///r/example/agent/device.dev-a.terminal.extra",
+    "easynet:///r/example/agent/authority.assistant"
+  ]
+}

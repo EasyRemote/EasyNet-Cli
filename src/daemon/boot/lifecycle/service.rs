@@ -67,12 +67,18 @@ impl RuntimeLifecycleService {
     }
 
     /// Observe the current lifecycle state.
-    pub fn status(&self) -> RuntimeStatusReport {
-        RuntimeStatusReport::from_parts_with_presence(
-            self.projection_store.load(),
+    pub fn status(&self) -> Result<RuntimeStatusReport, RuntimeLifecycleError> {
+        let projection = self.projection_store.load().map_err(|source| {
+            RuntimeLifecycleError::ProjectionLoadFailed {
+                message: source.to_string(),
+            }
+        })?;
+        Ok(RuntimeStatusReport::from_parts_with_companion_observation(
+            projection,
             self.discovery.capture(),
             self.presence_observer.capture(),
-        )
+            super::status::desktop_companion_statuses(),
+        ))
     }
 
     /// Evaluate start preflight from process facts, removing stale
@@ -81,7 +87,7 @@ impl RuntimeLifecycleService {
         &self,
         request: &RuntimeStartRequest,
     ) -> Result<RuntimeStartPreflightReport, RuntimeLifecycleError> {
-        let report = start::preflight_start(request, &self.status())?;
+        let report = start::preflight_start(request, &self.status()?)?;
         if matches!(
             report.action(),
             RuntimeStartPreflightAction::RemovedStaleProjection
@@ -96,8 +102,8 @@ impl RuntimeLifecycleService {
     }
 
     /// Build the side-effect-free stop plan for the current host.
-    pub fn stop_plan(&self) -> RuntimeStopPlan {
-        RuntimeStopPlan::from_report(&self.status())
+    pub fn stop_plan(&self) -> Result<RuntimeStopPlan, RuntimeLifecycleError> {
+        Ok(RuntimeStopPlan::from_report(&self.status()?))
     }
 
     /// Persist `runtime.json` after daemon Ready, rolling back a newly
@@ -131,7 +137,10 @@ mod tests {
 
     #[test]
     fn service_reports_without_requiring_runtime_projection() {
-        let report = RuntimeLifecycleService::new().status();
+        let _home = HomeGuard::new();
+        let report = RuntimeLifecycleService::new()
+            .status()
+            .expect("fresh home status should classify");
 
         assert!(
             matches!(
@@ -141,7 +150,7 @@ mod tests {
                     | super::super::status::RuntimeLifecycleStatus::ProjectionMissingProcessRunning
                     | super::super::status::RuntimeLifecycleStatus::ProjectionPresentProcessMissing
                     | super::super::status::RuntimeLifecycleStatus::ControlOnlyInvocationDown
-                    | super::super::status::RuntimeLifecycleStatus::LegacyAxonBridge
+                    | super::super::status::RuntimeLifecycleStatus::DaemonDiscoveryInvalid
             ),
             "Invariant 1: status observation must classify every host state"
         );
@@ -176,6 +185,26 @@ mod tests {
         assert!(
             config::load().is_err(),
             "runtime.json must be removed only by the lifecycle service side-effect boundary"
+        );
+    }
+
+    #[test]
+    fn service_rejects_malformed_projection_before_start_preflight() {
+        let _home = HomeGuard::new();
+        std::fs::create_dir_all(config::state_dir()).expect("state dir");
+        std::fs::write(config::runtime_state_path(), "{ not json").expect("runtime projection");
+
+        let error = RuntimeLifecycleService::new()
+            .preflight_start(&RuntimeStartRequest::device("tenant-test", "node-test"))
+            .expect_err("malformed projection must block start preflight");
+
+        assert!(
+            matches!(error, RuntimeLifecycleError::ProjectionLoadFailed { .. }),
+            "wrong error: {error:#}"
+        );
+        assert!(
+            config::runtime_state_path().exists(),
+            "malformed runtime.json must not be removed as a stale projection"
         );
     }
 }

@@ -6,11 +6,13 @@ use std::time::{Duration, Instant};
 use crate::daemon::control::{discovery, transport};
 use crate::daemon::persistence::config;
 use crate::daemon::persistence::daemon_config::{
-    DaemonConfig, DaemonMode as PersistedDaemonMode, DEFAULT_DAEMON_CONFIG_PATH,
+    self, DaemonConfig, DaemonMode as PersistedDaemonMode, DEFAULT_DAEMON_CONFIG_PATH,
     DEFAULT_DAEMON_UDS_PATH,
 };
+use crate::daemon::persistence::file_lock::ExclusiveFileLock;
 use crate::support::platform::{local_daemon_grpc, net};
 
+use super::identity_fact::DeviceNodeIdFact;
 use super::{DaemonError, Result};
 
 const DEFAULT_DAEMON_BIN: &str = "easynet-daemon";
@@ -31,12 +33,16 @@ const STOP_POLL_INTERVAL: Duration = Duration::from_millis(100);
 ///    is accepting but `daemon.sock` is not, startup returns
 ///    `ControlAliveInvocationDown` so callers do not persist a broken
 ///    Invocation endpoint.
+/// 4. A live PID without accepting endpoints is a non-terminal daemon state,
+///    not permission to spawn a replacement. The child process additionally
+///    holds an OS-level lease for the full lifetime of the state root.
 #[derive(Debug, Clone)]
 pub struct DaemonStartConfig {
     mode: DaemonStartMode,
     realm: Option<String>,
     node_id: String,
     daemon_bin: Option<PathBuf>,
+    working_dir: Option<PathBuf>,
     env: BTreeMap<String, String>,
     log_path: Option<PathBuf>,
     detach: bool,
@@ -70,6 +76,7 @@ impl DaemonStartConfig {
             realm: None,
             node_id: "hub".to_string(),
             daemon_bin: None,
+            working_dir: None,
             env: BTreeMap::new(),
             log_path: None,
             detach: true,
@@ -86,6 +93,7 @@ impl DaemonStartConfig {
             realm: None,
             node_id,
             daemon_bin: None,
+            working_dir: None,
             env: BTreeMap::new(),
             log_path: None,
             detach: true,
@@ -107,6 +115,16 @@ impl DaemonStartConfig {
             return Err(DaemonError::EmptyBinaryPath);
         }
         self.daemon_bin = Some(path);
+        Ok(self)
+    }
+
+    /// Override the daemon process working directory.
+    pub fn with_working_dir(mut self, path: impl Into<PathBuf>) -> Result<Self> {
+        let path = path.into();
+        if path.as_os_str().is_empty() {
+            return Err(DaemonError::EmptyWorkingDir);
+        }
+        self.working_dir = Some(path);
         Ok(self)
     }
 
@@ -137,7 +155,7 @@ impl DaemonStartConfig {
     /// Start `easynet-daemon`, or return a handle to the already-live
     /// daemon when both control and Invocation endpoints are accepting.
     pub fn start(&self) -> Result<DaemonHandle> {
-        let paths = self.launch_paths();
+        let paths = self.launch_paths()?;
         let endpoints = paths.endpoints.clone();
         if local_daemon_grpc::probe_accepting(&endpoints.control) {
             if !local_daemon_grpc::probe_accepting(&endpoints.invocation) {
@@ -154,6 +172,7 @@ impl DaemonStartConfig {
                 pid_path: paths.pid_path,
             });
         }
+        refuse_live_daemon_without_endpoints(&paths)?;
 
         let binary = self.resolve_daemon_bin();
         let log_path = paths.log_path.clone();
@@ -196,52 +215,64 @@ impl DaemonStartConfig {
             .unwrap_or_else(|| PathBuf::from(DEFAULT_DAEMON_BIN))
     }
 
-    fn resolve_log_path(&self) -> PathBuf {
-        self.log_path.clone().unwrap_or_else(|| {
-            self.effective_state_dir()
+    fn resolve_log_path(&self) -> Result<PathBuf> {
+        match self.log_path.clone() {
+            Some(path) => Ok(path),
+            None => Ok(self
+                .effective_state_dir()?
                 .join("logs")
-                .join("easynet-daemon.log")
-        })
+                .join("easynet-daemon.log")),
+        }
     }
 
-    fn launch_paths(&self) -> DaemonLaunchPaths {
-        let state_dir = self.effective_state_dir();
-        DaemonLaunchPaths {
+    fn launch_paths(&self) -> Result<DaemonLaunchPaths> {
+        let state_dir = self.effective_state_dir()?;
+        Ok(DaemonLaunchPaths {
             endpoints: DaemonEndpoints {
                 control: state_dir.join(transport::UDS_FILENAME),
-                invocation: self.resolve_invocation_endpoint(),
+                invocation: self.resolve_invocation_endpoint()?,
             },
             discovery_path: state_dir.join(discovery::CONTROL_JSON_FILENAME),
             pid_path: state_dir.join("easynet-daemon.pid"),
-            log_path: self.resolve_log_path(),
+            log_path: self.resolve_log_path()?,
+        })
+    }
+
+    fn effective_state_dir(&self) -> Result<PathBuf> {
+        Ok(self.effective_home_dir()?.join(".easynet"))
+    }
+
+    fn effective_home_dir(&self) -> Result<PathBuf> {
+        if let Some(value) = self.env.get("HOME") {
+            if value.trim().is_empty() {
+                return Err(DaemonError::DaemonHomeUnavailable {
+                    context: "daemon child HOME override",
+                });
+            }
+            return validate_effective_home("daemon child HOME override", PathBuf::from(value));
         }
-    }
 
-    fn effective_state_dir(&self) -> PathBuf {
-        self.effective_home_dir().join(".easynet")
-    }
-
-    fn effective_home_dir(&self) -> PathBuf {
-        self.env
-            .get("HOME")
-            .filter(|value| !value.trim().is_empty())
+        let home = std::env::var_os("HOME")
+            .filter(|value| !value.is_empty())
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("."))
+            .ok_or(DaemonError::DaemonHomeUnavailable {
+                context: "daemon process HOME",
+            })?;
+        validate_effective_home("daemon process HOME", home)
     }
 
-    fn expand_effective_home(&self, path: impl AsRef<Path>) -> PathBuf {
+    fn expand_effective_home(&self, path: impl AsRef<Path>) -> Result<PathBuf> {
         let path = path.as_ref();
         let Some(raw) = path.to_str() else {
-            return path.to_path_buf();
+            return Ok(path.to_path_buf());
         };
         if let Some(rest) = raw.strip_prefix("~/") {
-            return self.effective_home_dir().join(rest);
+            return Ok(self.effective_home_dir()?.join(rest));
         }
-        path.to_path_buf()
+        Ok(path.to_path_buf())
     }
 
-    fn resolve_invocation_endpoint(&self) -> PathBuf {
+    fn resolve_invocation_endpoint(&self) -> Result<PathBuf> {
         if let Some(raw) = self
             .env
             .get("EASYNET_DAEMON_GRPC_UDS")
@@ -250,7 +281,7 @@ impl DaemonStartConfig {
             return self.expand_effective_home(raw);
         }
 
-        let config_path = self.expand_effective_home(DEFAULT_DAEMON_CONFIG_PATH);
+        let config_path = self.expand_effective_home(DEFAULT_DAEMON_CONFIG_PATH)?;
         match DaemonConfig::load(&config_path) {
             Ok(cfg) => self.expand_effective_home(cfg.uds_path()),
             Err(_) => self.expand_effective_home(DEFAULT_DAEMON_UDS_PATH),
@@ -292,12 +323,13 @@ impl DaemonStartConfig {
             }
         }
         if matches!(self.mode, DaemonStartMode::Device) {
-            let actual_node = identity.node_id.unwrap_or_default();
-            if self.node_id.trim() != actual_node {
+            let requested_node = DeviceNodeIdFact::from_optional(Some(self.node_id.trim()));
+            let actual_node = DeviceNodeIdFact::from_optional(identity.node_id.as_deref());
+            if requested_node.present_value() != actual_node.present_value() {
                 return Err(DaemonError::DiscoveryIdentityMismatch {
                     field: "node_id",
-                    requested: self.node_id.trim().to_string(),
-                    actual: actual_node,
+                    requested: requested_node.mismatch_value(),
+                    actual: actual_node.mismatch_value(),
                 });
             }
         }
@@ -321,6 +353,9 @@ impl DaemonStartConfig {
             })?;
 
         let mut cmd = Command::new(binary);
+        if let Some(working_dir) = &self.working_dir {
+            cmd.current_dir(working_dir);
+        }
         cmd.env("EASYNET_NODE_ID", self.node_id.trim());
         for (key, value) in &self.env {
             cmd.env(key, value);
@@ -354,6 +389,111 @@ impl DaemonStartConfig {
     }
 }
 
+/// Process-lifetime ownership of one local daemon state root.
+///
+/// The lease is acquired before any daemon-owned listener or background
+/// service starts and is retained until process shutdown. Endpoint files are
+/// therefore safe to replace only after this lease has been obtained: a
+/// second daemon cannot unlink a live process's `control.sock` or
+/// `daemon.sock` and create two competing runtime authorities for one HOME.
+pub struct DaemonProcessLease {
+    _lock: ExclusiveFileLock,
+    pid_path: PathBuf,
+    pid: u32,
+}
+
+impl DaemonProcessLease {
+    /// Acquire the process lease for the current daemon state root and publish
+    /// this process as its sole PID owner.
+    pub fn acquire_current() -> Result<Self> {
+        let pid_path = config::try_easynet_daemon_pid_path().map_err(|source| {
+            DaemonError::DaemonStateRootUnavailable {
+                context: "daemon process lease",
+                source,
+            }
+        })?;
+        Self::acquire_at(pid_path)
+    }
+
+    fn acquire_at(pid_path: PathBuf) -> Result<Self> {
+        let lock = ExclusiveFileLock::try_acquire_for_data_path(&pid_path).map_err(|source| {
+            DaemonError::AcquireProcessLease {
+                path: pid_path.clone(),
+                source,
+            }
+        })?;
+        let Some(lock) = lock else {
+            let owner = read_daemon_pid_at(&pid_path)
+                .map(|pid| format!("pid {pid}"))
+                .unwrap_or_else(|| "another daemon process".to_string());
+            return Err(DaemonError::ProcessLeaseHeld {
+                path: pid_path,
+                owner,
+            });
+        };
+
+        let pid = std::process::id();
+        if let Some(existing_pid) = read_daemon_pid_at(&pid_path)
+            .filter(|existing_pid| *existing_pid != pid)
+            .filter(|existing_pid| net::is_pid_alive(*existing_pid))
+        {
+            if !net::is_easynet_process(existing_pid) {
+                return Err(DaemonError::PidReuseRefused { pid: existing_pid });
+            }
+            return Err(DaemonError::ProcessLeaseHeld {
+                path: pid_path,
+                owner: format!("legacy daemon pid {existing_pid}"),
+            });
+        }
+
+        write_daemon_pid_at(&pid_path, pid)?;
+        Ok(Self {
+            _lock: lock,
+            pid_path,
+            pid,
+        })
+    }
+}
+
+impl Drop for DaemonProcessLease {
+    fn drop(&mut self) {
+        if read_daemon_pid_at(&self.pid_path) == Some(self.pid) {
+            let _ = std::fs::remove_file(&self.pid_path);
+        }
+    }
+}
+
+fn refuse_live_daemon_without_endpoints(paths: &DaemonLaunchPaths) -> Result<()> {
+    let Some(pid) = read_daemon_pid_at(&paths.pid_path) else {
+        return Ok(());
+    };
+    if !net::is_pid_alive(pid) {
+        let _ = std::fs::remove_file(&paths.pid_path);
+        return Ok(());
+    }
+    if !net::is_easynet_process(pid) {
+        return Err(DaemonError::PidReuseRefused { pid });
+    }
+    Err(DaemonError::ProcessAliveEndpointsDown {
+        pid,
+        control: paths.endpoints.control.clone(),
+        invocation: paths.endpoints.invocation.clone(),
+    })
+}
+
+fn validate_effective_home(context: &'static str, path: PathBuf) -> Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path);
+    }
+    Err(DaemonError::DaemonStateRootUnavailable {
+        context,
+        source: anyhow::anyhow!(
+            "HOME must resolve to an absolute path before deriving .easynet state root, got {}",
+            path.display()
+        ),
+    })
+}
+
 fn mode_matches(requested: DaemonStartMode, actual: &str) -> bool {
     match requested {
         DaemonStartMode::Device => actual == PersistedDaemonMode::Device.as_str(),
@@ -383,13 +523,27 @@ impl DaemonEndpoints {
     /// Resolve endpoints from the current process environment and
     /// daemon configuration files.
     pub fn current() -> Self {
-        Self {
-            control: transport::default_socket_path(),
-            invocation: local_daemon_grpc::resolve_socket_path(),
-        }
+        Self::try_current().unwrap_or_else(|error| panic!("{error}"))
     }
 
-    /// Legacy control-plane endpoint (`control.sock` or named pipe).
+    /// Fallible endpoint resolution for production lifecycle paths.
+    ///
+    /// Endpoint discovery is part of the daemon state-root state machine. A
+    /// missing or invalid state root must surface as a lifecycle error instead
+    /// of panicking or re-deriving paths from the current working directory.
+    pub fn try_current() -> Result<Self> {
+        Ok(Self {
+            control: transport::try_default_socket_path().map_err(|source| {
+                DaemonError::DaemonStateRootUnavailable {
+                    context: "control endpoint discovery",
+                    source,
+                }
+            })?,
+            invocation: daemon_config::resolved_local_uds_path_with_env_override(),
+        })
+    }
+
+    /// Boot/status control endpoint (`control.sock` or named pipe).
     pub fn control(&self) -> &Path {
         &self.control
     }
@@ -418,6 +572,62 @@ pub struct DaemonHandle {
 }
 
 impl DaemonHandle {
+    /// Attach to an already-running daemon without spawning a new
+    /// process.
+    pub fn attach_current() -> Result<Self> {
+        let endpoints = DaemonEndpoints::try_current()?;
+        Self::attach_endpoints_with_process_facts(
+            endpoints,
+            discover_existing_daemon_pid(),
+            config::try_easynet_daemon_pid_path().map_err(|source| {
+                DaemonError::DaemonStateRootUnavailable {
+                    context: "daemon pidfile discovery",
+                    source,
+                }
+            })?,
+        )
+    }
+
+    /// Attach to an explicitly discovered daemon endpoint pair.
+    ///
+    /// SDK embeddings may manage more than one daemon state root in the same
+    /// process. This path therefore must not consult process-default HOME or
+    /// pidfile state after the caller has supplied concrete endpoints.
+    pub(crate) fn attach_endpoints(endpoints: DaemonEndpoints) -> Result<Self> {
+        let pid_path = endpoints
+            .control
+            .parent()
+            .map(|parent| parent.join("easynet-daemon.pid"))
+            .unwrap_or_else(|| PathBuf::from("easynet-daemon.pid"));
+        Self::attach_endpoints_with_process_facts(endpoints, None, pid_path)
+    }
+
+    fn attach_endpoints_with_process_facts(
+        endpoints: DaemonEndpoints,
+        pid: Option<u32>,
+        pid_path: PathBuf,
+    ) -> Result<Self> {
+        let control_accepting = local_daemon_grpc::probe_accepting(&endpoints.control);
+        let invocation_accepting = local_daemon_grpc::probe_accepting(&endpoints.invocation);
+        if control_accepting && !invocation_accepting {
+            return Err(DaemonError::ControlAliveInvocationDown {
+                control: endpoints.control.clone(),
+                invocation: endpoints.invocation.clone(),
+            });
+        }
+        if !invocation_accepting {
+            return Err(DaemonError::InvocationEndpointDown {
+                endpoint: endpoints.invocation.clone(),
+            });
+        }
+        Ok(Self {
+            child: None,
+            pid,
+            pid_path,
+            endpoints,
+        })
+    }
+
     /// PID of the daemon process, when known.
     pub fn pid(&self) -> Option<u32> {
         self.pid
@@ -436,6 +646,16 @@ impl DaemonHandle {
     /// Local Axon Invocation endpoint.
     pub fn invocation_endpoint(&self) -> &Path {
         self.endpoints.invocation()
+    }
+
+    /// Runtime endpoints owned by this handle.
+    pub fn endpoints(&self) -> &DaemonEndpoints {
+        &self.endpoints
+    }
+
+    /// Release local process ownership without stopping the daemon.
+    pub fn detach(&mut self) {
+        self.child = None;
     }
 
     /// Snapshot daemon liveness through pid and endpoint probes.
@@ -481,6 +701,22 @@ impl DaemonStatus {
     pub fn current() -> Self {
         let endpoints = DaemonEndpoints::current();
         Self::from_parts(discover_existing_daemon_pid(), endpoints)
+    }
+
+    /// Fallible status resolution for lifecycle paths that must not panic on
+    /// an invalid state root.
+    pub fn try_current() -> Result<Self> {
+        let endpoints = DaemonEndpoints::try_current()?;
+        Ok(Self::from_parts(discover_existing_daemon_pid(), endpoints))
+    }
+
+    /// Snapshot liveness for an explicitly selected daemon endpoint pair.
+    ///
+    /// C ABI lifecycle callers can attach to non-default state roots; their
+    /// discovery/status path must therefore avoid process-default pidfile and
+    /// HOME-derived endpoint resolution.
+    pub(crate) fn from_explicit_endpoints(endpoints: DaemonEndpoints) -> Self {
+        Self::from_parts(None, endpoints)
     }
 
     fn from_parts(pid: Option<u32>, endpoints: DaemonEndpoints) -> Self {
@@ -557,33 +793,13 @@ fn write_daemon_pid_at(pid_path: &Path, pid: u32) -> Result<()> {
 }
 
 fn discover_existing_daemon_pid() -> Option<u32> {
-    discover_existing_daemon_pid_at(&config::easynet_daemon_pid_path())
+    config::try_easynet_daemon_pid_path()
+        .ok()
+        .and_then(|path| discover_existing_daemon_pid_at(&path))
 }
 
 fn discover_existing_daemon_pid_at(pid_path: &Path) -> Option<u32> {
-    if let Some(pid) = read_daemon_pid_at(pid_path).filter(|pid| net::is_pid_alive(*pid)) {
-        return Some(pid);
-    }
-
-    #[cfg(windows)]
-    {
-        None
-    }
-
-    #[cfg(not(windows))]
-    {
-        let output = Command::new("pgrep")
-            .args(["-f", DEFAULT_DAEMON_BIN])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(|line| line.trim().parse::<u32>().ok())
-            .find(|pid| *pid != std::process::id() && net::is_pid_alive(*pid))
-    }
+    read_daemon_pid_at(pid_path).filter(|pid| net::is_pid_alive(*pid))
 }
 
 fn read_daemon_pid_at(pid_path: &Path) -> Option<u32> {
@@ -759,7 +975,7 @@ mod tests {
                 "EASYNET_DAEMON_GRPC_UDS",
                 "~/.easynet/custom-invocation.sock",
             );
-        let paths = config.launch_paths();
+        let paths = config.launch_paths().expect("launch paths");
 
         assert_eq!(
             paths.endpoints.control(),
@@ -777,6 +993,150 @@ mod tests {
             paths.pid_path,
             PathBuf::from("/tmp/easynet-sdk-home/.easynet/easynet-daemon.pid")
         );
+    }
+
+    #[test]
+    fn launch_paths_reject_blank_child_home_instead_of_process_fallback() {
+        let config = DaemonStartConfig::device("node-a")
+            .unwrap()
+            .with_env("HOME", " ");
+        let err = config
+            .launch_paths()
+            .expect_err("blank child HOME must fail closed");
+
+        assert!(matches!(
+            err,
+            DaemonError::DaemonHomeUnavailable {
+                context: "daemon child HOME override"
+            }
+        ));
+    }
+
+    #[test]
+    fn launch_paths_reject_relative_child_home_before_cwd_fallback() {
+        let config = DaemonStartConfig::device("node-a")
+            .unwrap()
+            .with_env("HOME", "relative-home");
+        let err = config
+            .launch_paths()
+            .expect_err("relative child HOME must fail closed");
+
+        assert!(matches!(
+            err,
+            DaemonError::DaemonStateRootUnavailable {
+                context: "daemon child HOME override",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn launch_paths_reject_missing_process_home_instead_of_cwd_fallback() {
+        let _lock = crate::cli::commands::test_support::env_lock();
+        let previous_home = std::env::var_os("HOME");
+        struct RestoreHome(Option<std::ffi::OsString>);
+        impl Drop for RestoreHome {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(value) => std::env::set_var("HOME", value),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+        let _restore = RestoreHome(previous_home);
+        std::env::remove_var("HOME");
+
+        let config = DaemonStartConfig::device("node-a").unwrap();
+        let err = config
+            .launch_paths()
+            .expect_err("missing HOME must fail closed");
+
+        assert!(matches!(
+            err,
+            DaemonError::DaemonHomeUnavailable {
+                context: "daemon process HOME"
+            }
+        ));
+    }
+
+    #[test]
+    fn discover_existing_daemon_pid_returns_none_for_missing_pidfile() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pid_path = temp.path().join("missing-daemon.pid");
+
+        assert_eq!(
+            discover_existing_daemon_pid_at(&pid_path),
+            None,
+            "missing pidfile must not fall back to global process-name discovery"
+        );
+    }
+
+    #[test]
+    fn discover_existing_daemon_pid_returns_none_for_stale_pidfile() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pid_path = temp.path().join("stale-daemon.pid");
+        std::fs::write(&pid_path, "999999999").expect("write stale pidfile");
+
+        assert_eq!(
+            discover_existing_daemon_pid_at(&pid_path),
+            None,
+            "stale pidfile must not fall back to global process-name discovery"
+        );
+    }
+
+    #[test]
+    fn daemon_process_lease_is_exclusive_and_cleans_its_pid() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pid_path = temp.path().join("easynet-daemon.pid");
+        let lease = DaemonProcessLease::acquire_at(pid_path.clone()).expect("first lease");
+
+        assert_eq!(read_daemon_pid_at(&pid_path), Some(std::process::id()));
+        let error = DaemonProcessLease::acquire_at(pid_path.clone())
+            .err()
+            .expect("second process lease must fail without blocking");
+        assert!(matches!(error, DaemonError::ProcessLeaseHeld { .. }));
+
+        drop(lease);
+        assert!(
+            !pid_path.exists(),
+            "the process that owns the pid projection must remove it on shutdown"
+        );
+    }
+
+    #[test]
+    fn daemon_process_lease_does_not_remove_a_reassigned_pid_projection() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pid_path = temp.path().join("easynet-daemon.pid");
+        let lease = DaemonProcessLease::acquire_at(pid_path.clone()).expect("process lease");
+        std::fs::write(&pid_path, "424242").expect("simulate reassigned pid projection");
+
+        drop(lease);
+
+        assert_eq!(read_daemon_pid_at(&pid_path), Some(424242));
+    }
+
+    #[test]
+    fn daemon_start_refuses_live_pid_when_endpoints_are_down() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = DaemonLaunchPaths {
+            endpoints: DaemonEndpoints {
+                control: temp.path().join("control.sock"),
+                invocation: temp.path().join("daemon.sock"),
+            },
+            discovery_path: temp.path().join("control.json"),
+            pid_path: temp.path().join("easynet-daemon.pid"),
+            log_path: temp.path().join("daemon.log"),
+        };
+        std::fs::write(&paths.pid_path, std::process::id().to_string())
+            .expect("write live daemon pid");
+
+        let error = refuse_live_daemon_without_endpoints(&paths)
+            .expect_err("a live pid must block replacement even before endpoints are ready");
+
+        assert!(matches!(
+            error,
+            DaemonError::ProcessAliveEndpointsDown { pid, .. } if pid == std::process::id()
+        ));
     }
 
     #[test]
@@ -798,6 +1158,52 @@ mod tests {
                 field: "node_id",
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn device_attach_identity_rejects_missing_discovered_node_id() {
+        let config = DaemonStartConfig::device("node-a")
+            .unwrap()
+            .with_realm("realm-a");
+        let err = config
+            .validate_discovered_identity(discovery::DaemonIdentity {
+                mode: "device".into(),
+                realm: "realm-a".into(),
+                node_id: None,
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            DaemonError::DiscoveryIdentityMismatch {
+                field: "node_id",
+                requested,
+                actual,
+            } if requested == "node-a" && actual == "<missing>"
+        ));
+    }
+
+    #[test]
+    fn device_attach_identity_rejects_blank_discovered_node_id() {
+        let config = DaemonStartConfig::device("node-a")
+            .unwrap()
+            .with_realm("realm-a");
+        let err = config
+            .validate_discovered_identity(discovery::DaemonIdentity {
+                mode: "device".into(),
+                realm: "realm-a".into(),
+                node_id: Some("  ".into()),
+            })
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            DaemonError::DiscoveryIdentityMismatch {
+                field: "node_id",
+                requested,
+                actual,
+            } if requested == "node-a" && actual == "<blank>"
         ));
     }
 

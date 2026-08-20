@@ -5,7 +5,7 @@ compatibility: Requires easynet CLI built and on PATH
 metadata:
   author: easynet
   version: "1.0.0"
-  axon-resource-uri: "easynet:///r/org/ability-author"
+  axon-resource-ura: "easynet:///r/org/ability-author"
 allowed-tools: Bash(*), Edit, Write, Read
 ---
 

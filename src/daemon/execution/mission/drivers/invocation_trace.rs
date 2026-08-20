@@ -19,6 +19,8 @@
 
 use serde_json::Value;
 
+use crate::core::identity::RuntimeIdentityUra;
+use crate::core::ura::URAKind;
 use crate::daemon::execution::mission::dispatch::ToolCall;
 
 /// Reserved payload key used by EasyNet MCP projection to attach
@@ -63,15 +65,20 @@ pub(crate) struct InvocationTraceMetadata {
 pub(crate) fn parse_invocation_trace_metadata(text: &str) -> Option<InvocationTraceMetadata> {
     let value = parse_tool_result_json(text)?;
     let meta = value.get(TRACE_METADATA_KEY)?.as_object()?;
+    let ability_ura = trace_ura_field(meta, "ability_ura", Some(URAKind::Ability))?;
+    let invocation_ura = trace_ura_field(meta, "invocation_ura", Some(URAKind::Resource))?;
+    let caller_ura = trace_ura_field(meta, "caller_ura", None)?;
+    let callee_ura = trace_ura_field(meta, "callee_ura", None)?;
+    let subject_ura = trace_ura_field(meta, "subject_ura", None)?;
     Some(InvocationTraceMetadata {
         ability: json_string(meta.get("ability")),
         mcp_tool_name: json_string(meta.get("mcp_tool")),
         request_id: json_string(meta.get("request_id")),
-        ability_ura: json_string(meta.get("ability_ura")),
-        invocation_ura: json_string(meta.get("invocation_ura")),
-        caller_ura: json_string(meta.get("caller_ura")),
-        callee_ura: json_string(meta.get("callee_ura")),
-        subject_ura: json_string(meta.get("subject_ura")),
+        ability_ura,
+        invocation_ura,
+        caller_ura,
+        callee_ura,
+        subject_ura,
     })
 }
 
@@ -151,6 +158,21 @@ fn json_string(value: Option<&Value>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn trace_ura_field(
+    meta: &serde_json::Map<String, Value>,
+    field: &str,
+    expected_kind: Option<URAKind>,
+) -> Option<Option<String>> {
+    let Some(raw) = json_string(meta.get(field)) else {
+        return Some(None);
+    };
+    let ura = RuntimeIdentityUra::parse(&raw).ok()?;
+    if expected_kind.is_some_and(|kind| ura.kind() != kind) {
+        return None;
+    }
+    Some(Some(ura.into_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +191,21 @@ mod tests {
         )
         .expect("nested metadata");
         assert_eq!(nested.request_id.as_deref(), Some("req-1"));
+    }
+
+    #[test]
+    fn rejects_legacy_invocation_role_trace_ura() {
+        assert!(parse_invocation_trace_metadata(
+            r#"{"x-easynet-invocation":{"ability":"demo.weather","mcp_tool":"demo_weather","invocation_ura":"easynet:///r/localhost/invocation/req-1"}}"#,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn rejects_all_zero_principal_trace_ura() {
+        assert!(parse_invocation_trace_metadata(
+            r#"{"x-easynet-invocation":{"subject_ura":"easynet:///r/localhost/resource/user.00000000-0000-0000-0000-000000000000/runtime-state/read"}}"#,
+        )
+        .is_none());
     }
 }

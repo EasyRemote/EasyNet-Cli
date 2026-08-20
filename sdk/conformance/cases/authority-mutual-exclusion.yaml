@@ -1,0 +1,37 @@
+id: authority/mutual_exclusion
+profile: runtime_core
+required_for:
+  - go
+  - python
+  - node
+  - java
+  - swift
+description: Invocation builders expose typed authority metadata and reject ambiguous delegated/session authority.
+steps:
+  - action: load_authority_fixture
+    fixture: authority-metadata.v4.json
+  - action: project_delegation_metadata
+  - action: project_session_authority_metadata
+  - action: mint_delegation_via_transport
+  - action: mint_session_authority_via_transport
+  - action: attach_single_authority_metadata
+  - action: attach_ambiguous_authority_metadata
+expect:
+  result: error
+  error_code: INVALID_ARGUMENT
+  delegation_metadata_key: x-runtime-delegation
+  session_authority_metadata_key: x-runtime-session-authority
+  typed_delegation_projection: true
+  typed_session_authority_projection: true
+  authority_minting_facade: provider_backed
+  authority_minting_cabi_core: true
+  authority_minting_concrete_transport: true
+  go_authority_minting_cabi_transport: true
+  python_authority_minting_cabi_transport: true
+  node_authority_minting_injected_transport: true
+  java_authority_minting_injected_transport: true
+  swift_authority_minting_injected_transport: true
+  authority_minting_canonical_payload_owned_by_sdk: false
+  unrelated_metadata_preserved: true
+  ambiguous_authority_rejected: true
+  canonical_payload_owned_by_sdk: false

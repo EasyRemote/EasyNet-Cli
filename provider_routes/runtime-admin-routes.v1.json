@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "provider": "runtime",
+  "capability": "runtime_admin",
+  "profile": "runtime_admin",
+  "routes": [
+    {
+      "id": "session_list",
+      "go_const": "runtimeAdminSessionListAbility",
+      "python_const": "_RUNTIME_ADMIN_SESSION_LIST_ABILITY",
+      "daemon_const": "SESSION_LIST",
+      "ability": "session.list",
+      "sdk_surface": true
+    },
+    {
+      "id": "device_revoke",
+      "daemon_const": "FEDERATION_REVOKE",
+      "ability": "federation.revoke",
+      "sdk_surface": false
+    }
+  ]
+}

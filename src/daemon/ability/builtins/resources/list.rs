@@ -3,11 +3,12 @@
 //
 // File: src/daemon/ability/builtins/resources/list.rs
 //
-// Resource discovery surface for physical-channel abilities
+// Read-only cache projection for physical-channel resources
 // (mic.subscribe, camera.subscribe, screen.subscribe, camera.record_start,
-// ...). A consumer wishing to record "Chrome" calls
-// `meta.list_resources(types=["application"])`, picks the application's
-// `resource_ura`, then invokes `screen.subscribe(subject=<that ura>)`.
+// ...). Display/window/application rows returned by this ability are not a live
+// target picker contract: consumers that need selectable remote desktop targets
+// must call `resource.refresh_remote_targets` or `resource.watch_remote_targets`
+// and then invoke with the selected `resource_ura` as the envelope subject.
 //
 // Wire shape:
 //
@@ -44,20 +45,24 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::daemon::ability::catalog::ability_toml::Rfc006Metadata;
-use crate::daemon::ability::descriptors::AbilityClass;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
-use crate::daemon::persistence::resources::{self, filter_by_kinds, ResourceEntry, ResourceType};
+use crate::daemon::persistence::resources::{self, filter_by_kinds, ResourceType};
+use crate::daemon::resources::projection::ResourceListResponse;
 
 pub const ABILITY_META_LIST_RESOURCES: &str =
     crate::daemon::ability::names::resources::META_LIST_RESOURCES;
 
 /// Register `meta.list_resources` on the registry.
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner(
+    reg.register_rpc_with_spec(
         ABILITY_META_LIST_RESOURCES,
-        OwnerKind::Device,
+        OwnerKind::runtime_introspection_system(),
+        crate::daemon::ability::catalog::system_manifest::registry_manifest(
+            ABILITY_META_LIST_RESOURCES,
+            description(),
+            input_schema(),
+        ),
         Arc::new(handler),
     );
 }
@@ -84,8 +89,9 @@ fn handler(args: Value) -> anyhow::Result<Value> {
     let kinds = parse_kinds(args.get("types"))?;
     let file = resources::load()?;
     let entries = filter_by_kinds(&file, &kinds);
-    let wire: Vec<Value> = entries.iter().map(|e| project(e)).collect();
-    Ok(json!({ "resources": wire }))
+    Ok(serde_json::to_value(ResourceListResponse::from_entries(
+        entries,
+    ))?)
 }
 
 /// Parse the optional `types` arg into a typed `ResourceType`
@@ -114,28 +120,11 @@ fn parse_kinds(raw: Option<&Value>) -> anyhow::Result<Vec<ResourceType>> {
     }
 }
 
-/// Project a single `ResourceEntry` to the per-resource wire
-/// shape. Only the public fields go on the wire — `first_seen_at`
-/// and `hardware_id` are audit fields that stay file-local
-/// (operator-inspectable via `cat ~/.easynet/resources.json` but
-/// not protocol-exposed; `hardware_id` would leak the platform
-/// device-naming scheme to remote callers).
-fn project(e: &ResourceEntry) -> Value {
-    json!({
-        "resource_ura": e.resource_ura,
-        "owner_agent":  e.owner_agent,
-        "type":         e.kind.as_str(),
-        "binding":      e.binding.as_str(),
-        "display_name": e.display_name,
-        "metadata":     e.metadata,
-    })
-}
-
 /// JSON Schema for `args`. The `enum` for `types[]` derives from
 /// `ResourceType::ALL` rather than a hand-typed string list so a
 /// new variant in `persistence::resources` shows up here without
-/// a second edit (single source of truth — same drift-prevention
-/// pattern as `AbilityClass::as_str`).
+/// a second edit (single source of truth — the same drift-prevention
+/// pattern used by descriptor call-mode rendering).
 pub fn input_schema() -> Value {
     let enum_values: Vec<Value> = ResourceType::ALL
         .iter()
@@ -165,31 +154,41 @@ pub fn description() -> &'static str {
      cameras, displays, applications, windows, speakers, voice \
      profiles, ASR models). Each entry's `resource_ura` is the \
      canonical subject for media abilities (mic.subscribe, \
-     camera.snapshot, ...). Optional `types` filter narrows the \
-     result."
-}
-
-/// RFC-006 metadata for `meta.list_resources`. Pure read, no
-/// state mutation — Query class. Co-located with the handler so
-/// mod.rs's `rfc006_for` can delegate without inlining yet
-/// another `Rfc006Metadata` literal (the same drift class
-/// `resources::media::rfc006` exists to prevent).
-pub fn rfc006() -> Rfc006Metadata {
-    Rfc006Metadata {
-        class: Some(AbilityClass::Query),
-        ..Default::default()
-    }
+     camera.snapshot, ...). Display/window/application rows are \
+     cache projections; live target pickers must use \
+     resource.refresh_remote_targets or resource.watch_remote_targets."
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::persistence::resources::{ResourceBinding, ResourceUpsert};
 
     #[test]
     fn registration_makes_meta_list_resources_dispatchable() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = AxonAbilityCatalog::new_test_metadata_for_device_authority(
+            "easynet:///r/test/device/resource-list",
+        );
         register(&mut reg);
         assert!(reg.get_rpc(ABILITY_META_LIST_RESOURCES).is_some());
+        assert_eq!(
+            reg.control_plane_owner(ABILITY_META_LIST_RESOURCES),
+            Some(OwnerKind::runtime_introspection_system())
+        );
+        let descriptor = reg
+            .canonical_descriptor_for_ability(ABILITY_META_LIST_RESOURCES)
+            .expect("unambiguous resource-list descriptor")
+            .expect("registered resource-list descriptor");
+        assert_eq!(
+            descriptor.metadata.get("exposure").map(String::as_str),
+            Some("operator"),
+            "product-issued resource reads must import their canonical operator exposure"
+        );
+        assert_eq!(descriptor.version, "1.0.1");
+        assert_eq!(
+            descriptor.admission_action(),
+            crate::daemon::ability::descriptors::AdmissionAction::Read
+        );
     }
 
     // ── parse_kinds (pure; no filesystem dependency) ──────────
@@ -271,12 +270,54 @@ mod tests {
     }
 
     #[test]
-    fn rfc006_declares_query_class() {
-        // Pin: meta.list_resources is read-only, must classify as
-        // Query. A reclassification would change receipt semantics
-        // (Stream vs Query) and trip wire format consumers.
-        let m = rfc006();
-        assert_eq!(m.class, Some(AbilityClass::Query));
-        assert!(m.transition.is_none());
+    fn meta_list_resources_is_read_only_cache_projection() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = resources::ResourcesFile::default();
+        resources::upsert_resource(
+            &mut file,
+            ResourceUpsert {
+                realm: "acme",
+                owner_agent: "easynet:///r/acme/agent/device.node-1.media",
+                kind: ResourceType::Window,
+                binding: ResourceBinding::LocalDevice,
+                hardware_id: "window:readonly:1",
+                display_name: "Read-only Window",
+                metadata: json!({
+                    "backend": "xcap",
+                    "availability": "available",
+                    "freshness": {
+                        "observed_at_ms": 1,
+                        "stale_after_ms": u64::MAX,
+                        "source": "live_refresh",
+                    },
+                }),
+            },
+        )
+        .expect("seed window resource");
+        resources::save(&file).expect("save resources");
+        let path = resources::path();
+        let before_body = std::fs::read(&path).expect("read resources before");
+        let before_modified = std::fs::metadata(&path)
+            .expect("metadata before")
+            .modified()
+            .expect("modified before");
+
+        let resp = handler(json!({"types": ["window", "application"]}))
+            .expect("meta.list_resources reads cache");
+
+        assert_eq!(resp["resources"].as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            std::fs::read(&path).expect("read resources after"),
+            before_body,
+            "meta.list_resources must not mutate resources.json"
+        );
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("metadata after")
+                .modified()
+                .expect("modified after"),
+            before_modified,
+            "meta.list_resources must not rewrite resources.json"
+        );
     }
 }

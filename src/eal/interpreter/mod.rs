@@ -7,15 +7,14 @@
 // =============================
 //
 // File: src/eal/interpreter.rs
-// Description: Client-side execution engine for Mission IR v2 (temporary — target: MissionControl v2).
+// Description: Daemon-owned execution engine for Mission IR v2.
 //
 // Execution Model:
 //   Phases execute sequentially (data-flow barriers between them).
-//   Steps within a phase execute in parallel via rayon work-stealing threadpool.
-//   When a dispatcher cannot be cloned across worker threads, falls back to sequential.
+//   Steps within a phase execute under the dispatcher's declared concurrency policy.
 //
 // Core Capabilities:
-//   1. True parallel dispatch — rayon::scope + clone_for_thread() per step.
+//   1. Declared parallel dispatch — rayon::scope + clone_for_thread() per step.
 //   2. Structured ExecutionTrace — per-step audit log with timestamps, result hashes, retry history.
 //   3. Retry with exponential backoff — delay = min(base * 2^attempt, max) + deterministic jitter.
 //   4. Cross-phase data flow — results captured in HashMap, substituted into downstream input_refs.
@@ -42,9 +41,11 @@ mod retry;
 mod tests;
 mod trace;
 
-#[cfg(test)]
-use dispatch::dispatch_to_agent;
-pub use dispatch::AgentAwareDispatcher;
+use crate::daemon::execution::child_invocation::{
+    ChildInvocationReceiptAnchor, ChildInvocationRecord,
+};
+use crate::daemon::execution::mission::invocation_gateway::MissionInvocationGateway;
+pub(crate) use dispatch::AgentAwareDispatcher;
 use phases::{
     calls_from_partition, execute_calls_phase_partition, execute_loop, split_phase_steps,
     PhasePartition, PhaseRunState,
@@ -66,16 +67,7 @@ fn millis_u64(d: Duration) -> u64 {
 use crate::core::agent::id::AbilityName;
 use crate::eal::diagnostics::EalError;
 use crate::eal::runtime::ir::IrTarget;
-use crate::eal::runtime::ir::{IrCall, IrEmit, IrEmitValue, MissionIr};
-
-/// Interpreter-local alias. The per-step execution machinery —
-/// retries, dispatch, resolve_arguments, process_step_result — works
-/// on flat `IrCall`s. Block variants of `RealIrStep` are expanded by
-/// `execute_with_dispatcher` into batches of `IrCall`s (or iterated
-/// sequentially in the `IrStep::Loop` case) before reaching any
-/// per-step helper. The alias keeps those helpers signature-
-/// compatible with the pre-PR-10 code without a churn-only rename.
-type IrStep = IrCall;
+use crate::eal::runtime::ir::{IrEmit, IrEmitValue, MissionIr};
 
 // ── PR-10 Stage 3: per-variant IrStep dispatch ───────────────────────────
 //
@@ -95,12 +87,24 @@ type IrStep = IrCall;
 // into parallel phases) does not silently break this layer.
 
 #[derive(Debug, Clone, Copy)]
-pub struct RunContext<'a> {
+pub(crate) struct RunContext<'a> {
     pub tenant: &'a str,
     pub trace_id: &'a str,
+    pub deadline: Option<Instant>,
 }
 
-pub trait StepDispatcher {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StepDispatchConcurrency {
+    // The production Agent-aware dispatcher is parallel-capable today;
+    // test and future single-thread dispatchers still need an explicit
+    // sequential state so scheduling never infers capability from a
+    // failed clone attempt.
+    #[allow(dead_code)]
+    Sequential,
+    Parallel,
+}
+
+pub(crate) trait StepDispatcher {
     /// Dispatch one step. The runtime sees only the resolved
     /// `IrTarget` enum and the typed `AbilityName` — there is no
     /// string-based `is_agent` check here, by design (see
@@ -110,12 +114,11 @@ pub trait StepDispatcher {
     /// future telemetry) can branch on category rather than parsing
     /// English strings. The error is converted to its display form
     /// when stored in `StepExecResult::Error.message`.
-    /// `causal_parents` carries the producing steps' receipt anchors
-    /// (`{node, invocation_ura, receipt_ura, receipt_hash}` objects)
-    /// for this step's `input_refs`. Dispatchers that lower onto the
-    /// Axon Invocation surface encode them as the envelope's
-    /// `causal_context`; transports without an invocation surface
-    /// ignore them.
+    /// `dependency_receipts` carries the verified terminal receipt
+    /// anchors of the producing steps named by this step's
+    /// `input_refs`. They are typed dependency evidence for joins;
+    /// the canonical child causal authority remains the admitted
+    /// Mission parent's receipt minted by `prepare_child_dispatch`.
     fn dispatch(
         &self,
         run: RunContext<'_>,
@@ -123,32 +126,36 @@ pub trait StepDispatcher {
         ability: &AbilityName,
         arguments: &Value,
         timeout_ms: Option<u64>,
-        causal_parents: &[Value],
+        dependency_receipts: &[ChildInvocationReceiptAnchor],
     ) -> Result<StepDispatchOutcome, EalError>;
 
-    /// Create an independent clone for parallel dispatch.
-    /// Each thread in a phase needs its own dispatcher.
+    /// Declares whether this dispatcher can run phase steps in
+    /// parallel. This is capability state, not an error side effect.
+    fn dispatch_concurrency(&self) -> StepDispatchConcurrency;
+
+    /// Create an independent clone for parallel dispatch. Called only
+    /// when `dispatch_concurrency()` returns `Parallel`; any error is a
+    /// structural runtime failure for that step, not a sequential
+    /// downgrade signal.
     fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError>;
 }
 
-/// Successful dispatch outcome: the step's result value plus, when
-/// the step was lowered onto the daemon's Axon Invocation surface,
-/// the seven-tuple invocation record (envelope echo + ledger receipt
-/// anchors). `invocation: None` means the step executed through a
-/// path that emits no Axon invocation (in-process fallback, agent
-/// CLI dispatch) — the trace records that honestly rather than
-/// fabricating a receipt.
+/// Successful dispatch outcome: the step's result value plus the
+/// mandatory seven-tuple invocation record (envelope echo + verified
+/// terminal receipt). A successful EAL step cannot exist without its
+/// canonical child Invocation.
 #[derive(Debug)]
-pub struct StepDispatchOutcome {
+pub(crate) struct StepDispatchOutcome {
     pub value: Value,
-    pub invocation: Option<Value>,
+    pub invocation: ChildInvocationRecord,
 }
 
+#[cfg(test)]
 impl From<Value> for StepDispatchOutcome {
     fn from(value: Value) -> Self {
         Self {
             value,
-            invocation: None,
+            invocation: ChildInvocationRecord::for_test("test.dispatch", 0x7f),
         }
     }
 }
@@ -167,24 +174,22 @@ impl From<Value> for StepDispatchOutcome {
 /// `MissionRunMeta.trace_id`, every child Invocation envelope, and
 /// the on-disk `trace.json` all name the same run. That identity is
 /// operational metadata, not an eighth Invocation tuple field.
-pub fn execute_with_endpoint_for_trace(
-    endpoint: &str,
+pub(crate) fn execute_with_gateway_for_trace_with_timeout(
+    gateway: std::sync::Arc<dyn MissionInvocationGateway>,
     tenant: &str,
     ir: &MissionIr,
     trace_id: String,
+    run_timeout: Option<Duration>,
 ) -> anyhow::Result<ExecutionReport> {
-    let dispatcher = AgentAwareDispatcher::new(
-        endpoint,
-        crate::support::platform::timeouts::BRIDGE_CONNECT_TIMEOUT_MS,
-    );
-    execute_with_dispatcher_for_trace(&dispatcher, tenant, ir, trace_id)
+    let dispatcher = AgentAwareDispatcher::new(gateway)?;
+    execute_with_dispatcher_for_trace_with_timeout(&dispatcher, tenant, ir, trace_id, run_timeout)
 }
 
 // ── Core execution engine ──
 
 #[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
 #[cfg(test)]
-pub fn execute_with_dispatcher(
+fn execute_with_dispatcher(
     dispatcher: &dyn StepDispatcher,
     tenant: &str,
     ir: &MissionIr,
@@ -200,18 +205,34 @@ pub fn execute_with_dispatcher(
 /// depending on `mission_runs` persistence. Production mission runs
 /// call the endpoint variant above so the same trace id reaches the
 /// daemon-lowered child Invocations.
-pub fn execute_with_dispatcher_for_trace(
+#[cfg(test)]
+fn execute_with_dispatcher_for_trace(
     dispatcher: &dyn StepDispatcher,
     tenant: &str,
     ir: &MissionIr,
     mission_id: String,
 ) -> anyhow::Result<ExecutionReport> {
+    execute_with_dispatcher_for_trace_with_timeout(dispatcher, tenant, ir, mission_id, None)
+}
+
+/// Execute a mission through an injected dispatcher with an optional run-level
+/// timeout. The timeout is converted once into a deadline and each child
+/// dispatch receives only the remaining budget.
+fn execute_with_dispatcher_for_trace_with_timeout(
+    dispatcher: &dyn StepDispatcher,
+    tenant: &str,
+    ir: &MissionIr,
+    mission_id: String,
+    run_timeout: Option<Duration>,
+) -> anyhow::Result<ExecutionReport> {
     // One trace id per mission run, equal to the mission id: every
     // lowered invocation envelope carries it, so the daemon ledger can
     // group the run (`easynet invocation trace <mission_id>`).
+    let deadline = run_timeout.and_then(|timeout| Instant::now().checked_add(timeout));
     let run = RunContext {
         tenant,
         trace_id: &mission_id,
+        deadline,
     };
     let mission_start = Instant::now();
     let started_at = now_unix_ms();
@@ -357,10 +378,9 @@ pub fn execute_with_dispatcher_for_trace(
         traces_truncated,
     };
 
-    // Convert captured results to readable strings for the report.
-    let outputs: HashMap<String, String> = captured
+    let outputs: HashMap<String, Value> = captured
         .into_iter()
-        .map(|(k, v)| (k, String::from_utf8_lossy(&v.value).to_string()))
+        .map(|(key, result)| (key, decode_emitted_value(&result.value)))
         .collect();
 
     Ok(ExecutionReport {
@@ -431,9 +451,8 @@ enum StepExecResult {
         completed_at: u64,
         retry_count: u32,
         retry_history: Vec<RetryRecord>,
-        /// Seven-tuple invocation record from the daemon lowering
-        /// path; None when the step ran through a receipt-less path.
-        invocation: Option<Value>,
+        /// Seven-tuple invocation record from the daemon lowering path.
+        invocation: Box<ChildInvocationRecord>,
     },
     Error {
         message: String,

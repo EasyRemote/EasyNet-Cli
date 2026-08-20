@@ -11,8 +11,7 @@
 #   1. Final-forbidden source roots must not exist.
 #   2. Retired crate-root namespaces must not be imported from `src/`.
 #   3. Daemon control/invocation code must not depend on CLI/FFI edges.
-#   4. Execution reaches federation through GatewayApi, not the
-#      concrete gateway implementation.
+#   4. Execution does not import federation transport implementations.
 #
 # Exit codes
 #   0 - all rules satisfied
@@ -100,15 +99,15 @@ if [[ -n "$edge_hits" ]]; then
     violations=$((violations + 1))
 fi
 
-# Rule 4: Execution layer must not reach into the concrete gateway impl.
-# Execution -> GatewayApi trait only.
+# Rule 4: Execution layer must not reach into federation transport
+# implementations. Network publication and remote calls are owned by the
+# daemon Invocation/session layers.
 if [[ -d "src/daemon/execution" ]]; then
-    gateway_hits="$(production_non_comment_hits '\bcrate::daemon::federation::gateway\b' src/daemon/execution \
-        | grep -v 'crate::daemon::federation::gateway_api' || true)"
+    gateway_hits="$(production_non_comment_hits '\bcrate::daemon::federation::(gateway|client|directory)\b' src/daemon/execution || true)"
     if [[ -n "$gateway_hits" ]]; then
-        echo "ERROR: execution layer imports crate::daemon::federation::gateway directly:"
+        echo "ERROR: execution layer imports a federation transport implementation:"
         echo "$gateway_hits"
-        echo "  Use crate::daemon::federation::gateway_api::GatewayApi trait instead."
+        echo "  Route network work through daemon::invocation or its session supervisor."
         violations=$((violations + 1))
     fi
 fi

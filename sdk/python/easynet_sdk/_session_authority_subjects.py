@@ -1,0 +1,52 @@
+"""Session-authority subject admission helpers for canonical runtime calls."""
+
+from __future__ import annotations
+
+from .authority import SessionAuthority, canonical_session_authority_id
+from .axon_addressing import parse_ura
+from .errors import SDKError
+
+
+def session_authority_admits_subject(
+    authority: SessionAuthority,
+    subject_ura: str,
+) -> bool:
+    """Return whether a session authority admits one descriptor-bound subject.
+
+    The shared SDK predicate parses the canonical `subject_ura` itself:
+    - exact `subject_ura` equality is always accepted;
+    - a user session authority may admit resources owned by that user;
+    - an agent-owned resource is admitted only when the agent owner is the same
+      user.
+
+    Path substring matches are intentionally not accepted. Ownership must come
+    from the canonical URA projection's `owner_id` component.
+    """
+
+    if not canonical_session_authority_id(authority.session_id):
+        return False
+    if authority.subject_ura.strip() == subject_ura.strip():
+        return True
+    try:
+        subject = parse_ura(subject_ura.strip())
+    except SDKError:
+        return False
+    if subject.kind != "resource":
+        return False
+    owner_id = subject.components.get("owner_id")
+    path = subject.components.get("path")
+    if not isinstance(owner_id, str):
+        return False
+    if isinstance(path, str) and path.startswith("session/"):
+        session_id = path.removeprefix("session/")
+        if not canonical_session_authority_id(session_id):
+            return False
+    owner_user_id = authority.session_owner_user_id.strip()
+    if not owner_user_id:
+        return False
+    if owner_id == f"user.{owner_user_id}":
+        return True
+    if not owner_id.startswith("agent."):
+        return False
+    agent_owner = owner_id.removeprefix("agent.").split(".", 1)
+    return len(agent_owner) == 2 and agent_owner[0] == owner_user_id

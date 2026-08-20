@@ -2,10 +2,10 @@
 // =====================================================================
 //
 // File: src/daemon/ability/builtins/resources/files_store/mod.rs
-// Description: registration entry point for the user-rooted files
+// Description: registration entry point for the user-scoped files
 //              namespace, complement to Pages (RFC-006-B v0.6).
-//              Registers `<user>.files.<verb>` directly into the
-//              daemon-hosted Axon LocalRuntime.
+//              Registers owner-local `files.<verb>` abilities under the
+//              daemon-native `agent/<user>.files` executor root.
 //
 // What this is for:
 //   `/v1/chat/completions` accepts OpenAI-shape multimodal messages
@@ -28,14 +28,16 @@
 //
 // Storage:
 //   $EASYNET_FILES_ROOT (default ~/.easynet/files)/<sha256>
-//   Content-addressed. Same bytes → same hash → same on-disk path.
+//   $EASYNET_FILES_ROOT (default ~/.easynet/files)/<sha256>.metadata.json
+//   Content-addressed. Same bytes → same hash → same on-disk path; producer
+//   metadata is immutable for that hash.
 //
 // Three abilities registered:
-//   <user>.files.put    — write {filename, bytes_b64, content_type?}
+//   files.put           — write {filename, bytes_b64, content_type}
 //                         → {ura, sha256, size, content_type}
-//   <user>.files.get    — read {sha256} or {path: "<sha256>"}
+//   files.get           — read {sha256} or {ura}
 //                         → {bytes_b64, content_type, sha256}
-//   <user>.files.list   — read {} → {items: [{sha256, size, ...}]}
+//   files.list          — read {} → {items: [{sha256, size, ...}]}
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -46,7 +48,10 @@ pub mod state;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::daemon::ability::descriptors::AdmissionAction;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler, OwnerKind};
+use crate::daemon::ability::manifest::AbilityManifest;
+use serde_json::{json, Value};
 
 /// Installation parameters for the Files reference system. Mirror
 /// of `PagesConfig`; the daemon's user identity is the only field
@@ -60,10 +65,105 @@ pub struct FilesConfig {
     pub realm: String,
 }
 
+fn files_manifest(
+    manifest_name: &str,
+    description: &str,
+    input_schema: Value,
+    admission_action: AdmissionAction,
+) -> AbilityManifest {
+    AbilityManifest::new(manifest_name, description, input_schema)
+        .and_then(|manifest| manifest.with_admission_action(admission_action.as_str()))
+        .expect("files_store ability manifest must be valid")
+}
+
+fn put_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["filename", "bytes_b64", "content_type"],
+        "properties": {
+            "filename": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Producer-supplied display filename for the stored blob."
+            },
+            "bytes_b64": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Base64-encoded blob bytes supplied by the producer."
+            },
+            "content_type": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Producer-supplied payload media type. The file store never infers this from filename."
+            }
+        }
+    })
+}
+
+fn get_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "oneOf": [
+            {"required": ["sha256"]},
+            {"required": ["ura"]}
+        ],
+        "properties": {
+            "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{64}$",
+                "description": "Content-addressed blob hash."
+            },
+            "ura": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Canonical files resource URA ending in the blob sha256."
+            }
+        }
+    })
+}
+
+fn list_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+    })
+}
+
+pub(crate) fn description_for(name: &str) -> Option<&'static str> {
+    match name {
+        "files.put" => Some("Write a content-addressed file blob for the user account."),
+        "files.get" => Some("Read a content-addressed file blob for the user account."),
+        "files.list" => Some("List content-addressed file blobs for the user account."),
+        _ => None,
+    }
+}
+
+pub(crate) fn input_schema_for(name: &str) -> Option<Value> {
+    match name {
+        "files.put" => Some(put_input_schema()),
+        "files.get" => Some(get_input_schema()),
+        "files.list" => Some(list_input_schema()),
+        _ => None,
+    }
+}
+
+fn register_files_rpc(
+    reg: &mut AxonAbilityCatalog,
+    ability: &'static str,
+    owner: OwnerKind,
+    manifest: AbilityManifest,
+    handler: LocalRpcHandler,
+) {
+    reg.register_rpc_with_spec(ability, owner, manifest, handler)
+}
+
 /// Wire the Files reference system into the registry. Called
 /// once at daemon boot from `build_registry_with_services`. The
 /// blob storage root is resolved here from `EASYNET_FILES_ROOT`
-/// (or `~/.easynet/files` fallback); handlers receive the path
+/// (or the documented daemon files root); handlers receive the path
 /// by Arc, no further env-reads at invoke time.
 pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
     let root: Arc<PathBuf> = match state::root_from_env() {
@@ -76,25 +176,39 @@ pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
             return;
         }
     };
-    let owner = OwnerKind::User(config.user.clone());
+    let owner = OwnerKind::files_system();
 
     let user = config.user.clone();
     let realm = config.realm.clone();
     let root_for_put = Arc::clone(&root);
     let put_handler: LocalRpcHandler =
         Arc::new(move |args| handlers::handle_put(&user, &realm, &root_for_put, args));
-    reg.register_rpc_with_owner(
-        format!("{}.files.put", config.user),
+    register_files_rpc(
+        reg,
+        "files.put",
         owner.clone(),
+        files_manifest(
+            "put",
+            "Write a content-addressed file blob for the user account.",
+            put_input_schema(),
+            AdmissionAction::Manage,
+        ),
         put_handler,
     );
 
     let root_for_get = Arc::clone(&root);
     let get_handler: LocalRpcHandler =
         Arc::new(move |args| handlers::handle_get(&root_for_get, args));
-    reg.register_rpc_with_owner(
-        format!("{}.files.get", config.user),
+    register_files_rpc(
+        reg,
+        "files.get",
         owner.clone(),
+        files_manifest(
+            "get",
+            "Read a content-addressed file blob for the user account.",
+            get_input_schema(),
+            AdmissionAction::Read,
+        ),
         get_handler,
     );
 
@@ -103,5 +217,16 @@ pub fn register(reg: &mut AxonAbilityCatalog, config: FilesConfig) {
     let root_for_list = Arc::clone(&root);
     let list_handler: LocalRpcHandler =
         Arc::new(move |args| handlers::handle_list(&user, &realm, &root_for_list, args));
-    reg.register_rpc_with_owner(format!("{}.files.list", config.user), owner, list_handler);
+    register_files_rpc(
+        reg,
+        "files.list",
+        owner,
+        files_manifest(
+            "list",
+            "List content-addressed file blobs for the user account.",
+            list_input_schema(),
+            AdmissionAction::Read,
+        ),
+        list_handler,
+    );
 }

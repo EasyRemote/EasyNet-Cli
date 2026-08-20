@@ -1,6 +1,22 @@
-schema_version = "1"
+schema_version = "3"
 name = "agent.refresh"
+descriptor_version = "1.0.0"
 description = "Re-register the LocalRuntime handlers for one or all LLM sub-agents declared in agents.json. With `name` set, only that agent's `<agent>.*` handlers and ability TOMLs are rebuilt; with `name` omitted, every row in agents.json is rebuilt. This is the daemon-hosted surface behind `easynet agent refresh` and re-reads `<agent-root>/abilities/*.ability.toml` from disk."
+exposure = "operator"
+dedicated_surface = "none"
+subject_contract_kind = "explicit-ura"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

@@ -7,14 +7,12 @@
 use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
+use serde_json::Value;
 
+use super::plugin_template::{init_hello_plugin, PluginTemplateInit, PluginTemplateLanguage};
 use crate::daemon::plugins::index::default_plugin_root;
 use crate::daemon::plugins::{
-    PluginInstaller, PluginLoadPlanner, PluginPackageIndex, PluginPackageSurfaceRecord,
-    PluginRealtimeActivationOutcome, PluginRealtimeActivationReport, PluginRealtimeKind,
-    PluginRealtimeMode, PluginRealtimeOutcomeStatus, PluginRealtimePermissionStatus,
-    PluginRealtimeTransport, PluginRealtimeTransportReadinessStatus, PluginSurfaceProjector,
-    PluginSurfaceReport,
+    DesktopCompanionManager, PluginInstaller, PluginKind, PluginPackageIndex,
 };
 use crate::support::platform::output::{self, OutputFormat};
 
@@ -31,6 +29,8 @@ pub struct PluginArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum PluginAction {
+    /// Create a Hello World plugin project.
+    Init(InitArgs),
     /// List indexed plugin abilities and their descriptor/runtime/invocation surfaces.
     List(ListArgs),
     /// Install an unpacked plugin package directory transactionally.
@@ -39,8 +39,35 @@ pub enum PluginAction {
     Update(PackageSourceArgs),
     /// Remove one installed package version transactionally.
     Remove(RemoveArgs),
+    /// Enable a desktop companion plugin.
+    Enable(CompanionPackageArgs),
+    /// Disable a desktop companion plugin.
+    Disable(CompanionPackageArgs),
+    /// Show one plugin package status.
+    Status(PluginStatusArgs),
     /// Check whether a package's realtime capability can be activated now.
     ActivateRealtime(ActivateRealtimeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    /// Target directory for the generated plugin project.
+    pub path: PathBuf,
+    /// Plugin package id. Defaults to local.<directory_slug>.
+    #[arg(long)]
+    pub id: Option<String>,
+    /// Public plugin ability name. Defaults to <directory_slug>.echo.
+    #[arg(long)]
+    pub ability: Option<String>,
+    /// Plugin package version.
+    #[arg(long, default_value = "0.1.0")]
+    pub package_version: String,
+    /// Governed AbilityDescriptor version.
+    #[arg(long, default_value = "1.0.0")]
+    pub descriptor_version: String,
+    /// Template language. Python and Node are script-backed; Go, Rust, and Java generate compiled source.
+    #[arg(long, value_enum, default_value_t = PluginTemplateLanguage::Python)]
+    pub language: PluginTemplateLanguage,
 }
 
 #[derive(Debug, Args)]
@@ -65,6 +92,27 @@ pub struct RemoveArgs {
 }
 
 #[derive(Debug, Args)]
+pub struct CompanionPackageArgs {
+    /// Plugin package id.
+    pub id: String,
+    /// Optional plugin package version.
+    #[arg(long)]
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct PluginStatusArgs {
+    /// Plugin package id.
+    pub id: String,
+    /// Optional plugin package version.
+    #[arg(long)]
+    pub version: Option<String>,
+    /// Output JSON instead of an operator table.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Args)]
 pub struct ActivateRealtimeArgs {
     /// Plugin package id.
     pub id: String,
@@ -78,25 +126,70 @@ pub struct ActivateRealtimeArgs {
 
 pub fn run(args: PluginArgs) -> anyhow::Result<()> {
     match args.action {
+        PluginAction::Init(args) => run_init(args),
         PluginAction::List(args) => run_list(args),
         PluginAction::Install(args) => run_install(args),
         PluginAction::Update(args) => run_update(args),
         PluginAction::Remove(args) => run_remove(args),
+        PluginAction::Enable(args) => run_enable(args),
+        PluginAction::Disable(args) => run_disable(args),
+        PluginAction::Status(args) => run_status(args),
         PluginAction::ActivateRealtime(args) => run_activate_realtime(args),
     }
 }
 
-fn run_list(args: ListArgs) -> anyhow::Result<()> {
-    let report = match invoke_plugin_status()? {
-        Some(report) => report,
-        None => {
-            output::warn("daemon is not running; showing offline planned plugin status");
-            let index_report = PluginPackageIndex::load_default_resilient()?;
-            let (index, index_errors) = index_report.into_parts();
-            let plan = PluginLoadPlanner::current().plan(&index);
-            PluginSurfaceProjector::project_report_with_daemon(&index, &plan, None, &index_errors)
+fn run_init(args: InitArgs) -> anyhow::Result<()> {
+    let project = init_hello_plugin(PluginTemplateInit {
+        path: args.path,
+        package_id: args.id,
+        ability_name: args.ability,
+        package_version: args.package_version,
+        descriptor_version: args.descriptor_version,
+        language: args.language,
+    })?;
+    output::success(&format!(
+        "created {} Hello World plugin {}@{}",
+        project.language.label(),
+        project.package_id,
+        project.package_version
+    ));
+    output::detail("path", &project.path.display().to_string());
+    output::detail("ability", &project.ability_name);
+    let next = match project.language {
+        PluginTemplateLanguage::Python => {
+            format!("easynet plugin install '{}'", project.path.display())
+        }
+        PluginTemplateLanguage::Go => {
+            format!(
+                "cd '{}' && make build && easynet plugin install .",
+                project.path.display()
+            )
+        }
+        PluginTemplateLanguage::Rust => {
+            format!(
+                "cd '{}' && make build && easynet plugin install .",
+                project.path.display()
+            )
+        }
+        PluginTemplateLanguage::Java => {
+            format!(
+                "cd '{}' && make build && easynet plugin install .",
+                project.path.display()
+            )
+        }
+        PluginTemplateLanguage::Node => {
+            format!(
+                "cd '{}' && npm install && easynet plugin install .",
+                project.path.display()
+            )
         }
     };
+    output::detail("next", &next);
+    Ok(())
+}
+
+fn run_list(args: ListArgs) -> anyhow::Result<()> {
+    let report = require_plugin_control_value(invoke_plugin_status()?, "plugin list")?;
 
     match args.format {
         OutputFormat::Json => {
@@ -113,19 +206,28 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
                 "runtime",
                 "invoke",
                 "realtime",
+                "companion",
+                "supervisor",
+                "observed",
             ]);
-            for package in report.packages {
-                let realtime = realtime_label(&package);
+            for package in array_json(&report, "packages")? {
+                let realtime = realtime_label(package)?;
+                let companion = companion_field(package, "projected_state");
+                let supervisor = companion_field(package, "supervisor_state");
+                let observed = companion_field(package, "observed_state");
                 package_table.add_row([
-                    package.package_id,
-                    package.package_version,
-                    format!("{:?}", package.kind).to_ascii_lowercase(),
-                    package.planned_load_status,
-                    package.daemon_runtime_status,
-                    package.ability_count.to_string(),
-                    bool_label(package.runtime_published),
-                    bool_label(package.invokable),
+                    required_string_json(package, "package_id")?,
+                    required_string_json(package, "package_version")?,
+                    required_string_json(package, "kind")?,
+                    required_string_json(package, "planned_load_status")?,
+                    required_string_json(package, "daemon_runtime_status")?,
+                    required_usize_json(package, "ability_count")?.to_string(),
+                    bool_label(required_bool_json(package, "runtime_published")?),
+                    bool_label(required_bool_json(package, "invokable")?),
                     realtime,
+                    companion,
+                    supervisor,
+                    observed,
                 ]);
             }
             println!("{package_table}");
@@ -142,18 +244,18 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
                 "runtime",
                 "invoke",
             ]);
-            for row in report.abilities {
+            for row in array_json(&report, "abilities")? {
                 ability_table.add_row([
-                    row.package_id,
-                    row.package_version,
-                    row.ability,
-                    format!("{:?}", row.kind).to_ascii_lowercase(),
-                    format!("{:?}", row.call_mode).to_ascii_lowercase(),
-                    row.planned_load_status,
-                    row.daemon_runtime_status,
-                    bool_label(row.descriptor_published),
-                    bool_label(row.runtime_published),
-                    bool_label(row.invokable),
+                    required_string_json(row, "package_id")?,
+                    required_string_json(row, "package_version")?,
+                    required_string_json(row, "ability")?,
+                    required_string_json(row, "kind")?,
+                    required_string_json(row, "call_mode")?,
+                    required_string_json(row, "planned_load_status")?,
+                    required_string_json(row, "daemon_runtime_status")?,
+                    bool_label(required_bool_json(row, "descriptor_published")?),
+                    bool_label(required_bool_json(row, "runtime_published")?),
+                    bool_label(required_bool_json(row, "invokable")?),
                 ]);
             }
             println!("{ability_table}");
@@ -164,7 +266,8 @@ fn run_list(args: ListArgs) -> anyhow::Result<()> {
 
 fn run_install(args: PackageSourceArgs) -> anyhow::Result<()> {
     let installer = PluginInstaller::new(default_plugin_root());
-    let record = installer.install(&args.path)?;
+    let companion_manager = DesktopCompanionManager::current()?;
+    let record = installer.install_with_companion_manager(&args.path, &companion_manager)?;
     output::success(&format!(
         "installed plugin {}@{}",
         record.id, record.version
@@ -176,7 +279,8 @@ fn run_install(args: PackageSourceArgs) -> anyhow::Result<()> {
 
 fn run_update(args: PackageSourceArgs) -> anyhow::Result<()> {
     let installer = PluginInstaller::new(default_plugin_root());
-    let record = installer.update(&args.path)?;
+    let companion_manager = DesktopCompanionManager::current()?;
+    let record = installer.update_with_companion_manager(&args.path, &companion_manager)?;
     output::success(&format!("updated plugin {}@{}", record.id, record.version));
     output::detail("hash", &record.hash);
     notify_daemon_reload()?;
@@ -185,9 +289,89 @@ fn run_update(args: PackageSourceArgs) -> anyhow::Result<()> {
 
 fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
     let installer = PluginInstaller::new(default_plugin_root());
-    installer.remove(&args.id, &args.version)?;
+    let companion_manager = DesktopCompanionManager::current()?;
+    installer.remove_with_companion_manager(&args.id, &args.version, &companion_manager)?;
     output::success(&format!("removed plugin {}@{}", args.id, args.version));
     notify_daemon_reload()?;
+    Ok(())
+}
+
+fn run_enable(args: CompanionPackageArgs) -> anyhow::Result<()> {
+    let package = resolve_package(&args.id, args.version.as_deref())?;
+    let result = DesktopCompanionManager::current()?.enable(&package)?;
+    output::success(&format!(
+        "enabled companion {}@{}",
+        package.id().as_str(),
+        package.version().as_str()
+    ));
+    output::detail("result", &result.to_string());
+    notify_daemon_reload()?;
+    Ok(())
+}
+
+fn run_disable(args: CompanionPackageArgs) -> anyhow::Result<()> {
+    let package = resolve_package(&args.id, args.version.as_deref())?;
+    let result = DesktopCompanionManager::current()?.disable(&package)?;
+    output::success(&format!(
+        "disabled companion {}@{}",
+        package.id().as_str(),
+        package.version().as_str()
+    ));
+    output::detail("result", &result.to_string());
+    notify_daemon_reload()?;
+    Ok(())
+}
+
+fn run_status(args: PluginStatusArgs) -> anyhow::Result<()> {
+    let package = resolve_package(&args.id, args.version.as_deref())?;
+    if package.manifest().kind() == PluginKind::DesktopCompanion {
+        let status = require_plugin_control_value(
+            invoke_companion_status(&args.id, args.version.as_deref())?,
+            "plugin status",
+        )?;
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&status)?);
+        } else {
+            print_companion_status(&status);
+        }
+        return Ok(());
+    }
+
+    let report = require_plugin_control_value(invoke_plugin_status()?, "plugin status")?;
+    let mut selected_row = None;
+    for row in array_json(&report, "packages")? {
+        let package_id = required_string_json(row, "package_id")?;
+        let package_version = required_string_json(row, "package_version")?;
+        if package_id == args.id
+            && args
+                .version
+                .as_deref()
+                .map(|version| package_version == version)
+                .unwrap_or(true)
+        {
+            selected_row = Some(row);
+            break;
+        }
+    }
+    let Some(row) = selected_row else {
+        anyhow::bail!("plugin package not found: {}", args.id);
+    };
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&row)?);
+    } else {
+        let package = required_string_json(row, "package_id")?;
+        let version = required_string_json(row, "package_version")?;
+        let kind = required_string_json(row, "kind")?;
+        let planned = required_string_json(row, "planned_load_status")?;
+        let daemon = required_string_json(row, "daemon_runtime_status")?;
+        output::kv_section(&[
+            ("Package", package.as_str()),
+            ("Version", version.as_str()),
+            ("Kind", kind.as_str()),
+            ("Planned", planned.as_str()),
+            ("Daemon", daemon.as_str()),
+        ]);
+    }
     Ok(())
 }
 
@@ -199,7 +383,7 @@ fn run_activate_realtime(args: ActivateRealtimeArgs) -> anyhow::Result<()> {
     };
     match args.format {
         OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&report)?),
-        OutputFormat::Table => print_activation_report(&report),
+        OutputFormat::Table => print_activation_report(&report)?,
     }
     Ok(())
 }
@@ -212,35 +396,184 @@ fn bool_label(value: bool) -> String {
     }
 }
 
-fn realtime_label(row: &PluginPackageSurfaceRecord) -> String {
-    if row.realtime_activation_plans.is_empty() {
-        return "-".to_string();
+fn realtime_label(row: &Value) -> anyhow::Result<String> {
+    let plans = row
+        .get("realtime_activation_plans")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    if plans.is_empty() {
+        return Ok("-".to_string());
     }
-    row.realtime_activation_plans
+    let labels = plans
         .iter()
-        .map(|plan| {
-            let kind = format!("{:?}", plan.capability.kind()).to_ascii_lowercase();
+        .map(|plan| -> anyhow::Result<String> {
+            let kind = plan
+                .pointer("/capability/kind")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "plugin control response field `capability.kind` must be a string"
+                    )
+                })?;
             let modes = plan
-                .capability
-                .modes()
-                .iter()
-                .map(|mode| format!("{mode:?}").to_ascii_lowercase())
-                .collect::<Vec<_>>()
-                .join("/");
-            let quick = if plan.is_quick_add() { "+quick" } else { "" };
-            let status = format!("{:?}", plan.status).to_ascii_lowercase();
-            let missing = if plan.missing_abilities.is_empty() {
+                .pointer("/capability/modes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "plugin control response field `capability.modes` must be an array"
+                    )
+                })?;
+            let modes = string_array_label(modes)?;
+            let quick = if plan
+                .pointer("/capability/quick_add")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "plugin control response field `capability.quick_add` must be a boolean"
+                    )
+                })? {
+                "+quick"
+            } else {
+                ""
+            };
+            let status = required_string_json(plan, "status")?;
+            let missing_abilities = plan
+                .get("missing_abilities")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "plugin control response field `missing_abilities` must be an array"
+                    )
+                })?;
+            let missing = if missing_abilities.is_empty() {
                 String::new()
             } else {
-                format!(" missing={}", plan.missing_abilities.join("/"))
+                format!(" missing={}", string_array_label(missing_abilities)?)
             };
-            format!("{kind}:{modes}{quick}+{status}{missing}")
+            Ok(format!("{kind}:{modes}{quick}+{status}{missing}"))
         })
-        .collect::<Vec<_>>()
-        .join(",")
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(labels.join(","))
 }
 
-fn print_activation_report(report: &PluginRealtimeActivationReport) {
+fn companion_field(row: &Value, field: &str) -> String {
+    row.get("companion")
+        .and_then(|value| value.get(field))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("-")
+        .to_string()
+}
+
+fn print_companion_status(status: &serde_json::Value) {
+    let rows: Vec<(&str, String)> = vec![
+        ("Package", optional_string_json(status, "package_id")),
+        ("Version", optional_string_json(status, "package_version")),
+        ("Display", optional_string_json(status, "display_name")),
+        ("Platform", optional_string_json(status, "platform")),
+        ("State", optional_string_json(status, "projected_state")),
+        ("Desired", optional_string_json(status, "desired_state")),
+        (
+            "Supervisor",
+            optional_string_json(status, "supervisor_state"),
+        ),
+        ("Observed", optional_string_json(status, "observed_state")),
+    ];
+    let kv = rows
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect::<Vec<_>>();
+    output::kv_section(&kv);
+}
+
+fn optional_string_json(value: &serde_json::Value, field: &str) -> String {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("-")
+        .to_string()
+}
+
+fn required_string_json(value: &serde_json::Value, field: &str) -> anyhow::Result<String> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("plugin control response field `{field}` must be a string"))
+}
+
+fn required_bool_json(value: &Value, field: &str) -> anyhow::Result<bool> {
+    value
+        .get(field)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| anyhow::anyhow!("plugin control response field `{field}` must be a boolean"))
+}
+
+fn required_usize_json(value: &Value, field: &str) -> anyhow::Result<usize> {
+    value
+        .get(field)
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "plugin control response field `{field}` must be a non-negative integer"
+            )
+        })
+}
+
+fn array_json<'a>(value: &'a Value, field: &str) -> anyhow::Result<&'a Vec<Value>> {
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("plugin control response missing `{field}` array"))
+}
+
+fn string_array_label(values: &[Value]) -> anyhow::Result<String> {
+    values
+        .iter()
+        .map(|value| {
+            value.as_str().ok_or_else(|| {
+                anyhow::anyhow!("plugin control response string array contains a non-string item")
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()
+        .map(|items| items.join("/"))
+}
+
+fn require_plugin_control_value<T>(value: Option<T>, command: &str) -> anyhow::Result<T> {
+    value.ok_or_else(|| {
+        anyhow::anyhow!(
+            "`easynet {command}` requires the daemon plugin control ability; \
+             start the daemon and retry"
+        )
+    })
+}
+
+fn resolve_package(
+    id: &str,
+    version: Option<&str>,
+) -> anyhow::Result<crate::daemon::plugins::package::SharedPluginPackage> {
+    let index_report = PluginPackageIndex::load_default_resilient()?;
+    let (index, _) = index_report.into_parts();
+    let matches = index
+        .packages()
+        .iter()
+        .filter(|package| {
+            package.id().as_str() == id
+                && version
+                    .map(|version| package.version().as_str() == version)
+                    .unwrap_or(true)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [package] => Ok(package.clone()),
+        [] => anyhow::bail!("plugin package not found: {id}"),
+        _ => anyhow::bail!("multiple plugin versions found for {id}; pass --version"),
+    }
+}
+
+fn print_activation_report(report: &Value) -> anyhow::Result<()> {
     let mut table = output::table(&[
         "package",
         "version",
@@ -252,141 +585,145 @@ fn print_activation_report(report: &PluginRealtimeActivationReport) {
         "permissions",
         "publish",
     ]);
-    for outcome in &report.outcomes {
+    for outcome in array_json(report, "outcomes")? {
         table.add_row([
-            outcome.package_id.clone(),
-            outcome.package_version.clone(),
-            activation_capability_label(outcome),
-            activation_transport_label(outcome),
-            outcome_status_label(outcome.status).to_string(),
-            activation_resources_label(outcome),
-            activation_abilities_label(outcome),
-            activation_permissions_label(outcome),
-            outcome.publish.realm_advertise.clone(),
+            required_string_json(outcome, "package_id")?,
+            required_string_json(outcome, "package_version")?,
+            activation_capability_label(outcome)?,
+            activation_transport_label(outcome)?,
+            required_string_json(outcome, "status")?,
+            activation_resources_label(outcome)?,
+            activation_abilities_label(outcome)?,
+            activation_permissions_label(outcome)?,
+            outcome
+                .get("publish")
+                .ok_or_else(|| {
+                    anyhow::anyhow!("plugin control response field `publish` must be an object")
+                })
+                .and_then(|publish| required_string_json(publish, "realm_advertise"))?,
         ]);
     }
     println!("{table}");
+    Ok(())
 }
 
-fn activation_transport_label(outcome: &PluginRealtimeActivationOutcome) -> String {
-    let status = transport_readiness_status_label(outcome.transport.status);
-    match outcome.transport.selected {
-        Some(selected) => format!("{}:{status}", transport_label(selected)),
-        None => status.to_string(),
+fn activation_transport_label(outcome: &Value) -> anyhow::Result<String> {
+    let transport = outcome
+        .get("transport")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            anyhow::anyhow!("plugin control response field `transport` must be an object")
+        })?;
+    let transport = Value::Object(transport.clone());
+    let status = required_string_json(&transport, "status")?;
+    match transport.get("selected").and_then(Value::as_str) {
+        Some(selected) => Ok(format!("{selected}:{status}")),
+        None if transport.get("selected").is_none()
+            || transport.get("selected") == Some(&Value::Null) =>
+        {
+            Ok(status)
+        }
+        None => Err(anyhow::anyhow!(
+            "plugin control response field `transport.selected` must be a string or null"
+        )),
     }
 }
 
-fn activation_capability_label(outcome: &PluginRealtimeActivationOutcome) -> String {
-    let kind = realtime_kind_label(outcome.capability.kind());
-    let modes = outcome
-        .capability
-        .modes()
-        .iter()
-        .map(|mode| realtime_mode_label(*mode))
-        .collect::<Vec<_>>()
-        .join("/");
+fn activation_capability_label(outcome: &Value) -> anyhow::Result<String> {
+    let capability = outcome.get("capability").ok_or_else(|| {
+        anyhow::anyhow!("plugin control response field `capability` must be an object")
+    })?;
+    let kind = required_string_json(capability, "kind")?;
+    let modes = capability
+        .get("modes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            anyhow::anyhow!("plugin control response field `capability.modes` must be an array")
+        })?;
+    let modes = string_array_label(modes)?;
     if modes.is_empty() {
-        kind.to_string()
+        Ok(kind)
     } else {
-        format!("{kind}:{modes}")
+        Ok(format!("{kind}:{modes}"))
     }
 }
 
-fn activation_resources_label(outcome: &PluginRealtimeActivationOutcome) -> String {
-    if !outcome.resources.missing.is_empty() {
-        return format!("missing={}", outcome.resources.missing.join("/"));
+fn activation_resources_label(outcome: &Value) -> anyhow::Result<String> {
+    let resources = outcome.get("resources").ok_or_else(|| {
+        anyhow::anyhow!("plugin control response field `resources` must be an object")
+    })?;
+    let missing = resources
+        .get("missing")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            anyhow::anyhow!("plugin control response field `resources.missing` must be an array")
+        })?;
+    if !missing.is_empty() {
+        return Ok(format!("missing={}", string_array_label(missing)?));
+    }
+    let available = resources
+        .get("available")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            anyhow::anyhow!("plugin control response field `resources.available` must be an array")
+        })?
+        .iter()
+        .map(|item| -> anyhow::Result<String> {
+            Ok(format!(
+                "{}={}",
+                required_string_json(item, "kind")?,
+                required_usize_json(item, "count")?
+            ))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    if available.is_empty() {
+        Ok("ready".to_string())
+    } else {
+        Ok(available.join("/"))
+    }
+}
+
+fn activation_abilities_label(outcome: &Value) -> anyhow::Result<String> {
+    let missing = outcome
+        .get("missing_abilities")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            anyhow::anyhow!("plugin control response field `missing_abilities` must be an array")
+        })?;
+    if !missing.is_empty() {
+        return Ok(format!("missing={}", string_array_label(missing)?));
     }
     let available = outcome
-        .resources
-        .available
-        .iter()
-        .map(|item| format!("{}={}", item.kind, item.count))
-        .collect::<Vec<_>>();
+        .get("available_abilities")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            anyhow::anyhow!("plugin control response field `available_abilities` must be an array")
+        })?;
     if available.is_empty() {
-        "ready".to_string()
+        Ok("-".to_string())
     } else {
-        available.join("/")
+        string_array_label(available)
     }
 }
 
-fn activation_abilities_label(outcome: &PluginRealtimeActivationOutcome) -> String {
-    if !outcome.missing_abilities.is_empty() {
-        return format!("missing={}", outcome.missing_abilities.join("/"));
+fn activation_permissions_label(outcome: &Value) -> anyhow::Result<String> {
+    let permissions = outcome.get("permissions").ok_or_else(|| {
+        anyhow::anyhow!("plugin control response field `permissions` must be an object")
+    })?;
+    let required = permissions
+        .get("required")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            anyhow::anyhow!("plugin control response field `permissions.required` must be an array")
+        })?;
+    if required.is_empty() {
+        return Ok("not_required".to_string());
     }
-    if outcome.available_abilities.is_empty() {
-        "-".to_string()
-    } else {
-        outcome.available_abilities.join("/")
-    }
-}
-
-fn activation_permissions_label(outcome: &PluginRealtimeActivationOutcome) -> String {
-    if outcome.permissions.required.is_empty() {
-        return "not_required".to_string();
-    }
-    format!(
+    Ok(format!(
         "{}:{}",
-        outcome.permissions.required.join("/"),
-        permission_status_label(outcome.permissions.status)
-    )
-}
-
-fn outcome_status_label(status: PluginRealtimeOutcomeStatus) -> &'static str {
-    match status {
-        PluginRealtimeOutcomeStatus::Ready => "ready",
-        PluginRealtimeOutcomeStatus::Blocked => "blocked",
-        PluginRealtimeOutcomeStatus::Partial => "partial",
-        PluginRealtimeOutcomeStatus::Unsupported => "unsupported",
-        PluginRealtimeOutcomeStatus::Unknown => "unknown",
-    }
-}
-
-fn permission_status_label(status: PluginRealtimePermissionStatus) -> &'static str {
-    match status {
-        PluginRealtimePermissionStatus::NotRequired => "not_required",
-        PluginRealtimePermissionStatus::StatusAbilityAvailable => "status_ability_available",
-        PluginRealtimePermissionStatus::RequestAbilityAvailable => "request_ability_available",
-        PluginRealtimePermissionStatus::Unknown => "unknown",
-    }
-}
-
-fn transport_readiness_status_label(
-    status: PluginRealtimeTransportReadinessStatus,
-) -> &'static str {
-    match status {
-        PluginRealtimeTransportReadinessStatus::Unknown => "unknown",
-        PluginRealtimeTransportReadinessStatus::Ready => "ready",
-        PluginRealtimeTransportReadinessStatus::FallbackReady => "fallback_ready",
-        PluginRealtimeTransportReadinessStatus::Blocked => "blocked",
-    }
-}
-
-fn transport_label(transport: PluginRealtimeTransport) -> &'static str {
-    match transport {
-        PluginRealtimeTransport::InvokeStream => "invoke_stream",
-        PluginRealtimeTransport::InvokeBidi => "invoke_bidi",
-        PluginRealtimeTransport::Webrtc => "webrtc",
-    }
-}
-
-fn realtime_kind_label(kind: PluginRealtimeKind) -> &'static str {
-    match kind {
-        PluginRealtimeKind::Camera => "camera",
-        PluginRealtimeKind::Mic => "mic",
-        PluginRealtimeKind::Screen => "screen",
-        PluginRealtimeKind::Speaker => "speaker",
-        PluginRealtimeKind::Voice => "voice",
-    }
-}
-
-fn realtime_mode_label(mode: PluginRealtimeMode) -> &'static str {
-    match mode {
-        PluginRealtimeMode::Snapshot => "snapshot",
-        PluginRealtimeMode::Subscribe => "subscribe",
-        PluginRealtimeMode::Record => "record",
-        PluginRealtimeMode::Publish => "publish",
-        PluginRealtimeMode::Transcribe => "transcribe",
-    }
+        string_array_label(required)?,
+        required_string_json(permissions, "status")?
+    ))
 }
 
 fn notify_daemon_reload() -> anyhow::Result<()> {
@@ -412,7 +749,7 @@ fn invoke_plugin_reload() -> anyhow::Result<Option<serde_json::Value>> {
     )
 }
 
-fn invoke_plugin_status() -> anyhow::Result<Option<PluginSurfaceReport>> {
+fn invoke_plugin_status() -> anyhow::Result<Option<Value>> {
     let Some(value) = invoke_plugin_control_ability(
         crate::daemon::ability::builtins::integrations::plugins::STATUS_ABILITY,
         serde_json::json!({}),
@@ -420,13 +757,13 @@ fn invoke_plugin_status() -> anyhow::Result<Option<PluginSurfaceReport>> {
     else {
         return Ok(None);
     };
-    Ok(Some(serde_json::from_value(value)?))
+    Ok(Some(value))
 }
 
 fn invoke_plugin_activate_realtime(
     id: &str,
     version: Option<&str>,
-) -> anyhow::Result<Option<PluginRealtimeActivationReport>> {
+) -> anyhow::Result<Option<Value>> {
     let mut body = serde_json::json!({ "package_id": id });
     if let Some(version) = version {
         body["package_version"] = serde_json::json!(version);
@@ -438,7 +775,21 @@ fn invoke_plugin_activate_realtime(
     else {
         return Ok(None);
     };
-    Ok(Some(serde_json::from_value(value)?))
+    Ok(Some(value))
+}
+
+fn invoke_companion_status(
+    id: &str,
+    version: Option<&str>,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let mut body = serde_json::json!({ "package_id": id });
+    if let Some(version) = version {
+        body["package_version"] = serde_json::json!(version);
+    }
+    invoke_plugin_control_ability(
+        crate::daemon::ability::builtins::integrations::plugins::COMPANION_STATUS_ABILITY,
+        body,
+    )
 }
 
 fn invoke_plugin_control_ability(
@@ -463,18 +814,17 @@ fn invoke_plugin_control_ability_via_daemon(
     ability: &'static str,
     args: serde_json::Value,
 ) -> anyhow::Result<Option<serde_json::Value>> {
-    let Some(subject) = plugin_control_subject_ura()? else {
-        return Ok(None);
+    let subject = match PluginControlSubject::resolve()? {
+        PluginControlSubject::Available(subject) => subject,
+        PluginControlSubject::Unpaired => return Ok(None),
     };
-    match crate::support::platform::local_invoke::invoke_local_ability_with_subject(
-        ability,
-        args,
-        Some(subject),
+    match crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(
+        ability, args, &subject,
     ) {
         Ok(value) => Ok(Some(value)),
         Err(err)
-            if crate::support::platform::local_invoke::classify_invoke_error(&err)
-                == crate::support::platform::local_invoke::LocalInvokeErrorKind::DaemonOffline =>
+            if crate::support::platform::local_invoke::classify_invoke_failure(&err)
+                == crate::support::platform::local_invoke::LocalInvokeFailureClass::DaemonOffline =>
         {
             Ok(None)
         }
@@ -483,26 +833,23 @@ fn invoke_plugin_control_ability_via_daemon(
 }
 
 #[cfg(feature = "axon-pb")]
-fn plugin_control_subject_ura() -> anyhow::Result<Option<String>> {
-    match crate::daemon::persistence::config::load_credentials() {
-        Ok(creds) => Ok(Some(crate::core::ura::device_ura(
-            creds.realm.trim(),
-            creds.node_id.trim(),
-        ))),
-        Err(err) => {
-            if is_missing_or_incomplete_credentials(&err) {
-                Ok(None)
-            } else {
-                Err(err)
-            }
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PluginControlSubject {
+    Available(String),
+    Unpaired,
 }
 
 #[cfg(feature = "axon-pb")]
-fn is_missing_or_incomplete_credentials(err: &anyhow::Error) -> bool {
-    let msg = err.to_string();
-    msg.contains("no credentials found") || msg.contains("credentials file is incomplete")
+impl PluginControlSubject {
+    fn resolve() -> anyhow::Result<Self> {
+        let Some(creds) = crate::daemon::persistence::config::load_credentials_optional()? else {
+            return Ok(Self::Unpaired);
+        };
+        Ok(Self::Available(crate::core::ura::device_ura(
+            creds.realm.trim(),
+            creds.node_id.trim(),
+        )))
+    }
 }
 
 #[cfg(all(test, feature = "axon-pb"))]
@@ -510,10 +857,163 @@ mod tests {
     use super::*;
 
     #[test]
+    fn plugin_control_value_accepts_daemon_authority_value() {
+        let status = serde_json::json!({
+            "kind": "desktop_companion_status",
+            "package_id": "easynet.desktop.menubar",
+            "projected_state": "running"
+        });
+
+        let selected = require_plugin_control_value(Some(status.clone()), "plugin status")
+            .expect("daemon value should be accepted");
+
+        assert_eq!(selected, status);
+    }
+
+    #[test]
+    fn plugin_control_value_rejects_missing_daemon_authority() {
+        let err = require_plugin_control_value::<serde_json::Value>(None, "plugin status")
+            .expect_err("missing daemon value must fail closed");
+
+        assert!(err
+            .to_string()
+            .contains("requires the daemon plugin control ability"));
+    }
+
+    #[test]
+    fn plugin_table_projection_rejects_malformed_required_scalar() {
+        let row = serde_json::json!({
+            "package_id": "pkg.demo",
+            "runtime_published": "yes"
+        });
+
+        let err = required_bool_json(&row, "runtime_published")
+            .expect_err("required boolean field must not default from malformed JSON");
+
+        assert!(
+            err.to_string().contains("runtime_published") && err.to_string().contains("boolean"),
+            "wrong error: {err}"
+        );
+    }
+
+    #[test]
+    fn plugin_realtime_label_rejects_malformed_activation_plan() {
+        let row = serde_json::json!({
+            "realtime_activation_plans": [{
+                "capability": {
+                    "kind": "camera",
+                    "modes": ["snapshot"]
+                },
+                "status": "ready",
+                "missing_abilities": []
+            }]
+        });
+
+        let err =
+            realtime_label(&row).expect_err("missing quick_add must not render as a false default");
+
+        assert!(
+            err.to_string().contains("capability.quick_add") && err.to_string().contains("boolean"),
+            "wrong error: {err}"
+        );
+    }
+
+    #[test]
+    fn plugin_activation_table_rejects_malformed_nested_report() {
+        let report = serde_json::json!({
+            "outcomes": [{
+                "package_id": "pkg.demo",
+                "package_version": "0.1.0",
+                "capability": {
+                    "kind": "camera",
+                    "modes": ["snapshot"]
+                },
+                "transport": {
+                    "status": "ready",
+                    "selected": "invoke_bidi"
+                },
+                "status": "ready",
+                "resources": {
+                    "missing": [],
+                    "available": [{"kind": "camera", "count": "one"}]
+                },
+                "available_abilities": ["camera.snapshot"],
+                "missing_abilities": [],
+                "permissions": {
+                    "required": [],
+                    "status": "not_required"
+                },
+                "publish": {
+                    "realm_advertise": "ready"
+                }
+            }]
+        });
+
+        let err = print_activation_report(&report)
+            .expect_err("malformed nested resource count must not render as zero");
+
+        assert!(
+            err.to_string().contains("count") && err.to_string().contains("non-negative integer"),
+            "wrong error: {err}"
+        );
+    }
+
+    #[test]
     fn plugin_control_subject_is_unavailable_when_unpaired() {
         let _guard = crate::cli::commands::test_support::HomeGuard::new();
 
-        assert_eq!(plugin_control_subject_ura().unwrap(), None);
+        assert_eq!(
+            PluginControlSubject::resolve().unwrap(),
+            PluginControlSubject::Unpaired
+        );
+    }
+
+    #[test]
+    fn plugin_control_subject_rejects_malformed_credentials() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(crate::daemon::persistence::config::state_dir())
+            .expect("state dir");
+        std::fs::write(
+            crate::daemon::persistence::config::state_dir().join("credentials.json"),
+            b"{",
+        )
+        .expect("write malformed credentials");
+
+        let err = PluginControlSubject::resolve()
+            .expect_err("malformed credentials must not look like unpaired state");
+
+        assert!(
+            err.to_string().contains("parse credentials"),
+            "wrong error: {err}"
+        );
+    }
+
+    #[test]
+    fn plugin_control_subject_rejects_incomplete_credentials() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(crate::daemon::persistence::config::state_dir())
+            .expect("state dir");
+        std::fs::write(
+            crate::daemon::persistence::config::state_dir().join("credentials.json"),
+            r#"{
+  "node_id": "",
+  "credential_token": "token",
+  "hub_endpoint": "axon://hub.example:7700",
+  "realm": "acme",
+  "username": "alice",
+  "user_id": "user-alice"
+}
+"#,
+        )
+        .expect("write incomplete credentials");
+
+        let err = PluginControlSubject::resolve()
+            .expect_err("incomplete credentials must not look like unpaired state");
+
+        assert!(
+            err.to_string().contains("validate credentials"),
+            "wrong error: {err}"
+        );
     }
 
     #[test]
@@ -533,8 +1033,8 @@ mod tests {
         .expect("write test credentials");
 
         assert_eq!(
-            plugin_control_subject_ura().unwrap().as_deref(),
-            Some("easynet:///r/acme/device/dev-a")
+            PluginControlSubject::resolve().unwrap(),
+            PluginControlSubject::Available("easynet:///r/acme/device/dev-a".to_string())
         );
     }
 }

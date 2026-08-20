@@ -10,29 +10,29 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::daemon::persistence::agent_registry as agents;
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, AgentRegisteredAgentLoadError, AgentRegisteredWorkspace,
+    AgentRegisteredWorkspaceLookupError, AgentSkillLayout,
+};
 use crate::daemon::persistence::config;
 
 const GLOBAL_SKILL_OWNER_PREFIX: &str = "global:";
 
 /// The normalised install record persisted at
-/// `<agent-root>/skills/<name>/.easynet/install.json`. One file per
-/// installed skill; the file is the source of truth for `list` /
+/// `<agent-managed-skills-dir>/<name>/.easynet/install.json`. One file
+/// per installed skill; the file is the source of truth for `list` /
 /// `upgrade` / `remove`.
 ///
-/// Matches the backend's `types.InstalledSkill` shape (minus
-/// `agent_id` / `node_id`, which the backend injects when
-/// aggregating). Keeping the two schemas isomorphic means
-/// `skill list --json` output is directly parseable by the backend
-/// without a translation shim.
+/// Persistence model only. Public skill ability / CLI response fields
+/// are owned by `projection.rs` so the store does not carry product
+/// or legacy wire names.
 ///
-/// Rust field names here are chosen for *semantic* honesty (see
-/// `skill_tree_hash` doc). Wire + on-disk JSON keeps the legacy
-/// `content_hash` name via `#[serde(rename)]` so that the backend
-/// (`types.InstalledSkill.ContentHash`), the Frontend (`content_hash`
-/// in `easynet-skills.ts`), and any pre-existing `install.json`
-/// files keep parsing without a coordinated three-repo rename.
+/// The install tree digest is persisted as `skill_tree_hash`. The
+/// public `content_hash` response name is intentionally projected at
+/// the API boundary instead of being baked into this canonical store
+/// record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InstallRecord {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -57,9 +57,8 @@ pub struct InstallRecord {
     /// signed-envelope path tracked in
     /// `docs/open-questions/cli-dispatch-as-first-class-invocation.md`.
     ///
-    /// Wire name is `content_hash` — see the struct-level doc for
-    /// why we don't rename in JSON.
-    #[serde(rename = "content_hash")]
+    /// Disk name is `skill_tree_hash`. Public response compatibility
+    /// with `content_hash` belongs to `InstalledSkillProjection`.
     pub skill_tree_hash: String,
     pub size_bytes: u64,
     pub installed_at: String,
@@ -69,7 +68,27 @@ pub struct InstallRecord {
     pub upgrade_available: bool,
 }
 
+impl InstallRecord {
+    pub(crate) fn validate_canonical_persistence(&self) -> anyhow::Result<()> {
+        let hash = self.skill_tree_hash.trim();
+        anyhow::ensure!(
+            hash == self.skill_tree_hash,
+            "install record skill_tree_hash must be canonical without surrounding whitespace"
+        );
+        anyhow::ensure!(
+            hash.starts_with("sha256:"),
+            "install record skill_tree_hash must include sha256: algorithm prefix"
+        );
+        anyhow::ensure!(
+            hash.len() > "sha256:".len(),
+            "install record skill_tree_hash must include a digest"
+        );
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SkillSource {
     pub kind: String,
     pub identifier: String,
@@ -102,9 +121,9 @@ impl SkillSource {
 }
 
 /// Pure install helper: fetches the source, atomically moves into
-/// the agent's skills/ dir, writes the install record, and returns
-/// it. No stdout, no CLI dep. Used by `run_install` (CLI) and
-/// `skill.install` ability (daemon ability dispatch).
+/// the agent runtime's managed skills dir, writes the install record,
+/// and returns it. No stdout, no CLI dep. Used by `run_install` (CLI)
+/// and `skill.install` ability (daemon ability dispatch).
 ///
 /// `pub(crate)` because the only callers are in this crate
 /// (run_install in this file + the skill.install system ability
@@ -131,14 +150,8 @@ pub(crate) fn install_skill(
         ..parsed
     };
 
-    let registry = agents::load_agents()?;
-    let entry = registry.agents.get(agent).ok_or_else(|| {
-        anyhow::anyhow!("agent '{}' not registered; run 'easynet agent list'", agent)
-    })?;
-    let agent_root = entry
-        .root_path
-        .clone()
-        .unwrap_or_else(|| config::agents_root().join(agent));
+    let workspace = resolve_skill_agent_workspace(agent, SkillMutation::Install)?;
+    let agent_root = workspace.root_path();
     if !agent_root.exists() {
         anyhow::bail!(
             "agent '{}' has no on-disk root at {}",
@@ -147,7 +160,7 @@ pub(crate) fn install_skill(
         );
     }
 
-    let skills_dir = agent_root.join("skills");
+    let skills_dir = managed_skill_dir_for(agent_root, workspace.skill_layout());
     fs::create_dir_all(&skills_dir)?;
 
     // Workdir wrapped in an RAII guard so it's removed on every
@@ -279,9 +292,8 @@ fn extract_tar_gz(tar_path: &Path, out_dir: &Path) -> anyhow::Result<()> {
 
 fn single_top_dir(dir: &Path) -> anyhow::Result<PathBuf> {
     let mut entries: Vec<PathBuf> = fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .collect();
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
     anyhow::ensure!(
         entries.len() == 1 && entries[0].is_dir(),
         "expected exactly one top-level directory in archive, got {} entries",
@@ -291,17 +303,17 @@ fn single_top_dir(dir: &Path) -> anyhow::Result<PathBuf> {
 }
 
 pub(crate) fn global_skill_pools_for(
-    agent_type: agents::AgentType,
+    layout: AgentSkillLayout,
 ) -> Vec<(&'static str, std::path::PathBuf)> {
     let home = config::home_dir();
-    match agent_type {
-        agents::AgentType::ClaudeCode => {
+    match layout {
+        AgentSkillLayout::ClaudeCode => {
             vec![("claude-global", home.join(".claude").join("skills"))]
         }
-        agents::AgentType::Codex | agents::AgentType::CodexAppServer => {
+        AgentSkillLayout::Codex => {
             vec![("codex-global", home.join(".agents").join("skills"))]
         }
-        agents::AgentType::External => Vec::new(),
+        AgentSkillLayout::External => Vec::new(),
     }
 }
 
@@ -352,39 +364,38 @@ impl GlobalSkillPoolRef {
         global_skill_pool_dirs_for_label(&self.label)
     }
 
-    pub(crate) fn skill_dir(&self, skill_name: &str) -> Option<std::path::PathBuf> {
+    pub(crate) fn skill_dir(&self, skill_name: &str) -> anyhow::Result<Option<std::path::PathBuf>> {
         for pool_dir in self.dirs() {
-            if let Some(path) = skill_dir_in_global_pool(&pool_dir, skill_name) {
-                return Some(path);
+            if let Some(path) = skill_dir_in_global_pool(&pool_dir, skill_name)? {
+                return Ok(Some(path));
             }
         }
-        None
+        Ok(None)
     }
 }
 
 pub(crate) fn global_skill_dir_for(
-    agent_type: agents::AgentType,
+    layout: AgentSkillLayout,
     skill_name: &str,
-) -> Option<std::path::PathBuf> {
-    for (_label, pool_dir) in global_skill_pools_for(agent_type) {
-        if let Some(path) = skill_dir_in_global_pool(&pool_dir, skill_name) {
-            return Some(path);
+) -> anyhow::Result<Option<std::path::PathBuf>> {
+    for (_label, pool_dir) in global_skill_pools_for(layout) {
+        if let Some(path) = skill_dir_in_global_pool(&pool_dir, skill_name)? {
+            return Ok(Some(path));
         }
     }
-    None
+    Ok(None)
 }
 
 fn global_skill_pool_dirs_for_label(pool_label: &str) -> Vec<std::path::PathBuf> {
-    let agent_types = [
-        agents::AgentType::ClaudeCode,
-        agents::AgentType::Codex,
-        agents::AgentType::CodexAppServer,
-        agents::AgentType::External,
+    let layouts = [
+        AgentSkillLayout::ClaudeCode,
+        AgentSkillLayout::Codex,
+        AgentSkillLayout::External,
     ];
     let mut dirs = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    for agent_type in agent_types {
-        for (label, pool_dir) in global_skill_pools_for(agent_type) {
+    for layout in layouts {
+        for (label, pool_dir) in global_skill_pools_for(layout) {
             if label != pool_label || !seen.insert(pool_dir.clone()) {
                 continue;
             }
@@ -394,7 +405,10 @@ fn global_skill_pool_dirs_for_label(pool_label: &str) -> Vec<std::path::PathBuf>
     dirs
 }
 
-fn skill_dir_in_global_pool(pool_dir: &Path, skill_name: &str) -> Option<std::path::PathBuf> {
+fn skill_dir_in_global_pool(
+    pool_dir: &Path,
+    skill_name: &str,
+) -> anyhow::Result<Option<std::path::PathBuf>> {
     let direct = pool_dir.join(skill_name);
     if direct
         .file_name()
@@ -403,34 +417,43 @@ fn skill_dir_in_global_pool(pool_dir: &Path, skill_name: &str) -> Option<std::pa
         && direct.is_dir()
         && looks_like_skill_dir(&direct)
     {
-        return Some(direct);
+        let declared = required_global_skill_declared_name(&direct)?;
+        if declared == skill_name {
+            return Ok(Some(direct));
+        }
     }
 
-    let entries = fs::read_dir(pool_dir).ok()?;
-    for dir_entry in entries.flatten() {
+    let entries = match fs::read_dir(pool_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => anyhow::bail!("read global skill pool {}: {err}", pool_dir.display()),
+    };
+    for dir_entry in entries {
+        let dir_entry = dir_entry.map_err(|err| {
+            anyhow::anyhow!("scan global skill pool {}: {err}", pool_dir.display())
+        })?;
         let path = dir_entry.path();
         if !path.is_dir() {
             continue;
         }
-        let dir_name = match path.file_name().and_then(|s| s.to_str()) {
-            Some(n) if !n.starts_with('.') => n.to_string(),
+        match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) if !n.starts_with('.') => {}
             _ => continue,
         };
         if !looks_like_skill_dir(&path) {
             continue;
         }
-        let parsed_name =
-            parse_skill_md_name(&path.join("SKILL.md")).unwrap_or_else(|| dir_name.clone());
-        if parsed_name == skill_name || dir_name == skill_name {
-            return Some(path);
+        if required_global_skill_declared_name(&path)? == skill_name {
+            return Ok(Some(path));
         }
     }
-    None
+    Ok(None)
 }
 
-/// Walk a global skill pool and append one synthetic InstallRecord
-/// per skill directory it contains. Skips directories that don't
-/// look like a skill (no `SKILL.md` and no nested `skill.json`).
+/// Walk a global skill pool and append one synthetic InstallRecord per declared
+/// skill package. Global pool identity is semantic: `SKILL.md` frontmatter
+/// `name` is the only public package name authority. Physical directory names
+/// remain source subpaths and never become fallback skill identities.
 ///
 /// We do not propagate IO errors from the walk: a global pool that
 /// is missing or unreadable should not fail the whole listing —
@@ -440,9 +463,9 @@ pub(crate) fn scan_global_pool_into(
     pool_label: &str,
     pool_dir: &std::path::Path,
     rows: &mut Vec<InstallRecord>,
-) {
+) -> anyhow::Result<()> {
     if !pool_dir.is_dir() {
-        return;
+        return Ok(());
     }
     let entries = match fs::read_dir(pool_dir) {
         Ok(e) => e,
@@ -451,10 +474,13 @@ pub(crate) fn scan_global_pool_into(
                 "[warn] global skill pool {} unreadable: {e}",
                 pool_dir.display()
             );
-            return;
+            anyhow::bail!("global skill pool {} unreadable: {e}", pool_dir.display());
         }
     };
-    for dir_entry in entries.flatten() {
+    for dir_entry in entries {
+        let dir_entry = dir_entry.map_err(|err| {
+            anyhow::anyhow!("scan global skill pool {}: {err}", pool_dir.display())
+        })?;
         let path = dir_entry.path();
         if !path.is_dir() {
             continue;
@@ -472,61 +498,100 @@ pub(crate) fn scan_global_pool_into(
             // user folder under ~/.claude. Silent skip.
             continue;
         }
-        if let Some(record) = global_skill_record_from_dir(agent_name, pool_label, &path) {
+        if let Some(record) = global_skill_record_from_dir(agent_name, pool_label, &path)? {
             rows.push(record);
         }
     }
+    Ok(())
 }
 
 pub(crate) fn global_skill_record_from_dir(
     agent_name: &str,
     pool_label: &str,
     path: &std::path::Path,
-) -> Option<InstallRecord> {
-    if !path.is_dir() || !looks_like_skill_dir(path) {
-        return None;
-    }
-    let dir_name = path.file_name().and_then(|s| s.to_str())?;
-    if dir_name.starts_with('.') {
-        return None;
-    }
-    // Best-effort metadata extraction. Frontmatter `name` wins
-    // when present; otherwise the directory name is the fallback.
-    let skill_md = path.join("SKILL.md");
-    let parsed_name = parse_skill_md_name(&skill_md).unwrap_or_else(|| dir_name.to_string());
-    let size_bytes = directory_size_bytes(path);
-    let installed_at = file_mtime_iso(path).unwrap_or_default();
+) -> anyhow::Result<Option<InstallRecord>> {
+    skill_record_from_unmanaged_dir(agent_name, "global", pool_label, path)
+}
 
-    Some(InstallRecord {
-        name: parsed_name,
-        description: skill_description_from_dir(path),
+/// Project a valid runtime-native project skill that was not installed by the
+/// EasyNet marketplace. Agent bootstrap writes these packages directly into
+/// the runtime's canonical skill directory, so requiring marketplace-owned
+/// `.easynet/install.json` metadata would make an active skill invisible.
+///
+/// This remains a read projection only: it neither creates install metadata
+/// nor makes the package eligible for marketplace upgrade/remove operations.
+pub(crate) fn native_project_skill_record_from_dir(
+    agent_name: &str,
+    runtime_label: &str,
+    path: &std::path::Path,
+) -> anyhow::Result<Option<InstallRecord>> {
+    skill_record_from_unmanaged_dir(agent_name, "custom", runtime_label, path)
+}
+
+fn skill_record_from_unmanaged_dir(
+    agent_name: &str,
+    source_kind: &str,
+    source_identifier: &str,
+    path: &std::path::Path,
+) -> anyhow::Result<Option<InstallRecord>> {
+    if !path.is_dir() || !looks_like_skill_dir(path) {
+        return Ok(None);
+    }
+    let Some(dir_name) = path.file_name().and_then(|s| s.to_str()) else {
+        return Ok(None);
+    };
+    if dir_name.starts_with('.') {
+        return Ok(None);
+    }
+    let metadata = required_global_skill_metadata(path)?;
+    let size_bytes = directory_size_bytes(path);
+    let installed_at = file_mtime_iso(path)?;
+
+    Ok(Some(InstallRecord {
+        name: metadata.name,
+        description: metadata.description,
         agent_id: agent_name.to_string(),
         source: SkillSource {
-            // `kind = "global"` distinguishes these from the
-            // `github`-kind records that `easynet skill install`
-            // writes. The to_url() rendering becomes
-            // "global:claude-global" — visible in the SOURCE
-            // column so an operator can tell which pool a row
-            // came from.
-            kind: "global".to_string(),
-            identifier: pool_label.to_string(),
+            kind: source_kind.to_string(),
+            identifier: source_identifier.to_string(),
             ref_: None,
             subpath: Some(dir_name.to_string()),
         },
-        // No tree hash for global skills — they're not pinned by
-        // EasyNet and the file set may change without us
-        // observing. Empty string is the documented "unknown"
-        // sentinel.
+        // Unmanaged skills are not pinned by EasyNet and can change without
+        // an install transaction. Empty is the public "unknown" sentinel.
         skill_tree_hash: String::new(),
         size_bytes,
         installed_at,
         last_checked_at: None,
         upgrade_available: false,
-    })
+    }))
 }
 
 fn looks_like_skill_dir(path: &std::path::Path) -> bool {
     path.join("SKILL.md").exists() || path.join("skill.json").exists()
+}
+
+struct SkillMarkdownMetadata {
+    name: String,
+    description: String,
+}
+
+fn required_global_skill_declared_name(path: &std::path::Path) -> anyhow::Result<String> {
+    Ok(required_global_skill_metadata(path)?.name)
+}
+
+fn required_global_skill_metadata(path: &std::path::Path) -> anyhow::Result<SkillMarkdownMetadata> {
+    let skill_md = path.join("SKILL.md");
+    let content = fs::read_to_string(&skill_md)
+        .map_err(|err| anyhow::anyhow!("read {}: {err}", skill_md.display()))?;
+    let name = parse_skill_md_name_from_content(&content)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "global skill package {} must declare frontmatter name in SKILL.md",
+            path.display()
+        )
+    })?;
+    let description = skill_description_from_markdown_content(&content);
+    Ok(SkillMarkdownMetadata { name, description })
 }
 
 pub(crate) fn skill_description_from_dir(path: &std::path::Path) -> String {
@@ -535,9 +600,13 @@ pub(crate) fn skill_description_from_dir(path: &std::path::Path) -> String {
 
 fn skill_description_from_markdown(path: &std::path::Path) -> Option<String> {
     let content = fs::read_to_string(path).ok()?;
-    if let Some(frontmatter) = skill_md_frontmatter(&content) {
+    Some(skill_description_from_markdown_content(&content))
+}
+
+fn skill_description_from_markdown_content(content: &str) -> String {
+    if let Some(frontmatter) = skill_md_frontmatter(content) {
         if let Some(description) = frontmatter_field(frontmatter, "description") {
-            return Some(description);
+            return description;
         }
     }
     content
@@ -545,18 +614,15 @@ fn skill_description_from_markdown(path: &std::path::Path) -> Option<String> {
         .map(str::trim)
         .find(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with("---"))
         .map(|line| line.to_string())
+        .unwrap_or_default()
 }
 
-/// Extract the `name:` field from a SKILL.md YAML frontmatter
-/// block. Returns None on any parse failure — the caller falls back
-/// to the directory name. We do a minimal hand parse rather than
-/// pulling in a YAML crate because the frontmatter shape we care
-/// about is one line: `name: <value>`.
-fn parse_skill_md_name(skill_md: &std::path::Path) -> Option<String> {
-    let content = fs::read_to_string(skill_md).ok()?;
+fn parse_skill_md_name_from_content(content: &str) -> anyhow::Result<Option<String>> {
     // Frontmatter is delimited by `---` lines at the top.
-    let frontmatter = skill_md_frontmatter(&content)?;
-    frontmatter_field(frontmatter, "name")
+    let Some(frontmatter) = skill_md_frontmatter(content) else {
+        return Ok(None);
+    };
+    Ok(frontmatter_field(frontmatter, "name"))
 }
 
 fn skill_md_frontmatter(content: &str) -> Option<&str> {
@@ -602,11 +668,14 @@ fn directory_size_bytes(dir: &std::path::Path) -> u64 {
 
 /// ISO-8601 mtime of a path, best-effort. Returns None if the
 /// metadata read fails.
-fn file_mtime_iso(path: &std::path::Path) -> Option<String> {
-    let meta = fs::metadata(path).ok()?;
-    let modified = meta.modified().ok()?;
+fn file_mtime_iso(path: &std::path::Path) -> anyhow::Result<String> {
+    let meta = fs::metadata(path)
+        .map_err(|err| anyhow::anyhow!("read metadata {}: {err}", path.display()))?;
+    let modified = meta
+        .modified()
+        .map_err(|err| anyhow::anyhow!("read modified time {}: {err}", path.display()))?;
     let dt: chrono::DateTime<chrono::Utc> = modified.into();
-    Some(dt.to_rfc3339())
+    Ok(dt.to_rfc3339())
 }
 
 /// new ref into place, and returns the new InstallRecord on success.
@@ -624,16 +693,10 @@ pub(crate) fn upgrade_skill(
     agent: &str,
     target_ref: Option<&str>,
 ) -> anyhow::Result<InstallRecord> {
-    let registry = agents::load_agents()?;
-    let entry = registry
-        .agents
-        .get(agent)
-        .ok_or_else(|| anyhow::anyhow!("agent '{}' not registered", agent))?;
-    let agent_root = entry
-        .root_path
-        .clone()
-        .unwrap_or_else(|| config::agents_root().join(agent));
-    let skill_dir = agent_root.join("skills").join(name);
+    let workspace = resolve_skill_agent_workspace(agent, SkillMutation::Upgrade)?;
+    let agent_root = workspace.root_path();
+    let skills_dir = managed_skill_dir_for(agent_root, workspace.skill_layout());
+    let skill_dir = skills_dir.join(name);
     let record_path = skill_dir.join(".easynet").join("install.json");
     let existing = read_install_record(&record_path)?;
 
@@ -649,9 +712,7 @@ pub(crate) fn upgrade_skill(
     new_source.ref_ = resolved_target_ref.clone();
     let fetch = fetch_github(&new_source, workdir.path())?;
 
-    let backup = agent_root
-        .join("skills")
-        .join(format!(".{}-backup-{}", name, rand_suffix()));
+    let backup = skills_dir.join(format!(".{}-backup-{}", name, rand_suffix()));
     fs::rename(&skill_dir, &backup)?;
     let result = (|| -> anyhow::Result<InstallRecord> {
         if fs::rename(&fetch.unpacked, &skill_dir).is_err() {
@@ -708,16 +769,9 @@ pub(crate) fn upgrade_skill(
 ///     idempotent at the ability layer if desired; we surface the
 ///     distinction here)
 pub(crate) fn remove_skill(name: &str, agent: &str) -> anyhow::Result<()> {
-    let registry = agents::load_agents()?;
-    let entry = registry
-        .agents
-        .get(agent)
-        .ok_or_else(|| anyhow::anyhow!("agent '{}' not registered", agent))?;
-    let agent_root = entry
-        .root_path
-        .clone()
-        .unwrap_or_else(|| config::agents_root().join(agent));
-    let skill_dir = agent_root.join("skills").join(name);
+    let workspace = resolve_skill_agent_workspace(agent, SkillMutation::Remove)?;
+    let skill_dir =
+        managed_skill_dir_for(workspace.root_path(), workspace.skill_layout()).join(name);
     if !skill_dir.exists() {
         anyhow::bail!("skill '{}' is not installed on agent '{}'", name, agent);
     }
@@ -726,6 +780,60 @@ pub(crate) fn remove_skill(name: &str, agent: &str) -> anyhow::Result<()> {
 }
 
 // ─── helpers ─────────────────────────────────────────────────────
+
+#[derive(Clone, Copy)]
+enum SkillMutation {
+    Install,
+    Upgrade,
+    Remove,
+}
+
+impl SkillMutation {
+    fn operation(self) -> &'static str {
+        match self {
+            Self::Install => "skill.install",
+            Self::Upgrade => "skill.upgrade",
+            Self::Remove => "skill.remove",
+        }
+    }
+
+    fn missing_owner_error(self, agent: &str) -> anyhow::Error {
+        match self {
+            Self::Install => {
+                anyhow::anyhow!("agent '{}' not registered; run 'easynet agent list'", agent)
+            }
+            Self::Upgrade | Self::Remove => anyhow::anyhow!("agent '{}' not registered", agent),
+        }
+    }
+}
+
+fn resolve_skill_agent_workspace(
+    agent: &str,
+    mutation: SkillMutation,
+) -> anyhow::Result<AgentRegisteredWorkspace> {
+    match AgentAggregateRepository::load_registered_agent_workspace(agent, mutation.operation()) {
+        Ok(workspace) => Ok(workspace),
+        Err(AgentRegisteredAgentLoadError::Lookup(
+            AgentRegisteredWorkspaceLookupError::Missing { .. },
+        )) => Err(mutation.missing_owner_error(agent)),
+        Err(error) => Err(error.into_source_or_self()),
+    }
+}
+
+/// Canonical managed skill directory for an Agent runtime workspace.
+///
+/// This is the single projection used by `skill.install`,
+/// `skill.publish`, `skill.list`, `skill.upgrade`, and `skill.remove`.
+/// Runtime-specific loaders are the authority: Claude Code reads
+/// `.claude/skills`, Codex/Codex App Server read `.agents/skills`, and only
+/// External runtimes keep the generic `<root>/skills` convention.
+pub(crate) fn managed_skill_dir_for(root: &Path, layout: AgentSkillLayout) -> PathBuf {
+    match layout {
+        AgentSkillLayout::ClaudeCode => root.join(".claude").join("skills"),
+        AgentSkillLayout::Codex => root.join(".agents").join("skills"),
+        AgentSkillLayout::External => root.join("skills"),
+    }
+}
 
 fn parse_source_url(url: &str) -> anyhow::Result<SkillSource> {
     let (kind, rest) = url
@@ -759,15 +867,18 @@ fn parse_source_url(url: &str) -> anyhow::Result<SkillSource> {
 pub(crate) fn read_install_record(path: &Path) -> anyhow::Result<InstallRecord> {
     let text =
         fs::read_to_string(path).map_err(|e| anyhow::anyhow!("read {}: {e}", path.display()))?;
-    Ok(serde_json::from_str(&text)?)
+    let record: InstallRecord = serde_json::from_str(&text)?;
+    record.validate_canonical_persistence()?;
+    Ok(record)
 }
 
-fn write_install_record(skill_dir: &Path, record: &InstallRecord) -> anyhow::Result<()> {
+pub(crate) fn write_install_record(skill_dir: &Path, record: &InstallRecord) -> anyhow::Result<()> {
+    record.validate_canonical_persistence()?;
     let meta_dir = skill_dir.join(".easynet");
     fs::create_dir_all(&meta_dir)?;
     let path = meta_dir.join("install.json");
     let json = serde_json::to_string_pretty(record)?;
-    fs::write(&path, json)?;
+    config::atomic_write(&path, json.as_bytes())?;
     Ok(())
 }
 
@@ -919,6 +1030,55 @@ pub(crate) fn format_bytes(n: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::persistence::agent_registry as agents;
+
+    #[test]
+    fn resolve_skill_agent_workspace_projects_registered_workspace() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let root = config::home_dir().join("agents").join("alice");
+        let mut entry =
+            agents::AgentEntry::new(crate::core::agent::spec::RuntimeKind::ClaudeCode, None);
+        entry.root_path = Some(root.clone());
+        let mut registry = agents::AgentRegistry::default();
+        registry.agents.insert("default/alice".to_string(), entry);
+        agents::save_agents(&registry).expect("save registry");
+
+        let workspace =
+            resolve_skill_agent_workspace("alice", SkillMutation::Install).expect("workspace");
+        assert_eq!(workspace.root_path(), root);
+        assert_eq!(workspace.skill_layout(), AgentSkillLayout::ClaudeCode);
+    }
+
+    #[test]
+    fn resolve_skill_agent_workspace_preserves_command_specific_missing_owner_errors() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        for (mutation, expected) in [
+            (
+                SkillMutation::Install,
+                "agent 'missing' not registered; run 'easynet agent list'",
+            ),
+            (SkillMutation::Upgrade, "agent 'missing' not registered"),
+            (SkillMutation::Remove, "agent 'missing' not registered"),
+        ] {
+            let err = resolve_skill_agent_workspace("missing", mutation)
+                .expect_err("missing owner must fail");
+            assert!(err.to_string().contains(expected), "wrong error: {err}");
+        }
+    }
+
+    #[test]
+    fn managed_skill_dir_for_codex_uses_runtime_project_skill_root() {
+        let root = std::path::Path::new("/tmp/agent-root");
+        assert_eq!(
+            managed_skill_dir_for(root, AgentSkillLayout::Codex),
+            root.join(".agents").join("skills")
+        );
+        assert_ne!(
+            managed_skill_dir_for(root, AgentSkillLayout::Codex),
+            root.join("skills"),
+            "codex managed installs must not land in the retired audit-only root"
+        );
+    }
 
     #[test]
     fn global_skill_pool_ref_parses_known_owner_and_rejects_bad_labels() {
@@ -947,7 +1107,7 @@ mod tests {
     }
 
     #[test]
-    fn global_skill_pool_ref_resolves_directory_name_without_alias_scan() {
+    fn global_skill_pool_ref_resolves_declared_name_not_directory_alias() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let pool = GlobalSkillPoolRef::from_label("claude-global", "skill.test").unwrap();
         let skill_dir = config::home_dir()
@@ -962,12 +1122,70 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            pool.skill_dir("directory-name").as_deref(),
-            Some(skill_dir.as_path())
+            pool.skill_dir("directory-name").unwrap().as_deref(),
+            None,
+            "global pool lookup must not treat physical directory names as public skill identity"
         );
         assert_eq!(
-            pool.skill_dir("frontmatter-alias").as_deref(),
+            pool.skill_dir("frontmatter-alias").unwrap().as_deref(),
             Some(skill_dir.as_path())
+        );
+    }
+
+    #[test]
+    fn global_skill_record_requires_declared_frontmatter_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let unnamed = dir.path().join("directory-name");
+        fs::create_dir_all(&unnamed).unwrap();
+        fs::write(unnamed.join("SKILL.md"), "# No declared name\n").unwrap();
+
+        let error = global_skill_record_from_dir("alice", "claude-global", &unnamed).unwrap_err();
+        assert!(
+            error.to_string().contains("must declare frontmatter name"),
+            "wrong error: {error}"
+        );
+
+        fs::write(
+            unnamed.join("SKILL.md"),
+            "---\nname: declared-name\ndescription: Declared\n---\n# Declared\n",
+        )
+        .unwrap();
+        let record = global_skill_record_from_dir("alice", "claude-global", &unnamed)
+            .expect("record")
+            .expect("record present");
+
+        assert_eq!(record.name, "declared-name");
+        assert_eq!(record.source.subpath.as_deref(), Some("directory-name"));
+    }
+
+    #[test]
+    fn global_skill_dir_lookup_requires_declared_name_even_for_direct_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let direct = dir.path().join("declared-name");
+        fs::create_dir_all(&direct).unwrap();
+        fs::write(direct.join("SKILL.md"), "# Missing frontmatter name\n").unwrap();
+
+        let error = skill_dir_in_global_pool(dir.path(), "declared-name").unwrap_err();
+        assert!(
+            error.to_string().contains("must declare frontmatter name"),
+            "wrong error: {error}"
+        );
+
+        fs::remove_dir_all(&direct).unwrap();
+
+        let renamed = dir.path().join("physical-package");
+        fs::create_dir_all(&renamed).unwrap();
+        fs::write(
+            renamed.join("SKILL.md"),
+            "---\nname: declared-name\ndescription: Declared\n---\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            skill_dir_in_global_pool(dir.path(), "declared-name")
+                .unwrap()
+                .as_deref(),
+            Some(renamed.as_path())
         );
     }
 
@@ -1055,8 +1273,8 @@ mod tests {
     fn hash_tree_is_deterministic_across_platforms() {
         // Build a tiny tree twice, verify the hash matches. The
         // walk must sort paths — otherwise two runs on the same
-        // content produce different hashes and content_hash
-        // loses its AXIOM §6.1 Q6 meaning.
+        // content produce different skill tree hashes, making
+        // upgrade and install-integrity comparisons unstable.
         let tmp = std::env::temp_dir().join(format!(
             "easynet-hash-test-{}-{}",
             std::process::id(),
@@ -1078,9 +1296,8 @@ mod tests {
     #[test]
     fn hash_tree_respects_skip_list() {
         // Our .easynet/install.json changes between installs but
-        // must not participate in content_hash — otherwise every
-        // skill's hash depends on its own install timestamp,
-        // which makes Q6 attestation meaningless.
+        // must not participate in the skill tree hash — otherwise
+        // every skill's hash depends on its own install timestamp.
         let tmp = std::env::temp_dir().join(format!(
             "easynet-hash-skip-test-{}-{}",
             std::process::id(),
@@ -1097,7 +1314,7 @@ mod tests {
 
         assert_eq!(
             h_without_easynet, h_with_easynet,
-            "adding .easynet/ must not change the content hash"
+            "adding .easynet/ must not change the skill tree hash"
         );
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -1121,18 +1338,15 @@ mod tests {
         assert_eq!(format_bytes(1024 * 1024), "1.0MB");
     }
 
-    // ─── wire compatibility for the Q6-motivated rename ──────────
+    // ─── canonical install-record persistence schema ─────────────
     //
-    // The Rust field is `skill_tree_hash` (semantic name — it is
-    // NOT AXIOM §6.1 Q6's `ability_snapshot.content_hash`). The
-    // JSON wire field stays `content_hash` because the backend's
-    // `types.InstalledSkill.ContentHash` and the Frontend's
-    // `content_hash` in `easynet-skills.ts` read that name. Losing
-    // the `#[serde(rename = "content_hash")]` silently breaks the
-    // whole cross-repo wire. These tests pin both directions.
+    // The persisted field is `skill_tree_hash` (semantic name — it is
+    // NOT AXIOM §6.1 Q6's `ability_snapshot.content_hash`). Public
+    // response compatibility with `content_hash` belongs to
+    // `InstalledSkillProjection`, never to the canonical store record.
 
     #[test]
-    fn install_record_serialize_emits_content_hash_on_wire() {
+    fn install_record_serialize_emits_skill_tree_hash_on_disk() {
         let rec = InstallRecord {
             name: "alpha".into(),
             description: "Alpha skill".into(),
@@ -1151,24 +1365,23 @@ mod tests {
         };
         let wire = serde_json::to_string(&rec).unwrap();
         assert!(
-            wire.contains("\"content_hash\":\"sha256:deadbeef\""),
-            "wire must emit 'content_hash' (not the Rust field name): {wire}"
+            wire.contains("\"skill_tree_hash\":\"sha256:deadbeef\""),
+            "install record must persist the canonical 'skill_tree_hash': {wire}"
         );
         assert!(
             wire.contains("\"description\":\"Alpha skill\""),
-            "wire must include the skill description: {wire}"
+            "install record must include the skill description: {wire}"
         );
         assert!(
-            !wire.contains("skill_tree_hash"),
-            "wire must NOT leak the Rust field name: {wire}"
+            !wire.contains("\"content_hash\""),
+            "install record must not persist the public projection field: {wire}"
         );
     }
 
     #[test]
-    fn install_record_deserialize_reads_content_hash_from_wire() {
-        // Simulates reading a record that came across the wire
-        // (or from an older install.json file). The wire name is
-        // `content_hash`; the Rust field is `skill_tree_hash`.
+    fn install_record_deserialize_reads_skill_tree_hash_from_disk() {
+        // Simulates reading the canonical install.json persistence
+        // record. Public `content_hash` is a projection-only field.
         let wire = r#"{
             "name": "alpha",
             "agent_id": "alice",
@@ -1176,7 +1389,7 @@ mod tests {
                 "kind": "github",
                 "identifier": "a/b"
             },
-            "content_hash": "sha256:wire",
+            "skill_tree_hash": "sha256:wire",
             "size_bytes": 99,
             "installed_at": "2026-04-23T00:00:00Z",
             "upgrade_available": false
@@ -1184,6 +1397,137 @@ mod tests {
         let rec: InstallRecord = serde_json::from_str(wire).unwrap();
         assert_eq!(rec.skill_tree_hash, "sha256:wire");
         assert_eq!(rec.description, "");
+    }
+
+    #[test]
+    fn read_install_record_rejects_unprefixed_skill_tree_hash() {
+        let guard = TempDirGuard::create("install-record-read-unprefixed").unwrap();
+        let path = guard.path().join("install.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "name": "alpha",
+                "agent_id": "alice",
+                "source": {
+                    "kind": "github",
+                    "identifier": "a/b"
+                },
+                "skill_tree_hash": "wire",
+                "size_bytes": 99,
+                "installed_at": "2026-04-23T00:00:00Z",
+                "upgrade_available": false
+            }"#,
+        )
+        .unwrap();
+        let error = read_install_record(&path)
+            .expect_err("canonical read must reject unprefixed skill_tree_hash");
+        assert!(
+            error
+                .to_string()
+                .contains("skill_tree_hash must include sha256:"),
+            "expected canonical hash prefix error: {error}"
+        );
+    }
+
+    #[test]
+    fn write_install_record_rejects_unprefixed_skill_tree_hash() {
+        let guard = TempDirGuard::create("install-record-write-unprefixed").unwrap();
+        let record = InstallRecord {
+            name: "alpha".into(),
+            description: "Alpha skill".into(),
+            agent_id: "alice".into(),
+            source: SkillSource {
+                kind: "github".into(),
+                identifier: "a/b".into(),
+                ref_: None,
+                subpath: None,
+            },
+            skill_tree_hash: "deadbeef".into(),
+            size_bytes: 42,
+            installed_at: "2026-04-23T00:00:00Z".into(),
+            last_checked_at: None,
+            upgrade_available: false,
+        };
+        let error = write_install_record(guard.path(), &record)
+            .expect_err("canonical write must reject unprefixed skill_tree_hash");
+        assert!(
+            error
+                .to_string()
+                .contains("skill_tree_hash must include sha256:"),
+            "expected canonical hash prefix error: {error}"
+        );
+        assert!(
+            !guard.path().join(".easynet").join("install.json").exists(),
+            "invalid records must not be persisted"
+        );
+    }
+
+    #[test]
+    fn install_record_rejects_legacy_content_hash_on_disk() {
+        let wire = r#"{
+            "name": "alpha",
+            "agent_id": "alice",
+            "source": {
+                "kind": "github",
+                "identifier": "a/b"
+            },
+            "content_hash": "sha256:legacy",
+            "size_bytes": 99,
+            "installed_at": "2026-04-23T00:00:00Z",
+            "upgrade_available": false
+        }"#;
+        let error = serde_json::from_str::<InstallRecord>(wire)
+            .expect_err("legacy content_hash must fail closed in persistence");
+        assert!(
+            error.to_string().contains("content_hash"),
+            "strict schema error should name the legacy field: {error}"
+        );
+    }
+
+    #[test]
+    fn install_record_rejects_unknown_top_level_fields() {
+        let wire = r#"{
+            "name": "alpha",
+            "agent_id": "alice",
+            "source": {
+                "kind": "github",
+                "identifier": "a/b"
+            },
+            "skill_tree_hash": "sha256:wire",
+            "size_bytes": 99,
+            "installed_at": "2026-04-23T00:00:00Z",
+            "upgrade_available": false,
+            "legacy_content_hash": "sha256:legacy"
+        }"#;
+        let error = serde_json::from_str::<InstallRecord>(wire)
+            .expect_err("unknown install record fields must fail closed");
+        assert!(
+            error.to_string().contains("legacy_content_hash"),
+            "strict schema error should name the unknown field: {error}"
+        );
+    }
+
+    #[test]
+    fn install_record_rejects_unknown_source_fields() {
+        let wire = r#"{
+            "name": "alpha",
+            "agent_id": "alice",
+            "source": {
+                "kind": "github",
+                "identifier": "a/b",
+                "legacy_ref": "main"
+            },
+            "skill_tree_hash": "sha256:wire",
+            "size_bytes": 99,
+            "installed_at": "2026-04-23T00:00:00Z",
+            "upgrade_available": false
+        }"#;
+        let error = serde_json::from_str::<InstallRecord>(wire)
+            .expect_err("unknown nested source fields must fail closed");
+        assert!(
+            error.to_string().contains("legacy_ref"),
+            "strict nested schema error should name the unknown field: {error}"
+        );
     }
 
     // ─── TempDirGuard ─────────────────────────────────────────────

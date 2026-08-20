@@ -38,24 +38,36 @@ pub mod control;
 pub mod execution;
 pub mod federation;
 pub mod identity;
-#[cfg(feature = "axon-pb")]
 pub mod invocation;
 pub mod keyring;
 pub mod persistence;
 pub mod plugins;
 pub mod resources;
+pub(crate) mod runtime_failure;
 pub mod telemetry;
 pub mod trust;
 
 pub use boot::lifecycle;
 pub use boot::DaemonError;
+#[cfg(feature = "axon-pb")]
+pub use boot::DaemonInvocationErrorProjection;
 pub use boot::{
     start_daemon, stop_daemon, DaemonEndpoints, DaemonHandle, DaemonStartConfig, DaemonStatus,
 };
 #[cfg(feature = "axon-pb")]
-pub use invocation::dispatch::client::{DaemonBidiSession, DaemonClient};
+pub use invocation::dispatch::client::{
+    ClientConnectionState, DaemonBidiSession, DaemonClient, InvocationCancellationAuthority,
+    InvocationHandle, InvocationOutcome, InvocationReceiptStages, InvocationResult, ReceiptSummary,
+    RuntimeClient, RuntimeErrorSummary, RuntimeHealth,
+};
 #[cfg(feature = "axon-pb")]
-pub use invocation::{DaemonInvocation, DaemonInvocationBuilder};
+pub use invocation::{
+    CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationArgsSet,
+    InvocationArgsUnset, InvocationDraft, InvocationTuple,
+    KeyServiceProviderManagedInvocationSigner, PrepareOptions, PreparedInvocation,
+    ProviderManagedInvocationSigner, SignedInvocation, SignerPolicy, SignerPolicyMode,
+    SigningMaterial,
+};
 
 /// Result alias for the daemon SDK surface.
 pub type Result<T> = std::result::Result<T, DaemonError>;

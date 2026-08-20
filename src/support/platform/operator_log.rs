@@ -13,7 +13,7 @@
 // A documented convention is not enforced by the compiler. The audit
 // of the 2026-05-24 streamable-HTTP / federation work found a fresh
 // `eprintln!` that violated the convention inside the same PR that
-// codified it (`forward_invoke.auto_route` used as `kind`, with a dot
+// codified it (`canonical_invoke.auto_route` used as `kind`, with a dot
 // instead of underscore, and a `kind=` prefix missing entirely). That
 // breakage is the cost of `eprintln!`-driven logging — there is no
 // type to enforce the shape.

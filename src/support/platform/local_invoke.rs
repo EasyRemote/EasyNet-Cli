@@ -2,8 +2,7 @@
 // ==============================================
 //
 // File: src/support/local_invoke.rs
-// Description: One function — `invoke_local_ability(name, args)` —
-//              that every CLI subcommand uses to dispatch through
+// Description: Support-layer issuers for CLI/product dispatch through
 //              the local daemon's Axon Invocation gRPC surface
 //              (~/.easynet/daemon.sock).
 //
@@ -14,15 +13,14 @@
 // CLI means each subcommand should be a thin wrapper that:
 //
 //   1. Maps the user's CLI args into a JSON args object.
-//   2. Calls the appropriate ability via this helper.
+//   2. Calls the appropriate ability via a named issuer.
 //   3. Prints the result.
 //
-// Any subcommand that bypasses this — calling a transport
-// directly, or constructing its own IPC client — is a layering
-// violation: it ties the CLI to a specific transport (the
-// federation bridge in pre-P1.5 code; an alternate IPC in some
-// future variant) instead of to the ability surface. One helper
-// here means one point to swap when the transport evolves.
+// Any subcommand that bypasses these issuers — calling a transport
+// directly, constructing its own IPC client, or silently defaulting
+// tuple fields — is a layering violation. The named issuers make the
+// subject policy visible before the request crosses the local runtime
+// boundary.
 //
 // Routing model
 // -------------
@@ -41,6 +39,7 @@
 use serde_json::Value;
 
 pub use crate::daemon::invocation::routing::target::LocalAbilityTarget;
+use crate::daemon::invocation::routing::target::{CallMode, LocalTargetRootInvocation};
 
 /// One decoded frame from a daemon-hosted server-stream ability.
 ///
@@ -75,24 +74,202 @@ pub struct LocalBidiFrame {
     pub payload: Value,
 }
 
+/// Project one Axon `InvokeBidiDown` frame into the support-layer JSON frame
+/// shape consumed by CLI/product callers.
+///
+/// Binary chunks are payload bytes by definition, so non-JSON data is exposed
+/// losslessly as `data_b64`. Receipt payloads are different: they are receipt
+/// projection facts. A non-empty receipt payload must declare a JSON content
+/// type and parse as JSON, otherwise the projection fails before product code
+/// can mistake opaque bytes for verified receipt facts.
+#[cfg(feature = "axon-pb")]
+pub fn project_invoke_bidi_down_frame(
+    frame: axon_sdk::pb::axon::v1::InvokeBidiDown,
+) -> anyhow::Result<Option<LocalBidiFrame>> {
+    use axon_sdk::pb::axon::v1::invoke_bidi_down::Payload as DownPayload;
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use serde_json::json;
+
+    let sequence = frame.sequence;
+    let Some(payload) = frame.payload else {
+        return Ok(None);
+    };
+
+    let projected = match payload {
+        DownPayload::BinaryChunk(chunk) => {
+            let payload = serde_json::from_slice(&chunk.data).unwrap_or_else(|_| {
+                json!({
+                    "type": "binary",
+                    "stream_id": chunk.stream_id,
+                    "data_b64": B64.encode(&chunk.data),
+                })
+            });
+            LocalBidiFrame {
+                sequence,
+                content_type: "application/json".to_string(),
+                terminal: false,
+                payload,
+            }
+        }
+        DownPayload::Receipt(receipt) => {
+            let terminal =
+                receipt.state != axon_sdk::invocation::InvocationState::Admitted.to_wire_i32();
+            let receipt_payload =
+                project_receipt_payload_json(&receipt.payload_content_type, &receipt.payload)?;
+            LocalBidiFrame {
+                sequence,
+                content_type: receipt.payload_content_type.clone(),
+                terminal,
+                payload: json!({
+                    "type": "receipt",
+                    "state": receipt.state,
+                    "reason": receipt.reason,
+                    "cleanup_complete": receipt.cleanup_complete,
+                    "failure": receipt.failure.map(|failure| json!({
+                        "code": failure.code,
+                        "message": failure.message,
+                        "retryable": failure.retryable,
+                    })),
+                    "payload": receipt_payload,
+                }),
+            }
+        }
+        DownPayload::Control(_) => LocalBidiFrame {
+            sequence,
+            content_type: "application/json".to_string(),
+            terminal: false,
+            payload: json!({"type": "control"}),
+        },
+        DownPayload::DispatchCall(_) | DownPayload::ReverseDispatchResult(_) => return Ok(None),
+    };
+
+    Ok(Some(projected))
+}
+
+#[cfg(feature = "axon-pb")]
+fn project_receipt_payload_json(content_type: &str, payload: &[u8]) -> anyhow::Result<Value> {
+    if payload.is_empty() {
+        return Ok(Value::Null);
+    }
+    if !is_json_content_type(content_type) {
+        let content_type = if content_type.trim().is_empty() {
+            "<missing>"
+        } else {
+            content_type.trim()
+        };
+        anyhow::bail!("InvokeBidi receipt payload declares non-JSON content_type `{content_type}`");
+    }
+    serde_json::from_slice(payload)
+        .map_err(|err| anyhow::anyhow!("InvokeBidi receipt payload is not valid JSON: {err}"))
+}
+
+#[cfg(feature = "axon-pb")]
+fn is_json_content_type(content_type: &str) -> bool {
+    let essence = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    essence == "application/json" || essence.ends_with("+json")
+}
+
 /// Typed failure classes for local-daemon invocation (F-023).
 ///
 /// Minted at the transport layer where the cause is structurally known
 /// (socket probe failed, crate built without `axon-pb`), so consumers
-/// branch with [`classify_invoke_error`] instead of sniffing message
+/// branch with [`classify_invoke_failure`] instead of sniffing message
 /// text.
 #[derive(Debug, thiserror::Error)]
 pub enum LocalInvokeFailure {
     /// The daemon is not reachable (listener probe failed, or this
-    /// build has no gRPC transport). Falling back to an in-process
-    /// executor is legitimate — nothing ran.
+    /// build has no gRPC transport). No daemon-side execution occurred.
     #[error("{0}")]
     DaemonOffline(String),
+    /// The daemon accepted the transport connection and rejected or failed the
+    /// invocation with a protocol status. The code remains structured so
+    /// callers never infer control flow from daemon message wording.
+    #[error("daemon error invoking {ability} through Axon (code={code}): {message}")]
+    DaemonStatus {
+        ability: String,
+        code: LocalInvokeStatusCode,
+        message: String,
+    },
 }
 
-/// Consumer-facing classification of a local-invoke error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalInvokeErrorKind {
+pub enum LocalInvokeStatusCode {
+    Ok,
+    Cancelled,
+    Unknown,
+    InvalidArgument,
+    DeadlineExceeded,
+    NotFound,
+    AlreadyExists,
+    PermissionDenied,
+    ResourceExhausted,
+    FailedPrecondition,
+    Aborted,
+    OutOfRange,
+    Unimplemented,
+    Internal,
+    Unavailable,
+    DataLoss,
+    Unauthenticated,
+}
+
+impl std::fmt::Display for LocalInvokeStatusCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Ok => "Ok",
+            Self::Cancelled => "Cancelled",
+            Self::Unknown => "Unknown",
+            Self::InvalidArgument => "InvalidArgument",
+            Self::DeadlineExceeded => "DeadlineExceeded",
+            Self::NotFound => "NotFound",
+            Self::AlreadyExists => "AlreadyExists",
+            Self::PermissionDenied => "PermissionDenied",
+            Self::ResourceExhausted => "ResourceExhausted",
+            Self::FailedPrecondition => "FailedPrecondition",
+            Self::Aborted => "Aborted",
+            Self::OutOfRange => "OutOfRange",
+            Self::Unimplemented => "Unimplemented",
+            Self::Internal => "Internal",
+            Self::Unavailable => "Unavailable",
+            Self::DataLoss => "DataLoss",
+            Self::Unauthenticated => "Unauthenticated",
+        })
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl From<tonic::Code> for LocalInvokeStatusCode {
+    fn from(code: tonic::Code) -> Self {
+        match code {
+            tonic::Code::Ok => Self::Ok,
+            tonic::Code::Cancelled => Self::Cancelled,
+            tonic::Code::Unknown => Self::Unknown,
+            tonic::Code::InvalidArgument => Self::InvalidArgument,
+            tonic::Code::DeadlineExceeded => Self::DeadlineExceeded,
+            tonic::Code::NotFound => Self::NotFound,
+            tonic::Code::AlreadyExists => Self::AlreadyExists,
+            tonic::Code::PermissionDenied => Self::PermissionDenied,
+            tonic::Code::ResourceExhausted => Self::ResourceExhausted,
+            tonic::Code::FailedPrecondition => Self::FailedPrecondition,
+            tonic::Code::Aborted => Self::Aborted,
+            tonic::Code::OutOfRange => Self::OutOfRange,
+            tonic::Code::Unimplemented => Self::Unimplemented,
+            tonic::Code::Internal => Self::Internal,
+            tonic::Code::Unavailable => Self::Unavailable,
+            tonic::Code::DataLoss => Self::DataLoss,
+            tonic::Code::Unauthenticated => Self::Unauthenticated,
+        }
+    }
+}
+
+/// Consumer-facing classification of a local-invoke failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalInvokeFailureClass {
     DaemonOffline,
     AbilityUnregistered,
     /// The daemon executed the request and it failed for real.
@@ -101,146 +278,1432 @@ pub enum LocalInvokeErrorKind {
     Failed,
 }
 
-/// Classify a local-invoke error for fallback decisions.
+/// Classify a local-invoke failure for caller policy.
 ///
-/// Prefers the typed [`LocalInvokeFailure`] payload (walks the anyhow
-/// chain). The string table below is the TRANSITIONAL fallback for
-/// error paths that cannot mint typed payloads yet — daemon-side
-/// status codes have no typed surface (RFC gap: flagged, not
-/// extrapolated). It is the single permitted sniffing point in the
-/// crate; consumers must not grow their own.
-pub fn classify_invoke_error(err: &anyhow::Error) -> LocalInvokeErrorKind {
+/// Walks the anyhow chain for the transport-owned typed failure. Untyped
+/// errors are real execution/projection failures and therefore remain terminal.
+pub fn classify_invoke_failure(err: &anyhow::Error) -> LocalInvokeFailureClass {
     for cause in err.chain() {
         if let Some(f) = cause.downcast_ref::<LocalInvokeFailure>() {
             return match f {
-                LocalInvokeFailure::DaemonOffline(_) => LocalInvokeErrorKind::DaemonOffline,
+                LocalInvokeFailure::DaemonOffline(_) => LocalInvokeFailureClass::DaemonOffline,
+                LocalInvokeFailure::DaemonStatus {
+                    code: LocalInvokeStatusCode::NotFound,
+                    ..
+                } => LocalInvokeFailureClass::AbilityUnregistered,
+                LocalInvokeFailure::DaemonStatus { .. } => LocalInvokeFailureClass::Failed,
             };
         }
     }
-    let lower = format!("{err:#}").to_ascii_lowercase();
-    if lower.contains("daemon not running")
-        || lower.contains("listener unreachable")
-        || lower.contains("connect to local axon daemon")
-        || lower.contains("requires the `axon-pb` feature")
-    {
-        return LocalInvokeErrorKind::DaemonOffline;
+    LocalInvokeFailureClass::Failed
+}
+
+/// Named issuer for product CLI commands that invoke daemon-local abilities as
+/// `_system.local` roots while preserving the ability owner's callee identity.
+///
+/// Generic `easynet ability ...` ingress must use explicit tuple helpers. This
+/// issuer exists for product commands such as pages, principal, and media
+/// record workflows whose user-facing contract is not raw invocation tuple
+/// submission.
+pub struct LocalDaemonSystemAbilityIssuer;
+
+fn local_daemon_system_ability_target(
+    ability: &str,
+    execution_host_ura: &str,
+) -> anyhow::Result<LocalAbilityTarget> {
+    let execution_host = crate::core::ura::parse_ura(execution_host_ura)
+        .map_err(|error| anyhow::anyhow!("local daemon execution host URA is invalid: {error}"))?;
+    match execution_host.kind {
+        crate::core::ura::URAKind::Device => {
+            LocalAbilityTarget::for_device_sponsored_system_ability(ability, execution_host_ura)
+        }
+        crate::core::ura::URAKind::Authority => {
+            LocalAbilityTarget::new(ability, execution_host_ura)
+        }
+        other => anyhow::bail!(
+            "local daemon system ability execution host must be Device or Authority, got {other}"
+        ),
     }
-    if lower.contains("unknown_ability")
-        || lower.contains("not_found")
-        || lower.contains("no local handler registered")
-    {
-        return LocalInvokeErrorKind::AbilityUnregistered;
+}
+
+impl LocalDaemonSystemAbilityIssuer {
+    #[cfg(feature = "axon-pb")]
+    fn local_daemon_identity_subject_ura() -> anyhow::Result<String> {
+        crate::daemon::identity::local_invocation::local_daemon_ura()
     }
-    LocalInvokeErrorKind::Failed
+
+    #[cfg(not(feature = "axon-pb"))]
+    fn local_daemon_identity_subject_ura() -> anyhow::Result<String> {
+        Err(local_invocation_capability_unsupported_error(
+            "resolve local daemon identity subject",
+        ))
+    }
+
+    pub fn invoke_root_for_local_daemon_identity(
+        ability: &str,
+        args: Value,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_root_for_local_daemon_identity_timeout(
+            ability,
+            args,
+            std::time::Duration::from_secs(30),
+        )
+    }
+
+    pub fn invoke_root_for_local_daemon_identity_timeout(
+        ability: &str,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        let subject_ura = Self::local_daemon_identity_subject_ura()?;
+        Self::invoke_root_for_subject_timeout(ability, args, &subject_ura, timeout)
+    }
+
+    pub fn stream_root_for_local_daemon_identity_timeout(
+        ability: &str,
+        args: Value,
+        timeout: std::time::Duration,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        let subject_ura = Self::local_daemon_identity_subject_ura()?;
+        let execution_host_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
+        let target = local_daemon_system_ability_target(ability, &execution_host_ura)?;
+        Self::stream_target_root(&target, args, &subject_ura, timeout, max_frames)
+    }
+
+    pub fn invoke_root_for_subject(
+        ability: &str,
+        args: Value,
+        subject_ura: &str,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_root_for_subject_timeout(
+            ability,
+            args,
+            subject_ura,
+            std::time::Duration::from_secs(30),
+        )
+    }
+
+    pub fn invoke_root_for_subject_timeout(
+        ability: &str,
+        args: Value,
+        subject_ura: &str,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        let execution_host_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
+        let target = local_daemon_system_ability_target(ability, &execution_host_ura)?;
+        Self::invoke_target_root_timeout(&target, args, subject_ura, timeout)
+    }
+
+    pub fn invoke_target_root_timeout(
+        target: &LocalAbilityTarget,
+        args: Value,
+        subject_ura: &str,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        crate::support::platform::local_daemon_grpc::invoke_local_daemon_system_ability_targeted_root_timeout(
+            target.dispatch_name(),
+            args,
+            target.callee_ura(),
+            subject_ura,
+            timeout,
+        )
+    }
+
+    pub(crate) fn invoke_target_root_with_authority_timeout(
+        target: &LocalAbilityTarget,
+        args: Value,
+        subject_ura: &str,
+        authority_metadata: crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        crate::support::platform::local_daemon_grpc::invoke_local_daemon_system_ability_targeted_root_with_authority_timeout(
+            target.dispatch_name(),
+            args,
+            target.callee_ura(),
+            subject_ura,
+            authority_metadata,
+            timeout,
+        )
+    }
+
+    pub fn invoke_issued_target_root_timeout(
+        invocation: &LocalTargetRootInvocation,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        if invocation.call_mode() != CallMode::Rpc {
+            anyhow::bail!(
+                "local daemon system target root invoke requires RPC call_mode, got {:?}",
+                invocation.call_mode()
+            );
+        }
+        Self::invoke_target_root_timeout(
+            invocation.target(),
+            invocation.normalized_args().clone(),
+            invocation.subject_ura(),
+            timeout,
+        )
+    }
+
+    pub fn stream_target_root(
+        target: &LocalAbilityTarget,
+        args: Value,
+        subject_ura: &str,
+        timeout: std::time::Duration,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        crate::support::platform::local_daemon_grpc::invoke_local_daemon_system_ability_targeted_stream_root(
+            target.dispatch_name(),
+            args,
+            target.callee_ura(),
+            subject_ura,
+            timeout,
+            max_frames,
+        )
+    }
 }
 
-/// Invoke an ability against the local daemon's Axon runtime.
+/// Key-service-backed canonical authority provider for daemon-local runtime
+/// callers.
 ///
-/// `ability` is the wire-level qualified name (e.g. `easynet.discover`,
-/// `claude.weather`, `observe.health`). `args` is forwarded as-is —
-/// the helper does not validate the shape; the daemon-side handler
-/// is the authority on argument validation, and a CLI-side
-/// pre-check would only drift.
+/// This is the Rust peer of the Go/Python canonical authority transports. It
+/// owns no terminal or product semantics and never exposes private key bytes.
+pub(crate) struct LocalRuntimeAuthorityIssuer;
+
+impl LocalRuntimeAuthorityIssuer {
+    pub(crate) fn issue_session_authority(
+        request: crate::daemon::invocation::admission::authority_metadata::SessionAuthorityRequest,
+    ) -> anyhow::Result<
+        crate::daemon::invocation::admission::authority_metadata::IssuedAuthorityMetadata,
+    > {
+        use crate::daemon::invocation::admission::authority_metadata::CanonicalSessionAuthorityIssuer;
+
+        let issuer_ura = crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA;
+        CanonicalSessionAuthorityIssuer::issue(request, issuer_ura, |canonical| {
+            crate::daemon::identity::local_invocation::sign_system_canonical(canonical)
+                .map(|signature| signature.to_bytes().to_vec())
+        })
+        .map_err(anyhow::Error::new)
+    }
+}
+
+/// Named issuer for user-owned daemon-local runtime-state reads.
 ///
-/// On success returns the raw value (whatever shape the handler
-/// produced). On error returns a typed `anyhow::Error` with the
-/// daemon-side `code` + `message` rendered into the message — the
-/// CLI's outer layer can surface that verbatim or pattern-match if
-/// it needs typed handling.
+/// These reads are product/operator projections over the running LocalRuntime
+/// state whose subject is the paired user's runtime-state Resource URA:
+/// health/status probes and invocation ledger views. Catalogue reads are a
+/// distinct runtime-owner projection and intentionally use
+/// `LocalRuntimeCatalogueReadIssuer` instead of this user-resource issuer.
+pub struct LocalRuntimeStateReadIssuer;
+
+impl LocalRuntimeStateReadIssuer {
+    pub fn agent_list(args: Value) -> anyhow::Result<Value> {
+        Self::agent_list_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn agent_list_timeout(args: Value, timeout: std::time::Duration) -> anyhow::Result<Value> {
+        Self::read_state_timeout(
+            crate::daemon::ability::names::agents::AGENT_LIST,
+            args,
+            timeout,
+        )
+    }
+
+    fn read_state_timeout(
+        ability: &str,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        let subject_ura = Self::subject_ura()?;
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_subject_timeout(
+            ability,
+            args,
+            &subject_ura,
+            timeout,
+        )
+    }
+
+    fn subject_ura() -> anyhow::Result<String> {
+        LocalRuntimeStateReadAttachment::from_runtime_attachment_file(
+            &KeyServiceRuntimeStateReadSignerCustody,
+        )
+        .and_then(|attachment| attachment.into_subject_ura())
+    }
+}
+
+/// Named issuer for user-rooted API-key inventory reads.
 ///
-/// **Canonical entry point for the "one CLI subcommand = one
-/// ability invoke" contract.** CLI surfaces MUST go through this
-/// function (or [`invoke_local_ability_with_subject`]), not the
-/// transport-level free fns in `support::local_daemon_grpc`. The
-/// indirection looks redundant — the body is one line — but it
-/// matters: the day the local-ability transport evolves, this is
-/// the **one** call site that knows the underlying transport.
-/// Callers that bypass it become per-surface transport coupling.
-pub fn invoke_local_ability(ability: &str, args: Value) -> anyhow::Result<Value> {
-    invoke_local_ability_with_subject(ability, args, None)
+/// `<user>.api_key.list` is dynamically named by the current user root, but it
+/// remains one semantic read model: API-key metadata inventory. Callers pass the
+/// governed ability name selected from their principal and do not receive a
+/// generic runtime-state dispatch method.
+pub struct LocalRuntimeApiKeyInventoryReadIssuer;
+
+impl LocalRuntimeApiKeyInventoryReadIssuer {
+    pub fn list_api_keys(ability: &str, args: Value) -> anyhow::Result<Value> {
+        Self::list_api_keys_timeout(ability, args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn list_api_keys_timeout(
+        ability: &str,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        LocalRuntimeStateReadIssuer::read_state_timeout(ability, args, timeout)
+    }
 }
 
-/// Same as [`invoke_local_ability`] but threads an optional
-/// envelope subject through to the daemon. The subject lands in
-/// `EnvelopeContext.subject` for handlers that consume it
-/// (e.g. `camera.snapshot`, which routes its frame from the
-/// resource the subject URI names).
-pub fn invoke_local_ability_with_subject(
-    ability: &str,
-    args: Value,
-    subject: Option<String>,
-) -> anyhow::Result<Value> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_with_subject(
-        ability, args, subject,
-    )
-}
-
-pub fn invoke_local_ability_with_subject_timeout(
-    ability: &str,
-    args: Value,
-    subject: Option<String>,
-    timeout: std::time::Duration,
-) -> anyhow::Result<Value> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_with_subject_timeout(
-        ability, args, subject, timeout,
-    )
-}
-
-/// Explicit local projection for stream-mode abilities when a scalar caller
-/// needs one JSON value. This opens InvokeStream directly and returns the first
-/// non-empty payload frame; it never probes unary first.
-pub fn invoke_local_stream_ability_first_payload(
-    ability: &str,
-    args: Value,
-    subject: Option<String>,
-    timeout: std::time::Duration,
-) -> anyhow::Result<Value> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_stream_first_payload_with_subject(
-        ability, args, subject, timeout,
-    )
-}
-
-/// Invoke a canonical local Ability URA target through the daemon.
+/// Named issuer for daemon-local device directory/read-model projections.
 ///
-/// This path preserves the full descriptor owner identity in the signed
-/// envelope. Use it for user-facing `ability invoke <ability-ura>` surfaces;
-/// use the string-only helper only for daemon-owned system surfaces whose
-/// callee really is the local device.
-pub fn invoke_local_ability_target_with_subject_timeout(
+/// `node.describe` is the canonical device-directory projection consumed by
+/// `easynet device show`. The CLI should not know the raw ability string or
+/// keep a generic local dispatch seam; this issuer owns the typed read-model
+/// entry while preserving the existing runtime-state subject custody.
+pub struct LocalRuntimeDeviceDirectoryReadIssuer;
+
+impl LocalRuntimeDeviceDirectoryReadIssuer {
+    pub fn describe_node(args: Value) -> anyhow::Result<Value> {
+        Self::describe_node_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn describe_node_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        LocalRuntimeStateReadIssuer::read_state_timeout(
+            crate::daemon::ability::names::device_control::NODE_DESCRIBE,
+            args,
+            timeout,
+        )
+    }
+}
+
+/// Named issuer for daemon-local model catalogue/read-model projections.
+///
+/// `openai.list_models` is the OpenAI compatibility view over local
+/// chat-capable ability descriptors. Product callers should ask for this typed
+/// catalogue projection instead of issuing a raw runtime-state ability name.
+pub struct LocalRuntimeModelCatalogueReadIssuer;
+
+impl LocalRuntimeModelCatalogueReadIssuer {
+    pub fn list_openai_models(args: Value) -> anyhow::Result<Value> {
+        Self::list_openai_models_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn list_openai_models_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        LocalRuntimeStateReadIssuer::read_state_timeout(
+            crate::daemon::ability::names::integrations::OPENAI_LIST_MODELS,
+            args,
+            timeout,
+        )
+    }
+}
+
+/// Named issuer for daemon-local installed skill catalogue/read-model
+/// projections.
+///
+/// `skill.list` is the canonical inventory of skill package resources hosted
+/// by local agents. CLI callers should depend on this typed read model instead
+/// of issuing a raw runtime-state ability name.
+pub struct LocalRuntimeSkillCatalogueReadIssuer;
+
+impl LocalRuntimeSkillCatalogueReadIssuer {
+    pub fn list_installed_skills(args: Value) -> anyhow::Result<Value> {
+        Self::list_installed_skills_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn list_installed_skills_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        LocalRuntimeStateReadIssuer::read_state_timeout(
+            crate::daemon::ability::names::resources::SKILL_LIST,
+            args,
+            timeout,
+        )
+    }
+}
+
+/// Named issuer for daemon-local operational health reads.
+///
+/// `observe.health` proves the local runtime invocation path, not a
+/// user-scoped product session. Bound-user runtimes keep the user-owned
+/// runtime-state subject; Hub and federation-native device-only runtimes use
+/// their runtime-owner subject. This keeps health checks available in every
+/// valid runtime mode without minting a placeholder User.
+pub struct LocalRuntimeOperationalReadIssuer;
+
+impl LocalRuntimeOperationalReadIssuer {
+    pub fn observe_health(args: Value) -> anyhow::Result<Value> {
+        Self::observe_health_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn observe_health_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        let subject_ura = LocalRuntimeOwnerReadAttachment::from_discovery_file(
+            &KeyServiceRuntimeStateReadSignerCustody,
+            "runtime operational read subject unavailable",
+        )
+        .and_then(|attachment| attachment.into_subject_ura())?;
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_subject_timeout(
+            crate::daemon::ability::names::governance::OBSERVE_HEALTH,
+            args,
+            &subject_ura,
+            timeout,
+        )
+    }
+}
+
+/// Named issuer for runtime identity/trust-anchor reads.
+///
+/// These reads observe daemon runtime trust state: the same authority source
+/// admission uses for user-as-caller verification. They intentionally use the
+/// runtime-owner subject, not the paired user's runtime-state Resource subject,
+/// because callers use this path to discover whether that user's signer is
+/// already trusted. Requiring user runtime-state signer custody before the read
+/// would recreate a compatibility-shaped chicken-and-egg path.
+pub struct LocalRuntimeIdentityReadIssuer;
+
+impl LocalRuntimeIdentityReadIssuer {
+    pub fn list_user_pubkeys(args: Value) -> anyhow::Result<Value> {
+        Self::list_user_pubkeys_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn list_user_pubkeys_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        let subject_ura = LocalRuntimeOwnerReadAttachment::from_discovery_file(
+            &KeyServiceRuntimeStateReadSignerCustody,
+            "runtime identity read subject unavailable",
+        )
+        .and_then(|attachment| attachment.into_subject_ura())?;
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_subject_timeout(
+            crate::daemon::ability::names::federation::IDENTITY_LIST_USER_PUBKEYS,
+            args,
+            &subject_ura,
+            timeout,
+        )
+    }
+}
+
+/// Named issuer for runtime governance ledger reads.
+///
+/// Bound-user product reads are user-owned runtime-state observations and keep
+/// the stricter paired-user signer custody requirement. Hub-local governance
+/// reads are owned by the realm Authority; federation-native device-only
+/// governance reads are owned by the local Device. This issuer selects among
+/// those explicit states from daemon Ready discovery instead of defaulting a
+/// placeholder user.
+pub struct LocalRuntimeGovernanceReadIssuer;
+
+impl LocalRuntimeGovernanceReadIssuer {
+    pub fn invocation_history_path(args: Value) -> anyhow::Result<Value> {
+        Self::invocation_history_path_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invocation_history_path_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_governance_read_timeout(
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_PATH,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn invocation_history_list(args: Value) -> anyhow::Result<Value> {
+        Self::invocation_history_list_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invocation_history_list_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_governance_read_timeout(
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn invocation_history_get(args: Value) -> anyhow::Result<Value> {
+        Self::invocation_history_get_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invocation_history_get_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_governance_read_timeout(
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_GET,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn invocation_record_get(args: Value) -> anyhow::Result<Value> {
+        Self::invocation_record_get_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invocation_record_get_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_governance_read_timeout(
+            crate::daemon::ability::names::governance::INVOCATION_RECORD_GET,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn invocation_trace_get(args: Value) -> anyhow::Result<Value> {
+        Self::invocation_trace_get_timeout(args, std::time::Duration::from_secs(30))
+    }
+
+    pub fn invocation_trace_get_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_governance_read_timeout(
+            crate::daemon::ability::names::governance::INVOCATION_TRACE_GET,
+            args,
+            timeout,
+        )
+    }
+
+    fn invoke_governance_read_timeout(
+        ability: &'static str,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        let subject_ura = Self::subject_ura()?;
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_subject_timeout(
+            ability,
+            args,
+            &subject_ura,
+            timeout,
+        )
+    }
+
+    fn subject_ura() -> anyhow::Result<String> {
+        LocalRuntimeOwnerReadAttachment::from_discovery_file(
+            &KeyServiceRuntimeStateReadSignerCustody,
+            "runtime governance read subject unavailable",
+        )
+        .and_then(|attachment| attachment.into_subject_ura())
+    }
+}
+
+trait RuntimeStateReadSignerCustody {
+    fn prove(&self, user_ura: &str) -> anyhow::Result<()>;
+}
+
+struct KeyServiceRuntimeStateReadSignerCustody;
+
+impl RuntimeStateReadSignerCustody for KeyServiceRuntimeStateReadSignerCustody {
+    fn prove(&self, user_ura: &str) -> anyhow::Result<()> {
+        crate::daemon::identity::self_identity::prove_runtime_caller_signer_custody(user_ura)
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "runtime-state read subject unavailable: caller signer for `{user_ura}` is not prepared"
+                )
+            })
+    }
+}
+
+/// Active attachment facts for daemon-local runtime-state read projections.
+///
+/// Runtime-state reads are user-owned resource observations over the running
+/// daemon, not actions performed as the daemon/device identity itself. Binding
+/// them to a user-owned Resource URA lets the existing session-authority
+/// admission rule prove ownership without reintroducing a device-subject
+/// fallback. Subject grammar is owned by `RuntimeStateReadSubject`; this object
+/// owns only Ready discovery, paired credentials, and signer-custody checks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalRuntimeStateReadAttachment {
+    realm: String,
+    user_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LocalRuntimeOwnerReadAttachment {
+    PairedUser(LocalRuntimeStateReadAttachment),
+    RuntimeOwner { subject_ura: String },
+}
+
+impl LocalRuntimeOwnerReadAttachment {
+    #[cfg(test)]
+    fn runtime_owner_from_discovery(
+        discovery: &crate::daemon::control::discovery::ControlDiscovery,
+        error_prefix: &'static str,
+    ) -> anyhow::Result<Self> {
+        let identity = discovery.daemon_identity.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("{error_prefix}: daemon Ready discovery has no runtime identity")
+        })?;
+        match identity.mode.trim() {
+            "hub" => {
+                let realm = identity.realm.trim();
+                if realm.is_empty() {
+                    anyhow::bail!("{error_prefix}: hub daemon identity has empty realm");
+                }
+                let authority = crate::core::ura::hub_ura(realm);
+                crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
+                    &authority, &authority,
+                )
+                .map_err(|error| {
+                    anyhow::anyhow!("runtime governance read subject is invalid: {error}")
+                })?;
+                Ok(Self::RuntimeOwner {
+                    subject_ura: authority,
+                })
+            }
+            "device" | "both" => {
+                let credentials = crate::daemon::persistence::config::load_credentials()
+                    .map_err(|error| anyhow::anyhow!("{error_prefix}: {error}"))?;
+                let identity = LocalRuntimeAttachmentIdentity::from_credentials_discovery(
+                    &credentials,
+                    discovery,
+                    error_prefix,
+                )?;
+                let device_ura = crate::core::ura::device_ura(&identity.realm, &identity.node_id);
+                crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
+                    &device_ura,
+                    &device_ura,
+                )
+                .map_err(|error| {
+                    anyhow::anyhow!("runtime governance read subject is invalid: {error}")
+                })?;
+                Ok(Self::RuntimeOwner {
+                    subject_ura: device_ura,
+                })
+            }
+            other => {
+                anyhow::bail!("{error_prefix}: daemon mode {other:?} cannot own runtime reads")
+            }
+        }
+    }
+
+    fn from_discovery_file(
+        signer_custody: &dyn RuntimeStateReadSignerCustody,
+        error_prefix: &'static str,
+    ) -> anyhow::Result<Self> {
+        let path = crate::daemon::control::discovery::try_default_path()
+            .map_err(|error| anyhow::anyhow!("{error_prefix}: {error}"))?;
+        let discovery = crate::daemon::control::discovery::read(&path)
+            .map_err(|error| anyhow::anyhow!("{error_prefix}: {error}"))?
+            .ok_or_else(|| anyhow::anyhow!("{error_prefix}: daemon Ready discovery is missing"))?;
+        Self::from_discovery(&discovery, signer_custody, error_prefix)
+    }
+
+    fn from_discovery(
+        discovery: &crate::daemon::control::discovery::ControlDiscovery,
+        signer_custody: &dyn RuntimeStateReadSignerCustody,
+        error_prefix: &'static str,
+    ) -> anyhow::Result<Self> {
+        let identity = discovery.daemon_identity.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("{error_prefix}: daemon Ready discovery has no runtime identity")
+        })?;
+        match identity.mode.trim() {
+            "hub" => {
+                let realm = identity.realm.trim();
+                if realm.is_empty() {
+                    anyhow::bail!("{error_prefix}: hub daemon identity has empty realm");
+                }
+                let authority = crate::core::ura::hub_ura(realm);
+                crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
+                    &authority, &authority,
+                )
+                .map_err(|error| {
+                    anyhow::anyhow!("runtime governance read subject is invalid: {error}")
+                })?;
+                Ok(Self::RuntimeOwner {
+                    subject_ura: authority,
+                })
+            }
+            "device" | "both" => {
+                let credentials = crate::daemon::persistence::config::load_credentials()
+                    .map_err(|error| anyhow::anyhow!("{error_prefix}: {error}"))?;
+                match credentials
+                    .runtime_user_binding()
+                    .map_err(|error| anyhow::anyhow!("{error_prefix}: {error}"))?
+                {
+                    crate::daemon::persistence::config::RuntimeUserBinding::Bound { .. } => {
+                        let attachment = LocalRuntimeStateReadAttachment::from_runtime_attachment(
+                            &credentials,
+                            discovery,
+                            signer_custody,
+                        )?;
+                        Ok(Self::PairedUser(attachment))
+                    }
+                    crate::daemon::persistence::config::RuntimeUserBinding::Unbound { .. } => {
+                        let identity = LocalRuntimeAttachmentIdentity::from_credentials_discovery(
+                            &credentials,
+                            discovery,
+                            error_prefix,
+                        )?;
+                        let device_ura =
+                            crate::core::ura::device_ura(&identity.realm, &identity.node_id);
+                        crate::core::identity::RuntimeGovernanceReadSubject::parse_for_callee(
+                            &device_ura,
+                            &device_ura,
+                        )
+                        .map_err(|error| {
+                            anyhow::anyhow!("runtime governance read subject is invalid: {error}")
+                        })?;
+                        Ok(Self::RuntimeOwner {
+                            subject_ura: device_ura,
+                        })
+                    }
+                }
+            }
+            other => {
+                anyhow::bail!("{error_prefix}: daemon mode {other:?} cannot own runtime reads")
+            }
+        }
+    }
+
+    fn subject_ura(&self) -> anyhow::Result<String> {
+        match self {
+            Self::PairedUser(attachment) => attachment.clone().into_subject_ura(),
+            Self::RuntimeOwner { subject_ura } => Ok(subject_ura.clone()),
+        }
+    }
+
+    fn into_subject_ura(self) -> anyhow::Result<String> {
+        self.subject_ura()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalRuntimeAttachmentIdentity {
+    realm: String,
+    node_id: String,
+}
+
+impl LocalRuntimeAttachmentIdentity {
+    fn from_credentials_discovery(
+        credentials: &crate::daemon::persistence::config::Credentials,
+        discovery: &crate::daemon::control::discovery::ControlDiscovery,
+        error_prefix: &'static str,
+    ) -> anyhow::Result<Self> {
+        let identity = discovery.daemon_identity.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("{error_prefix}: daemon Ready discovery has no runtime identity")
+        })?;
+        if identity.realm.trim() != credentials.realm_str().trim() {
+            anyhow::bail!(
+                "{error_prefix}: daemon realm `{}` does not match paired credentials realm `{}`",
+                identity.realm.trim(),
+                credentials.realm_str().trim()
+            );
+        }
+        if let Some(node_id) = identity.node_id.as_deref() {
+            if node_id.trim() != credentials.node_id.trim() {
+                anyhow::bail!(
+                    "{error_prefix}: daemon node `{}` does not match paired credentials node `{}`",
+                    node_id.trim(),
+                    credentials.node_id.trim()
+                );
+            }
+        }
+        let realm = credentials.realm_str().trim();
+        if realm.is_empty() {
+            anyhow::bail!("{error_prefix}: credentials file is missing realm");
+        }
+        let node_id = credentials.node_id.trim();
+        if node_id.is_empty() {
+            anyhow::bail!("{error_prefix}: credentials file is missing node_id");
+        }
+        Ok(Self {
+            realm: realm.to_string(),
+            node_id: node_id.to_string(),
+        })
+    }
+}
+
+impl LocalRuntimeStateReadAttachment {
+    fn from_runtime_attachment_file(
+        signer_custody: &dyn RuntimeStateReadSignerCustody,
+    ) -> anyhow::Result<Self> {
+        let credentials = crate::daemon::persistence::config::load_credentials()
+            .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
+        let path = crate::daemon::control::discovery::try_default_path()
+            .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
+        let discovery = crate::daemon::control::discovery::read(&path)
+            .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "runtime-state read subject unavailable: daemon Ready discovery is missing"
+                )
+            })?;
+        Self::from_runtime_attachment(&credentials, &discovery, signer_custody)
+    }
+
+    fn from_runtime_attachment(
+        credentials: &crate::daemon::persistence::config::Credentials,
+        discovery: &crate::daemon::control::discovery::ControlDiscovery,
+        signer_custody: &dyn RuntimeStateReadSignerCustody,
+    ) -> anyhow::Result<Self> {
+        let has_paired_user_signer = discovery.capability_flags.iter().any(|flag| {
+            flag == crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
+        });
+        if !has_paired_user_signer {
+            anyhow::bail!(
+                "runtime-state read subject unavailable: daemon Ready did not prove paired User caller signer custody"
+            );
+        }
+        let identity = LocalRuntimeAttachmentIdentity::from_credentials_discovery(
+            credentials,
+            discovery,
+            "runtime-state read subject unavailable",
+        )?;
+        let user_ura = credentials
+            .user_ura()
+            .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
+        signer_custody.prove(&user_ura)?;
+        let user_id = credentials
+            .user_id()
+            .map_err(|error| anyhow::anyhow!("runtime-state read subject unavailable: {error}"))?;
+        Ok(Self {
+            realm: identity.realm,
+            user_id: user_id.to_string(),
+        })
+    }
+
+    fn subject(&self) -> anyhow::Result<crate::core::identity::RuntimeStateReadSubject> {
+        crate::core::identity::RuntimeStateReadSubject::new(&self.realm, &self.user_id)
+            .map_err(|error| anyhow::anyhow!("runtime-state read subject is invalid: {error}"))
+    }
+
+    fn into_subject_ura(self) -> anyhow::Result<String> {
+        self.subject().map(|subject| subject.into_string())
+    }
+}
+
+/// Invoke a canonical local target with public-ingress tuple facts.
+///
+/// This is the user-facing ability-invoke path: subject, nonce, and causal
+/// placement are declared by the caller before daemon transport entry.
+pub fn invoke_local_target_explicit_causal_timeout(
     target: &LocalAbilityTarget,
     args: Value,
-    subject: Option<String>,
+    subject_ura: &str,
+    invocation_nonce: [u8; 16],
+    causal_context: axon_sdk::invocation::CausalContext,
     timeout: std::time::Duration,
 ) -> anyhow::Result<Value> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_timeout(
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_explicit_causal_timeout(
         target.dispatch_name(),
         args,
         target.callee_ura(),
-        target.default_subject_ura(),
-        subject,
+        subject_ura,
+        invocation_nonce,
+        causal_context,
         timeout,
     )
 }
 
-/// Stream a canonical local Ability URA target through the daemon.
+/// Named issuer for runtime-owner catalogue reads.
 ///
-/// This is the stream-mode twin of
-/// [`invoke_local_ability_target_with_subject_timeout`]; it keeps callee and
-/// default subject tied to the canonical Ability owner instead of defaulting
-/// them to the local device signer.
-pub fn invoke_local_ability_target_stream_with_subject(
+/// `meta.list_abilities` and `meta.list_resources` are LocalRuntime catalogue
+/// projections, not user-owned ledger/status observations. Their subject is
+/// the runtime owner being read so catalogue admission and descriptor proof
+/// facts are checked against the same authority that owns the registered
+/// ability/resource table.
+pub struct LocalRuntimeCatalogueReadIssuer;
+
+impl LocalRuntimeCatalogueReadIssuer {
+    pub fn list_abilities(args: Value) -> anyhow::Result<Value> {
+        Self::list_abilities_timeout(
+            args,
+            crate::support::platform::timeouts::catalogue_read_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn list_abilities_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_catalogue_read_timeout(
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn list_resources(args: Value) -> anyhow::Result<Value> {
+        Self::list_resources_timeout(
+            args,
+            crate::support::platform::timeouts::catalogue_read_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn list_resources_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        Self::invoke_catalogue_read_timeout(
+            crate::daemon::ability::names::resources::META_LIST_RESOURCES,
+            args,
+            timeout,
+        )
+    }
+
+    fn invoke_catalogue_read_timeout(
+        ability: &'static str,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity_timeout(
+            ability, args, timeout,
+        )
+    }
+}
+
+/// Named issuer for daemon-local remote target inventory refresh/watch.
+///
+/// This is the mutable counterpart to [`LocalRuntimeCatalogueReadIssuer`].
+/// Target pickers that need live display/window/application rows must invoke
+/// `resource.refresh_remote_targets` or `resource.watch_remote_targets`
+/// through this issuer before presenting selectable resources.
+/// `meta.list_resources` intentionally remains a read-only cache projection.
+pub struct LocalRemoteTargetInventoryIssuer;
+
+impl LocalRemoteTargetInventoryIssuer {
+    pub fn refresh_remote_targets(args: Value) -> anyhow::Result<Value> {
+        Self::refresh_remote_targets_timeout(
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn refresh_remote_targets_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity_timeout(
+            crate::daemon::ability::names::resources::RESOURCE_REFRESH_REMOTE_TARGETS,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn watch_remote_targets(
+        args: Value,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        Self::watch_remote_targets_timeout(
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+            max_frames,
+        )
+    }
+
+    pub fn watch_remote_targets_timeout(
+        args: Value,
+        timeout: std::time::Duration,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        LocalDaemonSystemAbilityIssuer::stream_root_for_local_daemon_identity_timeout(
+            crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS,
+            args,
+            timeout,
+            max_frames,
+        )
+    }
+}
+
+/// Named local surface for starting a remote desktop session from a selected
+/// live target resource.
+///
+/// Callers supply the selected `resource_ura`; this adapter binds that URA as
+/// the envelope subject for both consent and session creation. The
+/// `grant_consent` terminal receipt is carried into `create_session` through
+/// verified causal metadata, so product UI code does not construct Axon causal
+/// context itself.
+#[cfg(feature = "remote-desktop")]
+pub struct LocalRemoteDesktopSessionIssuer;
+
+/// Local control binding for one daemon-owned remote desktop session.
+///
+/// This is intentionally not a protocol or SDK abstraction. It is the CLI
+/// support-layer projection of the create-session response fields required to
+/// issue later lifecycle/signaling Invocations without hiding tuple facts:
+/// the envelope subject remains the session's selected Resource URA and the
+/// causal context carries the cryptographically verified consent receipt. Later
+/// wrappers import that proof from the create-session response metadata instead
+/// of trusting ability-payload JSON as a receipt proof.
+#[cfg(feature = "remote-desktop")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalRemoteDesktopSessionControlBinding {
+    subject_ura: String,
+    session_id: String,
+    session_token: String,
+    session_causal_parent: Value,
+}
+
+#[cfg(feature = "remote-desktop")]
+impl LocalRemoteDesktopSessionControlBinding {
+    pub fn from_create_session_response(value: &Value) -> anyhow::Result<Self> {
+        let session = value.get("session").ok_or_else(|| {
+            anyhow::anyhow!(
+                "remote desktop session control binding requires create_session response.session"
+            )
+        })?;
+        let consent_invocation = value.get("consent_invocation").ok_or_else(|| {
+            anyhow::anyhow!(
+                "remote desktop session control binding requires create_session response.consent_invocation"
+            )
+        })?;
+        let subject_ura = canonical_selected_remote_target_resource_ura(required_nonempty_string(
+            session,
+            "subject_ura",
+            "remote desktop session control binding",
+        )?)?;
+        let session_causal_parent =
+            crate::support::platform::local_daemon_grpc::import_verified_causal_parent_from_invocation_meta(
+                consent_invocation,
+                crate::daemon::plugins::remote_desktop::constants::ABILITY_GRANT_CONSENT,
+                &subject_ura,
+            )?;
+        Self::from_session_view_with_parent(session, subject_ura, session_causal_parent)
+    }
+
+    fn from_session_view_with_parent(
+        session: &Value,
+        subject_ura: String,
+        session_causal_parent: Value,
+    ) -> anyhow::Result<Self> {
+        let session_id = required_nonempty_string(
+            session,
+            "session_id",
+            "remote desktop session control binding",
+        )?;
+        let session_token = required_nonempty_string(
+            session,
+            "session_token",
+            "remote desktop session control binding",
+        )?;
+        Ok(Self {
+            subject_ura,
+            session_id: session_id.to_string(),
+            session_token: session_token.to_string(),
+            session_causal_parent,
+        })
+    }
+
+    pub fn subject_ura(&self) -> &str {
+        &self.subject_ura
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn session_token(&self) -> &str {
+        &self.session_token
+    }
+}
+
+#[cfg(feature = "remote-desktop")]
+impl LocalRemoteDesktopSessionIssuer {
+    pub fn create_session(
+        selected_resource_ura: &str,
+        create_session_args: Value,
+    ) -> anyhow::Result<(
+        Value,
+        VerifiedLocalInvocationMeta,
+        VerifiedLocalInvocationMeta,
+    )> {
+        Self::create_session_timeout(
+            selected_resource_ura,
+            create_session_args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+            None,
+        )
+    }
+
+    pub fn create_session_timeout(
+        selected_resource_ura: &str,
+        create_session_args: Value,
+        timeout: std::time::Duration,
+        trace_id: Option<&str>,
+    ) -> anyhow::Result<(
+        Value,
+        VerifiedLocalInvocationMeta,
+        VerifiedLocalInvocationMeta,
+    )> {
+        let selected_resource_ura =
+            canonical_selected_remote_target_resource_ura(selected_resource_ura)?;
+        let grant_target = local_remote_desktop_ability_target(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_GRANT_CONSENT,
+        )?;
+        let grant_context = LocalSystemInvocationIssuer::root_context(
+            selected_resource_ura.as_str(),
+            &[],
+            timeout,
+            trace_id,
+        )?;
+        let (grant, grant_meta) = invoke_local_target_with_invocation_meta(
+            &grant_target,
+            serde_json::json!({ "intent": "remote_desktop_session" }),
+            grant_context,
+        )?;
+        let consent_ticket = grant
+            .get("consent_ticket")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("remote_desktop.grant_consent did not return consent_ticket")
+            })?
+            .to_string();
+        let parent = grant_meta.causal_parent()?;
+        let create_args =
+            create_session_args_with_consent_ticket(create_session_args, &consent_ticket)?;
+        let causal_parents = vec![parent];
+        let create_target = local_remote_desktop_ability_target(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION,
+        )?;
+        let create_context = LocalSystemInvocationIssuer::root_context(
+            selected_resource_ura,
+            &causal_parents,
+            timeout,
+            trace_id,
+        )?;
+        let (session, create_meta) =
+            invoke_local_target_with_invocation_meta(&create_target, create_args, create_context)?;
+        Ok((session, create_meta, grant_meta))
+    }
+
+    pub fn set_description(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+    ) -> anyhow::Result<Value> {
+        Self::set_description_timeout(
+            binding,
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn set_description_timeout(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        invoke_remote_desktop_session_control_rpc(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION,
+            binding,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn show_session(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+    ) -> anyhow::Result<Value> {
+        Self::show_session_timeout(
+            binding,
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn show_session_timeout(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        invoke_remote_desktop_session_control_rpc(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_SHOW_SESSION,
+            binding,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn add_ice_candidate(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+    ) -> anyhow::Result<Value> {
+        Self::add_ice_candidate_timeout(
+            binding,
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn add_ice_candidate_timeout(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        invoke_remote_desktop_session_control_rpc(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_ADD_ICE_CANDIDATE,
+            binding,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn report_client_state(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+    ) -> anyhow::Result<Value> {
+        Self::report_client_state_timeout(
+            binding,
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+        )
+    }
+
+    pub fn report_client_state_timeout(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<Value> {
+        invoke_remote_desktop_session_control_rpc(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_REPORT_CLIENT_STATE,
+            binding,
+            args,
+            timeout,
+        )
+    }
+
+    pub fn watch_events(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        Self::watch_events_timeout(
+            binding,
+            args,
+            crate::support::platform::timeouts::remote_system_transport_guard(0)
+                .map_err(anyhow::Error::msg)?,
+            max_frames,
+        )
+    }
+
+    pub fn watch_events_timeout(
+        binding: &LocalRemoteDesktopSessionControlBinding,
+        args: Value,
+        timeout: std::time::Duration,
+        max_frames: Option<usize>,
+    ) -> anyhow::Result<Vec<LocalStreamFrame>> {
+        let target = local_remote_desktop_ability_target(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_WATCH_EVENTS,
+        )?;
+        let args = remote_desktop_session_control_args(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_WATCH_EVENTS,
+            binding,
+            args,
+        )?;
+        let causal_parents = vec![binding.session_causal_parent.clone()];
+        let context = LocalSystemInvocationIssuer::root_context(
+            binding.subject_ura(),
+            &causal_parents,
+            timeout,
+            None,
+        )?;
+        invoke_local_target_stream_with_invocation_context(&target, args, context, max_frames)
+    }
+}
+
+#[cfg(feature = "remote-desktop")]
+fn invoke_remote_desktop_session_control_rpc(
+    ability: &'static str,
+    binding: &LocalRemoteDesktopSessionControlBinding,
+    args: Value,
+    timeout: std::time::Duration,
+) -> anyhow::Result<Value> {
+    let target = local_remote_desktop_ability_target(ability)?;
+    let args = remote_desktop_session_control_args(ability, binding, args)?;
+    let causal_parents = vec![binding.session_causal_parent.clone()];
+    let context = LocalSystemInvocationIssuer::root_context(
+        binding.subject_ura(),
+        &causal_parents,
+        timeout,
+        None,
+    )?;
+    let (response, _) = invoke_local_target_with_invocation_meta(&target, args, context)?;
+    Ok(response)
+}
+
+#[cfg(feature = "remote-desktop")]
+fn local_remote_desktop_ability_target(ability: &str) -> anyhow::Result<LocalAbilityTarget> {
+    let execution_host_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
+    local_daemon_system_ability_target(ability, &execution_host_ura)
+}
+
+#[cfg(feature = "remote-desktop")]
+fn canonical_selected_remote_target_resource_ura(value: &str) -> anyhow::Result<String> {
+    let value = value.trim();
+    let parsed = crate::core::identity::RuntimeIdentityUra::parse(value)
+        .map_err(|error| anyhow::anyhow!("selected remote desktop target resource_ura {error}"))?;
+    if parsed.kind() != crate::core::ura::URAKind::Resource {
+        anyhow::bail!("selected remote desktop target must be a Resource URA");
+    }
+    SelectedRemoteDesktopTargetSubjectKind::parse(value)?;
+    Ok(parsed.into_string())
+}
+
+#[cfg(feature = "remote-desktop")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectedRemoteDesktopTargetSubjectKind {
+    Display,
+    Window,
+    Application,
+}
+
+#[cfg(feature = "remote-desktop")]
+impl SelectedRemoteDesktopTargetSubjectKind {
+    fn parse(subject_ura: &str) -> anyhow::Result<Self> {
+        let parsed = crate::core::ura::parse_ura(subject_ura).map_err(|error| {
+            anyhow::anyhow!("selected remote desktop target resource_ura is not canonical: {error}")
+        })?;
+        if parsed.kind != crate::core::ura::URAKind::Resource {
+            anyhow::bail!("selected remote desktop target must be a Resource URA");
+        }
+        let owner = parsed.resource_owner_id().ok_or_else(|| {
+            anyhow::anyhow!(
+                "selected remote desktop target must be a device-owned display/window/application resource subject"
+            )
+        })?;
+        if !owner.starts_with("device.") {
+            anyhow::bail!(
+                "selected remote desktop target must be a device-owned display/window/application resource subject"
+            );
+        }
+        let path = parsed.resource_path().ok_or_else(|| {
+            anyhow::anyhow!(
+                "selected remote desktop target must be a device stream display/window/application resource subject"
+            )
+        })?;
+        if path.starts_with("streams/display.") {
+            return Ok(Self::Display);
+        }
+        if path.starts_with("streams/window.") {
+            return Ok(Self::Window);
+        }
+        if path.starts_with("streams/application.") {
+            return Ok(Self::Application);
+        }
+        anyhow::bail!(
+            "selected remote desktop target must be a device stream display/window/application resource subject"
+        )
+    }
+}
+
+#[cfg(feature = "remote-desktop")]
+fn create_session_args_with_consent_ticket(
+    args: Value,
+    consent_ticket: &str,
+) -> anyhow::Result<Value> {
+    let mut object = match args {
+        Value::Object(object) => object,
+        _ => anyhow::bail!("remote_desktop.create_session args must be a JSON object"),
+    };
+    for forbidden in ["subject", "resource_ura"] {
+        if object.contains_key(forbidden) {
+            anyhow::bail!(
+                "remote_desktop.create_session {forbidden} MUST come from selected_resource_ura/envelope subject, not args"
+            );
+        }
+    }
+    if object.contains_key("consent_ticket") {
+        anyhow::bail!(
+            "remote_desktop.create_session consent_ticket is issued by grant_consent and must not be supplied by caller args"
+        );
+    }
+    object.insert(
+        "consent_ticket".to_string(),
+        Value::String(consent_ticket.to_string()),
+    );
+    Ok(Value::Object(object))
+}
+
+#[cfg(feature = "remote-desktop")]
+fn remote_desktop_session_control_args(
+    ability: &'static str,
+    binding: &LocalRemoteDesktopSessionControlBinding,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let mut object = match args {
+        Value::Object(object) => object,
+        _ => anyhow::bail!("{ability} args must be a JSON object"),
+    };
+    for forbidden in [
+        "subject",
+        "resource_ura",
+        "consent",
+        "consent_ticket",
+        "session_id",
+        "session_token",
+    ] {
+        if object.contains_key(forbidden) {
+            anyhow::bail!(
+                "{ability} {forbidden} MUST come from the session control binding/envelope, not args"
+            );
+        }
+    }
+    object.insert(
+        "session_id".to_string(),
+        Value::String(binding.session_id().to_string()),
+    );
+    object.insert(
+        "session_token".to_string(),
+        Value::String(binding.session_token().to_string()),
+    );
+    Ok(Value::Object(object))
+}
+
+fn required_nonempty_string<'a>(
+    value: &'a Value,
+    field: &'static str,
+    context: &'static str,
+) -> anyhow::Result<&'a str> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("{context} requires non-empty {field}"))
+}
+
+/// Stream a canonical local Ability URA target with public-ingress tuple facts.
+pub fn invoke_local_target_stream_explicit_causal(
     target: &LocalAbilityTarget,
     args: Value,
-    subject: Option<String>,
+    subject_ura: &str,
+    invocation_nonce: [u8; 16],
+    causal_context: axon_sdk::invocation::CausalContext,
     timeout: std::time::Duration,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<LocalStreamFrame>> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_stream_with_subject(
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_stream_explicit_causal(
         target.dispatch_name(),
         args,
         target.callee_ura(),
-        target.default_subject_ura(),
-        subject,
+        subject_ura,
+        invocation_nonce,
+        causal_context,
         timeout,
         max_frames,
     )
@@ -248,171 +1711,1093 @@ pub fn invoke_local_ability_target_stream_with_subject(
 
 /// Open a canonical local Ability URA target as an InvokeBidi JSON-frame
 /// session and drain a bounded number of down frames.
-pub fn invoke_local_ability_target_bidi_json_frames_with_subject(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public facade preserves the complete explicit invocation tuple for API compatibility"
+)]
+pub fn invoke_local_target_bidi_json_frames_explicit_causal(
     target: &LocalAbilityTarget,
     args: Value,
-    subject: Option<String>,
+    subject_ura: &str,
+    invocation_nonce: [u8; 16],
+    causal_context: axon_sdk::invocation::CausalContext,
     timeout: std::time::Duration,
     input_frames: Vec<Value>,
     max_frames: Option<usize>,
 ) -> anyhow::Result<Vec<LocalBidiFrame>> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_bidi_json_frames_with_subject(
-        target.dispatch_name(),
-        args,
-        target.callee_ura(),
-        target.default_subject_ura(),
-        subject,
-        timeout,
-        input_frames,
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_bidi_json_frames_explicit_causal(
+        crate::support::platform::local_daemon_grpc::LocalDaemonTargetedBidiRequest {
+            function_name: target.dispatch_name(),
+            payload_json: args,
+            callee_ura: target.callee_ura(),
+            subject_ura,
+            invocation_nonce,
+            causal_context,
+            timeout,
+            input_frames,
+            max_frames,
+        },
+    )
+}
+
+/// Metadata produced only after Axon has verified the admission and terminal
+/// receipt checkpoints against the trusted local key service.
+///
+/// The constructor remains private to this module. Consumers may inspect or
+/// serialize the verified JSON projection, but cannot label arbitrary JSON as
+/// verified metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerifiedLocalInvocationMeta(Value);
+
+impl VerifiedLocalInvocationMeta {
+    pub fn as_value(&self) -> &Value {
+        &self.0
+    }
+
+    /// Project the verified terminal receipt into the minimal causal-parent
+    /// shape accepted by [`LocalSystemInvocationIssuer`].
+    ///
+    /// This derives from Axon-verified invocation metadata, not ability
+    /// payloads, so product adapters can chain local invocations without
+    /// fabricating causal context.
+    pub fn causal_parent(&self) -> anyhow::Result<Value> {
+        let anchor = self
+            .0
+            .get("receipt")
+            .and_then(|receipt| receipt.get("anchor"))
+            .ok_or_else(|| {
+                anyhow::anyhow!("verified invocation metadata is missing receipt anchor")
+            })?;
+        let receipt_ura = anchor
+            .get("receipt_ura")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("verified invocation metadata anchor is missing receipt_ura")
+            })?;
+        let receipt_hash = anchor
+            .get("receipt_hash")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("verified invocation metadata anchor is missing receipt_hash")
+            })?;
+        if hex::decode(receipt_hash)
+            .ok()
+            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+            .is_none()
+        {
+            anyhow::bail!("verified invocation metadata anchor receipt_hash must be 32-byte hex");
+        }
+        Ok(serde_json::json!({
+            "receipt_ura": receipt_ura,
+            "receipt_hash": receipt_hash,
+        }))
+    }
+}
+
+/// Explicit caller-owned facts for a daemon-local system invocation.
+///
+/// The caller identity is fixed by the named `_system.local` issuer. Callee and
+/// ability come from [`LocalAbilityTarget`]. Subject, nonce, causal placement,
+/// timeout, and trace placement must be selected before transport entry.
+#[derive(Debug)]
+pub struct LocalSystemInvocationContext<'a> {
+    subject_ura: String,
+    invocation_nonce: [u8; 16],
+    causal_parents: &'a [Value],
+    step_timeout: std::time::Duration,
+    trace_id: Option<&'a str>,
+}
+
+impl<'a> LocalSystemInvocationContext<'a> {
+    fn new(
+        subject_ura: impl Into<String>,
+        invocation_nonce: [u8; 16],
+        causal_parents: &'a [Value],
+        step_timeout: std::time::Duration,
+        trace_id: Option<&'a str>,
+    ) -> anyhow::Result<Self> {
+        let subject_ura = crate::core::identity::RuntimeIdentityUra::parse(subject_ura.into())
+            .map_err(|error| anyhow::anyhow!("local system invocation subject_ura {error}"))?
+            .into_string();
+        if invocation_nonce == [0; 16] {
+            anyhow::bail!("local system invocation nonce must not be all-zero");
+        }
+        if step_timeout.is_zero() {
+            anyhow::bail!("local system invocation timeout must be greater than zero");
+        }
+        if trace_id.is_some_and(|trace_id| trace_id.trim().is_empty()) {
+            anyhow::bail!("local system invocation trace_id must not be empty when supplied");
+        }
+        Ok(Self {
+            subject_ura,
+            invocation_nonce,
+            causal_parents,
+            step_timeout,
+            trace_id,
+        })
+    }
+}
+
+/// Named issuer for daemon-local system contexts used by product adapters.
+///
+/// Callers provide the semantic subject, causal parents, timeout, and trace.
+/// Freshness is minted only here so adapters do not own root tuple facts.
+pub struct LocalSystemInvocationIssuer;
+
+impl LocalSystemInvocationIssuer {
+    pub fn root_context<'a>(
+        subject_ura: impl Into<String>,
+        causal_parents: &'a [Value],
+        step_timeout: std::time::Duration,
+        trace_id: Option<&'a str>,
+    ) -> anyhow::Result<LocalSystemInvocationContext<'a>> {
+        LocalSystemInvocationContext::new(
+            subject_ura,
+            axon_sdk::invocation::fresh_nonce(),
+            causal_parents,
+            step_timeout,
+            trace_id,
+        )
+    }
+
+    pub fn root_context_for_target<'a>(
+        target: &LocalAbilityTarget,
+        causal_parents: &'a [Value],
+        step_timeout: std::time::Duration,
+        trace_id: Option<&'a str>,
+    ) -> anyhow::Result<LocalSystemInvocationContext<'a>> {
+        Self::root_context(
+            target.daemon_system_subject_ura()?,
+            causal_parents,
+            step_timeout,
+            trace_id,
+        )
+    }
+}
+
+/// Invoke a canonical local Ability target and return cryptographically
+/// verified invocation metadata with the result.
+pub fn invoke_local_target_with_invocation_meta(
+    target: &LocalAbilityTarget,
+    args: Value,
+    context: LocalSystemInvocationContext<'_>,
+) -> anyhow::Result<(Value, VerifiedLocalInvocationMeta)> {
+    let request =
+        crate::support::platform::local_daemon_grpc::LocalDaemonTargetedInvocationMetaRequest {
+            function_name: target.dispatch_name(),
+            payload_json: args,
+            callee_ura: target.callee_ura(),
+            subject_ura: &context.subject_ura,
+            invocation_nonce: context.invocation_nonce,
+            causal_parents: context.causal_parents,
+            step_timeout: context.step_timeout,
+            trace_id: context.trace_id,
+        };
+    let (value, metadata) =
+        crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_with_invocation_meta(request)?;
+    Ok((value, VerifiedLocalInvocationMeta(metadata)))
+}
+
+/// Stream a canonical local Ability target with a named local-system
+/// invocation context.
+pub fn invoke_local_target_stream_with_invocation_context(
+    target: &LocalAbilityTarget,
+    args: Value,
+    context: LocalSystemInvocationContext<'_>,
+    max_frames: Option<usize>,
+) -> anyhow::Result<Vec<LocalStreamFrame>> {
+    let request =
+        crate::support::platform::local_daemon_grpc::LocalDaemonTargetedInvocationMetaRequest {
+            function_name: target.dispatch_name(),
+            payload_json: args,
+            callee_ura: target.callee_ura(),
+            subject_ura: &context.subject_ura,
+            invocation_nonce: context.invocation_nonce,
+            causal_parents: context.causal_parents,
+            step_timeout: context.step_timeout,
+            trace_id: context.trace_id,
+        };
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_stream_with_invocation_context(
+        request,
         max_frames,
     )
 }
 
-/// Same as [`invoke_local_ability_with_subject`] but returns the
-/// invocation record alongside the result.
-///
-/// This is the EAL mission runner's lowering surface: each mission
-/// step becomes one complete seven-tuple Axon invocation. The
-/// returned metadata value carries the envelope echo (caller /
-/// callee / ability / subject / nonce / causal_context) plus the
-/// ledger-assigned `invocation_ura`, `trace_id`, and receipt-chain
-/// anchors — the material a downstream step needs to name THIS step
-/// as its causal parent. `causal_parents` entries are
-/// `{node, invocation_ura, receipt_ura, receipt_hash}` objects from
-/// prior steps' metadata; they are encoded into the envelope's
-/// `causal_context` (explicit `Empty` for a root step, `ReceiptRef`
-/// scalar for one parent, ordered `ReceiptList` for a join).
-/// `trace_id` is the mission run's id; it is stamped on the
-/// envelope's operational-metadata `trace_id` field so the daemon
-/// ledger groups every step of one run under one trace.
-pub fn invoke_local_ability_with_invocation_meta(
-    ability: &str,
-    args: Value,
-    subject: Option<String>,
-    causal_parents: &[Value],
-    step_timeout: Option<std::time::Duration>,
-    trace_id: Option<&str>,
-    callee_agent: Option<&str>,
-) -> anyhow::Result<(Value, Value)> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_with_invocation_meta(
-        ability,
-        args,
-        subject,
-        causal_parents,
-        step_timeout,
-        trace_id,
-        callee_agent,
-    )
-}
-
-/// Same as [`invoke_local_ability_with_invocation_meta`], but annotates the
-/// returned metadata with the hosted agent whose local device signed the call.
+/// Invoke a canonical local target with explicit hosted-agent delegation.
 ///
 /// This does NOT rewrite the hosted agent into Axon's caller. The signed
 /// Invocation caller is the local daemon IPC system identity; hosted-agent
 /// intent is carried as explicit delegation metadata and ability arguments,
 /// not by rewriting caller identity.
-pub fn invoke_local_ability_with_hosted_agent_delegation(
-    ability: &str,
+pub fn invoke_local_target_with_hosted_agent_delegation(
+    target: &LocalAbilityTarget,
     args: Value,
-    subject: Option<String>,
-    causal_parents: &[Value],
-    step_timeout: Option<std::time::Duration>,
-    trace_id: Option<&str>,
+    context: LocalSystemInvocationContext<'_>,
     hosted_agent_ura: &str,
 ) -> anyhow::Result<(Value, Value)> {
-    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_with_hosted_agent_delegation(
-        ability,
-        args,
-        subject,
-        causal_parents,
-        step_timeout,
-        trace_id,
+    let request =
+        crate::support::platform::local_daemon_grpc::LocalDaemonTargetedInvocationMetaRequest {
+            function_name: target.dispatch_name(),
+            payload_json: args,
+            callee_ura: target.callee_ura(),
+            subject_ura: &context.subject_ura,
+            invocation_nonce: context.invocation_nonce,
+            causal_parents: context.causal_parents,
+            step_timeout: context.step_timeout,
+            trace_id: context.trace_id,
+        };
+    crate::support::platform::local_daemon_grpc::invoke_local_daemon_ability_targeted_with_hosted_agent_delegation(
+        request,
         hosted_agent_ura,
     )
 }
 
-/// Standard error message for any CLI surface that semantically
-/// requires the federation tier (cross-node enumeration, remote
-/// dispatch, voice/video signaling). The federation Invoke surface
-/// that would back these calls was removed by AXON-RFC-001 P1.5
-/// and ships as a follow-up; until then, every command that
-/// genuinely needs cross-node reach surfaces this exact message.
-///
-/// Centralised so:
-///   * the wording stays byte-identical across surfaces (a script
-///     can grep one substring),
-///   * the operator sees one consistent name for the missing
-///     subsystem instead of 8 variations of "federation gone",
-///   * the day federation Invoke lands, deletion of this string
-///     plus its callers is one PR rather than scavenger-hunt.
-///
-/// `action` is a short verb-phrase describing what the user was
-/// trying to do (e.g. `"list remote devices"`, `"deploy ability to a
-/// remote node"`); it is splice into the message so the operator
-/// sees the verb that failed in front of the same explanation.
+/// Standard error for CLI/support surfaces that require a federation
+/// transport provider while the current runtime capability matrix marks that
+/// transport Unsupported.
 #[cfg(not(feature = "axon-pb"))]
-pub fn federation_not_wired_error(action: &str) -> anyhow::Error {
+pub fn federation_capability_unsupported_error(action: &str) -> anyhow::Error {
     anyhow::Error::new(LocalInvokeFailure::DaemonOffline(format!(
-        "{action} requires the `axon-pb` feature; rebuild with \
-         `cargo build --features axon-pb` (production builds always do)."
+        "{action} is unsupported by the canonical runtime capability matrix: \
+         federation transport provider is unavailable; capability_state=unsupported"
+    )))
+}
+
+/// Standard error for CLI/support surfaces that require the local Invocation
+/// provider while the current runtime capability matrix marks that provider
+/// Unsupported.
+#[cfg(not(feature = "axon-pb"))]
+pub fn local_invocation_capability_unsupported_error(action: &str) -> anyhow::Error {
+    anyhow::Error::new(LocalInvokeFailure::DaemonOffline(format!(
+        "{action} is unsupported by the canonical runtime capability matrix: \
+         local invocation provider is unavailable; capability_state=unsupported"
     )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+
+    struct ReadyRuntimeStateReadSignerCustody;
+
+    impl RuntimeStateReadSignerCustody for ReadyRuntimeStateReadSignerCustody {
+        fn prove(&self, user_ura: &str) -> anyhow::Result<()> {
+            assert_eq!(user_ura, "easynet:///r/acme/user/user-alice");
+            Ok(())
+        }
+    }
+
+    struct FailedRuntimeStateReadSignerCustody;
+
+    impl RuntimeStateReadSignerCustody for FailedRuntimeStateReadSignerCustody {
+        fn prove(&self, _user_ura: &str) -> anyhow::Result<()> {
+            anyhow::bail!("test signer unavailable")
+        }
+    }
+
+    fn runtime_state_read_credentials() -> crate::daemon::persistence::config::Credentials {
+        crate::daemon::persistence::config::Credentials {
+            node_id: "dev-a".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.example:50051".to_string(),
+            realm: "acme".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".to_string()),
+            user_id: Some("user-alice".to_string()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        }
+    }
+
+    fn device_only_runtime_credentials() -> crate::daemon::persistence::config::Credentials {
+        let mut credentials = runtime_state_read_credentials();
+        credentials.credential_token.clear();
+        credentials.username = None;
+        credentials.user_id = None;
+        credentials.hub_pubkey_b64 = Some("hub-pubkey".to_string());
+        credentials.join_receipt_hash = Some("sha256:test-join-receipt".to_string());
+        credentials
+    }
+
+    fn runtime_state_read_discovery(
+        realm: &str,
+        node_id: Option<&str>,
+        capability_flags: Vec<String>,
+    ) -> crate::daemon::control::discovery::ControlDiscovery {
+        crate::daemon::control::discovery::ControlDiscovery {
+            socket_path: Some(std::path::PathBuf::from("/tmp/daemon.sock")),
+            pipe_name: None,
+            invocation_endpoint: Some(std::path::PathBuf::from("/tmp/daemon.sock")),
+            daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                mode: "device".to_string(),
+                realm: realm.to_string(),
+                node_id: node_id.map(str::to_string),
+            }),
+            pid: 42,
+            daemon_version: "test".to_string(),
+            supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                crate::daemon::control::discovery::IPC_VERSION_V1,
+            ),
+            capability_flags,
+            pages_port: None,
+        }
+    }
+
+    fn paired_user_runtime_signer_flag() -> Vec<String> {
+        vec![crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string()]
+    }
+
+    fn hub_runtime_governance_discovery(
+        realm: &str,
+    ) -> crate::daemon::control::discovery::ControlDiscovery {
+        crate::daemon::control::discovery::ControlDiscovery {
+            socket_path: Some(std::path::PathBuf::from("/tmp/daemon.sock")),
+            pipe_name: None,
+            invocation_endpoint: Some(std::path::PathBuf::from("/tmp/daemon.sock")),
+            daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                mode: "hub".to_string(),
+                realm: realm.to_string(),
+                node_id: None,
+            }),
+            pid: 42,
+            daemon_version: "test".to_string(),
+            supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                crate::daemon::control::discovery::IPC_VERSION_V1,
+            ),
+            capability_flags: vec![],
+            pages_port: None,
+        }
+    }
 
     #[test]
-    fn local_ability_target_preserves_agent_owner_as_callee_and_subject() {
+    fn local_daemon_system_target_separates_device_host_from_system_agent_owner() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device-sponsored runtime-introspection target");
+
+        assert_eq!(
+            target.callee_ura(),
+            crate::core::ura::device_agent_ura(
+                "acme",
+                "dev-a",
+                crate::daemon::ability::names::governance::RUNTIME_GOVERNANCE_SYSTEM_AGENT_ID,
+            )
+        );
+        assert_eq!(
+            target.dispatch_name(),
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST
+        );
+    }
+
+    #[test]
+    fn local_catalogue_target_is_runtime_introspection_system_agent() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device-sponsored runtime-introspection target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.runtime-introspection"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.runtime-introspection.meta.list_abilities"
+        );
+        assert_eq!(
+            target.dispatch_name(),
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES
+        );
+    }
+
+    #[test]
+    fn local_remote_target_inventory_target_is_media_system_agent() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::ability::names::resources::RESOURCE_REFRESH_REMOTE_TARGETS,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device-sponsored media target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.media"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.media.resource.refresh_remote_targets"
+        );
+        assert_eq!(
+            target.dispatch_name(),
+            crate::daemon::ability::names::resources::RESOURCE_REFRESH_REMOTE_TARGETS
+        );
+    }
+
+    #[test]
+    fn local_remote_target_inventory_watch_target_is_media_system_agent() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device-sponsored media stream target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.media"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.media.resource.watch_remote_targets"
+        );
+        assert_eq!(
+            target.dispatch_name(),
+            crate::daemon::ability::names::resources::RESOURCE_WATCH_REMOTE_TARGETS
+        );
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn local_remote_desktop_session_target_is_remote_desktop_system_agent() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("device-sponsored remote desktop target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.remote-desktop"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.remote-desktop.remote_desktop.create_session"
+        );
+        assert_eq!(
+            target.dispatch_name(),
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION
+        );
+    }
+
+    #[test]
+    fn verified_invocation_meta_projects_causal_parent_from_receipt_anchor() {
+        let metadata = VerifiedLocalInvocationMeta(serde_json::json!({
+            "receipt": {
+                "anchor": {
+                    "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/i1/receipt/1",
+                    "receipt_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+                    "state": "completed",
+                }
+            }
+        }));
+
+        assert_eq!(
+            metadata.causal_parent().expect("causal parent"),
+            serde_json::json!({
+                "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/i1/receipt/1",
+                "receipt_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+            })
+        );
+    }
+
+    #[test]
+    fn verified_invocation_meta_rejects_malformed_causal_parent_hash() {
+        let metadata = VerifiedLocalInvocationMeta(serde_json::json!({
+            "receipt": {
+                "anchor": {
+                    "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/i1/receipt/1",
+                    "receipt_hash": "abc",
+                }
+            }
+        }));
+
+        let err = metadata
+            .causal_parent()
+            .expect_err("causal parent hash must be structurally verified");
+        assert!(err.to_string().contains("32-byte hex"));
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn selected_remote_desktop_target_must_be_capture_resource_subject() {
+        for subject in [
+            "easynet:///r/acme/resource/device.dev/streams/display.1",
+            "easynet:///r/acme/resource/device.dev/streams/window.7",
+            "easynet:///r/acme/resource/device.dev/streams/application.com.example",
+        ] {
+            assert_eq!(
+                canonical_selected_remote_target_resource_ura(subject)
+                    .expect("remote desktop target resource"),
+                subject
+            );
+        }
+
+        let err = canonical_selected_remote_target_resource_ura("easynet:///r/acme/device/dev")
+            .expect_err("Device URA must not be accepted as selected target");
+        assert!(err.to_string().contains("must be a Resource URA"));
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn selected_remote_desktop_target_rejects_non_capture_resources() {
+        for subject in [
+            "easynet:///r/acme/resource/device.dev/streams/mic.1",
+            "easynet:///r/acme/resource/resource-1",
+            "easynet:///r/acme/resource/user.alice/runtime-state/read",
+            "easynet:///r/acme/resource/user.alice/streams/display.1",
+        ] {
+            let err = canonical_selected_remote_target_resource_ura(subject)
+                .expect_err("non-capture resource must not enter remote desktop session workflow");
+            assert!(
+                err.to_string()
+                    .contains("device-owned display/window/application resource subject")
+                    || err
+                        .to_string()
+                        .contains("display/window/application resource subject"),
+                "{err}"
+            );
+        }
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn create_session_args_injects_consent_ticket_without_subject_args() {
+        let args = create_session_args_with_consent_ticket(
+            serde_json::json!({
+                "mode": "view_only",
+                "transport_preferences": ["webrtc"],
+            }),
+            "ticket-1",
+        )
+        .expect("create args");
+
+        assert_eq!(args["consent_ticket"], serde_json::json!("ticket-1"));
+        assert!(args.get("subject").is_none());
+        assert!(args.get("resource_ura").is_none());
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn create_session_args_rejects_subject_and_external_consent_ticket() {
+        for args in [
+            serde_json::json!({"subject": "easynet:///r/acme/resource/device.dev/streams/window.7"}),
+            serde_json::json!({"resource_ura": "easynet:///r/acme/resource/device.dev/streams/window.7"}),
+            serde_json::json!({"consent_ticket": "caller-supplied"}),
+        ] {
+            let err = create_session_args_with_consent_ticket(args, "ticket-1")
+                .expect_err("caller must not supply tuple or consent fields");
+            let message = err.to_string();
+            assert!(
+                message.contains("MUST come from selected_resource_ura")
+                    || message.contains("consent_ticket is issued by grant_consent"),
+                "{message}"
+            );
+        }
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    fn remote_desktop_session_view_for_control() -> serde_json::Value {
+        serde_json::json!({
+            "subject_ura": "easynet:///r/acme/resource/device.dev/streams/window.7",
+            "session_id": "rd-control",
+            "session_token": "token-control"
+        })
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    fn remote_desktop_test_control_binding() -> LocalRemoteDesktopSessionControlBinding {
+        LocalRemoteDesktopSessionControlBinding::from_session_view_with_parent(
+            &remote_desktop_session_view_for_control(),
+            "easynet:///r/acme/resource/device.dev/streams/window.7".to_string(),
+            serde_json::json!({
+                "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/create/receipt/4",
+                "receipt_hash": "3333333333333333333333333333333333333333333333333333333333333333"
+            }),
+        )
+        .expect("test control binding")
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn remote_desktop_session_control_binding_requires_verified_consent_invocation() {
+        let response = serde_json::json!({
+            "session": remote_desktop_session_view_for_control(),
+        });
+        let err = LocalRemoteDesktopSessionControlBinding::from_create_session_response(&response)
+            .expect_err("session control binding must require invocation proof");
+
+        assert!(err.to_string().contains("response.consent_invocation"));
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn remote_desktop_session_control_args_insert_session_fields_without_tuple_args() {
+        let binding = remote_desktop_test_control_binding();
+        let args = remote_desktop_session_control_args(
+            crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION,
+            &binding,
+            serde_json::json!({
+                "side": "remote",
+                "description": {"type": "offer", "sdp": "v=0\r\n"}
+            }),
+        )
+        .expect("control args");
+
+        assert_eq!(args["session_id"], serde_json::json!("rd-control"));
+        assert_eq!(args["session_token"], serde_json::json!("token-control"));
+        assert!(args.get("subject").is_none());
+        assert!(args.get("resource_ura").is_none());
+        assert!(args.get("consent").is_none());
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn remote_desktop_session_control_args_reject_caller_owned_binding_fields() {
+        let binding = remote_desktop_test_control_binding();
+        for (field, args) in [
+            ("subject", serde_json::json!({"subject": "bad"})),
+            ("resource_ura", serde_json::json!({"resource_ura": "bad"})),
+            ("consent", serde_json::json!({"consent": {}})),
+            (
+                "consent_ticket",
+                serde_json::json!({"consent_ticket": "bad"}),
+            ),
+            ("session_id", serde_json::json!({"session_id": "bad"})),
+            ("session_token", serde_json::json!({"session_token": "bad"})),
+        ] {
+            let err = remote_desktop_session_control_args(
+                crate::daemon::plugins::remote_desktop::constants::ABILITY_SET_DESCRIPTION,
+                &binding,
+                args,
+            )
+            .expect_err("caller-owned binding field must be rejected");
+            assert!(
+                err.to_string().contains(field),
+                "expected error to mention {field}: {err}"
+            );
+        }
+    }
+
+    #[cfg(feature = "remote-desktop")]
+    #[test]
+    fn remote_desktop_session_control_binding_rejects_session_only_payload_receipts() {
+        let response = serde_json::json!({
+            "session": {
+                "subject_ura": "easynet:///r/acme/resource/device.dev/streams/window.7",
+                "session_id": "rd-control",
+                "session_token": "token-control",
+                "consent": {
+                    "approval_receipt": {
+                        "receipt_ura": "easynet:///r/acme/resource/device.dev/streams/window.7/invocation/approve/receipt/1",
+                        "receipt_hash": "2222222222222222222222222222222222222222222222222222222222222222"
+                    }
+                }
+            }
+        });
+        let err = LocalRemoteDesktopSessionControlBinding::from_create_session_response(&response)
+            .expect_err("payload receipt must not replace verified invocation proof");
+
+        assert!(err.to_string().contains("response.consent_invocation"));
+    }
+
+    #[test]
+    fn local_daemon_system_target_preserves_realm_authority_owner() {
+        let target = local_daemon_system_ability_target(
+            crate::daemon::ability::names::federation::DISCOVER,
+            "easynet:///r/acme/authority",
+        )
+        .expect("realm Authority target");
+
+        assert_eq!(target.callee_ura(), "easynet:///r/acme/authority");
+    }
+
+    #[test]
+    fn local_system_context_requires_complete_explicit_facts() {
+        let complete = LocalSystemInvocationContext::new(
+            "easynet:///r/acme/resource/device.local/probe/alive",
+            [0x33; 16],
+            &[],
+            std::time::Duration::from_secs(5),
+            Some("trace-1"),
+        )
+        .expect("complete context");
+        assert_eq!(complete.invocation_nonce, [0x33; 16]);
+        assert_eq!(complete.step_timeout, std::time::Duration::from_secs(5));
+
+        assert!(LocalSystemInvocationContext::new(
+            "",
+            [0x33; 16],
+            &[],
+            std::time::Duration::from_secs(5),
+            None,
+        )
+        .is_err());
+        let placeholder_error = LocalSystemInvocationContext::new(
+            "easynet:///r/acme/resource/user.00000000-0000-0000-0000-000000000000/runtime-state/read",
+            [0x33; 16],
+            &[],
+            std::time::Duration::from_secs(5),
+            None,
+        )
+        .expect_err("all-zero User subject must fail before issuer construction");
+        assert!(placeholder_error
+            .to_string()
+            .contains("all-zero principal placeholder"));
+        assert!(LocalSystemInvocationContext::new(
+            "easynet:///r/acme/resource/device.local/probe/alive",
+            [0; 16],
+            &[],
+            std::time::Duration::from_secs(5),
+            None,
+        )
+        .is_err());
+        assert!(LocalSystemInvocationContext::new(
+            "easynet:///r/acme/resource/device.local/probe/alive",
+            [0x33; 16],
+            &[],
+            std::time::Duration::ZERO,
+            None,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn local_system_context_for_agent_target_uses_agent_owner_subject() {
         let selector = crate::core::ura::AbilitySelector::parse(
             "easynet:///r/acme/ability/alice.claude.weather",
         )
         .expect("agent ability selector");
         let target = LocalAbilityTarget::from_selector(&selector);
+        let context = LocalSystemInvocationIssuer::root_context_for_target(
+            &target,
+            &[],
+            std::time::Duration::from_secs(5),
+            None,
+        )
+        .expect("issuer context");
 
         assert_eq!(target.dispatch_name(), "claude.weather");
         assert_eq!(target.callee_ura(), "easynet:///r/acme/agent/alice.claude");
-        assert_eq!(
-            target.default_subject_ura(),
-            "easynet:///r/acme/agent/alice.claude"
-        );
+        assert_eq!(context.subject_ura, "easynet:///r/acme/agent/alice.claude");
     }
 
     #[test]
-    fn local_ability_target_uses_ability_subject_for_hub_owner() {
+    fn local_system_context_for_realm_authority_target_uses_ability_subject() {
         let selector = crate::core::ura::AbilitySelector::parse(
-            "easynet:///r/acme/ability/hub.federation.resolve",
+            "easynet:///r/acme/ability/authority.federation.resolve",
         )
-        .expect("hub ability selector");
+        .expect("realm Authority ability selector");
         let target = LocalAbilityTarget::from_selector(&selector);
+        let context = LocalSystemInvocationIssuer::root_context_for_target(
+            &target,
+            &[],
+            std::time::Duration::from_secs(5),
+            None,
+        )
+        .expect("issuer context");
 
         assert_eq!(target.dispatch_name(), "federation.resolve");
-        assert_eq!(target.callee_ura(), "easynet:///r/acme/hub");
+        assert_eq!(target.callee_ura(), "easynet:///r/acme/authority");
         assert_eq!(
-            target.default_subject_ura(),
-            "easynet:///r/acme/ability/hub.federation.resolve"
+            context.subject_ura,
+            "easynet:///r/acme/ability/authority.federation.resolve"
         );
     }
 
     #[test]
-    fn invoke_local_ability_surfaces_daemon_down_with_actionable_message() {
-        // Fresh HOME: no Axon daemon socket can be accepting. The
-        // compatibility helper must surface the same actionable
-        // daemon-down message while routing through daemon.sock,
-        // not the legacy control socket frame.
-        let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let err =
-            invoke_local_ability("observe.health", json!({})).expect_err("daemon-down must fail");
-        let msg = format!("{err}");
+    fn classification_uses_typed_daemon_status_not_message_text() {
+        let not_found = anyhow::Error::new(LocalInvokeFailure::DaemonStatus {
+            ability: "skill.list".to_string(),
+            code: LocalInvokeStatusCode::NotFound,
+            message: "wording may change".to_string(),
+        });
+        assert_eq!(
+            classify_invoke_failure(&not_found),
+            LocalInvokeFailureClass::AbilityUnregistered
+        );
+
+        let untyped = anyhow::anyhow!("unknown_ability and daemon not running are only text");
+        assert_eq!(
+            classify_invoke_failure(&untyped),
+            LocalInvokeFailureClass::Failed
+        );
+    }
+
+    #[test]
+    fn non_not_found_daemon_status_remains_terminal() {
+        let unavailable = anyhow::Error::new(LocalInvokeFailure::DaemonStatus {
+            ability: "agent.start".to_string(),
+            code: LocalInvokeStatusCode::Unavailable,
+            message: "daemon reported a runtime failure".to_string(),
+        });
+        assert_eq!(
+            classify_invoke_failure(&unavailable),
+            LocalInvokeFailureClass::Failed
+        );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn bidi_down_projection_preserves_binary_chunk_as_lossless_b64() {
+        use axon_sdk::pb::axon::v1::{
+            invoke_bidi_down::Payload as DownPayload, BinaryChunk, InvokeBidiDown,
+        };
+
+        let frame = project_invoke_bidi_down_frame(InvokeBidiDown {
+            sequence: 7,
+            payload: Some(DownPayload::BinaryChunk(BinaryChunk {
+                stream_id: 3,
+                data: vec![0xff, 0x00, 0x01],
+                ..BinaryChunk::default()
+            })),
+            ..InvokeBidiDown::default()
+        })
+        .expect("binary chunk projection")
+        .expect("binary chunk frame");
+
+        assert_eq!(frame.sequence, 7);
+        assert_eq!(frame.payload["type"], "binary");
+        assert_eq!(frame.payload["stream_id"], 3);
+        assert_eq!(frame.payload["data_b64"], "/wAB");
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn bidi_receipt_projection_rejects_non_json_payload_content_type() {
+        use axon_sdk::pb::axon::v1::{
+            invoke_bidi_down::Payload as DownPayload, InvocationReceipt, InvokeBidiDown,
+        };
+
+        let error = project_invoke_bidi_down_frame(InvokeBidiDown {
+            payload: Some(DownPayload::Receipt(InvocationReceipt {
+                payload_content_type: "application/octet-stream".to_string(),
+                payload: vec![1, 2, 3],
+                ..InvocationReceipt::default()
+            })),
+            ..InvokeBidiDown::default()
+        })
+        .expect_err("receipt payload content_type must be JSON");
+
         assert!(
-            msg.contains("daemon not running"),
-            "must say `daemon not running`; got: {msg}"
+            error.to_string().contains("non-JSON content_type"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[cfg(feature = "axon-pb")]
+    #[test]
+    fn bidi_receipt_projection_rejects_malformed_json_payload() {
+        use axon_sdk::pb::axon::v1::{
+            invoke_bidi_down::Payload as DownPayload, InvocationReceipt, InvokeBidiDown,
+        };
+
+        let error = project_invoke_bidi_down_frame(InvokeBidiDown {
+            payload: Some(DownPayload::Receipt(InvocationReceipt {
+                payload_content_type: "application/json".to_string(),
+                payload: b"{not-json".to_vec(),
+                ..InvocationReceipt::default()
+            })),
+            ..InvokeBidiDown::default()
+        })
+        .expect_err("receipt payload JSON must parse");
+
+        assert!(
+            error.to_string().contains("not valid JSON"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[test]
+    fn runtime_state_read_subject_uses_user_owned_resource_not_daemon_identity() {
+        let subject = LocalRuntimeStateReadAttachment::from_runtime_attachment(
+            &runtime_state_read_credentials(),
+            &runtime_state_read_discovery("acme", Some("dev-a"), paired_user_runtime_signer_flag()),
+            &ReadyRuntimeStateReadSignerCustody,
+        )
+        .expect("runtime-state read subject from ready runtime attachment")
+        .into_subject_ura()
+        .expect("canonical runtime-state read subject");
+
+        assert_eq!(
+            subject,
+            "easynet:///r/acme/resource/user.user-alice/runtime-state/read"
+        );
+        assert_ne!(subject, crate::core::ura::device_ura("acme", "dev-a"));
+    }
+
+    #[test]
+    fn runtime_state_read_subject_requires_ready_signer_capability() {
+        let error = LocalRuntimeStateReadAttachment::from_runtime_attachment(
+            &runtime_state_read_credentials(),
+            &runtime_state_read_discovery("acme", Some("dev-a"), vec![]),
+            &ReadyRuntimeStateReadSignerCustody,
+        )
+        .expect_err("runtime-state read must require daemon Ready signer proof");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("paired User caller signer custody"),
+            "wrong readiness error: {message}"
+        );
+    }
+
+    #[test]
+    fn runtime_state_read_subject_rejects_stale_runtime_attachment() {
+        let error = LocalRuntimeStateReadAttachment::from_runtime_attachment(
+            &runtime_state_read_credentials(),
+            &runtime_state_read_discovery(
+                "acme",
+                Some("other-node"),
+                paired_user_runtime_signer_flag(),
+            ),
+            &ReadyRuntimeStateReadSignerCustody,
+        )
+        .expect_err("runtime-state read must bind credentials to the active runtime attachment");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(
+                "daemon node `other-node` does not match paired credentials node `dev-a`"
+            ),
+            "wrong stale runtime attachment error: {message}"
+        );
+    }
+
+    #[test]
+    fn runtime_state_read_subject_rejects_missing_live_signer_custody() {
+        let error = LocalRuntimeStateReadAttachment::from_runtime_attachment(
+            &runtime_state_read_credentials(),
+            &runtime_state_read_discovery("acme", Some("dev-a"), paired_user_runtime_signer_flag()),
+            &FailedRuntimeStateReadSignerCustody,
+        )
+        .expect_err("runtime-state read must prove live caller signer custody");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("test signer unavailable"),
+            "wrong signer custody error: {message}"
+        );
+    }
+
+    #[test]
+    fn runtime_state_read_subject_rejects_missing_user_id_before_device_fallback() {
+        let credentials = crate::daemon::persistence::config::Credentials {
+            node_id: "dev-a".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.example:50051".to_string(),
+            realm: "acme".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".to_string()),
+            user_id: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+
+        let error = LocalRuntimeStateReadAttachment::from_runtime_attachment(
+            &credentials,
+            &runtime_state_read_discovery("acme", Some("dev-a"), paired_user_runtime_signer_flag()),
+            &ReadyRuntimeStateReadSignerCustody,
+        )
+        .expect_err("missing user_id must fail before any device subject fallback");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("runtime-state read subject unavailable"),
+            "wrong readiness error: {message}"
         );
         assert!(
-            msg.contains("easynet runtime start"),
-            "must point at `easynet [runtime] start`; got: {msg}"
+            message.contains("missing user_id"),
+            "runtime-state read must fail on user custody, not derive a device subject: {message}"
+        );
+    }
+
+    #[test]
+    fn runtime_governance_read_subject_uses_realm_authority_in_hub_mode() {
+        let subject = LocalRuntimeOwnerReadAttachment::from_discovery(
+            &hub_runtime_governance_discovery("acme"),
+            &FailedRuntimeStateReadSignerCustody,
+            "runtime governance read subject unavailable",
+        )
+        .expect("hub governance read subject must not require paired user signer custody")
+        .into_subject_ura()
+        .expect("hub authority subject");
+
+        assert_eq!(subject, "easynet:///r/acme/authority");
+    }
+
+    #[test]
+    fn runtime_governance_read_subject_uses_device_owner_for_device_only_credentials() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(&device_only_runtime_credentials())
+            .expect("save device-only credentials");
+
+        let subject = LocalRuntimeOwnerReadAttachment::from_discovery(
+            &runtime_state_read_discovery("acme", Some("dev-a"), vec![]),
+            &FailedRuntimeStateReadSignerCustody,
+            "runtime governance read subject unavailable",
+        )
+        .expect("device-only governance read subject must not require paired user signer custody")
+        .into_subject_ura()
+        .expect("device runtime-owner subject");
+
+        assert_eq!(subject, "easynet:///r/acme/device/dev-a");
+    }
+
+    #[test]
+    fn runtime_owner_read_subject_uses_device_owner_for_bound_device_credentials() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(&runtime_state_read_credentials())
+            .expect("save bound device credentials");
+
+        let subject = LocalRuntimeOwnerReadAttachment::runtime_owner_from_discovery(
+            &runtime_state_read_discovery("acme", Some("dev-a"), vec![]),
+            "runtime agent inventory read subject unavailable",
+        )
+        .expect("runtime-owner read subject must not require paired user signer custody")
+        .into_subject_ura()
+        .expect("device runtime-owner subject");
+
+        assert_eq!(subject, "easynet:///r/acme/device/dev-a");
+    }
+
+    #[test]
+    fn runtime_governance_read_subject_rejects_unknown_daemon_mode() {
+        let mut discovery = hub_runtime_governance_discovery("acme");
+        discovery.daemon_identity.as_mut().expect("identity").mode = "worker".to_string();
+
+        let error = LocalRuntimeOwnerReadAttachment::from_discovery(
+            &discovery,
+            &ReadyRuntimeStateReadSignerCustody,
+            "runtime governance read subject unavailable",
+        )
+        .expect_err("unknown daemon mode must fail closed");
+        assert!(
+            error.to_string().contains("cannot own runtime reads"),
+            "wrong error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn resource_catalogue_read_uses_catalogue_subject_policy() {
+        assert!(
+            crate::daemon::ability::names::governance::is_runtime_catalogue_read(
+                crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+            )
+        );
+        assert!(
+            crate::daemon::ability::names::governance::is_runtime_catalogue_read(
+                crate::daemon::ability::names::resources::META_LIST_RESOURCES,
+            )
+        );
+        assert!(
+            !crate::daemon::ability::names::governance::is_runtime_catalogue_read(
+                crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+            )
         );
     }
 }

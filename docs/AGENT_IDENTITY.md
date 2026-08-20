@@ -37,8 +37,8 @@ construct one form by string-formatting another. In particular:
 
 ```rust
 // FORBIDDEN
-let uri = format!("easynet:///{}", agent_id);
-let id  = uri.strip_prefix("easynet:///").unwrap();
+let ura = format!("easynet:///{}", agent_id);
+let id  = ura.strip_prefix("easynet:///").unwrap();
 ```
 
 L1 ↔ L2 ↔ L3 transitions go through **typed converters** (when L3
@@ -233,16 +233,18 @@ lower to the same `IrTarget::Agent(AgentId)` IR shape; only the
 
 ---
 
-## 5. Migration to URA (future, do not implement now)
+## 5. Current URA boundary
 
-When URA L3 lands, the mapping will be:
+URA is the current L3 identity model. `AgentId` remains an L2 compiler/local
+registry label; it is never serialized as a protocol identity and never parsed
+out of a URA to authorize a call.
 
-| L2 (`AgentId`) field | L3 (URA URI) location |
+| L2 (`AgentId`) field | Current L3 projection |
 |---|---|
-| `name` | subject-value, encoded as `agent.<name>` under `subject-type=reg` |
-| `tenant` | envelope `tenant_id` (portable mode) **or** URI query `?tenant_id=<x>` (bound mode, ontology §11.5) |
-| (none — ability is on `IrStep`) | resource-kind = `abilities`, resource-path = `<ability-name>` |
-| (none — version is future) | `@<version-ref>` |
+| `name` | Agent id segment selected by the Axon `agent_ura` builder |
+| `tenant` | Local compiler namespace only; not a URA query or authority claim |
+| ability on `IrStep` | Owner-local ability name bound by an Axon AbilityDescriptorRef |
+| descriptor version | DescriptorRef fact, not a suffix invented by EAL |
 
 Concretely, an L2 step like:
 
@@ -253,26 +255,22 @@ IrStep {
 }
 ```
 
-will map to L3 wire form:
+is resolved with explicit realm and owner authority before it becomes a signed
+Invocation:
 
 ```
-URI:      easynet:///r/demo/ability/alice.claude.chat
-envelope: { tenant_id: "silan", ... }
+URA: easynet:///r/demo/ability/alice.claude.chat
 ```
 
-(under URA portable tenant mode, the default — see URA §7.1).
-
-The mapping is **forward-only**. There is no requirement that the
-URA URI round-trip back to a unique L2 `AgentId`; URA carries more
-information (subject-type, scope, namespace, version) that L2 does
-not represent. The right transition is:
+The mapping is **forward-only**. URA carries protocol authority, owner, realm,
+and descriptor identity that an L2 `AgentId` does not contain. Callers use
+Axon's typed builders and `AbilitySelector`; they do not recover authorization
+state by splitting strings:
 
 ```rust
-// FUTURE — when URA module exists
-fn agent_id_to_ura(id: &AgentId, ability: &str) -> ura::Uri { ... }
-// There is intentionally no `ura_to_agent_id`. Going from L3 to L2
-// is lossy. If you need to dispatch by URA URI, do it through the
-// L3 dispatch path, not by trying to extract an AgentId.
+let owner = easynet_axon::ura::agent_ura(realm, user_id, &id.name);
+let ability_ura = easynet_axon::ura::owner_ability_ura(&owner, ability)?;
+// There is intentionally no authorization-bearing `ura_to_agent_id`.
 ```
 
 ---
@@ -302,7 +300,7 @@ This layer does not, and will not, do any of the following.
 If a requirement points at one of these, it belongs in a different
 layer or a future epic.
 
-- **Not a URI parser.** That is L3 (URA).
+- **Not a URA parser.** URA grammar and canonicalization belong to Axon.
 - **Not a canonicalization spec.** L3 has its own normalization
   (NFC, percent-encoding, signed bytes). L2 only validates
   ASCII-lowercase shape.

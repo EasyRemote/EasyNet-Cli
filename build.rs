@@ -48,9 +48,66 @@ fn main() {
     println!("cargo:rerun-if-changed=schemas/common.proto");
     println!("cargo:rerun-if-changed=schemas/control_plane.proto");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=plugins/desktop-menubar/plugin.toml");
+    println!("cargo:rerun-if-changed=plugins/desktop-menubar/scripts/build-macos.sh");
+    println!(
+        "cargo:rerun-if-changed=plugins/desktop-menubar/companion/macos/EasyNetMenuBar/Info.plist"
+    );
+    println!(
+        "cargo:rerun-if-changed=plugins/desktop-menubar/companion/macos/EasyNetMenuBar/Sources/EasyNetMenuBar/main.swift"
+    );
+    println!(
+        "cargo:rerun-if-changed=plugins/desktop-menubar/companion/macos/EasyNetMenuBar/Resources"
+    );
+
+    materialize_desktop_menubar_package();
 
     #[cfg(feature = "proto-gen")]
     compile_proto();
+}
+
+fn materialize_desktop_menubar_package() {
+    let Ok(target_os) = std::env::var("CARGO_CFG_TARGET_OS") else {
+        return;
+    };
+    if target_os != "macos" {
+        return;
+    }
+
+    let manifest_dir =
+        std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
+    let package_root = out_dir
+        .join("builtin-plugins")
+        .join("easynet.desktop.menubar");
+    let script = manifest_dir
+        .join("plugins")
+        .join("desktop-menubar")
+        .join("scripts")
+        .join("build-macos.sh");
+
+    std::fs::create_dir_all(&package_root).expect("create desktop menubar package root");
+    std::fs::copy(
+        manifest_dir
+            .join("plugins")
+            .join("desktop-menubar")
+            .join("plugin.toml"),
+        package_root.join("plugin.toml"),
+    )
+    .expect("copy desktop menubar plugin manifest into materialized package");
+
+    let status = std::process::Command::new(&script)
+        .env("EASYNET_DESKTOP_MENUBAR_PACKAGE_ROOT", &package_root)
+        .status()
+        .expect("run desktop menubar macOS build script");
+    if !status.success() {
+        panic!("desktop menubar macOS build script failed with {status}");
+    }
+
+    println!(
+        "cargo:rustc-env=EASYNET_DESKTOP_MENUBAR_PACKAGE_ROOT={}",
+        package_root.display()
+    );
 }
 
 #[cfg(feature = "proto-gen")]

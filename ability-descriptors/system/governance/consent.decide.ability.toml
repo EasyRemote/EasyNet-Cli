@@ -1,6 +1,22 @@
-schema_version = "1"
+schema_version = "3"
 name = "consent.decide"
+descriptor_version = "1.0.0"
 description = "Deliver a decision for a pending permission request by id. Decision must be one of `allow`, `deny`, or `allow_once`. v1 cross-machine semantics: advisory only."
+exposure = "operator"
+dedicated_surface = "none"
+subject_contract_kind = "explicit-ura"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

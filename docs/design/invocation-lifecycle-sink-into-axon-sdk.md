@@ -18,7 +18,7 @@
 
 ## 1. 根因（为什么不收敛）
 
-**根因：生命周期编排逻辑没有归宿（no home），被复制进了 4 个传输适配器，因为 SDK 此前只下沉了"原语"（admission gate、dispatch_shim、receipt、ledger_sink）却从未下沉"编排这些原语的状态机"。**
+**根因：生命周期编排逻辑没有归宿（no home），被复制进了 4 个传输适配器，因为 SDK 此前只下沉了"原语"（admission gate、descriptor_bound_dispatch、receipt、ledger_sink）却从未下沉"编排这些原语的状态机"。**
 
 证据（同一条生命周期的 5 个阶段在 4 个文件里各写一遍）：
 
@@ -26,9 +26,9 @@
 |---|---|---|
 | Admission 4-step gate | `admission.rs::run_descriptor_bound_admission`（SDK 已有，mod.rs:41 导出） | `admission_facade.rs:506 verify_invoke` / `:522 verify_invoke_stream` / `:539 verify_envelope_for_bidi` — 三个几何各调一次 `run_transport_policy_gate` |
 | Route resolve | `SelectedInvokeRoute`（CLI 内，**proto-coupled**，见 §5 阻塞 B1） | `route_resolver.rs:595 resolve_route` 被 `unary_dispatcher.rs` / `stream_dispatcher.rs:397` / `bidi_dispatcher.rs:604` 三处相同调用 |
-| Dispatch-ack | `dispatch_shim.rs:338-572 dispatch_rpc_*/open_stream_*/open_bidi_*`（已是 Axon 原语） | 三个 dispatcher 各自按几何挑入口、各自 await |
+| Dispatch-ack | `descriptor_bound_dispatch.rs:338-572 dispatch_rpc_*/open_stream_*/open_bidi_*`（已是 Axon 原语） | 三个 dispatcher 各自按几何挑入口、各自 await |
 | Pending + backpressure 分类 | `backpressure.rs::BackpressurePolicy`（SDK 已有） | `unary_dispatcher.rs:1509-1625` / `bidi_dispatcher.rs:304-339` / `local_session_dispatcher.rs spawn_*_forwarder` 各写一遍 Full=retryable vs Closed=offline |
-| Terminal detect + receipt project | `handle.rs:83 is_terminal()` + `TERMINAL_STATES`（SDK 已有）+ `RpcDispatchOutcome{state,terminal_receipt}`（dispatch_shim.rs:230-241） | `unary_dispatcher.rs:1723-1753` / `bidi_dispatcher.rs:378-403` / `stream_dispatcher.rs:359-371` / `local_session_dispatcher.rs:1596-1610` 各写一遍终态判定 |
+| Terminal detect + receipt project | `handle.rs:83 is_terminal()` + `TERMINAL_STATES`（SDK 已有）+ `RpcDispatchOutcome{state,terminal_receipt}`（descriptor_bound_dispatch.rs:230-241） | `unary_dispatcher.rs:1723-1753` / `bidi_dispatcher.rs:378-403` / `stream_dispatcher.rs:359-371` / `local_session_dispatcher.rs:1596-1610` 各写一遍终态判定 |
 | Ledger project | `ledger_sink.rs::LedgerSink`（SDK 已有 seam） | `ledger_projection.rs:37 build_unary_ledger_record` / `:514 ledger_record_from_remote_receipt` + `bidi_dispatcher.rs:1178-1204` |
 | 失败分类 | （SDK `AxonErrorKind` 仅 7 个通用 gRPC 变体，见 §5 阻塞 B2） | `invoke_remote_initiator.rs:354 RequestOutcome` / `:367 SessionRequestError{TargetOffline\|PermissionDenied\|UpstreamFailure\|UpstreamTimeout}` — CLI 本地枚举 |
 
@@ -120,7 +120,7 @@ EasyNet-Cli/src/services/invocation_transport/
 - `Admitting→Failed`：任一拒因 → **不发 admission receipt**（runtime 前拒，纯 `tonic::Status`）。
 - `Routing→Dispatching`：`resolve_route` Ok 且 `matches_self_target_ura == true → LOCAL`；`== false → REMOTE`（sub-target 由 Transport adapter 选：presence sender / session call_id / peer hub endpoint）。`is_authoritative_local_or_better()` 决定 local vs better-route。
 - `Routing→Failed`：`ResolveRouteFailure`（无路由 / ability_ura ownership 不符 / dispatch_key 不符）| 跨 realm delegation 未解析。
-- `Dispatching→Projecting`：LOCAL → `dispatch_shim` 返回 `RpcDispatchOutcome`/handle；REMOTE → `Transport.recv_frame` 在 `PRESENCE_DISPATCH_REPLY_TIMEOUT` 内 yield 终态 frame。
+- `Dispatching→Projecting`：LOCAL → `descriptor_bound_dispatch` 返回 `RpcDispatchOutcome`/handle；REMOTE → `Transport.recv_frame` 在 `PRESENCE_DISPATCH_REPLY_TIMEOUT` 内 yield 终态 frame。
 - `Dispatching→Dispatching`（self-loop）：非终态 frame，`recv_frame`/`send_frame` 继续；bidi 校验 up-sequence。**这条 self-loop 是 stream pump 的归宿**。
 - `Dispatching→Failed`：target offline/closed（**busy != offline**：`Full`=可重试背压保持 session；`Closed`=`OfflineReason::StreamClosed` 驱逐）| timeout（`UpstreamTimeout`）| `sender.try_send` err | escalation `Err{TargetOffline|PermissionDenied|UpstreamFailure|UpstreamTimeout}`。
 - `Projecting→Settled`：`outcome.state ∈ {Completed}`，carrier-v1 **要求**终态 receipt；`axon_took_it==false` 时写 ledger。
@@ -189,7 +189,7 @@ Axon proto 已是 Envelope/URA/Invocation/Receipt 的唯一定义（跨 repo 协
   验证：`cargo build -p easynet_axon`（default，proto-off）绿 → 证明 TransportFrame 全 proto-free。
 - **Step 2**：SDK 新建 `src/invocation/route.rs`：`RouteResolver` trait + `ResolvedRoute`（proto-free 投影，B1 裁决产物）。
   验证：`cargo build -p easynet_axon` 绿。
-- **Step 3**：SDK 新建 `src/invocation/lifecycle.rs`：`InvocationLifecycleContext` + 5 阶段 driver（`admit/route/dispatch/project/settle`）+ 状态枚举 + 失败分类（B2 裁决产物）。driver 调用已有 `run_descriptor_bound_admission` / `dispatch_shim`-等价原语 / `is_terminal` / `LedgerSink`。
+- **Step 3**：SDK 新建 `src/invocation/lifecycle.rs`：`InvocationLifecycleContext` + 5 阶段 driver（`admit/route/dispatch/project/settle`）+ 状态枚举 + 失败分类（B2 裁决产物）。driver 调用已有 `run_descriptor_bound_admission` / `descriptor_bound_dispatch`-等价原语 / `is_terminal` / `LedgerSink`。
   验证：`cargo build -p easynet_axon` 绿 + 为 driver 写单元测试（用 in-memory 假 Transport 跑通 5 阶段 happy path + 每条 Failed 边）。SDK 此时已能独立驱动一条调用。
 
 ### Phase B — CLI 建 adapter（逐几何替换，每替换一个删一个旧 dispatcher）

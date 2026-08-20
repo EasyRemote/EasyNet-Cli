@@ -7,7 +7,7 @@
 //
 // Permission model:
 //   - `--permission-mode acceptEdits` auto-approves file edits within the
-//     agent's cwd (which is an isolated workspace under ~/.easynet/workspaces).
+//     agent's cwd (which is an isolated workspace under ~/.easynet/agents).
 //   - `--allowedTools` additionally whitelists Bash operations that agents
 //     commonly need (opening generated files, listing the workspace, etc.)
 //     so they run without interactive prompts.
@@ -24,12 +24,13 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::daemon::execution::mission::adapter::{DriverCommand, DriverIsolation};
 use crate::daemon::execution::mission::dispatch::ToolCall;
 use crate::daemon::execution::mission::drivers::invocation_trace::{
     apply_tool_result_meta, parse_invocation_trace_metadata, text_to_json_value,
@@ -87,6 +88,11 @@ pub struct ClaudeOptions {
     pub max_output_bytes: usize,
     pub env: BTreeMap<String, String>,
     pub cwd: Option<PathBuf>,
+    /// Structured system content supplied by the caller. Kept separate from
+    /// stdin and projected through Claude Code's native system-prompt flag.
+    pub system_prompt: Option<String>,
+    /// Ambient-context policy for this invocation.
+    pub isolation: DriverIsolation,
     /// PR-7 Commit 2: Timeline writer. When `Some`, each
     /// streamed stdout line is emitted as a `progress` event on
     /// the P1-P6 event log (and broadcast to any live
@@ -101,14 +107,10 @@ pub struct ClaudeOptions {
     /// progress to its broadcast channel; without it the
     /// stream surface was effectively snapshot+done.
     pub progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
-    /// Binary to spawn. Empty string means "use the driver
-    /// default" (`DEFAULT_CLAUDE_BINARY`). Dispatch fills this
-    /// from `AgentEntry::command` so operators who have a
-    /// custom install path (or a test that wires a fake binary
-    /// through `dummy_entry`) see their override honored. The
-    /// fallback mirrors the pre-refactor default so existing
-    /// registry rows with an empty `command` field keep working.
-    pub command: String,
+    /// Binary state to spawn. Dispatch converts
+    /// `AgentEntry::command` into a typed default-or-explicit
+    /// state before the driver sees it.
+    pub command: DriverCommand,
     /// When `Some(<UUID>)`, the driver continues an existing
     /// claude-code session via `--resume <id>` instead of starting
     /// a fresh one. The session is the same on-disk transcript
@@ -127,7 +129,8 @@ pub struct ClaudeOptions {
     pub fresh_session_id: Option<String>,
 }
 
-/// Default binary name when `ClaudeOptions::command` is empty.
+/// Default binary name when `ClaudeOptions::command` is
+/// `DriverCommand::Default`.
 /// Exposed as a constant so tests and adapters can name it
 /// without re-hardcoding the string.
 pub const DEFAULT_CLAUDE_BINARY: &str = "claude";
@@ -140,9 +143,11 @@ impl Default for ClaudeOptions {
             max_output_bytes: 1_048_576,
             env: BTreeMap::new(),
             cwd: None,
+            system_prompt: None,
+            isolation: DriverIsolation::Agent,
             timeline: None,
             progress_tx: None,
-            command: String::new(),
+            command: DriverCommand::Default,
             resume_thread_id: None,
             fresh_session_id: None,
         }
@@ -150,17 +155,11 @@ impl Default for ClaudeOptions {
 }
 
 impl ClaudeOptions {
-    /// Resolve the binary the driver should spawn. Empty
-    /// `command` yields the default; anything else is returned
-    /// verbatim. Kept as a small helper so both the main
-    /// streaming path and the doctor / follow-up invocations
-    /// share one rule.
+    /// Resolve the binary the driver should spawn. Kept as a
+    /// small helper so both the main streaming path and the
+    /// doctor / follow-up invocations share one rule.
     pub fn resolved_command(&self) -> &str {
-        if self.command.is_empty() {
-            DEFAULT_CLAUDE_BINARY
-        } else {
-            self.command.as_str()
-        }
+        self.command.resolve(DEFAULT_CLAUDE_BINARY)
     }
 }
 
@@ -174,40 +173,9 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
         "--output-format".to_string(),
         "stream-json".to_string(),
         "--verbose".to_string(),
-        // Auto-accept file edits within cwd (the isolated workspace).
-        // Writes outside cwd still require approval.
-        "--permission-mode".to_string(),
-        "acceptEdits".to_string(),
-        // Pre-authorise common read-only / launch shell commands so the
-        // agent doesn't stall waiting for approval on `open`, `ls`, etc.
-        // The trailing `mcp__easynet` (no parens, no glob) authorises
-        // every MCP tool exposed by the EasyNet workspace MCP server
-        // — i.e. fs.read / fs.write / process.exec / shell.run /
-        // http.request and the agent's own per-workspace abilities.
-        // Without this, the spawned `claude -p` runs in non-interactive
-        // mode and refuses to call MCP tools because no human is there
-        // to approve. Claude Code's CLI accepts `mcp__<server>` to
-        // mean "every tool from this MCP server is pre-allowed".
-        "--allowedTools".to_string(),
-        // Pre-authorise the EasyNet-shaped agent loop.
-        //
-        // `Bash(easynet:*)` is what a freshly-installed agent
-        // needs to actually run the steps its seeded skills teach
-        // (e.g. `easynet pages create`, `easynet ability deploy`)
-        // — without it, the agent reads `easynet-pages-author`
-        // SKILL.md and then stalls asking the (non-interactive)
-        // dispatcher to approve every shell call. `Bash(curl:*)`
-        // is included so the agent can verify its own deploy by
-        // hitting the URL it just published.
-        //
-        // The rest of the list is unchanged from the prior allow
-        // set (Bash safe-readers + Read/Write/Edit + the EasyNet
-        // MCP namespace).
-        "Bash(open:*) Bash(ls:*) Bash(cat:*) Bash(pwd) Bash(mkdir:*) \
-         Bash(easynet:*) Bash(curl:*) \
-         Read Write Edit Glob Grep mcp__easynet"
-            .to_string(),
     ];
+
+    append_claude_policy_args(&mut args, &opts);
 
     if let Some(m) = &opts.model {
         args.push("--model".to_string());
@@ -240,72 +208,14 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
     }
 
     // Explicitly load MCP config from the workspace.
-    if let Some(cwd) = &opts.cwd {
-        let mcp_json = cwd.join(".mcp.json");
-        if mcp_json.exists() {
-            args.push("--mcp-config".to_string());
-            args.push(mcp_json.to_string_lossy().to_string());
-        }
-        // G2 — installed skills as Claude Code plugins.
-        // `skill.install` writes to <cwd>/skills/<name>/.
-        // Claude Code's `--plugin-dir <path>` accepts a directory
-        // whose subdirs each look like a plugin (containing a
-        // skills/ / commands/ / agents/ / hooks/ subtree). When
-        // an EasyNet-installed skill matches that layout — which
-        // a github:owner/repo source typically does because
-        // upstream Claude-skill repos are shaped that way — the
-        // plugin gets discovered as `/{skill-name}` and the agent
-        // can invoke it.
-        //
-        // Pre-fix the skill files were dropped on disk but the
-        // adapter never told claude to look at them. The skill
-        // was inert.
-        // Two skill directories to scan:
-        //
-        //   * `<cwd>/.claude/skills/` — the Anthropic project-local
-        //     skill convention. This is where curator publishes
-        //     (`skill.publish` for claude-code agents) and where the
-        //     workspace seed (`easynet-collaborate`) lands. Claude
-        //     Code auto-scans this path inside the running subprocess
-        //     for plain SKILL.md files; passing `--plugin-dir` for
-        //     plugin-shaped subdirs gives it the entry hint when the
-        //     skill ships extra plugin assets.
-        //   * `<cwd>/skills/` — legacy EasyNet path, kept for
-        //     backward compatibility with skills installed via
-        //     `easynet skill install` against the pre-fix layout.
-        //     Walked for plugin-shaped subdirs only.
-        //
-        // Pre-fix only `<cwd>/skills/` was scanned; the workspace
-        // seed wrote to `<cwd>/skills/` too which Claude Code's
-        // own auto-loader did not reach for SKILL-only skills.
-        // The 2026-04-29 fix routes seeds + curator publishes to
-        // `.claude/skills/`; this scan adds discovery for both.
-        for skills_dir in [cwd.join(".claude").join("skills"), cwd.join("skills")] {
-            if !skills_dir.is_dir() {
-                continue;
+    if opts.isolation == DriverIsolation::Agent {
+        if let Some(cwd) = &opts.cwd {
+            let mcp_json = cwd.join(".mcp.json");
+            if mcp_json.exists() {
+                args.push("--mcp-config".to_string());
+                args.push(mcp_json.to_string_lossy().to_string());
             }
-            // Each subdirectory of skills/ is a candidate plugin.
-            // Only push --plugin-dir entries for ones that look
-            // plugin-shaped (contain a SKILL.md or plugin.json,
-            // or have a skills/ subdir of their own — claude's
-            // discovery is forgiving but we'd rather not point
-            // it at empty dirs that would just print a warning).
-            if let Ok(entries) = std::fs::read_dir(&skills_dir) {
-                for entry in entries.flatten() {
-                    let p = entry.path();
-                    if !p.is_dir() {
-                        continue;
-                    }
-                    let looks_plugin_shaped = p.join("plugin.json").is_file()
-                        || p.join("SKILL.md").is_file()
-                        || p.join("skills").is_dir()
-                        || p.join("commands").is_dir();
-                    if looks_plugin_shaped {
-                        args.push("--plugin-dir".to_string());
-                        args.push(p.to_string_lossy().to_string());
-                    }
-                }
-            }
+            append_claude_workspace_plugin_dirs(&mut args, cwd);
         }
     }
 
@@ -315,7 +225,7 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
     let run_start = std::time::Instant::now();
 
     // Shared state assembled from the stream.
-    let final_text = Arc::new(Mutex::new(String::new()));
+    let final_text = Arc::new(Mutex::new(None::<String>));
     let stats = Arc::new(Mutex::new(RunStats::default()));
     let final_text_cb = Arc::clone(&final_text);
     let stats_cb = Arc::clone(&stats);
@@ -385,7 +295,11 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
     let text = lock_or_recover(&final_text).clone();
 
     if result.exit_code != 0 {
-        anyhow::bail!(format_child_exit_error(&binary, &result, &text));
+        anyhow::bail!(format_child_exit_error(
+            &binary,
+            &result,
+            text.as_deref().unwrap_or("")
+        ));
     }
 
     let mut final_stats = lock_or_recover(&stats).clone();
@@ -393,13 +307,79 @@ pub fn invoke(prompt: &str, opts: ClaudeOptions) -> anyhow::Result<(String, RunS
         final_stats.duration_ms = run_start.elapsed().as_millis() as u64;
     }
 
-    if text.is_empty() {
-        // Fallback: stream didn't yield a result event (unexpected). Return
-        // raw stdout so the caller still sees something useful.
-        Ok((result.stdout, final_stats))
-    } else {
-        Ok((text, final_stats))
+    let Some(text) = text else {
+        anyhow::bail!(format_missing_final_result_event_error(&binary, &result));
+    };
+    Ok((text, final_stats))
+}
+
+fn append_claude_policy_args(args: &mut Vec<String>, opts: &ClaudeOptions) {
+    match opts.isolation {
+        DriverIsolation::Agent => {
+            // Preserve the registered agent's existing non-interactive tool
+            // policy for legacy calls.
+            args.extend([
+                "--permission-mode".to_string(),
+                "acceptEdits".to_string(),
+                "--allowedTools".to_string(),
+                "Bash(open:*) Bash(ls:*) Bash(cat:*) Bash(pwd) Bash(mkdir:*) \
+                 Bash(easynet:*) Bash(curl:*) \
+                 Read Write Edit Glob Grep mcp__easynet"
+                    .to_string(),
+            ]);
+        }
+        DriverIsolation::Strict => {
+            // Safe mode suppresses CLAUDE.md, skills, hooks, plugins, MCP and
+            // other project/user customizations. An empty tool set prevents
+            // the benchmark turn from observing host files or network state.
+            args.extend([
+                "--safe-mode".to_string(),
+                "--tools".to_string(),
+                String::new(),
+                "--permission-mode".to_string(),
+                "dontAsk".to_string(),
+                "--no-session-persistence".to_string(),
+            ]);
+        }
     }
+
+    if let Some(system_prompt) = &opts.system_prompt {
+        args.push("--append-system-prompt".to_string());
+        args.push(system_prompt.clone());
+    }
+}
+
+fn append_claude_workspace_plugin_dirs(args: &mut Vec<String>, cwd: &Path) {
+    // G2 — installed skills as Claude Code plugins.
+    //
+    // Claude Code owns a project-local skill convention:
+    // `<cwd>/.claude/skills/<name>/`. Mission workspace seeding and
+    // `skill.publish` for claude-code agents both write there. The
+    // driver consumes that runtime-owned directory only; historical
+    // `<cwd>/skills/` agent-private content must not influence process
+    // launch.
+    let skills_dir = cwd.join(".claude").join("skills");
+    if !skills_dir.is_dir() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(&skills_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if !p.is_dir() || !looks_like_claude_plugin_dir(&p) {
+            continue;
+        }
+        args.push("--plugin-dir".to_string());
+        args.push(p.to_string_lossy().to_string());
+    }
+}
+
+fn looks_like_claude_plugin_dir(path: &Path) -> bool {
+    path.join("plugin.json").is_file()
+        || path.join("SKILL.md").is_file()
+        || path.join("skills").is_dir()
+        || path.join("commands").is_dir()
 }
 
 fn format_child_exit_error(
@@ -434,10 +414,38 @@ fn format_child_exit_error(
     format!("{binary} exited with code {}", result.exit_code)
 }
 
+const MISSING_RESULT_STDOUT_PREVIEW_CHARS: usize = 1024;
+
+fn format_missing_final_result_event_error(
+    binary: &str,
+    result: &process_runner::ChildResult,
+) -> String {
+    let stdout_preview =
+        bounded_stdout_preview(&result.stdout, MISSING_RESULT_STDOUT_PREVIEW_CHARS);
+    format!(
+        "{binary} protocol error: process exited successfully but stream-json output did not \
+         include a terminal result event; stdout_preview={stdout_preview:?}"
+    )
+}
+
+fn bounded_stdout_preview(stdout: &str, max_chars: usize) -> String {
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() || max_chars == 0 {
+        return String::new();
+    }
+    let mut chars = trimmed.chars();
+    let preview: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{preview}…")
+    } else {
+        preview
+    }
+}
+
 /// Parse one stream-json line and print a trace event to stderr.
 fn handle_stream_line(
     line: &str,
-    final_text: &Arc<Mutex<String>>,
+    final_text: &Arc<Mutex<Option<String>>>,
     stats: &Arc<Mutex<RunStats>>,
     run_start: std::time::Instant,
 ) {
@@ -569,9 +577,12 @@ fn handle_stream_line(
         "result" => {
             // Final result event — capture the assistant's final text plus
             // aggregate usage and cost metrics.
-            if let Some(text) = v.get("result").and_then(Value::as_str) {
-                *lock_or_recover(final_text) = text.to_string();
-            }
+            *lock_or_recover(final_text) = Some(
+                v.get("result")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            );
             let mut s = lock_or_recover(stats);
             if let Some(n) = v.get("num_turns").and_then(Value::as_u64) {
                 s.num_turns = n;
@@ -709,12 +720,13 @@ impl AgentAdapter for ClaudeCodeAdapter {
                 max_output_bytes: opts.max_output_bytes,
                 env: opts.env,
                 cwd: Some(opts.cwd),
+                system_prompt: opts.system_prompt,
+                isolation: opts.isolation,
                 timeline: opts.timeline,
                 progress_tx: opts.progress_tx,
-                // Honor `InvokeOpts::command` — dispatch filled
-                // it from `AgentEntry::command`. Empty string
-                // falls through to the driver default inside
-                // `ClaudeOptions::resolved_command`.
+                // Honor `InvokeOpts::command` — dispatch converted
+                // the persisted registry value into typed runtime
+                // command state.
                 command: opts.command,
                 resume_thread_id: opts.resume_thread_id,
                 // The fresh-session-id bind path is currently
@@ -752,7 +764,11 @@ fn run_stats_to_usage(s: &RunStats) -> AgentUsage {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_child_exit_error, handle_stream_line, RunStats};
+    use super::{
+        append_claude_policy_args, append_claude_workspace_plugin_dirs, format_child_exit_error,
+        format_missing_final_result_event_error, handle_stream_line, ClaudeOptions, RunStats,
+    };
+    use crate::daemon::execution::mission::adapter::DriverIsolation;
     use crate::daemon::execution::mission::process_runner::ChildResult;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -765,6 +781,30 @@ mod tests {
             duration: Duration::from_millis(1),
             truncated: false,
         }
+    }
+
+    #[test]
+    fn strict_policy_uses_native_system_prompt_and_disables_ambient_tools() {
+        let opts = ClaudeOptions {
+            system_prompt: Some("benchmark system".to_string()),
+            isolation: DriverIsolation::Strict,
+            ..ClaudeOptions::default()
+        };
+        let mut args = Vec::new();
+        append_claude_policy_args(&mut args, &opts);
+        assert!(args.iter().any(|arg| arg == "--safe-mode"));
+        assert!(args.iter().any(|arg| arg == "--no-session-persistence"));
+        let tools = args.iter().position(|arg| arg == "--tools").unwrap();
+        assert_eq!(args.get(tools + 1).map(String::as_str), Some(""));
+        let system = args
+            .iter()
+            .position(|arg| arg == "--append-system-prompt")
+            .unwrap();
+        assert_eq!(
+            args.get(system + 1).map(String::as_str),
+            Some("benchmark system")
+        );
+        assert!(!args.iter().any(|arg| arg.contains("mcp__easynet")));
     }
 
     #[test]
@@ -800,8 +840,81 @@ mod tests {
     }
 
     #[test]
+    fn claude_driver_rejects_missing_final_result_event_with_bounded_stdout() {
+        let long_stdout = format!("{}\n{}", "x".repeat(1500), "tail");
+        let msg = format_missing_final_result_event_error("claude", &child(&long_stdout, "", 0));
+
+        assert!(
+            msg.contains("protocol error"),
+            "missing terminal event must be a protocol error: {msg}"
+        );
+        assert!(
+            msg.contains("terminal result event"),
+            "error must name the missing terminal fact: {msg}"
+        );
+        assert!(
+            msg.contains('…'),
+            "long stdout diagnostics must be visibly truncated: {msg}"
+        );
+        assert!(
+            !msg.contains("tail"),
+            "bounded diagnostic must not expose unbounded raw stdout: {msg}"
+        );
+    }
+
+    #[test]
+    fn stream_result_event_records_empty_terminal_result() {
+        let final_text = Arc::new(Mutex::new(None::<String>));
+        let stats = Arc::new(Mutex::new(RunStats::default()));
+        handle_stream_line(
+            r#"{"type":"result","result":"","num_turns":1}"#,
+            &final_text,
+            &stats,
+            std::time::Instant::now(),
+        );
+
+        assert_eq!(
+            final_text.lock().unwrap().as_deref(),
+            Some(""),
+            "empty result event is still a terminal result fact"
+        );
+        assert_eq!(stats.lock().unwrap().num_turns, 1);
+    }
+
+    #[test]
+    fn plugin_dirs_use_claude_project_skill_root_only() {
+        let workspace = tempfile::tempdir().expect("workspace");
+
+        let canonical = workspace
+            .path()
+            .join(".claude")
+            .join("skills")
+            .join("canonical");
+        std::fs::create_dir_all(&canonical).expect("canonical skill dir");
+        std::fs::write(canonical.join("SKILL.md"), "---\nname: canonical\n---\n")
+            .expect("canonical skill");
+
+        let legacy = workspace.path().join("skills").join("legacy");
+        std::fs::create_dir_all(&legacy).expect("legacy skill dir");
+        std::fs::write(legacy.join("SKILL.md"), "---\nname: legacy\n---\n").expect("legacy skill");
+
+        let mut args = Vec::new();
+        append_claude_workspace_plugin_dirs(&mut args, workspace.path());
+
+        assert_eq!(args.len(), 2, "expected one --plugin-dir pair: {args:?}");
+        assert_eq!(args[0], "--plugin-dir");
+        assert_eq!(args[1], canonical.to_string_lossy());
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.contains("/skills/legacy") || arg.ends_with("skills/legacy")),
+            "legacy workspace skills path must not affect Claude launch args: {args:?}"
+        );
+    }
+
+    #[test]
     fn stream_tool_result_backfills_easynet_invocation_identity() {
-        let final_text = Arc::new(Mutex::new(String::new()));
+        let final_text = Arc::new(Mutex::new(None::<String>));
         let stats = Arc::new(Mutex::new(RunStats::default()));
         let start = std::time::Instant::now();
         handle_stream_line(
@@ -811,7 +924,7 @@ mod tests {
             start,
         );
         handle_stream_line(
-            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"{\"ok\":true,\"x-easynet-invocation\":{\"ability\":\"docetl.code_filter\",\"ability_ura\":\"easynet:///r/localhost/ability/device.dev-1.docetl.code_filter\",\"mcp_tool\":\"docetl_code_filter\",\"invocation_ura\":\"easynet:///r/localhost/invocation/req-1\",\"callee_ura\":\"easynet:///r/localhost/device/dev-1\"}}"}]}]}}"#,
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"{\"ok\":true,\"x-easynet-invocation\":{\"ability\":\"docetl.code_filter\",\"ability_ura\":\"easynet:///r/localhost/ability/alice.docetl.docetl.code_filter\",\"mcp_tool\":\"docetl_code_filter\",\"invocation_ura\":\"easynet:///r/localhost/resource/device.dev-1/invocation/req-1/history\",\"callee_ura\":\"easynet:///r/localhost/agent/alice.docetl\"}}"}]}]}}"#,
             &final_text,
             &stats,
             start,
@@ -826,21 +939,21 @@ mod tests {
         assert_eq!(call.mcp_tool_name.as_deref(), Some("docetl_code_filter"));
         assert_eq!(
             call.ability_ura.as_deref(),
-            Some("easynet:///r/localhost/ability/device.dev-1.docetl.code_filter")
+            Some("easynet:///r/localhost/ability/alice.docetl.docetl.code_filter")
         );
         assert_eq!(
             call.invocation_ura.as_deref(),
-            Some("easynet:///r/localhost/invocation/req-1")
+            Some("easynet:///r/localhost/resource/device.dev-1/invocation/req-1/history")
         );
         assert_eq!(
             call.callee_ura.as_deref(),
-            Some("easynet:///r/localhost/device/dev-1")
+            Some("easynet:///r/localhost/agent/alice.docetl")
         );
     }
 
     #[test]
     fn stream_tool_result_ignores_trace_metadata_for_non_easynet_tool() {
-        let final_text = Arc::new(Mutex::new(String::new()));
+        let final_text = Arc::new(Mutex::new(None::<String>));
         let stats = Arc::new(Mutex::new(RunStats::default()));
         let start = std::time::Instant::now();
         handle_stream_line(

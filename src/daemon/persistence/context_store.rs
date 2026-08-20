@@ -32,6 +32,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+use anyhow::Context as _;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -71,22 +73,19 @@ fn favorites_path() -> PathBuf {
 // ── tracking config ─────────────────────────────────────────────────
 
 #[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ContextConfig {
-    #[serde(default)]
     clipboard_tracking: bool,
 }
 
-fn load_config() -> ContextConfig {
-    fs::read_to_string(config_path())
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+fn load_config() -> anyhow::Result<ContextConfig> {
+    Ok(read_json_file(config_path(), "context config")?.unwrap_or_default())
 }
 
 /// Whether clipboard tracking is enabled. Read by the tracker every
 /// tick (the file is tiny) so toggles take effect without IPC.
-pub fn clipboard_tracking() -> bool {
-    load_config().clipboard_tracking
+pub fn clipboard_tracking() -> anyhow::Result<bool> {
+    Ok(load_config()?.clipboard_tracking)
 }
 
 pub fn set_clipboard_tracking(enabled: bool) -> anyhow::Result<()> {
@@ -104,6 +103,7 @@ pub fn set_clipboard_tracking(enabled: bool) -> anyhow::Result<()> {
 /// One captured clipboard item. `image_file` is a file name inside
 /// `clips_dir()` (not an absolute path) so the state dir can move.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ClipEntry {
     pub id: String,
     /// RFC3339 capture time.
@@ -136,6 +136,7 @@ pub struct ClipListEntry {
 }
 
 pub fn append_clip(entry: &ClipEntry) -> anyhow::Result<()> {
+    validate_clip_entry(entry)?;
     fs::create_dir_all(context_dir())?;
     let mut line = serde_json::to_string(entry)?;
     line.push('\n');
@@ -149,18 +150,15 @@ pub fn append_clip(entry: &ClipEntry) -> anyhow::Result<()> {
 }
 
 /// Newest-first clip entries, capped at `min(limit, LIST_CLIPS_MAX)`.
-pub fn list_clips(limit: usize) -> Vec<ClipEntry> {
+pub fn list_clips(limit: usize) -> anyhow::Result<Vec<ClipEntry>> {
     let cap = limit.clamp(1, LIST_CLIPS_MAX);
-    let Ok(content) = fs::read_to_string(clipboard_log_path()) else {
-        return Vec::new();
+    let Some(content) = read_clipboard_log()? else {
+        return Ok(Vec::new());
     };
-    let mut entries: Vec<ClipEntry> = content
-        .lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .collect();
+    let mut entries = parse_clipboard_log(&content)?;
     entries.reverse();
     entries.truncate(cap);
-    entries
+    Ok(entries)
 }
 
 /// Newest-first unique clip entries, annotated with repeat counts.
@@ -170,18 +168,15 @@ pub fn list_clips(limit: usize) -> Vec<ClipEntry> {
 /// each content key's latest entry before older duplicates. A hash map
 /// gives O(1) expected duplicate lookup and avoids an O(k log k) sort
 /// over the unique rows.
-pub fn list_clip_summaries(limit: usize) -> Vec<ClipListEntry> {
+pub fn list_clip_summaries(limit: usize) -> anyhow::Result<Vec<ClipListEntry>> {
     let cap = limit.clamp(1, LIST_CLIPS_MAX);
-    let Ok(content) = fs::read_to_string(clipboard_log_path()) else {
-        return Vec::new();
+    let Some(content) = read_clipboard_log()? else {
+        return Ok(Vec::new());
     };
     let mut positions: HashMap<[u8; 32], usize> = HashMap::new();
     let mut summaries: Vec<ClipListEntry> = Vec::new();
-    for entry in content
-        .lines()
-        .rev()
-        .filter_map(|l| serde_json::from_str::<ClipEntry>(l).ok())
-    {
+    let entries = parse_clipboard_log(&content)?;
+    for entry in entries.into_iter().rev() {
         let key = clip_content_key(&entry);
         if let Some(&idx) = positions.get(&key) {
             summaries[idx].occurrence_count += 1;
@@ -196,7 +191,58 @@ pub fn list_clip_summaries(limit: usize) -> Vec<ClipListEntry> {
         }
     }
     summaries.truncate(cap);
-    summaries
+    Ok(summaries)
+}
+
+fn read_clipboard_log() -> anyhow::Result<Option<String>> {
+    let path = clipboard_log_path();
+    match fs::read_to_string(&path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => {
+            Err(error).with_context(|| format!("read context clipboard log {}", path.display()))
+        }
+    }
+}
+
+fn parse_clipboard_log(content: &str) -> anyhow::Result<Vec<ClipEntry>> {
+    let mut entries = Vec::new();
+    for (index, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let entry = serde_json::from_str::<ClipEntry>(line).with_context(|| {
+            format!(
+                "parse context clipboard log {} line {}",
+                clipboard_log_path().display(),
+                index + 1
+            )
+        })?;
+        validate_clip_entry(&entry)?;
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
+fn validate_clip_entry(entry: &ClipEntry) -> anyhow::Result<()> {
+    require_non_empty_state_field("context clipboard", "id", &entry.id)?;
+    require_non_empty_state_field("context clipboard", "timestamp", &entry.timestamp)?;
+    require_non_empty_state_field("context clipboard", "device", &entry.device)?;
+    require_non_empty_state_field("context clipboard", "kind", &entry.kind)?;
+    match entry.kind.as_str() {
+        "text" => {}
+        "image" => {
+            let Some(file) = entry.image_file.as_deref() else {
+                anyhow::bail!("context clipboard state invalid: image row must carry image_file");
+            };
+            require_non_empty_state_field("context clipboard", "image_file", file)?;
+            if file.contains('/') || file.contains('\\') || file.contains("..") {
+                anyhow::bail!("context clipboard state invalid: image_file must be a file name");
+            }
+        }
+        other => anyhow::bail!("context clipboard state invalid: unsupported kind `{other}`"),
+    }
+    Ok(())
 }
 
 fn clip_content_key(entry: &ClipEntry) -> [u8; 32] {
@@ -215,16 +261,29 @@ fn clip_content_key(entry: &ClipEntry) -> [u8; 32] {
 /// is kept byte-for-byte) and an image clip's PNG is deleted from
 /// `clips_dir()` best-effort. Returns the removed entry.
 pub fn remove_clip(id: &str) -> anyhow::Result<ClipEntry> {
-    let content = fs::read_to_string(clipboard_log_path()).unwrap_or_default();
+    let Some(content) = read_clipboard_log()? else {
+        anyhow::bail!("context clipboard: no clip {id}");
+    };
     let mut removed: Option<ClipEntry> = None;
     let mut kept = String::with_capacity(content.len());
-    for line in content.lines() {
-        match serde_json::from_str::<ClipEntry>(line) {
-            Ok(e) if removed.is_none() && e.id == id => removed = Some(e),
-            _ => {
-                kept.push_str(line);
-                kept.push('\n');
-            }
+    for (index, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            kept.push_str(line);
+            kept.push('\n');
+            continue;
+        }
+        let entry = serde_json::from_str::<ClipEntry>(line).with_context(|| {
+            format!(
+                "parse context clipboard log {} line {}",
+                clipboard_log_path().display(),
+                index + 1
+            )
+        })?;
+        if removed.is_none() && entry.id == id {
+            removed = Some(entry);
+        } else {
+            kept.push_str(line);
+            kept.push('\n');
         }
     }
     let entry = removed.ok_or_else(|| anyhow::anyhow!("context clipboard: no clip {id}"))?;
@@ -244,24 +303,27 @@ pub fn remove_clip(id: &str) -> anyhow::Result<ClipEntry> {
 /// Absolute path of a stored clip image, if the entry exists and is an
 /// image. Resolves strictly inside `clips_dir()` — the id is ours, but
 /// the lookup still refuses separators so a crafted id can't traverse.
-pub fn clip_image_abs_path(id: &str) -> Option<PathBuf> {
+pub fn clip_image_abs_path(id: &str) -> anyhow::Result<Option<PathBuf>> {
     if id.contains('/') || id.contains('\\') || id.contains("..") {
-        return None;
+        return Ok(None);
     }
-    let entry = list_clips(LIST_CLIPS_MAX)
-        .into_iter()
-        .find(|e| e.id == id)?;
-    let file = entry.image_file?;
+    let Some(entry) = list_clips(LIST_CLIPS_MAX)?.into_iter().find(|e| e.id == id) else {
+        return Ok(None);
+    };
+    let Some(file) = entry.image_file else {
+        return Ok(None);
+    };
     if file.contains('/') || file.contains('\\') || file.contains("..") {
-        return None;
+        return Ok(None);
     }
     let p = clips_dir().join(file);
-    p.is_file().then_some(p)
+    Ok(p.is_file().then_some(p))
 }
 
 // ── folder mappings ─────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FolderMapping {
     /// Display name (defaults to the directory's file name).
     pub name: String,
@@ -271,22 +333,37 @@ pub struct FolderMapping {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FoldersFile {
-    #[serde(default)]
     folders: Vec<FolderMapping>,
 }
 
-pub fn list_folders() -> Vec<FolderMapping> {
-    fs::read_to_string(folders_path())
-        .ok()
-        .and_then(|s| serde_json::from_str::<FoldersFile>(&s).ok())
-        .unwrap_or_default()
-        .folders
+impl FoldersFile {
+    fn load() -> anyhow::Result<Self> {
+        let file: Self = read_json_file(folders_path(), "context folders")?.unwrap_or_default();
+        file.validate()?;
+        Ok(file)
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        for folder in &self.folders {
+            require_non_empty_state_field("context folders", "name", &folder.name)?;
+            require_non_empty_state_field("context folders", "path", &folder.path)?;
+            require_non_empty_state_field("context folders", "added_at", &folder.added_at)?;
+        }
+        Ok(())
+    }
+}
+
+pub fn list_folders() -> anyhow::Result<Vec<FolderMapping>> {
+    Ok(FoldersFile::load()?.folders)
 }
 
 fn save_folders(folders: Vec<FolderMapping>) -> anyhow::Result<()> {
     fs::create_dir_all(context_dir())?;
-    let json = serde_json::to_string_pretty(&FoldersFile { folders })?;
+    let file = FoldersFile { folders };
+    file.validate()?;
+    let json = serde_json::to_string_pretty(&file)?;
     atomic_write_with_permissions(&folders_path(), json.as_bytes(), WritePermissions::Default)?;
     Ok(())
 }
@@ -301,7 +378,7 @@ pub fn add_folder(path: &str, name: Option<&str>) -> anyhow::Result<FolderMappin
         anyhow::bail!("context add: {path} is not a directory");
     }
     let canon_str = canon.to_string_lossy().to_string();
-    let mut folders = list_folders();
+    let mut folders = list_folders()?;
     if folders.iter().any(|f| f.path == canon_str) {
         anyhow::bail!("context add: {canon_str} is already mapped");
     }
@@ -321,7 +398,7 @@ pub fn add_folder(path: &str, name: Option<&str>) -> anyhow::Result<FolderMappin
 
 /// Remove by name or path. Returns the removed mapping.
 pub fn remove_folder(key: &str) -> anyhow::Result<FolderMapping> {
-    let mut folders = list_folders();
+    let mut folders = list_folders()?;
     let pos = folders
         .iter()
         .position(|f| f.name == key || f.path == key)
@@ -336,7 +413,7 @@ pub fn remove_folder(key: &str) -> anyhow::Result<FolderMapping> {
 /// the canonicalized target must stay under the canonicalized mapping
 /// root, so `..` and symlinks out of the tree are refused.
 pub fn list_folder_entries(folder_key: &str, rel: &str) -> anyhow::Result<Value> {
-    let mapping = list_folders()
+    let mapping = list_folders()?
         .into_iter()
         .find(|f| f.name == folder_key || f.path == folder_key)
         .ok_or_else(|| anyhow::anyhow!("context.fs.list: unknown folder {folder_key}"))?;
@@ -400,6 +477,7 @@ pub fn list_folder_entries(folder_key: &str, rel: &str) -> anyhow::Result<Value>
 // ── favorites ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Favorite {
     pub id: String,
     /// "clipboard" | "file" | "folder"
@@ -412,22 +490,39 @@ pub struct Favorite {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FavoritesFile {
-    #[serde(default)]
     favorites: Vec<Favorite>,
 }
 
-pub fn list_favorites() -> Vec<Favorite> {
-    fs::read_to_string(favorites_path())
-        .ok()
-        .and_then(|s| serde_json::from_str::<FavoritesFile>(&s).ok())
-        .unwrap_or_default()
-        .favorites
+impl FavoritesFile {
+    fn load() -> anyhow::Result<Self> {
+        let file: Self = read_json_file(favorites_path(), "context favorites")?.unwrap_or_default();
+        file.validate()?;
+        Ok(file)
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        for favorite in &self.favorites {
+            require_non_empty_state_field("context favorites", "id", &favorite.id)?;
+            require_non_empty_state_field("context favorites", "kind", &favorite.kind)?;
+            require_non_empty_state_field("context favorites", "label", &favorite.label)?;
+            require_non_empty_state_field("context favorites", "reference", &favorite.reference)?;
+            require_non_empty_state_field("context favorites", "added_at", &favorite.added_at)?;
+        }
+        Ok(())
+    }
+}
+
+pub fn list_favorites() -> anyhow::Result<Vec<Favorite>> {
+    Ok(FavoritesFile::load()?.favorites)
 }
 
 fn save_favorites(favorites: Vec<Favorite>) -> anyhow::Result<()> {
     fs::create_dir_all(context_dir())?;
-    let json = serde_json::to_string_pretty(&FavoritesFile { favorites })?;
+    let file = FavoritesFile { favorites };
+    file.validate()?;
+    let json = serde_json::to_string_pretty(&file)?;
     atomic_write_with_permissions(
         &favorites_path(),
         json.as_bytes(),
@@ -437,7 +532,7 @@ fn save_favorites(favorites: Vec<Favorite>) -> anyhow::Result<()> {
 }
 
 pub fn add_favorite(kind: &str, label: &str, reference: &str) -> anyhow::Result<Favorite> {
-    let mut favorites = list_favorites();
+    let mut favorites = list_favorites()?;
     if favorites
         .iter()
         .any(|f| f.kind == kind && f.reference == reference)
@@ -457,7 +552,7 @@ pub fn add_favorite(kind: &str, label: &str, reference: &str) -> anyhow::Result<
 }
 
 pub fn remove_favorite(id: &str) -> anyhow::Result<Favorite> {
-    let mut favorites = list_favorites();
+    let mut favorites = list_favorites()?;
     let pos = favorites
         .iter()
         .position(|f| f.id == id)
@@ -491,6 +586,7 @@ fn captures_log_path() -> PathBuf {
 /// One persisted media artifact. `file` is a file name inside
 /// `captures/<ability>/` (never a path) so the state dir can move.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CaptureEntry {
     pub id: String,
     /// RFC3339 capture time.
@@ -557,6 +653,14 @@ pub fn record_capture(record: CaptureRecord<'_>) -> anyhow::Result<CaptureEntry>
     if !safe_path_segment(ext) {
         anyhow::bail!("record_capture: extension {ext:?} is not a safe file suffix");
     }
+    let device_identity = crate::core::ura::parse_ura(device)
+        .map_err(|error| anyhow::anyhow!("record_capture: device URA is invalid: {error}"))?;
+    if device_identity.kind != crate::core::ura::URAKind::Device {
+        anyhow::bail!(
+            "record_capture: storage owner must be a Device URA, got {}",
+            device_identity.kind
+        );
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now();
     // Timestamp prefix keeps `ls` of the folder chronologically sorted
@@ -578,6 +682,7 @@ pub fn record_capture(record: CaptureRecord<'_>) -> anyhow::Result<CaptureEntry>
         duration_ms,
         preview,
     };
+    validate_capture_entry(&entry)?;
     let mut line = serde_json::to_string(&entry)?;
     line.push('\n');
     use std::io::Write;
@@ -589,54 +694,140 @@ pub fn record_capture(record: CaptureRecord<'_>) -> anyhow::Result<CaptureEntry>
     Ok(entry)
 }
 
-/// Newest-first capture entries, optionally filtered to one ability,
-/// capped at `min(limit, LIST_CAPTURES_MAX)`.
-pub fn list_captures(ability: Option<&str>, limit: usize) -> Vec<CaptureEntry> {
+/// Newest-first capture entries owned by one canonical device, optionally
+/// filtered to one ability, capped at `min(limit, LIST_CAPTURES_MAX)`.
+///
+/// Device ownership is part of the lookup key. Callers must derive it from
+/// an admitted envelope; an artifact id or ability name is never authority.
+pub fn list_captures(
+    device_ura: &str,
+    ability: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<Vec<CaptureEntry>> {
     let cap = limit.clamp(1, LIST_CAPTURES_MAX);
-    let Ok(content) = fs::read_to_string(captures_log_path()) else {
-        return Vec::new();
+    let Some(content) = read_captures_log()? else {
+        return Ok(Vec::new());
     };
-    let mut entries: Vec<CaptureEntry> = content
-        .lines()
-        .filter_map(|l| serde_json::from_str(l).ok())
-        .filter(|e: &CaptureEntry| ability.is_none_or(|a| e.ability == a))
+    let mut entries: Vec<CaptureEntry> = parse_captures_log(&content)?
+        .into_iter()
+        .filter(|entry| entry.device == device_ura)
+        .filter(|entry| ability.is_none_or(|name| entry.ability == name))
         .collect();
     entries.reverse();
     entries.truncate(cap);
-    entries
+    Ok(entries)
 }
 
 /// Distinct ability folder names present in the captures index,
 /// alphabetical. Drives the Context page's per-device folder list.
-pub fn list_capture_abilities() -> Vec<String> {
-    let Ok(content) = fs::read_to_string(captures_log_path()) else {
-        return Vec::new();
+pub fn list_capture_abilities(device_ura: &str) -> anyhow::Result<Vec<String>> {
+    let Some(content) = read_captures_log()? else {
+        return Ok(Vec::new());
     };
-    let mut abilities: Vec<String> = content
-        .lines()
-        .filter_map(|l| serde_json::from_str::<CaptureEntry>(l).ok())
+    let mut abilities: Vec<String> = parse_captures_log(&content)?
+        .into_iter()
+        .filter(|entry| entry.device == device_ura)
         .map(|e| e.ability)
         .collect();
     abilities.sort();
     abilities.dedup();
-    abilities
+    Ok(abilities)
 }
 
 /// Absolute path + entry for a stored capture. Same traversal posture
 /// as `clip_image_abs_path`: ids are ours, but the lookup still
 /// refuses separators so a crafted id can't escape.
-pub fn capture_abs_path(id: &str) -> Option<(PathBuf, CaptureEntry)> {
+pub fn capture_abs_path(
+    device_ura: &str,
+    id: &str,
+) -> anyhow::Result<Option<(PathBuf, CaptureEntry)>> {
     if id.contains('/') || id.contains('\\') || id.contains("..") {
-        return None;
+        return Ok(None);
     }
-    let entry = list_captures(None, LIST_CAPTURES_MAX)
+    let Some(content) = read_captures_log()? else {
+        return Ok(None);
+    };
+    let Some(entry) = parse_captures_log(&content)?
         .into_iter()
-        .find(|e| e.id == id)?;
+        .find(|entry| entry.device == device_ura && entry.id == id)
+    else {
+        return Ok(None);
+    };
     if !safe_path_segment(&entry.ability) || entry.file.contains('/') || entry.file.contains("..") {
-        return None;
+        return Ok(None);
     }
     let p = captures_dir().join(&entry.ability).join(&entry.file);
-    p.is_file().then_some((p, entry))
+    Ok(p.is_file().then_some((p, entry)))
+}
+
+fn read_json_file<T>(path: PathBuf, state_name: &'static str) -> anyhow::Result<Option<T>>
+where
+    T: DeserializeOwned,
+{
+    match fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content)
+            .with_context(|| format!("parse {state_name} {}", path.display()))
+            .map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("read {state_name} {}", path.display())),
+    }
+}
+
+fn read_captures_log() -> anyhow::Result<Option<String>> {
+    let path = captures_log_path();
+    match fs::read_to_string(&path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => {
+            Err(error).with_context(|| format!("read context captures log {}", path.display()))
+        }
+    }
+}
+
+fn parse_captures_log(content: &str) -> anyhow::Result<Vec<CaptureEntry>> {
+    let mut entries = Vec::new();
+    for (index, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let entry = serde_json::from_str::<CaptureEntry>(line).with_context(|| {
+            format!(
+                "parse context captures log {} line {}",
+                captures_log_path().display(),
+                index + 1
+            )
+        })?;
+        validate_capture_entry(&entry)?;
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
+fn validate_capture_entry(entry: &CaptureEntry) -> anyhow::Result<()> {
+    require_non_empty_state_field("context captures", "id", &entry.id)?;
+    require_non_empty_state_field("context captures", "timestamp", &entry.timestamp)?;
+    require_non_empty_state_field("context captures", "device", &entry.device)?;
+    require_non_empty_state_field("context captures", "ability", &entry.ability)?;
+    require_non_empty_state_field("context captures", "file", &entry.file)?;
+    require_non_empty_state_field("context captures", "content_type", &entry.content_type)?;
+    if !safe_path_segment(&entry.ability) {
+        anyhow::bail!("context captures state invalid: field `ability` is not a safe path segment");
+    }
+    if entry.file.contains('/') || entry.file.contains('\\') || entry.file.contains("..") {
+        anyhow::bail!("context captures state invalid: field `file` must be a file name");
+    }
+    Ok(())
+}
+
+fn require_non_empty_state_field(
+    state_name: &'static str,
+    field: &'static str,
+    value: &str,
+) -> anyhow::Result<()> {
+    if value.trim().is_empty() {
+        anyhow::bail!("{state_name} state invalid: field `{field}` must be non-empty");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -646,11 +837,23 @@ mod tests {
     #[test]
     fn clipboard_tracking_round_trip() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        assert!(!clipboard_tracking(), "default is off");
+        assert!(!clipboard_tracking().unwrap(), "default is off");
         set_clipboard_tracking(true).unwrap();
-        assert!(clipboard_tracking());
+        assert!(clipboard_tracking().unwrap());
         set_clipboard_tracking(false).unwrap();
-        assert!(!clipboard_tracking());
+        assert!(!clipboard_tracking().unwrap());
+    }
+
+    #[test]
+    fn clipboard_tracking_rejects_malformed_existing_config() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(context_dir()).unwrap();
+        std::fs::write(config_path(), r#"{"clipboard_tracking":"yes"}"#).unwrap();
+
+        let error = clipboard_tracking().unwrap_err();
+        let message = format!("{error:#}");
+
+        assert!(message.contains("parse context config"));
     }
 
     #[test]
@@ -668,7 +871,7 @@ mod tests {
             })
             .unwrap();
         }
-        let clips = list_clips(2);
+        let clips = list_clips(2).unwrap();
         assert_eq!(clips.len(), 2);
         assert_eq!(clips[0].id, "c2", "newest first");
         assert_eq!(clips[1].id, "c1");
@@ -695,7 +898,7 @@ mod tests {
             .unwrap();
         }
 
-        let clips = list_clip_summaries(10);
+        let clips = list_clip_summaries(10).unwrap();
         assert_eq!(clips.len(), 2, "duplicate content is displayed once");
         assert_eq!(clips[0].entry.id, "new-a", "latest duplicate wins");
         assert_eq!(clips[0].occurrence_count, 2);
@@ -703,6 +906,55 @@ mod tests {
         assert_eq!(clips[1].entry.id, "only-b");
         assert_eq!(clips[1].occurrence_count, 1);
         assert_eq!(clips[1].duplicate_count, 0);
+    }
+
+    #[test]
+    fn clipboard_history_missing_log_is_empty_state() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+
+        assert!(list_clips(10).unwrap().is_empty());
+        assert!(list_clip_summaries(10).unwrap().is_empty());
+        let error = remove_clip("missing").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("context clipboard: no clip missing"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn clipboard_history_malformed_row_fails_closed_instead_of_skipping() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(context_dir()).unwrap();
+        std::fs::write(
+            clipboard_log_path(),
+            concat!(
+                "{\"id\":\"good\",\"timestamp\":\"2026-06-10T00:00:00Z\",",
+                "\"device\":\"easynet:///r/localhost/device/d1\",",
+                "\"kind\":\"text\",\"text\":\"hello\",\"preview\":\"hello\"}\n",
+                "{not json}\n"
+            ),
+        )
+        .unwrap();
+
+        for result in [
+            list_clips(10).map(|_| ()),
+            list_clip_summaries(10).map(|_| ()),
+            remove_clip("good").map(|_| ()),
+        ] {
+            let message = format!("{:#}", result.unwrap_err());
+            assert!(
+                message.contains("parse context clipboard log"),
+                "unexpected error: {message}"
+            );
+        }
+
+        let body = std::fs::read_to_string(clipboard_log_path()).unwrap();
+        assert!(
+            body.contains("{not json}"),
+            "failed remove must not rewrite a corrupt clipboard log"
+        );
     }
 
     #[test]
@@ -715,7 +967,7 @@ mod tests {
 
         let mapping = add_folder(dir.path().to_str().unwrap(), Some("proj")).unwrap();
         assert_eq!(mapping.name, "proj");
-        assert_eq!(list_folders().len(), 1);
+        assert_eq!(list_folders().unwrap().len(), 1);
 
         // root listing: dirs before files, dotfiles hidden
         let root = list_folder_entries("proj", "").unwrap();
@@ -735,7 +987,25 @@ mod tests {
         assert!(list_folder_entries("proj", "../").is_err());
 
         remove_folder("proj").unwrap();
-        assert!(list_folders().is_empty());
+        assert!(list_folders().unwrap().is_empty());
+    }
+
+    #[test]
+    fn folder_mapping_malformed_state_fails_closed() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(context_dir()).unwrap();
+        std::fs::write(
+            folders_path(),
+            r#"{"folders":[{"name":"","path":"/tmp","added_at":"2026-01-01T00:00:00Z"}]}"#,
+        )
+        .unwrap();
+
+        let error = list_folders().unwrap_err();
+        let message = format!("{error:#}");
+
+        assert!(message.contains("context folders state invalid"));
+        assert!(add_folder("/tmp", Some("tmp")).is_err());
+        assert!(remove_folder("tmp").is_err());
     }
 
     #[test]
@@ -767,24 +1037,43 @@ mod tests {
         .unwrap();
 
         // newest-first, ability filter works
-        let all = list_captures(None, 10);
+        let all = list_captures("easynet:///r/localhost/device/d1", None, 10).unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].ability, "mic.subscribe", "newest first");
-        let screens = list_captures(Some("screen.snapshot"), 10);
+        let screens = list_captures(
+            "easynet:///r/localhost/device/d1",
+            Some("screen.snapshot"),
+            10,
+        )
+        .unwrap();
         assert_eq!(screens.len(), 1);
         assert_eq!(screens[0].id, entry.id);
 
         // distinct folder names, alphabetical
         assert_eq!(
-            list_capture_abilities(),
+            list_capture_abilities("easynet:///r/localhost/device/d1").unwrap(),
             vec!["mic.subscribe".to_string(), "screen.snapshot".to_string()]
         );
 
         // payload resolvable, traversal refused
-        let (path, got) = capture_abs_path(&entry.id).unwrap();
+        let (path, got) = capture_abs_path("easynet:///r/localhost/device/d1", &entry.id)
+            .unwrap()
+            .unwrap();
         assert_eq!(std::fs::read(path).unwrap(), b"\xff\xd8fakejpeg");
         assert_eq!(got.content_type, "image/jpeg");
-        assert!(capture_abs_path("../evil").is_none());
+        assert!(
+            capture_abs_path("easynet:///r/localhost/device/d1", "../evil")
+                .unwrap()
+                .is_none()
+        );
+        assert!(list_captures("easynet:///r/localhost/device/d2", None, 10)
+            .unwrap()
+            .is_empty());
+        assert!(
+            capture_abs_path("easynet:///r/localhost/device/d2", &entry.id)
+                .unwrap()
+                .is_none()
+        );
 
         // unsafe ability folder refused
         assert!(record_capture(CaptureRecord {
@@ -802,13 +1091,61 @@ mod tests {
     }
 
     #[test]
+    fn captures_malformed_log_fails_closed_instead_of_skipping() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(context_dir()).unwrap();
+        std::fs::write(
+            captures_log_path(),
+            concat!(
+                "{\"id\":\"good\",\"timestamp\":\"2026-06-10T00:00:00Z\",",
+                "\"device\":\"easynet:///r/localhost/device/d1\",",
+                "\"ability\":\"screen.snapshot\",\"file\":\"shot.jpg\",",
+                "\"content_type\":\"image/jpeg\",\"byte_size\":1,",
+                "\"preview\":\"shot\"}\n",
+                "{not json}\n"
+            ),
+        )
+        .unwrap();
+
+        for result in [
+            list_captures("easynet:///r/localhost/device/d1", None, 10).map(|_| ()),
+            list_capture_abilities("easynet:///r/localhost/device/d1").map(|_| ()),
+            capture_abs_path("easynet:///r/localhost/device/d1", "good").map(|_| ()),
+        ] {
+            let message = format!("{:#}", result.unwrap_err());
+            assert!(
+                message.contains("parse context captures log"),
+                "unexpected error: {message}"
+            );
+        }
+    }
+
+    #[test]
     fn favorites_round_trip() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let f = add_favorite("clipboard", "snippet", "c1").unwrap();
-        assert_eq!(list_favorites().len(), 1);
+        assert_eq!(list_favorites().unwrap().len(), 1);
         // duplicate refused
         assert!(add_favorite("clipboard", "again", "c1").is_err());
         remove_favorite(&f.id).unwrap();
-        assert!(list_favorites().is_empty());
+        assert!(list_favorites().unwrap().is_empty());
+    }
+
+    #[test]
+    fn favorites_malformed_state_fails_closed() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(context_dir()).unwrap();
+        std::fs::write(
+            favorites_path(),
+            r#"{"favorites":[{"id":"","kind":"clipboard","label":"x","reference":"c1","added_at":"2026-01-01T00:00:00Z"}]}"#,
+        )
+        .unwrap();
+
+        let error = list_favorites().unwrap_err();
+        let message = format!("{error:#}");
+
+        assert!(message.contains("context favorites state invalid"));
+        assert!(add_favorite("clipboard", "snippet", "c1").is_err());
+        assert!(remove_favorite("missing").is_err());
     }
 }

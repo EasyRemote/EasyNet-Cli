@@ -1,6 +1,22 @@
-schema_version = "1"
+schema_version = "3"
 name = "terminal.list"
+descriptor_version = "1.0.0"
 description = "List live PTY sessions owned by this device daemon. Returns daemon-minted session_id values suitable for terminal.attach, input/read/resize, and close. Equivalent to the PTY-internal list used by the lifecycle subsystem; the `terminal` namespace is the stable operator-facing alias."
+exposure = "operator"
+dedicated_surface = "terminal"
+subject_contract_kind = "dedicated-surface"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

@@ -11,9 +11,6 @@
 //   add / list / remove / doctor   instance lifecycle      (-> cli::agent)
 //   send <name> <prompt>           sugar for `agent.chat`  (-> cli::agent)
 //   session new/list/show/append/end   memory dimension    (NEW)
-//   discuss                        DEPRECATED → mission discuss
-//   think                          DEPRECATED → mission think
-//
 // Why `agent send` is sugar:
 //   `easynet agent send claude "hello"` desugars to a single-line
 //   External EAL mission:
@@ -32,22 +29,16 @@
 //   memory and uses it across multiple `agent send` calls. See
 //   ARCHITECTURE.md §10 (retention of agent_sessions.rs).
 //
-// Why `discuss` / `think` are deprecated aliases:
-//   Both are *mission patterns*, not agent-instance methods:
-//     - discuss = a multi-agent orchestration loop (calls many agents)
-//     - think   = an iterative planning loop (calls one agent + executes)
-//   Their primary location is now `easynet mission discuss` /
-//   `easynet mission think`. The aliases here keep existing scripts
-//   working but emit a deprecation notice.
-//
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use clap::{Args, Subcommand};
 use console::style;
 
-use crate::cli::commands::{agent as agent_cmd, agent_sessions, discuss as discuss_cmd};
+use crate::cli::commands::{agent as agent_cmd, agent_sessions};
 use crate::support::platform::output;
+
+const RETIRED_AGENT_SCOPED_VERBS: &[&str] = &["discuss", "think"];
 
 #[derive(Debug, Args)]
 pub struct AgentArgs {
@@ -104,8 +95,6 @@ pub enum AgentAction {
     /// which manages the per-caller memory dimension.
     #[command(name = "chat-history")]
     ChatHistory(agent_cmd::ChatHistoryArgs),
-    /// DEPRECATED: use `easynet mission discuss`.
-    Discuss(discuss_cmd::DiscussArgs),
     /// Agent-scoped object grammar:
     /// `easynet agent <agent-id-or-ura> new-ability ...`.
     #[command(external_subcommand)]
@@ -197,22 +186,21 @@ pub fn run(args: AgentArgs) -> anyhow::Result<()> {
         AgentAction::ChatHistory(a) => agent_cmd::run(agent_cmd::AgentArgs {
             action: agent_cmd::AgentAction::ChatHistory(a),
         }),
-        AgentAction::Discuss(a) => {
-            eprintln!(
-                "  {} {}",
-                style("deprecated:").yellow(),
-                style("`easynet agent discuss` → use `easynet mission discuss`").dim()
-            );
-            discuss_cmd::run(a)
-        } // The pre-rewrite `easynet agent think` deprecated alias was
-        // removed alongside `easynet mission think` and the
-        // `mission.think` ability: modern agent runtimes already do
-        // think-act-observe inside `<agent>.chat`, so the outer loop
-        // was redundant.
-        AgentAction::Scoped(tokens) => agent_cmd::run(agent_cmd::AgentArgs {
-            action: agent_cmd::AgentAction::Scoped(tokens),
-        }),
+        AgentAction::Scoped(tokens) => run_scoped(tokens),
     }
+}
+
+fn run_scoped(tokens: Vec<String>) -> anyhow::Result<()> {
+    if let Some(first) = tokens.first().map(String::as_str) {
+        if RETIRED_AGENT_SCOPED_VERBS.contains(&first) {
+            anyhow::bail!(
+                "`easynet agent {first}` is retired; use the current `easynet mission {first}` surface"
+            );
+        }
+    }
+    agent_cmd::run(agent_cmd::AgentArgs {
+        action: agent_cmd::AgentAction::Scoped(tokens),
+    })
 }
 
 fn run_session(args: SessionArgs) -> anyhow::Result<()> {
@@ -273,5 +261,24 @@ fn run_session(args: SessionArgs) -> anyhow::Result<()> {
             output::success(&format!("ended session '{}'", a.id));
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retired_agent_discuss_alias_fails_before_scoped_dispatch() {
+        let err = run_scoped(vec![
+            "discuss".to_string(),
+            "--topic".to_string(),
+            "x".to_string(),
+        ])
+        .expect_err("retired agent discuss alias must fail");
+        assert!(
+            err.to_string().contains("is retired"),
+            "unexpected error: {err}"
+        );
     }
 }

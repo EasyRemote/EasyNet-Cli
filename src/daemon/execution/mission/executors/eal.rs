@@ -6,9 +6,7 @@
 //              ability manifest. Renders the embedded EAL `source`
 //              against the call's `args` JSON via the shared
 //              `{{ name }}` template engine, then hands the rendered
-//              source to `mission_runs::run_mission_inproc` — the
-//              single canonical EAL entry point that `easynet
-//              mission run` and `easynet.run` already share.
+//              source to the invocation-scoped `MissionRunner`.
 //
 // Why this executor exists at all
 // -------------------------------
@@ -26,7 +24,7 @@
 //      bound_vars).
 //
 // The executor goes with (2). The cost is one extra crate boundary
-// (this file → mission_runs::run_mission_inproc) and a soft cap on
+// (this file -> MissionRunner) and a soft cap on
 // embedded source size; the win is the curator-authored workflow is
 // indistinguishable, at execution time, from a hand-written `.eal`
 // file the operator could run themselves.
@@ -50,10 +48,11 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use crate::cli::commands::mission_runs::{run_mission_inproc, MissionRunOpts};
-use crate::core::ability::spec::EalExec;
-use crate::daemon::execution::mission::context::ParentInvocationContext;
+use crate::daemon::ability::manifest::EalExec;
+use crate::daemon::execution::mission::invocation_gateway::MissionInvocationGateway;
+use crate::daemon::execution::mission::orchestration::{MissionRunOpts, MissionRunner};
 use serde_json::{json, Value};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Default per-call timeout. An EAL ability can fan out across
@@ -65,50 +64,29 @@ use std::time::{Duration, Instant};
 /// facing surface. Manifests with a known short workflow should
 /// pin `timeout_seconds` explicitly.
 const DEFAULT_TIMEOUT_SECS: u64 = 3600;
-pub const AXON_INVOCATION_CONTEXT_KEY: &str = "__axon_invocation";
-
 /// Run an EAL ability. Returns a JSON envelope
 /// `{"result": <bound_vars or single binding>, "fulfilled_by": "eal",
 /// "run_id": "<mission run id>", "elapsed_ms": N, "ok": <bool>}`.
 /// Errors come back as `Err(anyhow)`; the dispatcher surfaces them
 /// as typed error frames the same way it does for shell + http.
-pub fn run_eal_exec(
+pub(crate) fn run_eal_exec_with_gateway(
     spec: &EalExec,
     args: &Value,
+    gateway: Arc<dyn MissionInvocationGateway>,
     timeout: Option<Duration>,
 ) -> anyhow::Result<Value> {
-    run_eal_exec_with_invocation_context(spec, args, None, timeout)
-}
-
-/// Run an EAL ability with daemon invocation context available to templates.
-///
-/// Plugin-owned EAL abilities receive the parent AXIOM envelope under the
-/// reserved `__axon_invocation` argument key. This keeps caller, subject, nonce,
-/// and causal context visible to composed EAL missions without asking plugin
-/// authors to smuggle protocol state through business arguments.
-pub fn run_eal_exec_with_invocation_context(
-    spec: &EalExec,
-    args: &Value,
-    invocation_context: Option<Value>,
-    timeout: Option<Duration>,
-) -> anyhow::Result<Value> {
-    let render_args = args_with_invocation_context(args, invocation_context.clone())?;
-    let parent_invocation = invocation_context
-        .map(ParentInvocationContext::from_json_value)
-        .transpose()
-        .map_err(|err| anyhow::anyhow!("eal executor: invalid invocation context: {err}"))?;
     // Render `{{ name }}` placeholders in the embedded source. We
     // render BEFORE handing to the EAL parser so a template error
     // (missing arg, unclosed brace, …) surfaces with the executor
     // label — not as a confusing parse error several layers down.
     let rendered = crate::daemon::execution::mission::executors::template::render_template(
         &spec.source,
-        &render_args,
+        args,
         "eal executor",
     )?;
 
     let started = Instant::now();
-    let _ = timeout.unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
+    let effective_timeout = timeout.unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
 
     // Hand to the canonical EAL entry point. We deliberately do NOT
     // re-implement compile/dispatch here — that would create a second
@@ -121,12 +99,9 @@ pub fn run_eal_exec_with_invocation_context(
     // `~/.easynet/missions/runs/*/meta.json` can tell which runs
     // came from a curator-published EAL ability vs a hand-rolled
     // mission.
-    let opts = MissionRunOpts {
-        source_label: Some("ability:eal".to_string()),
-        trace_path: None,
-        invocation_context: parent_invocation,
-    };
-    let run = run_mission_inproc(&rendered, opts)
+    let opts = mission_run_opts(effective_timeout);
+    let run = MissionRunner::new(gateway)
+        .run(&rendered, opts)
         .map_err(|e| anyhow::anyhow!("eal executor: mission run failed: {e}"))?;
 
     let elapsed_ms = started.elapsed().as_millis() as u64;
@@ -169,29 +144,11 @@ pub fn run_eal_exec_with_invocation_context(
     }))
 }
 
-fn args_with_invocation_context(
-    args: &Value,
-    invocation_context: Option<Value>,
-) -> anyhow::Result<Value> {
-    let Some(invocation_context) = invocation_context else {
-        return Ok(args.clone());
-    };
-    let mut object = match args {
-        Value::Object(map) => map.clone(),
-        other => {
-            return Ok(json!({
-                "args": other,
-                AXON_INVOCATION_CONTEXT_KEY: invocation_context,
-            }));
-        }
-    };
-    if object.contains_key(AXON_INVOCATION_CONTEXT_KEY) {
-        anyhow::bail!(
-            "eal executor: `{AXON_INVOCATION_CONTEXT_KEY}` is reserved for daemon invocation context"
-        );
+fn mission_run_opts(run_timeout: Duration) -> MissionRunOpts {
+    MissionRunOpts {
+        source_label: Some("ability:eal".to_string()),
+        run_timeout: Some(run_timeout),
     }
-    object.insert(AXON_INVOCATION_CONTEXT_KEY.to_string(), invocation_context);
-    Ok(Value::Object(object))
 }
 
 #[cfg(test)]
@@ -200,7 +157,7 @@ mod tests {
     use crate::cli::commands::test_support::HomeGuard;
 
     /// Template substitution must run BEFORE the EAL parser AND
-    /// before `run_mission_inproc` reaches `daemon::persistence::config::load`.
+    /// before `MissionRunner` reaches daemon configuration loading.
     /// A missing arg error attributable to the executor's caller
     /// label — not to a parser or daemon-state error several layers
     /// down — is the contract this test pins. It fires entirely on
@@ -219,38 +176,21 @@ mod tests {
             source: "mission \"{{ name }}\" {}".to_string(),
             result_binding: None,
         };
-        let err = run_eal_exec(&spec, &json!({}), None).unwrap_err();
+        let err = crate::daemon::execution::mission::executors::template::render_template(
+            &spec.source,
+            &json!({}),
+            "eal executor",
+        )
+        .unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("eal executor"), "label missing: {msg}");
         assert!(msg.contains("name"), "missing key not named: {msg}");
     }
 
     #[test]
-    fn invocation_context_is_available_to_plugin_eal_templates() {
-        let args = args_with_invocation_context(
-            &json!({}),
-            Some(json!({"subject": "easynet:///r/acme/resource/test"})),
-        )
-        .expect("context args");
-        assert_eq!(
-            args[AXON_INVOCATION_CONTEXT_KEY]["subject"],
-            "easynet:///r/acme/resource/test"
-        );
-    }
-
-    #[test]
-    fn user_args_cannot_shadow_invocation_context() {
-        let spec = EalExec {
-            source: "mission \"x\" {}".to_string(),
-            result_binding: None,
-        };
-        let err = run_eal_exec_with_invocation_context(
-            &spec,
-            &json!({"__axon_invocation": {}}),
-            Some(json!({"subject": "s"})),
-            None,
-        )
-        .unwrap_err();
-        assert!(format!("{err}").contains("reserved"));
+    fn mission_opts_carry_manifest_timeout_as_run_deadline() {
+        let opts = mission_run_opts(Duration::from_secs(7));
+        assert_eq!(opts.run_timeout, Some(Duration::from_secs(7)));
+        assert_eq!(opts.source_label.as_deref(), Some("ability:eal"));
     }
 }

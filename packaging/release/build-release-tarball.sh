@@ -11,8 +11,9 @@
 #   easynet-daemon                       — long-running daemon
 #   easynet-keyring                      — device-signing vault helper
 #   libaxon_dendrite_bridge.{dylib|so}   — dendrite SDK shared library
-#   include/easynet_cli.h                — libeasynet_cli C ABI v3 header
-#   docs/spec/ffi-abi-v3.md              — binding-facing ABI spec
+#   include/easynet_cli.h                — libeasynet_cli generic C ABI v7 header
+#   include/easynet_cli.exports.v7       — exact 56-symbol export allowlist
+#   docs/spec/ffi-abi-v7.md              — binding-facing ABI spec
 #
 # Critically: NO `axon-runtime`. The production installer cleans up
 # any axon-runtime binary it finds (`packaging/release/install.sh` lines around 264-268
@@ -132,9 +133,10 @@ daemon_bin="$cli_root/target/$build_profile/easynet-daemon"
 keyring_bin="$cli_root/target/$build_profile/easynet-keyring"
 bridge_lib="$bridge_crate/target/$build_profile/libaxon_dendrite_bridge.${lib_ext}"
 abi_header="$cli_root/include/easynet_cli.h"
-abi_spec="$cli_root/docs/spec/ffi-abi-v3.md"
+abi_exports="$cli_root/include/easynet_cli.exports.v7"
+abi_spec="$cli_root/docs/spec/ffi-abi-v7.md"
 
-for path in "$cli_bin" "$daemon_bin" "$keyring_bin" "$bridge_lib" "$abi_header" "$abi_spec"; do
+for path in "$cli_bin" "$daemon_bin" "$keyring_bin" "$bridge_lib" "$abi_header" "$abi_exports" "$abi_spec"; do
     if [ ! -f "$path" ]; then
         echo "build-release-tarball.sh: expected artefact missing: $path" >&2
         exit 1
@@ -159,7 +161,8 @@ cp "$keyring_bin" "$stage_dir/easynet-keyring"
 cp "$bridge_lib" "$stage_dir/libaxon_dendrite_bridge.${lib_ext}"
 mkdir -p "$stage_dir/include" "$stage_dir/docs/spec"
 cp "$abi_header" "$stage_dir/include/easynet_cli.h"
-cp "$abi_spec" "$stage_dir/docs/spec/ffi-abi-v3.md"
+cp "$abi_exports" "$stage_dir/include/easynet_cli.exports.v7"
+cp "$abi_spec" "$stage_dir/docs/spec/ffi-abi-v7.md"
 
 # Strip symbols on release builds to match what production tarballs
 # look like; debug profile keeps symbols for stack traces.
@@ -175,11 +178,12 @@ tar -czf "$out_file" -C "$stage_dir" \
     easynet-keyring \
     "libaxon_dendrite_bridge.${lib_ext}" \
     include/easynet_cli.h \
-    docs/spec/ffi-abi-v3.md
+    include/easynet_cli.exports.v7 \
+    docs/spec/ffi-abi-v7.md
 
 echo
 echo "[OK] release tarball ready"
 echo "  path:    $out_file"
-echo "  shape:   easynet, easynet-daemon, easynet-keyring, libaxon_dendrite_bridge.${lib_ext}, include/easynet_cli.h, docs/spec/ffi-abi-v3.md"
+echo "  shape:   easynet, easynet-daemon, easynet-keyring, libaxon_dendrite_bridge.${lib_ext}, include/easynet_cli.h, include/easynet_cli.exports.v7, docs/spec/ffi-abi-v7.md"
 echo "  axon-runtime: NOT shipped (production-shape contract)"
 echo "  size:    $(wc -c < "$out_file" | awk '{printf "%.1f MiB", $1/1024/1024}')"

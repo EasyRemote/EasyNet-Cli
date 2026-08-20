@@ -4,13 +4,13 @@
 
 ## Scope — what this spec is, and is not
 
-**This spec is:** the on-wire format of the `a2a.agents_json` string attached to an Axon node's `labels` map via `DendriteBridge::register_node_with_options(RegisterNodeOptions { labels })`. The label is a **node-level discovery hint** that the EasyNet backend parses to enumerate what agents a device is currently hosting, so the EasyNet Frontend can render them in its Agents list. The label travels as part of the standard Axon node descriptor — no invocation, no receipt, no chain, no signature beyond whatever the bridge applies to the whole node registration.
+**This spec is:** the on-wire format of the `a2a.agents_json` string carried by the daemon session-registration prelude. The label is a **node-level discovery hint** that the EasyNet backend parses to enumerate what agents a device is currently hosting, so the EasyNet Frontend can render them in its Agents list. The label travels as part of the standard Axon node descriptor — no invocation, no receipt, no chain, no signature beyond the enclosing session registration.
 
 **This spec is not:**
 
 - **Not an Agent-layer publish.** AXIOM §6.2 (Tier 2) locates real Agent publish at a reserved Tier-2 *discovery agent* that exposes `publish` / `unpublish` / `lookup` abilities. That agent's URA and ability signatures are marked `\deferred` in AXIOM pending `document/profiles/DEFAULT_PROFILE.md`. Writing a JSON blob onto a node label is **not** the same thing. When the discovery agent lands, its publish path will produce Invocation Axiom-conformant receipts; this label produces none.
-- **Not a capability package publish.** `DendriteBridge::publish_capability` is the SDK surface for distributable capability packages (signed tar.gz artefacts with `payload_uri` / `package_bytes_base64` / `signature_fingerprint` fields), used for tenant-wide capability replication. An agent subprocess on the operator's machine is not a package and does not belong on that API.
-- **Not authoritative for dispatch.** Incoming RPCs against `<agent>.<verb>` still flow through `AgentDispatchAdapter` on the CLI side (a process-local `AbilityToolAdapter::register` call, not a protocol-level publish). The label tells the Frontend what exists; the adapter makes it callable. The two must stay in sync — that's the load-bearing property, not the wire format of the label itself.
+- **Not a capability package publish.** Distributable capability packages are signed artifacts with package payload and signature fields. An agent subprocess on the operator's machine is not a package and does not belong on that API.
+- **Not authoritative for dispatch.** Incoming RPCs against `<agent>.<verb>` resolve through the daemon's live control-plane catalogue and dispatch through canonical daemon Invocation. The label is projected from that committed catalogue for discovery; it does not create callability by itself.
 
 **Retirement.** This label has a retirement path that starts the moment AXIOM §6.2 discovery agent becomes implementable. Tracked in `../open-questions/retire-a2a-agents-json-label.md`.
 
@@ -90,7 +90,7 @@ The redundancy is deliberate. A consumer that reads a single skill line (e.g. in
 
 `tests/fixtures/a2a-v2/golden.json` is the canonical byte-level document.
 
-- CLI CI: asserts `registry::a2a_labels::build` produces *byte-equal* JSON given a fixed synthetic registry (helper: `build_golden_agents_label_for_testing`).
+- CLI CI: asserts `daemon::federation::read_model::a2a_labels::build_agents_envelope` produces *byte-equal* JSON given fixed roster metadata and a fixed committed ability publication snapshot.
 - EasyNet backend CI: asserts `node_mapper.ParseAgentsJSON` parses the fixture without error and extracts the expected shape.
 
 Frontend has **no** CI coverage of this fixture by design — it consumes the backend's normalized `/api/v1/agents` response, not `a2a.agents_json`, so the wire shape is invisible to it. (An earlier draft listed a third Frontend CI here; that was written under the wrong assumption that the Frontend parsed the label directly.)
@@ -139,10 +139,10 @@ Given that, we do **not** ship tolerant parsers or dual-write fallbacks. We flip
 ### Files that change
 
 EasyNet-Cli (PR-5b-relabel):
-- `src/registry/a2a_labels.rs` — rewrite `build()` to emit the envelope shape and per-entry `a2a_schema_version`; remove the label-level `a2a.version` key.
-- `src/runtime/abilities.rs::AgentAbilitySpec::to_discovery_json` — rename `parameters` to `input_schema`; add `output_schema` and `timeout_seconds` fields (both `null` for the seeded chat ability).
-- `src/cli/agent.rs::run_publish` + `summarize_schema` — dry-run table reads the renamed fields; user-facing column unchanged.
-- Existing tests in `registry::a2a_labels` that assert on `a2a.version` label-level / `parameters` key / `type` agent-entry key — all rewritten.
+- `src/daemon/federation/read_model/a2a_labels.rs` — emit the envelope shape from `AgentRegistry` roster metadata plus `LocalAbilityPublicationSnapshot` descriptor rows; no label-level `a2a.version` key.
+- `src/daemon/execution/mission/agent_ability_specs.rs` and the hosted-agent descriptor publication path — keep ability `input_schema`, `output_schema`, and `timeout_seconds` fields sourced from committed descriptors rather than from label-local DTOs.
+- `src/daemon/ability/builtins/integrations/a2a/bridge.rs` — expose the same structured envelope through `a2a.bridge.list_skills`, so in-process callers and label readers see one projection.
+- Existing tests in `daemon::federation::read_model::a2a_labels` that assert on v2 envelope shape, live RPC descriptor projection, and deterministic output — kept as the CLI-side contract.
 
 EasyNet backend (companion PR, same release window):
 - `backend/internal/axon/node_mapper.go::ParseAgentsJSON` — rewrite to expect the envelope. v1 bare-array input is explicitly rejected (returns `nil` with a log line, not silent fallback).
@@ -161,7 +161,7 @@ Single-owner topology: both repos are yours, coordination is a git branch, not a
 
 Order matters only to keep the Frontend from rendering an empty agents list for the gap between the two merges. In practice the gap is minutes. No tolerant parser, no dual-write, no alternate label key — every one of those fallbacks would be paying the cost of cross-team coordination that doesn't apply.
 
-The byte-for-byte contract between the two PRs is `tests/fixtures/a2a-v2/golden.json` in this repo, copied into `backend/internal/axon/testdata/a2a-v2-golden.json` during the backend PR. Both CIs assert against their own copy; a diff between the two fixture files is a three-way merge mistake and is caught by a one-line check script in `scripts/` that hashes both files.
+The byte-for-byte contract between the two PRs is `tests/fixtures/a2a-v2/golden.json` in this repo, copied into `backend/internal/runtimecontract/testdata/a2a-v2-golden.json` during the backend PR. Both CIs assert against their own copy; a diff between the two fixture files is a three-way merge mistake and is caught by a one-line check script in `scripts/` that hashes both files.
 
 ### Cost estimate
 
@@ -172,12 +172,12 @@ Neither PR is a "large change" by line count; the industrial-grade discipline is
 
 ## SDK compatibility
 
-The label is written through `register_node_with_options(RegisterNodeOptions { labels })`, which has existed since well before the v1 label shape did. No SDK bump is required to flip the label format. The `easynet-axon` dependency stays at its current pin; the companion backend PR touches only its own parser, not its SDK import. (An earlier draft of this spec claimed a mandatory bump to SDK `1.2+`; that version number was fabricated — the real SDK is `easynet-axon 0.55.2` and nothing about it is load-bearing for this rewrite.)
+The label is carried as daemon session-registration metadata and remains a string-valued Axon node descriptor label. No SDK bump is required to flip the label format. The `easynet-axon` dependency stays at its current pin; the companion backend PR touches only its own parser, not its SDK import. (An earlier draft of this spec claimed a mandatory bump to SDK `1.2+`; that version number was fabricated — the real SDK is `easynet-axon 0.55.2` and nothing about it is load-bearing for this rewrite.)
 
 ## Impact on PR-5b-relabel
 
-- `src/registry/a2a_labels.rs::build` rewrites to emit the v2 envelope + renamed fields.
-- `src/runtime/abilities.rs::AgentAbilitySpec::to_discovery_json` renames the `parameters` key to `input_schema` and adds `output_schema` + `timeout_seconds` fields (both `null` for the seeded chat ability).
+- `src/daemon/federation/read_model/a2a_labels.rs::build_agents_envelope` emits the v2 envelope and renamed fields from the daemon catalogue projection.
+- Hosted-agent descriptor publication keeps `input_schema`, `output_schema`, and `timeout_seconds` in the committed descriptor path, so discovery and daemon Invocation cannot drift.
 - **No new `publish/` module, no `publish.json`, no `agent publish` verb beyond the dry-run added in PR-4.** The `agent publish --dry-run` output gets updated to use the new field names; live publish stays unimplemented (and now correctly scoped to "registering abilities through the Axon discovery agent," not "writing a label," per the Open Question).
 - Paired with one EasyNet backend companion PR (see "Files that change" above) that merges first. The byte-stable `tests/fixtures/a2a-v2/golden.json` is the only shared artefact. Frontend is untouched (consumes the backend's normalized `/api/v1/agents`).
 

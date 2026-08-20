@@ -78,14 +78,20 @@ use crate::daemon::ability::builtins::{
     device_control::{
         file_transfer as file_transfer_ability, session as session_ability,
         terminal::{
-            attach as pty_attach_ability, io as pty_io_ability, lifecycle as pty_lifecycle_ability,
+            attach as terminal_attach_ability, io as terminal_io_ability,
+            lifecycle as terminal_lifecycle_ability,
         },
     },
-    governance::consent as permission_ability,
+    governance::consent as consent_ability,
 };
-use crate::daemon::ability::catalog::{build_registry, is_publishable_catalog_name};
+use crate::daemon::ability::catalog::{
+    build_registry, build_registry_for_test_execution, is_publishable_catalog_name,
+};
+use crate::daemon::ability::conformance::{BaselineSurface, HubBaseline};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+use crate::daemon::invocation::routing::target::{
+    CallMode, InvocationTarget, LocalAbilityTarget, SystemInvocationTargetIssuer,
+};
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -93,8 +99,204 @@ fn fs_ref(
     path: &std::path::Path,
     capability: crate::daemon::resources::files::FilesystemResourceCapability,
 ) -> Value {
-    crate::daemon::resources::files::resource_ref_for_local_path(path, capability)
+    snapshot_filesystem_provider()
+        .resource_ref_for_local_path(path, capability)
         .expect("local fs ResourceRef")
+}
+
+fn snapshot_filesystem_provider() -> crate::daemon::resources::files::FilesystemResourceProvider {
+    crate::daemon::resources::files::FilesystemResourceProvider::for_device(
+        crate::core::ura::device_ura(crate::core::ura::REALM_EASYNET, "ability-catalog-snapshot"),
+    )
+    .expect("snapshot filesystem Device authority")
+}
+
+fn authority_fixture_filesystem_provider(
+) -> crate::daemon::resources::files::FilesystemResourceProvider {
+    crate::daemon::resources::files::FilesystemResourceProvider::for_device(
+        authority_fixture_device_ura(),
+    )
+    .expect("real-invoke filesystem Device authority")
+}
+
+/// Owns both ends of the file-transfer authorization boundary used by the
+/// real-invocation tests. ResourceRefs must be minted by the same explicit
+/// Device provider that the dispatcher uses to resolve them.
+struct RealFileTransferFixture {
+    dispatcher: Arc<AxonAbilityCatalog>,
+    filesystem: crate::daemon::resources::files::FilesystemResourceProvider,
+}
+
+impl RealFileTransferFixture {
+    fn new() -> Self {
+        let filesystem = authority_fixture_filesystem_provider();
+        let mut catalog = runtime_attached_catalog();
+        file_transfer_ability::register(&mut catalog, filesystem.clone())
+            .expect("register file-transfer fixture");
+        Self {
+            dispatcher: dispatcher_for(Arc::new(catalog)),
+            filesystem,
+        }
+    }
+
+    fn resource_ref(
+        &self,
+        path: &std::path::Path,
+        capability: crate::daemon::resources::files::FilesystemResourceCapability,
+    ) -> Value {
+        self.filesystem
+            .resource_ref_for_local_path(path, capability)
+            .expect("file-transfer fixture ResourceRef")
+    }
+}
+
+fn authority_fixture_device_ura() -> String {
+    crate::core::ura::device_ura("localhost", "dev-1")
+}
+
+fn authority_fixture_terminal_system_agent_ura() -> String {
+    crate::core::ura::device_agent_ura(
+        "localhost",
+        "dev-1",
+        crate::daemon::ability::names::device_control::TERMINAL_SYSTEM_AGENT_ID,
+    )
+}
+
+fn authority_fixture_context_system_agent_ura() -> String {
+    crate::core::ura::device_agent_ura(
+        crate::core::ura::REALM_EASYNET,
+        "ability-catalog-snapshot",
+        crate::daemon::ability::names::resources::CONTEXT_SYSTEM_AGENT_ID,
+    )
+}
+
+fn canonical_test_runtime() -> Arc<axon_sdk::invocation::LocalRuntime> {
+    crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+        crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+        None,
+    )
+}
+
+fn canonical_test_runtime_with_ephemeral_keys() -> Arc<axon_sdk::invocation::LocalRuntime> {
+    crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+        crate::daemon::axon_bridge::runtime_factory::ephemeral_test_receipt_key_resolver(),
+        None,
+    )
+}
+
+fn runtime_attached_catalog() -> AxonAbilityCatalog {
+    AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        canonical_test_runtime(),
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+            authority_fixture_device_ura(),
+        )
+        .expect("build explicit real-invoke authority context"),
+    )
+}
+
+fn runtime_attached_catalog_with_ephemeral_keys() -> AxonAbilityCatalog {
+    AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        canonical_test_runtime_with_ephemeral_keys(),
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+            authority_fixture_device_ura(),
+        )
+        .expect("build explicit real-invoke authority context"),
+    )
+}
+
+fn runtime_attached_catalog_for_realm(realm: &str) -> AxonAbilityCatalog {
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+            crate::core::ura::device_ura(realm, "real-invoke-device"),
+        )
+        .expect("build realm-specific real-invoke authority context");
+    AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        canonical_test_runtime(),
+        authority_context,
+    )
+}
+
+struct SharedVoiceProviderFixture {
+    provider:
+        crate::daemon::ability::builtins::resources::voice_contract::VoiceCallProviderAssembly,
+    _shared_root: tempfile::TempDir,
+}
+
+impl SharedVoiceProviderFixture {
+    fn new(realm: &str) -> Self {
+        let shared_root = tempfile::tempdir().expect("create explicit shared Voice fixture root");
+        let repository = Arc::new(
+            crate::daemon::persistence::voice_calls::HubRealmVoiceCallRepository::open(
+                shared_root.path(),
+                realm,
+            )
+            .expect("open explicit shared Voice fixture"),
+        );
+        let provider =
+            crate::daemon::ability::builtins::resources::voice_contract::VoiceCallProviderAssembly::try_new(
+                repository,
+            )
+            .expect("qualify explicit shared Voice fixture");
+        Self {
+            provider,
+            _shared_root: shared_root,
+        }
+    }
+
+    fn provider(
+        &self,
+    ) -> crate::daemon::ability::builtins::resources::voice_contract::VoiceCallProviderAssembly
+    {
+        self.provider.clone()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RealInvokeAuthorityProfile {
+    DeviceDefault,
+    CombinedDeviceHub,
+}
+
+fn authority_context_for_real_invoke(
+    profile: RealInvokeAuthorityProfile,
+) -> crate::daemon::ability::dispatch::AbilityAuthorityContext {
+    let device_ura = authority_fixture_device_ura();
+    match profile {
+        RealInvokeAuthorityProfile::DeviceDefault => {
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                device_ura,
+            )
+            .expect("build Device authority fixture")
+        }
+        RealInvokeAuthorityProfile::CombinedDeviceHub => {
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+                device_ura,
+            )
+            .expect("build combined Device+realm-authority fixture")
+        }
+    }
+}
+
+fn registry_with_temp_home_for_profile(
+    profile: RealInvokeAuthorityProfile,
+) -> (
+    Arc<AxonAbilityCatalog>,
+    crate::cli::commands::test_support::HomeGuard,
+) {
+    let guard = crate::cli::commands::test_support::HomeGuard::new();
+    // build_registry_for_daemon_result does the agent-registry load that
+    // some abilities need (agent.list, chat-per-agent etc).
+    let mut config =
+        crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new_with_authority_context(
+            crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
+            authority_context_for_real_invoke(profile),
+        );
+    config.local_runtime = Some(canonical_test_runtime());
+    config.loaders = Some(Arc::new(Vec::new()));
+    let reg = crate::daemon::ability::catalog::build_registry_for_daemon_result(config)
+        .expect("build production registry for isolated invocation test")
+        .catalog;
+    (reg, guard)
 }
 
 /// Build the production registry inside a HomeGuard so any
@@ -104,14 +306,93 @@ fn registry_with_temp_home() -> (
     Arc<AxonAbilityCatalog>,
     crate::cli::commands::test_support::HomeGuard,
 ) {
+    registry_with_temp_home_for_profile(RealInvokeAuthorityProfile::DeviceDefault)
+}
+
+fn registry_with_voice_temp_home() -> (
+    Arc<AxonAbilityCatalog>,
+    crate::cli::commands::test_support::HomeGuard,
+    SharedVoiceProviderFixture,
+) {
     let guard = crate::cli::commands::test_support::HomeGuard::new();
-    // build_registry_for_daemon does the agent-registry load that
-    // some abilities need (agent.list, chat-per-agent etc).
-    let mut config = crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new(
-        crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
-    );
+    let voice = SharedVoiceProviderFixture::new("localhost");
+    let mut config =
+        crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new_with_authority_context(
+            crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
+            authority_context_for_real_invoke(RealInvokeAuthorityProfile::CombinedDeviceHub),
+        );
+    config.shared_stores = crate::daemon::ability::catalog::RegistrySharedStores::default()
+        .with_voice_call_provider_assembly(voice.provider());
+    config.local_runtime = Some(canonical_test_runtime());
     config.loaders = Some(Arc::new(Vec::new()));
-    let reg = crate::daemon::ability::catalog::build_registry_for_daemon(config);
+    let reg = crate::daemon::ability::catalog::build_registry_for_daemon_result(config)
+        .expect("build production registry for isolated Voice invocation test")
+        .catalog;
+    (reg, guard, voice)
+}
+
+fn provision_joined_device_home() -> crate::cli::commands::test_support::HomeGuard {
+    let guard = crate::cli::commands::test_support::HomeGuard::new();
+    crate::daemon::persistence::config::save_credentials(
+        &crate::daemon::persistence::config::Credentials {
+            node_id: "dev-1".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.test:50051".to_string(),
+            realm: "localhost".to_string(),
+            username: Some("dev".to_string()),
+            user_id: Some("user-dev".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("seed joined credentials before authority-context assembly");
+    guard
+}
+
+fn registry_with_joined_device_home() -> (
+    Arc<AxonAbilityCatalog>,
+    crate::cli::commands::test_support::HomeGuard,
+) {
+    let guard = provision_joined_device_home();
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+            authority_fixture_device_ura(),
+            std::iter::empty::<String>(),
+        )
+        .expect("build joined Device authority fixture with hot hosted-Agent inventory");
+    let mut config =
+        crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new_with_authority_context(
+            crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
+            authority_context,
+        );
+    config.local_runtime = Some(canonical_test_runtime());
+    config.loaders = Some(Arc::new(Vec::new()));
+    let reg = crate::daemon::ability::catalog::build_registry_for_daemon_result(config)
+        .expect("build joined production registry for isolated invocation test")
+        .catalog;
+    (reg, guard)
+}
+
+fn registry_with_joined_device_home_for_accountable_user() -> (
+    Arc<AxonAbilityCatalog>,
+    crate::cli::commands::test_support::HomeGuard,
+) {
+    let guard = provision_joined_device_home();
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+            authority_fixture_device_ura(),
+            std::iter::empty::<String>(),
+        )
+        .expect("build joined Device authority fixture with hot hosted-Agent inventory");
+    let mut config =
+        crate::daemon::ability::catalog::RegistryDaemonBuildConfig::new_with_authority_context(
+            crate::daemon::ability::catalog::RegistryBuildServices::fresh(),
+            authority_context,
+        );
+    config.local_runtime = Some(canonical_test_runtime_with_ephemeral_keys());
+    config.loaders = Some(Arc::new(Vec::new()));
+    let reg = crate::daemon::ability::catalog::build_registry_for_daemon_result(config)
+        .expect("build joined production registry for accountable-user invocation test")
+        .catalog;
     (reg, guard)
 }
 
@@ -127,7 +408,11 @@ fn materialise_skill_fixture(
         .unwrap_or(0);
     let owner = format!("real-skill-{tag}-{pid}-{nanos}");
     let root = crate::daemon::persistence::config::agents_root().join(&owner);
-    let skill_dir = root.join("skills").join(skill_name);
+    let skill_dir = crate::daemon::resources::skills::store::managed_skill_dir_for(
+        &root,
+        crate::daemon::persistence::agent_aggregate::AgentSkillLayout::Codex,
+    )
+    .join(skill_name);
     std::fs::create_dir_all(&skill_dir).expect("create skill fixture dir");
     crate::daemon::persistence::config::atomic_write(&skill_dir.join("SKILL.md"), body.as_bytes())
         .expect("write skill fixture body");
@@ -156,11 +441,11 @@ fn materialise_skill_fixture(
     let mut registry =
         crate::daemon::persistence::agent_registry::load_agents().unwrap_or_default();
     let mut entry = crate::daemon::persistence::agent_registry::AgentEntry::new(
-        crate::daemon::persistence::agent_registry::AgentType::Codex,
+        crate::core::agent::spec::RuntimeKind::Codex,
         None,
     );
     entry.root_path = Some(root);
-    registry.agents.insert(owner.clone(), entry);
+    registry.agents.insert(format!("default/{owner}"), entry);
     crate::daemon::persistence::agent_registry::save_agents(&registry)
         .expect("save skill fixture agent");
     (owner, skill_dir)
@@ -170,25 +455,211 @@ fn dispatcher_for(reg: Arc<AxonAbilityCatalog>) -> Arc<AxonAbilityCatalog> {
     reg
 }
 
+fn real_invoke_accountable_user_ura() -> String {
+    crate::core::ura::user_ura("localhost", "user-dev")
+}
+
+fn deterministic_user_test_key_bytes(user_ura: &str) -> [u8; 32] {
+    use sha2::{Digest as _, Sha256};
+    let digest = Sha256::digest(user_ura.as_bytes());
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&digest);
+    seed
+}
+
+fn ability_management_system_agent_ura() -> String {
+    crate::core::ura::device_agent_ura(
+        "localhost",
+        "dev-1",
+        crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
+    )
+}
+
+fn automation_system_agent_ura() -> String {
+    crate::core::ura::device_agent_ura(
+        "localhost",
+        "dev-1",
+        crate::daemon::ability::names::automation::AUTOMATION_SYSTEM_AGENT_ID,
+    )
+}
+
+fn execute_rpc_as_accountable_user(
+    reg: &Arc<AxonAbilityCatalog>,
+    callee_ura: &str,
+    ability: &str,
+    subject_ura: &str,
+    args: Value,
+) -> anyhow::Result<Value> {
+    crate::support::async_bridge::run_blocking(
+        execute_rpc_as_accountable_user_async(
+            Arc::clone(reg),
+            callee_ura.to_string(),
+            ability.to_string(),
+            subject_ura.to_string(),
+            args,
+        ),
+        crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
+    )
+}
+
+async fn execute_rpc_as_accountable_user_async(
+    reg: Arc<AxonAbilityCatalog>,
+    callee_ura: String,
+    ability: String,
+    subject_ura: String,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let runtime = reg
+        .runtime()
+        .ok_or_else(|| anyhow::anyhow!("accountable-user real invoke requires LocalRuntime"))?;
+    let payload =
+        crate::daemon::invocation::dispatch::local_runtime_invoker::encode_json_payload(&args)
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
+    let runtime_ability =
+        crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(&callee_ura, &ability)?;
+    let descriptor_binding =
+        crate::daemon::axon_bridge::descriptor_ref::registered_descriptor_binding(
+            &runtime,
+            &runtime_ability,
+            axon_sdk::invocation::CallMode::Rpc,
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!("{}", err.message()))?;
+    let descriptor_ref =
+        crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+            &callee_ura,
+            &ability,
+            &descriptor_binding,
+        )?;
+    let user_ura = real_invoke_accountable_user_ura();
+    let signer = Arc::new(
+        crate::daemon::identity::self_identity::TestCanonicalSigner::new(
+            user_ura.clone(),
+            deterministic_user_test_key_bytes(&user_ura),
+        ),
+    );
+    let request =
+        crate::daemon::axon_bridge::local_runtime_request::AccountableUserInvocationIssuer::request_for_descriptor_ref(
+            axon_sdk::invocation::CallMode::Rpc,
+            signer,
+            &callee_ura,
+            descriptor_ref,
+            &subject_ura,
+            payload,
+            axon_sdk::invocation::CausalContext::None,
+            crate::daemon::axon_bridge::local_runtime_request::LocalRuntimeRequestOptions::default(),
+        )
+        .await?;
+    let (handle, _) = runtime
+        .invoke_descriptor_bound_request_async(request)
+        .await
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+    crate::daemon::invocation::dispatch::local_runtime_invoker::rpc_value_from_handle(handle)
+        .await
+        .map_err(|err| anyhow::anyhow!("{err}"))
+}
+
 fn target(name: &str, args: Value) -> InvocationTarget {
-    InvocationTarget {
-        scope: TargetScope::Local,
-        ability: name.to_string(),
-        normalized_args: args,
-        call_mode: CallMode::Rpc,
-        // Test helper: legacy callers that don't need a subject
-        // get None. The `with_subject` builder lets per-test code
-        // attach one when exercising INV-SUBJECT-ENVELOPE paths.
-        subject: None,
-        causal_context: None,
+    // Test helper: default smoke calls use the named daemon-system policy.
+    crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+        name,
+        args,
+        CallMode::Rpc,
+    )
+}
+
+fn target_for_subject(name: &str, args: Value, subject: impl Into<String>) -> InvocationTarget {
+    crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+        name,
+        args,
+        CallMode::Rpc,
+        subject,
+    )
+}
+
+fn context_system_target(name: &str, args: Value, call_mode: CallMode) -> InvocationTarget {
+    let target = LocalAbilityTarget::new(name, authority_fixture_context_system_agent_ura())
+        .expect("context ability target must bind to context SystemAgent");
+    SystemInvocationTargetIssuer::local_root_for_target(&target, args, call_mode)
+        .expect("context SystemAgent target must derive daemon-system tuple")
+}
+
+fn invoke_context(name: &str, args: Value) -> Value {
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
+    let d = dispatcher_for(reg);
+    match d.execute_rpc(context_system_target(name, args, CallMode::Rpc)) {
+        Ok(v) => v,
+        Err(e) => panic!("{name} unexpected error: {e}"),
     }
+}
+
+fn explicit_target(
+    name: &str,
+    args: Value,
+    subject: impl Into<String>,
+    causal_context: axon_sdk::invocation::CausalContext,
+) -> InvocationTarget {
+    crate::daemon::invocation::routing::target::PublicInvocationTargetIssuer::local_explicit_tuple(
+        name,
+        args,
+        CallMode::Rpc,
+        subject,
+        causal_context,
+    )
+    .expect("real invoke test explicit target must be canonical")
+}
+
+fn terminal_followup_target(
+    name: &str,
+    args: Value,
+    session_id: &str,
+    action: &str,
+) -> InvocationTarget {
+    use base64::Engine;
+    const SESSION_OWNER_USER_ID: &str = "real-invoke-test-user";
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_millis() as i64;
+    let callee = authority_fixture_terminal_system_agent_ura();
+    let subject_owner = format!("user.{SESSION_OWNER_USER_ID}");
+    let subject_ura = crate::core::ura::resource_dot_ura(
+        "localhost",
+        &subject_owner,
+        &format!("session/{session_id}"),
+    );
+    let payload = json!({
+        "issuer_ura": crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
+        "session_id": session_id,
+        "session_owner_user_id": SESSION_OWNER_USER_ID,
+        "creator_principal_id": crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
+        "callee_ura": callee,
+        "subject_ura": subject_ura,
+        "audience": callee,
+        "scopes": [name],
+        "allowed_actions": [action],
+        "allowed_followup_abilities": [name],
+        "issued_at_ms": now_ms - 1_000,
+        "expires_at_ms": now_ms + 300_000,
+    });
+    let wire = json!({"payload": payload, "signature": "test-session-authority"});
+    let encoded = base64::engine::general_purpose::STANDARD
+        .encode(serde_json::to_vec(&wire).expect("session authority wire"));
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert(
+        crate::daemon::invocation::admission::authority_metadata::SESSION_AUTHORITY_METADATA_KEY
+            .to_string(),
+        encoded,
+    );
+    target(name, args).with_request_metadata(metadata)
 }
 
 // Borrowed receipt-URA shape (ledger.rs test convention) — no
 // production builder yet; RFC-007/008 tracks canonicalization (F-042).
 #[cfg(feature = "remote-desktop")]
-fn remote_desktop_test_consent_causal_context() -> easynet_axon::invocation::CausalContext {
-    easynet_axon::invocation::CausalContext::Scalar(easynet_axon::invocation::ReceiptRef {
+fn remote_desktop_test_consent_causal_context() -> axon_sdk::invocation::CausalContext {
+    axon_sdk::invocation::CausalContext::Scalar(axon_sdk::invocation::ReceiptRef {
         receipt_ura: "easynet:///r/acme/resource/alice.invocations/test-local-consent".to_string(),
         receipt_hash: [0x42; 32],
     })
@@ -198,7 +669,7 @@ fn invoke(name: &str, args: Value) -> Value {
     // Convenience for tests that don't need a HomeGuard. For
     // tests that do, build the dispatcher inline so the guard
     // outlives the call.
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     match d.execute_rpc(target(name, args)) {
         Ok(v) => v,
@@ -260,7 +731,7 @@ fn real_invocation_history_list_accepts_explicit_ura_scope() {
             json!({
                 "limit": 5,
                 "filter": {
-                    "agent_ura": "easynet:///r/test/device/callee",
+                    "callee_ura": "easynet:///r/test/agent/device.callee.locomotion",
                     "subject_ura": "easynet:///r/test/user/alice"
                 }
             }),
@@ -269,7 +740,7 @@ fn real_invocation_history_list_accepts_explicit_ura_scope() {
     let body = resp.as_object().expect("object");
     assert!(
         body.get("records").and_then(Value::as_array).is_some(),
-        "history list must accept agent_ura + subject_ura scope: {resp}"
+        "history list must accept canonical callee_ura + subject_ura scope: {resp}"
     );
 }
 
@@ -300,6 +771,22 @@ fn real_invocation_history_get_accepts_request_id() {
     assert!(
         body.contains_key("record"),
         "history get must return a record field even when absent: {resp}"
+    );
+}
+
+#[test]
+fn real_invocation_record_get_accepts_request_id() {
+    let (reg, _g) = registry_with_temp_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "invocation.record.get",
+            json!({ "request_id": "missing-real-invoke-request" }),
+        ))
+        .expect("invocation.record.get");
+    let body = resp.as_object().expect("object");
+    assert!(
+        body.contains_key("record"),
+        "record get must return a record field even when absent: {resp}"
     );
 }
 
@@ -481,21 +968,8 @@ fn real_mission_cancel_returns_an_error_for_an_unknown_run_id() {
 // the registration site + name + arg shape line up.
 
 #[test]
-fn real_device_node_list_returns_local_view_envelope() {
-    let (reg, _g) = registry_with_temp_home();
-    let resp = dispatcher_for(reg)
-        .execute_rpc(target("node.list", json!({})))
-        .expect("node.list");
-    let nodes = resp.get("nodes").and_then(Value::as_array).unwrap();
-    assert!(
-        nodes.iter().any(|n| n.get("is_self") == Some(&json!(true))),
-        "node.list must include the local device entry: {resp}"
-    );
-}
-
-#[test]
 fn real_device_node_describe_via_invoke_helper_returns_self_envelope() {
-    let (reg, _g) = registry_with_temp_home();
+    let (reg, _g) = registry_with_joined_device_home();
     let resp = dispatcher_for(reg)
         .execute_rpc(target("node.describe", json!({ "node_id": "local" })))
         .expect("node.describe local");
@@ -504,7 +978,7 @@ fn real_device_node_describe_via_invoke_helper_returns_self_envelope() {
 
 #[test]
 fn real_device_node_remove_refuses_to_remove_self() {
-    let (reg, _g) = registry_with_temp_home();
+    let (reg, _g) = registry_with_joined_device_home();
     let err = dispatcher_for(reg)
         .execute_rpc(target("node.remove", json!({ "node_id": "local" })))
         .expect_err("node.remove must refuse to remove self");
@@ -513,25 +987,40 @@ fn real_device_node_remove_refuses_to_remove_self() {
 
 #[test]
 fn real_device_ability_deploy_validates_resource_ref_argument() {
-    let (reg, _g) = registry_with_temp_home();
-    let err = dispatcher_for(reg)
-        .execute_rpc(target("ability.deploy", json!({})))
-        .expect_err("ability.deploy must require `resource_ref`");
+    let (reg, _g) = registry_with_joined_device_home_for_accountable_user();
+    let subject = crate::core::ura::resource_dot_ura(
+        "localhost",
+        "user.user-dev",
+        "ability-deployment/missing-resource-ref",
+    );
+    let err = execute_rpc_as_accountable_user(
+        &dispatcher_for(reg),
+        &ability_management_system_agent_ura(),
+        "ability.deploy",
+        &subject,
+        json!({ "target_ura": authority_fixture_device_ura() }),
+    )
+    .expect_err("ability.deploy must require `resource_ref`");
     assert!(format!("{err}").contains("resource_ref"));
 }
 
 #[test]
 fn real_device_ability_uninstall_refuses_unwired_runtime() {
-    let (reg, _g) = registry_with_temp_home();
-    let err = dispatcher_for(reg)
-        .execute_rpc(target(
-            "ability.uninstall",
-            json!({
-                "ability_ura": "easynet:///r/localhost/ability/alice.claude.weather",
-                "node_id": "local"
-            }),
-        ))
-        .expect_err("unwired registrar must not report REMOVED");
+    let (reg, _g) = registry_with_joined_device_home_for_accountable_user();
+    let ability_ura =
+        crate::core::ura::owner_ability_ura(&ability_management_system_agent_ura(), "weather")
+            .expect("ability-management ability URA");
+    let err = execute_rpc_as_accountable_user(
+        &dispatcher_for(reg),
+        &ability_management_system_agent_ura(),
+        "ability.uninstall",
+        &ability_ura,
+        json!({
+            "ability_ura": ability_ura,
+            "target_ura": authority_fixture_device_ura()
+        }),
+    )
+    .expect_err("unwired registrar must not report REMOVED");
     let msg = format!("{err}");
     assert!(msg.contains("runtime not wired yet"), "{msg}");
 }
@@ -577,8 +1066,7 @@ fn real_device_node_deregister_is_not_a_runtime_surface() {
 // the integration layer — dispatch each one through the real
 // dispatcher to prove the registration site + name + arg shape line
 // up. We mint unique call_ids using nanos so concurrent test runs
-// (cargo test --test-threads=N) don't collide on the in-process
-// store.
+// (cargo test --test-threads=N) don't collide in the test repository.
 
 fn unique_call_id(label: &str) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -589,23 +1077,33 @@ fn unique_call_id(label: &str) -> String {
     format!("real-invoke-{label}-{nanos:x}")
 }
 
+fn invoke_voice(registry: &AxonAbilityCatalog, name: &str, args: Value) -> anyhow::Result<Value> {
+    let hub = crate::core::ura::hub_ura("localhost");
+    let envelope = crate::daemon::ability::dispatch::EnvelopeContext::for_test_targeted_ability(
+        crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
+        &hub,
+        name,
+        crate::core::ura::resource_dot_ura("localhost", "hub.voice-call", "real-invoke"),
+    );
+    registry
+        .resolve_rpc_with_env(name)
+        .ok_or_else(|| anyhow::anyhow!("{name} has no envelope-aware RPC handler"))?(
+        envelope, args
+    )
+}
+
 #[test]
 fn real_voice_create_call_returns_a_minted_id() {
-    let (reg, _g) = registry_with_temp_home();
-    let resp = dispatcher_for(reg)
-        .execute_rpc(target("voice.create_call", json!({})))
-        .expect("voice.create_call");
+    let (reg, _g, _voice) = registry_with_voice_temp_home();
+    let resp = invoke_voice(&reg, "voice.create_call", json!({})).expect("voice.create_call");
     let cid = resp.get("call_id").and_then(Value::as_str).unwrap();
     assert!(cid.starts_with("call-"));
 }
 
 #[test]
 fn real_voice_show_call_unknown_call_errors() {
-    let (reg, _g) = registry_with_temp_home();
-    let result = dispatcher_for(reg).execute_rpc(target(
-        "voice.show_call",
-        json!({"call_id": "no-such-call"}),
-    ));
+    let (reg, _g, _voice) = registry_with_voice_temp_home();
+    let result = invoke_voice(&reg, "voice.show_call", json!({"call_id": "no-such-call"}));
     assert!(
         result.is_err(),
         "voice.show_call must error on unknown call_id"
@@ -614,30 +1112,27 @@ fn real_voice_show_call_unknown_call_errors() {
 
 #[test]
 fn real_voice_join_call_transitions_call_to_active() {
-    // voice.* in-process state machine: a call goes "active"
+    // The voice aggregate state machine moves a call to "active"
     // when ≥2 participants are present (creator + first remote
     // joiner per voice_call_ability::join_call_handler comment).
     // The test must therefore pre-populate the creator via
     // `voice.create_call` taking a `participant_id`, then add
     // the second via `voice.join_call`.
-    let (reg, _g) = registry_with_temp_home();
+    let (reg, _g, _voice) = registry_with_voice_temp_home();
     let cid = unique_call_id("join");
-    let dispatcher = dispatcher_for(reg);
-    dispatcher
-        .execute_rpc(target(
-            "voice.create_call",
-            json!({"call_id": cid.clone(), "participant_id": "creator"}),
-        ))
-        .expect("create");
-    dispatcher
-        .execute_rpc(target(
-            "voice.join_call",
-            json!({"call_id": cid.clone(), "participant_id": "alice"}),
-        ))
-        .expect("join");
-    let show = dispatcher
-        .execute_rpc(target("voice.show_call", json!({"call_id": cid})))
-        .expect("show");
+    invoke_voice(
+        &reg,
+        "voice.create_call",
+        json!({"call_id": cid.clone(), "participant_id": "creator"}),
+    )
+    .expect("create");
+    invoke_voice(
+        &reg,
+        "voice.join_call",
+        json!({"call_id": cid.clone(), "participant_id": "alice"}),
+    )
+    .expect("join");
+    let show = invoke_voice(&reg, "voice.show_call", json!({"call_id": cid})).expect("show");
     assert_eq!(
         show.get("state").and_then(Value::as_str),
         Some("VOICE_CALL_STATE_ACTIVE")
@@ -647,59 +1142,59 @@ fn real_voice_join_call_transitions_call_to_active() {
 
 #[test]
 fn real_voice_leave_call_removes_participant() {
-    let (reg, _g) = registry_with_temp_home();
+    let (reg, _g, _voice) = registry_with_voice_temp_home();
     let cid = unique_call_id("leave");
-    let d = dispatcher_for(reg);
-    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
-        .expect("create");
-    d.execute_rpc(target(
+    invoke_voice(&reg, "voice.create_call", json!({"call_id": cid.clone()})).expect("create");
+    invoke_voice(
+        &reg,
         "voice.join_call",
         json!({"call_id": cid.clone(), "participant_id": "alice"}),
-    ))
+    )
     .expect("join");
-    d.execute_rpc(target(
+    invoke_voice(
+        &reg,
         "voice.leave_call",
         json!({"call_id": cid.clone(), "participant_id": "alice"}),
-    ))
+    )
     .expect("leave");
     // No assertion on state machine here beyond "didn't panic" —
     // semantics are pinned in the unit-test file. Real-invoke
     // coverage just proves the ability is registered + reachable.
-    let _ = d
-        .execute_rpc(target("voice.show_call", json!({"call_id": cid})))
-        .expect("show");
+    let _ = invoke_voice(&reg, "voice.show_call", json!({"call_id": cid})).expect("show");
 }
 
 #[test]
 fn real_voice_end_call_is_idempotent() {
-    let (reg, _g) = registry_with_temp_home();
+    let (reg, _g, _voice) = registry_with_voice_temp_home();
     let cid = unique_call_id("end");
-    let d = dispatcher_for(reg);
-    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
-        .expect("create");
-    d.execute_rpc(target("voice.end_call", json!({"call_id": cid.clone()})))
-        .expect("first end");
-    let r2 = d
-        .execute_rpc(target("voice.end_call", json!({"call_id": cid})))
-        .expect("second end");
+    invoke_voice(&reg, "voice.create_call", json!({"call_id": cid.clone()})).expect("create");
+    invoke_voice(
+        &reg,
+        "voice.end_call",
+        json!({"call_id": cid.clone(), "end_reason": 1}),
+    )
+    .expect("first end");
+    let r2 = invoke_voice(
+        &reg,
+        "voice.end_call",
+        json!({"call_id": cid, "end_reason": 1}),
+    )
+    .expect("second end");
     assert_eq!(r2.get("already_ended"), Some(&json!(true)));
 }
 
 #[test]
 fn real_voice_watch_call_returns_event_snapshot() {
-    let (reg, _g) = registry_with_temp_home();
+    let (reg, _g, _voice) = registry_with_voice_temp_home();
     let cid = unique_call_id("watch");
-    let d = dispatcher_for(reg);
-    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
-        .expect("create");
-    d.execute_rpc(target(
+    invoke_voice(&reg, "voice.create_call", json!({"call_id": cid.clone()})).expect("create");
+    invoke_voice(
+        &reg,
         "voice.join_call",
         json!({"call_id": cid.clone(), "participant_id": "alice"}),
-    ))
+    )
     .expect("join");
-    let w = d
-        .execute_rpc(target("voice.watch_call", json!({"call_id": cid})))
-        .expect("watch");
+    let w = invoke_voice(&reg, "voice.watch_call", json!({"call_id": cid})).expect("watch");
     let events = w.get("events").and_then(Value::as_array).unwrap();
     assert!(events
         .iter()
@@ -708,26 +1203,25 @@ fn real_voice_watch_call_returns_event_snapshot() {
 
 #[test]
 fn real_voice_report_metrics_appends_event() {
-    let (reg, _g) = registry_with_temp_home();
+    let (reg, _g, _voice) = registry_with_voice_temp_home();
     let cid = unique_call_id("metrics");
-    let d = dispatcher_for(reg);
-    d.execute_rpc(target("voice.create_call", json!({"call_id": cid.clone()})))
-        .expect("create");
-    d.execute_rpc(target(
+    invoke_voice(&reg, "voice.create_call", json!({"call_id": cid.clone()})).expect("create");
+    invoke_voice(
+        &reg,
         "voice.join_call",
         json!({"call_id": cid.clone(), "participant_id": "alice"}),
-    ))
+    )
     .expect("join");
-    let r = d
-        .execute_rpc(target(
-            "voice.report_metrics",
-            json!({
-                "call_id": cid,
-                "participant_id": "alice",
-                "metrics": { "rtt_ms": 42 },
-            }),
-        ))
-        .expect("metrics");
+    let r = invoke_voice(
+        &reg,
+        "voice.report_metrics",
+        json!({
+            "call_id": cid,
+            "participant_id": "alice",
+            "metrics": { "rtt_ms": 42 },
+        }),
+    )
+    .expect("metrics");
     assert_eq!(r.get("ack"), Some(&json!(true)));
 }
 
@@ -824,6 +1318,7 @@ fn real_admin_status_reports_components_under_temp_home() {
 /// after itself.
 #[test]
 fn real_fs_write_round_trips_through_real_disk() {
+    let _g = provision_joined_device_home();
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let scratch = manifest
         .join("target")
@@ -969,6 +1464,7 @@ fn real_shell_run_destructive_rejection_visible_in_response() {
 /// of the test fixture and the test only reads it.
 #[test]
 fn real_fs_read_reads_this_crates_cargo_toml() {
+    let _g = provision_joined_device_home();
     // CARGO_MANIFEST_DIR is set by cargo for every test run; it
     // is the absolute path of the directory containing
     // Cargo.toml. Using it makes this test work both when run
@@ -1004,7 +1500,7 @@ fn real_fs_read_reads_this_crates_cargo_toml() {
 
 #[test]
 fn real_fs_read_reads_an_actual_file() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let _g = provision_joined_device_home();
     let dir = std::env::temp_dir().join(format!("real-invoke-fs-read-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("hello.txt");
@@ -1026,7 +1522,7 @@ fn real_fs_read_reads_an_actual_file() {
 
 #[test]
 fn real_fs_stat_reports_file_metadata() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let _g = provision_joined_device_home();
     let dir = std::env::temp_dir().join(format!("real-invoke-fs-stat-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("metadata.txt");
@@ -1064,7 +1560,7 @@ fn real_fs_stat_reports_file_metadata() {
 
 #[test]
 fn real_fs_write_creates_a_file_with_expected_content() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let _g = provision_joined_device_home();
     let dir = std::env::temp_dir().join(format!("real-invoke-fs-write-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("out.txt");
@@ -1085,7 +1581,7 @@ fn real_fs_write_creates_a_file_with_expected_content() {
 
 #[test]
 fn real_fs_list_lists_directory_entries() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let _g = provision_joined_device_home();
     let dir = std::env::temp_dir().join(format!("real-invoke-fs-list-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     std::fs::write(dir.join("a.txt"), "a").unwrap();
@@ -1140,7 +1636,7 @@ fn real_fs_list_lists_directory_entries() {
 
 #[test]
 fn real_fs_edit_replaces_a_unique_match() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let _g = provision_joined_device_home();
     let dir = std::env::temp_dir().join(format!("real-invoke-fs-edit-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let path = dir.join("config.txt");
@@ -1172,8 +1668,8 @@ fn real_consent_decide_records_a_decision() {
     // unknown id rather than panicking.
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let perms = Arc::new(crate::daemon::execution::permission::PermissionService::new());
-    let mut reg = AxonAbilityCatalog::new();
-    permission_ability::register(&mut reg, perms);
+    let mut reg = runtime_attached_catalog();
+    consent_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
     let result = d.execute_rpc(target(
         "consent.decide",
@@ -1201,8 +1697,8 @@ fn real_consent_decide_records_a_decision() {
 fn real_consent_list_pending_returns_empty_on_fresh_service() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let perms = Arc::new(crate::daemon::execution::permission::PermissionService::new());
-    let mut reg = AxonAbilityCatalog::new();
-    permission_ability::register(&mut reg, perms);
+    let mut reg = runtime_attached_catalog();
+    consent_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
     let resp = d
         .execute_rpc(target("consent.list_pending", json!({})))
@@ -1222,7 +1718,11 @@ fn real_consent_list_pending_returns_empty_on_fresh_service() {
 fn real_discuss_create_then_post_round_trips_through_the_service() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::mission::discuss::DiscussService::new());
-    let mut reg = AxonAbilityCatalog::new();
+    svc.bind_memory_for_test(
+        crate::core::domain::NodeId::new("runtime-node"),
+        crate::core::domain::TenantId::new("runtime-tenant"),
+    );
+    let mut reg = runtime_attached_catalog();
     discuss_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
 
@@ -1267,28 +1767,38 @@ fn real_discuss_create_then_post_round_trips_through_the_service() {
 fn real_schedule_add_then_list_then_remove_round_trip() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::schedule::ScheduleService::new());
-    let mut reg = AxonAbilityCatalog::new();
+    let mut reg = runtime_attached_catalog_with_ephemeral_keys();
     schedule_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
+    let user_subject =
+        crate::core::ura::resource_dot_ura("localhost", "user.user-dev", "automation/schedule");
 
     // List on a fresh service.
-    let list_empty = d
-        .execute_rpc(target("schedule.list", json!({})))
-        .expect("schedule.list (fresh)");
+    let list_empty = execute_rpc_as_accountable_user(
+        &d,
+        &automation_system_agent_ura(),
+        "schedule.list",
+        &user_subject,
+        json!({}),
+    )
+    .expect("schedule.list (fresh)");
     assert!(list_empty.is_object());
 
     // Add a schedule. The exact required fields vary; pass a
     // realistic-shape envelope. If the handler rejects, the
     // assertion below ensures we at least reached it.
-    let add = d.execute_rpc(target(
+    let add = execute_rpc_as_accountable_user(
+        &d,
+        &automation_system_agent_ura(),
         "schedule.add",
+        &user_subject,
         json!({
             "target_node": "self",
             "ability": "observe.health",
             "args": {},
             "cron": "0 * * * *",
         }),
-    ));
+    );
     match add {
         Ok(v) => assert!(v.is_object()),
         Err(e) => {
@@ -1305,7 +1815,7 @@ fn real_schedule_add_then_list_then_remove_round_trip() {
 fn real_schedule_enable_routes_to_handler() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::schedule::ScheduleService::new());
-    let mut reg = AxonAbilityCatalog::new();
+    let mut reg = runtime_attached_catalog();
     schedule_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let r = d.execute_rpc(target(
@@ -1328,7 +1838,7 @@ fn real_schedule_enable_routes_to_handler() {
 fn real_schedule_remove_routes_to_handler() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::schedule::ScheduleService::new());
-    let mut reg = AxonAbilityCatalog::new();
+    let mut reg = runtime_attached_catalog();
     schedule_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let r = d.execute_rpc(target(
@@ -1347,7 +1857,7 @@ fn real_schedule_remove_routes_to_handler() {
 fn real_loop_create_then_status_then_cancel() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::loop_instance::LoopService::new());
-    let mut reg = AxonAbilityCatalog::new();
+    let mut reg = runtime_attached_catalog();
     loop_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
 
@@ -1385,7 +1895,7 @@ fn real_loop_create_then_status_then_cancel() {
 fn real_loop_status_routes_for_unknown_id() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::loop_instance::LoopService::new());
-    let mut reg = AxonAbilityCatalog::new();
+    let mut reg = runtime_attached_catalog();
     loop_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let r = d.execute_rpc(target("loop.status", json!({"loop_id": "none"})));
@@ -1401,7 +1911,7 @@ fn real_loop_status_routes_for_unknown_id() {
 fn real_loop_cancel_routes_for_unknown_id() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::loop_instance::LoopService::new());
-    let mut reg = AxonAbilityCatalog::new();
+    let mut reg = runtime_attached_catalog();
     loop_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let r = d.execute_rpc(target("loop.cancel", json!({"loop_id": "none"})));
@@ -1424,28 +1934,22 @@ fn real_device_agent_list_returns_a_list_under_temp_home() {
 
 #[test]
 fn real_device_session_list_returns_empty_under_temp_home() {
+    const SESSION_LIST: &str = "session.list";
+
+    assert_eq!(
+        SESSION_LIST,
+        crate::daemon::ability::names::device_control::SESSION_LIST
+    );
     let (reg, _g) = registry_with_temp_home();
     let resp = dispatcher_for(reg)
-        .execute_rpc(target("session.list", json!({})))
-        .expect("session.list");
+        .execute_rpc(target(SESSION_LIST, json!({})))
+        .expect(SESSION_LIST);
     assert!(resp.is_object());
 }
 
 #[test]
 fn real_device_agent_start_then_stop_agent_round_trip() {
-    let (reg, _g) = registry_with_temp_home();
-    crate::daemon::persistence::config::save_credentials(
-        &crate::daemon::persistence::config::Credentials {
-            node_id: "dev-1".to_string(),
-            credential_token: "token".to_string(),
-            hub_endpoint: "axon://hub.test:50051".to_string(),
-            realm: "localhost".to_string(),
-            username: Some("dev".to_string()),
-            user_id: Some("user-dev".to_string()),
-            ..Default::default()
-        },
-    )
-    .expect("seed joined credentials");
+    let (reg, _g) = registry_with_joined_device_home();
     let d = dispatcher_for(reg);
     let start = d
         .execute_rpc(target(
@@ -1469,6 +1973,110 @@ fn real_device_agent_start_then_stop_agent_round_trip() {
 }
 
 #[test]
+fn real_device_agent_ability_put_commits_live_executable_publication() {
+    let (reg, _g) = registry_with_joined_device_home();
+    let d = dispatcher_for(reg);
+    let start = d
+        .execute_rpc(target(
+            "agent.start",
+            json!({
+                "name": "authoring-smoke-agent",
+                "agent_type": "claude-code",
+                "materialize_directory": true,
+            }),
+        ))
+        .expect("materialize hosted Agent before authoring");
+    let owner_ura = start["agent_ura"]
+        .as_str()
+        .expect("agent.start returns canonical Agent URA")
+        .to_string();
+    let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+        "catalog-smoke",
+        "Catalog cutover real-invoke fixture.",
+        json!({"type": "object", "additionalProperties": false}),
+    )
+    .expect("fixture manifest")
+    .with_exec(crate::daemon::ability::manifest::AbilityExec::Shell(
+        crate::daemon::ability::manifest::ShellExec {
+            argv: vec!["/usr/bin/true".to_string()],
+            stdout: None,
+            sandbox: None,
+        },
+    ))
+    .expect("fixture executable binding")
+    .to_toml_string()
+    .expect("fixture manifest TOML");
+
+    let response = d
+        .execute_rpc(target(
+            "agent.ability.put",
+            json!({
+                "name": "authoring-smoke-agent",
+                "manifests_toml": [manifest],
+            }),
+        ))
+        .expect("agent.ability.put");
+    assert_eq!(response["ok"], true);
+    assert_eq!(response["state"], "committed");
+    assert_eq!(response["owner_ura"], owner_ura);
+    assert_eq!(response["written"], json!(["catalog-smoke"]));
+    assert!(
+        d.control_plane_record_for_authority_mode(
+            &owner_ura,
+            "authoring-smoke-agent.catalog-smoke",
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .expect("authority-scoped authored ability lookup")
+        .is_some(),
+        "successful authoring must commit the live control-plane row"
+    );
+}
+
+#[test]
+fn real_device_agent_purge_missing_agent_is_idempotent() {
+    let (reg, _g) = registry_with_joined_device_home();
+    let response = dispatcher_for(reg)
+        .execute_rpc(target(
+            "agent.purge",
+            json!({"name": "missing-purge-agent"}),
+        ))
+        .expect("agent.purge missing-agent outcome");
+    assert_eq!(response["ack"], false);
+    assert_eq!(response["purge_state"], "not_applicable");
+    assert!(response["purged_path"].is_null());
+}
+
+#[test]
+fn real_device_agent_purge_reconcile_routes_to_authorized_handler() {
+    let (reg, _g) = registry_with_joined_device_home();
+    let error = dispatcher_for(reg)
+        .execute_rpc(target("agent.purge.reconcile", json!({})))
+        .expect_err("agent.purge.reconcile requires an admitted reconciliation command");
+    assert!(
+        !error
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("no rpc handler"),
+        "agent.purge.reconcile must be registered as a real handler: {error}"
+    );
+}
+
+#[test]
+fn real_device_invocation_cancel_routes_to_lifecycle_handler() {
+    let (reg, _g) = registry_with_joined_device_home();
+    let error = dispatcher_for(reg)
+        .execute_rpc(target("invocation.cancel", json!({})))
+        .expect_err("invocation.cancel requires a target lifecycle hash");
+    assert!(
+        !error
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("no rpc handler"),
+        "invocation.cancel must be registered as a real handler: {error}"
+    );
+}
+
+#[test]
 fn real_device_agent_refresh_scans_agents_through_wired_registrar() {
     // A daemon-built registry wires the HotAgentRegistrar into the shared
     // cell at construction (the catalog builder stashes it immediately), so
@@ -1476,19 +2084,7 @@ fn real_device_agent_refresh_scans_agents_through_wired_registrar() {
     // case — it scans the persisted agents through the registrar and
     // returns `ok=true`. A hosted agent with no runtime row to sync simply
     // reports `runtime_registered=0` without failing.
-    let (reg, _g) = registry_with_temp_home();
-    crate::daemon::persistence::config::save_credentials(
-        &crate::daemon::persistence::config::Credentials {
-            node_id: "dev-1".to_string(),
-            credential_token: "token".to_string(),
-            hub_endpoint: "axon://hub.test:50051".to_string(),
-            realm: "localhost".to_string(),
-            username: Some("dev".to_string()),
-            user_id: Some("user-dev".to_string()),
-            ..Default::default()
-        },
-    )
-    .expect("seed joined credentials");
+    let (reg, _g) = registry_with_joined_device_home();
     let d = dispatcher_for(reg);
     d.execute_rpc(target(
         "agent.start",
@@ -1581,6 +2177,44 @@ fn real_ability_publish_routes_with_missing_args() {
 }
 
 #[test]
+fn real_ability_publish_writes_manifest_and_returns_envelope() {
+    let (reg, _g) = registry_with_temp_home();
+    let (agent_id, _) = materialise_skill_fixture(
+        "ability-publish",
+        "existing-fixture-skill",
+        "# Existing fixture skill\n",
+    );
+    let owner_ura = crate::core::ura::agent_ura("localhost", "alice", &agent_id);
+    let manifest = r#"schema_version = "1"
+name = "custom_probe"
+description = "CLI daemon e2e custom ability"
+
+[input_schema]
+type = "object"
+"#;
+
+    let result = dispatcher_for(reg)
+        .execute_rpc(target(
+            "ability.publish",
+            json!({
+                "owner_ura": owner_ura,
+                "manifest_toml": manifest,
+            }),
+        ))
+        .expect("ability.publish must execute through LocalRuntime");
+
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["public_name"], "custom_probe");
+    let path = result["path"]
+        .as_str()
+        .expect("ability.publish result must include path");
+    assert!(
+        std::path::Path::new(path).exists(),
+        "published manifest must exist on disk: {path}"
+    );
+}
+
+#[test]
 fn real_ability_unpublish_routes_with_missing_args() {
     let (reg, _g) = registry_with_temp_home();
     let d = dispatcher_for(reg);
@@ -1669,7 +2303,7 @@ fn real_skill_list_accepts_agent_and_subject_ura_scope() {
     let (owner, _skill_dir) = materialise_skill_fixture("scope", "scoped-skill", "# Scoped\nBody");
     let agent_ura = crate::core::ura::agent_ura("localhost", "dev", &owner);
     let mut local = crate::daemon::persistence::local_agents::LocalAgentsFile {
-        host_device_agent_ura: "easynet:///r/localhost/device/dev-1".to_string(),
+        host_device_ura: "easynet:///r/localhost/device/dev-1".to_string(),
         ..Default::default()
     };
     crate::daemon::persistence::local_agents::upsert_hosted_agent(
@@ -2050,6 +2684,181 @@ fn real_meta_forget_routes_with_missing_args() {
     }
 }
 
+#[test]
+fn real_authority_binding_grant_list_check_and_revoke_round_trip() {
+    let (reg, _g) = registry_with_temp_home();
+    let d = dispatcher_for(reg);
+    let actor_ura = "easynet:///r/test/user/rfc014-owner";
+    let owner_ura = actor_ura;
+    let callee_ura = crate::core::ura::device_agent_ura(
+        "test",
+        "dev",
+        crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+    );
+    let subject_ura =
+        "easynet:///r/test/resource/user.rfc014-owner/session/authority-binding-round-trip";
+    let grant = json!({
+        "grant_id": "grant-real-001",
+        "principal_kind": "token",
+        "token_id": "token-1",
+        "token_class": "hub_link",
+        "callee_ura": callee_ura,
+        "subject_ura_pattern": subject_ura,
+        "ability_ura_pattern": "meta.describe",
+        "actions": ["read"],
+        "effect": "allow",
+        "lifetime": "permanent",
+        "state": "active",
+        "created_by": actor_ura,
+        "created_at": "2026-07-09T00:00:00Z"
+    });
+
+    let granted = d
+        .execute_rpc(target(
+            "authority.binding.grant",
+            json!({ "grant": grant, "owner_ura": owner_ura, "actor_ura": actor_ura }),
+        ))
+        .expect("authority.binding.grant must create a grant");
+    assert_eq!(granted["grant"]["grant_id"], "grant-real-001");
+    assert_eq!(granted["idempotent_replay"], false);
+
+    let listed = d
+        .execute_rpc(target(
+            "authority.binding.list",
+            json!({ "owner_ura": owner_ura, "token_id": "token-1" }),
+        ))
+        .expect("authority.binding.list must return grants");
+    assert_eq!(listed["grants"].as_array().expect("grants").len(), 1);
+
+    let checked = d
+        .execute_rpc(target(
+            "authority.binding.check",
+            json!({
+                "owner_ura": owner_ura,
+                "owner_source": "subject",
+                "caller_ura": "easynet:///r/test/authority",
+                "principal_kind": "token",
+                "token_id": "token-1",
+                "token_class": "hub_link",
+                "callee_ura": callee_ura,
+                "subject_ura": subject_ura,
+                "ability_ura": "meta.describe",
+                "action": "read"
+            }),
+        ))
+        .expect("authority.binding.check must evaluate policy");
+    assert_eq!(checked["policy_decision"]["decision"], "allow");
+    assert_eq!(checked["policy_decision"]["reason"], "EXPLICIT_GRANT_ALLOW");
+
+    let revoked = d
+        .execute_rpc(target(
+            "authority.binding.revoke",
+            json!({
+                "grant_id": "grant-real-001",
+                "owner_ura": owner_ura,
+                "actor_ura": actor_ura,
+                "reason": "real-invoke coverage"
+            }),
+        ))
+        .expect("authority.binding.revoke must revoke grant");
+    assert_eq!(revoked["grant"]["state"], "revoked");
+}
+
+#[test]
+fn real_policy_request_create_list_and_resolve_round_trip() {
+    let (reg, _g) = registry_with_temp_home();
+    let d = dispatcher_for(reg);
+    let owner_ura = "easynet:///r/test/user/rfc014-request-owner";
+    let actor_ura = "easynet:///r/test/authority";
+    let callee_ura = crate::core::ura::device_agent_ura(
+        "test",
+        "dev",
+        crate::daemon::ability::names::device_control::TERMINAL_SYSTEM_AGENT_ID,
+    );
+    let device_subject_ura = "easynet:///r/test/device/dev";
+    let pending = json!({
+        "request_id": "req-real-001",
+        "caller_ura": actor_ura,
+        "principal_kind": "token",
+        "token_id": "token-1",
+        "token_class": "hub_link",
+        "callee_ura": callee_ura,
+        "subject_ura": device_subject_ura,
+        "ability_ura": "terminal.create",
+        "action": "stream",
+        "canonical_hash": "sha256:test",
+        "requested_lifetimes": ["session"],
+        "status": "pending",
+        "created_at": "2026-07-09T00:00:00Z",
+        "expires_at": "2026-07-09T00:05:00Z"
+    });
+
+    let created = d
+        .execute_rpc(target(
+            "policy.request.create",
+            json!({ "request": pending, "owner_ura": owner_ura, "actor_ura": actor_ura }),
+        ))
+        .expect("policy.request.create must persist pending request");
+    assert_eq!(created["request"]["status"], "pending");
+
+    let listed = d
+        .execute_rpc(target(
+            "policy.request.list",
+            json!({ "owner_ura": owner_ura, "token_id": "token-1" }),
+        ))
+        .expect("policy.request.list must return requests");
+    assert_eq!(listed["requests"].as_array().expect("requests").len(), 1);
+
+    let denied = json!({
+        "request_id": "req-real-001",
+        "caller_ura": actor_ura,
+        "principal_kind": "token",
+        "token_id": "token-1",
+        "token_class": "hub_link",
+        "callee_ura": callee_ura,
+        "subject_ura": device_subject_ura,
+        "ability_ura": "terminal.create",
+        "action": "stream",
+        "canonical_hash": "sha256:test",
+        "requested_lifetimes": ["session"],
+        "status": "denied",
+        "created_at": "2026-07-09T00:00:00Z",
+        "expires_at": "2026-07-09T00:05:00Z",
+        "resolver_ura": "easynet:///r/test/user/rfc014-request-owner",
+        "resolved_at": "2026-07-09T00:01:00Z",
+        "decision_reason": "owner denied"
+    });
+    let resolved = d
+        .execute_rpc(target(
+            "policy.request.resolve",
+            json!({
+                "request": denied,
+                "owner_ura": owner_ura,
+                "actor_ura": "easynet:///r/test/user/rfc014-request-owner"
+            }),
+        ))
+        .expect("policy.request.resolve must persist terminal decision");
+    assert_eq!(resolved["request"]["status"], "denied");
+}
+
+#[test]
+fn real_admission_explain_requires_authoritative_ledger() {
+    let (reg, _g) = registry_with_temp_home();
+    let err = dispatcher_for(reg)
+        .execute_rpc(target(
+            "admission.explain",
+            json!({
+                "observer_ura": "easynet:///r/test/user/alice",
+                "request_id": "req-missing"
+            }),
+        ))
+        .expect_err("admission.explain must not fabricate diagnostics");
+    assert!(
+        err.to_string().contains("invocation ledger unavailable"),
+        "{err}"
+    );
+}
+
 // ════════════════════════════════════════════════════════════════
 // Coverage matrix: every published ability is exercised above
 // ════════════════════════════════════════════════════════════════
@@ -2069,13 +2878,24 @@ fn real_meta_forget_routes_with_missing_args() {
 #[test]
 fn every_published_ability_has_a_real_invoke_test() {
     let source = include_str!("real_invoke_tests.rs");
+    let daemon_invocation_surface: std::collections::BTreeSet<&'static str> =
+        HubBaseline::required_abilities()
+            .iter()
+            .filter(|ability| ability.surface == BaselineSurface::DaemonInvocation)
+            .map(|ability| ability.name)
+            .collect();
     let published: std::collections::BTreeSet<String> = build_registry()
         .list_abilities()
         .into_iter()
         .filter(|n| is_publishable_catalog_name(n))
+        // DaemonInvocation routes are covered by
+        // `DaemonInvocationSurface::from_daemon_surface`; this file owns
+        // LocalRegistry handler behavior only.
+        .filter(|n| !daemon_invocation_surface.contains(n.as_str()))
         .filter(|n| !n.ends_with(".chat")) // dynamic per-agent, not in this catalog
-        // RFC-002 §3.3: keyring abilities are owner-namespaced and
-        // covered by their own unit tests in
+        // RFC-002 §3.3: keyring abilities retain the legacy
+        // `device.keyring.*` local-name namespace but publish through the
+        // keyring-management SystemAgent. Behavior coverage lives in
         // `daemon::keyring::abilities::tests`.
         .filter(|n| !n.starts_with("device.keyring."))
         .collect();
@@ -2129,7 +2949,7 @@ fn every_published_ability_has_a_real_invoke_test() {
 #[test]
 fn real_device_plugin_status_reports_runtime_surface() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let status = d
         .execute_rpc(target("plugin.status", json!({})))
@@ -2144,7 +2964,7 @@ fn real_device_plugin_status_reports_runtime_surface() {
 #[test]
 fn real_device_plugin_reload_reports_registration_diff() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let report = d
         .execute_rpc(target("plugin.reload", json!({})))
@@ -2163,7 +2983,7 @@ fn real_device_plugin_reload_reports_registration_diff() {
 #[test]
 fn real_device_plugin_activate_realtime_routes_through_lifecycle_ability() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let result = d.execute_rpc(target(
         "plugin.activate_realtime",
@@ -2185,11 +3005,90 @@ fn real_device_plugin_activate_realtime_routes_through_lifecycle_ability() {
 // ════════════════════════════════════════════════════════════════
 
 #[test]
+#[cfg(feature = "browser-cdp")]
+fn real_browser_plugin_abilities_reach_handlers_without_launching_chrome() {
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
+    let d = dispatcher_for(reg);
+    let missing_session =
+        "easynet:///r/localhost/resource/plugin.easynet.browser/session/missing-real-invoke";
+
+    let open = d
+        .execute_rpc(target(
+            "browser.open_session",
+            json!({"url": "file:///etc/passwd"}),
+        ))
+        .expect_err("browser.open_session with a non-http URL must fail before Chrome launch");
+    assert!(
+        open.to_string().contains("browser_invalid_argument"),
+        "browser.open_session must route to browser argument validation; got {open}"
+    );
+
+    let show = d
+        .execute_rpc(target_for_subject(
+            "browser.show_session",
+            json!({}),
+            missing_session,
+        ))
+        .expect_err("browser.show_session with a missing session must reach session gate");
+    assert!(
+        show.to_string().contains("browser_session_not_found"),
+        "browser.show_session must route to browser session gate; got {show}"
+    );
+
+    let send = d
+        .execute_rpc(target_for_subject(
+            "browser.send_input",
+            json!({"event": {"kind": "text", "text": "hello"}}),
+            missing_session,
+        ))
+        .expect_err("browser.send_input with a missing session must reach session gate");
+    assert!(
+        send.to_string().contains("browser_session_not_found"),
+        "browser.send_input must route to browser session gate; got {send}"
+    );
+
+    let mut capture = target_for_subject(
+        "browser.capture_viewport",
+        json!({"max_frames": 1}),
+        missing_session,
+    );
+    capture.call_mode = CallMode::Stream;
+    let capture = d
+        .execute_stream(capture)
+        .expect_err("browser.capture_viewport with a missing session must reach session gate");
+    assert!(
+        capture.to_string().contains("browser_session_not_found"),
+        "browser.capture_viewport must route to browser session gate; got {capture}"
+    );
+
+    let mut attach = target_for_subject("browser.attach_session", json!({}), missing_session);
+    attach.call_mode = CallMode::Bidi;
+    let attach = d
+        .execute_bidi(attach)
+        .expect_err("browser.attach_session with a missing session must reach session gate");
+    assert!(
+        attach.to_string().contains("browser_session_not_found"),
+        "browser.attach_session must route to browser session gate; got {attach}"
+    );
+
+    let close = d
+        .execute_rpc(target_for_subject(
+            "browser.close_session",
+            json!({}),
+            missing_session,
+        ))
+        .expect("browser.close_session is idempotent for an already-missing session");
+    assert_eq!(close["state"], "closed");
+    assert_eq!(close["already_closed"], true);
+}
+
+#[test]
 fn real_consent_subscribe_returns_a_stream_source() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let perms = Arc::new(crate::daemon::execution::permission::PermissionService::new());
-    let mut reg = AxonAbilityCatalog::new();
-    permission_ability::register(&mut reg, perms);
+    let mut reg = runtime_attached_catalog();
+    consent_ability::register(&mut reg, perms);
     let d = dispatcher_for(Arc::new(reg));
     let mut t = target("consent.subscribe", json!({}));
     t.call_mode = CallMode::Stream;
@@ -2202,7 +3101,11 @@ fn real_consent_subscribe_returns_a_stream_source() {
 fn real_discuss_subscribe_returns_a_stream_source() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::mission::discuss::DiscussService::new());
-    let mut reg = AxonAbilityCatalog::new();
+    svc.bind_memory_for_test(
+        crate::core::domain::NodeId::new("runtime-node"),
+        crate::core::domain::TenantId::new("runtime-tenant"),
+    );
+    let mut reg = runtime_attached_catalog();
     discuss_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let mut t = target("discuss.subscribe", json!({"room_id": "any"}));
@@ -2223,7 +3126,7 @@ fn real_discuss_subscribe_returns_a_stream_source() {
 fn real_loop_subscribe_returns_a_stream_source() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::loop_instance::LoopService::new());
-    let mut reg = AxonAbilityCatalog::new();
+    let mut reg = runtime_attached_catalog();
     loop_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let mut t = target("loop.subscribe", json!({"loop_id": "any"}));
@@ -2241,7 +3144,7 @@ fn real_loop_subscribe_returns_a_stream_source() {
 fn real_device_session_attach_returns_a_stream_source_for_unknown_id() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let svc = Arc::new(crate::daemon::execution::session::SessionService::new());
-    let mut reg = AxonAbilityCatalog::new();
+    let mut reg = runtime_attached_catalog();
     session_ability::register(&mut reg, svc);
     let d = dispatcher_for(Arc::new(reg));
     let mut t = target("session.attach", json!({"session_id": "no-such"}));
@@ -2259,13 +3162,13 @@ fn real_device_session_attach_returns_a_stream_source_for_unknown_id() {
 fn real_device_terminal_create_then_close_round_trip() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
-    let mut reg = AxonAbilityCatalog::new();
-    pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
+    let mut reg = runtime_attached_catalog();
+    terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
         .execute_rpc(target("terminal.create", json!({})))
-        .expect("pty_session_create");
+        .expect("terminal.create");
     let session_id = create["session_id"]
         .as_str()
         .expect("session_id in response")
@@ -2284,8 +3187,13 @@ fn real_device_terminal_create_then_close_round_trip() {
     );
 
     let close = d
-        .execute_rpc(target("terminal.close", json!({"session_id": session_id})))
-        .expect("pty_session_close");
+        .execute_rpc(terminal_followup_target(
+            "terminal.close",
+            json!({"session_id": session_id}),
+            &session_id,
+            "manage",
+        ))
+        .expect("terminal.close");
     assert_eq!(close["ack"], json!(true));
 }
 
@@ -2302,25 +3210,27 @@ fn real_device_terminal_create_then_close_round_trip() {
 fn real_device_terminal_input_read_resize_round_trip() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
-    let io = pty_io_ability::PtyIoService::new();
-    let mut reg = AxonAbilityCatalog::new();
-    pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
-    pty_io_ability::register(&mut reg, Arc::clone(&pty), io);
+    let io = terminal_io_ability::PtyIoService::new();
+    let mut reg = runtime_attached_catalog();
+    terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
+    terminal_io_ability::register(&mut reg, Arc::clone(&pty), io);
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
         .execute_rpc(target("terminal.create", json!({})))
-        .expect("pty_session_create");
+        .expect("terminal.create");
     let sid = create["session_id"].as_str().unwrap().to_string();
 
     // terminal.resize — exercise it before any I/O so
     // the shell starts at the requested geometry.
     let resize = d
-        .execute_rpc(target(
+        .execute_rpc(terminal_followup_target(
             "terminal.resize",
             json!({"session_id": sid.clone(), "cols": 132, "rows": 50}),
+            &sid,
+            "stream",
         ))
-        .expect("pty_session_resize");
+        .expect("terminal.resize");
     assert_eq!(resize["ack"], json!(true));
 
     // terminal.input — push a printf line that produces
@@ -2329,11 +3239,13 @@ fn real_device_terminal_input_read_resize_round_trip() {
     let input_b64 =
         base64::engine::general_purpose::STANDARD.encode(b"printf 'EASYNET_REAL_PTY_OK\\n'\n");
     let input = d
-        .execute_rpc(target(
+        .execute_rpc(terminal_followup_target(
             "terminal.input",
             json!({"session_id": sid.clone(), "data": input_b64}),
+            &sid,
+            "stream",
         ))
-        .expect("pty_session_input");
+        .expect("terminal.input");
     assert_eq!(input["ack"], json!(true));
 
     // terminal.read — drain output up to a timeout
@@ -2343,11 +3255,13 @@ fn real_device_terminal_input_read_resize_round_trip() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while std::time::Instant::now() < deadline && !accum.contains("EASYNET_REAL_PTY_OK") {
         let resp = d
-            .execute_rpc(target(
+            .execute_rpc(terminal_followup_target(
                 "terminal.read",
                 json!({"session_id": sid.clone(), "timeout": 1.0}),
+                &sid,
+                "stream",
             ))
-            .expect("pty_session_read");
+            .expect("terminal.read");
         if let Some(b64) = resp["output"].as_str() {
             if !b64.is_empty() {
                 let raw = base64::engine::general_purpose::STANDARD
@@ -2363,32 +3277,47 @@ fn real_device_terminal_input_read_resize_round_trip() {
     );
 
     // Cleanup.
-    let _ = d.execute_rpc(target("terminal.close", json!({"session_id": sid})));
+    let _ = d.execute_rpc(terminal_followup_target(
+        "terminal.close",
+        json!({"session_id": sid}),
+        &sid,
+        "manage",
+    ));
 }
 
-// pty_session_attach spawns three tokio tasks (reader / writer /
+// terminal.attach spawns three tokio tasks (reader / writer /
 // exit-watcher) inside the bidi handler, so the test needs a
 // live runtime.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_device_terminal_attach_returns_a_bidi_source() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
-    let mut reg = AxonAbilityCatalog::new();
-    pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
-    pty_attach_ability::register(&mut reg, Arc::clone(&pty));
+    let mut reg = runtime_attached_catalog();
+    terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
+    terminal_attach_ability::register(&mut reg, Arc::clone(&pty));
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
         .execute_rpc(target("terminal.create", json!({})))
-        .expect("pty_session_create");
+        .expect("terminal.create");
     let sid = create["session_id"].as_str().unwrap().to_string();
 
-    let mut t = target("terminal.attach", json!({"session_id": sid.clone()}));
+    let mut t = terminal_followup_target(
+        "terminal.attach",
+        json!({"session_id": sid.clone()}),
+        &sid,
+        "stream",
+    );
     t.call_mode = CallMode::Bidi;
-    let _bidi = d.execute_bidi(t).expect("pty_session_attach bidi");
+    let _bidi = d.execute_bidi(t).expect("terminal.attach bidi");
 
     // Cleanup.
-    let _ = d.execute_rpc(target("terminal.close", json!({"session_id": sid})));
+    let _ = d.execute_rpc(terminal_followup_target(
+        "terminal.close",
+        json!({"session_id": sid}),
+        &sid,
+        "manage",
+    ));
 }
 
 // fs.transfer is a bidi ability — open it with mode=upload
@@ -2399,10 +3328,7 @@ async fn real_device_terminal_attach_returns_a_bidi_source() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
     use base64::Engine;
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let mut reg = AxonAbilityCatalog::new();
-    file_transfer_ability::register(&mut reg);
-    let d = dispatcher_for(Arc::new(reg));
+    let fixture = RealFileTransferFixture::new();
 
     let path = std::env::temp_dir().join(format!(
         "easynet-real-ft-{}-{}.bin",
@@ -2417,11 +3343,14 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
         "fs.transfer",
         json!({
             "mode": "upload",
-            "resource_ref": fs_ref(&path, crate::daemon::resources::files::FilesystemResourceCapability::Write),
+            "resource_ref": fixture.resource_ref(&path, crate::daemon::resources::files::FilesystemResourceCapability::Write),
         }),
     );
     t.call_mode = CallMode::Bidi;
-    let bidi = d.execute_bidi(t).expect("file_transfer bidi");
+    let bidi = fixture
+        .dispatcher
+        .execute_bidi(t)
+        .expect("file_transfer bidi");
 
     let bytes = b"real-invoke-device-file-transfer";
     let chunk_b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
@@ -2455,10 +3384,7 @@ async fn real_device_fs_transfer_uploads_a_round_trip_through_dispatcher() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
     use base64::Engine;
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let mut reg = AxonAbilityCatalog::new();
-    file_transfer_ability::register(&mut reg);
-    let d = dispatcher_for(Arc::new(reg));
+    let fixture = RealFileTransferFixture::new();
 
     let path = std::env::temp_dir().join(format!(
         "easynet-real-ft-download-{}-{}.bin",
@@ -2475,11 +3401,14 @@ async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
         "fs.transfer",
         json!({
             "mode": "download",
-            "resource_ref": fs_ref(&path, crate::daemon::resources::files::FilesystemResourceCapability::Read),
+            "resource_ref": fixture.resource_ref(&path, crate::daemon::resources::files::FilesystemResourceCapability::Read),
         }),
     );
     t.call_mode = CallMode::Bidi;
-    let bidi = d.execute_bidi(t).expect("file_transfer bidi");
+    let bidi = fixture
+        .dispatcher
+        .execute_bidi(t)
+        .expect("file_transfer bidi");
 
     let mut from = bidi.from_client;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
@@ -2537,37 +3466,21 @@ async fn real_device_fs_transfer_downloads_a_round_trip_through_dispatcher() {
 // scanner sees it.
 // ════════════════════════════════════════════════════════════════
 
-/// Helper: for the seven stubs, the expected behaviour is a
-/// terminal error whose message reaches the stub body. Match on
-/// either `"device backend not yet wired"` (PR2 stub default) or
-/// the INV-SUBJECT-ENVELOPE rejection — anything else means the
-/// ability didn't route to its handler at all.
-fn assert_routed_to_media_stub(ability: &str, err: &anyhow::Error) {
-    let msg = err.to_string();
-    let routed = msg.contains("device backend not yet wired")
-        || msg.contains("INV-SUBJECT-ENVELOPE")
-        || msg.contains("subject_required")
-        || msg.contains("subject_in_args");
-    assert!(
-        routed,
-        "{ability}: error did not look like the PR2 media stub: {msg}"
-    );
-}
-
 fn seed_real_invoke_display_resource(hardware_id: &str) -> String {
     let mut file = crate::daemon::persistence::resources::ResourcesFile::default();
     let ura = crate::daemon::persistence::resources::upsert_resource(
         &mut file,
         crate::daemon::persistence::resources::ResourceUpsert {
             realm: "acme",
-            owner_agent: "easynet:///r/acme/device/real-invoke",
+            owner_agent: "easynet:///r/acme/agent/device.real-invoke.media",
             kind: crate::daemon::persistence::resources::ResourceType::Display,
             binding: crate::daemon::persistence::resources::ResourceBinding::LocalDevice,
             hardware_id,
             display_name: "Real Invoke Display",
-            metadata: json!({}),
+            metadata: json!({"primary_display": true, "backend": "xcap"}),
         },
-    );
+    )
+    .expect("seed real-invoke display resource");
     crate::daemon::persistence::resources::save(&file).expect("save real-invoke display resource");
     ura
 }
@@ -2575,10 +3488,13 @@ fn seed_real_invoke_display_resource(hardware_id: &str) -> String {
 #[test]
 fn real_mic_subscribe_routes_to_subject_gate() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
-    let mut t = target("mic.subscribe", json!({}))
-        .with_subject("easynet:///r/acme/resource/missing-real-invoke-mic");
+    let mut t = target_for_subject(
+        "mic.subscribe",
+        json!({}),
+        "easynet:///r/acme/resource/missing-real-invoke-mic",
+    );
     t.call_mode = CallMode::Stream;
     let err = d
         .execute_stream(t)
@@ -2592,7 +3508,7 @@ fn real_mic_subscribe_routes_to_subject_gate() {
 #[test]
 fn real_camera_subscribe_routes_to_media_subject_gate() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let mut t = target("camera.subscribe", json!({}));
     t.call_mode = CallMode::Stream;
@@ -2611,7 +3527,7 @@ fn real_camera_snapshot_with_no_subject_returns_subject_required() {
     // MUST reject with reason="subject_required". The dedicated
     // suite in `media::camera_snapshot` covers the populated path.
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let err = d
         .execute_rpc(target("camera.snapshot", json!({})))
@@ -2625,7 +3541,7 @@ fn real_camera_snapshot_with_no_subject_returns_subject_required() {
 #[test]
 fn real_camera_record_start_with_no_subject_returns_subject_required() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let err = d
         .execute_rpc(target("camera.record_start", json!({})))
@@ -2639,7 +3555,7 @@ fn real_camera_record_start_with_no_subject_returns_subject_required() {
 #[test]
 fn real_camera_record_stop_with_no_subject_returns_subject_required() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let err = d
         .execute_rpc(target(
@@ -2656,7 +3572,7 @@ fn real_camera_record_stop_with_no_subject_returns_subject_required() {
 #[test]
 fn real_screen_subscribe_with_no_subject_returns_subject_required() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let mut t = target("screen.subscribe", json!({}));
     t.call_mode = CallMode::Stream;
@@ -2672,7 +3588,7 @@ fn real_screen_subscribe_with_no_subject_returns_subject_required() {
 #[test]
 fn real_screen_snapshot_with_no_subject_returns_subject_required() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let err = d
         .execute_rpc(target("screen.snapshot", json!({})))
@@ -2685,12 +3601,41 @@ fn real_screen_snapshot_with_no_subject_returns_subject_required() {
 
 #[test]
 #[cfg(feature = "remote-desktop")]
+fn real_remote_desktop_grant_consent_binds_local_actor_and_resource() {
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let subject = seed_real_invoke_display_resource("remote-desktop-consent-real-invoke-display");
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
+    let d = dispatcher_for(reg);
+
+    let granted = d
+        .execute_rpc(target_for_subject(
+            "remote_desktop.grant_consent",
+            json!({ "intent": "remote_desktop_session" }),
+            subject.clone(),
+        ))
+        .expect("remote_desktop.grant_consent must dispatch");
+
+    assert_eq!(granted["consent"], "granted");
+    assert_eq!(granted["policy"], "local_user_consent");
+    assert_eq!(granted["subject_ura"], subject);
+    assert_eq!(
+        granted["approval_actor_ura"],
+        crate::core::ura::LOCAL_SYSTEM_AGENT_URA
+    );
+}
+
+#[test]
+#[cfg(feature = "remote-desktop")]
 fn real_remote_desktop_permission_status_reports_contract() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let status = d
-        .execute_rpc(target("remote_desktop.permission_status", json!({})))
+        .execute_rpc(target_for_subject(
+            "remote_desktop.permission_status",
+            json!({}),
+            crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
+        ))
         .expect("remote_desktop.permission_status must dispatch");
     assert_eq!(
         status["permission"], "screen_capture",
@@ -2702,10 +3647,14 @@ fn real_remote_desktop_permission_status_reports_contract() {
 #[cfg(feature = "remote-desktop")]
 fn real_remote_desktop_request_permission_reports_contract() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let status = d
-        .execute_rpc(target("remote_desktop.request_permission", json!({})))
+        .execute_rpc(target_for_subject(
+            "remote_desktop.request_permission",
+            json!({}),
+            crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
+        ))
         .expect("remote_desktop.request_permission must dispatch");
     assert_eq!(
         status["permission"], "screen_capture",
@@ -2717,7 +3666,7 @@ fn real_remote_desktop_request_permission_reports_contract() {
 #[cfg(feature = "remote-desktop")]
 fn real_remote_desktop_create_session_requires_envelope_subject() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let err = d
         .execute_rpc(target("remote_desktop.create_session", json!({})))
@@ -2733,23 +3682,34 @@ fn real_remote_desktop_create_session_requires_envelope_subject() {
 fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let subject = seed_real_invoke_display_resource("remote-desktop-real-invoke-display");
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let session_id = unique_call_id("remote-desktop");
+    let granted = d
+        .execute_rpc(explicit_target(
+            "remote_desktop.grant_consent",
+            json!({"intent": "remote_desktop_session"}),
+            subject.clone(),
+            remote_desktop_test_consent_causal_context(),
+        ))
+        .expect("remote_desktop.grant_consent must issue a ticket");
+    let consent_ticket = granted["consent_ticket"]
+        .as_str()
+        .expect("grant_consent must return consent_ticket")
+        .to_string();
 
     let created = d
-        .execute_rpc(
-            target(
-                "remote_desktop.create_session",
-                json!({
-                    "session_id": session_id,
-                    "mode": "view_only",
-                    "lease_ttl_ms": 5000,
-                }),
-            )
-            .with_subject(subject.clone())
-            .with_causal_context(remote_desktop_test_consent_causal_context()),
-        )
+        .execute_rpc(explicit_target(
+            "remote_desktop.create_session",
+            json!({
+                "session_id": session_id,
+                "consent_ticket": consent_ticket,
+                "mode": "view_only",
+                "lease_ttl_ms": 5000,
+            }),
+            subject.clone(),
+            remote_desktop_test_consent_causal_context(),
+        ))
         .expect("remote_desktop.create_session must create a session");
     assert_eq!(created["session_id"], session_id);
     let token = created["session_token"]
@@ -2758,14 +3718,12 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
         .to_string();
 
     let shown = d
-        .execute_rpc(
-            target(
-                "remote_desktop.show_session",
-                json!({"session_id": session_id, "session_token": token}),
-            )
-            .with_subject(subject.clone())
-            .with_causal_context(remote_desktop_test_consent_causal_context()),
-        )
+        .execute_rpc(explicit_target(
+            "remote_desktop.show_session",
+            json!({"session_id": session_id, "session_token": token}),
+            subject.clone(),
+            remote_desktop_test_consent_causal_context(),
+        ))
         .expect("remote_desktop.show_session must dispatch");
     assert_eq!(shown["session_id"], session_id);
     assert!(
@@ -2775,46 +3733,42 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let token = created["session_token"].as_str().unwrap().to_string();
 
     let signaled = d
-        .execute_rpc(
-            target(
-                "remote_desktop.set_description",
-                json!({
-                    "session_id": session_id,
-                    "session_token": token,
-                    "side": "local",
-                    "description": {"type": "answer", "sdp": "v=0"}
-                }),
-            )
-            .with_subject(subject.clone())
-            .with_causal_context(remote_desktop_test_consent_causal_context()),
-        )
+        .execute_rpc(explicit_target(
+            "remote_desktop.set_description",
+            json!({
+                "session_id": session_id,
+                "session_token": token,
+                "side": "local",
+                "description": {"type": "answer", "sdp": "v=0"}
+            }),
+            subject.clone(),
+            remote_desktop_test_consent_causal_context(),
+        ))
         .expect("remote_desktop.set_description must dispatch");
     assert_eq!(signaled["state"], "negotiating");
     let token = created["session_token"].as_str().unwrap().to_string();
 
     let candidate_view = d
-        .execute_rpc(
-            target(
-                "remote_desktop.add_ice_candidate",
-                json!({
-                    "session_id": session_id,
-                    "session_token": token,
-                    "candidate": {"candidate": "candidate:1"}
-                }),
-            )
-            .with_subject(subject.clone())
-            .with_causal_context(remote_desktop_test_consent_causal_context()),
-        )
+        .execute_rpc(explicit_target(
+            "remote_desktop.add_ice_candidate",
+            json!({
+                "session_id": session_id,
+                "session_token": token,
+                "candidate": {"candidate": "candidate:1"}
+            }),
+            subject.clone(),
+            remote_desktop_test_consent_causal_context(),
+        ))
         .expect("remote_desktop.add_ice_candidate must dispatch");
     assert_eq!(candidate_view["signaling"]["ice_candidate_count"], 1);
     let token = created["session_token"].as_str().unwrap().to_string();
 
-    let mut watch = target(
+    let mut watch = explicit_target(
         "remote_desktop.watch_events",
         json!({"session_id": session_id, "session_token": token}),
-    )
-    .with_subject(subject.clone())
-    .with_causal_context(remote_desktop_test_consent_causal_context());
+        subject.clone(),
+        remote_desktop_test_consent_causal_context(),
+    );
     watch.call_mode = CallMode::Stream;
     let events = d
         .execute_stream(watch)
@@ -2829,40 +3783,59 @@ fn real_remote_desktop_session_lifecycle_routes_through_local_runtime() {
     let token = created["session_token"].as_str().unwrap().to_string();
 
     let refreshed = d
-        .execute_rpc(
-            target(
-                "remote_desktop.refresh_lease",
-                json!({
-                    "session_id": session_id,
-                    "session_token": token,
-                    "lease_ttl_ms": 5000
-                }),
-            )
-            .with_subject(subject.clone())
-            .with_causal_context(remote_desktop_test_consent_causal_context()),
-        )
+        .execute_rpc(explicit_target(
+            "remote_desktop.refresh_lease",
+            json!({
+                "session_id": session_id,
+                "session_token": token,
+                "lease_ttl_ms": 5000
+            }),
+            subject.clone(),
+            remote_desktop_test_consent_causal_context(),
+        ))
         .expect("remote_desktop.refresh_lease must dispatch");
     assert_eq!(refreshed["session_id"], session_id);
     let token = created["session_token"].as_str().unwrap().to_string();
 
     let ended = d
-        .execute_rpc(
-            target(
-                "remote_desktop.end_session",
-                json!({"session_id": session_id, "session_token": token}),
-            )
-            .with_subject(subject)
-            .with_causal_context(remote_desktop_test_consent_causal_context()),
-        )
+        .execute_rpc(explicit_target(
+            "remote_desktop.end_session",
+            json!({"session_id": session_id, "session_token": token}),
+            subject,
+            remote_desktop_test_consent_causal_context(),
+        ))
         .expect("remote_desktop.end_session must dispatch");
     assert_eq!(ended["state"], "closed");
 }
 
 #[test]
 #[cfg(feature = "remote-desktop")]
+fn real_remote_desktop_report_client_state_reaches_session_gate() {
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
+    let d = dispatcher_for(reg);
+    let err = d
+        .execute_rpc(target(
+            "remote_desktop.report_client_state",
+            json!({
+                "session_id": "missing-real-invoke-session",
+                "session_token": "not-a-live-token",
+                "transport_epoch": 1,
+                "state": "stalled"
+            }),
+        ))
+        .expect_err("report_client_state with missing session must reject");
+    assert!(
+        err.to_string().contains("session_not_found"),
+        "report_client_state must route to the remote desktop session gate; got {err}"
+    );
+}
+
+#[test]
+#[cfg(feature = "remote-desktop")]
 fn real_remote_desktop_attach_reaches_session_gate_without_starting_capture() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let mut attach = target(
         "remote_desktop.attach",
@@ -2879,189 +3852,39 @@ fn real_remote_desktop_attach_reaches_session_gate_without_starting_capture() {
 }
 
 #[test]
-fn real_speaker_publish_routes_to_media_stub() {
+fn real_speaker_publish_is_not_published_without_media_provider() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
-    let d = dispatcher_for(reg);
-    let mut t = target("speaker.publish", json!({}));
-    t.call_mode = CallMode::Bidi;
-    let err = d.execute_bidi(t).expect_err("PR2 stub must reject");
-    assert_routed_to_media_stub("speaker.publish", &err);
-}
-
-#[test]
-fn real_voice_subscribe_routes_to_media_stub() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
-    let d = dispatcher_for(reg);
-    let mut t = target("voice.subscribe", json!({}));
-    t.call_mode = CallMode::Stream;
-    let err = d.execute_stream(t).expect_err("PR2 stub must reject");
-    assert_routed_to_media_stub("voice.subscribe", &err);
-}
-
-#[test]
-fn real_voice_transcribe_routes_to_media_stub() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
-    let d = dispatcher_for(reg);
-    let mut t = target("voice.transcribe", json!({}));
-    t.call_mode = CallMode::Bidi;
-    let err = d.execute_bidi(t).expect_err("PR2 stub must reject");
-    assert_routed_to_media_stub("voice.transcribe", &err);
-}
-
-// ── browser.* v0 mock surface (RFC-012 §RemoteWebSurface) ─
-//
-// v0 ships mock handlers that disclose `[V0 MOCK …]` in their
-// descriptions; RFC-013 W1+ replaces the bodies with real WebView
-// integration. The tests here pin the registry-side contract: the
-// abilities are dispatchable, accept the documented args, and the
-// stream verb yields exactly one placeholder frame so the frontend
-// canvas pipeline can be exercised end-to-end.
-
-#[test]
-fn real_browser_open_session_mints_resource_ura() {
-    let resp = invoke(
-        "browser.open_session",
-        json!({"url": "https://example.com"}),
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
+    assert!(
+        !reg.has_bidi("speaker.publish"),
+        "speaker.publish must remain absent until a provider-backed media module registers it"
     );
-    let ura = resp["session_ura"]
-        .as_str()
-        .expect("open_session must return session_ura");
-    // Centralised URA parsing satisfies the
-    // `tests/scripts/test_no_raw_ura_construction.sh` contract: no
-    // module outside `src/ura.rs` should hand-parse the scheme.
-    let parsed = crate::core::ura::parse_ura(ura)
-        .unwrap_or_else(|e| panic!("session_ura {ura:?} must parse: {e}"));
-    assert_eq!(
-        parsed.kind,
-        crate::core::ura::URAKind::Resource,
-        "session_ura must resolve to a Resource URA, got {parsed:?}"
+    assert!(
+        reg.authority_ability_catalog_snapshot()
+            .iter()
+            .all(|row| row.name != "speaker.publish"),
+        "speaker.publish must not publish descriptor rows from an unimplemented stub"
     );
-    assert_eq!(resp["state"], "open");
 }
 
 #[test]
-fn real_browser_send_input_requires_known_session() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
-    let d = dispatcher_for(reg);
-    let err = d
-        .execute_rpc(target(
-            "browser.send_input",
-            json!({
-                "session_ura": "easynet:///r/local/resource/daemon.browser/bogus",
-                "event": {"kind": "click", "x": 1, "y": 2}
-            }),
-        ))
-        .expect_err("send_input against unknown session must error");
-    assert!(err.to_string().contains("not found"), "send_input: {err}");
+fn real_voice_subscribe_is_not_published_without_media_provider() {
+    let (reg, _g, _voice) = registry_with_voice_temp_home();
+    assert!(!reg.has_stream("voice.subscribe"));
+    assert!(reg
+        .authority_ability_catalog_snapshot()
+        .iter()
+        .all(|row| row.name != "voice.subscribe"));
 }
 
 #[test]
-fn real_browser_capture_viewport_emits_one_placeholder_frame() {
-    // Open a session inside the same dispatcher so the in-process
-    // session store sees the row when capture_viewport runs.
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
-    let d = dispatcher_for(reg);
-    let open = d
-        .execute_rpc(target(
-            "browser.open_session",
-            json!({"url": "https://example.com"}),
-        ))
-        .expect("open_session ok");
-    let ura = open["session_ura"].as_str().unwrap().to_string();
-    let mut t = target("browser.capture_viewport", json!({"session_ura": ura}));
-    t.call_mode = CallMode::Stream;
-    let source = d.execute_stream(t).expect("capture_viewport must dispatch");
-    let frames = source.into_snapshot();
-    assert_eq!(
-        frames.len(),
-        1,
-        "v0 mock must emit exactly one placeholder frame"
-    );
-    assert_eq!(frames[0]["is_placeholder"], true);
-}
-
-#[tokio::test]
-async fn real_browser_attach_session_emits_ready_frame_and_accepts_close() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
-    let d = dispatcher_for(reg);
-    let open = d
-        .execute_rpc(target(
-            "browser.open_session",
-            json!({"url": "https://example.com"}),
-        ))
-        .expect("open_session ok");
-    let ura = open["session_ura"].as_str().unwrap().to_string();
-
-    let mut target = target(
-        "browser.attach_session",
-        json!({"session_ura": ura.clone()}),
-    );
-    target.call_mode = CallMode::Bidi;
-    let mut bidi = d
-        .execute_bidi(target)
-        .expect("attach_session must open bidi source");
-
-    let ready = tokio::time::timeout(std::time::Duration::from_secs(2), bidi.from_client.recv())
-        .await
-        .expect("ready frame timed out")
-        .expect("ready frame missing")
-        .into_json_value()
-        .expect("ready frame json");
-    assert_eq!(ready["type"], "browser.ready");
-    assert_eq!(ready["session_ura"], ura);
-
-    let frame = tokio::time::timeout(std::time::Duration::from_secs(2), bidi.from_client.recv())
-        .await
-        .expect("initial frame timed out")
-        .expect("initial frame missing")
-        .into_json_value()
-        .expect("initial frame json");
-    assert_eq!(frame["type"], "browser.frame");
-    assert_eq!(frame["frame"]["is_placeholder"], true);
-
-    bidi.to_client
-        .send(json!({"type": "browser.close"}))
-        .await
-        .expect("send close frame");
-    let closed = tokio::time::timeout(std::time::Duration::from_secs(2), bidi.from_client.recv())
-        .await
-        .expect("closed frame timed out")
-        .expect("closed frame missing")
-        .into_json_value()
-        .expect("closed frame json");
-    assert_eq!(closed["type"], "closed");
-    assert_eq!(closed["session_ura"], ura);
-}
-
-#[test]
-fn real_browser_close_session_is_idempotent() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
-    let d = dispatcher_for(reg);
-    let open = d
-        .execute_rpc(target(
-            "browser.open_session",
-            json!({"url": "https://example.com"}),
-        ))
-        .expect("open ok");
-    let ura = open["session_ura"].as_str().unwrap().to_string();
-    let first = d
-        .execute_rpc(target(
-            "browser.close_session",
-            json!({"session_ura": ura.clone()}),
-        ))
-        .expect("first close ok");
-    assert_eq!(first["status"], "closed");
-    let second = d
-        .execute_rpc(target("browser.close_session", json!({"session_ura": ura})))
-        .expect("second close ok (idempotent)");
-    assert_eq!(second["status"], "already_closed");
+fn real_voice_transcribe_is_not_published_without_media_provider() {
+    let (reg, _g, _voice) = registry_with_voice_temp_home();
+    assert!(!reg.has_bidi("voice.transcribe"));
+    assert!(reg
+        .authority_ability_catalog_snapshot()
+        .iter()
+        .all(|row| row.name != "voice.transcribe"));
 }
 
 #[test]
@@ -3077,6 +3900,57 @@ fn real_meta_list_resources_returns_resources_array() {
     );
 }
 
+#[test]
+fn real_resource_refresh_remote_targets_returns_inventory_projection() {
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "resource.refresh_remote_targets",
+            json!({"types": ["display"]}),
+        ))
+        .expect("resource.refresh_remote_targets");
+    assert!(
+        resp.get("resources").and_then(Value::as_array).is_some(),
+        "resource.refresh_remote_targets receipt must carry `resources` array; got {resp}"
+    );
+    assert!(
+        resp.get("screen_target_discovery_available")
+            .and_then(Value::as_bool)
+            .is_some(),
+        "resource.refresh_remote_targets receipt must report discovery availability; got {resp}"
+    );
+}
+
+#[test]
+fn real_resource_watch_remote_targets_emits_bounded_snapshot_event() {
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
+    let mut watch = target(
+        "resource.watch_remote_targets",
+        json!({"types": ["display"], "max_events": 1, "poll_interval_ms": 250}),
+    );
+    watch.call_mode = CallMode::Stream;
+    let frames = dispatcher_for(reg)
+        .execute_stream(watch)
+        .expect("resource.watch_remote_targets")
+        .into_snapshot();
+    assert_eq!(
+        frames.len(),
+        1,
+        "bounded resource.watch_remote_targets must emit exactly one frame; got {frames:?}"
+    );
+    assert_eq!(frames[0]["event_type"], json!("target_inventory_snapshot"));
+    assert!(
+        frames[0]
+            .get("resources")
+            .and_then(Value::as_array)
+            .is_some(),
+        "resource.watch_remote_targets snapshot must carry `resources`; got {:?}",
+        frames[0]
+    );
+}
+
 // ── Joint-plan unified path: new published abilities ─────────────
 //
 // `every_published_ability_has_a_real_invoke_test` walks this file
@@ -3085,8 +3959,10 @@ fn real_meta_list_resources_returns_resources_array() {
 
 #[test]
 fn real_device_node_describe_local_returns_self_envelope() {
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let resp = invoke("node.describe", json!({"node_id": "local"}));
+    let (reg, _g) = registry_with_joined_device_home();
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target("node.describe", json!({"node_id": "local"})))
+        .expect("node.describe local");
     assert!(
         resp.get("node_id").is_some(),
         "node.describe receipt must carry `node_id`; got {resp}"
@@ -3101,8 +3977,8 @@ fn real_device_terminal_create_close_round_trip_via_v2_alias() {
     // namespace so an accidental reintroduction of old names fails.
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
-    let mut reg = AxonAbilityCatalog::new();
-    pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
+    let mut reg = runtime_attached_catalog();
+    terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), None);
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
@@ -3115,7 +3991,12 @@ fn real_device_terminal_create_close_round_trip_via_v2_alias() {
     assert!(!session_id.is_empty());
 
     let close = d
-        .execute_rpc(target("terminal.close", json!({"session_id": session_id})))
+        .execute_rpc(terminal_followup_target(
+            "terminal.close",
+            json!({"session_id": session_id}),
+            &session_id,
+            "manage",
+        ))
         .expect("terminal.close");
     assert_eq!(close["ack"], json!(true));
 }
@@ -3127,10 +4008,10 @@ fn real_device_terminal_input_read_resize_via_v2_alias() {
     // wiring; same printf marker pattern.
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
-    let io = pty_io_ability::PtyIoService::new();
-    let mut reg = AxonAbilityCatalog::new();
-    pty_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
-    pty_io_ability::register(&mut reg, Arc::clone(&pty), io);
+    let io = terminal_io_ability::PtyIoService::new();
+    let mut reg = runtime_attached_catalog();
+    terminal_lifecycle_ability::register(&mut reg, Arc::clone(&pty), Some(io.clone()));
+    terminal_io_ability::register(&mut reg, Arc::clone(&pty), io);
     let d = dispatcher_for(Arc::new(reg));
 
     let create = d
@@ -3139,9 +4020,11 @@ fn real_device_terminal_input_read_resize_via_v2_alias() {
     let sid = create["session_id"].as_str().unwrap().to_string();
 
     let resize = d
-        .execute_rpc(target(
+        .execute_rpc(terminal_followup_target(
             "terminal.resize",
             json!({"session_id": sid.clone(), "cols": 132, "rows": 50}),
+            &sid,
+            "stream",
         ))
         .expect("terminal.resize");
     assert_eq!(resize["ack"], json!(true));
@@ -3150,9 +4033,11 @@ fn real_device_terminal_input_read_resize_via_v2_alias() {
     let input_b64 =
         base64::engine::general_purpose::STANDARD.encode(b"printf 'EASYNET_V2_PTY_OK\\n'\n");
     let input = d
-        .execute_rpc(target(
+        .execute_rpc(terminal_followup_target(
             "terminal.input",
             json!({"session_id": sid.clone(), "data": input_b64}),
+            &sid,
+            "stream",
         ))
         .expect("terminal.input");
     assert_eq!(input["ack"], json!(true));
@@ -3161,9 +4046,11 @@ fn real_device_terminal_input_read_resize_via_v2_alias() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while std::time::Instant::now() < deadline && !accum.contains("EASYNET_V2_PTY_OK") {
         let resp = d
-            .execute_rpc(target(
+            .execute_rpc(terminal_followup_target(
                 "terminal.read",
                 json!({"session_id": sid.clone(), "timeout": 1.0}),
+                &sid,
+                "stream",
             ))
             .expect("terminal.read");
         if let Some(b64) = resp["output"].as_str() {
@@ -3190,22 +4077,22 @@ fn real_device_terminal_attach_is_registered_as_bidi() {
     // on the legacy alias's test.
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     let pty = Arc::new(crate::daemon::execution::pty::PtyService::new());
-    let mut reg = AxonAbilityCatalog::new();
-    pty_attach_ability::register(&mut reg, pty);
+    let mut reg = runtime_attached_catalog();
+    terminal_attach_ability::register(&mut reg, pty);
     assert!(
-        reg.get_bidi("terminal.attach").is_some(),
+        reg.resolve_bidi_with_env("terminal.attach").is_some(),
         "terminal.attach (v2 alias) must be registered as bidi"
     );
 }
 
 #[test]
 fn real_voice_list_calls_returns_items_array() {
-    // `voice.list_calls` projects the registry-owned in-process call
+    // `voice.list_calls` projects the injected test repository
     // service as `{items: [...]}`. This integration test pins only
     // the wire contract; behavior-level state semantics live in
     // `voice_call_ability` unit tests.
-    let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let resp = invoke("voice.list_calls", json!({}));
+    let (reg, _g, _voice) = registry_with_voice_temp_home();
+    let resp = invoke_voice(&reg, "voice.list_calls", json!({})).expect("voice.list_calls");
     assert!(
         resp.get("items").and_then(Value::as_array).is_some(),
         "voice.list_calls receipt must carry `items` array; got {resp}"
@@ -3216,8 +4103,8 @@ fn real_voice_list_calls_returns_items_array() {
 // Category C: device-local OpenAI shim (RFC-006-C v0.1)
 // ════════════════════════════════════════════════════════════════
 //
-// `openai.{chat_completions,list_models}` are device-owned
-// adapters that translate OpenAI HTTP shape ↔ host-local
+// `openai.{chat_completions,list_models}` are device-hosted
+// openai-compat SystemAgent adapters that translate OpenAI HTTP shape ↔ host-local
 // chat-base abilities (`<agent>.chat`). The full handlers want a
 // real `<agent>.chat` peer; the smokes here pin only the
 // register-and-dispatch surface (rejection paths) so the
@@ -3246,7 +4133,7 @@ fn real_device_openai_chat_completions_rejects_missing_request_arg() {
     // body must fail-fast rather than dispatch into the chat-base
     // pipeline with a None.
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
     let d = dispatcher_for(reg);
     let err = d
         .execute_rpc(target("openai.chat_completions", json!({})))
@@ -3258,13 +4145,129 @@ fn real_device_openai_chat_completions_rejects_missing_request_arg() {
     );
 }
 
+#[test]
+fn real_device_openai_files_upload_retrieve_delete_round_trip() {
+    // Keep this fixture private instead of using the process-wide
+    // OpenAI compatibility singleton: the runtime is an object with an
+    // explicit dispatch handle and identity, so concurrent tests cannot
+    // rewrite the user slot underneath this invocation.
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let handle = Arc::new(std::sync::OnceLock::new());
+    let runtime =
+        crate::daemon::ability::builtins::integrations::openai_compat::OpenAICompatRuntime::from_pages_identity(
+            Arc::clone(&handle),
+            crate::daemon::ability::builtins::resources::pages::PagesIdentity {
+                user: Some("test".to_string()),
+                owner_user_id: Some("test".to_string()),
+                realm: Some("default".to_string()),
+                listener_port: None,
+            },
+        )
+        .expect("test OpenAI runtime identity is complete");
+    let mut reg = runtime_attached_catalog_for_realm("default");
+    crate::daemon::ability::builtins::resources::files_store::register(
+        &mut reg,
+        crate::daemon::ability::builtins::resources::files_store::FilesConfig {
+            user: "test".to_string(),
+            realm: "default".to_string(),
+        },
+    );
+    let files_owner = crate::core::ura::device_agent_ura(
+        "default",
+        "real-invoke-device",
+        crate::daemon::ability::names::resources::FILES_SYSTEM_AGENT_ID,
+    );
+    assert!(
+        reg.control_plane_record_for_authority_mode(
+            &files_owner,
+            "files.put",
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .expect("files.put control-plane lookup")
+        .is_some(),
+        "files_store::register must publish files.put under {files_owner}; rows={:?}",
+        reg.authority_ability_catalog_snapshot()
+    );
+    let upload_runtime = runtime.clone();
+    reg.register_rpc_with_owner(
+        "openai.files.upload",
+        crate::daemon::ability::dispatch::OwnerKind::openai_compat_system(),
+        Arc::new(move |args| upload_runtime.handle_file_upload(args))
+            as crate::daemon::ability::dispatch::LocalRpcHandler,
+    );
+    let retrieve_runtime = runtime.clone();
+    reg.register_rpc_with_owner(
+        "openai.files.retrieve",
+        crate::daemon::ability::dispatch::OwnerKind::openai_compat_system(),
+        Arc::new(move |args| retrieve_runtime.handle_file_retrieve(args))
+            as crate::daemon::ability::dispatch::LocalRpcHandler,
+    );
+    let delete_runtime = runtime;
+    reg.register_rpc_with_owner(
+        "openai.files.delete",
+        crate::daemon::ability::dispatch::OwnerKind::openai_compat_system(),
+        Arc::new(move |args| delete_runtime.handle_file_delete(args))
+            as crate::daemon::ability::dispatch::LocalRpcHandler,
+    );
+    let reg = Arc::new(reg);
+    assert!(handle.set(Arc::clone(&reg)).is_ok());
+    let d = dispatcher_for(reg);
+
+    let upload = d
+        .execute_rpc(target(
+            "openai.files.upload",
+            json!({
+                "filename": "prompt.txt",
+                "purpose": "assistants",
+                "bytes_b64": "aGk=",
+                "content_type": "text/plain",
+            }),
+        ))
+        .expect("openai.files.upload");
+    assert_eq!(upload["kind"], "file");
+    assert_eq!(upload["filename"], "prompt.txt");
+    assert_eq!(upload["bytes"], 2);
+    let file_id = upload
+        .get("id")
+        .and_then(Value::as_str)
+        .expect("upload id")
+        .to_string();
+
+    let retrieve = d
+        .execute_rpc(target(
+            "openai.files.retrieve",
+            json!({
+                "file_id": file_id,
+                "filename": "prompt.txt",
+                "purpose": "assistants",
+            }),
+        ))
+        .expect("openai.files.retrieve");
+    assert_eq!(retrieve["kind"], "file");
+    assert_eq!(retrieve["id"], upload["id"]);
+    assert_eq!(
+        retrieve.pointer("/metadata/bytes_b64"),
+        Some(&json!("aGk="))
+    );
+
+    let delete = d
+        .execute_rpc(target(
+            "openai.files.delete",
+            json!({ "file_id": retrieve["id"] }),
+        ))
+        .expect("openai.files.delete");
+    assert_eq!(delete["kind"], "file_delete_result");
+    assert_eq!(delete["deleted"], true);
+}
+
 // ════════════════════════════════════════════════════════════════
 // Category D: user-rooted credential lifecycle (api_key.*)
 // ════════════════════════════════════════════════════════════════
 //
 // `<user>.api_key.{create,list,revoke}` registers under the active
-// identity; the test harness's username is `test`, so the
-// catalogue carries `test.api_key.*`. v0 contract: create returns
+// identity as a device-local lifecycle for the local OpenAI shim;
+// the test harness's username is `test`, so the catalogue carries
+// `test.api_key.*`. v0 contract: create returns
 // the bearer once and a fingerprint; list returns metadata; revoke
 // takes the fingerprint and removes the row.
 
@@ -3281,8 +4284,8 @@ fn real_test_api_key_create_then_list_then_revoke_round_trip() {
     // wired in — invoking them through a private dispatcher hits
     // the same code paths the production registration would.
     let _g = crate::cli::commands::test_support::HomeGuard::new();
-    let mut reg = AxonAbilityCatalog::new();
-    crate::daemon::ability::builtins::governance::api_key::register(&mut reg, "test");
+    let mut reg = runtime_attached_catalog();
+    crate::daemon::ability::builtins::governance::api_key::register(&mut reg, "test", "default");
     let d = dispatcher_for(Arc::new(reg));
 
     // Create issues a bearer + identifier. The wire shape changed
@@ -3334,7 +4337,7 @@ fn real_context_clipboard_and_favorites_round_trip() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
 
     // Tracking toggle: flip on, observe the flag in the list reply.
-    let tracked = invoke("context.clipboard.track", json!({"enabled": true}));
+    let tracked = invoke_context("context.clipboard.track", json!({"enabled": true}));
     assert_eq!(tracked["tracking"], json!(true));
 
     // Seed one clip directly through the store (the tracker thread
@@ -3351,27 +4354,37 @@ fn real_context_clipboard_and_favorites_round_trip() {
         },
     )
     .expect("seed clip");
-    let listed = invoke("context.clipboard.list", json!({"limit": 10}));
+    let listed = invoke_context("context.clipboard.list", json!({"limit": 10}));
     assert_eq!(listed["entries"][0]["id"], json!("clip-1"));
-    let got = invoke("context.clipboard.get", json!({"id": "clip-1"}));
+    let got = invoke_context("context.clipboard.get", json!({"id": "clip-1"}));
     assert_eq!(got["text"], json!("hello clipboard"));
 
     // Favorites: star the clip, list it, unstar it.
-    let fav = invoke(
+    let fav = invoke_context(
         "context.favorites.add",
         json!({"kind": "clipboard", "label": "hello", "reference": "clip-1"}),
     );
     let fav_id = fav["id"].as_str().expect("favorite id").to_string();
-    let favs = invoke("context.favorites.list", json!({}));
+    let favs = invoke_context("context.favorites.list", json!({}));
     assert_eq!(favs["favorites"][0]["reference"], json!("clip-1"));
-    let removed = invoke("context.favorites.remove", json!({"id": fav_id}));
+
+    let catalog = invoke_context("context.catalog", json!({"limit": 10}));
+    let catalog_items = catalog["items"].as_array().expect("context catalog items");
+    assert!(catalog_items
+        .iter()
+        .any(|item| item["id"] == json!("clipboard:clip-1")));
+    assert!(catalog_items
+        .iter()
+        .any(|item| item["kind"] == json!("favorite")));
+
+    let removed = invoke_context("context.favorites.remove", json!({"id": fav_id}));
     assert_eq!(removed["reference"], json!("clip-1"));
 
     // Remove the clip itself: the removed entry is the receipt and
     // the list forgets it.
-    let removed_clip = invoke("context.clipboard.remove", json!({"id": "clip-1"}));
+    let removed_clip = invoke_context("context.clipboard.remove", json!({"id": "clip-1"}));
     assert_eq!(removed_clip["id"], json!("clip-1"));
-    let after = invoke("context.clipboard.list", json!({"limit": 10}));
+    let after = invoke_context("context.clipboard.list", json!({"limit": 10}));
     assert_eq!(
         after["entries"].as_array().expect("entries array").len(),
         0,
@@ -3388,10 +4401,10 @@ fn real_context_folders_and_fs_list_browse_a_mapped_dir() {
     crate::daemon::persistence::context_store::add_folder(dir.to_str().unwrap(), Some("proj"))
         .expect("map folder");
 
-    let folders = invoke("context.folders.list", json!({}));
+    let folders = invoke_context("context.folders.list", json!({}));
     assert_eq!(folders["folders"][0]["name"], json!("proj"));
 
-    let listing = invoke("context.fs.list", json!({"folder": "proj", "path": ""}));
+    let listing = invoke_context("context.fs.list", json!({"folder": "proj", "path": ""}));
     let names: Vec<&str> = listing["entries"]
         .as_array()
         .expect("entries array")
@@ -3407,13 +4420,16 @@ fn real_context_folders_and_fs_list_browse_a_mapped_dir() {
 }
 
 #[test]
-fn real_context_captures_record_list_get() {
+fn real_context_captures_record_list_get_and_stream_read() {
     let _g = crate::cli::commands::test_support::HomeGuard::new();
     // Seed one artifact the way a media handler does, then read it
     // back through both abilities.
     let entry = crate::daemon::persistence::context_store::record_capture(
         crate::daemon::persistence::context_store::CaptureRecord {
-            device: "easynet:///r/test/device/d1",
+            device: &crate::core::ura::device_ura(
+                crate::core::ura::REALM_EASYNET,
+                "ability-catalog-snapshot",
+            ),
             ability: "screen.snapshot",
             ext: "jpg",
             bytes: b"\xff\xd8jpegbytes",
@@ -3426,19 +4442,32 @@ fn real_context_captures_record_list_get() {
     )
     .expect("seed capture");
 
-    let listed = invoke(
+    let listed = invoke_context(
         "context.captures.list",
         json!({"ability": "screen.snapshot", "limit": 10}),
     );
     assert_eq!(listed["abilities"], json!(["screen.snapshot"]));
     assert_eq!(listed["entries"][0]["id"], json!(entry.id.clone()));
 
-    let got = invoke("context.captures.get", json!({"id": entry.id}));
+    let got = invoke_context("context.captures.get", json!({"id": entry.id.clone()}));
     assert_eq!(got["content_type"], json!("image/jpeg"));
     assert!(
-        got["data_base64"].as_str().is_some_and(|s| !s.is_empty()),
-        "payload inlined as base64"
+        got.get("data_base64").is_none(),
+        "payload must not be inlined"
     );
+
+    let registry = build_registry_for_test_execution().expect("build executable test registry");
+    let stream = dispatcher_for(registry)
+        .execute_stream(context_system_target(
+            "context.captures.read",
+            json!({"id": entry.id}),
+            CallMode::Stream,
+        ))
+        .expect("stream capture through LocalRuntime");
+    let frames = stream.into_snapshot();
+    assert_eq!(frames.len(), 2, "one payload chunk plus completion");
+    assert_eq!(frames[0]["kind"], "chunk");
+    assert_eq!(frames[1]["kind"], "complete");
 }
 
 #[test]

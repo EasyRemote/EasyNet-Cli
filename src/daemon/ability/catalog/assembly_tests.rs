@@ -2,16 +2,44 @@
 
 use super::*;
 use crate::daemon::ability::catalog::{
-    build_registry, build_registry_with_services, build_system_registry, published_abilities,
-    published_ability_names, published_system_abilities,
-    recover_descriptor_import_transactions_before_daemon_registry_boot, RegistryBuildConfig,
-    RegistryBuildServices,
+    build_registry, build_registry_for_daemon_result, build_registry_with_services_result,
+    build_system_registry, published_abilities, published_ability_names,
+    published_system_abilities, recover_descriptor_import_transactions_before_daemon_registry_boot,
+    RegistryBuildConfig, RegistryBuildServices, RegistryDaemonBuildConfig,
 };
 use crate::daemon::persistence::agent_registry::AgentRegistry;
 use std::sync::Arc;
 
 fn registry_config_for_agents(agents: &AgentRegistry) -> RegistryBuildConfig<'_> {
-    RegistryBuildConfig::new(RegistryBuildServices::fresh(), agents)
+    let hosted_agent_roots = agents.agents.keys().map(|key| {
+        let agent_id = crate::core::agent::id::AgentId::parse(key)
+            .expect("assembly-test AgentRegistry keys must be canonical AgentId values");
+        crate::core::ura::agent_ura("localhost", "dev", &agent_id.name)
+    });
+    let authority_context = crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+        crate::core::ura::device_ura("localhost", "dev"),
+        hosted_agent_roots,
+    )
+    .expect("build explicit assembly-test Device authority with hosted Agent inventory");
+    registry_config_for_agents_with_authority(agents, authority_context)
+}
+
+fn registry_config_for_agents_with_authority(
+    agents: &AgentRegistry,
+    authority_context: crate::daemon::ability::dispatch::AbilityAuthorityContext,
+) -> RegistryBuildConfig<'_> {
+    let mut config = RegistryBuildConfig::new_with_authority_context(
+        RegistryBuildServices::fresh(),
+        agents,
+        authority_context,
+    );
+    config.local_runtime = Some(
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        ),
+    );
+    config
 }
 
 fn sha256_hex_for_test(bytes: &[u8]) -> String {
@@ -19,22 +47,71 @@ fn sha256_hex_for_test(bytes: &[u8]) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
+fn default_voice_capability_state_evidence(
+) -> Vec<crate::daemon::ability::conformance::VoiceCapabilityStateEvidence> {
+    crate::daemon::ability::conformance::voice_capability_state_evidence(
+        crate::daemon::ability::conformance::VoiceAssemblyEvidence::default(),
+    )
+}
+
+fn provider_backed_voice_capability_state_evidence(
+) -> Vec<crate::daemon::ability::conformance::VoiceCapabilityStateEvidence> {
+    crate::daemon::ability::conformance::voice_capability_state_evidence(
+        crate::daemon::ability::conformance::VoiceAssemblyEvidence {
+            repository_assembled: true,
+            executable_delivery_evidence: false,
+        },
+    )
+}
+
 /// Seed `local-agents.json` with the canonical hosted-agent identities the
 /// hot registrar requires before it will register `<agent>.chat` into the
 /// runtime. Each tuple is `(profile, name)`; the agent URA is the canonical
 /// `agent/<name>.<profile>` form under the local realm. Call inside a
 /// `HomeGuard` so the file lands in the test's temp HOME.
-fn seed_hosted_agents_for_chat(agents: &[(&str, &str)]) {
+fn seed_hosted_agents_for_chat(agent_names: &[&str]) {
     use crate::daemon::persistence::local_agents::{save, upsert_hosted_agent, LocalAgentsFile};
-    let mut local = LocalAgentsFile::default();
-    for (profile, name) in agents {
-        // Agent URA is `agent/<user>.<name>`; the registrar verifies its
-        // agent-id (the after-dot segment) equals the registry name, so
-        // `name` must be the third arg.
-        let agent_ura = crate::core::ura::agent_ura("localhost", profile, name);
-        upsert_hosted_agent(&mut local, profile, name, &agent_ura);
+    use crate::daemon::persistence::{agent_registry, config};
+    config::save_credentials(&config::Credentials {
+        node_id: "dev".to_string(),
+        credential_token: "token".to_string(),
+        hub_endpoint: "axon://hub.test:50051".to_string(),
+        realm: "localhost".to_string(),
+        username: Some("dev".to_string()),
+        user_id: Some("user-dev".to_string()),
+        ..Default::default()
+    })
+    .expect("seed paired Device credentials");
+    let mut local = LocalAgentsFile {
+        host_device_ura: crate::core::ura::device_ura("localhost", "dev"),
+        ..LocalAgentsFile::default()
+    };
+    let mut durable = AgentRegistry::default();
+    for name in agent_names {
+        let agent_ura = crate::core::ura::agent_ura("localhost", "dev", name);
+        upsert_hosted_agent(&mut local, "llm", name, &agent_ura);
+        durable.agents.insert(
+            canonical_test_agent_registry_key(name),
+            test_agent_entry(name),
+        );
     }
     save(&local).expect("seed local-agents.json for chat handlers");
+    agent_registry::save_agents(&durable).expect("seed durable Agent registry");
+}
+
+fn canonical_test_agent_registry_key(name: &str) -> String {
+    crate::core::agent::id::AgentId::parse(name)
+        .expect("test agent id must be canonicalizable")
+        .to_string()
+}
+
+fn test_agent_entry(name: &str) -> crate::daemon::persistence::agent_registry::AgentEntry {
+    let mut entry = crate::daemon::persistence::agent_registry::AgentEntry::new(
+        crate::core::agent::spec::RuntimeKind::ClaudeCode,
+        None,
+    );
+    entry.root_path = Some(crate::daemon::persistence::config::agents_root().join(name));
+    entry
 }
 
 #[test]
@@ -91,13 +168,10 @@ fn daemon_registry_boot_hook_recovers_acquiring_descriptor_imports() {
 #[test]
 fn published_ability_names_contains_agent_list_and_terminal_list() {
     // Diagnostic for the production NODATA: agent.list resolves but
-    // terminal.list does not. Both are OwnerKind::Device RPC abilities
-    // and both must be in the published set that (a) drives the device
-    // profile and (b) is registered into the live LocalRuntime via
-    // runtime.register_local_tool.
-    // Hold the env lock: published_ability_names() reads HOME-rooted
-    // registry state, so a concurrent HOME-mutating test must not race it.
-    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    // terminal.list does not. `agent.list` and `terminal.list` are now
+    // device-sponsored SystemAgent abilities, but both must remain in the
+    // published set that is registered directly into the daemon's live,
+    // embedded LocalRuntime during catalog assembly.
     let names = published_ability_names();
     assert!(
         names.iter().any(|n| n == "agent.list"),
@@ -110,9 +184,9 @@ fn published_ability_names_contains_agent_list_and_terminal_list() {
 }
 
 #[test]
-fn build_registry_publishes_manifests_for_device_media_and_remote_desktop() {
+fn build_registry_publishes_canonical_descriptors_for_device_media_and_remote_desktop() {
     let reg = build_registry();
-    let rows = reg.ability_catalog_snapshot();
+    let rows = reg.authority_ability_catalog_snapshot();
 
     for ability in [
         "mic.subscribe",
@@ -120,34 +194,122 @@ fn build_registry_publishes_manifests_for_device_media_and_remote_desktop() {
         "camera.subscribe",
         "screen.snapshot",
         "screen.subscribe",
-        "remote_desktop.create_session",
+        "remote_desktop.add_ice_candidate",
         "remote_desktop.attach",
+        "remote_desktop.create_session",
+        "remote_desktop.end_session",
+        "remote_desktop.grant_consent",
+        "remote_desktop.permission_status",
+        "remote_desktop.refresh_lease",
+        "remote_desktop.request_permission",
+        "remote_desktop.set_description",
+        "remote_desktop.show_session",
+        "remote_desktop.watch_events",
     ] {
         let row = rows
             .iter()
             .find(|row| row.name == ability)
             .unwrap_or_else(|| panic!("{ability} must be registered at daemon boot"));
-        let manifest = row
-            .manifest
-            .as_ref()
-            .unwrap_or_else(|| panic!("{ability} must publish a registry manifest"));
         assert_eq!(
-            manifest.input_schema()["type"],
+            row.descriptor.input_schema()["type"],
             serde_json::json!("object"),
             "{ability} must expose an object input schema"
+        );
+        if ability.starts_with("remote_desktop.") {
+            assert_eq!(
+                row.owner,
+                crate::daemon::ability::dispatch::OwnerKind::remote_desktop_system(),
+                "{ability} must be catalogued under remote-desktop SystemAgent owner"
+            );
+            let parsed_owner = crate::core::ura::parse_ura(&row.descriptor.owner_ura)
+                .unwrap_or_else(|error| panic!("{ability} owner_ura must be canonical: {error}"));
+            let (_, system_agent_id) = parsed_owner.device_agent_ids().unwrap_or_else(|| {
+                panic!("{ability} owner must be a device-sponsored SystemAgent")
+            });
+            assert_eq!(
+                system_agent_id,
+                crate::daemon::ability::names::integrations::REMOTE_DESKTOP_SYSTEM_AGENT_ID,
+                "{ability} must be published through remote-desktop, not plugin-management or direct Device ownership"
+            );
+        }
+    }
+}
+
+#[test]
+fn ability_deployment_lifecycle_has_system_agent_owner_and_typed_subjects() {
+    let rows = build_registry().authority_ability_catalog_snapshot();
+    for (ability, subject_kind) in [
+        ("ability.deploy", "resource"),
+        ("ability.uninstall", "ability"),
+    ] {
+        let row = rows
+            .iter()
+            .find(|row| row.name == ability)
+            .unwrap_or_else(|| panic!("{ability} must be registered at daemon boot"));
+        assert_eq!(
+            row.owner,
+            crate::daemon::ability::dispatch::OwnerKind::ability_management_system(),
+            "{ability} must be owned by the ability-management SystemAgent"
+        );
+        assert_eq!(
+            row.descriptor.scope_subjects,
+            crate::daemon::ability::descriptors::ScopeRule::OnlyUraKinds(vec![
+                subject_kind.to_string()
+            ]),
+            "{ability} must enforce its lifecycle subject kind at descriptor admission"
+        );
+        let parsed_owner = crate::core::ura::parse_ura(&row.descriptor.owner_ura)
+            .unwrap_or_else(|error| panic!("{ability} owner_ura must be canonical: {error}"));
+        assert_eq!(
+            parsed_owner
+                .device_agent_ids()
+                .map(|(_, agent_id)| agent_id),
+            Some(crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID),
+            "{ability} owner must be the Device-sponsored ability-management SystemAgent"
         );
     }
 }
 
 #[test]
-fn terminal_list_is_owner_kind_device() {
+fn migrated_device_native_abilities_are_owner_kind_system_agent() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     use crate::daemon::ability::dispatch::OwnerKind;
     assert_eq!(
         system_ability_owner("terminal.list"),
-        Some(OwnerKind::Device)
+        Some(OwnerKind::terminal_system())
     );
-    assert_eq!(system_ability_owner("agent.list"), Some(OwnerKind::Device));
+    assert_eq!(
+        system_ability_owner("agent.list"),
+        Some(OwnerKind::agent_management_system())
+    );
+    assert_eq!(
+        system_ability_owner("mission.run"),
+        Some(OwnerKind::automation_system())
+    );
+    assert_eq!(
+        system_ability_owner("schedule.add"),
+        Some(OwnerKind::automation_system())
+    );
+    assert_eq!(
+        system_ability_owner(crate::daemon::ability::names::device_control::SESSION_LIST),
+        Some(OwnerKind::session_system())
+    );
+    assert_eq!(
+        system_ability_owner(crate::daemon::ability::names::device_control::SESSION_ATTACH),
+        Some(OwnerKind::session_system())
+    );
+    assert_eq!(
+        system_ability_owner(crate::daemon::ability::names::governance::OBSERVE_HEALTH),
+        Some(OwnerKind::runtime_health_system())
+    );
+    assert_eq!(
+        system_ability_owner(crate::daemon::ability::names::governance::OBSERVE_NETWORK_HEALTH),
+        Some(OwnerKind::runtime_health_system())
+    );
+    assert_eq!(
+        system_ability_owner(crate::daemon::ability::names::governance::ADMIN_STATUS),
+        Some(OwnerKind::runtime_health_system())
+    );
 }
 
 #[test]
@@ -161,6 +323,18 @@ fn discovery_hints_read_only_tracks_ability_layer() {
     // Introspection read → read_only + idempotent.
     let h = discovery_hints_for(&reg, "meta.list_resources");
     assert!(h.read_only && h.idempotent, "introspection read: {h:?}");
+    for name in [
+        "agent.list",
+        "invocation.history.list",
+        "invocation.history.path",
+        "meta.list_resources",
+    ] {
+        let h = discovery_hints_for(&reg, name);
+        assert!(
+            h.read_only && h.idempotent,
+            "registered introspection read: {name}: {h:?}"
+        );
+    }
     // Observation read → read_only + idempotent.
     let h = discovery_hints_for(&reg, "observe.health");
     assert!(h.read_only && h.idempotent, "observation read: {h:?}");
@@ -172,6 +346,43 @@ fn discovery_hints_read_only_tracks_ability_layer() {
     assert!(!h.read_only && !h.idempotent, "operational verb: {h:?}");
     let h = discovery_hints_for(&reg, "remote_desktop.create_session");
     assert!(!h.read_only, "create_session must not be read_only: {h:?}");
+    // Operational creation/update is effectful but not destructive.
+    for name in ["ability.deploy", "ability.publish"] {
+        let h = discovery_hints_for(&reg, name);
+        assert!(
+            !h.read_only && !h.idempotent && !h.destructive,
+            "non-destructive lifecycle mutation: {name}: {h:?}",
+        );
+    }
+    // Durable deletion/removal is explicit destructive risk. This is
+    // intentionally not inferred from the broad Operational layer.
+    for name in [
+        "ability.uninstall",
+        "ability.unpublish",
+        "node.remove",
+        "agent.purge",
+        "skill.remove",
+        "skill.unpublish",
+    ] {
+        let h = discovery_hints_for(&reg, name);
+        assert!(
+            !h.read_only && !h.idempotent && h.destructive,
+            "destructive lifecycle mutation: {name}: {h:?}",
+        );
+    }
+}
+
+#[test]
+fn deterministic_registry_snapshot_does_not_replay_hosted_agent_runtime() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+
+    let reg = build_registry();
+    let h = discovery_hints_for(&reg, "agent.list");
+
+    assert!(
+        h.read_only && h.idempotent,
+        "deterministic registry snapshots must publish static Device abilities without replaying hosted-Agent runtimes: {h:?}"
+    );
 }
 
 #[test]
@@ -188,10 +399,6 @@ fn ability_layer_classification_is_complete() {
         .collect();
     let unclassified: Vec<String> = names
         .iter()
-        // device.keyring.* abilities have their own ontology
-        // (RFC-002 §3.3) and are not classified by the system
-        // ability layer table.
-        .filter(|n| !n.starts_with("device.keyring."))
         .filter(|n| classify_ability(n).is_none())
         .cloned()
         .collect();
@@ -253,12 +460,50 @@ fn published_ability_names_matches_live_registry() {
 }
 
 #[test]
+fn companion_control_abilities_are_local_only() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let registry = build_registry();
+    let companion_controls = [
+        crate::daemon::ability::builtins::integrations::plugins::COMPANION_STATUS_ABILITY,
+        crate::daemon::ability::builtins::integrations::plugins::COMPANION_RECONCILE_ABILITY,
+    ];
+
+    for ability in companion_controls {
+        assert!(
+            registry.has_rpc(ability),
+            "{ability} must stay callable through the local daemon registry"
+        );
+        assert!(
+            !is_publishable_catalog_name(ability),
+            "{ability} must be excluded from public catalogue publication"
+        );
+    }
+
+    let published_names: std::collections::BTreeSet<String> =
+        published_ability_names().into_iter().collect();
+    let system_names: std::collections::BTreeSet<String> = published_system_abilities()
+        .into_iter()
+        .map(|metadata| metadata.name)
+        .collect();
+
+    for ability in companion_controls {
+        assert!(
+            !published_names.contains(ability),
+            "{ability} must not be advertised through published_ability_names"
+        );
+        assert!(
+            !system_names.contains(ability),
+            "{ability} must not produce public system descriptors"
+        );
+    }
+}
+
+#[test]
 fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     // The TOML descriptors in ability-descriptors/system/ are the
     // source of truth for external discovery tools. They are
-    // GENERATED from `render_ability_toml(name,
-    // description_for(name), input_schema_for(name))`. This
+    // GENERATED from the canonical descriptor contract inventory. This
     // test enforces that the on-disk file is byte-for-byte
     // identical to what the renderer produces; if the
     // dispatcher's metadata changed and a maintainer forgot
@@ -266,7 +511,7 @@ fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
     // and tells them how to fix it.
     let mut missing: Vec<String> = Vec::new();
     let mut drift: Vec<String> = Vec::new();
-    for meta in published_system_abilities() {
+    for meta in system_ability_contract_inventory() {
         let toml_path = descriptor_path_for(&meta.name);
         let on_disk = match std::fs::read_to_string(&toml_path) {
             Ok(body) => body,
@@ -275,9 +520,7 @@ fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
                 continue;
             }
         };
-        let _ = rfc006_for(&meta.name);
-        let expected =
-            ability_toml::render_ability_toml(&meta.name, &meta.description, &meta.input_schema);
+        let expected = ability_toml::render_ability_contract_toml(&meta);
         if on_disk != expected {
             drift.push(meta.name.clone());
         }
@@ -302,12 +545,51 @@ fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
     );
 }
 
-/// Walk every published ability and confirm a handler is
-/// registered under SOME invocation mode (RPC, Stream, or
-/// Bidi). Distinguishes "ability advertised in
-/// list_abilities() but dispatcher returns ABILITY_NOT_FOUND"
-/// from "ability is callable". This is the bare minimum for
-/// the question "is this ability really wired".
+#[test]
+fn contract_inventory_retains_voice_without_leaking_it_into_live_inventory() {
+    let contract_inventory = system_ability_contract_inventory();
+    let live_names = published_system_abilities()
+        .into_iter()
+        .map(|descriptor| descriptor.name)
+        .collect::<std::collections::BTreeSet<_>>();
+
+    for evidence in default_voice_capability_state_evidence() {
+        let contract = contract_inventory
+            .iter()
+            .find(|contract| contract.name == evidence.name)
+            .unwrap_or_else(|| panic!("{} missing from contract inventory", evidence.name));
+        assert_eq!(contract.call_mode, evidence.call_mode);
+        assert_eq!(contract.capability_state, evidence.state);
+        assert!(
+            !live_names.contains(evidence.name),
+            "{} contract must not become operational inventory",
+            evidence.name
+        );
+        assert!(
+            std::path::Path::new(&descriptor_path_for(evidence.name)).exists(),
+            "{} contract descriptor must remain on disk",
+            evidence.name
+        );
+    }
+
+    use crate::daemon::ability::descriptors::AdmissionAction;
+    let action_for = |name: &str| {
+        contract_inventory
+            .iter()
+            .find(|contract| contract.name == name)
+            .map(|contract| contract.admission_action)
+            .unwrap_or_else(|| panic!("{name} missing from contract inventory"))
+    };
+    assert_eq!(action_for("voice.show_call"), AdmissionAction::Read);
+    assert_eq!(action_for("voice.list_calls"), AdmissionAction::Read);
+    assert_eq!(action_for("voice.report_metrics"), AdmissionAction::Invoke);
+    assert_eq!(action_for("voice.subscribe"), AdmissionAction::Stream);
+}
+
+/// Walk the canonical published system descriptor set and confirm a handler is
+/// registered under the descriptor's invocation mode. The descriptor set is
+/// deliberately the baseline: deriving the baseline from `list_abilities()`
+/// would hide a descriptor whose registration was omitted entirely.
 ///
 /// What this DOES NOT verify:
 ///   * the handler implementation is correct (most need
@@ -325,23 +607,65 @@ fn every_published_ability_has_a_toml_byte_for_byte_matching_the_renderer() {
 #[test]
 fn every_published_ability_resolves_to_a_handler() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
-    let reg = build_registry();
-    let names: Vec<String> = reg.list_abilities();
+    let agents = AgentRegistry::default();
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+            crate::core::ura::device_ura(
+                crate::core::ura::REALM_EASYNET,
+                "ability-catalog-snapshot",
+            ),
+        )
+        .expect("build explicit assembly-test Device authority");
+    let mut config = registry_config_for_agents_with_authority(&agents, authority_context);
+    config.pages_identity = crate::daemon::ability::builtins::resources::pages::PagesIdentity {
+        user: Some("catalog-pages".to_string()),
+        owner_user_id: Some("catalog-pages-owner".to_string()),
+        realm: Some(crate::core::ura::REALM_EASYNET.to_string()),
+        listener_port: Some(8787),
+    };
+    let reg = build_registry_with_services_result(config)
+        .expect("assemble executable system registry with deterministic Pages identity")
+        .catalog;
+    let daemon_invocation_surface: std::collections::BTreeSet<&'static str> =
+        crate::daemon::ability::conformance::HubBaseline::required_abilities()
+            .iter()
+            .filter(|ability| {
+                ability.surface
+                    == crate::daemon::ability::conformance::BaselineSurface::DaemonInvocation
+            })
+            .map(|ability| ability.name)
+            .collect();
     let mut unresolved: Vec<String> = Vec::new();
-    for name in &names {
-        // <agent>.chat handlers register as Stream. Most
-        // system abilities register as RPC. Bidi is rare
-        // (PTY attach). We accept any of the three.
-        let has_rpc = reg.has_rpc(name);
-        let has_stream = reg.has_stream(name);
-        let has_bidi = reg.has_bidi(name);
+    let mut wrong_mode: Vec<String> = Vec::new();
+    for metadata in published_system_abilities() {
+        let name = metadata.name.clone();
+        if daemon_invocation_surface.contains(name.as_str()) {
+            continue;
+        }
+        let has_rpc = reg.has_rpc(&name);
+        let has_stream = reg.has_stream(&name);
+        let has_bidi = reg.has_bidi(&name);
         if !(has_rpc || has_stream || has_bidi) {
-            unresolved.push(name.clone());
+            unresolved.push(name);
+            continue;
+        }
+
+        let expected_mode_is_registered = match metadata.call_mode() {
+            crate::daemon::ability::CallMode::Rpc => has_rpc,
+            crate::daemon::ability::CallMode::Stream => has_stream,
+            crate::daemon::ability::CallMode::Bidi => has_bidi,
+        };
+        if !expected_mode_is_registered {
+            wrong_mode.push(format!(
+                "{}: expected={}, registered=[rpc:{has_rpc}, stream:{has_stream}, bidi:{has_bidi}]",
+                name,
+                metadata.call_mode().as_str()
+            ));
         }
     }
     assert!(
-        unresolved.is_empty(),
-        "abilities listed by list_abilities() but with NO handler registered: {unresolved:?}"
+        unresolved.is_empty() && wrong_mode.is_empty(),
+        "published system abilities are not executable:\n  missing handlers: {unresolved:?}\n  wrong modes: {wrong_mode:?}"
     );
 }
 
@@ -365,7 +689,7 @@ fn every_published_ability_resolves_to_a_handler() {
 #[test]
 fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
-    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::invocation::routing::target::CallMode;
 
     let reg = build_system_registry();
     let dispatcher = Arc::clone(&reg);
@@ -391,14 +715,12 @@ fn every_rpc_ability_actually_dispatches_through_to_its_handler() {
             skipped_effectful_or_expensive.push(name.clone());
             continue;
         }
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: name.clone(),
-            normalized_args: serde_json::json!({}),
-            call_mode: CallMode::Rpc,
-            subject: None,
-            causal_context: None,
-        };
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                name.clone(),
+                serde_json::json!({}),
+                CallMode::Rpc,
+            );
         match dispatcher.execute_rpc(target) {
             Ok(_) => invoked_ok.push(name.clone()),
             Err(e) => {
@@ -476,11 +798,12 @@ fn is_fast_read_only_smoke_ability(name: &str) -> bool {
             | "admin.status"
             | "agent.list"
             | "terminal.list"
-            | "session.list"
+            | crate::daemon::ability::names::device_control::SESSION_LIST
             | "consent.list_pending"
             | "schedule.list"
             | "plugin.status"
             | "meta.list_resources"
+            | "context.catalog"
             | "context.clipboard.list"
             | "context.folders.list"
             | "context.favorites.list"
@@ -518,6 +841,7 @@ fn build_registry_actually_contains_every_baseline_locomotion_ability() {
         "admin.status",
         "agent.start",
         "agent.stop",
+        "agent.purge",
         "agent.refresh",
     ];
     let missing: Vec<&str> = must_have
@@ -535,6 +859,64 @@ fn build_registry_actually_contains_every_baseline_locomotion_ability() {
 }
 
 #[test]
+fn agent_purge_descriptor_is_destructive_but_agent_stop_is_not() {
+    let descriptors = published_system_abilities();
+    let stop = descriptors
+        .iter()
+        .find(|descriptor| descriptor.name == "agent.stop")
+        .expect("agent.stop descriptor");
+    let purge = descriptors
+        .iter()
+        .find(|descriptor| descriptor.name == "agent.purge")
+        .expect("agent.purge descriptor");
+
+    assert!(!stop.hints.destructive);
+    assert!(purge.hints.destructive);
+    assert_ne!(stop.name, purge.name);
+}
+
+#[test]
+fn authority_lifecycle_contract_descriptors_use_canonical_destructive_hints() {
+    let contracts = system_ability_contract_inventory()
+        .into_iter()
+        .map(|contract| (contract.name.clone(), contract))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    for name in [
+        "federation.revoke",
+        "identity.revoke_user_pubkey",
+        "principal.lifecycle.delete",
+        "principal.lifecycle.revoke_key",
+        "principal.lifecycle.revoke_enrollment",
+        "principal.lifecycle.revoke_grant",
+    ] {
+        let contract = contracts
+            .get(name)
+            .unwrap_or_else(|| panic!("{name} contract descriptor"));
+        assert!(
+            contract.hints.destructive,
+            "{name} removes durable authority/trust material and must require destructive UI consent"
+        );
+    }
+
+    for name in [
+        "federation.join",
+        "identity.register_pubkey",
+        "principal.lifecycle.create",
+        "principal.lifecycle.issue_enrollment",
+        "principal.lifecycle.issue_grant",
+    ] {
+        let contract = contracts
+            .get(name)
+            .unwrap_or_else(|| panic!("{name} contract descriptor"));
+        assert!(
+            !contract.hints.destructive,
+            "{name} is effectful authority lifecycle work but not durable deletion"
+        );
+    }
+}
+
+#[test]
 fn build_registry_satisfies_device_baseline_contract() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let reg = build_registry();
@@ -546,6 +928,692 @@ fn build_registry_satisfies_device_baseline_contract() {
         report.is_conformant(),
         "Device baseline abilities missing or registered under the wrong call mode:\n  {}",
         report.panic_message()
+    );
+}
+
+#[test]
+fn default_registry_build_uses_device_authority_profile_without_realm_authority_rows() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let registry = build_registry();
+    let rows = registry.authority_ability_catalog_snapshot();
+
+    assert!(
+        !rows.is_empty(),
+        "default Device registry must not be empty"
+    );
+    assert!(
+        rows.iter()
+            .all(|row| row.owner != crate::daemon::ability::dispatch::OwnerKind::RealmAuthority),
+        "default RegistryBuildConfig leaked RealmAuthority rows: {rows:?}"
+    );
+}
+
+#[test]
+fn combined_registry_binds_local_introspection_to_distinct_device_and_realm_authority_roots() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let agents = AgentRegistry::default();
+    let device_ura = crate::core::ura::device_ura("realm-b", "dev-b");
+    let hub_ura = crate::core::ura::hub_ura("realm-b");
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+            device_ura.clone(),
+        )
+        .expect("combined authority context");
+    let config = registry_config_for_agents_with_authority(&agents, authority_context);
+    let built = build_registry_with_services_result(config).expect("assemble registry");
+    assert!(
+        built.ability_deployment_registrar_cell.get().is_none(),
+        "RealmAuthority registry assembly must not initialize the Device ability store registrar"
+    );
+    let registry = built.catalog;
+
+    assert!(
+        registry.static_authority_exclusion_snapshot().is_empty(),
+        "combined authority set must admit every built-in owner plane"
+    );
+
+    let runtime_introspection_ura = crate::core::ura::device_agent_ura(
+        "realm-b",
+        "dev-b",
+        crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+    );
+    for owner_ura in [&runtime_introspection_ura, &hub_ura] {
+        let record = registry
+            .control_plane_record_for_authority_mode(
+                owner_ura,
+                "meta.list_abilities",
+                crate::daemon::ability::CallMode::Rpc,
+            )
+            .expect("authority-scoped lookup")
+            .unwrap_or_else(|| panic!("meta.list_abilities missing for {owner_ura}"));
+        assert_eq!(record.authority().scope().authority_root(), *owner_ura);
+    }
+
+    for evidence in default_voice_capability_state_evidence() {
+        for authority in [&hub_ura, &device_ura] {
+            assert!(
+                registry
+                    .control_plane_record_for_authority_mode(
+                        authority,
+                        evidence.name,
+                        evidence.call_mode,
+                    )
+                    .expect("voice seam authority lookup")
+                    .is_none(),
+                "{} must not be published without its provider",
+                evidence.name
+            );
+        }
+    }
+
+    // The control-plane record checked above is not what
+    // `DaemonRouteResolver`'s local-authority fast path consults for
+    // self-invocations: that path resolves through
+    // `LocalAbilityPublicationSnapshot::capture()`, which applies its own
+    // owner/execution-host/runtime-binding/authority/implementation gates on
+    // top of the control-plane row. A device resolving its own
+    // `runtime-introspection.meta.list_abilities` must find it here too, or
+    // route resolution falls through to the presence/projection path and
+    // fails with NXDOMAIN "owner is not online" even though the daemon is
+    // its own owner.
+    let publication_snapshot = LocalAbilityPublicationSnapshot::capture(&registry);
+    assert!(
+        publication_snapshot.resolves(&runtime_introspection_ura, "meta.list_abilities"),
+        "runtime-introspection.meta.list_abilities must resolve from the local publication \
+         snapshot so self-invocations never need presence"
+    );
+}
+
+#[test]
+fn combined_registry_exposes_invocation_history_through_one_ledger_governance_owner() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let agents = AgentRegistry::default();
+    let device_ura = crate::core::ura::device_ura("history-fixture", "dev-b");
+    let governance_ura = crate::core::ura::device_agent_ura(
+        "history-fixture",
+        "dev-b",
+        crate::daemon::ability::names::governance::RUNTIME_GOVERNANCE_SYSTEM_AGENT_ID,
+    );
+    let hub_ura = crate::core::ura::hub_ura("history-fixture");
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+            device_ura.clone(),
+        )
+        .expect("combined authority context");
+    let config = registry_config_for_agents_with_authority(&agents, authority_context);
+    let registry = build_registry_with_services_result(config)
+        .expect("assemble registry")
+        .catalog;
+
+    let governance_record = registry
+        .control_plane_record_for_authority_mode(
+            &governance_ura,
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .expect("runtime-governance history authority lookup");
+    let hub_record = registry
+        .control_plane_record_for_authority_mode(
+            &hub_ura,
+            crate::daemon::ability::names::governance::INVOCATION_HISTORY_LIST,
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .expect("Hub history authority lookup");
+
+    let record = governance_record
+        .expect("history list must publish through the runtime-governance SystemAgent");
+    assert_eq!(record.descriptor().owner_ura, governance_ura);
+    assert_eq!(record.authority().scope().authority_root(), governance_ura);
+    assert!(
+        hub_record.is_none(),
+        "one daemon ledger must not publish a duplicate hub-governance history route"
+    );
+}
+
+#[test]
+fn explicit_voice_repository_registers_only_hub_call_aggregate_routes() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let agents = AgentRegistry::default();
+    let device_ura = crate::core::ura::device_ura("voice-fixture", "dev");
+    let hub_ura = crate::core::ura::hub_ura("voice-fixture");
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+            device_ura.clone(),
+        )
+        .expect("combined authority context");
+    let mut config = registry_config_for_agents_with_authority(&agents, authority_context);
+    let voice_shared_root = tempfile::tempdir().expect("create explicit shared Voice fixture root");
+    let repository = Arc::new(
+        crate::daemon::persistence::voice_calls::HubRealmVoiceCallRepository::open(
+            voice_shared_root.path(),
+            "voice-fixture",
+        )
+        .expect("open explicit shared Voice fixture"),
+    );
+    let provider =
+        crate::daemon::ability::builtins::resources::voice_contract::VoiceCallProviderAssembly::try_new(
+            repository,
+        )
+        .expect("qualify explicit shared Voice fixture");
+    config.shared_stores =
+        RegistrySharedStores::default().with_voice_call_provider_assembly(provider);
+    let built = build_registry_with_services_result(config)
+        .expect("assemble registry with explicit voice repository");
+    assert_eq!(
+        built.voice_capability_state,
+        provider_backed_voice_capability_state_evidence()
+    );
+    let registry = built.catalog;
+    let contracts = system_ability_contract_inventory_for_voice_assembly(
+        crate::daemon::ability::conformance::VoiceAssemblyEvidence {
+            repository_assembled: true,
+            executable_delivery_evidence: false,
+        },
+    );
+
+    for evidence in provider_backed_voice_capability_state_evidence() {
+        let hub_record = registry
+            .control_plane_record_for_authority_mode(&hub_ura, evidence.name, evidence.call_mode)
+            .expect("Hub voice authority lookup");
+        if evidence.state == crate::daemon::ability::conformance::CapabilityState::ProviderBacked {
+            let record = hub_record.unwrap_or_else(|| panic!("{} missing", evidence.name));
+            assert_eq!(record.descriptor().owner_ura, hub_ura);
+            assert_eq!(record.authority().scope().authority_root(), hub_ura);
+            let contract = contracts
+                .iter()
+                .find(|contract| contract.name == evidence.name)
+                .unwrap_or_else(|| panic!("{} contract missing", evidence.name));
+            assert_eq!(record.descriptor().call_mode(), contract.call_mode);
+            assert_eq!(
+                record.descriptor().admission_action(),
+                contract.admission_action
+            );
+        } else {
+            assert!(
+                hub_record.is_none(),
+                "{} has no media provider",
+                evidence.name
+            );
+        }
+        assert!(
+            registry
+                .control_plane_record_for_authority_mode(
+                    &device_ura,
+                    evidence.name,
+                    evidence.call_mode,
+                )
+                .expect("Device voice exclusion lookup")
+                .is_none(),
+            "{} must never have a Device owner",
+            evidence.name
+        );
+    }
+}
+
+#[test]
+fn unqualified_voice_repository_is_rejected_before_registry_assembly() {
+    let error =
+        crate::daemon::ability::builtins::resources::voice_contract::VoiceCallProviderAssembly::try_new(
+            Arc::new(
+                crate::daemon::ability::builtins::resources::voice_contract::TestVoiceCallRepository::default(),
+            ),
+        )
+        .expect_err("unqualified repositories must not assemble as production Voice providers");
+    assert!(error
+        .to_string()
+        .contains("not qualified for durable realm authority"));
+}
+
+#[test]
+fn pages_management_is_owned_by_principal_scoped_pages_service() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let agents = AgentRegistry::default();
+    let device_ura = crate::core::ura::device_ura("pages-owner", "dev-1");
+    let owner_user_id = "user-alice";
+    let pages_service = crate::core::ura::service_ura("pages-owner", owner_user_id, "pages");
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+            device_ura,
+        )
+        .expect("pages test Device authority context");
+    let mut config = registry_config_for_agents_with_authority(&agents, authority_context);
+    config.pages_identity = crate::daemon::ability::builtins::resources::pages::PagesIdentity {
+        user: Some("alice".to_string()),
+        owner_user_id: Some(owner_user_id.to_string()),
+        realm: Some("pages-owner".to_string()),
+        listener_port: Some(8787),
+    };
+
+    let registry = build_registry_with_services_result(config)
+        .expect("assemble registry")
+        .catalog;
+    let record = registry
+        .control_plane_record_for_authority_mode(
+            &pages_service,
+            "pages.publish",
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .expect("Pages control-plane lookup")
+        .expect("Pages publish must be registered under its declared Pages Service");
+    assert_eq!(
+        record.authority().scope().owner_projection(),
+        "service:user-alice.pages"
+    );
+    assert_eq!(record.authority().scope().authority_root(), pages_service);
+
+    crate::daemon::ability::builtins::resources::pages::register_project_abilities(
+        &registry,
+        owner_user_id,
+        "alice",
+        "portfolio",
+    )
+    .expect("register dynamic Pages project abilities");
+    let fetch_record = registry
+        .control_plane_record_for_authority_mode(
+            &pages_service,
+            "alice.portfolio.page.fetch",
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .expect("dynamic Pages control-plane lookup")
+        .expect("page.fetch must use the same declared Pages Service");
+    assert_eq!(
+        fetch_record.authority().scope().owner_projection(),
+        "service:user-alice.pages"
+    );
+    assert_eq!(
+        fetch_record.authority().scope().authority_root(),
+        pages_service
+    );
+}
+
+#[test]
+fn same_user_on_two_devices_shares_pages_service_and_gets_distinct_device_local_owners() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+
+    let owners_for = |device_id: &str| {
+        let agents = AgentRegistry::default();
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                crate::core::ura::device_ura("multi-device", device_id),
+            )
+            .unwrap();
+        let mut config = registry_config_for_agents_with_authority(&agents, authority_context);
+        config.pages_identity = crate::daemon::ability::builtins::resources::pages::PagesIdentity {
+            user: Some("alice".to_string()),
+            owner_user_id: Some("same-user-id".to_string()),
+            realm: Some("multi-device".to_string()),
+            listener_port: Some(8787),
+        };
+        let registry = build_registry_with_services_result(config).unwrap().catalog;
+        ["pages.publish", "files.put", "mcp.bridge.list_tools"].map(|ability| {
+            registry
+                .runtime_binding_facts_for_mode(ability, crate::daemon::ability::CallMode::Rpc)
+                .unwrap()
+                .unwrap()
+                .authority_root
+        })
+    };
+
+    let linux = owners_for("dev-linux");
+    let macos = owners_for("dev-macos-sim");
+
+    assert_eq!(
+        linux,
+        [
+            "easynet:///r/multi-device/service/same-user-id.pages",
+            "easynet:///r/multi-device/agent/device.dev-linux.files",
+            "easynet:///r/multi-device/agent/device.dev-linux.mcp-integration",
+        ]
+    );
+    assert_eq!(
+        macos,
+        [
+            "easynet:///r/multi-device/service/same-user-id.pages",
+            "easynet:///r/multi-device/agent/device.dev-macos-sim.files",
+            "easynet:///r/multi-device/agent/device.dev-macos-sim.mcp-integration",
+        ]
+    );
+    assert_eq!(
+        linux[0], macos[0],
+        "Pages is the principal-scoped Service surface shared by the user's devices"
+    );
+    assert!(linux[1..]
+        .iter()
+        .zip(macos[1..].iter())
+        .all(|(left, right)| left != right));
+}
+
+#[test]
+fn paired_device_registry_retains_device_local_api_key_lifecycle() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let agents = AgentRegistry::default();
+    let device_ura = crate::core::ura::device_ura("device-local-api-key", "dev-1");
+    let owner_user_id = "user-alice";
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+            device_ura.clone(),
+        )
+        .expect("api-key test Device authority context");
+    let mut config = registry_config_for_agents_with_authority(&agents, authority_context);
+    config.pages_identity = crate::daemon::ability::builtins::resources::pages::PagesIdentity {
+        user: Some("alice".to_string()),
+        owner_user_id: Some(owner_user_id.to_string()),
+        realm: Some("device-local-api-key".to_string()),
+        listener_port: Some(8787),
+    };
+
+    let registry = build_registry_with_services_result(config)
+        .expect("assemble paired Device registry")
+        .catalog;
+
+    let api_key_owner_ura = crate::core::ura::device_agent_ura(
+        "device-local-api-key",
+        "dev-1",
+        crate::daemon::ability::names::governance::API_KEY_MANAGEMENT_SYSTEM_AGENT_ID,
+    );
+    for ability in [
+        "user-alice.api_key.create",
+        "user-alice.api_key.list",
+        "user-alice.api_key.revoke",
+    ] {
+        let record = registry
+            .control_plane_record_for_authority_mode(
+                &api_key_owner_ura,
+                ability,
+                crate::daemon::ability::CallMode::Rpc,
+            )
+            .expect("api-key control-plane lookup")
+            .unwrap_or_else(|| {
+                panic!("{ability} must remain registered in paired Device-mode registry")
+            });
+        assert_eq!(
+            record.authority().scope().owner_projection(),
+            "system-agent:api-key-management",
+            "{ability} must be owned by the api-key-management SystemAgent while the Device remains execution host"
+        );
+        assert_eq!(
+            record.authority().scope().authority_root(),
+            api_key_owner_ura
+        );
+    }
+
+    let openai_owner_ura = crate::core::ura::device_agent_ura(
+        "device-local-api-key",
+        "dev-1",
+        crate::daemon::ability::names::integrations::OPENAI_COMPAT_SYSTEM_AGENT_ID,
+    );
+    assert!(
+        registry
+            .control_plane_record_for_authority_mode(
+                &openai_owner_ura,
+                crate::daemon::ability::names::integrations::OPENAI_CHAT_COMPLETIONS,
+                crate::daemon::ability::CallMode::Rpc,
+            )
+            .expect("OpenAI shim control-plane lookup")
+            .is_some(),
+        "Device-hosted API-key lifecycle and consuming OpenAI shim must assemble as SystemAgent-owned surfaces"
+    );
+}
+
+#[test]
+fn user_rooted_registry_rejects_paired_identity_without_realm() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let agents = AgentRegistry::default();
+    let mut config = registry_config_for_agents(&agents);
+    config.pages_identity = crate::daemon::ability::builtins::resources::pages::PagesIdentity {
+        user: Some("alice".to_string()),
+        owner_user_id: Some("user-alice".to_string()),
+        realm: None,
+        listener_port: Some(8787),
+    };
+
+    let error = match build_registry_with_services_result(config) {
+        Ok(_) => panic!("registry assembly must not default a paired user into a product realm"),
+        Err(error) => error,
+    };
+
+    assert!(
+        error.to_string().contains("explicit realm"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
+fn hub_registry_assembly_contains_no_device_plane_control_or_runtime_rows() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let agents = AgentRegistry::default();
+    let hub_ura = crate::core::ura::hub_ura("hub-only");
+    let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+        crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+        None,
+    );
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
+            &hub_ura,
+        )
+        .expect("realm authority context");
+    let mut config = registry_config_for_agents_with_authority(&agents, authority_context);
+    config.local_runtime = Some(Arc::clone(&runtime));
+    let registry = build_registry_with_services_result(config)
+        .expect("assemble registry")
+        .catalog;
+
+    let rows = registry.authority_ability_catalog_snapshot();
+    assert!(
+        !rows.is_empty(),
+        "RealmAuthority registry must retain its Authority-owned abilities"
+    );
+    let leaked_rows: Vec<_> = rows
+        .iter()
+        .filter(|row| {
+            row.owner != crate::daemon::ability::dispatch::OwnerKind::RealmAuthority
+                || row.descriptor.owner_ura != hub_ura
+        })
+        .collect();
+    assert!(
+        leaked_rows.is_empty(),
+        "RealmAuthority registry leaked a non-Authority row: {leaked_rows:?}"
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|row| {
+                row.name == crate::daemon::ability::names::device_control::SESSION_OPEN
+                    && row.owner == crate::daemon::ability::dispatch::OwnerKind::RealmAuthority
+                    && row.descriptor.owner_ura == hub_ura
+                    && row.descriptor.call_mode() == crate::daemon::ability::CallMode::Bidi
+                    && row.descriptor.metadata.get("exposure").map(String::as_str)
+                        == Some("internal")
+            })
+            .count(),
+        1,
+        "RealmAuthority registry must retain exactly one internal Authority-owned session.open descriptor"
+    );
+    let exclusions = registry.static_authority_exclusion_snapshot();
+    assert!(
+        exclusions.get("device").copied().unwrap_or_default() == 0,
+        "RealmAuthority assembly must not treat Device as a public ability owner plane: {exclusions:?}"
+    );
+    assert!(
+        exclusions
+            .keys()
+            .any(|owner| owner.starts_with("system-agent:")),
+        "shared assembly must report centrally-filtered SystemAgent registrations: {exclusions:?}"
+    );
+    let conformance = crate::daemon::ability::conformance::RegistryConformance::new(&registry)
+        .check(
+            "hub",
+            crate::daemon::ability::conformance::HubBaseline::required_abilities(),
+        );
+    assert!(
+        conformance.is_conformant(),
+        "RealmAuthority owner filtering broke the local authority baseline: {}",
+        conformance.panic_message()
+    );
+
+    let hub_meta = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+        &hub_ura,
+        "meta.list_abilities",
+    )
+    .expect("RealmAuthority meta runtime key");
+    assert!(
+        crate::support::async_bridge::run_blocking(
+            runtime.ability_options(&hub_meta),
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::UseFuturesExecutor,
+        )
+        .is_some(),
+        "RealmAuthority LocalRuntime must retain meta.list_abilities"
+    );
+
+    let hub_voice_list = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+        &hub_ura,
+        crate::daemon::ability::names::resources::VOICE_LIST_CALLS,
+    )
+    .expect("RealmAuthority voice.list_calls runtime key");
+    assert!(
+        crate::support::async_bridge::run_blocking(
+            runtime.ability_options(&hub_voice_list),
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::UseFuturesExecutor,
+        )
+        .is_none(),
+        "RealmAuthority LocalRuntime must not expose voice.list_calls without a realm provider"
+    );
+
+    let former_synthetic_device = crate::core::ura::device_ura("hub-only", "local");
+    let device_observe = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+        &former_synthetic_device,
+        "observe.health",
+    )
+    .expect("hypothetical Device runtime key");
+    assert!(
+        crate::support::async_bridge::run_blocking(
+            runtime.ability_options(&device_observe),
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::UseFuturesExecutor,
+        )
+        .is_none(),
+        "RealmAuthority LocalRuntime must not contain rows under the former synthetic Device root"
+    );
+}
+
+#[test]
+fn realm_authority_daemon_builder_does_not_read_device_agent_transaction_state() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let state_dir = crate::daemon::persistence::config::state_dir();
+    std::fs::create_dir_all(&state_dir).expect("create isolated state directory");
+    std::fs::write(state_dir.join("agents.json"), b"not-json")
+        .expect("write invalid Device agent registry sentinel");
+    std::fs::write(state_dir.join("ability-deployments.json"), b"not-json")
+        .expect("write invalid Device ability store sentinel");
+    std::fs::write(
+        crate::daemon::persistence::teach_grants::path(),
+        b"not-json",
+    )
+    .expect("write invalid Device teach-transaction sentinel");
+
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
+            crate::core::ura::hub_ura("hub-only"),
+        )
+        .expect("realm authority context");
+    let mut config = RegistryDaemonBuildConfig::new_with_authority_context(
+        RegistryBuildServices::fresh(),
+        authority_context,
+    );
+    config.local_runtime = Some(
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        ),
+    );
+    let built = build_registry_for_daemon_result(config).expect(
+        "RealmAuthority daemon builder must not parse Device agent/ability transaction state",
+    );
+    assert!(
+        built.ability_deployment_registrar_cell.get().is_none(),
+        "RealmAuthority daemon builder must not initialize the Device ability registrar"
+    );
+    let rows = built.catalog.authority_ability_catalog_snapshot();
+    assert!(
+        rows.iter()
+            .all(|row| row.owner == crate::daemon::ability::dispatch::OwnerKind::RealmAuthority),
+        "RealmAuthority daemon builder leaked Device/Agent state: {rows:?}"
+    );
+    assert!(built
+        .catalog
+        .authority_ability_catalog_snapshot()
+        .iter()
+        .any(
+            |row| row.name == crate::daemon::ability::names::governance::AUTHORITY_BINDING_GRANT
+                && row.owner == crate::daemon::ability::dispatch::OwnerKind::RealmAuthority
+        ));
+}
+
+#[test]
+fn realm_authority_daemon_builder_starts_without_publishing_unprovided_voice_capabilities() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
+            crate::core::ura::hub_ura("voice-provider-required"),
+        )
+        .expect("realm authority context");
+    let mut config = RegistryDaemonBuildConfig::new_with_authority_context(
+        RegistryBuildServices::fresh(),
+        authority_context,
+    );
+    config.local_runtime = Some(
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        ),
+    );
+
+    let built = build_registry_for_daemon_result(config)
+        .expect("Hub daemon must start when optional voice providers are absent");
+    assert_eq!(
+        built.voice_capability_state,
+        default_voice_capability_state_evidence()
+    );
+    let rows = built.catalog.authority_ability_catalog_snapshot();
+    for evidence in default_voice_capability_state_evidence() {
+        assert!(
+            !rows.iter().any(|row| row.name == evidence.name),
+            "{} must not appear operational without its provider",
+            evidence.name
+        );
+    }
+}
+
+#[test]
+fn device_daemon_builder_refuses_corrupt_agent_registry() {
+    let _home = crate::cli::commands::test_support::HomeGuard::new();
+    let state_dir = crate::daemon::persistence::config::state_dir();
+    std::fs::create_dir_all(&state_dir).expect("create isolated state directory");
+    std::fs::write(state_dir.join("agents.json"), b"not-json")
+        .expect("write corrupt agent registry");
+
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+            crate::core::ura::device_ura("localhost", "dev"),
+        )
+        .expect("Device authority context");
+    let mut config = RegistryDaemonBuildConfig::new_with_authority_context(
+        RegistryBuildServices::fresh(),
+        authority_context,
+    );
+    config.local_runtime = Some(
+        crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        ),
+    );
+    let result = build_registry_for_daemon_result(config);
+    assert!(
+        result.is_err(),
+        "device daemon boot must not hide corrupt durable agent state"
+    );
+    let error = result.err().expect("checked above");
+    assert!(
+        error.to_string().contains("load daemon agent registry"),
+        "unexpected daemon registry boot error: {error:#}"
     );
 }
 
@@ -574,21 +1642,20 @@ fn published_abilities_includes_skill_list_with_real_metadata() {
     // axon-runtime stores). Empty `{}` would also pass `is_object`,
     // so additionally pin the `type` field.
     assert_eq!(
-        skill.input_schema.get("type").and_then(|v| v.as_str()),
+        skill.input_schema().get("type").and_then(|v| v.as_str()),
         Some("object"),
         "input schema must declare type:object; got {:?}",
-        skill.input_schema
+        skill.input_schema()
     );
-    assert!(
-        !skill.hints.streaming_only && !skill.hints.bidi_only,
-        "skill.list must stay unary-only; got hints {:?}",
-        skill.hints
+    assert_eq!(
+        skill.call_mode(),
+        crate::daemon::ability::CallMode::Rpc,
+        "skill.list must stay unary-only"
     );
 }
 
 #[test]
 fn published_system_abilities_excludes_plugin_package_abilities() {
-    let _home = crate::cli::commands::test_support::HomeGuard::new();
     let plugin_leaks: Vec<String> = published_system_abilities()
         .into_iter()
         .map(|meta| meta.name)
@@ -602,9 +1669,6 @@ fn published_system_abilities_excludes_plugin_package_abilities() {
 
 #[test]
 fn published_abilities_marks_server_stream_routes_as_streaming_only() {
-    // Hold the env lock: published_abilities() reads HOME-rooted registry
-    // state, so a concurrent HOME-mutating test must not race it.
-    let _home = crate::cli::commands::test_support::HomeGuard::new();
     let metas = published_abilities();
     let expected = [
         "consent.subscribe",
@@ -614,7 +1678,6 @@ fn published_abilities_marks_server_stream_routes_as_streaming_only() {
         "mic.subscribe",
         "camera.subscribe",
         "screen.subscribe",
-        "voice.subscribe",
     ];
     #[cfg(feature = "remote-desktop")]
     let expected = {
@@ -629,11 +1692,11 @@ fn published_abilities_marks_server_stream_routes_as_streaming_only() {
             .iter()
             .find(|m| m.name == name)
             .unwrap_or_else(|| panic!("{name} must be published"));
-        assert!(
-            meta.hints.streaming_only,
-            "{name} must advertise streaming_only so callers use InvokeStream"
+        assert_eq!(
+            meta.call_mode(),
+            crate::daemon::ability::CallMode::Stream,
+            "{name} must bind InvokeStream call_mode"
         );
-        assert!(!meta.hints.bidi_only, "{name} is server-stream, not bidi");
     }
 }
 
@@ -641,12 +1704,7 @@ fn published_abilities_marks_server_stream_routes_as_streaming_only() {
 fn published_abilities_marks_bidi_routes_as_bidi_only() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let metas = published_abilities();
-    let expected = [
-        "fs.transfer",
-        "terminal.attach",
-        "speaker.publish",
-        "voice.transcribe",
-    ];
+    let expected = ["fs.transfer", "terminal.attach"];
     #[cfg(feature = "remote-desktop")]
     let expected = {
         let mut expected = expected.to_vec();
@@ -660,10 +1718,10 @@ fn published_abilities_marks_bidi_routes_as_bidi_only() {
             .iter()
             .find(|m| m.name == name)
             .unwrap_or_else(|| panic!("{name} must be published"));
-        assert!(meta.hints.bidi_only, "{name} must advertise bidi_only");
-        assert!(
-            !meta.hints.streaming_only,
-            "{name} must not masquerade as server-stream"
+        assert_eq!(
+            meta.call_mode(),
+            crate::daemon::ability::CallMode::Bidi,
+            "{name} must bind InvokeBidi call_mode"
         );
     }
 }
@@ -671,36 +1729,40 @@ fn published_abilities_marks_bidi_routes_as_bidi_only() {
 #[test]
 fn discovery_hints_leave_agent_chat_on_unary_control_plane_path() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
+    seed_hosted_agents_for_chat(&["alice"]);
     let mut agents = AgentRegistry::default();
-    agents
-        .agents
-        .insert("alice".into(), AgentEntry::new(AgentType::ClaudeCode, None));
-    let reg = build_registry_with_services(registry_config_for_agents(&agents));
-    let hints = discovery_hints_for(&reg, "alice.chat");
-    assert!(
-        !hints.streaming_only && !hints.bidi_only,
-        "alice.chat must stay on the unary/OpenAI path until generic InvokeStream support lands; got {:?}",
-        hints
+    agents.agents.insert(
+        canonical_test_agent_registry_key("alice"),
+        test_agent_entry("alice"),
+    );
+    let reg = build_registry_with_services_result(registry_config_for_agents(&agents))
+        .expect("assemble registry")
+        .catalog;
+    let descriptor = reg
+        .control_plane_record_for_mode("alice.chat", crate::daemon::ability::CallMode::Rpc)
+        .expect("chat descriptor lookup")
+        .expect("chat descriptor");
+    assert_eq!(
+        descriptor.descriptor().call_mode(),
+        crate::daemon::ability::CallMode::Rpc,
+        "alice.chat must stay on the unary/OpenAI path until generic InvokeStream support lands"
     );
 }
 
 #[test]
 fn published_abilities_excludes_per_agent_chat_handlers() {
-    // `<agent>.chat` is published via the per-agent manifest path
-    // (`daemon::federation::publish::republish_abilities_via_advertise`) off the
-    // on-disk `chat.ability.toml`. Re-publishing it through the
-    // system path would double-register with a synthesised schema
-    // that shadows the manifest's real one. The filter in
-    // `published_abilities()` enforces this; pin it.
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
+    // Deterministic system metadata excludes dynamic hosted-Agent rows. Live
+    // daemon publication captures those rows from the committed control plane.
     let _home = crate::cli::commands::test_support::HomeGuard::new();
-    seed_hosted_agents_for_chat(&[("claude", "alice")]);
+    seed_hosted_agents_for_chat(&["alice"]);
     let mut agents = AgentRegistry::default();
-    agents
-        .agents
-        .insert("alice".into(), AgentEntry::new(AgentType::ClaudeCode, None));
-    let reg = build_registry_with_services(registry_config_for_agents(&agents));
+    agents.agents.insert(
+        canonical_test_agent_registry_key("alice"),
+        test_agent_entry("alice"),
+    );
+    let reg = build_registry_with_services_result(registry_config_for_agents(&agents))
+        .expect("assemble registry")
+        .catalog;
     // Sanity: the registry itself does include alice.chat.
     assert!(reg.list_abilities().iter().any(|n| n == "alice.chat"));
     // But the system publisher's view excludes it. We can't call
@@ -718,12 +1780,32 @@ fn published_abilities_excludes_per_agent_chat_handlers() {
 }
 
 #[test]
+fn daemon_local_discover_is_routable_but_not_publishable() {
+    assert!(
+        !is_publishable_catalog_name("agent.discover"),
+        "agent.discover is a local aggregate-discovery front door and must not be federated"
+    );
+    assert!(
+        is_local_runtime_routable_catalog_name("agent.discover"),
+        "agent.discover must stay invokable through the local daemon Invocation surface"
+    );
+    for ability in ["plugin.companion_status", "plugin.companion_reconcile"] {
+        assert!(
+            !is_publishable_catalog_name(ability),
+            "{ability} must not be published as a federated ability"
+        );
+        assert!(
+            !is_local_runtime_routable_catalog_name(ability),
+            "{ability} must remain outside public Invocation routing"
+        );
+    }
+}
+
+#[test]
 fn description_for_and_input_schema_for_cover_every_published_name() {
-    let _home = crate::cli::commands::test_support::HomeGuard::new();
     // Adding a new ability to build_registry without also adding
-    // arms to `description_for`/`input_schema_for` would let it
-    // ship with the unknown-name fallback ("(system ability)" and
-    // empty `{type: object}` schema). Pin the contract that every
+    // arms to `description_for`/`try_input_schema_for` would let it
+    // ship with the undeclared-object schema. Pin the contract that every
     // published system name has real metadata. This deliberately uses
     // `published_system_abilities()` instead of the live daemon view so a
     // developer's `$HOME/.easynet/plugins` cannot make the unit test
@@ -737,14 +1819,15 @@ fn description_for_and_input_schema_for_cover_every_published_name() {
             desc, "(system ability)",
             "{name} is missing a description_for arm — add one in daemon::ability::catalog::catalog_metadata"
         );
-        let schema = input_schema_for(&name);
-        // The default fallback returns `{"type":"object"}` with
-        // NO other keys. A real arm always pins something more —
+        let schema = try_input_schema_for(&name)
+            .unwrap_or_else(|error| panic!("{name} schema lookup must be fail-closed: {error}"));
+        // The undeclared object projection returns `{"type":"object"}` with
+        // NO other keys. A real authored schema always pins something more —
         // `properties`, `additionalProperties`, `oneOf`, etc. —
         // even for genuinely-no-arg abilities (e.g.
         // `consent.subscribe` declares
-        // `additionalProperties: false`). Distinguishing the
-        // fallback from an authored "no-arg" schema by structure
+        // `additionalProperties: false`). Distinguishing an
+        // undeclared projection from an authored "no-arg" schema by structure
         // (does the object have any key besides `type`?) is
         // strictly stronger than a name allowlist.
         let obj = schema
@@ -754,10 +1837,28 @@ fn description_for_and_input_schema_for_cover_every_published_name() {
         assert!(
             !has_only_type,
             "{name} fell through to the default `{{type: object}}` schema; \
-                 add an input_schema_for arm (declare additionalProperties: false \
+                 add an authored schema arm (declare additionalProperties: false \
                  even if the ability is genuinely no-arg)"
         );
     }
+}
+
+#[test]
+fn fallible_input_schema_projection_does_not_treat_absent_plugin_as_failure() {
+    let schema = try_input_schema_for("observe.health")
+        .expect("system ability schema projection must continue after absent plugin lookup");
+    let description = try_description_for_owned("observe.health")
+        .expect("system ability description projection must continue after absent plugin lookup");
+
+    assert_eq!(schema["type"], "object");
+    assert!(
+        schema.as_object().is_some_and(|object| object.len() > 1),
+        "system ability must not fall through to undeclared object schema"
+    );
+    assert_ne!(
+        description, "(system ability)",
+        "system ability must not fall through to generic description metadata"
+    );
 }
 
 #[test]
@@ -767,17 +1868,23 @@ fn registry_includes_chat_handler_per_registered_agent() {
     // the unified AxonAbilityCatalog. This is the load-bearing
     // property that lets the proxy dispatch chat through the
     // same registry as ping/session/permission.
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
+    use crate::core::agent::spec::RuntimeKind;
+    use crate::daemon::persistence::agent_registry::AgentEntry;
     let _home = crate::cli::commands::test_support::HomeGuard::new();
-    seed_hosted_agents_for_chat(&[("claude", "alice"), ("codex", "bob")]);
+    seed_hosted_agents_for_chat(&["alice", "bob"]);
     let mut agents = AgentRegistry::default();
+    agents.agents.insert(
+        canonical_test_agent_registry_key("alice"),
+        test_agent_entry("alice"),
+    );
+    let mut bob = AgentEntry::new(RuntimeKind::Codex, None);
+    bob.root_path = Some(crate::daemon::persistence::config::agents_root().join("bob"));
     agents
         .agents
-        .insert("alice".into(), AgentEntry::new(AgentType::ClaudeCode, None));
-    agents
-        .agents
-        .insert("bob".into(), AgentEntry::new(AgentType::Codex, None));
-    let reg = build_registry_with_services(registry_config_for_agents(&agents));
+        .insert(canonical_test_agent_registry_key("bob"), bob);
+    let reg = build_registry_with_services_result(registry_config_for_agents(&agents))
+        .expect("assemble registry")
+        .catalog;
     let names = reg.list_abilities();
     assert!(
         names.iter().any(|n| n == "alice.chat"),
@@ -790,48 +1897,20 @@ fn registry_includes_chat_handler_per_registered_agent() {
 }
 
 #[test]
-fn build_registry_registers_keyring_abilities_when_not_disabled() {
-    // Run in a child-process-style isolation: redirect the
-    // keyring file path to a tempdir + clear DISABLE so the
-    // auto-init path runs. The default tests set DISABLE.
-    // NOTE: this test already serialises via env_lock() directly — do
-    // NOT also take a HomeGuard (it acquires the same non-reentrant
-    // env_lock and would deadlock).
-    let _env_lock = crate::cli::commands::test_support::env_lock();
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = dir.path().join("keyring.json");
-    let prev_disable = std::env::var_os("EASYNET_KEYRING_DISABLE");
-    let prev_path = std::env::var_os("EASYNET_KEYRING_PATH");
-    let prev_pass = std::env::var_os("EASYNET_KEYRING_PASS");
-    std::env::remove_var("EASYNET_KEYRING_DISABLE");
-    std::env::set_var("EASYNET_KEYRING_PATH", &path);
-    std::env::set_var("EASYNET_KEYRING_PASS", "test-pass-keyring-init");
-
+fn build_registry_always_registers_key_service_abilities() {
     let agents = AgentRegistry::default();
-    let reg = build_registry_with_services(registry_config_for_agents(&agents));
+    let reg = build_registry_with_services_result(registry_config_for_agents(&agents))
+        .expect("assemble registry")
+        .catalog;
     let names = reg.list_abilities();
 
-    // Restore env before assertions so a panic doesn't leak
-    // environment changes into other tests in the same binary.
-    match prev_disable {
-        Some(v) => std::env::set_var("EASYNET_KEYRING_DISABLE", v),
-        None => std::env::remove_var("EASYNET_KEYRING_DISABLE"),
-    }
-    match prev_path {
-        Some(v) => std::env::set_var("EASYNET_KEYRING_PATH", v),
-        None => std::env::remove_var("EASYNET_KEYRING_PATH"),
-    }
-    match prev_pass {
-        Some(v) => std::env::set_var("EASYNET_KEYRING_PASS", v),
-        None => std::env::remove_var("EASYNET_KEYRING_PASS"),
-    }
-
-    // All 10 abilities must be present under device.keyring.*.
+    // Administrative projections retain the legacy `device.keyring.*` local
+    // names but are owned by the keyring-management SystemAgent. Raw signing is
+    // SDK-only and must never be exposed as an Invocation ability.
     for verb in [
         "create",
         "list",
         "get_public",
-        "sign",
         "rotate",
         "revoke",
         "expire_set",
@@ -845,52 +1924,73 @@ fn build_registry_registers_keyring_abilities_when_not_disabled() {
             "{want} must be registered; got {names:?}"
         );
     }
-    assert!(path.exists(), "keyring file must have been auto-created");
+    for row in reg.authority_ability_catalog_snapshot() {
+        if row.name.starts_with("device.keyring.") {
+            assert_eq!(
+                row.owner,
+                crate::daemon::ability::dispatch::OwnerKind::keyring_management_system(),
+                "{} must be owned by the keyring-management SystemAgent",
+                row.name
+            );
+        }
+    }
+    assert!(
+        !names.iter().any(|name| name == "device.keyring.sign"),
+        "raw signing must remain inside the local key-service capability boundary"
+    );
 }
 
 /// RFC-005 lint: public catalogue names are owner-local names.
 /// Device ownership is carried by `owner_ura` / `ability_ura`, so
 /// catalogue rows must not expose implementation-local owner prefixes such
-/// as `fs.read`.
+/// as `fs.read`. The remaining `device.keyring.*` names are historical wire
+/// names whose owner is asserted above as the keyring-management SystemAgent;
+/// they are not Device-owned descriptors.
 #[test]
 fn published_catalogue_does_not_duplicate_device_owner_prefix() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
-    let names: Vec<String> = published_system_abilities()
+    let violations: Vec<String> = published_system_abilities()
         .into_iter()
-        .map(|meta| meta.name)
-        .collect();
-    let violations: Vec<String> = names
-        .into_iter()
-        .filter(|name| name.starts_with("device."))
+        .filter(|descriptor| {
+            if !descriptor.name.starts_with("device.") {
+                return false;
+            }
+            // `device.keyring.*` is the only legacy owner-prefixed public
+            // namespace kept for wire compatibility. The semantic owner/callee
+            // must still be the keyring-management SystemAgent.
+            !(descriptor.name.starts_with("device.keyring.")
+                && descriptor.owner_ura.ends_with(".keyring-management"))
+        })
+        .map(|descriptor| descriptor.name)
         .collect();
     assert!(
         violations.is_empty(),
-        "RFC-005 catalogue must not duplicate device ownership in public names: {violations:?}"
+        "RFC-005 catalogue must not duplicate Device ownership in public names except keyring-management legacy wire names: {violations:?}"
     );
 }
 
-/// **M5 lint** — the legacy self alias token never appears as a first
+/// **M5 lint** — placeholder owner tokens never appear as a first
 /// segment in the published catalogue. The wire-pinned trio
-/// (`session.open`, `runtime.invoke_remote`,
+/// (`session.open`,
 /// `identity.register_pubkey`) goes through wire-only
 /// constants; they are NOT registered into the discoverable
 /// catalogue. If they ever leak, this test fails and the
 /// regression is caught at CI rather than in an LLM seeing
-/// a legacy self-alias entry and getting confused.
+/// a placeholder owner entry and getting confused.
 #[test]
-fn published_catalogue_never_contains_self_alias() {
+fn published_catalogue_never_contains_placeholder_owner() {
     let _home = crate::cli::commands::test_support::HomeGuard::new();
     let names: Vec<String> = published_system_abilities()
         .into_iter()
         .map(|meta| meta.name)
         .collect();
-    let legacy_self_prefix = ["<", "self", ">"].concat();
+    let placeholder_owner_prefix = ["<", "self", ">"].concat();
     let leaks: Vec<&String> = names
         .iter()
-        .filter(|n| n.starts_with(&legacy_self_prefix))
+        .filter(|n| n.starts_with(&placeholder_owner_prefix))
         .collect();
     assert!(
         leaks.is_empty(),
-        "post-M5 catalogue must not expose legacy self-alias names; got {leaks:?}"
+        "post-M5 catalogue must not expose placeholder-owner names; got {leaks:?}"
     );
 }

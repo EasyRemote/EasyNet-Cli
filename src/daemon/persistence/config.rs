@@ -2,10 +2,8 @@
 // ====================================
 //
 // File: src/daemon/persistence/config.rs
-// Description: Persistence layer for all local device state under
-//              `~/.easynet/`, plus the one-call bridge-opening helper
-//              that composes loaded [`RuntimeState`] with the
-//              state-free connector in `shared`.
+// Description: Persistence layer for local device state under
+//              `~/.easynet/`.
 //
 // Three persistence domains
 // -------------------------
@@ -16,7 +14,7 @@
 //      Fields: endpoint (required), pid, hub, tenant, label, started_at.
 //
 //   2. `Credentials` (credentials.json) — long-lived, survives reboots:
-//      `easynet join` → save_credentials()  |  `easynet reset` → delete_credentials()
+//      `easynet join` → save_credentials()  |  `easynet device reset` → delete_credentials()
 //      Fields: node_id, credential_token/join_receipt_hash, hub_endpoint,
 //      realm, user_id, username, deploy_signature.
 //      Unix permissions: 0o600 (contains credential_token and deploy_signature).
@@ -24,25 +22,6 @@
 //   3. `DeviceSettings` (device_settings.json) — user-controlled knobs:
 //      `easynet config` → save/load  |  consumed by start.rs at boot.
 //      Fields: session_bridge_exec_enabled (default false).
-//
-// Where the bridge helper lives — and why here
-// --------------------------------------------
-//
-// [`load_and_connect`] and [`RuntimeState::connect_bridge`] read the
-// on-disk state and then open a [`DendriteBridge`] to its endpoint.
-// They live in this module — not in `shared` — because the dependency
-// only flows one way: **persistence composes transport**, never the
-// reverse. `shared` remains a pure-plumbing leaf that takes an
-// endpoint string in. An earlier draft had both helpers sitting at
-// the top of `shared/mod.rs`, which made `shared` silently consume
-// `persistence::config::load` — inverting the module layering in a
-// way that only showed up as a paragraph in the doc comment. The
-// placement here makes the layering visible at the use site:
-//
-//     // 1 argument → pure transport
-//     let bridge = support::connect_bridge_to(endpoint)?;
-//     // 0 arguments → reads state, then connects
-//     let (bridge, state) = persistence::config::load_and_connect()?;
 //
 // Implementation notes
 // --------------------
@@ -53,16 +32,14 @@
 //
 // Architectural Position
 // ----------------------
-// Foundation layer consumed by every CLI command. No network
-// dependencies on its own — `load_and_connect` sits at the seam
-// where persistence pairs a loaded endpoint with the transport layer
-// from `shared`.
+// Foundation layer consumed by every CLI command. It has no network
+// dependency and does not infer transport state from persisted endpoints.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use serde::{Deserialize, Serialize};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -79,6 +56,60 @@ pub(crate) enum WritePermissions {
     /// Owner-only read/write (`0o600`). Used for credentials and any
     /// file that must never be world-readable.
     OwnerReadWrite,
+}
+
+/// Whether an atomic replacement is known to have crossed the rename commit
+/// point.
+///
+/// Callers that maintain an in-memory projection must distinguish these two
+/// states.  Before rename, rolling memory back is correct.  After rename, the
+/// replacement is already visible and rolling memory back would create two
+/// conflicting truths; the caller must retain the replacement and fail-stop
+/// until the parent directory has been re-synchronised on restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AtomicWriteCommitState {
+    NotCommitted,
+    ReplacementVisibleButDurabilityUncertain,
+}
+
+impl std::fmt::Display for AtomicWriteCommitState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotCommitted => f.write_str("not committed"),
+            Self::ReplacementVisibleButDurabilityUncertain => {
+                f.write_str("replacement visible but durability uncertain")
+            }
+        }
+    }
+}
+
+/// Failure from the shared atomic-replacement primitive, including the exact
+/// commit state at which it failed.
+#[derive(Debug, thiserror::Error)]
+#[error("atomic write {commit_state}: {source}")]
+pub(crate) struct AtomicWriteError {
+    commit_state: AtomicWriteCommitState,
+    source: anyhow::Error,
+}
+
+impl AtomicWriteError {
+    fn not_committed(source: impl Into<anyhow::Error>) -> Self {
+        Self {
+            commit_state: AtomicWriteCommitState::NotCommitted,
+            source: source.into(),
+        }
+    }
+
+    fn durability_uncertain(source: impl Into<anyhow::Error>) -> Self {
+        Self {
+            commit_state: AtomicWriteCommitState::ReplacementVisibleButDurabilityUncertain,
+            source: source.into(),
+        }
+    }
+
+    pub(crate) fn commit_state(&self) -> AtomicWriteCommitState {
+        self.commit_state
+    }
 }
 
 /// Atomic write: stage in a per-writer temp file, fsync, optionally chmod,
@@ -100,12 +131,14 @@ pub(crate) enum WritePermissions {
 ///   a power loss after `rename` can leave the filesystem pointing the
 ///   new name at unflushed (possibly empty) data.
 ///
-/// - **`chmod` before rename** closes the permissions race: if we
-///   `rename` first and `chmod` after, another process can `open` the
-///   file in the window between the two syscalls and read it with the
-///   default (world-readable on most systems) mode. Applying the mode
-///   to the temp file first means the file is *never* visible at the
-///   target path with the wrong permissions.
+/// - **Owner-only mode at `open(2)`** closes both permissions races: a
+///   sensitive temp file is created as `0600`, then its mode is reasserted
+///   before rename. Neither the staging name nor the target name is ever
+///   visible with the platform's broader default mode.
+///
+/// - **`create_new` staging** prevents a stale or attacker-planted temp path
+///   from being truncated or followed as a symlink. A collision fails closed
+///   and is cleaned up; it never mutates the target.
 ///
 /// - **Best-effort cleanup** removes the staged tmp if any step fails,
 ///   so a crash-loop doesn't gradually fill the directory with
@@ -120,7 +153,24 @@ pub(crate) fn atomic_write_with_permissions(
     path: &Path,
     data: &[u8],
     perms: WritePermissions,
-) -> anyhow::Result<()> {
+) -> Result<(), AtomicWriteError> {
+    atomic_write_with_permissions_and_sync(path, data, perms, sync_directory)
+}
+
+/// Atomic replacement with an injectable parent-directory synchroniser.
+///
+/// The injection seam is deliberately below all callers and above the commit
+/// classification so tests can prove post-rename behaviour without a second,
+/// subtly different writer implementation.
+pub(crate) fn atomic_write_with_permissions_and_sync<F>(
+    path: &Path,
+    data: &[u8],
+    perms: WritePermissions,
+    sync: F,
+) -> Result<(), AtomicWriteError>
+where
+    F: FnOnce(&Path) -> anyhow::Result<()>,
+{
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let dir = path.parent().unwrap_or(Path::new("."));
     let base = path
@@ -133,7 +183,14 @@ pub(crate) fn atomic_write_with_permissions(
     // Stage: open the temp file, write the payload, fsync, apply
     // permissions. Any failure on this path removes the temp file.
     let staged = (|| -> std::io::Result<()> {
-        let mut f = File::create(&tmp)?;
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if matches!(perms, WritePermissions::OwnerReadWrite) {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let mut f = options.open(&tmp)?;
         f.write_all(data)?;
         f.sync_all()?;
         #[cfg(unix)]
@@ -147,7 +204,7 @@ pub(crate) fn atomic_write_with_permissions(
     })();
     if let Err(e) = staged {
         let _ = fs::remove_file(&tmp);
-        return Err(e.into());
+        return Err(AtomicWriteError::not_committed(e));
     }
 
     // Commit: swing the directory entry atomically onto `path`. On
@@ -155,9 +212,9 @@ pub(crate) fn atomic_write_with_permissions(
     // cleaned up so we don't leak.
     if let Err(e) = fs::rename(&tmp, path) {
         let _ = fs::remove_file(&tmp);
-        return Err(e.into());
+        return Err(AtomicWriteError::not_committed(e));
     }
-    sync_directory(dir)
+    sync(dir).map_err(AtomicWriteError::durability_uncertain)
 }
 
 /// Sync a directory after a metadata mutation such as `rename` or
@@ -194,7 +251,7 @@ pub(crate) fn sync_parent_dir(path: &Path) -> anyhow::Result<()> {
 /// common case of no special permissions. Preserved so the existing
 /// ~20 call sites stay terse; new call sites that need owner-only
 /// permissions should use the explicit form.
-pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> anyhow::Result<()> {
+pub(crate) fn atomic_write(path: &Path, data: &[u8]) -> Result<(), AtomicWriteError> {
     atomic_write_with_permissions(path, data, WritePermissions::Default)
 }
 
@@ -207,27 +264,17 @@ pub const DEFAULT_HUB_HOST: &str = "easynet.run";
 pub const DEFAULT_TENANT: &str = "easynet-platform";
 pub const DEFAULT_BIND: &str = "0.0.0.0:50051";
 
-/// Which process shape the persisted runtime state refers to.
-///
-/// Old `runtime.json` files (pre-daemon-only device mode) carried only
-/// an `endpoint` string and therefore deserialize as the historical
-/// default: an Axon bridge endpoint.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Process shape recorded by the runtime session projection.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeKind {
-    /// Historical local `axon-runtime` process reachable via the
-    /// dendrite bridge (`state.endpoint` is a bridge endpoint).
-    #[default]
-    AxonBridge,
-    /// Daemon-only device mode. `state.endpoint` names the daemon's
-    /// local gRPC UDS socket and MUST NOT be treated as a bridge.
+    /// Unified EasyNet daemon. `state.endpoint` is the local Invocation UDS.
     DaemonOnly,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeState {
     pub endpoint: String,
-    #[serde(default)]
     pub runtime_kind: RuntimeKind,
     pub pid: Option<u32>,
     pub hub: Option<String>,
@@ -241,108 +288,143 @@ pub struct RuntimeState {
 }
 
 /// Resolve the user's home directory.
-/// Returns the first available of `$HOME`, `$USERPROFILE`, or the OS-provided home.
+/// Returns the first available absolute path from `$HOME`, `$USERPROFILE`, or
+/// the OS-provided home.
 pub fn home_dir() -> PathBuf {
-    if let Ok(h) = std::env::var("HOME") {
-        return PathBuf::from(h);
-    }
-    if let Ok(h) = std::env::var("USERPROFILE") {
-        return PathBuf::from(h);
-    }
-    // Last resort: platform home_dir (works on most systems).
+    try_home_dir().unwrap_or_else(|error| panic!("{error}"))
+}
+
+pub fn try_home_dir() -> anyhow::Result<PathBuf> {
+    resolve_home_dir(
+        std::env::var("HOME").ok(),
+        std::env::var("USERPROFILE").ok(),
+        platform_home_dir(),
+    )
+}
+
+#[allow(deprecated)]
+fn platform_home_dir() -> Option<PathBuf> {
     #[allow(deprecated)]
-    std::env::home_dir().unwrap_or_else(|| {
-        eprintln!("warning: cannot determine home directory; using current directory");
-        PathBuf::from(".")
-    })
+    std::env::home_dir()
+}
+
+fn resolve_home_dir(
+    home: Option<String>,
+    user_profile: Option<String>,
+    os_home: Option<PathBuf>,
+) -> anyhow::Result<PathBuf> {
+    if let Some(path) = env_home_path("HOME", home)? {
+        return Ok(path);
+    }
+    if let Some(path) = env_home_path("USERPROFILE", user_profile)? {
+        return Ok(path);
+    }
+    if let Some(path) = os_home {
+        return validate_home_path("OS home directory", path);
+    }
+    anyhow::bail!(
+        "cannot determine home directory; refusing to use current directory as EasyNet state root"
+    )
+}
+
+fn env_home_path(name: &'static str, value: Option<String>) -> anyhow::Result<Option<PathBuf>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    validate_home_path(name, PathBuf::from(value)).map(Some)
+}
+
+fn validate_home_path(source: &'static str, path: PathBuf) -> anyhow::Result<PathBuf> {
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("{source} resolved to an empty path");
+    }
+    if !path.is_absolute() {
+        anyhow::bail!("{source} must resolve to an absolute path, got {path:?}");
+    }
+    Ok(path)
 }
 
 pub fn state_dir() -> PathBuf {
-    home_dir().join(".easynet")
+    try_state_dir().unwrap_or_else(|error| panic!("{error}"))
 }
 
-/// Resolve the directory that holds per-agent root directories.
-///
-/// Returns the new convention (`~/.easynet/agents/`) when that path
-/// exists on disk; otherwise returns the legacy path
-/// (`~/.easynet/workspaces/`). Writers should still use the legacy
-/// path until the full `agent.toml` + `AgentDirectory` machinery
-/// lands (planned) — at that point writers flip to the new path and
-/// a one-shot migration moves any remaining legacy-path agents.
-///
-/// Rationale for "read two, write one":
-///
-/// - The on-disk layout of a per-agent root is unchanged (runs/,
-///   CLAUDE.md, AGENTS.md, .mcp.json, .codex/config.toml, .git/,
-///   .agents/skills/). Only the parent directory name changes.
-///   A read-side fallback is cheap and lets users who already have
-///   agents under `workspaces/` keep working across the upgrade
-///   without a flag day.
-/// - Committing the final rename to the writer before the new
-///   AgentDirectory model exists would leave us with the new path
-///   on disk and the old code generating into it — two versions
-///   of the same transition, confusing to debug.
-///
-/// Deprecation window: legacy fallback is kept until 1.9.0 (see
-/// `docs/rfc/eal-control-flow-v1.md` is unrelated — the window
-/// tracked in the top-level plan). A single `eprintln` warning is
-/// emitted the first time a process observes a legacy-only agents
-/// directory so operators know the rename is pending.
+pub fn try_state_dir() -> anyhow::Result<PathBuf> {
+    resolve_state_dir(
+        std::env::var("HOME").ok(),
+        std::env::var("USERPROFILE").ok(),
+        platform_home_dir(),
+    )
+}
+
+fn resolve_state_dir(
+    home: Option<String>,
+    user_profile: Option<String>,
+    os_home: Option<PathBuf>,
+) -> anyhow::Result<PathBuf> {
+    Ok(resolve_home_dir(home, user_profile, os_home)?.join(".easynet"))
+}
+
+/// Canonical directory that owns all per-agent roots.
 pub fn agents_root() -> PathBuf {
-    let new = state_dir().join("agents");
-    if new.exists() {
-        return new;
-    }
-    let legacy = state_dir().join("workspaces");
-    if legacy.exists() {
-        warn_legacy_agents_root_once(&legacy);
-        return legacy;
-    }
-    // Neither exists yet (fresh install, or `easynet start` hasn't
-    // run). Fall through to the legacy path so the first writer
-    // stays byte-compatible with the pre-rename shape. The new
-    // AgentDirectory flip happens when that PR lands.
-    legacy
+    state_dir().join("agents")
 }
 
-/// Print the "workspaces is deprecated" warning at most once per
-/// process. `state_dir()` is read on nearly every CLI invocation,
-/// so a plain `eprintln` would spam the terminal. `OnceCell` gives
-/// us the "once per process" semantic without a mutex.
-fn warn_legacy_agents_root_once(path: &std::path::Path) {
-    use std::sync::OnceLock;
-    static WARNED: OnceLock<()> = OnceLock::new();
-    if WARNED.set(()).is_ok() {
-        eprintln!(
-            "note: {} is deprecated — agents will move to {}/agents/ at 1.9.0",
-            path.display(),
-            state_dir().display(),
-        );
-    }
+pub fn try_agents_root() -> anyhow::Result<PathBuf> {
+    Ok(try_state_dir()?.join("agents"))
 }
 
+#[cfg(test)]
 fn state_path() -> PathBuf {
     state_dir().join("runtime.json")
 }
 
+fn try_state_path() -> anyhow::Result<PathBuf> {
+    Ok(try_state_dir()?.join("runtime.json"))
+}
+
+#[cfg(test)]
+pub(crate) fn runtime_state_path() -> PathBuf {
+    state_path()
+}
+
 pub fn save(state: &RuntimeState) -> anyhow::Result<()> {
-    let dir = state_dir();
+    let dir = try_state_dir()?;
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(state)?;
-    atomic_write(&state_path(), json.as_bytes())?;
+    atomic_write(&try_state_path()?, json.as_bytes())?;
     Ok(())
 }
 
 pub fn load() -> anyhow::Result<RuntimeState> {
-    let path = state_path();
+    let path = try_state_path()?;
     let data = fs::read_to_string(&path)
         .map_err(|_| anyhow::anyhow!("no running runtime — run `easynet start` first"))?;
     let state: RuntimeState = serde_json::from_str(&data)?;
     Ok(state)
 }
 
+pub(crate) fn load_optional_runtime_state() -> anyhow::Result<Option<RuntimeState>> {
+    let path = try_state_path()?;
+    let data = match fs::read_to_string(&path) {
+        Ok(data) => data,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(anyhow::anyhow!(
+                "read runtime projection {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let state: RuntimeState = serde_json::from_str(&data)
+        .map_err(|error| anyhow::anyhow!("parse runtime projection {}: {error}", path.display()))?;
+    Ok(Some(state))
+}
+
 pub fn remove() -> anyhow::Result<()> {
-    let path = state_path();
+    let path = try_state_path()?;
     if path.exists() {
         fs::remove_file(&path)?;
     }
@@ -353,65 +435,6 @@ impl RuntimeState {
     pub fn tenant_or_default(&self) -> &str {
         self.tenant.as_deref().unwrap_or(DEFAULT_TENANT)
     }
-
-    pub fn uses_bridge(&self) -> bool {
-        matches!(self.runtime_kind, RuntimeKind::AxonBridge)
-    }
-
-    /// Open a [`DendriteBridge`] to this runtime's endpoint, using the
-    /// shared connect-timeout budget.
-    ///
-    /// Thin composition of [`crate::support::connect_bridge_to`] —
-    /// lives here (not on the bridge side) so that consumers who
-    /// already hold a `RuntimeState` can spell the call in a way that
-    /// reads as "use this state to reach its runtime":
-    ///
-    /// ```ignore
-    /// let state = persistence::config::load()?;
-    /// let bridge = state.connect_bridge()?;
-    /// ```
-    ///
-    /// If you don't already have a `RuntimeState`, prefer
-    /// [`load_and_connect`] — it performs both steps in one call and
-    /// the shorter name matches the common case.
-    ///
-    /// [`DendriteBridge`]: easynet_axon::dendrite_bridge::DendriteBridge
-    pub fn connect_bridge(&self) -> anyhow::Result<easynet_axon::dendrite_bridge::DendriteBridge> {
-        anyhow::ensure!(
-            self.uses_bridge(),
-            "local runtime is running in daemon-only mode; no axon bridge endpoint is available"
-        );
-        crate::support::connect_bridge_to(&self.endpoint)
-    }
-}
-
-/// Load the persisted [`RuntimeState`] and open a [`DendriteBridge`]
-/// to its endpoint in one call.
-///
-/// Returns `(bridge, state)` so callers can access tenant, label, or
-/// started-at metadata without a second load. This is the canonical
-/// entry point for CLI commands that just need "connect me to
-/// whatever runtime is running here".
-///
-/// # Why this composition lives in `persistence`
-///
-/// The function spans two layers — it reads a file (`persistence`)
-/// and opens a socket (`shared`) — so placing it requires a
-/// convention. We place it in the layer that *consumes* the other:
-/// `persistence::config` imports `support::connect_bridge_to`, and
-/// `shared` imports neither. An earlier draft inverted this and put
-/// the helper in `shared/mod.rs`, which silently made the transport
-/// layer depend on the persistence layer. The doc comment there
-/// admitted the inversion in prose; the fix is to put the helper on
-/// the correct side of the seam. See `src/shared/mod.rs`'s module
-/// doc for the enforcement story.
-///
-/// [`DendriteBridge`]: easynet_axon::dendrite_bridge::DendriteBridge
-pub fn load_and_connect(
-) -> anyhow::Result<(easynet_axon::dendrite_bridge::DendriteBridge, RuntimeState)> {
-    let state = load()?;
-    let bridge = state.connect_bridge()?;
-    Ok((bridge, state))
 }
 
 // ─── Device Credentials ────────────────────────────────────────────────────
@@ -443,10 +466,8 @@ pub struct Credentials {
     /// preflight. Cross-machine cold-start fix (hub in US, CLI in
     /// SG): the device's `auto_wire_self_realm_trust` step needs
     /// this to write the hub's `(ura, pubkey, role=hub)` row into
-    /// `realm-trust.toml` without needing on-host access to the
-    /// hub's `~/.easynet-hub/<realm>/identity.json`. Empty when
-    /// paired against a pre-v4.1.4 hub (legacy fallback path reads
-    /// identity.json directly when same-host).
+    /// `realm-trust.toml` without needing on-host access to the hub
+    /// runtime keyring. Empty pairing responses are rejected by join.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hub_pubkey_b64: Option<String>,
     /// Optional base64-encoded PEM trust anchor for the hub's
@@ -464,6 +485,12 @@ pub struct Credentials {
     /// in Phase 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub join_receipt_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeUserBinding {
+    Bound { user_ura: String },
+    Unbound { reason: &'static str },
 }
 
 impl Credentials {
@@ -503,7 +530,8 @@ impl Credentials {
 
     /// Return the immutable product user id carried by device credentials.
     pub fn user_id(&self) -> anyhow::Result<&str> {
-        self.user_id
+        let user_id = self
+            .user_id
             .as_deref()
             .map(str::trim)
             .filter(|v| !v.is_empty())
@@ -511,7 +539,13 @@ impl Credentials {
                 anyhow::anyhow!(
                     "credentials file is missing user_id — run `easynet join <token>` to re-pair"
                 )
-            })
+            })?;
+        if crate::core::identity::is_all_zero_principal_id(user_id) {
+            anyhow::bail!(
+                "credentials file carries all-zero user_id — run `easynet join <token>` to re-pair"
+            );
+        }
+        Ok(user_id)
     }
 
     /// Return the canonical runtime user-subject URA for this credential.
@@ -520,6 +554,30 @@ impl Credentials {
             self.realm_str(),
             self.user_id()?,
         ))
+    }
+
+    /// Project the paired credential into an explicit runtime User binding
+    /// state. Token-paired devices must carry a concrete user identity; the
+    /// federation-native join lineage may intentionally be device-only until a
+    /// downstream product binds a user principal.
+    pub fn runtime_user_binding(&self) -> anyhow::Result<RuntimeUserBinding> {
+        if self
+            .user_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Ok(RuntimeUserBinding::Bound {
+                user_ura: self.user_ura()?,
+            });
+        }
+        if self.join_receipt_hash().is_some() && self.user_id.is_none() {
+            return Ok(RuntimeUserBinding::Unbound {
+                reason: "not bound (federation-native device credential)",
+            });
+        }
+        Ok(RuntimeUserBinding::Bound {
+            user_ura: self.user_ura()?,
+        })
     }
 
     pub fn join_receipt_hash(&self) -> Option<&str> {
@@ -540,6 +598,8 @@ impl Credentials {
         }
         if self.join_receipt_hash().is_none() {
             self.username_slug()?;
+            self.user_id()?;
+        } else if self.user_id.is_some() {
             self.user_id()?;
         }
         Ok(())
@@ -624,37 +684,31 @@ fn extract_api_host(endpoint: &str) -> String {
     }
 }
 
+#[cfg(test)]
 fn credentials_path() -> PathBuf {
     state_dir().join("credentials.json")
 }
 
-/// Path to the retired heartbeat sidecar PID file.
-/// Current runtime start does not write it; stop reads and removes it
-/// only as legacy janitor state from pre-session-heartbeat builds.
-pub fn heartbeat_pid_path() -> PathBuf {
-    state_dir().join("heartbeat.pid")
+fn try_credentials_path() -> anyhow::Result<PathBuf> {
+    Ok(try_state_dir()?.join("credentials.json"))
 }
 
-/// Path to the easynet-daemon PID file. Same shape and lifecycle as
-/// `heartbeat_pid_path`: start.rs writes it after spawn, stop.rs
-/// reads + signals + removes. Without it, `easynet runtime stop`
-/// could only kill the heartbeat daemon and the axon runtime;
-/// the easynet-daemon child stayed alive across restarts and a
-/// fresh `runtime start` would spawn a SECOND daemon that loses
-/// the runtime-dispatch socket bind to the older one ("another
-/// process already accepts on …/runtime-dispatch.sock — refusing
-/// to overwrite"). The newer daemon's responder exits and from
-/// that point control.sock chat dispatches succeed exactly once
-/// (whichever daemon's tokio runtime gets the connection) before
-/// returning "daemon closed the connection". Pidfile + signal-on-
-/// stop fixes that ghost-daemon class entirely.
+/// Path to the unified EasyNet daemon PID file.
+///
+/// Start writes it after spawning `easynet-daemon`; stop validates,
+/// signals, and removes it. Discovery remains an independent repair
+/// path when this projection is missing or stale.
 pub fn easynet_daemon_pid_path() -> PathBuf {
     state_dir().join("easynet-daemon.pid")
 }
 
+pub fn try_easynet_daemon_pid_path() -> anyhow::Result<PathBuf> {
+    Ok(try_state_dir()?.join("easynet-daemon.pid"))
+}
+
 pub fn save_credentials(creds: &Credentials) -> anyhow::Result<()> {
     creds.validate_complete()?;
-    let dir = state_dir();
+    let dir = try_state_dir()?;
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(creds)? + "\n";
     // Owner-only mode is applied to the staged temp file *before* the
@@ -662,7 +716,7 @@ pub fn save_credentials(creds: &Credentials) -> anyhow::Result<()> {
     // at its final path. A post-rename chmod leaves that window open —
     // see `atomic_write_with_permissions` for the full argument.
     atomic_write_with_permissions(
-        &credentials_path(),
+        &try_credentials_path()?,
         json.as_bytes(),
         WritePermissions::OwnerReadWrite,
     )?;
@@ -670,16 +724,32 @@ pub fn save_credentials(creds: &Credentials) -> anyhow::Result<()> {
 }
 
 pub fn load_credentials() -> anyhow::Result<Credentials> {
-    let path = credentials_path();
-    let data = fs::read_to_string(&path)
-        .map_err(|_| anyhow::anyhow!("no credentials found — run `easynet join <token>` first"))?;
-    let creds: Credentials = serde_json::from_str(&data)?;
-    creds.validate_complete()?;
-    Ok(creds)
+    load_credentials_optional()?
+        .ok_or_else(|| anyhow::anyhow!("no credentials found — run `easynet join <token>` first"))
+}
+
+pub fn load_credentials_optional() -> anyhow::Result<Option<Credentials>> {
+    let path = try_credentials_path()?;
+    let data = match fs::read_to_string(&path) {
+        Ok(data) => data,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(anyhow::anyhow!(
+                "read credentials from {}: {err}",
+                path.display()
+            ));
+        }
+    };
+    let creds: Credentials = serde_json::from_str(&data)
+        .map_err(|err| anyhow::anyhow!("parse credentials from {}: {err}", path.display()))?;
+    creds
+        .validate_complete()
+        .map_err(|err| anyhow::anyhow!("validate credentials from {}: {err}", path.display()))?;
+    Ok(Some(creds))
 }
 
 pub fn delete_credentials() -> anyhow::Result<()> {
-    let path = credentials_path();
+    let path = try_credentials_path()?;
     if path.exists() {
         fs::remove_file(&path)?;
     }
@@ -689,11 +759,12 @@ pub fn delete_credentials() -> anyhow::Result<()> {
 // ─── Device Settings ───────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct DeviceSettings {
     #[serde(default)]
     pub session_bridge_exec_enabled: bool,
     /// Stable per-machine install id. Generated once and persisted in
-    /// `device_settings.json` (which survives `easynet reset`, unlike
+    /// `device_settings.json` (which survives `easynet device reset`, unlike
     /// `credentials.json`), so the hub can recognise a returning machine on
     /// re-pair and reuse its `node_id` + keypair + trust row instead of
     /// minting a fresh identity each time (device-id churn). `None` until the
@@ -702,16 +773,21 @@ pub struct DeviceSettings {
     pub install_id: Option<String>,
 }
 
+#[cfg(test)]
 fn device_settings_path() -> PathBuf {
     state_dir().join("device_settings.json")
 }
 
+fn try_device_settings_path() -> anyhow::Result<PathBuf> {
+    Ok(try_state_dir()?.join("device_settings.json"))
+}
+
 /// Return this machine's stable install id, generating and persisting one on
-/// first use. Survives `easynet reset` (it lives in `device_settings.json`,
+/// first use. Survives `easynet device reset` (it lives in `device_settings.json`,
 /// not `credentials.json`), so re-pairing the same host presents the same
 /// install id and the hub can reuse the prior `node_id`.
 pub fn load_or_create_install_id() -> anyhow::Result<String> {
-    let mut settings = load_device_settings();
+    let mut settings = load_device_settings()?;
     if let Some(id) = settings
         .install_id
         .as_deref()
@@ -726,19 +802,29 @@ pub fn load_or_create_install_id() -> anyhow::Result<String> {
     Ok(id)
 }
 
-pub fn load_device_settings() -> DeviceSettings {
-    let path = device_settings_path();
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|data| serde_json::from_str(&data).ok())
-        .unwrap_or_default()
+pub fn load_device_settings() -> anyhow::Result<DeviceSettings> {
+    let path = try_device_settings_path()?;
+    let data = match fs::read_to_string(&path) {
+        Ok(data) => data,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DeviceSettings::default());
+        }
+        Err(err) => {
+            return Err(anyhow::anyhow!(
+                "read device settings from {}: {err}",
+                path.display()
+            ));
+        }
+    };
+    serde_json::from_str(&data)
+        .map_err(|err| anyhow::anyhow!("parse device settings from {}: {err}", path.display()))
 }
 
 pub fn save_device_settings(settings: &DeviceSettings) -> anyhow::Result<()> {
-    let dir = state_dir();
+    let dir = try_state_dir()?;
     fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(settings)? + "\n";
-    atomic_write(&device_settings_path(), json.as_bytes())?;
+    atomic_write(&try_device_settings_path()?, json.as_bytes())?;
     Ok(())
 }
 
@@ -748,6 +834,70 @@ pub fn save_device_settings(settings: &DeviceSettings) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn home_resolver_rejects_missing_sources_before_current_directory_fallback() {
+        let error = resolve_home_dir(None, None, None)
+            .expect_err("missing home sources must not fall back to cwd");
+
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to use current directory"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn home_resolver_rejects_relative_env_source_before_state_root_derivation() {
+        let error = resolve_home_dir(Some("relative-home".to_string()), None, None)
+            .expect_err("relative HOME must not derive a relative state root");
+
+        assert!(
+            error
+                .to_string()
+                .contains("HOME must resolve to an absolute path"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn home_resolver_uses_first_absolute_available_source() {
+        let user_profile = std::env::temp_dir().join("easynet-userprofile-home");
+        let os_home = std::env::temp_dir().join("easynet-os-home");
+
+        let resolved = resolve_home_dir(
+            Some(" ".to_string()),
+            Some(user_profile.display().to_string()),
+            Some(os_home),
+        )
+        .expect("blank HOME is unavailable; USERPROFILE is the first absolute source");
+
+        assert_eq!(resolved, user_profile);
+    }
+
+    #[test]
+    fn state_resolver_rejects_missing_home_before_current_directory_fallback() {
+        let error = resolve_state_dir(None, None, None)
+            .expect_err("missing home sources must not derive state root from cwd");
+
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to use current directory"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn state_resolver_derives_dot_easynet_from_absolute_home_source() {
+        let home = std::env::temp_dir().join("easynet-state-home");
+
+        let resolved = resolve_state_dir(Some(home.display().to_string()), None, None)
+            .expect("absolute HOME should derive state root");
+
+        assert_eq!(resolved, home.join(".easynet"));
+    }
 
     #[test]
     fn extract_api_host_strips_port_for_axon_scheme() {
@@ -794,6 +944,81 @@ mod tests {
             join_receipt_hash: None,
         };
         assert_eq!(creds.api_base(), "https://api.example.com");
+    }
+
+    #[test]
+    fn runtime_user_binding_projects_bound_user_ura() {
+        let creds = Credentials {
+            node_id: "n".into(),
+            credential_token: "t".into(),
+            hub_endpoint: "axon://easynet.run:50051".into(),
+            realm: "tenant".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+
+        assert_eq!(
+            creds.runtime_user_binding().expect("runtime user binding"),
+            RuntimeUserBinding::Bound {
+                user_ura: "easynet:///r/tenant/user/user-alice".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_user_binding_makes_federation_native_device_only_explicit() {
+        let creds = Credentials {
+            node_id: "n".into(),
+            credential_token: String::new(),
+            hub_endpoint: "https://hub.example:50443".into(),
+            realm: "tenant".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: None,
+            user_id: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: Some("a".repeat(64)),
+        };
+
+        assert_eq!(
+            creds
+                .runtime_user_binding()
+                .expect("device-only federation binding"),
+            RuntimeUserBinding::Unbound {
+                reason: "not bound (federation-native device credential)",
+            }
+        );
+    }
+
+    #[test]
+    fn runtime_user_binding_rejects_blank_join_user_id_instead_of_hiding_it() {
+        let creds = Credentials {
+            node_id: "n".into(),
+            credential_token: String::new(),
+            hub_endpoint: "https://hub.example:50443".into(),
+            realm: "tenant".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: None,
+            user_id: Some("   ".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: Some("a".repeat(64)),
+        };
+
+        let err = creds
+            .runtime_user_binding()
+            .expect_err("blank explicit user_id is invalid");
+        assert!(
+            err.to_string().contains("missing user_id"),
+            "explicit blank user_id must not become unbound: {err}"
+        );
     }
 
     #[test]
@@ -853,6 +1078,27 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn atomic_write_classifies_post_rename_directory_sync_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("state.json");
+        fs::write(&target, b"old").unwrap();
+
+        let error = atomic_write_with_permissions_and_sync(
+            &target,
+            b"new",
+            WritePermissions::OwnerReadWrite,
+            |_| anyhow::bail!("injected parent-directory fsync failure"),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.commit_state(),
+            AtomicWriteCommitState::ReplacementVisibleButDurabilityUncertain
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"new");
     }
 
     /// On Unix, owner-only permissions must be visible to a reader the
@@ -919,38 +1165,18 @@ mod tests {
     }
 
     #[test]
-    fn runtime_state_defaults_to_axon_bridge_when_kind_missing() {
-        let state: RuntimeState = serde_json::from_str(
+    fn runtime_state_rejects_missing_runtime_kind() {
+        let err = serde_json::from_str::<RuntimeState>(
             r#"{
-                "endpoint": "axon://127.0.0.1:50051",
+                "endpoint": "/tmp/easynet-daemon.sock",
                 "pid": 7,
                 "tenant": "tenant-a"
             }"#,
         )
-        .expect("deserialize legacy runtime state");
-        assert_eq!(state.runtime_kind, RuntimeKind::AxonBridge);
-        assert!(state.uses_bridge());
-    }
-
-    #[test]
-    fn daemon_only_runtime_state_rejects_bridge_connect() {
-        let state = RuntimeState {
-            endpoint: "/tmp/easynet.sock".into(),
-            runtime_kind: RuntimeKind::DaemonOnly,
-            pid: Some(9),
-            hub: None,
-            tenant: Some("tenant-a".into()),
-            label: None,
-            started_at: None,
-            credential_verified: None,
-        };
-        let err = match state.connect_bridge() {
-            Ok(_) => panic!("daemon-only state must not bridge-connect"),
-            Err(err) => err,
-        };
+        .expect_err("runtime projection must carry explicit runtime_kind");
         assert!(
-            err.to_string().contains("daemon-only mode"),
-            "unexpected error: {err}"
+            err.to_string().contains("missing field `runtime_kind`"),
+            "unexpected runtime projection error: {err}"
         );
     }
 
@@ -1023,6 +1249,30 @@ mod tests {
     }
 
     #[test]
+    fn save_credentials_rejects_join_receipt_with_all_zero_user_id() {
+        let _g = HomeGuard::new();
+        let creds = Credentials {
+            node_id: "node".into(),
+            credential_token: String::new(),
+            hub_endpoint: "https://hub.example:50443".into(),
+            realm: "tenant".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: None,
+            user_id: Some("00000000-0000-0000-0000-000000000000".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: Some("a".repeat(64)),
+        };
+
+        let err = save_credentials(&creds).expect_err("all-zero user_id must not persist");
+        assert!(
+            err.to_string().contains("all-zero user_id"),
+            "error should name the all-zero user_id contract: {err}"
+        );
+    }
+
+    #[test]
     fn save_credentials_writes_realm_field() {
         let _g = HomeGuard::new();
         let creds = Credentials {
@@ -1075,6 +1325,29 @@ mod tests {
     }
 
     #[test]
+    fn load_credentials_optional_returns_none_for_missing_file() {
+        let _g = HomeGuard::new();
+
+        let creds = load_credentials_optional().expect("missing credentials is optional absence");
+
+        assert!(creds.is_none());
+    }
+
+    #[test]
+    fn load_credentials_optional_rejects_malformed_existing_file() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(credentials_path(), b"{").expect("write malformed credentials");
+
+        let err = load_credentials_optional().expect_err("malformed credentials must fail");
+
+        assert!(
+            err.to_string().contains("parse credentials"),
+            "error should name credential parse failure: {err}"
+        );
+    }
+
+    #[test]
     fn load_credentials_rejects_file_without_user_id() {
         let _g = HomeGuard::new();
         fs::create_dir_all(state_dir()).expect("create state dir");
@@ -1096,6 +1369,58 @@ mod tests {
         assert!(
             err.to_string().contains("missing user_id"),
             "error should name the missing user_id contract: {err}"
+        );
+    }
+
+    #[test]
+    fn load_credentials_rejects_all_zero_user_id() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(
+            credentials_path(),
+            r#"{
+  "node_id": "node",
+  "credential_token": "token",
+  "hub_endpoint": "axon://hub.example:7700",
+  "realm": "tenant",
+  "deploy_signature": "",
+  "username": "alice",
+  "user_id": "00000000-0000-0000-0000-000000000000"
+}
+"#,
+        )
+        .expect("write placeholder credentials");
+
+        let err = load_credentials().expect_err("all-zero user_id must fail on load");
+        assert!(
+            err.to_string().contains("all-zero user_id"),
+            "error should name the all-zero user_id contract: {err}"
+        );
+    }
+
+    #[test]
+    fn load_credentials_rejects_join_receipt_with_all_zero_user_id() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(
+            credentials_path(),
+            r#"{
+  "node_id": "node",
+  "credential_token": "",
+  "hub_endpoint": "https://hub.example:50443",
+  "realm": "tenant",
+  "deploy_signature": "",
+  "user_id": "00000000-0000-0000-0000-000000000000",
+  "join_receipt_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}
+"#,
+        )
+        .expect("write receipt credentials with placeholder user id");
+
+        let err = load_credentials().expect_err("all-zero user_id must fail on load");
+        assert!(
+            err.to_string().contains("all-zero user_id"),
+            "error should name the all-zero user_id contract: {err}"
         );
     }
 
@@ -1125,107 +1450,46 @@ mod tests {
         );
     }
 
-    // ── agents_root() migration read ─────────────────────────────────────
+    #[test]
+    fn load_optional_runtime_state_returns_none_when_projection_missing() {
+        let _g = HomeGuard::new();
+
+        assert!(
+            load_optional_runtime_state()
+                .expect("missing projection")
+                .is_none(),
+            "missing runtime.json is a valid absent projection state"
+        );
+    }
+
+    #[test]
+    fn load_optional_runtime_state_rejects_malformed_existing_projection() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(runtime_state_path(), "{ not json").expect("write malformed runtime projection");
+
+        let error = load_optional_runtime_state()
+            .expect_err("malformed existing runtime.json must fail closed");
+
+        assert!(
+            error.to_string().contains("parse runtime projection"),
+            "wrong error: {error:#}"
+        );
+    }
+
+    // ── Agent directory layout migration ─────────────────────────────────
 
     // All of these tests use `HomeGuard` so they never touch the
     // developer's real `~/.easynet/` tree. `HomeGuard` serializes
     // concurrent tests via a global mutex, which is load-bearing because
-    // `agents_root()` reads `HOME`.
+    // the layout owner reads `HOME`.
 
     use crate::cli::commands::test_support::HomeGuard;
 
     #[test]
-    fn agents_root_prefers_new_layout_when_only_new_exists() {
+    fn agents_root_is_canonical_even_before_the_directory_exists() {
         let _g = HomeGuard::new();
-        let new_path = state_dir().join("agents");
-        fs::create_dir_all(&new_path).unwrap();
-
-        assert_eq!(agents_root(), new_path);
-    }
-
-    #[test]
-    fn agents_root_falls_back_to_legacy_when_only_legacy_exists() {
-        let _g = HomeGuard::new();
-        let legacy = state_dir().join("workspaces");
-        fs::create_dir_all(&legacy).unwrap();
-
-        assert_eq!(agents_root(), legacy);
-    }
-
-    #[test]
-    fn agents_root_prefers_new_when_both_exist() {
-        // Double-presence is a real-world shape: a user who created
-        // agents on an old binary and upgrades to a newer one that has
-        // begun writing to the new path will briefly hold both trees.
-        // The helper must resolve the ambiguity toward the new path so
-        // the rest of the codebase reads a single consistent layout.
-        let _g = HomeGuard::new();
-        let legacy = state_dir().join("workspaces");
-        let new_path = state_dir().join("agents");
-        fs::create_dir_all(&legacy).unwrap();
-        fs::create_dir_all(&new_path).unwrap();
-
-        assert_eq!(agents_root(), new_path);
-    }
-
-    #[test]
-    fn agents_root_returns_legacy_path_when_neither_exists() {
-        // Fresh install: no layout on disk. The helper returns the
-        // legacy path so the first writer lands under
-        // `~/.easynet/workspaces/`, byte-compatible with every
-        // pre-rename deployment. Flipping this default is reserved
-        // for the PR that introduces AgentDirectory writes.
-        let _g = HomeGuard::new();
-        let legacy = state_dir().join("workspaces");
-        assert_eq!(agents_root(), legacy);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn agents_root_survives_an_unreadable_legacy_path() {
-        // A legacy `workspaces/` that the user cannot list (e.g.
-        // wrong ownership after a chown) must not panic the resolver
-        // or crash on every CLI call. We verify the helper still
-        // returns a path — either the new layout (preferred) or the
-        // legacy one — without aborting.
-        use std::os::unix::fs::PermissionsExt;
-
-        let _g = HomeGuard::new();
-        let legacy = state_dir().join("workspaces");
-        fs::create_dir_all(&legacy).unwrap();
-        fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o000)).unwrap();
-
-        // The helper uses `Path::exists()` internally, which only
-        // checks metadata reachability — it tolerates unreadable
-        // targets as long as the path resolves. Either return path
-        // is acceptable here; the critical property is "no panic".
-        let got = agents_root();
-
-        // Restore permissions so `HomeGuard::drop` can clean up.
-        fs::set_permissions(&legacy, std::fs::Permissions::from_mode(0o700)).unwrap();
-
-        assert!(got.starts_with(state_dir()));
-    }
-
-    #[test]
-    fn agents_root_emits_deprecation_notice_at_most_once() {
-        // The deprecation notice runs through a `OnceLock`, so the
-        // first call that hits the legacy-only branch prints, and
-        // every subsequent call in the same process is silent. We
-        // can't capture stderr directly from an integration-style
-        // test, but we can still verify the helper is idempotent
-        // under repeated calls: the returned path must be stable
-        // and the process must not crash.
-        let _g = HomeGuard::new();
-        let legacy = state_dir().join("workspaces");
-        fs::create_dir_all(&legacy).unwrap();
-
-        let first = agents_root();
-        let second = agents_root();
-        let third = agents_root();
-        assert_eq!(first, legacy);
-        assert_eq!(second, legacy);
-        assert_eq!(third, legacy);
+        assert_eq!(agents_root(), state_dir().join("agents"));
     }
 
     #[test]
@@ -1235,7 +1499,13 @@ mod tests {
         // First call generates and persists.
         let first = load_or_create_install_id().expect("first install id");
         assert!(!first.is_empty());
-        assert!(load_device_settings().install_id.as_deref() == Some(first.as_str()));
+        assert!(
+            load_device_settings()
+                .expect("load device settings")
+                .install_id
+                .as_deref()
+                == Some(first.as_str())
+        );
 
         // Second call returns the SAME id (idempotent), not a new uuid.
         let second = load_or_create_install_id().expect("second install id");
@@ -1248,6 +1518,67 @@ mod tests {
         assert_eq!(
             first, after_reset,
             "install id must survive reset (lives in device_settings.json)"
+        );
+    }
+
+    #[test]
+    fn load_device_settings_missing_file_returns_default() {
+        let _g = HomeGuard::new();
+
+        let settings = load_device_settings().expect("missing settings uses default");
+
+        assert!(!settings.session_bridge_exec_enabled);
+        assert_eq!(settings.install_id, None);
+    }
+
+    #[test]
+    fn load_device_settings_rejects_malformed_existing_file() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(device_settings_path(), b"{").expect("write malformed settings");
+
+        let err = load_device_settings().expect_err("malformed settings must fail");
+
+        assert!(
+            err.to_string().contains("parse device settings"),
+            "error should name parse failure: {err}"
+        );
+    }
+
+    #[test]
+    fn load_device_settings_rejects_unknown_fields() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(
+            device_settings_path(),
+            br#"{"session_bridge_exec_enabled":false,"legacy":true}"#,
+        )
+        .expect("write unknown settings field");
+
+        let err = load_device_settings().expect_err("unknown settings field must fail");
+
+        assert!(
+            err.to_string().contains("unknown field"),
+            "error should reject unknown fields: {err}"
+        );
+    }
+
+    #[test]
+    fn load_or_create_install_id_rejects_malformed_settings_without_rewriting() {
+        let _g = HomeGuard::new();
+        fs::create_dir_all(state_dir()).expect("create state dir");
+        fs::write(device_settings_path(), b"{").expect("write malformed settings");
+
+        let err = load_or_create_install_id().expect_err("malformed settings must fail");
+
+        assert!(
+            err.to_string().contains("parse device settings"),
+            "error should surface malformed settings: {err}"
+        );
+        assert_eq!(
+            fs::read(device_settings_path()).expect("settings preserved"),
+            b"{",
+            "malformed settings must not be rewritten as default state"
         );
     }
 }

@@ -17,8 +17,10 @@ make_sandbox() {
     cp "$REPO_ROOT/packaging/release/e2e-release-flow.sh" "$sandbox/packaging/release/e2e-release-flow.sh"
     cp "$REPO_ROOT/packaging/release/e2e-release-install.sh" "$sandbox/packaging/release/e2e-release-install.sh"
     cp "$REPO_ROOT/packaging/release/install.sh" "$sandbox/packaging/release/install.sh"
+    cp "$REPO_ROOT/packaging/release/dev-install-local.sh" "$sandbox/packaging/release/dev-install-local.sh"
     cp "$REPO_ROOT/include/easynet_cli.h" "$sandbox/include/easynet_cli.h"
-    cp "$REPO_ROOT/docs/spec/ffi-abi-v3.md" "$sandbox/docs/spec/ffi-abi-v3.md"
+    cp "$REPO_ROOT/include/easynet_cli.exports.v7" "$sandbox/include/easynet_cli.exports.v7"
+    cp "$REPO_ROOT/docs/spec/ffi-abi-v7.md" "$sandbox/docs/spec/ffi-abi-v7.md"
     echo "$sandbox"
 }
 
@@ -39,6 +41,13 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "missing keyring build should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
+perl -0pi -e 's/ --bin easynet-keyring//' "$SB/packaging/release/dev-install-local.sh"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "dev installer missing keyring build should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
 perl -0pi -e 's#include/easynet_cli\.h#include/missing_header.h#g' \
     "$SB/packaging/release/build-release-tarball.sh"
 rc=0
@@ -54,12 +63,20 @@ rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "installer missing include dir should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/#define EASYNET_ABI_VERSION 3u/#define EASYNET_ABI_VERSION 2u/' \
+perl -0pi -e 's/#define RUNTIME_ABI_VERSION 7u/#define RUNTIME_ABI_VERSION 2u/' \
     "$SB/packaging/release/e2e-release-install.sh"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "e2e install missing ABI v3 assertion should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "e2e install missing ABI v7 assertion should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's#include/easynet_cli\.exports\.v7#include/missing_exports.v7#g' \
+    "$SB/packaging/release/build-release-tarball.sh"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "missing ABI export allowlist should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 perl -0pi -e 's#e2e-release-install\.sh#e2e-release-packaging/release/install.sh#g' \

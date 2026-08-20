@@ -5,12 +5,13 @@
 // Description: Daemon runtime projection helpers for the cross-realm
 //              directory federation surface introduced by PR-N3
 //              (`pr-drafts/PR-N3-spec-cross-realm-directory-v2.md`).
-//              The wire shapes themselves are Axon SDK exports.
+//              The wire shapes are product contracts owned by the
+//              daemon federation boundary.
 //
 //              PR-N3 originally landed these as CLI-local serde
 //              structs. F-07 de-forks that contract:
-//              `DirectoryEntry` and `DirectoryEvent` are imported
-//              from `easynet-axon`; this module keeps only
+//              `DirectoryEntry` and `DirectoryEvent` live in the
+//              daemon-owned wire contract; this module keeps only
 //              projection, merge, and runtime-view mechanics.
 //
 // Why a new module
@@ -35,16 +36,15 @@ use std::sync::{Arc, RwLock};
 type RealmDirectoryMap = BTreeMap<String, Arc<DirectoryView>>;
 type SharedRealmDirectoryMap = Arc<RealmDirectoryMap>;
 
-pub use easynet_axon::federation_directory::{
+pub use crate::daemon::federation::wire_contract::{
     DirectoryAgentSummary, DirectoryEntry, DirectoryEvent, ListUserDevicesRequest,
     ListUserDevicesResponse, SigningAuthority,
 };
 
 // ── PresenceEvent → DirectoryEvent adapter (PR-N3 N3-streaming-1) ──
 
-/// Project a single presence-registry URA into a `DirectoryEntry`
-/// suitable for legacy discover/list projections. The projection is
-/// pure — given a URA string and an
+/// Project a single presence-registry Device URA into a `DirectoryEntry`.
+/// The projection is pure — given a canonical Device URA string and an
 /// `is_active` flag, returns a deterministic entry shape.
 ///
 /// `origin_realm` is `None` because the local hub speaks for its
@@ -56,83 +56,96 @@ pub use easynet_axon::federation_directory::{
 /// pairing rows for display_name / last-seen) is N3-6 backend-Go
 /// territory.
 ///
-/// `node_id` is parsed from the URA tail. Canonical v4.1.4 device
-/// URAs use `/device/<node>`. Non-canonical URAs (which should not
-/// appear in the registry, but defensive handling matters) get
-/// `node_id = agent_ura.clone()` so downstream consumers always
-/// have a non-empty key.
+/// `node_id` is parsed from the URA tail. Non-canonical rows are rejected
+/// instead of projected with a synthetic id.
 #[cfg(feature = "axon-pb")]
-#[must_use]
-pub fn presence_ura_to_directory_entry(agent_ura: &str, is_active: bool) -> DirectoryEntry {
-    DirectoryEntry {
+pub fn presence_ura_to_directory_entry(
+    agent_ura: &str,
+    is_active: bool,
+) -> Result<DirectoryEntry, String> {
+    let node_id = canonical_device_node_id(agent_ura, "presence directory entry")?;
+    Ok(DirectoryEntry {
         agent_ura: agent_ura.to_string(),
-        node_id: agent_ura_to_node_id(agent_ura),
+        node_id,
         display_name: None,
         status: if is_active { "active" } else { "stale" }.to_string(),
         origin_realm: None,
         hub_endpoint: None,
         last_seen_unix_ms: None,
-    }
+    })
 }
 
 #[cfg(feature = "axon-pb")]
-#[must_use]
 pub fn presence_ura_to_directory_agent_summary(
     agent_ura: &str,
     is_active: bool,
-) -> DirectoryAgentSummary {
-    DirectoryAgentSummary {
+) -> Result<DirectoryAgentSummary, String> {
+    canonical_device_node_id(agent_ura, "presence directory summary")?;
+    Ok(DirectoryAgentSummary {
         agent_ura: agent_ura.to_string(),
         signing_authority: SigningAuthority::SelfSigned,
         status: if is_active { "active" } else { "stale" }.to_string(),
         ability_count: 0,
-    }
+    })
 }
 
 #[cfg(feature = "axon-pb")]
-#[must_use]
-pub fn presence_uras_to_directory_snapshot<I>(uras: I, snapshot_unix_ms: i64) -> DirectoryEvent
+pub fn presence_uras_to_directory_snapshot<I>(
+    uras: I,
+    snapshot_unix_ms: i64,
+) -> Result<DirectoryEvent, String>
 where
     I: IntoIterator,
     I::Item: AsRef<str>,
 {
-    let agents = uras
-        .into_iter()
-        .map(|ura| presence_ura_to_directory_agent_summary(ura.as_ref(), true))
-        .collect();
-    DirectoryEvent::Snapshot {
+    let mut agents = Vec::new();
+    for ura in uras {
+        agents.push(presence_ura_to_directory_agent_summary(ura.as_ref(), true)?);
+    }
+    Ok(DirectoryEvent::Snapshot {
         agents,
         snapshot_unix_ms,
-    }
+    })
 }
 
 #[cfg(feature = "axon-pb")]
-#[must_use]
 pub fn directory_agent_summary_to_entry(
     agent: &DirectoryAgentSummary,
     peer_realm: &str,
-) -> DirectoryEntry {
-    DirectoryEntry {
+) -> Result<DirectoryEntry, String> {
+    let node_id = canonical_device_node_id(&agent.agent_ura, "directory agent summary")?;
+    Ok(DirectoryEntry {
         agent_ura: agent.agent_ura.clone(),
-        node_id: agent_ura_to_node_id(&agent.agent_ura),
+        node_id,
         display_name: None,
         status: agent.status.clone(),
         origin_realm: Some(peer_realm.to_string()),
         hub_endpoint: None,
         last_seen_unix_ms: None,
-    }
+    })
 }
 
 #[cfg(feature = "axon-pb")]
-#[must_use]
-fn agent_ura_to_node_id(agent_ura: &str) -> String {
-    match crate::core::ura::parse_ura(agent_ura) {
-        Ok(parsed) if parsed.kind == crate::core::ura::URAKind::Device => parsed
-            .device_id()
-            .map(str::to_string)
-            .unwrap_or_else(|| agent_ura.to_string()),
-        _ => agent_ura.to_string(),
+fn canonical_device_node_id(agent_ura: &str, source: &str) -> Result<String, String> {
+    let parsed = crate::core::ura::parse_ura(agent_ura)
+        .map_err(|error| format!("{source}: {agent_ura:?} is not a canonical URA: {error}"))?;
+    if parsed.kind != crate::core::ura::URAKind::Device {
+        return Err(format!(
+            "{source}: {agent_ura:?} is not a canonical Device URA"
+        ));
     }
+    let node_id = parsed
+        .device_id()
+        .map(str::trim)
+        .filter(|node_id| !node_id.is_empty())
+        .ok_or_else(|| format!("{source}: {agent_ura:?} is missing canonical device id"))?;
+    let canonical_ura = crate::core::ura::device_ura(&parsed.realm, node_id);
+    if canonical_ura != agent_ura {
+        return Err(format!(
+            "{source}: {agent_ura:?} is not canonical; expected {canonical_ura:?}"
+        ));
+    }
+    Ok(node_id.to_string())
 }
 
 #[cfg(feature = "axon-pb")]
@@ -153,40 +166,44 @@ pub fn now_unix_ms() -> i64 {
 /// `subscribe_directory_v2` server stream wraps a per-subscriber
 /// `broadcast::Receiver<PresenceEvent>` with this adapter so the
 /// outbound frames carry the `DirectoryEvent` wire shape rather
-/// than the legacy `AgentSummary` shape.
+/// than the older presence `AgentSummary` shape.
 #[cfg(feature = "axon-pb")]
-#[must_use]
 pub fn presence_event_to_directory_event(
     event: &crate::daemon::invocation::bidi::state::presence::PresenceEvent,
-) -> DirectoryEvent {
+) -> Result<DirectoryEvent, String> {
     presence_event_to_directory_event_at(event, now_unix_ms())
 }
 
 #[cfg(feature = "axon-pb")]
-#[must_use]
 pub fn presence_event_to_directory_event_at(
     event: &crate::daemon::invocation::bidi::state::presence::PresenceEvent,
     unix_ms: i64,
-) -> DirectoryEvent {
+) -> Result<DirectoryEvent, String> {
     use crate::daemon::invocation::bidi::state::presence::PresenceEvent;
     match event {
-        PresenceEvent::Online { ura } => DirectoryEvent::AgentAdvertised {
-            agent_ura: ura.clone(),
-            signing_authority: SigningAuthority::SelfSigned,
-            replaced_prior: false,
-            unix_ms,
-        },
-        PresenceEvent::Offline { ura, reason } => DirectoryEvent::AgentRevoked {
-            agent_ura: ura.clone(),
-            was_active: true,
-            // `OfflineReason::as_wire_str` is the single source of
-            // truth for the snake_case label; both this projection
-            // and the op-event `reason=` field share it so an SRE
-            // pipeline grepping `reason=stream_closed` matches in
-            // both surfaces.
-            reason: reason.as_wire_str().to_string(),
-            unix_ms,
-        },
+        PresenceEvent::Online { ura } => {
+            canonical_device_node_id(ura, "presence online directory event")?;
+            Ok(DirectoryEvent::AgentAdvertised {
+                agent_ura: ura.clone(),
+                signing_authority: SigningAuthority::SelfSigned,
+                replaced_prior: false,
+                unix_ms,
+            })
+        }
+        PresenceEvent::Offline { ura, reason } => {
+            canonical_device_node_id(ura, "presence offline directory event")?;
+            Ok(DirectoryEvent::AgentRevoked {
+                agent_ura: ura.clone(),
+                was_active: true,
+                // `OfflineReason::as_wire_str` is the single source of
+                // truth for the snake_case label; both this projection
+                // and the op-event `reason=` field share it so an SRE
+                // pipeline grepping `reason=stream_closed` matches in
+                // both surfaces.
+                reason: reason.as_wire_str().to_string(),
+                unix_ms,
+            })
+        }
     }
 }
 
@@ -408,14 +425,15 @@ impl DirectoryView {
     /// peer's signing key is bound to its own realm by DEC-N1
     /// §2.4 admission), cross-realm spoofing is blocked at two
     /// layers.
-    pub fn apply_frame(&mut self, event: &DirectoryEvent) {
+    pub fn apply_frame(&mut self, event: &DirectoryEvent) -> Result<(), String> {
         match event {
             DirectoryEvent::Snapshot { agents, .. } => {
-                self.entries.clear();
+                let mut next_entries = BTreeMap::new();
                 for raw in agents {
-                    let entry = directory_agent_summary_to_entry(raw, &self.peer_realm);
-                    self.entries.insert(entry.agent_ura.clone(), entry);
+                    let entry = directory_agent_summary_to_entry(raw, &self.peer_realm)?;
+                    next_entries.insert(entry.agent_ura.clone(), entry);
                 }
+                self.entries = next_entries;
             }
             DirectoryEvent::AgentAdvertised {
                 agent_ura,
@@ -428,7 +446,7 @@ impl DirectoryView {
                     status: "active".to_string(),
                     ability_count: 0,
                 };
-                let entry = directory_agent_summary_to_entry(&summary, &self.peer_realm);
+                let entry = directory_agent_summary_to_entry(&summary, &self.peer_realm)?;
                 self.entries.insert(entry.agent_ura.clone(), entry);
             }
             DirectoryEvent::OwnerProjectionChanged { .. } => {
@@ -440,6 +458,7 @@ impl DirectoryView {
                 // in this agent-keyed view.
             }
             DirectoryEvent::AgentRevoked { agent_ura, .. } => {
+                canonical_device_node_id(agent_ura, "directory revoke event")?;
                 self.entries.remove(agent_ura);
             }
             DirectoryEvent::Heartbeat { .. } => {
@@ -451,6 +470,7 @@ impl DirectoryView {
                 // rather than a panic.
             }
         }
+        Ok(())
     }
 
     /// Replace this view from `federation.discover` rows. This is
@@ -507,22 +527,6 @@ impl DirectoryView {
 #[derive(Clone, Debug)]
 pub struct SharedFederatedDirectoryView {
     inner: Arc<RwLock<SharedRealmDirectoryMap>>,
-    /// **PR-N3 N3-streaming-10**. Peers currently being kept
-    /// up-to-date by the streaming supervisor. The poll task
-    /// (N3-3.1 fallback) skips entries in this set so the two
-    /// transports never race to publish into the same realm
-    /// slot. Streaming is the authoritative source whenever
-    /// the supervisor's stream is open; on stream-end the
-    /// supervisor removes its realm + the poll task picks up
-    /// the slack until the next reconnect.
-    ///
-    /// Wrapped in its own `RwLock` rather than folded into the
-    /// directory map's RwLock so streamed-set reads (the poll
-    /// task does this on every iteration) don't compete with
-    /// directory writes (the supervisor does this on every
-    /// applied frame). Two locks, two contended paths, no
-    /// cross-blocking.
-    streamed_peers: Arc<RwLock<std::collections::BTreeSet<String>>>,
 }
 
 impl SharedFederatedDirectoryView {
@@ -530,7 +534,6 @@ impl SharedFederatedDirectoryView {
     pub fn new(initial: BTreeMap<String, Arc<DirectoryView>>) -> Self {
         Self {
             inner: Arc::new(RwLock::new(Arc::new(initial))),
-            streamed_peers: Arc::new(RwLock::new(std::collections::BTreeSet::new())),
         }
     }
 
@@ -550,41 +553,6 @@ impl SharedFederatedDirectoryView {
     pub fn replace(&self, next: BTreeMap<String, Arc<DirectoryView>>) {
         let mut guard = self.inner.write().expect("rwlock poisoned");
         *guard = Arc::new(next);
-    }
-
-    /// **PR-N3 N3-streaming-10**. Mark a peer realm as actively
-    /// streamed. The streaming supervisor calls this after a
-    /// successful subscribe-stream open. The poll task
-    /// (`poll_once`) skips peers in the set so the two
-    /// transports never race to publish into the same realm
-    /// slot.
-    pub fn mark_streamed(&self, peer_realm: &str) {
-        self.streamed_peers
-            .write()
-            .expect("rwlock poisoned")
-            .insert(peer_realm.to_string());
-    }
-
-    /// **PR-N3 N3-streaming-10**. Unmark a peer realm.
-    /// Streaming supervisor calls this on every stream-end so
-    /// the poll task can pick up the slack until the next
-    /// reconnect.
-    pub fn unmark_streamed(&self, peer_realm: &str) {
-        self.streamed_peers
-            .write()
-            .expect("rwlock poisoned")
-            .remove(peer_realm);
-    }
-
-    /// **PR-N3 N3-streaming-10**. Is this peer realm currently
-    /// being kept fresh by the streaming supervisor? Used by
-    /// `poll_once` to skip peers whose stream is alive.
-    #[must_use]
-    pub fn is_streamed(&self, peer_realm: &str) -> bool {
-        self.streamed_peers
-            .read()
-            .expect("rwlock poisoned")
-            .contains(peer_realm)
     }
 }
 
@@ -656,135 +624,6 @@ pub fn flatten_federated_view(cell: &SharedFederatedDirectoryView) -> Vec<Direct
     out
 }
 
-// ── Directory poll task (PR-N3 N3-3.1) ─────────────────────────────
-
-/// Outcome of a single poll cycle. Returned by `poll_once`
-/// rather than logged inside so the boot-time spawn task can
-/// surface a structured trace, and the unit tests can assert
-/// per-peer success/failure without scraping stderr.
-#[cfg(feature = "axon-pb")]
-#[derive(Debug, Default)]
-pub struct PollOutcome {
-    /// Peers whose discover call succeeded; their realms.
-    pub successful_peers: Vec<String>,
-    /// Peers whose discover call failed; (realm, error string).
-    pub failed_peers: Vec<(String, String)>,
-}
-
-/// Run one round of cross-realm directory polling against every
-/// federated peer in the supplied `peers_snapshot`, writing the
-/// resulting per-peer `DirectoryView` projections into the
-/// `directory_cell`.
-///
-/// **PR-N3 commit N3-3.1**. The polling-based integration that
-/// turns N3-3's data-plane scaffold into a real working chain.
-/// Called periodically from a tokio task spawned at daemon
-/// boot; calling cadence drives the
-/// "new peer appears in discover within ~5s" acceptance from
-/// PR-N3 spec §八 scenario (4).
-///
-/// Per peer the task:
-///   1. Builds an `InvokeRequest` for `federation.discover` with
-///      a loopback envelope (bypass admission via the daemon's
-///      own URA; the peer accepts). Future signed-envelope
-///      version uses PR-N5's audit-bound caller binding.
-///   2. Dials the peer's hub via the supplied `FederationClient`.
-///   3. Parses the `DiscoverResponse`, projects each entry into
-///      the peer's `DirectoryView` (the §2.4 origin_realm
-///      rewrite stamps the peer's authenticated realm).
-///   4. Writes the new view into the `directory_cell`. Other
-///      peers' views in the cell are preserved verbatim — the
-///      replace is per-peer, not whole-map.
-///
-/// Errors per peer surface in `PollOutcome.failed_peers`; one
-/// peer's failure does not abort the round. Spec §3.1 backoff
-/// schedule lives in the FSM-driven streaming variant (which
-/// supersedes this poll task whenever it lands); the poll task
-/// just retries on the next interval.
-#[cfg(feature = "axon-pb")]
-pub async fn poll_once(
-    federation_client: &dyn crate::daemon::federation::client::FederationClient,
-    peers_snapshot: &std::collections::BTreeMap<String, String>,
-    daemon_ura: Option<&str>,
-    directory_cell: &SharedFederatedDirectoryView,
-) -> PollOutcome {
-    use easynet_axon::pb::axon::v1::{AgentIdentity as PbAgentIdentity, Envelope, InvokeRequest};
-
-    let mut outcome = PollOutcome::default();
-    // Start from the current cell so per-peer replaces preserve
-    // entries from peers we don't poll this round (eg. removed
-    // from federated_peers between snapshot fetch and now).
-    let mut next_map: std::collections::BTreeMap<String, Arc<DirectoryView>> =
-        (*directory_cell.snapshot()).clone();
-
-    for (peer_realm, peer_hub_endpoint) in peers_snapshot.iter() {
-        // **PR-N3 N3-streaming-10**: skip peers whose stream
-        // is currently open. The streaming supervisor is the
-        // authoritative source of truth for those peers; the
-        // poll task is the fallback for peers without v2
-        // support or peers in reconnect-backoff. Skipping
-        // here prevents a stale poll snapshot from
-        // overwriting a fresh stream-emitted Upsert/Remove.
-        if directory_cell.is_streamed(peer_realm) {
-            outcome.successful_peers.push(peer_realm.clone());
-            continue;
-        }
-
-        // Build a discover request with the daemon's own URA as
-        // caller so the peer's loopback bypass / hub-trust check
-        // admits (caller-side strict signing lands in N3-3.2 with
-        // the cross-realm CallerBinding from PR-N5 audit chain).
-        let envelope = daemon_ura.map(|ura| Envelope {
-            caller: Some(PbAgentIdentity {
-                ura: ura.to_string(),
-                profile: "easynet-strict-v2".to_string(),
-            }),
-            ..Envelope::default()
-        });
-        let request = InvokeRequest {
-            envelope,
-            function_name:
-                crate::daemon::invocation::dispatch::federation_wrappers::ABILITY_FEDERATION_DISCOVER
-                    .to_string(),
-            arguments: br#"{}"#.to_vec(),
-            ..InvokeRequest::default()
-        };
-
-        match federation_client
-            .forward_invoke(peer_hub_endpoint, request)
-            .await
-        {
-            Ok(response) => {
-                let parsed: Result<
-                    crate::daemon::invocation::dispatch::federation_wrappers::DiscoverResponse,
-                    _,
-                > = serde_json::from_slice(&response.result);
-                match parsed {
-                    Ok(discover) => {
-                        let mut view = DirectoryView::new(peer_realm.clone());
-                        view.replace_entries(discover.entries);
-                        next_map.insert(peer_realm.clone(), Arc::new(view));
-                        outcome.successful_peers.push(peer_realm.clone());
-                    }
-                    Err(err) => {
-                        outcome
-                            .failed_peers
-                            .push((peer_realm.clone(), format!("response parse failed: {err}")));
-                    }
-                }
-            }
-            Err(err) => {
-                outcome
-                    .failed_peers
-                    .push((peer_realm.clone(), format!("dial failed: {err:?}")));
-            }
-        }
-    }
-
-    directory_cell.replace(next_map);
-    outcome
-}
-
 // ── RemoteDirectoryClient (PR-N3 N3-3 scaffold) ────────────────────
 
 /// Per-peer remote directory subscriber.
@@ -843,7 +682,9 @@ impl RemoteDirectoryClient {
         // FSM accepted the frame; it's safe to apply to the
         // view. Heartbeat is the only frame that doesn't mutate
         // the view (apply_frame's Heartbeat arm is a no-op).
-        self.view.apply_frame(event);
+        self.view
+            .apply_frame(event)
+            .map_err(|_| FsmError::ProtocolViolation("invalid directory frame"))?;
         Ok(())
     }
 
@@ -909,6 +750,85 @@ impl RemoteDirectoryClient {
     }
 }
 
+/// Owner-bound request authority for federated directory subscriptions.
+///
+/// This is the sole production constructor for outbound directory stream
+/// requests. It binds the local Hub signer once, derives a legal resource
+/// subject for each peer, resolves the catalog descriptor, and delegates
+/// canonical tuple/freshness/signature construction to the invocation facade.
+#[cfg(feature = "axon-pb")]
+#[derive(Clone)]
+pub struct FederatedDirectorySubscriptionIssuer {
+    signer: Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>,
+    local_realm: String,
+}
+
+#[cfg(feature = "axon-pb")]
+impl std::fmt::Debug for FederatedDirectorySubscriptionIssuer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FederatedDirectorySubscriptionIssuer")
+            .field("owner_ura", &self.signer.owner_ura())
+            .field("local_realm", &self.local_realm)
+            .finish()
+    }
+}
+
+#[cfg(feature = "axon-pb")]
+impl FederatedDirectorySubscriptionIssuer {
+    pub fn new(
+        signer: Arc<dyn crate::daemon::identity::self_identity::CanonicalSigner>,
+    ) -> anyhow::Result<Self> {
+        let owner_ura = signer.owner_ura();
+        let parsed = crate::core::ura::parse_ura(owner_ura).map_err(|error| {
+            anyhow::anyhow!("directory subscription signer URA is invalid: {error}")
+        })?;
+        if parsed.kind != crate::core::ura::URAKind::Authority {
+            anyhow::bail!(
+                "directory subscription signer must be bound to an Authority URA; got `{owner_ura}`"
+            );
+        }
+        Ok(Self {
+            signer,
+            local_realm: parsed.realm,
+        })
+    }
+
+    async fn build_request(
+        &self,
+        peer_realm: &str,
+    ) -> anyhow::Result<axon_sdk::pb::axon::v1::InvokeServerStreamRequest> {
+        let ability = crate::daemon::invocation::dispatch::federation_wrappers::
+            ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2;
+        let callee_ura = crate::core::ura::hub_ura(peer_realm);
+        let subject_ura = crate::core::ura::resource_dot_ura(
+            &self.local_realm,
+            "hub.federation",
+            &format!("directory/{peer_realm}"),
+        );
+        let descriptor_ref =
+            crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
+                &callee_ura,
+                ability,
+                crate::daemon::ability::CallMode::Stream,
+            )
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        crate::daemon::invocation::dispatch::invocation_wire::ProtoEnvelope::from_target(
+            self.signer.owner_ura(),
+            callee_ura,
+            subject_ura,
+            crate::daemon::invocation::RootInvocationDerivationIssuer::fresh_root(),
+        )?
+        .signed_descriptor_ref_stream_request_with_signer(
+            ability,
+            descriptor_ref,
+            br#"{}"#.to_vec(),
+            self.signer.as_ref(),
+        )
+        .await
+    }
+}
+
 /// **PR-N3 N3-streaming-4**. Run the per-peer streaming
 /// supervisor loop. Opens a `subscribe_directory_v2` stream
 /// against the peer, drives `consume_directory_event_stream`,
@@ -930,7 +850,7 @@ impl RemoteDirectoryClient {
 pub async fn run_per_peer_supervisor(
     peer_realm: String,
     peer_hub_endpoint: String,
-    caller_ura: String,
+    request_issuer: FederatedDirectorySubscriptionIssuer,
     federation_client: std::sync::Arc<dyn crate::daemon::federation::client::FederationClient>,
     cell: SharedFederatedDirectoryView,
     cancel: tokio::sync::oneshot::Receiver<()>,
@@ -940,7 +860,7 @@ pub async fn run_per_peer_supervisor(
     run_per_peer_supervisor_with_idle_timeout(
         peer_realm,
         peer_hub_endpoint,
-        caller_ura,
+        request_issuer,
         federation_client,
         cell,
         cancel,
@@ -1021,17 +941,12 @@ where
 pub async fn run_per_peer_supervisor_with_idle_timeout(
     peer_realm: String,
     peer_hub_endpoint: String,
-    caller_ura: String,
+    request_issuer: FederatedDirectorySubscriptionIssuer,
     federation_client: std::sync::Arc<dyn crate::daemon::federation::client::FederationClient>,
     cell: SharedFederatedDirectoryView,
     mut cancel: tokio::sync::oneshot::Receiver<()>,
     idle_timeout_ms: u64,
 ) {
-    use easynet_axon::pb::axon::v1::{
-        AgentIdentity, Envelope, InvokeServerStreamRequest, SubjectIdentity,
-    };
-    use rand::RngCore;
-
     let mut client = RemoteDirectoryClient::new(peer_realm.clone());
     loop {
         // Honour cancel before doing anything expensive.
@@ -1039,52 +954,26 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
             return;
         }
 
-        // Build a request with a populated envelope. The peer's
-        // `dispatch_invoke_stream` admission rejects with
-        // `InvalidArgument: InvokeStream request missing
-        // envelope` if either the envelope or its caller /
-        // callee / subject / nonce fields are absent. We mirror
-        // the same shape the CLI bridge uses for forward_invoke:
-        // caller URA = this daemon's own URA, callee + subject =
-        // the peer's hub URA as the address being subscribed to,
-        // and a fresh 16-byte invocation nonce per dial. The
-        // CrossHubDialer applies its own trust gate (TLS pin)
-        // before the request reaches the peer's admission, so
-        // the peer's strict admission is defence-in-depth.
-        let mut nonce = vec![0u8; 16];
-        rand::rngs::OsRng.fill_bytes(&mut nonce);
-        // URA v4.1.4: peer hub is the realm-singleton; no sub-id tail.
-        let peer_ura_for_envelope = crate::core::ura::hub_ura(&peer_realm);
-        // v4.1.5 §A.URA-7 — `subject ∈ {user, device, resource}`.
-        // Pre-fix this site set `subject = peer_ura_for_envelope` (the
-        // peer hub URA), which violates the constraint (hub is not a
-        // legal subject kind). The natural legal subject for "this
-        // daemon subscribes to peer hub's directory" is the local
-        // daemon's own device URA (which equals `caller_ura`); peer
-        // admission's strict 4-step verify still cross-checks the
-        // signature against the trust anchor entry for this device.
-        let envelope = Envelope {
-            caller: Some(AgentIdentity {
-                ura: caller_ura.clone(),
-                ..AgentIdentity::default()
-            }),
-            callee: Some(AgentIdentity {
-                ura: peer_ura_for_envelope,
-                ..AgentIdentity::default()
-            }),
-            subject: Some(SubjectIdentity {
-                ura: caller_ura.clone(),
-                ..SubjectIdentity::default()
-            }),
-            invocation_nonce: nonce,
-            ..Envelope::default()
-        };
-        let request = InvokeServerStreamRequest {
-            envelope: Some(envelope),
-            function_name: crate::daemon::invocation::dispatch::federation_wrappers
-                ::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY_V2
-                .to_string(),
-            ..InvokeServerStreamRequest::default()
+        let request = match request_issuer.build_request(&peer_realm).await {
+            Ok(request) => request,
+            Err(error) => {
+                let error = error.to_string();
+                let backoff_ms = client.on_dial_err();
+                crate::op_event!(
+                    component = federation_directory,
+                    kind = subscribe_directory_v2_request_issue_failed,
+                    peer_realm = peer_realm,
+                    error = error,
+                    backoff_ms = backoff_ms,
+                );
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)) => {}
+                    _ = &mut cancel => {
+                        return;
+                    }
+                }
+                continue;
+            }
         };
 
         match federation_client
@@ -1093,12 +982,6 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
         {
             Ok(stream) => {
                 client.on_dial_ok();
-                // **PR-N3 N3-streaming-10**: claim authoritative
-                // ownership of this peer's directory slot while
-                // the stream is open. The poll task skips peers
-                // in this set so the two transports never race
-                // to publish.
-                cell.mark_streamed(&peer_realm);
                 // PR-N3 N3-streaming-7 + N3-streaming-8: enforce
                 // the spec §2.3 idle-timeout. Production cadence
                 // is 60s (= two missed 30s heartbeat windows);
@@ -1143,31 +1026,11 @@ pub async fn run_per_peer_supervisor_with_idle_timeout(
                         }
                     }
                     _ = &mut cancel => {
-                        // Always release the stream-claim on
-                        // exit, even via cancel — otherwise a
-                        // peer-removal SIGHUP would leave a
-                        // stale claim that blocks the poll task
-                        // from picking up the realm in a
-                        // re-add cycle. We do NOT mark stale
-                        // on cancel: a peer-removed via SIGHUP
-                        // means the operator no longer wants
-                        // the entries at all (the next watcher
-                        // pass drops them).
-                        cell.unmark_streamed(&peer_realm);
                         return;
                     }
                 }
-                // Stream ended (any outcome except cancel) —
-                // release the claim so the poll task picks up
-                // the slack until the next reconnect succeeds.
-                // Also flip every entry in the peer's local
-                // view to status = "stale" + republish so
-                // readers see freshness annotation per spec
-                // §2.1 (PR-N3 N3-streaming-12). The view stays
-                // populated so a brief disconnect doesn't
-                // erase the entries; the next successful
-                // Snapshot replaces them wholesale.
-                cell.unmark_streamed(&peer_realm);
+                // Preserve the last projection but mark it stale while the
+                // sole authoritative stream is reconnecting.
                 client.mark_stale_and_publish(&cell);
             }
             Err(err) => {
@@ -1320,10 +1183,9 @@ where
 mod tests {
     use super::*;
 
-    fn legacy_entry_json() -> &'static str {
-        // The PR-N1 commit 8/N readers see this exact shape on
-        // the wire. Legacy emit drops the schema-B fields
-        // entirely; new emit includes them.
+    fn minimal_local_entry_json() -> &'static str {
+        // Local minimal rows may omit enrichment fields that are unknown to
+        // the presence-only projection.
         r#"{
             "agent_ura": "easynet:///r/realm-a/device/device-A",
             "node_id": "node-1",
@@ -1345,11 +1207,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_entry_deserialises_with_origin_realm_none() {
-        // Schema-B forward-compat: a 4-field legacy entry
-        // round-trips without errors and the new optional
-        // fields surface as None / None / None.
-        let entry: DirectoryEntry = serde_json::from_str(legacy_entry_json()).expect("deserialise");
+    fn minimal_local_entry_deserialises_with_origin_realm_none() {
+        let entry: DirectoryEntry =
+            serde_json::from_str(minimal_local_entry_json()).expect("deserialise");
         assert_eq!(entry.agent_ura, "easynet:///r/realm-a/device/device-A");
         assert_eq!(entry.node_id, "node-1");
         assert_eq!(entry.display_name.as_deref(), Some("silan-laptop"));
@@ -1404,7 +1264,7 @@ mod tests {
         assert!(parsed["last_seen_unix_ms"].is_null());
     }
 
-    // ── N3-2 DirectoryEvent + subscribe_directory FSM ────────────
+    // ── N3-2 DirectoryEvent + subscribe_directory_v2 FSM ─────────
 
     fn sample_entry() -> DirectoryEntry {
         DirectoryEntry {
@@ -1723,7 +1583,8 @@ mod tests {
         view.apply_frame(&advertised_event(entry_with_claimed_origin(
             "easynet:///r/realm-b/device/peer-device",
             Some("realm-c"),
-        )));
+        )))
+        .expect("canonical device upsert applies");
         let stamped = view
             .lookup("easynet:///r/realm-b/device/peer-device")
             .expect("entry stored");
@@ -1732,15 +1593,15 @@ mod tests {
 
     #[test]
     fn apply_upsert_stamps_origin_realm_when_peer_omitted_it() {
-        // Peer's bytes had `origin_realm = None` (the legacy
-        // schema-A shape). The receiver still stamps the peer's
-        // realm so consumers downstream cannot accidentally see
-        // a None for a cross-realm entry.
+        // Peer's bytes omitted origin ownership. The receiver still stamps the
+        // peer's realm so consumers downstream cannot accidentally see a None
+        // for a cross-realm entry.
         let mut view = DirectoryView::new("realm-b".to_string());
         view.apply_frame(&advertised_event(entry_with_claimed_origin(
             "easynet:///r/realm-b/device/peer-device",
             None,
-        )));
+        )))
+        .expect("canonical device upsert applies");
         let stamped = view
             .lookup("easynet:///r/realm-b/device/peer-device")
             .expect("entry stored");
@@ -1753,14 +1614,16 @@ mod tests {
         view.apply_frame(&snapshot_event(vec![entry_with_claimed_origin(
             "easynet:///r/realm-b/device/peer-device",
             None,
-        )]));
+        )]))
+        .expect("canonical device snapshot applies");
         assert!(view
             .lookup("easynet:///r/realm-b/device/peer-device")
             .is_some());
         view.apply_frame(&revoked_event(
             "easynet:///r/realm-b/device/peer-device",
             "shutdown",
-        ));
+        ))
+        .expect("canonical device revoke applies");
         assert!(view
             .lookup("easynet:///r/realm-b/device/peer-device")
             .is_none());
@@ -1775,13 +1638,63 @@ mod tests {
         view.apply_frame(&advertised_event(entry_with_claimed_origin(
             "easynet:///r/realm-b/device/old",
             None,
-        )));
+        )))
+        .expect("canonical device upsert applies");
         view.apply_frame(&snapshot_event(vec![entry_with_claimed_origin(
             "easynet:///r/realm-b/device/new",
             None,
-        )]));
+        )]))
+        .expect("canonical device snapshot applies");
         assert!(view.lookup("easynet:///r/realm-b/device/old").is_none());
         assert!(view.lookup("easynet:///r/realm-b/device/new").is_some());
+    }
+
+    #[test]
+    fn apply_snapshot_rejects_invalid_agent_ura_without_mutating_view() {
+        let mut view = DirectoryView::new("realm-b".to_string());
+        view.apply_frame(&advertised_event(entry_with_claimed_origin(
+            "easynet:///r/realm-b/device/stable",
+            None,
+        )))
+        .expect("canonical device upsert applies");
+        let before = view.entries.clone();
+
+        let err = view
+            .apply_frame(&DirectoryEvent::Snapshot {
+                agents: vec![DirectoryAgentSummary {
+                    agent_ura: "easynet:///r/realm-b/agent/user.device-carryover".to_string(),
+                    signing_authority: SigningAuthority::SelfSigned,
+                    status: "active".to_string(),
+                    ability_count: 0,
+                }],
+                snapshot_unix_ms: 1_714_492_800_000,
+            })
+            .expect_err("agent URA must not publish as a directory device row");
+        assert!(
+            err.contains("not a canonical Device URA"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(view.entries, before, "invalid snapshot must not commit");
+    }
+
+    #[test]
+    fn apply_upsert_rejects_invalid_agent_ura_without_mutating_view() {
+        let mut view = DirectoryView::new("realm-b".to_string());
+        let before = view.entries.clone();
+
+        let err = view
+            .apply_frame(&DirectoryEvent::AgentAdvertised {
+                agent_ura: "not-canonical".to_string(),
+                signing_authority: SigningAuthority::SelfSigned,
+                replaced_prior: false,
+                unix_ms: 1_714_492_800_000,
+            })
+            .expect_err("malformed URA must not publish as a directory device row");
+        assert!(
+            err.contains("not a canonical URA"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(view.entries, before, "invalid upsert must not commit");
     }
 
     #[test]
@@ -1790,9 +1703,11 @@ mod tests {
         view.apply_frame(&advertised_event(entry_with_claimed_origin(
             "easynet:///r/realm-b/device/peer",
             None,
-        )));
+        )))
+        .expect("canonical device upsert applies");
         let before = view.entries.clone();
-        view.apply_frame(&heartbeat_event(1_714_500_000_000));
+        view.apply_frame(&heartbeat_event(1_714_500_000_000))
+            .expect("heartbeat applies");
         assert_eq!(view.entries, before, "heartbeat must not mutate the view");
     }
 
@@ -1873,13 +1788,20 @@ mod tests {
     mod supervisor_tests {
         use super::*;
         use crate::daemon::federation::client::{
-            DirectoryEventStream, FederationClient, FederationClientError, HubUri,
+            DirectoryEventStream, FederationClient, FederationClientError, HubEndpoint,
         };
+        use crate::daemon::identity::self_identity::{CanonicalSigner, TestCanonicalSigner};
         use async_trait::async_trait;
-        use easynet_axon::pb::axon::v1::{
-            InvokeRequest, InvokeResponse, InvokeServerStreamRequest,
-        };
+        use axon_sdk::pb::axon::v1::{InvokeRequest, InvokeResponse, InvokeServerStreamRequest};
         use std::sync::{Arc, Mutex};
+
+        fn test_request_issuer(realm: &str) -> FederatedDirectorySubscriptionIssuer {
+            let signer: Arc<dyn CanonicalSigner> = Arc::new(TestCanonicalSigner::new(
+                crate::core::ura::hub_ura(realm),
+                [0x4d; 32],
+            ));
+            FederatedDirectorySubscriptionIssuer::new(signer).expect("test request issuer")
+        }
 
         /// Mock that delivers a canned event sequence on the
         /// first subscribe call, then signals via `served`
@@ -1892,9 +1814,9 @@ mod tests {
 
         #[async_trait]
         impl FederationClient for OneShotStreamingClient {
-            async fn forward_invoke(
+            async fn invoke(
                 &self,
-                _target_hub: &HubUri,
+                _target_hub_endpoint: &HubEndpoint,
                 _request: InvokeRequest,
             ) -> Result<InvokeResponse, FederationClientError> {
                 Err(FederationClientError::Unimplemented("not used in test"))
@@ -1902,7 +1824,7 @@ mod tests {
 
             async fn subscribe_directory_v2(
                 &self,
-                _target_hub: &HubUri,
+                _target_hub_endpoint: &HubEndpoint,
                 _request: InvokeServerStreamRequest,
             ) -> Result<DirectoryEventStream, FederationClientError> {
                 let payload = self.events.lock().unwrap().take();
@@ -1912,7 +1834,7 @@ mod tests {
                         Ok(Box::pin(futures::stream::iter(events)))
                     }
                     None => Err(FederationClientError::DialFailed {
-                        hub: "in-process".to_string(),
+                        endpoint: "in-process".to_string(),
                         detail: "test fixture: stream already served once".to_string(),
                     }),
                 }
@@ -1929,9 +1851,9 @@ mod tests {
 
         #[async_trait]
         impl FederationClient for StalledStreamingClient {
-            async fn forward_invoke(
+            async fn invoke(
                 &self,
-                _target_hub: &HubUri,
+                _target_hub_endpoint: &HubEndpoint,
                 _request: InvokeRequest,
             ) -> Result<InvokeResponse, FederationClientError> {
                 Err(FederationClientError::Unimplemented("not used in test"))
@@ -1939,7 +1861,7 @@ mod tests {
 
             async fn subscribe_directory_v2(
                 &self,
-                _target_hub: &HubUri,
+                _target_hub_endpoint: &HubEndpoint,
                 _request: InvokeServerStreamRequest,
             ) -> Result<DirectoryEventStream, FederationClientError> {
                 *self.dial_count.lock().unwrap() += 1;
@@ -1953,9 +1875,9 @@ mod tests {
 
         #[async_trait]
         impl FederationClient for CaptureSubscribeRequestClient {
-            async fn forward_invoke(
+            async fn invoke(
                 &self,
-                _target_hub: &HubUri,
+                _target_hub_endpoint: &HubEndpoint,
                 _request: InvokeRequest,
             ) -> Result<InvokeResponse, FederationClientError> {
                 Err(FederationClientError::Unimplemented("not used in test"))
@@ -1963,13 +1885,20 @@ mod tests {
 
             async fn subscribe_directory_v2(
                 &self,
-                _target_hub: &HubUri,
+                _target_hub_endpoint: &HubEndpoint,
                 request: InvokeServerStreamRequest,
             ) -> Result<DirectoryEventStream, FederationClientError> {
                 self.function_names
                     .lock()
                     .unwrap()
-                    .push(request.function_name);
+                    .push(
+                        crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+                            "capture subscribe request",
+                            request.target.as_ref(),
+                        )
+                        .expect("typed stream target")
+                        .to_string(),
+                    );
                 Ok(Box::pin(futures::stream::pending::<DirectoryEvent>()))
             }
         }
@@ -1996,7 +1925,7 @@ mod tests {
                 run_per_peer_supervisor_with_idle_timeout(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
-                    crate::core::ura::hub_ura("realm-a"),
+                    test_request_issuer("realm-a"),
                     client_for_task,
                     cell_for_task,
                     cancel_rx,
@@ -2043,7 +1972,7 @@ mod tests {
                 run_per_peer_supervisor_with_idle_timeout(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
-                    crate::core::ura::hub_ura("realm-a"),
+                    test_request_issuer("realm-a"),
                     client_for_task,
                     cell_for_task,
                     cancel_rx,
@@ -2072,12 +2001,10 @@ mod tests {
                 "supervisor must dial the v2 stream ability; got {names:?}",
             );
             assert!(
-                names.iter().all(|name| {
-                    name
-                        != crate::daemon::invocation::dispatch::federation_wrappers
-                            ::ABILITY_FEDERATION_SUBSCRIBE_DIRECTORY
-                }),
-                "supervisor must not dial the legacy v1 stream ability; got {names:?}",
+                names
+                    .iter()
+                    .all(|name| name == "federation.subscribe_directory_v2"),
+                "supervisor must only dial the canonical v2 stream ability; got {names:?}",
             );
         }
 
@@ -2240,7 +2167,7 @@ mod tests {
                 run_per_peer_supervisor(
                     "realm-b".to_string(),
                     "https://hub-b.example:50443".to_string(),
-                    crate::core::ura::hub_ura("realm-a"),
+                    test_request_issuer("realm-a"),
                     client_for_task,
                     cell_for_task,
                     cancel_rx,
@@ -2286,109 +2213,6 @@ mod tests {
             assert!(
                 result.is_ok(),
                 "supervisor must honour cancel within timeout"
-            );
-        }
-
-        // ── PR-N3 N3-streaming-11 — streamed-marker lifecycle ──
-
-        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        async fn supervisor_marks_streamed_while_stream_open_unmarks_on_close() {
-            // Stream delivers a Snapshot then ends. Within the
-            // brief window between dial-ok and stream-end, the
-            // cell.is_streamed("realm-b") MUST be true. After
-            // the stream ends and the supervisor enters its
-            // reconnect-backoff sleep, the marker MUST be
-            // false (poll task can pick up the slack).
-            //
-            // Verifying mid-stream and post-close is racy with
-            // pure futures::iter (the stream completes
-            // synchronously). Use a delayed stream: yield the
-            // Snapshot, then await a small sleep before the
-            // None terminator so the test can poll
-            // is_streamed during the open window.
-            use futures::StreamExt;
-
-            struct DelayedStreamingClient {
-                served: Arc<Mutex<bool>>,
-            }
-
-            #[async_trait]
-            impl FederationClient for DelayedStreamingClient {
-                async fn forward_invoke(
-                    &self,
-                    _target_hub: &HubUri,
-                    _request: InvokeRequest,
-                ) -> Result<InvokeResponse, FederationClientError> {
-                    Err(FederationClientError::Unimplemented("not used"))
-                }
-
-                async fn subscribe_directory_v2(
-                    &self,
-                    _target_hub: &HubUri,
-                    _request: InvokeServerStreamRequest,
-                ) -> Result<DirectoryEventStream, FederationClientError> {
-                    if *self.served.lock().unwrap() {
-                        // Subsequent dials hang briefly so the
-                        // test can observe the unmark window
-                        // between stream-end and re-dial.
-                        return Ok(Box::pin(futures::stream::pending::<DirectoryEvent>()));
-                    }
-                    *self.served.lock().unwrap() = true;
-                    let snapshot = futures::stream::once(async { empty_snapshot_event() });
-                    // Hold the stream open ~200ms before EOF so
-                    // the test has a window to poll is_streamed.
-                    let hold = futures::stream::once(async {
-                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                        heartbeat_event(1_000)
-                    });
-                    Ok(Box::pin(snapshot.chain(hold)))
-                }
-            }
-
-            let cell = SharedFederatedDirectoryView::default();
-            let served = Arc::new(Mutex::new(false));
-            let client: Arc<dyn FederationClient> = Arc::new(DelayedStreamingClient {
-                served: served.clone(),
-            });
-            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
-
-            let cell_for_task = cell.clone();
-            let task = tokio::spawn(async move {
-                run_per_peer_supervisor(
-                    "realm-b".to_string(),
-                    "https://hub-b.example:50443".to_string(),
-                    crate::core::ura::hub_ura("realm-a"),
-                    client,
-                    cell_for_task,
-                    cancel_rx,
-                )
-                .await;
-            });
-
-            // Wait for the first dial to complete; mid-stream
-            // is_streamed must be true. The Snapshot frame +
-            // 200ms hold gives a generous observation window.
-            let mut saw_streamed = false;
-            for _ in 0..40 {
-                if *served.lock().unwrap() && cell.is_streamed("realm-b") {
-                    saw_streamed = true;
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(15)).await;
-            }
-            assert!(
-                saw_streamed,
-                "supervisor must mark realm-b streamed during the open window"
-            );
-
-            // Cancel before the supervisor can redial. The
-            // marker should be cleared on cancel-path exit so
-            // a re-add cycle isn't blocked by a stale claim.
-            let _ = cancel_tx.send(());
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), task).await;
-            assert!(
-                !cell.is_streamed("realm-b"),
-                "supervisor must unmark realm-b on cancel-path exit"
             );
         }
     }
@@ -2497,10 +2321,12 @@ mod tests {
         let cell = SharedFederatedDirectoryView::default();
         // Pre-populate realm-c (a different peer).
         let mut realm_c_view = DirectoryView::new("realm-c".to_string());
-        realm_c_view.apply_frame(&advertised_event(entry_with_claimed_origin(
-            "easynet:///r/realm-c/device/keep",
-            None,
-        )));
+        realm_c_view
+            .apply_frame(&advertised_event(entry_with_claimed_origin(
+                "easynet:///r/realm-c/device/keep",
+                None,
+            )))
+            .expect("canonical device upsert applies");
         let mut prior = BTreeMap::new();
         prior.insert("realm-c".to_string(), Arc::new(realm_c_view));
         cell.replace(prior);
@@ -2617,7 +2443,7 @@ mod tests {
             .is_some());
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test(start_paused = true)]
     async fn consume_with_idle_timeout_resets_on_each_received_frame() {
         // Frames arrive every 30ms; idle timeout is 50ms. The
         // reset-on-receive contract means the timeout never
@@ -2630,8 +2456,9 @@ mod tests {
         client.on_dial_ok();
         let cell = SharedFederatedDirectoryView::default();
 
-        // 5 frames at 30ms cadence = 150ms total runtime; idle
-        // timeout 50ms only trips if the reset is broken.
+        // The paused Tokio clock advances to the next scheduled deadline, so
+        // host load cannot turn a 30ms virtual cadence into a false 50ms idle
+        // timeout. Five frames span 150ms in total; only a broken reset trips.
         // First frame must be Snapshot per FSM contract; the
         // remaining four are Heartbeats which exercise the
         // reset-on-receive without changing the view.
@@ -2751,15 +2578,19 @@ mod tests {
         // earliest realm). BTreeMap iteration gives us this for
         // free, but pin the contract with a test.
         let mut realm_b = DirectoryView::new("realm-b".to_string());
-        realm_b.apply_frame(&advertised_event(entry_with_claimed_origin(
-            "easynet:///r/shared/device/dup",
-            None,
-        )));
+        realm_b
+            .apply_frame(&advertised_event(entry_with_claimed_origin(
+                "easynet:///r/shared/device/dup",
+                None,
+            )))
+            .expect("canonical device upsert applies");
         let mut realm_c = DirectoryView::new("realm-c".to_string());
-        realm_c.apply_frame(&advertised_event(entry_with_claimed_origin(
-            "easynet:///r/shared/device/dup",
-            None,
-        )));
+        realm_c
+            .apply_frame(&advertised_event(entry_with_claimed_origin(
+                "easynet:///r/shared/device/dup",
+                None,
+            )))
+            .expect("canonical device upsert applies");
         let mut peers = BTreeMap::new();
         peers.insert("realm-c".to_string(), Arc::new(realm_c));
         peers.insert("realm-b".to_string(), Arc::new(realm_b));
@@ -2800,7 +2631,8 @@ mod tests {
         #[test]
         fn presence_ura_to_directory_entry_extracts_node_id_from_canonical_shape() {
             let entry =
-                presence_ura_to_directory_entry("easynet:///r/realm-a/device/device-X", true);
+                presence_ura_to_directory_entry("easynet:///r/realm-a/device/device-X", true)
+                    .expect("canonical device projects");
             assert_eq!(entry.agent_ura, "easynet:///r/realm-a/device/device-X");
             assert_eq!(entry.node_id, "device-X");
             assert_eq!(entry.status, "active");
@@ -2815,26 +2647,30 @@ mod tests {
         #[test]
         fn presence_ura_to_directory_entry_inactive_marks_status_stale() {
             let entry =
-                presence_ura_to_directory_entry("easynet:///r/realm-a/device/device-X", false);
+                presence_ura_to_directory_entry("easynet:///r/realm-a/device/device-X", false)
+                    .expect("canonical device projects");
             assert_eq!(entry.status, "stale");
         }
 
         #[test]
-        fn presence_ura_to_directory_entry_treats_legacy_agent_shape_as_non_canonical() {
-            let entry =
-                presence_ura_to_directory_entry("easynet:///r/realm-a/agent/device-X", true);
-            assert_eq!(entry.agent_ura, "easynet:///r/realm-a/agent/device-X");
-            assert_eq!(entry.node_id, "easynet:///r/realm-a/agent/device-X");
+        fn presence_ura_to_directory_entry_rejects_agent_shape() {
+            let err =
+                presence_ura_to_directory_entry("easynet:///r/realm-a/agent/user.device-X", true)
+                    .expect_err("agent URA must not project into device directory");
+            assert!(
+                err.contains("not a canonical Device URA"),
+                "unexpected error: {err}"
+            );
         }
 
         #[test]
-        fn presence_ura_to_directory_entry_falls_back_when_ura_non_canonical() {
-            // Defensive — registry should never hold these, but
-            // the adapter must produce a non-empty node_id
-            // anyway so downstream code never sees an empty key.
-            let entry = presence_ura_to_directory_entry("not-canonical", true);
-            assert_eq!(entry.node_id, "not-canonical");
-            assert_eq!(entry.agent_ura, "not-canonical");
+        fn presence_ura_to_directory_entry_rejects_malformed_ura() {
+            let err = presence_ura_to_directory_entry("not-canonical", true)
+                .expect_err("malformed URA must not project into device directory");
+            assert!(
+                err.contains("not a canonical URA"),
+                "unexpected error: {err}"
+            );
         }
 
         #[test]
@@ -2844,7 +2680,8 @@ mod tests {
                     ura: "easynet:///r/realm-a/device/x".to_string(),
                 },
                 1_714_492_800_000,
-            );
+            )
+            .expect("canonical device online event projects");
             match evt {
                 DirectoryEvent::AgentAdvertised {
                     agent_ura,
@@ -2862,6 +2699,21 @@ mod tests {
         }
 
         #[test]
+        fn presence_event_rejects_non_device_ura() {
+            let err = presence_event_to_directory_event_at(
+                &PresenceEvent::Online {
+                    ura: "easynet:///r/realm-a/agent/user.x".to_string(),
+                },
+                1_714_492_800_000,
+            )
+            .expect_err("agent URA must not publish as directory event");
+            assert!(
+                err.contains("not a canonical Device URA"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
         fn presence_event_offline_projects_to_agent_revoked_with_reason_string() {
             let cases = [
                 (OfflineReason::StreamClosed, "stream_closed"),
@@ -2876,7 +2728,8 @@ mod tests {
                         reason,
                     },
                     1_714_492_800_000,
-                );
+                )
+                .expect("canonical device offline event projects");
                 match evt {
                     DirectoryEvent::AgentRevoked {
                         agent_ura,
@@ -2895,253 +2748,6 @@ mod tests {
         }
     }
 
-    // ── PollOnce integration (N3-3.1) ─────────────────────────
-
-    #[cfg(feature = "axon-pb")]
-    mod poll_tests {
-        use super::*;
-        use crate::daemon::federation::client::{FederationClient, FederationClientError, HubUri};
-        use async_trait::async_trait;
-        use easynet_axon::pb::axon::v1::{InvokeRequest, InvokeResponse};
-        use std::sync::Mutex;
-
-        /// Mock FederationClient. Returns canned discover
-        /// responses keyed by target_hub endpoint.
-        struct CannedClient {
-            responses: Mutex<std::collections::BTreeMap<String, Vec<u8>>>,
-        }
-
-        #[async_trait]
-        impl FederationClient for CannedClient {
-            async fn forward_invoke(
-                &self,
-                target_hub: &HubUri,
-                _request: InvokeRequest,
-            ) -> Result<InvokeResponse, FederationClientError> {
-                let bytes = self
-                    .responses
-                    .lock()
-                    .unwrap()
-                    .get(target_hub)
-                    .cloned()
-                    .unwrap_or_default();
-                Ok(InvokeResponse {
-                    result: bytes,
-                    ..Default::default()
-                })
-            }
-        }
-
-        struct DialFailedClient;
-        #[async_trait]
-        impl FederationClient for DialFailedClient {
-            async fn forward_invoke(
-                &self,
-                target_hub: &HubUri,
-                _request: InvokeRequest,
-            ) -> Result<InvokeResponse, FederationClientError> {
-                Err(FederationClientError::DialFailed {
-                    hub: target_hub.clone(),
-                    detail: "test-injected".to_string(),
-                })
-            }
-        }
-
-        fn build_canned_response(entries: Vec<DirectoryEntry>) -> Vec<u8> {
-            let resp = crate::daemon::invocation::dispatch::federation_wrappers::DiscoverResponse {
-                entries,
-            };
-            serde_json::to_vec(&resp).unwrap()
-        }
-
-        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        async fn poll_once_writes_per_peer_view_into_cell() {
-            let client = CannedClient {
-                responses: Mutex::new(
-                    [(
-                        "https://hub-b.example:50443".to_string(),
-                        build_canned_response(vec![entry_with_claimed_origin(
-                            "easynet:///r/realm-b/device/peer-device",
-                            // peer claims wrong origin_realm; rewrite gate must fix it
-                            Some("trusted-bank"),
-                        )]),
-                    )]
-                    .into_iter()
-                    .collect(),
-                ),
-            };
-            let mut peers = std::collections::BTreeMap::new();
-            peers.insert(
-                "realm-b".to_string(),
-                "https://hub-b.example:50443".to_string(),
-            );
-            let cell = SharedFederatedDirectoryView::default();
-
-            let local_hub = crate::core::ura::hub_ura("realm-a");
-            let outcome = poll_once(&client, &peers, Some(&local_hub), &cell).await;
-
-            assert_eq!(outcome.successful_peers, vec!["realm-b".to_string()]);
-            assert!(outcome.failed_peers.is_empty());
-
-            let snap = cell.snapshot();
-            let realm_b_view = snap.get("realm-b").expect("realm-b in cell");
-            let entry = realm_b_view
-                .lookup("easynet:///r/realm-b/device/peer-device")
-                .expect("entry in view");
-            // §2.4 chokepoint: receiving hub stamps peer's
-            // authenticated realm regardless of peer's claim.
-            assert_eq!(
-                entry.origin_realm.as_deref(),
-                Some("realm-b"),
-                "poll_once must enforce §2.4 origin_realm rewrite"
-            );
-        }
-
-        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        async fn poll_once_dial_failure_records_in_outcome_and_preserves_old_view() {
-            let cell = SharedFederatedDirectoryView::default();
-            // Pre-populate realm-b's view (simulating an earlier
-            // successful poll). The next round fails to dial;
-            // the prior view MUST stay intact (no flicker).
-            let mut prior_view = DirectoryView::new("realm-b".to_string());
-            prior_view.replace_entries(vec![entry_with_claimed_origin(
-                "easynet:///r/realm-b/device/persisted",
-                None,
-            )]);
-            let mut prior_map = std::collections::BTreeMap::new();
-            prior_map.insert("realm-b".to_string(), Arc::new(prior_view));
-            cell.replace(prior_map);
-
-            let mut peers = std::collections::BTreeMap::new();
-            peers.insert(
-                "realm-b".to_string(),
-                "https://hub-b.example:50443".to_string(),
-            );
-
-            let outcome = poll_once(&DialFailedClient, &peers, None, &cell).await;
-
-            assert!(outcome.successful_peers.is_empty());
-            assert_eq!(outcome.failed_peers.len(), 1);
-            assert_eq!(outcome.failed_peers[0].0, "realm-b");
-
-            let snap = cell.snapshot();
-            assert!(
-                snap.get("realm-b")
-                    .expect("realm-b view preserved")
-                    .lookup("easynet:///r/realm-b/device/persisted")
-                    .is_some(),
-                "dial failure MUST NOT clear the previously-cached view"
-            );
-        }
-
-        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        async fn poll_once_skips_peers_marked_streamed() {
-            // PR-N3 N3-streaming-10. The streaming supervisor
-            // marks realm-b as streamed via cell.mark_streamed.
-            // The poll task must skip realm-b on every
-            // subsequent round so it cannot overwrite a fresh
-            // stream-emitted entry with a stale poll snapshot.
-            //
-            // Pre-populate the cell with a fresh entry the
-            // streaming supervisor would have written; the poll
-            // mock returns an empty discover response. If the
-            // poll task didn't skip, it would overwrite the
-            // realm-b view with the empty response and the
-            // entry would disappear. Skipping preserves the
-            // entry.
-            let cell = SharedFederatedDirectoryView::default();
-            let mut realm_b_view = DirectoryView::new("realm-b".to_string());
-            realm_b_view.replace_entries(vec![entry_with_claimed_origin(
-                "easynet:///r/realm-b/device/streamed",
-                None,
-            )]);
-            let mut prior_map = std::collections::BTreeMap::new();
-            prior_map.insert("realm-b".to_string(), Arc::new(realm_b_view));
-            cell.replace(prior_map);
-            cell.mark_streamed("realm-b");
-
-            // Mock returns an empty DiscoverResponse — if
-            // poll_once didn't skip, this would clear the view.
-            let client = CannedClient {
-                responses: Mutex::new(
-                    [(
-                        "https://hub-b.example:50443".to_string(),
-                        build_canned_response(vec![]),
-                    )]
-                    .into_iter()
-                    .collect(),
-                ),
-            };
-            let mut peers = std::collections::BTreeMap::new();
-            peers.insert(
-                "realm-b".to_string(),
-                "https://hub-b.example:50443".to_string(),
-            );
-
-            let outcome = poll_once(&client, &peers, None, &cell).await;
-            // realm-b is in successful_peers (no error) but
-            // the poll didn't actually dial or replace.
-            assert_eq!(outcome.successful_peers, vec!["realm-b".to_string()]);
-            assert!(outcome.failed_peers.is_empty());
-
-            // The pre-populated entry survives.
-            let snap = cell.snapshot();
-            assert!(
-                snap.get("realm-b")
-                    .and_then(|v| v.lookup("easynet:///r/realm-b/device/streamed"))
-                    .is_some(),
-                "streamed peer's entry MUST NOT be cleared by a concurrent poll"
-            );
-        }
-
-        #[test]
-        fn streamed_marker_round_trips_via_cell_api() {
-            // Pure-data sanity test for mark/unmark/is_streamed.
-            let cell = SharedFederatedDirectoryView::default();
-            assert!(!cell.is_streamed("realm-b"));
-            cell.mark_streamed("realm-b");
-            assert!(cell.is_streamed("realm-b"));
-            assert!(!cell.is_streamed("realm-c"));
-            cell.unmark_streamed("realm-b");
-            assert!(!cell.is_streamed("realm-b"));
-        }
-
-        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-        async fn poll_once_with_empty_peers_clears_nothing() {
-            let cell = SharedFederatedDirectoryView::default();
-            // Pre-populate realm-b. Empty peers map ⇒ no dials,
-            // no replaces — the existing view stays.
-            let mut prior = DirectoryView::new("realm-b".to_string());
-            prior.apply_frame(&advertised_event(entry_with_claimed_origin(
-                "easynet:///r/realm-b/device/x",
-                None,
-            )));
-            let mut prior_map = std::collections::BTreeMap::new();
-            prior_map.insert("realm-b".to_string(), Arc::new(prior));
-            cell.replace(prior_map);
-
-            let outcome = poll_once(
-                &CannedClient {
-                    responses: Mutex::new(std::collections::BTreeMap::new()),
-                },
-                &std::collections::BTreeMap::new(),
-                None,
-                &cell,
-            )
-            .await;
-            assert!(outcome.successful_peers.is_empty());
-            assert!(outcome.failed_peers.is_empty());
-
-            // Cell still holds the pre-poll view.
-            let snap = cell.snapshot();
-            assert!(
-                snap.get("realm-b")
-                    .is_some_and(|v| v.lookup("easynet:///r/realm-b/device/x").is_some()),
-                "empty peers map must not clear existing views"
-            );
-        }
-    }
-
     #[test]
     fn shared_federated_directory_view_replace_publishes_atomically() {
         let cell = SharedFederatedDirectoryView::default();
@@ -3151,10 +2757,12 @@ mod tests {
 
         let mut next = BTreeMap::new();
         let mut peer_view = DirectoryView::new("realm-b".to_string());
-        peer_view.apply_frame(&advertised_event(entry_with_claimed_origin(
-            "easynet:///r/realm-b/device/peer",
-            None,
-        )));
+        peer_view
+            .apply_frame(&advertised_event(entry_with_claimed_origin(
+                "easynet:///r/realm-b/device/peer",
+                None,
+            )))
+            .expect("canonical device upsert applies");
         next.insert("realm-b".to_string(), Arc::new(peer_view));
         cell.replace(next);
 

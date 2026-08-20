@@ -42,10 +42,12 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub(crate) mod child_invocation;
 pub mod loop_instance;
 pub mod mcp;
 pub mod mission;
 pub mod permission;
 pub mod pty;
+pub mod runtime_identity;
 pub mod schedule;
 pub mod session;

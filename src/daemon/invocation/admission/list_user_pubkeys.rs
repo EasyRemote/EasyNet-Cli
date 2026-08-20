@@ -3,19 +3,19 @@
 //
 // File: src/daemon/invocation/list_user_pubkeys.rs
 // DEC-EU §multi-host-list. Read-only inventory of the realm-trust
-// entries registered under a given user URI. Backend's list
+// entries registered under a given user URA. Backend's list
 // endpoint calls this instead of reading the TOML directly, so
 // multi-host deployments (backend ↔ daemon on separate machines)
 // stay consistent with what admission actually sees.
 //
 // Inputs
 // ------
-//   {"agent_ura": "easynet:///r/{realm}/user/{user_id}"}
+//   {"user_ura": "easynet:///r/{realm}/user/{user_id}"}
 //
 // Output
 // ------
 //   {
-//     "agent_ura": "...",
+//     "user_ura": "...",
 //     "keys": [{"public_key_b64": "...", "added_at_unix_ms": ...}, ...],
 //     "rotation_epoch": 1,
 //     "revoked_key_count": 1
@@ -33,8 +33,9 @@ pub const ABILITY_IDENTITY_LIST_USER_PUBKEYS: &str =
     crate::daemon::ability::names::federation::IDENTITY_LIST_USER_PUBKEYS;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ListArgs {
-    agent_ura: String,
+    user_ura: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -45,7 +46,7 @@ pub struct ListedUserKey {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ListResponse {
-    pub agent_ura: String,
+    pub user_ura: String,
     pub keys: Vec<ListedUserKey>,
     pub rotation_epoch: u64,
     pub revoked_key_count: usize,
@@ -60,13 +61,9 @@ pub(crate) fn handle(
             "identity.list_user_pubkeys: arguments JSON decode failed: {err}"
         ))
     })?;
-    if args.agent_ura.is_empty() {
-        return Err(Status::invalid_argument(
-            "identity.list_user_pubkeys: agent_ura is required",
-        ));
-    }
+    let user_ura = required_user_ura(&args.user_ura)?;
 
-    let snapshot = runtime_trust.user_snapshot(&args.agent_ura);
+    let snapshot = runtime_trust.user_snapshot(&user_ura);
     let keys: Vec<ListedUserKey> = snapshot
         .keys
         .into_iter()
@@ -77,7 +74,7 @@ pub(crate) fn handle(
         .collect();
 
     serde_json::to_vec(&ListResponse {
-        agent_ura: args.agent_ura,
+        user_ura: snapshot.user_ura,
         keys,
         rotation_epoch: snapshot.rotation_epoch,
         revoked_key_count: snapshot.revoked_key_count,
@@ -89,11 +86,32 @@ pub(crate) fn handle(
     })
 }
 
+fn required_user_ura(raw: &str) -> Result<String, Status> {
+    let user_ura = raw.trim();
+    if user_ura.is_empty() {
+        return Err(Status::invalid_argument(
+            "identity.list_user_pubkeys: user_ura is required",
+        ));
+    }
+    let parsed = crate::core::ura::parse_ura(user_ura).map_err(|error| {
+        Status::invalid_argument(format!(
+            "identity.list_user_pubkeys: user_ura must be a canonical User URA: {error}"
+        ))
+    })?;
+    if parsed.kind != crate::core::ura::URAKind::User {
+        return Err(Status::invalid_argument(format!(
+            "identity.list_user_pubkeys: user_ura must identify a User, got {:?}",
+            parsed.kind
+        )));
+    }
+    Ok(user_ura.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::daemon::invocation::admission::runtime_trust::RuntimeTrustReader;
-    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{RealmTrustAnchor, TrustAnchorRole, TrustedAgent};
     use crate::daemon::trust::cell::SharedTrustAnchor;
     use base64::prelude::*;
     use serde_json::json;
@@ -112,7 +130,7 @@ mod tests {
                 .append_agent(TrustedAgent {
                     agent_ura: "easynet:///r/realm/user/alice".to_string(),
                     public_key_b64: b64_pubkey(seed),
-                    role: TrustedAgentRole::User,
+                    role: TrustAnchorRole::User,
                     added_at_unix_ms: 1_700_000_000_000 + u64::from(seed),
                     origin_realm: None,
                     hub_endpoint: None,
@@ -122,10 +140,10 @@ mod tests {
         }
         let cell = SharedTrustAnchor::new(Arc::new(anchor));
         let args =
-            serde_json::to_vec(&json!({"agent_ura": "easynet:///r/realm/user/alice"})).unwrap();
+            serde_json::to_vec(&json!({"user_ura": "easynet:///r/realm/user/alice"})).unwrap();
         let body = handle(&args, RuntimeTrustReader::new(&cell)).expect("ok");
         let resp: ListResponse = serde_json::from_slice(&body).unwrap();
-        assert_eq!(resp.agent_ura, "easynet:///r/realm/user/alice");
+        assert_eq!(resp.user_ura, "easynet:///r/realm/user/alice");
         assert_eq!(resp.keys.len(), 3);
         assert_eq!(resp.rotation_epoch, 0);
         assert_eq!(resp.revoked_key_count, 0);
@@ -135,7 +153,7 @@ mod tests {
     fn list_returns_empty_for_unknown_user() {
         let cell = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
         let args =
-            serde_json::to_vec(&json!({"agent_ura": "easynet:///r/realm/user/missing"})).unwrap();
+            serde_json::to_vec(&json!({"user_ura": "easynet:///r/realm/user/missing"})).unwrap();
         let body = handle(&args, RuntimeTrustReader::new(&cell)).expect("ok");
         let resp: ListResponse = serde_json::from_slice(&body).unwrap();
         assert!(resp.keys.is_empty());
@@ -154,7 +172,7 @@ mod tests {
                 .append_agent(TrustedAgent {
                     agent_ura: user_ura.to_string(),
                     public_key_b64: key.to_string(),
-                    role: TrustedAgentRole::User,
+                    role: TrustAnchorRole::User,
                     added_at_unix_ms: 1_700_000_000_000,
                     origin_realm: None,
                     hub_endpoint: None,
@@ -168,7 +186,7 @@ mod tests {
             .expect("tombstone");
 
         let cell = SharedTrustAnchor::new(Arc::new(anchor));
-        let args = serde_json::to_vec(&json!({"agent_ura": user_ura})).unwrap();
+        let args = serde_json::to_vec(&json!({"user_ura": user_ura})).unwrap();
         let body = handle(&args, RuntimeTrustReader::new(&cell)).expect("ok");
         let resp: ListResponse = serde_json::from_slice(&body).unwrap();
 
@@ -176,5 +194,29 @@ mod tests {
         assert_eq!(resp.keys[0].public_key_b64, active_key);
         assert_eq!(resp.rotation_epoch, 1);
         assert_eq!(resp.revoked_key_count, 1);
+    }
+
+    #[test]
+    fn list_rejects_retired_agent_ura_request_field() {
+        let cell = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
+        let args =
+            serde_json::to_vec(&json!({"agent_ura": "easynet:///r/realm/user/alice"})).unwrap();
+
+        let error = handle(&args, RuntimeTrustReader::new(&cell))
+            .expect_err("retired agent_ura input must fail");
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(error.message().contains("unknown field `agent_ura`"));
+    }
+
+    #[test]
+    fn list_rejects_non_user_ura_scope() {
+        let cell = SharedTrustAnchor::new(Arc::new(RealmTrustAnchor::default()));
+        let args =
+            serde_json::to_vec(&json!({"user_ura": "easynet:///r/realm/device/dev-a"})).unwrap();
+
+        let error = handle(&args, RuntimeTrustReader::new(&cell))
+            .expect_err("device URA must not query user key inventory");
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(error.message().contains("user_ura must identify a User"));
     }
 }

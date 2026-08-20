@@ -1,6 +1,22 @@
-schema_version = "1"
+schema_version = "3"
 name = "fs.transfer"
+descriptor_version = "1.0.0"
 description = "Bidirectional file transfer between the operator and this device's filesystem through a revalidated RFC-005 filesystem ResourceRef. mode=\"upload\" requires write capability and streams client→file with atomic rename + SHA-256; mode=\"download\" requires read capability and streams file→client with on-the-fly hashing. Per-call byte cap 1 GiB."
+exposure = "task"
+dedicated_surface = "file_transfer"
+subject_contract_kind = "dedicated-surface"
+call_mode = "bidi"
+capability_state = "cutover_ready"
+admission_action = "stream"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":true}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

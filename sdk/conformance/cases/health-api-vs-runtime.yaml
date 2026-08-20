@@ -1,0 +1,21 @@
+id: health/api_vs_runtime
+profile: health
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+  - node
+  - java
+  - swift
+description: Health distinguishes API liveness from full runtime readiness.
+steps:
+  - action: read_health
+    fixture: health.ready.v4.json
+  - action: read_diagnostics
+    fixture: diagnostics.ready.v4.json
+expect:
+  result: ok
+  api_ready_field: api_ready
+  runtime_ready_field: runtime_ready
+  diagnostics_kind: diagnostics_report

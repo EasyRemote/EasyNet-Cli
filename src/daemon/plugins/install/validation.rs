@@ -6,8 +6,9 @@
 
 use std::path::Path;
 
+use crate::daemon::ability::CallMode;
 use crate::daemon::plugins::errors::{PluginHostError, Result};
-use crate::daemon::plugins::manifest::{PluginCallMode, PluginDeclarativeBinding, PluginKind};
+use crate::daemon::plugins::manifest::{PluginDeclarativeBinding, PluginKind};
 use crate::daemon::plugins::package::PluginPackage;
 
 /// Validate that a package kind can be installed by this release.
@@ -23,12 +24,48 @@ pub(super) fn validate_installable_in_this_release(package: &PluginPackage) -> R
             Ok(())
         }
         PluginKind::Declarative => validate_declarative_installable(package),
+        PluginKind::DesktopCompanion => validate_companion_installable(package),
         other => Err(PluginHostError::InstallKindNotLoadableInThisRelease {
             id: manifest.id().to_string(),
             version: manifest.version().to_string(),
             kind: plugin_kind_label(other),
         }),
     }
+}
+
+fn validate_companion_installable(package: &PluginPackage) -> Result<()> {
+    let manifest = package.manifest();
+    let companion =
+        manifest
+            .companion()
+            .ok_or_else(|| PluginHostError::InvalidCompanionManifest {
+                id: manifest.id().to_string(),
+                reason: "desktop_companion packages must declare [companion]".to_string(),
+            })?;
+    if let Some(macos) = companion.macos() {
+        validate_package_artifact(package, macos.app_bundle())?;
+    }
+    if let Some(windows) = companion.windows() {
+        validate_package_artifact(package, windows.exe())?;
+    }
+    if let Some(linux) = companion.linux() {
+        validate_package_artifact(package, linux.exe())?;
+    }
+    Ok(())
+}
+
+fn validate_package_artifact(package: &PluginPackage, artifact: &str) -> Result<()> {
+    let path = package.root().join(artifact);
+    if !path.exists() {
+        return Err(PluginHostError::ReadFailed {
+            path,
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "declared companion artifact does not exist",
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn validate_declarative_installable(package: &PluginPackage) -> Result<()> {
@@ -53,7 +90,7 @@ fn validate_declarative_rpc_only(package: &PluginPackage, kind: &'static str) ->
     if manifest
         .abilities()
         .iter()
-        .all(|ability| ability.call_mode() == PluginCallMode::Rpc)
+        .all(|ability| ability.call_mode() == CallMode::Rpc)
     {
         Ok(())
     } else {
@@ -107,5 +144,6 @@ fn plugin_kind_label(kind: PluginKind) -> &'static str {
         PluginKind::Declarative => "declarative",
         PluginKind::Sidecar => "sidecar",
         PluginKind::Builtin => "builtin",
+        PluginKind::DesktopCompanion => "desktop_companion",
     }
 }

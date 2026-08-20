@@ -1,13 +1,21 @@
 [package]
 name = "easynet"
-version = "0.91.30"
+version = "0.139.14"
 edition = "2021"
 description = "EasyNet CLI + Hub MCP server + EAL (EasyNet Ability Language)."
 license = "Apache-2.0"
 build = "build.rs"
 
+[workspace]
+members = [
+    ".",
+    "plugins/browser",
+    "plugins/remote-desktop",
+    "tools/sdk-conformance-runner",
+]
+
 [features]
-default = ["axon-pb", "remote-desktop"]
+default = ["axon-pb", "browser-cdp", "remote-desktop", "native-media"]
 
 # Compile schemas/*.proto into Rust types via prost-build. Off by
 # default in v1 so developers without protoc installed can still
@@ -15,7 +23,7 @@ default = ["axon-pb", "remote-desktop"]
 # types start being consumed. v10.5 R1 PR-DAEMON ships the .proto
 # files and the toolchain wiring, but does NOT flip any call site
 # to use the generated types (that is a follow-up commit / PR-SYS).
-proto-gen = ["dep:prost", "dep:prost-types", "dep:prost-build"]
+proto-gen = ["dep:prost-types", "dep:prost-build"]
 
 # Enable Axon's SDK-owned `pb` module exposing the tonic server-side
 # `Invocation` trait that RFC-003 PR-1 implements. This is part of the
@@ -23,19 +31,17 @@ proto-gen = ["dep:prost", "dep:prost-types", "dep:prost-build"]
 # forwarding, and live discovery all depend on it. The SDK owns Axon proto
 # codegen; CLI must not compile `../EasyNet-Axon/.../proto` directly.
 axon-pb = [
-    "easynet-axon/grpc",
+    "axon-sdk/grpc",
     "dep:tonic",
     # PR-N1 commit 8/N CLI bridge needs the UDS-over-tonic adapters.
     "dep:tower",
     "dep:hyper-util",
 ]
 
-# Demo-only test fixtures compiled into the daemon binary. Off by
-# default so production builds cannot honour `EASYNET_DEMO_PRESENCE_SEED`
-# (or any future demo env var) regardless of operator misconfig.
-# Demo / e2e scripts pass `--features demo-fixture` to opt in. See
-# `daemon::invocation::boot::presence_seed::maybe_seed_demo_presence`.
-demo-fixture = []
+# Compile the provider-backed browser plugin and its version-tolerant CDP
+# transport. Browser commands/events remain application payloads carried by
+# Axon InvokeBidi; this feature does not add browser semantics to Axon.
+browser-cdp = ["dep:tokio-tungstenite", "dep:url"]
 
 # Compile the in-tree remote desktop plugin package and its media transport
 # stack. This is part of the current product surface: Frontend remote desktop,
@@ -50,6 +56,23 @@ remote-desktop = [
     "dep:objc2-screen-capture-kit",
     "dep:objc2-video-toolbox",
 ]
+
+# Compile native physical-device media backends. Ordinary product daemon builds
+# keep this enabled by default. Headless Linux runtime artifacts used by Docker
+# E2E disable default features and retain only the canonical runtime invocation
+# plane, avoiding GUI/Wayland/pkg-config coupling for scenarios that do not
+# exercise physical camera/screen/mic hardware.
+native-media = [
+    "dep:cpal",
+    "dep:nokhwa",
+    "dep:xcap",
+]
+
+# Compile provider-backed synthetic media handlers for headless Docker/CI
+# runtime artifacts. This keeps canonical media routes and receipt chains
+# present without linking native camera/screen/mic stacks into Linux images
+# that cannot access physical devices.
+headless-media = []
 
 # v10.5 R1 (PR-DAEMON): split historical binary-only crate into a
 # library + multiple bins. The library target carries all the
@@ -68,25 +91,17 @@ path = "src/lib.rs"
 crate-type = ["rlib", "cdylib", "staticlib"]
 bench = false
 
-# T0.4 carrier baseline (to-be-fix.spec §A2 gate): quantifies the
-# SessionDispatch JSON-in-BinaryChunk double-parse cost against the
-# canonical proto carrier before T2.1 unifies them.
-[[bench]]
-name = "session_frame_carrier"
-harness = false
-
 [[bin]]
 name = "easynet"
 path = "src/bin/easynet.rs"
 
-# Long-running daemon. Owns pair/heartbeat/Axon-node-identity today;
-# follow-up PRs in the v10.5 R1 series (PR-SYS / PR-ATTACH / PR-PERM
-# / PR-DISCUSS / PR-SCHED / PR-LOOP) extend it with the local IPC
-# server, schedule tick, and system.* ability publisher. `easynet
-# self control start/stop/status` supervises this bin's PID.
+# Per-user runtime authority. Owns lifecycle, discovery, canonical
+# Invocation admission/dispatch, live ability publication, and local
+# control IPC. `easynet start/stop/status` supervises this binary.
 [[bin]]
 name = "easynet-daemon"
 path = "src/bin/easynet-daemon.rs"
+required-features = ["axon-pb"]
 
 # RFC-001 plan v4.1.5 Phase 3A. Long-running per-user vault for
 # the device's Ed25519 keypair. backend / easynet-daemon / CLI all
@@ -115,10 +130,6 @@ path = "src/bin/gen-ability-tomls.rs"
 name = "real-user-smoke"
 path = "src/bin/real-user-smoke.rs"
 
-[[bin]]
-name = "real-publish-smoke"
-path = "src/bin/real-publish-smoke.rs"
-
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -126,6 +137,7 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 comfy-table = "7"
 console = "0.15"
+crossterm = "0.29"
 # Arrow-key TUI picker for `easynet agent send --resume` and any
 # future "pick from a list" surface. Thin wrapper over `console`
 # (already a direct dep), so adding `dialoguer` reuses the same
@@ -134,12 +146,13 @@ dialoguer = { version = "0.11", default-features = false }
 crossbeam-queue = "0.3"
 ctrlc = "3"
 # Concurrent shard-locked map. PresenceRegistry (RFC-003 PR-1 spec §3)
-# uses one DashMap<device_uri, DispatchSender> with shard count
+# uses one DashMap<device_ura, DispatchSender> with shard count
 # tuned via `with_shard_amount(num_cpus * 4)`. The full feature
 # justification — bounded backpressure, shard-locked sub-millisecond
 # lookups across thousands of devices — is documented in
 # `daemon/invocation/state/presence.rs` module docs.
 dashmap = "6"
+prost = "0.13"
 # async-trait — required by RFC-003 PR-2's `SessionFrameDispatcher`
 # trait so trait method bodies can be `async fn`. Already pulled in
 # transitively via tonic; declared direct so the daemon's surface
@@ -155,9 +168,9 @@ async-trait = "0.1"
 # Promoted from a transitive dep (already pulled in via tonic) to a
 # direct dep so the daemon's surface use is documented in Cargo.toml.
 tokio-stream = { version = "0.1", features = ["sync", "net"] }
-easynet-axon = { path = "../EasyNet-Axon/sdk/rust" }
+axon-sdk = { path = "../EasyNet-Axon/sdk/rust" }
 # Skill-install adapter needs tarball extraction + hex encoding of
-# the content_hash digest. Kept as direct deps (not via easynet-axon)
+# the content_hash digest. Kept as direct deps (not via axon-sdk)
 # because the skill subcommand is self-contained.
 flate2 = "1"
 gethostname = "0.5"
@@ -169,6 +182,7 @@ num_cpus = "1"
 rayon = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+regex = "1"
 sha2 = "0.10"
 # Used by `daemon::federation::publish::derive_owner_public_key_b64` to mirror
 # the SDK's deterministic key derivation — the daemon must pass the
@@ -199,13 +213,13 @@ jpeg-encoder = { version = "0.7", default-features = false }
 # maturity; per AXON-RFC-005-device-backend-selection the macOS
 # default-device sample-rate may diverge from the schema's
 # 16/24/48 kHz set, so a downsampler is added in a follow-up.
-cpal = "0.15"
+cpal = { version = "0.15", optional = true }
 # RFC-005 v3.2 A3/A4 — physical camera capture. Non-macOS camera
 # subscribe/snapshot uses nokhwa's platform-direct backends. macOS
 # snapshot/subscribe use direct AVFoundation bindings below so still
 # photos go through `AVCapturePhotoOutput` instead of preview frames.
 # `input-native` avoids the heavyweight image-pipeline backends.
-nokhwa = { version = "0.10", features = ["input-native"] }
+nokhwa = { version = "0.10", features = ["input-native"], optional = true }
 # RFC-005 v3.2 A4, A8 — physical screen capture
 # (screen.subscribe / screen.snapshot). xcap was picked over
 # `screenshots` and `scrap` for active maintenance and a usable
@@ -214,7 +228,7 @@ nokhwa = { version = "0.10", features = ["input-native"] }
 # system-modal Screen Recording permission dialog; the handler
 # surfaces the permission-denied case as
 # reason="resource_unavailable" rather than a panic.
-xcap = "0.9"
+xcap = { version = "0.9", optional = true }
 # Remote desktop diagnostic media path. OpenH264 is built into the CLI
 # artifact via the crate's source feature, so users do not need ffmpeg or
 # any other system encoder installed for baseline H.264 streaming.
@@ -222,15 +236,16 @@ openh264 = { version = "0.9", optional = true }
 # Remote desktop production media transport. This is Rust-native WebRTC
 # signaling/media glue for device-side RTP/SRTP; EasyNet invocation carries
 # SDP/ICE only, not desktop media frames.
-webrtc = { version = "0.20.0-alpha.1", optional = true }
-rtc = { version = "0.20.0-alpha.1", optional = true }
+webrtc = { version = "=0.20.3", optional = true }
+rtc = { version = "=0.20.3", optional = true }
 toml = "0.8"
 toml_edit = "0.23"
 # Tokio adopted in PR-7 (Commit 1) as a transitive-to-direct dependency.
-# `easynet-axon` already pulls in tokio; this entry adds `sync` + `rt-multi-thread`
+# `axon-sdk` already pulls in tokio; this entry adds `sync` + `rt-multi-thread`
 # features CLI needs directly for broadcast::channel and multi-thread
 # runtime (Commit 2 flips main.rs to #[tokio::main]).
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "fs", "io-util", "time", "net", "signal", "process"] }
+tokio-tungstenite = { version = "0.30", features = ["connect"], optional = true }
 # tokio-util LengthDelimitedCodec + Framed for IPC frame I/O
 # (4-byte LE length prefix + JSON payload). Plan v10.5 §架构决策
 # — 本机 IPC 接口.
@@ -240,6 +255,7 @@ futures = "0.3"
 # bytes::BytesMut backing the codec.
 bytes = "1"
 ureq = { version = "2", features = ["json"] }
+url = { version = "2.5.8", optional = true }
 # OpenAPI import accepts both JSON and YAML specifications.
 serde_yaml = "0.9"
 # Hidden password input for `easynet auth login` when --password
@@ -286,6 +302,19 @@ thiserror = "1"
 # permission rules) sits in plain Rust on top.
 tree-sitter = "0.25"
 tree-sitter-bash = "0.25"
+tree-sitter-css = "0.25"
+tree-sitter-go = "0.25"
+tree-sitter-highlight = "0.25"
+tree-sitter-html = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-json = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-swift = "0.7"
+tree-sitter-toml-ng = "0.7"
+tree-sitter-typescript = "0.23"
+tree-sitter-yaml = "0.7"
 
 # RFC-006-B v0.6 / Pages reference system — HTTP listener.
 #  - axum: in-daemon HTTP listener for `*.*.pages.localhost:<port>` (MVP). The
@@ -340,18 +369,18 @@ libc = "0.2"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_Pipes",
     "Win32_System_Threading",
 ] }
 
-# PR-N1 commit 8/N: CLI bridge for `easynet ability invoke --node`
-# uses a tonic UDS gRPC client to reach the local daemon's
-# Invocation server with `function_name="federation.forward_invoke"`.
+# The remote invocation adapter uses a tonic UDS client to submit a complete
+# signed `InvokeRequest` to the local daemon's Invocation server.
 # `tower::service_fn` adapts the `tokio::net::UnixStream` connector
 # tonic's `Endpoint::connect_with_connector` accepts; `hyper_util::
 # rt::TokioIo` wraps the stream into hyper-compatible IO. Both are
 # already in the transitive dep graph via tonic; declared direct
-# so the call site in `support/federation_invoke.rs` imports them
+# so the call site in `daemon/invocation/routing/remote_invoke.rs` imports them
 # cleanly. Gated to the `axon-pb` feature alongside tonic.
 [dependencies.tower]
 version = "0.5"
@@ -373,6 +402,10 @@ objc2-foundation = "0.3"
 objc2-av-foundation = { version = "0.3", features = [
     "AVCaptureOutputBase",
     "AVCapturePhotoOutput",
+] }
+objc2-app-kit = { version = "0.3", features = [
+    "NSRunningApplication",
+    "libc",
 ] }
 objc2-core-media = "0.3"
 objc2-core-video = "0.3"
@@ -398,22 +431,18 @@ objc2-video-toolbox = { version = "0.3", features = [
 ], optional = true }
 
 [dev-dependencies]
+axon-sdk = { path = "../EasyNet-Axon/sdk/rust" }
 # Paused-clock tests (`#[tokio::test(start_paused = true)]`) let the
 # invocation-transport reply-deadline tests fire the 60s timer
 # instantly instead of sleeping it for real. Test builds only.
 tokio = { version = "1", features = ["test-util"] }
-# T0.4 carrier baseline harness (benches/session_frame_carrier.rs).
-criterion = "0.5"
-# prost::Message in the bench encodes the pb frames the same way the
-# tonic wire does; version pinned to easynet-axon's prost.
-prost = "0.13"
-# Used by `tests/cross_device_invoke_remote_e2e.rs` to construct
-# a `tower::service_fn` connector that adapts a `tokio::net::UnixStream`
+# Used by daemon Invocation integration tests to construct a
+# `tower::service_fn` connector that adapts a `tokio::net::UnixStream`
 # into something tonic's `Endpoint::connect_with_connector` accepts.
 # tower itself is already pulled in transitively by tonic; declared
 # direct so the e2e test imports it cleanly.
 tower = "0.5"
-# Used by the same test to wrap a `tokio::net::UnixStream` into a
+# Used by the same integration fixtures to wrap a `tokio::net::UnixStream` into a
 # `hyper`-compatible IO via `hyper_util::rt::TokioIo`. Required by
 # tonic 0.12's UDS-over-`connect_with_connector` recipe.
 hyper-util = "0.1"
@@ -439,10 +468,6 @@ rcgen = "0.13"
 # sites on hand-rolled JSON structs; enabling `--features
 # proto-gen` makes prost-build compile schemas/*.proto into
 # target/build/proto/ types that follow-up commits consume.
-[dependencies.prost]
-version = "0.13"
-optional = true
-
 [dependencies.prost-types]
 version = "0.13"
 optional = true
@@ -453,7 +478,7 @@ optional = true
 
 # tonic runtime dependency for Invocation server/client plumbing and
 # `tonic::Status`. The generated Axon message/stub types now come from
-# `easynet-axon/grpc`, not from this crate's build script.
+# `axon-sdk/grpc`, not from this crate's build script.
 [dependencies.tonic]
 version = "0.12"
 # `tls-roots` adds the rustls-native-certs probe so dialing

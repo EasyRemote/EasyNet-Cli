@@ -1,14 +1,32 @@
-schema_version = "1"
+schema_version = "3"
 name = "ability.deploy"
-description = "Publish a host_stream device ability bundle ResourceRef to a node. Local target validates the manifest, durably installs it, binds the runtime, and registers the control-plane record. Remote targets defer to the federation Invoke replacement. Shell and arbitrary host-command exec kinds are rejected until a permission broker exists."
+descriptor_version = "1.0.0"
+description = "Deploy a host_stream ability bundle ResourceRef through the device-sponsored ability-management SystemAgent, which owns the deployed public descriptor. The target Device is execution host/custody only, not descriptor owner or public callee. A local target validates the manifest, durably installs it, binds the runtime, and registers the control-plane record. Remote CLI deploy stages a tar.gz bundle into the target Device resource plane before invoking this ability on its ability-management SystemAgent; this handler still rejects attempts to mutate a non-local target directly. Shell and arbitrary host-command exec kinds are rejected until a permission broker exists."
+exposure = "operator"
+dedicated_surface = "none"
+subject_contract_kind = "authenticated-user"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "only_ura_kinds"
+scope_subjects_uras = ["resource"]
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
-required = ["resource_ref"]
+required = ["resource_ref", "target_ura"]
 additionalProperties = false
 
-[input_schema.properties.node_id]
-type = "string"
+[input_schema.properties.binding_lease_ms]
+type = "integer"
+minimum = 1000
+maximum = 300000
 
 [input_schema.properties.resource_ref]
 type = "object"
@@ -40,3 +58,6 @@ minLength = 1
 [input_schema.properties.resource_ref.properties.revision]
 type = "string"
 minLength = 1
+
+[input_schema.properties.target_ura]
+type = "string"

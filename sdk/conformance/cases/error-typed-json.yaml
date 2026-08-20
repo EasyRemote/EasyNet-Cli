@@ -1,0 +1,24 @@
+id: error/typed_json
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+  - node
+  - java
+  - swift
+description: Stable ABI return codes project to schema-backed DaemonError JSON so bindings never parse human last-error strings.
+steps:
+  - action: trigger_invalid_handle_error
+  - action: read_last_error_json
+  - action: project_explicit_error_code
+expect:
+  result: typed_error_observed
+  schema: error.schema.json
+  invalid_handle_code: INVALID_HANDLE
+  invalid_handle_stage: sdk
+  invalid_handle_retry: never
+  explicit_timeout_code: TIMEOUT
+  explicit_timeout_retry: safe
+  human_message_parse_required: false

@@ -42,7 +42,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use anyhow::{anyhow, Context, Result};
@@ -56,7 +56,7 @@ pub struct FederatedUserBinding {
     /// Realm of the issuing daemon (the source_realm field of
     /// the consumed `UserBindingToken`).
     pub source_realm: String,
-    /// User URI on the source realm.
+    /// User URA on the source realm.
     pub source_user_ura: String,
     /// Source user's Ed25519 verifying key, base64-encoded for
     /// stable JSON. The structural length contract (32 bytes)
@@ -106,6 +106,11 @@ impl FederatedBindingsStore {
         } else {
             StoreFile::default()
         };
+        for binding in &file.bindings {
+            validate_binding_identity(binding).with_context(|| {
+                format!("invalid persisted federated binding in {}", path.display())
+            })?;
+        }
         Ok(Self {
             inner: Arc::new(RwLock::new(file)),
             path: Arc::new(path),
@@ -162,6 +167,7 @@ impl FederatedBindingsStore {
     /// Persistence is best-effort: when constructed via
     /// `in_memory`, no on-disk write occurs (no path).
     pub fn record_binding(&self, binding: FederatedUserBinding, nonce_b64: String) -> Result<()> {
+        validate_binding_identity(&binding)?;
         let mut guard = self.inner.write().expect("rwlock poisoned");
         let nonces = guard
             .consumed_nonces
@@ -177,25 +183,35 @@ impl FederatedBindingsStore {
         if !self.path.as_os_str().is_empty() {
             let bytes =
                 serde_json::to_vec_pretty(&*guard).context("serialise federated bindings")?;
-            atomic_write(self.path.as_path(), &bytes)?;
+            if let Some(parent) = self.path.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("create parent dir for {}", self.path.display()))?;
+            }
+            crate::daemon::persistence::config::atomic_write(self.path.as_path(), &bytes)?;
         }
         Ok(())
     }
 }
 
-/// Atomic write via temp file + rename. Mirrors the pattern
-/// `realm_trust_anchor::save` uses; keeping the helper local so
-/// the keyring crate doesn't depend on a wider util.
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow!("federated bindings path {} has no parent", path.display()))?;
-    std::fs::create_dir_all(parent)
-        .with_context(|| format!("create parent dir for {}", path.display()))?;
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes).with_context(|| format!("write tmp file {}", tmp.display()))?;
-    std::fs::rename(&tmp, path)
-        .with_context(|| format!("rename {} to {}", tmp.display(), path.display()))?;
+fn validate_binding_identity(binding: &FederatedUserBinding) -> Result<()> {
+    let source_user = crate::core::identity::RuntimeIdentityUra::parse(&binding.source_user_ura)
+        .map_err(|error| anyhow!("source_user_ura is not admissible: {error}"))?;
+    if source_user.as_str() != binding.source_user_ura {
+        return Err(anyhow!(
+            "source_user_ura must not contain surrounding whitespace"
+        ));
+    }
+    if source_user.kind() != crate::core::ura::URAKind::User {
+        return Err(anyhow!("source_user_ura must be a User URA"));
+    }
+    if source_user.realm() != binding.source_realm {
+        return Err(anyhow!("source_user_ura realm does not match source_realm"));
+    }
+    if crate::core::identity::is_all_zero_principal_id(&binding.local_user_id) {
+        return Err(anyhow!(
+            "local_user_id must not be the all-zero principal placeholder"
+        ));
+    }
     Ok(())
 }
 
@@ -259,6 +275,27 @@ mod tests {
     }
 
     #[test]
+    fn record_binding_rejects_all_zero_source_or_local_user() {
+        let store = FederatedBindingsStore::in_memory();
+        let zero_source = FederatedUserBinding {
+            source_user_ura: "easynet:///r/realm-a/user/00000000-0000-0000-0000-000000000000"
+                .to_string(),
+            ..binding_fixture()
+        };
+        assert!(store
+            .record_binding(zero_source, "zero-source".to_string())
+            .is_err());
+
+        let zero_local = FederatedUserBinding {
+            local_user_id: crate::core::identity::ALL_ZERO_PRINCIPAL_ID.to_string(),
+            ..binding_fixture()
+        };
+        assert!(store
+            .record_binding(zero_local, "zero-local".to_string())
+            .is_err());
+    }
+
+    #[test]
     fn open_or_create_round_trips_through_disk() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("federated_bindings.json");
@@ -272,6 +309,22 @@ mod tests {
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].local_user_id, "user-c-on-realm-b");
         assert!(store2.nonce_seen("realm-a", "n"));
+    }
+
+    #[test]
+    fn open_or_create_rejects_persisted_all_zero_user_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("federated_bindings.json");
+        let file = StoreFile {
+            bindings: vec![FederatedUserBinding {
+                local_user_id: crate::core::identity::ALL_ZERO_PRINCIPAL_ID.to_string(),
+                ..binding_fixture()
+            }],
+            consumed_nonces: BTreeMap::new(),
+        };
+        std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+
+        assert!(FederatedBindingsStore::open_or_create(path).is_err());
     }
 
     #[test]

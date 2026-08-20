@@ -1,0 +1,17 @@
+[package]
+name = "runtime-provider-pluginexec"
+version = "0.139.14"
+edition = "2021"
+description = "Canonical runtime SDK provider-scoped declarative exec plugin sidecar helper"
+license = "Apache-2.0"
+
+[workspace]
+
+[lib]
+name = "runtime_provider_pluginexec"
+path = "src/lib.rs"
+
+[dependencies]
+axon-sdk = { path = "../../../../../../EasyNet-Axon/sdk/rust", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

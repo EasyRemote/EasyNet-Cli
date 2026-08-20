@@ -14,7 +14,9 @@ use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::host_api::{
     PluginHotReloadReport, PluginRealtimeActivationHint, PluginRuntimeHost,
 };
-use crate::daemon::plugins::index::{PluginPackageIndex, PluginPackageIndexError};
+use crate::daemon::plugins::index::{
+    PluginPackageIndex, PluginPackageIndexError, PluginPackageIndexLoadReport,
+};
 use crate::daemon::plugins::load_plan::{PluginLoadPlan, PluginLoadPlanner};
 use crate::daemon::plugins::realtime::activation_plans_for_manifest;
 use crate::daemon::plugins::surface::{PluginSurfaceProjector, PluginSurfaceReport};
@@ -32,25 +34,33 @@ pub struct PluginRuntimeState {
 }
 
 impl PluginRuntimeState {
-    /// Construct a state snapshot from an already-loaded index.
-    pub fn from_index(index: PluginPackageIndex) -> Self {
-        let load_plan = PluginLoadPlanner::current().plan(&index);
+    fn from_parts(
+        index: PluginPackageIndex,
+        planner: PluginLoadPlanner,
+        index_errors: Vec<PluginPackageIndexError>,
+    ) -> Self {
+        let load_plan = planner.plan(&index);
         Self {
             index,
             load_plan,
-            index_errors: Vec::new(),
+            index_errors,
         }
+    }
+
+    /// Construct a state snapshot from an already-loaded index.
+    pub fn from_index(index: PluginPackageIndex) -> Self {
+        Self::from_index_with_planner(index, PluginLoadPlanner::current())
     }
 
     /// Construct a state snapshot from an already-loaded index and explicit
     /// planner.
     pub fn from_index_with_planner(index: PluginPackageIndex, planner: PluginLoadPlanner) -> Self {
-        let load_plan = planner.plan(&index);
-        Self {
-            index,
-            load_plan,
-            index_errors: Vec::new(),
-        }
+        Self::from_parts(index, planner, Vec::new())
+    }
+
+    fn from_load_report(report: PluginPackageIndexLoadReport, planner: PluginLoadPlanner) -> Self {
+        let (index, index_errors) = report.into_parts();
+        Self::from_parts(index, planner, index_errors)
     }
 
     /// Load the default builtin + installed package index. Builtin package
@@ -59,13 +69,7 @@ impl PluginRuntimeState {
     /// plugin abilities.
     pub fn load_default() -> Result<Self> {
         let report = PluginPackageIndex::load_default_resilient()?;
-        let (index, index_errors) = report.into_parts();
-        let load_plan = PluginLoadPlanner::current().plan(&index);
-        Ok(Self {
-            index,
-            load_plan,
-            index_errors,
-        })
+        Ok(Self::from_load_report(report, PluginLoadPlanner::current()))
     }
 
     /// Package index used for descriptor projection.
@@ -96,23 +100,25 @@ pub struct PluginRuntimeManager {
 }
 
 impl PluginRuntimeManager {
-    /// Construct an empty manager. State is loaded lazily so daemon metadata
-    /// queries do not panic if package indexing fails.
+    /// Construct the daemon default manager from the canonical plugin runtime
+    /// snapshot.
     ///
     /// Reads through the shared default-state snapshot (F-050): on a cold
     /// process this is the one boot-time disk read that also primes the
     /// snapshot for every later catalog reader.
-    pub fn new() -> Self {
-        let loaded = super::default_state().map(|state| (*state).clone());
-        let wire_registry = loaded
-            .as_ref()
-            .map(AbilityWireRegistry::from_plugin_runtime_state)
-            .unwrap_or_else(|_| AbilityWireRegistry::core());
-        Self {
-            state: RwLock::new(loaded.map_err(|err| err.to_string())),
+    ///
+    /// Failure is terminal for daemon assembly. The runtime catalog and bidi
+    /// wire registry are two projections of the same plugin state; booting with
+    /// a core-only wire registry after package-state failure makes product
+    /// routes disappear as late `ABILITY_NOT_FOUND`/`No route visible` errors.
+    pub fn new() -> Result<Self> {
+        let loaded = super::default_state().map(|state| (*state).clone())?;
+        let wire_registry = AbilityWireRegistry::from_plugin_runtime_state(&loaded);
+        Ok(Self {
+            state: RwLock::new(Ok(loaded)),
             runtime_host: PluginRuntimeHost::new(),
             wire_registry: Arc::new(wire_registry),
-        }
+        })
     }
 
     /// Construct a manager from an already-computed state snapshot.
@@ -326,12 +332,6 @@ impl PluginRuntimeManager {
     }
 }
 
-impl Default for PluginRuntimeManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 fn reject_catalog_collisions(
     package: &crate::daemon::plugins::package::SharedPluginPackage,
     existing: &BTreeSet<String>,
@@ -381,4 +381,28 @@ fn sort_hot_reload_report(report: &mut PluginHotReloadReport) {
             .then(a.package_version.cmp(&b.package_version))
             .then(format!("{:?}", a.capability.kind()).cmp(&format!("{:?}", b.capability.kind())))
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_runtime_state_constructors_share_canonical_snapshot_projection() {
+        let from_index = PluginRuntimeState::from_index_with_planner(
+            PluginPackageIndex::default(),
+            PluginLoadPlanner::new("macos"),
+        );
+        let from_report = PluginRuntimeState::from_load_report(
+            PluginPackageIndexLoadReport::default(),
+            PluginLoadPlanner::new("macos"),
+        );
+
+        assert!(from_index.index().packages().is_empty());
+        assert!(from_index.load_plan().entries().is_empty());
+        assert!(from_index.index_errors().is_empty());
+        assert!(from_report.index().packages().is_empty());
+        assert!(from_report.load_plan().entries().is_empty());
+        assert!(from_report.index_errors().is_empty());
+    }
 }

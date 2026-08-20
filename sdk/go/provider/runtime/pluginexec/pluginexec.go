@@ -1,0 +1,430 @@
+// Package pluginexec owns the runtime provider sidecar frame facade.
+//
+// It is intentionally provider-scoped: the canonical SDK root must not expose
+// sidecar execution protocol details. Process-backed plugins should
+// implement handlers over SidecarInvocation instead of hand-writing stdin/stdout
+// JSON frames.
+package pluginexec
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+)
+
+const canonicalInvocationNonceBytes = 16
+
+// SidecarInvocation is the handler-facing view of one runtime-admitted sidecar call.
+type SidecarInvocation struct {
+	CallID          string
+	CallerURA       string
+	CalleeURA       string
+	AbilityURA      string
+	SubjectURA      string
+	InvocationNonce []int
+	CausalContext   map[string]any
+	Args            map[string]any
+	FrameType       string
+}
+
+// Handler implements one sidecar invocation.
+type Handler func(context.Context, SidecarInvocation) (any, error)
+
+// ProtocolError reports malformed runtime sidecar frames.
+type ProtocolError struct {
+	message string
+}
+
+func (e *ProtocolError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
+}
+
+// Serve handles one stdin/stdout sidecar invocation using process defaults.
+func Serve(ctx context.Context, handler Handler) error {
+	return ServeIO(ctx, os.Stdin, os.Stdout, handler)
+}
+
+// MustServe is a process main helper for generated plugin templates.
+func MustServe(ctx context.Context, handler Handler) {
+	if err := Serve(ctx, handler); err != nil {
+		os.Exit(1)
+	}
+}
+
+// ServeIO handles one sidecar invocation over explicit streams.
+func ServeIO(ctx context.Context, input io.Reader, output io.Writer, handler Handler) error {
+	callID := ""
+	frame, err := readRequestFrame(input)
+	if err == nil {
+		callID = frame.CallID
+	}
+	if err != nil {
+		return writeResponseFrame(output, responseFrame{
+			Type:    "error",
+			CallID:  callID,
+			Message: err.Error(),
+		})
+	}
+	invocation, err := frame.projectInvocation()
+	if err != nil {
+		return writeResponseFrame(output, responseFrame{
+			Type:    "error",
+			CallID:  callID,
+			Message: err.Error(),
+		})
+	}
+	value, err := handler(ctx, invocation)
+	if err != nil {
+		return writeResponseFrame(output, responseFrame{
+			Type:    "error",
+			CallID:  invocation.CallID,
+			Message: err.Error(),
+		})
+	}
+	return writeResponseFrame(output, responseFrame{
+		Type:   "result",
+		CallID: invocation.CallID,
+		Value:  value,
+	})
+}
+
+func IsProtocolError(err error) bool {
+	var target *ProtocolError
+	return errors.As(err, &target)
+}
+
+type requestFrame struct {
+	Type       string          `json:"type"`
+	CallID     string          `json:"call_id"`
+	Invocation json.RawMessage `json:"invocation"`
+}
+
+type sidecarInvocationFrame struct {
+	CallerURA       string         `json:"caller_ura"`
+	CalleeURA       string         `json:"callee_ura"`
+	AbilityURA      string         `json:"ability_ura"`
+	SubjectURA      string         `json:"subject_ura"`
+	InvocationNonce []int          `json:"invocation_nonce"`
+	CausalContext   map[string]any `json:"causal_context"`
+	Args            map[string]any `json:"args"`
+}
+
+type responseFrame struct {
+	Type    string `json:"type"`
+	CallID  string `json:"call_id"`
+	Value   any    `json:"value,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+func readRequestFrame(input io.Reader) (requestFrame, error) {
+	line, err := bufio.NewReader(input).ReadBytes('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return requestFrame{}, protocolError("read sidecar request frame: %v", err)
+	}
+	if len(line) == 0 {
+		return requestFrame{}, protocolError("missing sidecar request frame")
+	}
+	fields, err := decodeRequestFields(line)
+	if err != nil {
+		return requestFrame{}, err
+	}
+	if err := rejectUnknownRequestFields(fields); err != nil {
+		return requestFrame{}, err
+	}
+	var frame requestFrame
+	if err := json.Unmarshal(line, &frame); err != nil {
+		return requestFrame{}, protocolError("invalid sidecar request JSON: %v", err)
+	}
+	if frame.CallID == "" {
+		return requestFrame{}, protocolError("sidecar frame field \"call_id\" must be a string")
+	}
+	return frame, nil
+}
+
+func decodeRequestFields(raw []byte) (map[string]json.RawMessage, error) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return nil, protocolError("sidecar request frame must be an object")
+	}
+	return object, nil
+}
+
+func rejectUnknownRequestFields(object map[string]json.RawMessage) error {
+	allowed := map[string]struct{}{
+		"type":       {},
+		"call_id":    {},
+		"invocation": {},
+	}
+	for field := range object {
+		if _, ok := allowed[field]; !ok {
+			return protocolError("sidecar request frame field %q is not part of the canonical request frame", field)
+		}
+	}
+	return nil
+}
+
+func (f requestFrame) projectInvocation() (SidecarInvocation, error) {
+	if len(f.Invocation) == 0 {
+		return SidecarInvocation{}, protocolError("sidecar frame field \"invocation\" must be an object")
+	}
+	fields, err := decodeInvocationFields(f.Invocation)
+	if err != nil {
+		return SidecarInvocation{}, err
+	}
+	if err := rejectUnknownInvocationFields(fields); err != nil {
+		return SidecarInvocation{}, err
+	}
+	if err := requireInvocationFields(fields); err != nil {
+		return SidecarInvocation{}, err
+	}
+	var invocation sidecarInvocationFrame
+	if err := json.Unmarshal(f.Invocation, &invocation); err != nil {
+		return SidecarInvocation{}, protocolError("sidecar frame field \"invocation\" must be an object")
+	}
+	return sidecarInvocationProjection{
+		frameType: f.Type,
+		callID:    f.CallID,
+		frame:     invocation,
+	}.project()
+}
+
+func decodeInvocationFields(raw json.RawMessage) (map[string]json.RawMessage, error) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return nil, protocolError("sidecar frame field \"invocation\" must be an object")
+	}
+	return object, nil
+}
+
+func rejectUnknownInvocationFields(object map[string]json.RawMessage) error {
+	allowed := map[string]struct{}{
+		"caller_ura":       {},
+		"callee_ura":       {},
+		"ability_ura":      {},
+		"subject_ura":      {},
+		"invocation_nonce": {},
+		"causal_context":   {},
+		"args":             {},
+	}
+	for field := range object {
+		if _, ok := allowed[field]; !ok {
+			return protocolError("sidecar frame field %q is not part of the canonical invocation frame", field)
+		}
+	}
+	return nil
+}
+
+func requireInvocationFields(object map[string]json.RawMessage) error {
+	for _, field := range []string{
+		"caller_ura",
+		"callee_ura",
+		"ability_ura",
+		"subject_ura",
+		"invocation_nonce",
+		"causal_context",
+		"args",
+	} {
+		if _, ok := object[field]; !ok {
+			return protocolError("sidecar frame field %q is required", field)
+		}
+	}
+	return nil
+}
+
+type sidecarInvocationProjection struct {
+	frameType string
+	callID    string
+	frame     sidecarInvocationFrame
+}
+
+func (p sidecarInvocationProjection) project() (SidecarInvocation, error) {
+	if err := p.validateFrameType(); err != nil {
+		return SidecarInvocation{}, err
+	}
+	if err := p.validateTupleStrings(); err != nil {
+		return SidecarInvocation{}, err
+	}
+	if err := p.validateNonce(); err != nil {
+		return SidecarInvocation{}, err
+	}
+	if err := p.validateObjects(); err != nil {
+		return SidecarInvocation{}, err
+	}
+	return p.intoInvocation(), nil
+}
+
+func (p sidecarInvocationProjection) validateFrameType() error {
+	if p.frameType != "invoke" {
+		return protocolError("exec sidecar expected invoke frame, got %q", p.frameType)
+	}
+	return nil
+}
+
+func (p sidecarInvocationProjection) validateTupleStrings() error {
+	for field, value := range map[string]string{
+		"caller_ura":  p.frame.CallerURA,
+		"callee_ura":  p.frame.CalleeURA,
+		"ability_ura": p.frame.AbilityURA,
+		"subject_ura": p.frame.SubjectURA,
+	} {
+		if value == "" {
+			return protocolError("sidecar frame field %q must be a string", field)
+		}
+	}
+	if err := validateCallableCalleeURA(p.frame.CalleeURA); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateCallableCalleeURA(calleeURA string) error {
+	role, err := calleeURARole(calleeURA)
+	if err != nil {
+		return protocolError("sidecar frame field \"callee_ura\" must be a canonical URA: %v", err)
+	}
+	switch role {
+	case "agent", "service", "authority":
+		return nil
+	case "device":
+		return protocolError("sidecar frame field \"callee_ura\" must be a callable Agent, Service, or Authority URA; Device is an execution host, not a callee")
+	case "user":
+		return protocolError("sidecar frame field \"callee_ura\" must advertise AbilityDescriptors; User is a principal, not a callee")
+	case "ability":
+		return protocolError("sidecar frame field \"callee_ura\" must be an owner identity, not an Ability URA")
+	case "resource":
+		return protocolError("sidecar frame field \"callee_ura\" must be an owner identity, not a Resource URA")
+	default:
+		return protocolError("sidecar frame field \"callee_ura\" has unknown URA role")
+	}
+}
+
+// calleeURARole intentionally inspects only the canonical role slot:
+//
+//	easynet:///r/<realm>/<role>/...
+//
+// The public Go SDK root owns full URA grammar delegation to Axon. This
+// provider-scoped package only needs a sidecar admission guard that cannot
+// mistake `/resource/.../device/...` for a Device callee or `/device/...` for a
+// callable owner.
+func calleeURARole(calleeURA string) (string, error) {
+	const prefix = "easynet:///r/"
+	remainder, ok := strings.CutPrefix(calleeURA, prefix)
+	if !ok {
+		return "", fmt.Errorf("missing %s prefix", prefix)
+	}
+	realm, remainder, ok := strings.Cut(remainder, "/")
+	if !ok || realm == "" {
+		return "", errors.New("missing realm or role")
+	}
+	role, tail, hasTail := strings.Cut(remainder, "/")
+	if role == "" {
+		return "", errors.New("missing role")
+	}
+	if role == "authority" {
+		if hasTail {
+			return "", errors.New("authority URA must not have a path tail")
+		}
+		return role, nil
+	}
+	if !hasTail || tail == "" {
+		return "", fmt.Errorf("%s URA is missing identity tail", role)
+	}
+	return role, nil
+}
+
+func (p sidecarInvocationProjection) validateNonce() error {
+	if len(p.frame.InvocationNonce) == 0 {
+		return protocolError("sidecar frame field \"invocation_nonce\" must be a byte array")
+	}
+	if len(p.frame.InvocationNonce) != canonicalInvocationNonceBytes {
+		return protocolError("sidecar frame field \"invocation_nonce\" must contain exactly %d bytes", canonicalInvocationNonceBytes)
+	}
+	for _, item := range p.frame.InvocationNonce {
+		if item < 0 || item > 255 {
+			return protocolError("sidecar frame field \"invocation_nonce\" must contain bytes")
+		}
+	}
+	return nil
+}
+
+func (p sidecarInvocationProjection) validateObjects() error {
+	if p.frame.CausalContext == nil {
+		return protocolError("sidecar frame field \"causal_context\" must be an object")
+	}
+	if p.frame.Args == nil {
+		return protocolError("sidecar frame field \"args\" must be an object")
+	}
+	return nil
+}
+
+func (p sidecarInvocationProjection) intoInvocation() SidecarInvocation {
+	return SidecarInvocation{
+		CallID:          p.callID,
+		CallerURA:       p.frame.CallerURA,
+		CalleeURA:       p.frame.CalleeURA,
+		AbilityURA:      p.frame.AbilityURA,
+		SubjectURA:      p.frame.SubjectURA,
+		InvocationNonce: cloneIntSlice(p.frame.InvocationNonce),
+		CausalContext:   cloneSidecarObject(p.frame.CausalContext),
+		Args:            cloneSidecarObject(p.frame.Args),
+		FrameType:       p.frameType,
+	}
+}
+
+func cloneIntSlice(values []int) []int {
+	return append([]int(nil), values...)
+}
+
+func cloneSidecarObject(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	projected := make(map[string]any, len(value))
+	for key, item := range value {
+		projected[key] = cloneSidecarValue(item)
+	}
+	return projected
+}
+
+func cloneSidecarValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneSidecarObject(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = cloneSidecarValue(item)
+		}
+		return out
+	case []string:
+		return append([]string(nil), typed...)
+	case []int:
+		return append([]int(nil), typed...)
+	case []float64:
+		return append([]float64(nil), typed...)
+	default:
+		return value
+	}
+}
+
+func writeResponseFrame(output io.Writer, frame responseFrame) error {
+	encoded, err := json.Marshal(frame)
+	if err != nil {
+		return err
+	}
+	encoded = append(encoded, '\n')
+	_, err = output.Write(encoded)
+	return err
+}
+
+func protocolError(format string, args ...any) error {
+	return &ProtocolError{message: fmt.Sprintf(format, args...)}
+}

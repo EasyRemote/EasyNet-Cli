@@ -1,142 +1,180 @@
-// EasyNet CLI — `easynet agent` publish surface
-// Split from cli/agent.rs (F-033 / T4.6); bodies are move-only.
+//! `easynet agent publish` live capability publication surface.
+//!
+//! The command never reconstructs abilities from manifests. Non-dry-run first
+//! asks the daemon to reconcile the selected Agent, then both modes render the
+//! canonical `meta.list_abilities` projection for that Agent owner.
 
 use console::style;
+use serde_json::{json, Value};
 
 use super::*;
 
 pub(super) fn run_publish(args: PublishArgs) -> anyhow::Result<()> {
+    let action_gateway = agent_command_gateway();
+    let read_gateway = agent_read_gateway();
+    let owner_ura = resolve_agent_owner_ura(read_gateway.as_ref(), &args.name)?;
     if !args.dry_run {
-        // Live publishing is gated until the cross-repo publish
-        // spec + implementation lands. Returning a clear error
-        // here — rather than silently calling through to a
-        // future Axon path — keeps the flag's contract honest:
-        // today every successful `agent publish` is a dry-run.
-        anyhow::bail!(
-            "only '--dry-run' is supported in this release. Live publishing through \
-             Axon lands in a later PR. Re-run with `--dry-run` to preview the \
-             `<agent>.<ability>` tools that would be registered."
-        );
+        action_gateway.invoke("agent.refresh", json!({"name": &args.name}))?;
     }
-
-    let dir = open_registered_agent(&args.name)?;
-    let manifests = dir.list_ability_manifests()?;
+    let response = read_gateway.list_agent_abilities(&owner_ura)?;
+    let mut abilities = response
+        .get("abilities")
+        .and_then(Value::as_array)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("meta.list_abilities returned no `abilities` array"))?;
+    abilities.sort_by_key(descriptor_sort_key);
 
     eprintln!();
     eprintln!(
         "  {} {}  {}",
-        style("dry-run:").yellow(),
+        if args.dry_run {
+            style("dry-run:").yellow()
+        } else {
+            style("published:").green()
+        },
         style(format!("agent publish {}", args.name)).white().bold(),
-        style(format!("root={}", dir.root().display())).dim(),
+        style(format!("owner={owner_ura}")).dim(),
     );
     eprintln!();
 
-    if manifests.is_empty() {
+    if abilities.is_empty() {
         eprintln!(
             "  {}",
-            style("Nothing to advertise: abilities/ is empty or missing.").dim(),
+            style("No committed live abilities are published for this Agent.").dim(),
         );
         eprintln!();
         return Ok(());
     }
 
-    // Emit one line per planned ToolSpec registration. The
-    // lines are `<qualified>\t<input_schema_shape>\t<output>` so
-    // a downstream consumer (`diff`, an ops script) can parse
-    // them with awk. The decorative styling only affects TTY
-    // output; `console::style` degrades to plain ASCII when the
-    // sink is not a terminal.
     eprintln!(
-        "  {:<28} {:<18} {}",
+        "  {:<28} {:<8} {:<10} {}",
         style("QUALIFIED NAME").dim(),
+        style("MODE").dim(),
+        style("VERSION").dim(),
         style("INPUT SHAPE").dim(),
-        style("OUTPUT SHAPE").dim(),
     );
-    eprintln!("  {}", style("─".repeat(72)).dim());
+    eprintln!("  {}", style("-".repeat(82)).dim());
 
-    for m in &manifests {
-        let qualified = m.qualified_name(&args.name);
-        // Render a one-line shape summary for each schema. A
-        // full JSON Schema tree would flood the terminal; the
-        // summary is "object(keys=prompt,context)" style. That
-        // line is enough to spot a schema regression at a
-        // glance; full content lives on disk for anyone who
-        // wants to inspect it.
-        let input_shape = summarize_schema(m.input_schema());
-        let output_shape = m
-            .output_schema()
-            .map(summarize_schema)
-            .unwrap_or_else(|| "-".to_string());
+    for descriptor in &abilities {
+        let public_name = descriptor
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("?");
+        let call_mode = descriptor
+            .get("call_mode")
+            .and_then(Value::as_str)
+            .unwrap_or("?");
+        let version = descriptor
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("?");
+        let input = descriptor
+            .pointer("/schema_summary/input")
+            .unwrap_or(&Value::Null);
         eprintln!(
-            "  {:<28} {:<18} {}",
-            style(qualified).cyan(),
-            style(input_shape).white(),
-            style(output_shape).dim(),
+            "  {:<28} {:<8} {:<10} {}",
+            style(format!("{}.{}", args.name, public_name)).cyan(),
+            style(call_mode).white(),
+            style(version).dim(),
+            style(summarize_schema(input)).white(),
         );
     }
 
     eprintln!();
     eprintln!(
-        "  {} {}",
-        style("would advertise").green(),
-        style(format!(
-            "{} ability{} in the node roster label",
-            manifests.len(),
-            if manifests.len() == 1 { "" } else { "s" }
-        ))
-        .white()
-        .bold(),
-    );
-    eprintln!(
         "  {}",
-        style("(dry-run — no Axon calls, no registry mutation)").dim(),
+        if args.dry_run {
+            style(format!(
+                "observed {} committed live descriptor(s); no state was mutated",
+                abilities.len()
+            ))
+            .dim()
+        } else {
+            style(format!(
+                "reconciled and published {} live descriptor(s)",
+                abilities.len()
+            ))
+            .green()
+        },
     );
     eprintln!();
     Ok(())
 }
 
-/// One-line shape summary for a JSON Schema root — used by the
-/// publish dry-run table. Deliberately coarse: the intent is "spot
-/// a regression at a glance", not "fully re-render the schema".
-pub(super) fn summarize_schema(schema: &serde_json::Value) -> String {
-    let obj = match schema.as_object() {
-        Some(o) => o,
-        None => return format!("{:?}", schema),
+fn resolve_agent_owner_ura(gateway: &dyn AgentReadGateway, name: &str) -> anyhow::Result<String> {
+    let response = gateway.list_agents()?;
+    response
+        .get("agents")
+        .and_then(Value::as_array)
+        .and_then(|agents| {
+            agents
+                .iter()
+                .find(|agent| agent.get("name").and_then(Value::as_str) == Some(name))
+        })
+        .and_then(|agent| agent.get("ura"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("agent '{name}' is not registered or has no canonical URA"))
+}
+
+fn descriptor_sort_key(descriptor: &Value) -> (String, String, String) {
+    (
+        descriptor
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        descriptor
+            .get("call_mode")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        descriptor
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    )
+}
+
+pub(super) fn summarize_schema(schema: &Value) -> String {
+    let Some(object) = schema.as_object() else {
+        return if schema.is_null() {
+            "-".to_string()
+        } else {
+            format!("{schema:?}")
+        };
     };
-    let ty = obj.get("type").and_then(|v| v.as_str()).unwrap_or("?");
-    // Dead-by-contract: AbilityManifest::validate() rejects any
-    // input_schema or output_schema whose top-level is not an
-    // object, so both schemas reaching this helper are objects.
-    // Kept as a belt-and-braces fallback so a future API widening
-    // ("accept a top-level $ref") doesn't panic the dry-run table;
-    // the render degrades to a single type word instead.
-    if ty != "object" {
-        return ty.to_string();
+    let kind = object.get("type").and_then(Value::as_str).unwrap_or("?");
+    if kind != "object" {
+        return kind.to_string();
     }
-    let mut keys: Vec<&str> = obj
+    let mut keys = object
         .get("properties")
-        .and_then(|v| v.as_object())
-        .map(|m| m.keys().map(String::as_str).collect())
+        .and_then(Value::as_object)
+        .map(|properties| properties.keys().map(String::as_str).collect::<Vec<_>>())
         .unwrap_or_default();
     keys.sort();
-    let required: std::collections::HashSet<&str> = obj
+    let required = object
         .get("required")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<std::collections::HashSet<_>>()
+        })
         .unwrap_or_default();
-    // Mark required keys with a trailing `!` so the summary
-    // distinguishes "prompt (required)" from "context (optional)"
-    // without expanding the column width.
-    let rendered: Vec<String> = keys
-        .iter()
-        .map(|k| {
-            if required.contains(k) {
-                format!("{k}!")
+    let rendered = keys
+        .into_iter()
+        .map(|key| {
+            if required.contains(key) {
+                format!("{key}!")
             } else {
-                (*k).to_string()
+                key.to_string()
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
     if rendered.is_empty() {
         "object".to_string()
     } else {

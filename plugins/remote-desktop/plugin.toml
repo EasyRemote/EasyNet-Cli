@@ -2,7 +2,7 @@ schema_version = "1"
 id = "easynet.remote_desktop"
 version = "0.1.0"
 kind = "builtin"
-entrypoint = "easynet_cli::daemon::resources::remote_desktop::contribute"
+entrypoint = "easynet_plugin_remote_desktop::provider"
 
 abilities = ["abilities/*.ability.toml"]
 permissions = [
@@ -25,11 +25,12 @@ max_frame_queue = 1
 kind = "screen"
 modes = ["subscribe", "record"]
 transport = "webrtc"
-fallback_transport = "invoke_bidi"
 activation_abilities = [
+  "remote_desktop.grant_consent",
   "remote_desktop.create_session",
   "remote_desktop.set_description",
   "remote_desktop.add_ice_candidate",
+  "remote_desktop.report_client_state",
   "remote_desktop.attach",
   "remote_desktop.end_session",
   "remote_desktop.permission_status",
@@ -48,6 +49,11 @@ resources = [
 quick_add = true
 
 [[ability_metadata]]
+name = "remote_desktop.grant_consent"
+layer = "control"
+call_mode = "rpc"
+
+[[ability_metadata]]
 name = "remote_desktop.create_session"
 layer = "control"
 call_mode = "rpc"
@@ -64,6 +70,11 @@ call_mode = "rpc"
 
 [[ability_metadata]]
 name = "remote_desktop.add_ice_candidate"
+layer = "control"
+call_mode = "rpc"
+
+[[ability_metadata]]
+name = "remote_desktop.report_client_state"
 layer = "control"
 call_mode = "rpc"
 

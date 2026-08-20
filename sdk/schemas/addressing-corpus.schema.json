@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/schemas/sdk/addressing-corpus.schema.json",
+  "title": "Canonical Addressing Conformance Corpus",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profile", "grammar_owner", "ura_cases", "descriptor", "invalid_uras"],
+  "properties": {
+    "profile": {"const": "axon-strict-v2"},
+    "grammar_owner": {"const": "axon"},
+    "ura_cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "request", "ura", "components"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "request": {"type": "object"},
+          "ura": {"type": "string", "pattern": "^easynet:///r/"},
+          "components": {"type": "object"}
+        }
+      }
+    },
+    "descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw", "components"],
+      "properties": {
+        "raw": {
+          "type": "string",
+          "pattern": "^easynet:///r/.+@[0-9]+\\.[0-9]+\\.[0-9]+#[0-9a-f]{64}![a-z_]+$"
+        },
+        "components": {
+          "type": "object",
+          "required": [
+            "ability_ura",
+            "descriptor_version",
+            "descriptor_hash",
+            "action",
+            "owner_ura",
+            "public_name"
+          ]
+        }
+      }
+    },
+    "invalid_uras": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    }
+  }
+}

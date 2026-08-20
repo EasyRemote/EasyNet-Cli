@@ -62,14 +62,11 @@ run_filter() {
     rm -f "$tmp"
 }
 
-# Runtime record tests exercise canonical bytes and invocation_id
-# stability. Dispatch request tests exercise causal context projection
-# on wire requests. Boot-kernel tests exercise the daemon-local
-# one-invocation/one-terminal-receipt path. Axon dispatch-shim tests
-# exercise receipt-bearing local runtime outcomes.
-run_filter "daemon::invocation::receipts::runtime_record"
+# Dispatch request tests exercise causal context projection on wire requests.
+# Boot-kernel tests exercise the SDK request/finalized-receipt path. Axon
+# Descriptor-bound dispatch tests exercise receipt-bearing local runtime outcomes.
 run_filter "daemon::invocation::dispatch::request"
 run_filter "daemon::boot::kernel"
-run_filter "daemon::axon_bridge::dispatch_shim"
+run_filter "daemon::axon_bridge::descriptor_bound_dispatch"
 
 echo "ok (D1 + D2 invariants hold for final daemon invocation construction)"

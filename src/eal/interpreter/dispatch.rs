@@ -1,20 +1,19 @@
 // Step dispatch plane: agent-aware dispatcher, daemon and
-// remote forward_invoke routes (split from interpreter.rs,
+// remote canonical_invoke routes (split from interpreter.rs,
 // T4.4 / F-021; bodies are move-only).
 
 // EasyNet CLI — EAL Interpreter
 // =============================
 //
 // File: src/eal/interpreter.rs
-// Description: Client-side execution engine for Mission IR v2 (temporary — target: MissionControl v2).
+// Description: Daemon-owned execution engine for Mission IR v2.
 //
 // Execution Model:
 //   Phases execute sequentially (data-flow barriers between them).
-//   Steps within a phase execute in parallel via rayon work-stealing threadpool.
-//   When a dispatcher cannot be cloned across worker threads, falls back to sequential.
+//   Steps within a phase execute under the dispatcher's declared concurrency policy.
 //
 // Core Capabilities:
-//   1. True parallel dispatch — rayon::scope + clone_for_thread() per step.
+//   1. Declared parallel dispatch — rayon::scope + clone_for_thread() per step.
 //   2. Structured ExecutionTrace — per-step audit log with timestamps, result hashes, retry history.
 //   3. Retry with exponential backoff — delay = min(base * 2^attempt, max) + deterministic jitter.
 //   4. Cross-phase data flow — results captured in HashMap, substituted into downstream input_refs.
@@ -30,156 +29,15 @@
 
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use serde_json::Value;
 
 use super::*;
-
-/// without changing the EAL surface.
-fn dispatch_remote_via_forward_invoke(
-    tenant: &str,
-    node_id: &str,
-    ability_name: &str,
-    arguments: &Value,
-    causal_parents: &[Value],
-    timeout_ms: Option<u64>,
-) -> Result<Value, EalError> {
-    #[cfg(feature = "axon-pb")]
-    {
-        let trimmed = node_id.trim();
-
-        // Local short-circuit: `local`, empty, or this device's own
-        // node id all dispatch through the local daemon's control
-        // socket, the same surface every other in-process invocation
-        // uses. Skip the forward_invoke envelope entirely — the
-        // self-target shortcut on the daemon side covers a different
-        // case (canonical self URI), not the keyword `local`.
-        let self_node = crate::daemon::persistence::config::load_credentials()
-            .ok()
-            .map(|c| c.node_id);
-        let is_local = trimmed.is_empty()
-            || trimmed.eq_ignore_ascii_case("local")
-            || self_node
-                .as_deref()
-                .is_some_and(|n| !n.is_empty() && trimmed == n);
-        if is_local {
-            let timeout = timeout_ms
-                .map(std::time::Duration::from_millis)
-                .unwrap_or_else(|| std::time::Duration::from_secs(30));
-            return dispatch_local_device_ability(ability_name, arguments, timeout);
-        }
-
-        let target_ura = if crate::core::ura::parse_ura(trimmed).is_ok() {
-            crate::daemon::invocation::routing::federation_invoke::parse_node_ura(trimmed)
-                .map_err(|e| EalError::Validation(format!("parse target URA: {e}")))?
-        } else if !tenant.is_empty() {
-            crate::core::ura::device_ura(tenant, trimmed)
-        } else {
-            return Err(EalError::Validation(format!(
-                "cannot resolve EAL device target {trimmed:?}: no tenant in scope; \
-                 pass a canonical `easynet:///r/<realm>/device/<id>` URA"
-            )));
-        };
-
-        let caller_ura = crate::daemon::persistence::config::load_credentials()
-            .ok()
-            .filter(|c| !c.realm.trim().is_empty() && !c.node_id.trim().is_empty())
-            .map(|c| crate::core::ura::device_ura(c.realm.trim(), c.node_id.trim()));
-        let target_call = crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
-            &target_ura,
-            ability_name,
-        )
-        .map_err(|e| EalError::Validation(format!("derive Ability URA for {ability_name}: {e}")))?;
-        crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target_with_causal_parents(
-            &target_call,
-            arguments.clone(),
-            caller_ura.as_deref(),
-            causal_parents,
-        )
-        .map_err(|e| {
-            EalError::Unavailable(format!("forward_invoke {ability_name} → {target_ura}: {e}"))
-        })
-    }
-    #[cfg(not(feature = "axon-pb"))]
-    {
-        let _ = (
-            tenant,
-            node_id,
-            ability_name,
-            arguments,
-            causal_parents,
-            timeout_ms,
-        );
-        Err(EalError::Unavailable(
-            "EAL device-targeted dispatch requires the `axon-pb` feature; \
-             rebuild with `--features axon-pb` (production builds always do)."
-                .to_string(),
-        ))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LocalDeviceDispatchMode {
-    Rpc,
-    StreamFirstPayload,
-    BidiUnsupported,
-}
-
-fn dispatch_local_device_ability(
-    ability_name: &str,
-    arguments: &Value,
-    timeout: std::time::Duration,
-) -> Result<Value, EalError> {
-    match local_device_dispatch_mode(ability_name) {
-        LocalDeviceDispatchMode::Rpc => {
-            crate::support::platform::local_invoke::invoke_local_ability_with_subject_timeout(
-                ability_name,
-                arguments.clone(),
-                None,
-                timeout,
-            )
-            .map_err(|e| {
-                EalError::Unavailable(format!("invoke_local_ability {ability_name} (local): {e}"))
-            })
-        }
-        LocalDeviceDispatchMode::StreamFirstPayload => {
-            crate::support::platform::local_invoke::invoke_local_stream_ability_first_payload(
-                ability_name,
-                arguments.clone(),
-                None,
-                timeout,
-            )
-            .map_err(|e| {
-                EalError::Unavailable(format!(
-                    "invoke_local_stream_ability {ability_name} (local): {e}"
-                ))
-            })
-        }
-        LocalDeviceDispatchMode::BidiUnsupported => Err(EalError::Validation(format!(
-            "local ability `{ability_name}` is bidirectional; EAL scalar call steps cannot open \
-             InvokeBidi sessions"
-        ))),
-    }
-}
-
-fn local_device_dispatch_mode(ability_name: &str) -> LocalDeviceDispatchMode {
-    crate::daemon::ability::catalog::published_abilities()
-        .into_iter()
-        .find(|meta| meta.name == ability_name)
-        .map(|meta| dispatch_mode_from_hints(&meta.hints))
-        .unwrap_or(LocalDeviceDispatchMode::Rpc)
-}
-
-fn dispatch_mode_from_hints(
-    hints: &crate::daemon::ability::descriptors::AbilityHints,
-) -> LocalDeviceDispatchMode {
-    if hints.bidi_only {
-        LocalDeviceDispatchMode::BidiUnsupported
-    } else if hints.streaming_only {
-        LocalDeviceDispatchMode::StreamFirstPayload
-    } else {
-        LocalDeviceDispatchMode::Rpc
-    }
-}
+use crate::daemon::execution::child_invocation::ChildInvocationReceiptAnchor;
+use crate::daemon::execution::mission::invocation_gateway::{
+    MissionInvocationGateway, MissionInvocationRequest,
+};
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 
 /// Per-mission-run dispatch context.
 ///
@@ -191,45 +49,36 @@ fn dispatch_mode_from_hints(
 /// `easynet invocation trace <mission_id>` reconstructs the run's
 /// receipt graph. It is not an Invocation axiom field — causal
 /// placement stays in `causal_context`.
-pub struct AgentAwareDispatcher {
+pub(crate) struct AgentAwareDispatcher {
     registry: Arc<crate::daemon::persistence::agent_registry::AgentRegistry>,
+    gateway: Arc<dyn MissionInvocationGateway>,
 }
 
 impl AgentAwareDispatcher {
-    pub fn new(_endpoint: &str, _timeout_ms: u64) -> Self {
-        let registry = load_registry_or_warn();
-        Self {
+    pub(crate) fn new(gateway: Arc<dyn MissionInvocationGateway>) -> anyhow::Result<Self> {
+        let registry = load_registry_projection_for_dispatch()?;
+        Ok(Self {
             registry: Arc::new(registry),
-        }
+            gateway,
+        })
     }
 }
 
-/// Load the agent registry, logging a visible warning if the load fails.
+/// Load the exact Agent registry projection required for EAL dispatch.
 ///
-/// Previously this was `load_agents().unwrap_or_default()`, which turned
-/// "registry file is corrupt / home dir missing / permission denied"
-/// into "you have no registered agents", so an EAL member-call like
-/// `claude.chat(...)` would fail downstream with `agent '…' not found
-/// in registry` — a classic false-negative that sends operators hunting
-/// for a mis-registered agent when the real problem is upstream.
+/// A missing registry file is still a valid first-run empty state because
+/// `agent_registry::load_agents()` owns that persistence rule. Any unreadable
+/// or malformed registry is unavailable runtime state and must fail before
+/// child Invocation planning.
 ///
-/// We still want a usable dispatcher when no agents are registered
-/// (that is a legitimate first-run state), so we return an empty
-/// registry on failure *after* logging. The distinction between
-/// "empty by design" and "empty by failure" is preserved in operator-
-/// visible logs rather than hidden from the caller.
-fn load_registry_or_warn() -> crate::daemon::persistence::agent_registry::AgentRegistry {
-    match crate::daemon::persistence::agent_registry::load_agents() {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!(
-                "[easynet eal] warning: agent registry load failed ({e}); \
-                 dispatching with an empty registry. Any agent-target call \
-                 will fail with `not_found` until the registry is repaired."
-            );
-            crate::daemon::persistence::agent_registry::AgentRegistry::default()
-        }
-    }
+/// EAL does not need hosted-Agent identity state to validate an Agent target,
+/// so this deliberately reads only the registry projection instead of the
+/// broader aggregate snapshot.
+fn load_registry_projection_for_dispatch(
+) -> anyhow::Result<crate::daemon::persistence::agent_registry::AgentRegistry> {
+    AgentAggregateRepository::load_registered_agent_registry_projection()
+        .map_err(|error| error.into_source_or_self())
+        .context("load Agent registry projection for EAL dispatch")
 }
 
 impl StepDispatcher for AgentAwareDispatcher {
@@ -240,329 +89,316 @@ impl StepDispatcher for AgentAwareDispatcher {
         ability: &AbilityName,
         arguments: &Value,
         timeout_ms: Option<u64>,
-        causal_parents: &[Value],
+        dependency_receipts: &[ChildInvocationReceiptAnchor],
     ) -> Result<StepDispatchOutcome, EalError> {
-        match target {
-            IrTarget::Agent(agent_id) => dispatch_to_agent(
-                &self.registry,
-                agent_id,
-                ability,
-                arguments,
-                causal_parents,
-                run.trace_id,
-            ),
-            IrTarget::Device { node_id } => {
-                // Thread the live causal parents onto the device forward hop
-                // too — the sibling agent branch already lowers them, and
-                // dropping them here re-rooted the receipt DAG (SPEC §15.1-1).
-                dispatch_remote_via_forward_invoke(
-                    run.tenant,
-                    node_id,
-                    ability.as_str(),
-                    arguments,
-                    causal_parents,
-                    timeout_ms,
+        let (request, target_timeout) = match target {
+            IrTarget::Agent(agent_id) => {
+                let manifest_timeout =
+                    validate_agent_target(&self.registry, agent_id, ability)?.timeout_seconds();
+                (
+                    MissionInvocationRequest::hosted_agent(
+                        agent_id.name.clone(),
+                        ability.as_str(),
+                        arguments.clone(),
+                    ),
+                    manifest_timeout.map(std::time::Duration::from_secs),
                 )
-                .map(Into::into)
             }
-        }
+            IrTarget::Device { node_id } => (
+                device_request(run.tenant, node_id, ability.as_str(), arguments.clone())?,
+                None,
+            ),
+        };
+        let request = request
+            .with_dispatch_timeout(
+                timeout_ms
+                    .map(std::time::Duration::from_millis)
+                    .or(target_timeout)
+                    .unwrap_or_else(|| std::time::Duration::from_secs(30)),
+            )
+            .with_dependency_receipts(dependency_receipts.to_vec())
+            .with_trace_id(run.trace_id);
+        let outcome = self
+            .gateway
+            .invoke(request)
+            .map_err(|error| EalError::Unavailable(format!("Mission child dispatch: {error:#}")))?;
+        Ok(StepDispatchOutcome {
+            value: outcome.value,
+            invocation: outcome.invocation,
+        })
+    }
+
+    fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+        StepDispatchConcurrency::Parallel
     }
 
     fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
         Ok(Box::new(AgentAwareDispatcher {
             registry: Arc::clone(&self.registry),
+            gateway: Arc::clone(&self.gateway),
         }))
     }
 }
 
-/// Shared agent dispatch logic used by AgentAwareDispatcher.
-pub(super) fn dispatch_to_agent(
+fn device_request(
+    tenant: &str,
+    node_id: &str,
+    ability: &str,
+    arguments: Value,
+) -> Result<MissionInvocationRequest, EalError> {
+    let node_id = node_id.trim();
+    if node_id.is_empty() || node_id.eq_ignore_ascii_case("local") {
+        return Ok(MissionInvocationRequest::system(ability, arguments));
+    }
+    let local_identity = EalLocalNodeIdentity::load();
+    if local_identity.matches_node(node_id)? {
+        return Ok(MissionInvocationRequest::system(ability, arguments));
+    }
+    let target = if crate::core::ura::parse_ura(node_id).is_ok() {
+        node_id.to_string()
+    } else if !tenant.trim().is_empty() {
+        crate::core::ura::device_ura(tenant.trim(), node_id)
+    } else {
+        return Err(EalError::Validation(format!(
+            "cannot resolve EAL device target {node_id:?}: no tenant in scope"
+        )));
+    };
+    MissionInvocationRequest::remote_target(target, ability, arguments)
+        .map_err(|error| EalError::Validation(format!("parse device target: {error}")))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EalLocalNodeIdentity {
+    Known(String),
+    Unpaired,
+    Unavailable { reason: String },
+}
+
+impl EalLocalNodeIdentity {
+    fn load() -> Self {
+        match crate::daemon::persistence::config::load_credentials_optional() {
+            Ok(Some(credentials)) => {
+                let node_id = credentials.node_id.trim();
+                if node_id.is_empty() {
+                    return Self::Unavailable {
+                        reason:
+                            "EAL device target resolution requires non-empty local node identity"
+                                .to_string(),
+                    };
+                }
+                Self::Known(node_id.to_string())
+            }
+            Ok(None) => Self::Unpaired,
+            Err(error) => Self::Unavailable {
+                reason: format!(
+                    "load local credentials for EAL device target resolution: {error:#}"
+                ),
+            },
+        }
+    }
+
+    fn matches_node(&self, node_id: &str) -> Result<bool, EalError> {
+        match self {
+            Self::Known(local_node_id) => Ok(local_node_id == node_id),
+            Self::Unpaired => Err(EalError::Unavailable(
+                "EAL device target resolution requires paired local credentials before remote device dispatch".to_string(),
+            )),
+            Self::Unavailable { reason } => Err(EalError::Unavailable(reason.clone())),
+        }
+    }
+}
+
+fn validate_agent_target(
     registry: &crate::daemon::persistence::agent_registry::AgentRegistry,
     agent_id: &crate::core::agent::id::AgentId,
     ability: &AbilityName,
-    arguments: &Value,
-    causal_parents: &[Value],
-    trace_id: &str,
-) -> Result<StepDispatchOutcome, EalError> {
-    // Registry is keyed by string today (see Step 4
-    // follow-up: registry will be keyed by AgentId itself).
-    // For now, look up by the canonical Display form.
+) -> Result<crate::daemon::ability::manifest::AbilityManifest, EalError> {
+    // Registry lookup is canonical-only: AgentId::Display emits the
+    // full `tenant/name` key used by current registry rows. Bare
+    // default-tenant keys are retired local state; callers must
+    // migrate/re-publish the registry instead of dispatching through a
+    // compatibility alias.
     let key = agent_id.to_string();
     let entry = registry
         .agents
         .get(&key)
-        .or_else(|| {
-            // Backwards-compat: registry files written
-            // before the migration may use the bare name
-            // form (`"claude"` instead of `"default/claude"`).
-            // Fall back to the bare name when the agent
-            // is in the default tenant.
-            if agent_id.tenant == crate::core::agent::id::DEFAULT_TENANT {
-                registry.agents.get(&agent_id.name)
-            } else {
-                None
-            }
-        })
         // Missing agent in registry is `not_found`, not `unavailable` —
         // the caller's identifier doesn't resolve and a retry of the
         // same id will not help.
         .ok_or_else(|| EalError::NotFound(format!("agent '{key}' not found in registry")))?;
 
-    // Fast path: if the target ability has an `[exec]` binding in its
-    // on-disk manifest, run the executor directly and skip spawning
-    // the LLM. This is the EAL counterpart of the dispatcher's
-    // shell-exec short-circuit in `chat_ability::build_agent_ability_handler`
-    // — both paths converge on `manifests_for(...) → run_shell_exec(...)`
-    // for a deterministic ability. Without this branch, EAL's
-    // `agent.ability(...)` syntax would always go through the chat
-    // CLI even when the manifest pinned a concrete argv, and a
-    // weather lookup that should take 200 ms would burn 30 s of LLM
-    // tool-search latency.
     let bare_ability = ability.as_str();
-    let manifest_match = crate::daemon::execution::mission::agent_ability_specs::manifests_for(
+    let manifest = crate::daemon::execution::mission::agent_ability_specs::manifests_for(
         &agent_id.name,
         entry,
     )
     .into_iter()
-    .find(|m| m.name() == bare_ability);
-    if let Some(manifest) = manifest_match {
-        if let Some(exec) = manifest.exec() {
-            // Lower the step onto the daemon's Axon Invocation surface
-            // first: the daemon executes the same `[exec]` manifest but
-            // the call becomes a ledger-recorded seven-tuple invocation
-            // (caller/callee/ability/subject/nonce/causal_context/args)
-            // whose receipt anchors downstream steps reference as their
-            // causal parents. The in-process executor below remains the
-            // offline path (daemon down / ability not registered yet)
-            // and is recorded with `invocation: None` — no fabricated
-            // receipts.
-            //
-            // `adapter_fault: "drop_causal_context"` is the phase-1
-            // benchmark fault-injection knob (Easynet-Semantic-Operator-
-            // Integration negative missions): it models a binding that
-            // fails to preserve causal placement, so the invocation is
-            // emitted with an empty causal_context while the argument
-            // still reaches the adapter.
-            let display_name = format!("{}.{}", agent_id.name, bare_ability);
-            let timeout = manifest
-                .timeout_seconds()
-                .map(std::time::Duration::from_secs);
-            let effective_parents: &[Value] =
-                if arguments.get("adapter_fault").and_then(Value::as_str)
-                    == Some("drop_causal_context")
-                {
-                    &[]
-                } else {
-                    causal_parents
-                };
-            match crate::support::platform::local_invoke::invoke_local_ability_with_invocation_meta(
-                bare_ability,
-                arguments.clone(),
-                None,
-                effective_parents,
-                timeout,
-                Some(trace_id),
-                Some(&agent_id.name),
-            ) {
-                Ok((value, meta)) => {
-                    return Ok(StepDispatchOutcome {
-                        value,
-                        invocation: Some(meta),
-                    });
-                }
-                Err(err) => {
-                    use crate::support::platform::local_invoke::{
-                        classify_invoke_error, LocalInvokeErrorKind,
-                    };
-                    match classify_invoke_error(&err) {
-                        // Nothing ran (daemon down / ability not
-                        // registered there) — the in-process executor
-                        // below may legitimately take over.
-                        LocalInvokeErrorKind::DaemonOffline
-                        | LocalInvokeErrorKind::AbilityUnregistered => {}
-                        // The daemon ran the same manifest and failed for
-                        // real; re-running in-process would double-execute
-                        // a side-effecting ability to mask a true error.
-                        LocalInvokeErrorKind::Failed => {
-                            return Err(EalError::Unavailable(format!(
-                                "daemon invoke {display_name}: {err}"
-                            )));
-                        }
-                    }
-                }
-            }
-            return (match exec {
-                crate::core::ability::spec::AbilityExec::Shell(spec) => {
-                    crate::daemon::execution::mission::executors::shell::run_shell_exec(
-                        spec, arguments, timeout,
-                    )
-                    .map_err(|e| EalError::Unavailable(format!("shell exec: {e}")))
-                }
-                crate::core::ability::spec::AbilityExec::Http(spec) => {
-                    crate::daemon::execution::mission::executors::http::run_http_exec(
-                        spec, arguments, timeout,
-                    )
-                    .map_err(|e| EalError::Unavailable(format!("http exec: {e}")))
-                }
-                crate::core::ability::spec::AbilityExec::Eal(spec) => {
-                    crate::daemon::execution::mission::executors::eal::run_eal_exec(
-                        spec, arguments, timeout,
-                    )
-                    .map_err(|e| EalError::Unavailable(format!("eal exec: {e}")))
-                }
-                crate::core::ability::spec::AbilityExec::Mcp(spec) => {
-                    let _ = timeout;
-                    crate::daemon::ability::builtins::integrations::mcp::executor::run_mcp_exec(
-                        spec, arguments,
-                    )
-                    .map_err(|e| EalError::Unavailable(format!("mcp exec: {e}")))
-                }
-                crate::core::ability::spec::AbilityExec::HostStream(_) => {
-                    // host_stream is a server-stream executor; an EAL step
-                    // is a unary child invocation and cannot carry its
-                    // many-frame output. Such an ability registers as
-                    // stream-mode and is reached via the stream dispatch
-                    // path, never here — surface a clear error if an EAL
-                    // program nonetheless targets one as a unary step.
-                    Err(EalError::Unavailable(
-                        "host_stream exec is server-stream; it cannot run as a \
-                         unary EAL step — call it as a stream invocation"
-                            .to_string(),
-                    ))
-                }
-            })
-            .map(Into::into);
-        }
-    }
-
-    // `<agent>.chat` is special: when an EAL mission desugars
-    // `easynet agent send` it wants the driver's live stderr
-    // timeline in the *current* CLI process. Routing chat through
-    // the daemon's unary Invoke RPC would hide that live output in
-    // the daemon process and reduce the caller to a final snapshot.
-    // Keep chat local by reusing the daemon handler's own parsing /
-    // context / resume logic directly in-process.
-    if bare_ability == crate::daemon::ability::builtins::agents::chat::ABILITY_VERB {
-        return crate::daemon::ability::builtins::agents::chat::invoke_direct_with_progress(
-            &agent_id.name,
-            entry,
-            &[],
-            arguments.clone(),
-            None,
-        )
-        .map(Into::into)
-        .map_err(|e| EalError::Unavailable(format!("agent chat: {e}")));
-    }
-
-    // Second fast path: try the local daemon's ability registry over
-    // the control socket. The daemon's public function name is the
-    // owner-local ability (`echo`, `discover`, `invoke`, ...); the
-    // hosted agent name is passed separately as callee/delegation
-    // context so Axon can bind the call to the canonical owner Ability
-    // URA. Keeping `<agent>.<verb>` out of the wire function_name is
-    // the convergence point with DescriptorBoundEnvelope dispatch:
-    // display names are not dispatch keys.
-    //
-    // We do the IPC round-trip here only when the manifest path
-    // above did NOT short-circuit. Every outcome is terminal — there is
-    // no chat fall-through. An ability the daemon does not recognise is a
-    // NOT_FOUND, the same answer the daemon/MCP surface gives; the EAL
-    // path must not divert to an LLM-fabricated reply for an ability that
-    // does not exist (that would make the same call return different
-    // results depending on the entry point). The only abilities reachable
-    // by chatting an agent are the explicit `<agent>.chat` verb handled
-    // above and declared abilities with a real `exec`, handled in-process
-    // or registered on the daemon.
-    let display_name = format!("{}.{}", agent_id.name, ability.as_str());
-    match try_dispatch_via_daemon(&agent_id.name, ability.as_str(), arguments) {
-        DaemonDispatch::Result(value) => Ok(value.into()),
-        DaemonDispatch::AbilityNotFound => Err(EalError::NotFound(format!(
-            "unknown ability: {display_name}"
-        ))),
-        DaemonDispatch::DaemonDown(reason) => Err(EalError::Unavailable(format!(
-            "daemon {display_name}: {reason}"
-        ))),
-        DaemonDispatch::Error(reason) => Err(EalError::Unavailable(format!(
-            "daemon {display_name}: {reason}"
-        ))),
-    }
-}
-
-/// Outcome of attempting to dispatch a `<agent>.<verb>` call through
-/// the local daemon's control socket.
-///
-/// Why a custom enum (rather than `Result<Option<Value>, ...>`)
-/// -----------------------------------------------------------
-/// `dispatch_to_agent` maps each outcome onto a distinct terminal answer:
-///   1. Got a value → return it.
-///   2. Daemon told us "no such ability" → NOT_FOUND. The same answer the
-///      daemon/MCP surface gives; the call does not divert to a chat
-///      reply just because the daemon was consulted first.
-///   3. Daemon down / daemon errored → Unavailable. Surfacing the error
-///      is the point — masking a transport failure would be worse.
-///
-/// A flat `Result<Option<Value>, ...>` would collapse (2) and (3) into
-/// the "Err" axis, indistinguishable without string-matching the error
-/// message — fragile.
-enum DaemonDispatch {
-    Result(Value),
-    AbilityNotFound,
-    DaemonDown(String),
-    Error(String),
-}
-
-/// Dispatch an owner-local ability against the local daemon through
-/// Axon's local Invocation gRPC surface, with the hosted agent carried
-/// as explicit callee context. Returns one of the four outcome variants
-/// the caller branches on.
-fn try_dispatch_via_daemon(
-    agent_name: &str,
-    ability_name: &str,
-    arguments: &Value,
-) -> DaemonDispatch {
-    use crate::support::platform::local_invoke::{classify_invoke_error, LocalInvokeErrorKind};
-    match crate::support::platform::local_invoke::invoke_local_ability_with_invocation_meta(
-        ability_name,
-        arguments.clone(),
-        None,
-        &[],
-        None,
-        None,
-        Some(agent_name),
-    ) {
-        Ok((value, _meta)) => DaemonDispatch::Result(value),
-        Err(err) => match classify_invoke_error(&err) {
-            LocalInvokeErrorKind::DaemonOffline => DaemonDispatch::DaemonDown(format!("{err}")),
-            LocalInvokeErrorKind::AbilityUnregistered => DaemonDispatch::AbilityNotFound,
-            LocalInvokeErrorKind::Failed => DaemonDispatch::Error(format!("{err}")),
-        },
-    }
+    .find(|manifest| manifest.name() == bare_ability)
+    .ok_or_else(|| {
+        EalError::NotFound(format!("unknown ability: {}.{bare_ability}", agent_id.name))
+    })?;
+    Ok(manifest)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch_mode_from_hints, LocalDeviceDispatchMode};
-    use crate::daemon::ability::descriptors::AbilityHints;
+    use super::*;
+    use crate::core::agent::id::{AbilityName, AgentId};
+    use crate::core::agent::spec::RuntimeKind;
+    use crate::daemon::execution::mission::invocation_gateway::MissionInvocationTarget;
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
+    use crate::daemon::persistence::config;
+    use serde_json::json;
+
+    struct UnusedMissionGateway;
+
+    impl MissionInvocationGateway for UnusedMissionGateway {
+        fn invoke(
+            &self,
+            _request: MissionInvocationRequest,
+        ) -> anyhow::Result<crate::daemon::execution::child_invocation::ChildInvocationOutcome>
+        {
+            panic!("registry-load tests must not invoke the Mission gateway");
+        }
+    }
+
+    fn claude_chat_target() -> (AgentId, AbilityName) {
+        (
+            AgentId::parse("claude").expect("valid shorthand agent id"),
+            AbilityName::parse("chat").expect("valid ability name"),
+        )
+    }
 
     #[test]
-    fn local_device_dispatch_mode_is_derived_from_descriptor_hints() {
-        assert_eq!(
-            dispatch_mode_from_hints(&AbilityHints::default()),
-            LocalDeviceDispatchMode::Rpc
+    fn validate_agent_target_rejects_bare_default_registry_key() {
+        let (agent_id, ability) = claude_chat_target();
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert(
+            "claude".to_string(),
+            AgentEntry::new(RuntimeKind::ClaudeCode, None),
         );
-        assert_eq!(
-            dispatch_mode_from_hints(&AbilityHints {
-                streaming_only: true,
-                ..Default::default()
-            }),
-            LocalDeviceDispatchMode::StreamFirstPayload
+
+        let error = validate_agent_target(&registry, &agent_id, &ability).unwrap_err();
+
+        assert_eq!(error.error_code(), "not_found");
+        assert!(
+            error
+                .message()
+                .contains("agent 'default/claude' not found in registry"),
+            "unexpected error: {error}"
         );
-        assert_eq!(
-            dispatch_mode_from_hints(&AbilityHints {
-                bidi_only: true,
-                ..Default::default()
-            }),
-            LocalDeviceDispatchMode::BidiUnsupported
+    }
+
+    #[test]
+    fn validate_agent_target_uses_canonical_registry_key_only() {
+        let (agent_id, ability) = claude_chat_target();
+        let mut registry = AgentRegistry::default();
+        registry.agents.insert(
+            "default/claude".to_string(),
+            AgentEntry::new(RuntimeKind::ClaudeCode, None),
+        );
+
+        let error = validate_agent_target(&registry, &agent_id, &ability).unwrap_err();
+
+        assert_eq!(error.error_code(), "not_found");
+        assert!(
+            error.message().contains("unknown ability: claude.chat"),
+            "canonical row was not used; unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn device_request_rejects_malformed_credentials_before_remote_guess() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(config::state_dir()).expect("create state dir");
+        std::fs::write(config::state_dir().join("credentials.json"), b"{")
+            .expect("write malformed credentials");
+
+        let error = device_request("acme", "node-b", "observe.health", json!({}))
+            .expect_err("malformed credentials must not collapse to remote target guessing");
+
+        assert_eq!(error.error_code(), "unavailable");
+        assert!(
+            error
+                .message()
+                .contains("load local credentials for EAL device target resolution"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            error.message().contains("parse credentials"),
+            "malformed credentials must surface parse failure: {error}"
+        );
+    }
+
+    #[test]
+    fn device_request_rejects_unpaired_credentials_before_remote_guess() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+
+        let request = device_request("acme", "node-b", "observe.health", json!({}))
+            .expect_err("unpaired credentials must not synthesize a remote device target");
+
+        assert_eq!(request.error_code(), "unavailable");
+        assert!(
+            request
+                .message()
+                .contains("requires paired local credentials"),
+            "unexpected error: {request}"
+        );
+    }
+
+    #[test]
+    fn device_request_resolves_known_local_node_to_system_target() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        config::save_credentials(&config::Credentials {
+            node_id: "node-a".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "axon://hub.example:50051".to_string(),
+            realm: "acme".to_string(),
+            username: Some("alice".to_string()),
+            user_id: Some("user-alice".to_string()),
+            ..Default::default()
+        })
+        .expect("write credentials");
+
+        let request = device_request("acme", "node-a", "observe.health", json!({}))
+            .expect("known local node resolves to local system target");
+
+        assert_eq!(request.target(), &MissionInvocationTarget::LocalDeviceHost);
+    }
+
+    #[test]
+    fn dispatcher_accepts_missing_registry_as_first_run_empty_state() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+
+        let dispatcher = AgentAwareDispatcher::new(Arc::new(UnusedMissionGateway));
+
+        assert!(
+            dispatcher.is_ok(),
+            "missing registry file is a valid first-run empty registry"
+        );
+    }
+
+    #[test]
+    fn dispatcher_rejects_malformed_registry_instead_of_empty_fallback() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let state_dir = config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("create isolated state dir");
+        std::fs::write(state_dir.join("agents.json"), "{not json")
+            .expect("seed malformed registry");
+
+        let error = match AgentAwareDispatcher::new(Arc::new(UnusedMissionGateway)) {
+            Ok(_) => panic!("malformed registry must not construct an EAL dispatcher"),
+            Err(error) => error,
+        };
+        let message = format!("{error:#}");
+
+        assert!(
+            message.contains("load Agent registry projection for EAL dispatch"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains("parse"),
+            "malformed registry must surface as parse failure, got: {message}"
         );
     }
 }

@@ -1,0 +1,492 @@
+# Invariants
+
+- No new product-specific abstraction may enter the SDK canonical runtime
+  surface.
+- No second route, proof, admission, receipt, or descriptor authority may remain
+  after callers have migrated.
+- A removed compatibility layer must have its callers migrated in the same
+  change.
+- Edge compatibility may preserve public behavior only by constructing complete
+  descriptor-bound runtime input and delegating to the canonical model.
+- Verification must include the narrow tests for the removed path and at least
+  one architecture/conformance gate that proves the old path cannot reappear.
+- User-role trust is a composite `(user_ura, pubkey)` fact. Runtime code must
+  never resolve a bare user URA into one selected signing key.
+- Descriptor selection at a generic runtime/provider seam must carry an
+  explicit `call_mode`; RPC defaults belong only in higher-level convenience
+  methods before they construct complete tuple input.
+- Session inventory and pointer state must come from the canonical session
+  index only; transcript content files must not become a discovery or repair
+  authority.
+- Runtime lifecycle configuration must be a closed state machine: missing
+  config may select a documented default, but malformed config must fail
+  closed instead of being rewritten to a valid lifecycle state.
+- FFI last-error JSON must be typed TLS state, not a compatibility projection
+  from raw message text. Every recorded last error carries an explicit ABI
+  code before it can be projected into the canonical runtime error DTO;
+  message-only buffers remain text diagnostics and cannot synthesize
+  `ERR_GENERIC` proof. Explicit-code JSON projection must not read the TLS
+  last-error slot as a message fallback; null message is explicit empty
+  message state, not permission to reuse stale thread-local diagnostics.
+- Canonical resource write surfaces must not infer producer facts. If a blob
+  needs a filename or content type in its public record, the producer must
+  submit that fact explicitly before the runtime stores or projects it.
+- Canonical resource read surfaces must expose one selector model per
+  capability. Product-specific path selectors belong to product abilities such
+  as Pages, not to the generic content-addressed Files resource surface.
+- Product federation directory reads must be user-scoped by default. An
+  unfiltered cross-realm directory read is an explicit operator/audit capability,
+  not a product fallback and not a shared helper default.
+- If a caller supplies `local_user_id`, daemon dispatch must either apply the
+  federated user-binding filter or fail closed. Missing filter dependencies
+  (`FederatedBindingsStore`, `session_realm`) are invalid lifecycle assembly,
+  not permission to return the unfiltered directory.
+- Durable agent specs must be self-describing. A missing `agent.toml`
+  `schema_version` is retired pre-stamp local state and must fail closed;
+  current writers and test fixtures must use the canonical `AgentSpec` writer
+  instead of hand-written implicit-schema TOML.
+- Global skill pool identity must be declared by package metadata. `SKILL.md`
+  frontmatter `name` is the public semantic package identity; filesystem
+  directory names are physical source subpaths only and must not be used as
+  fallback skill names.
+- Product fleet status must not project directory read failures as empty
+  directory state. Signer, admission, namespace, or descriptor failures are
+  runtime facts that must surface as unavailable/error, not as zero peers.
+- Product device inspection must not synthesize remote targets from bare ids
+  or repair missing ability facts from the local catalogue. Remote device
+  inspection requires a canonical Device URA, and hosted abilities must come
+  from the `node.describe` payload returned by the inspected device.
+- Product device removal must not synthesize revocation targets from bare ids
+  or current-pairing realm. Removing a remote substrate requires an explicit
+  canonical Device URA; self-removal remains the separate local `device reset`
+  lifecycle.
+- Product plugin runtime/status surfaces must be daemon-authoritative. The CLI
+  may mutate the installed package index while the daemon is offline, but
+  `plugin list` and `plugin status` must not project local package plans,
+  companion manager observations, or stale daemon/local disagreement into
+  runtime status facts.
+- Operator federation peer inspection may treat a missing config file as an
+  empty local configuration, but an existing unreadable or malformed
+  daemon-config/realm-trust file is unavailable state. It must not be projected
+  as "no peers" or "no trusted hubs".
+- Operator federation peer inspection must consume the daemon-owned
+  `RealmTrustAnchor` aggregate for `realm-trust.toml` schema validation.
+  Hub-role trust rows are selectable cross-hub peer evidence only when they
+  carry complete dial-eligible schema-B facts: canonical peer hub URA,
+  non-empty `origin_realm`, non-empty `hub_endpoint`, and non-empty
+  `tls_ca_pem_path`.
+- Product doctor agent inspection must distinguish an empty daemon-owned agent
+  registry from an unavailable daemon-owned agent registry. `agent.list`
+  failures and invalid daemon projection rows are runtime facts, not permission
+  to synthesize default local CLI probe results.
+- Local CLI probing is a product diagnostic over declared runtime kinds, not a
+  fallback descriptor authority. `external` agents have no default local binary
+  probe, and `codex-app-server` maps explicitly to the Codex CLI probe instead
+  of falling through a "not claude means codex" branch.
+- Product device inspection must treat `node.describe` as a schema-bound
+  projection. Device show may render unknown string states, but it must not
+  translate missing or numeric legacy SDK enum state into display facts.
+- Product ability catalogue grouping/classification must be owner-authoritative.
+  `owner_ura` is the section and KIND classifier; legacy handler hints such as
+  `fulfilled_by` may not override the canonical owner kind.
+- Product device list must treat federated `DirectoryEntry` rows as
+  schema-bound input. A projected device row requires a canonical Device URA,
+  explicit matching `node_id`, and explicit supported status; missing fields,
+  mismatched ids, or unknown status must fail closed instead of rendering empty
+  ids, active state, or `UNKNOWN`.
+- PrincipalLifecycle CLI key binding must not accept anonymous external public
+  key projections. When the operator supplies public key material directly
+  instead of using daemon-managed custody, the binding request must include an
+  explicit non-empty key id.
+- PrincipalLifecycle CLI commands must not synthesize proof references from
+  idempotency keys. `proof.reference` is proof evidence supplied by the caller,
+  not a receipt/idempotency namespace repair.
+- FFI externally supplied caller signatures must carry explicit non-empty
+  `key_id_hint` identity material. `signer_public_key_base64` is key material,
+  not a key identity, and the FFI boundary must not project it into
+  `key_id_hint` or default missing identity to an empty string.
+- Authority admission must verify complete canonical tuples before comparing
+  authority facts. Missing or blank caller/callee/subject URAs are
+  `ENVELOPE_INCOMPLETE` input defects, not empty-string identities that can be
+  reclassified as caller, subject, or audience mismatches.
+- Descriptor catalog resolution must fail closed on schema-incomplete matching
+  rows. A row that matches the requested ability/call mode but lacks
+  descriptor_ref, owner_ura, ability_ura, or public name is invalid provider
+  output, not a "descriptor not found" miss and not a row that may be projected
+  with empty strings.
+- Runtime caller signer custody must be classified explicitly before any
+  key-service lookup. User callers use the managed, subject-bound signing
+  inventory; Device, Authority, and Agent callers use runtime-owner custody;
+  malformed or non-principal URAs fail closed instead of being tried as owner
+  key names.
+- Device/Both daemon boot must not publish Invocation readiness unless the
+  paired User URA is present, has a managed runtime signing key, and that key's
+  public projection has been registered into runtime trust. Missing paired User
+  identity is invalid boot state, not permission to defer repair until a
+  remote descriptor invocation fails.
+- Runtime start attach must consume daemon-owned readiness facts, not just
+  process/socket presence. A live Device daemon is attachable only if its
+  ready discovery explicitly declares that paired User runtime signing custody
+  was provisioned before Invocation became visible; otherwise start must fail
+  closed and force a clean daemon restart.
+- Ability-target ingress must carry a complete invocation tuple before it
+  reaches the generic runtime/provider seam. `subject_ura` is caller intent,
+  not a fact that may be derived from an ability selector or descriptor
+  projection, and `call_mode` absence is invalid provider input rather than
+  permission to infer RPC.
+- Local daemon loopback transport must not interpret a missing subject as
+  target-self. Daemon-self root calls and explicit-subject calls are separate
+  named policies; targeted/product/public ingress must supply a concrete
+  subject before the gRPC tuple plan is built.
+- Product ability catalogue readers must not synthesize descriptor facts.
+  `meta.list_abilities` is the descriptor read-model authority; CLI facades
+  must fail closed on missing or invalid `descriptor_ref` instead of rebuilding
+  it from hash/version/action fields.
+- EAL/Mission dispatch must not project unavailable or corrupt agent registry
+  state as an empty registry. A missing registry file is a valid first-run
+  empty state; an unreadable or malformed registry is unavailable dispatch
+  state and must fail before child Invocation planning.
+- Bearer API key credential state must be fail-closed. A missing
+  `api_keys.toml` is a valid fresh-install empty store; an existing unreadable
+  or malformed store is unavailable credential authority and must not be
+  projected as "no keys" or overwritten by create/revoke/list flows.
+- Context clipboard history is an append-only read model. A missing
+  `clipboard.jsonl` is a valid empty history; an existing unreadable file or
+  malformed row is unavailable/corrupt context state and must not be projected
+  as an empty history, skipped row, or "clip not found".
+- Node Runtime Core must validate typed authority metadata against the
+  descriptor-bound invocation tuple before transport. Delegation/session
+  metadata is not just shape-valid JSON; it must admit the draft caller,
+  callee, subject, audience, action, and ability scope locally so predictable
+  authority-subject errors do not leak into daemon admission as product-facing
+  runtime failures.
+- Node SDK type/runtime tests are part of the product-neutrality boundary.
+  They must prove product clients are absent from runtime exports and
+  `index.d.ts` without importing removed product symbols, and they must build
+  generic runtime drafts with typed authority metadata rather than opaque
+  compatibility placeholders.
+- Authority metadata projection must not synthesize time. If the runtime clock
+  cannot produce a Unix epoch millisecond value, session-authority projection is
+  unavailable and must fail with an explicit authority error instead of
+  defaulting to epoch zero.
+- Invocation signing custody must be owner-authority backed. A raw key-service
+  signer capability is not sufficient to issue descriptor-bound invocation
+  signatures unless it is attached to a self-signed owner authority or a valid
+  hosted-agent signing lease.
+- Ability catalogue assembly must be authority-context complete. Registry
+  build configs carry one concrete `AbilityAuthorityContext`; daemon boot,
+  deterministic snapshots, and tests may choose different profiles, but the
+  assembly core must never interpret `None` as local-environment authority.
+- Product device visibility must be route-visible, not directory-visible. A
+  remote device profile row from the realm directory is discovery evidence
+  only until the daemon proves the device with a signed health probe; failed
+  probes may be reported as unavailable evidence but must not enter selectable
+  `nodes` or return stale ability summaries.
+- Namespace resolver ingress must be schema-bound before route selection. The
+  public `namespace.resolve` and `namespace.proxy_resolve` daemon abilities
+  require an explicit canonical `ResolveType` enum string; missing, empty,
+  unspecified, numeric, or shorthand qtype values must fail closed instead of
+  being inferred from `query_name` / `ability_name`.
+- Product user-device directory projection must be schema-bound at both local
+  presence and peer merge boundaries. A selected peer scope is not optional
+  discovery: missing federation transport, untrusted peers, malformed peer
+  rows, and fanout failures are runtime unavailable/configuration facts and
+  must not become an empty or partial successful device list.
+- Product namespace proxy resolution must treat `peer_hub_urls` as an exact
+  selected scope. Missing federation transport, untrusted peers, malformed
+  peer resolve answers, and fanout failures are unavailable/configuration
+  facts; they must not be merged into empty or partial
+  `RESOLVE_ANSWER_KIND_NON_DISPATCHABLE` success. Peer records must use the
+  canonical `record_type` field and canonical resolver enum strings.
+- Pairing auto-wire requires complete credential facts. Missing or blank
+  pairing `realm` and `node_id` are invalid runtime state, not successful
+  no-ops; join/start must surface them at the local ingress stage instead of
+  letting SDK calls fail later as descriptor, signer, route, or admission
+  errors.
+- Runtime start must not swallow local realm-trust auto-wire failures. If the
+  device cannot write or prove the trust facts required by local
+  self-admission, daemon boot is not invocation-ready and must stop before
+  advertising route visibility.
+- Product media recording resource selection must treat `meta.list_resources`
+  output as schema-bound read-model state. A matching resource row with
+  missing, blank, wrong-kind, or non-canonical `resource_ura` is corrupt
+  resource inventory, not proof that no mic/camera resource exists.
+- Product ability discovery must not report partial success after receiving
+  corrupt minted candidate rows. Zero-score rows may be ranking misses and
+  unminted identity rows may project as explicit non-callable candidates, but
+  missing `candidates[]` or non-canonical minted `qualified_name` is corrupt
+  discovery read-model state and must fail closed.
+- Product consent/receipt-bound session access must treat causal-context
+  receipt facts as schema-bound proof input. Missing causal context can remain
+  a valid no-receipt state for explicitly modeled owner-self consent, but a
+  declared scalar/list causal context with missing, blank, or malformed receipt
+  fields is invalid proof input and must not be skipped or downgraded into
+  self-consent or a generic receipt mismatch.
+- Invocation history filters are authority-bearing observation scope. Optional
+  filter fields may be absent, but when present `caller_ura`, `callee_ura`,
+  `agent_ura`, `subject_ura`, `subject_uras`, `ability_ura`,
+  `ability_uras`, `state`, and `trace_id` must satisfy the published schema
+  before either canonical ledger records or pre-runtime attempt records are
+  read/projected. Malformed filter scope must not widen to "all history" or
+  collapse into an empty/no-match result.
+- Invocation history URA filters are schema-bound runtime facts, not opaque
+  strings. `caller_ura`, `callee_ura`, and `agent_ura` must be canonical
+  principal URAs; `subject_ura` and `subject_uras` must be canonical URAs;
+  `ability_ura`, `ability_uras`, and `exclude_ability_uras` must be canonical
+  Ability URAs; `state` must be an explicit ledger or attempt state before
+  any ledger is opened.
+- `invocation.history.list` session authority must be bound to the exact
+  receipt query subject. The broader owner-aware runtime session admission
+  rule may remain valid for descriptor-bound invocation, but receipt history
+  observation must not expand from one user-owned session/resource subject to
+  another same-owner subject before the receipt provider is called.
+- Runtime-owner signing identity and managed-user signing identity are
+  disjoint custody states. `RuntimeSigningIdentity` may bind only Agent,
+  Device, or Authority owner URAs; User URAs must enter through the managed
+  user signing inventory before any caller signer lookup.
+- Runtime failure code projection is mandatory at the SDK/provider boundary.
+  A provider error object with a missing or blank `code` is malformed runtime
+  payload and must project to `PROTOCOL_MISMATCH`; it must not be repaired to
+  `ADMISSION_DENIED` through a language-local fallback parameter or direct
+  runtime adapter branch.
+- Product ability catalogue rows are schema-bound runtime facts. CLI
+  consumers of `meta.list_abilities` must validate `ability_ura`,
+  `descriptor_ref`, `owner_ura`, `name`, and `version` as one coherent
+  descriptor identity before list/show rendering. Renderers must not derive
+  owner from display name, read retired `ability_version` / `input_schema`
+  fields, or treat missing descriptor facts as best-effort UI metadata.
+  user signer resolver and must fail before any runtime-owner key-service
+  lookup if misrouted.
+- Remote-desktop session creation arguments are descriptor-bound product
+  ingress, not best-effort UI preferences. Absent optional fields may select
+  documented defaults, but present `mode`, TTL, `session_id`, `video`, and
+  `input_policy` / `input` fields must satisfy the same schema advertised by
+  the ability descriptor before a session id, consent grant, lease, media
+  policy, or input policy is minted. Malformed preference fields must not be
+  repaired into default media/input policy.
+- Remote-desktop interactive input frames are device-local control-plane input,
+  not soft diagnostics. Malformed Bidi control frame type, unknown payload
+  fields, missing key identity, missing clipboard text, or empty file-drop
+  payloads must be rejected at input-frame parsing before policy checks or
+  platform input injection. Unsupported but schema-valid frame types remain
+  distinct `unknown_frame` diagnostics.
+- Remote-desktop ICE candidates are signaling facts, not optional UI hints.
+  Remote candidate rows must be schema-bound before they are stored on a
+  session, and local candidate rows must be schema-bound before they are
+  projected into the session read model. Only explicit `null` or empty-string
+  `candidate` end markers may be omitted; malformed rows must surface as
+  invalid input or WebRTC diagnostic state, not as "no candidate".
+- Desktop companion desired-state rows are durable lifecycle authority. A
+  missing state file or absent package row may mean fresh-install disabled, but
+  an existing row with missing `desired_state`, blank identity, unknown fields,
+  or duplicate `(id, version)` is corrupt lifecycle state and must fail closed
+  before daemon-ready reconciliation, status projection, or self-uninstall
+  cleanup.
+- Installed plugin active-state rows are package authority, not cache hints. A
+  missing `plugins.toml` / `plugin-lock.toml` is the only fresh-install empty
+  state; once a state file exists it must explicitly declare `plugins`, reject
+  unknown fields, require non-empty `id`, `version`, and `hash`, and reject
+  duplicate package identity or multiple active versions for one package id.
+  Index loaders must reuse this state parser instead of owning a second TOML
+  interpretation path.
+- Context store files are product read-model authority, not UI caches. Missing
+  `context/config.json`, `folders.json`, `favorites.json`, or
+  `captures.jsonl` may project the documented first-run default, but existing
+  files must parse through one fail-closed store parser. Malformed JSON,
+  unknown fields, blank authority fields, unsafe capture file paths, and
+  malformed JSONL rows must not become disabled tracking, empty folders,
+  empty favorites, skipped captures, or "capture not found".
+- Global skill pool directories are optional environment roots, but directories
+  inside them that have skill package shape are package authority. Missing
+  pools may return no rows; corrupt skill packages must not disappear from
+  `skill.list` or `skill.publish` lookup as "not installed". `SKILL.md`
+  must be readable and declare frontmatter `name`; directory entry scan
+  errors and metadata errors must surface as unavailable inventory state.
+- Published Pages API discovery must distinguish "no API surface" from
+  corrupt API surface. An unpublished project or missing `api/` directory may
+  return no dynamic API abilities; an existing unreadable/non-directory API
+  path, directory entry error, or file-type error must fail registration
+  instead of making product routes disappear from the catalog.
+- Pages API HTTP ingress must distinguish absent request body from malformed
+  request body. Empty body may project to JSON null for APIs that intentionally
+  accept no payload; non-empty malformed JSON is invalid product input and must
+  fail before dispatch instead of being repaired into null invocation args.
+- Runtime lifecycle projection observation must distinguish absent projection
+  from corrupt or unreadable projection. Missing `runtime.json` may classify
+  as stopped or projection-missing depending on daemon facts; an existing
+  malformed/unreadable `runtime.json` is unavailable lifecycle state and must
+  fail status/start/stop planning instead of being projected as no runtime
+  projection.
+- Device reset must consume the lifecycle status report instead of opening
+  `runtime.json` directly. Corrupt/unreadable runtime projection is unknown
+  reset safety state and must abort before credentials are deleted; stale
+  projection cleanup must be an explicit lifecycle side effect whose failure
+  is returned, not ignored.
+- MCP status must consume the lifecycle status report instead of opening
+  `runtime.json` directly. A corrupt/unreadable runtime projection is
+  unavailable MCP runtime observation, not "runtime not running"; missing
+  projection with daemon facts must render as degraded daemon evidence rather
+  than empty local state.
+- Top-level help banner must consume lifecycle status instead of opening
+  `runtime.json` directly. Because the banner cannot return `Result`, corrupt
+  runtime projection must render as explicit unavailable metadata rather than
+  being projected as stopped or silently swallowed.
+- Auth agent inventory rendering must consume the canonical backend read-model
+  shape exactly. `/api/v1/agents` table projection reads `agent_id`,
+  `display_name`, `node_id`, and `skills` only; retired row aliases such as
+  `ura` and `name` are not compatibility inputs and must not be repaired into
+  visible identity facts.
+- Pages user-rooted identity resolution must classify credential state before
+  registry assembly. A missing `credentials.json` may project to an unpaired
+  daemon with no user-rooted Pages/API/File abilities; an existing unreadable,
+  malformed, or schema-invalid credentials file is unavailable boot identity
+  state and must not be swallowed into env defaults, default realm, or
+  unpaired registration.
+- EAL traditional target validation is a target-kind conflict check, not a
+  fallback subsystem. A traditional `call ... on "<name>"` target that collides
+  with a registered Agent is rejected as an explicit surface conflict; Mission
+  code, tests, and gates must not preserve `implicit agent fallback` concepts
+  or helper names.
+- Device settings are user configuration authority, not a cache. Missing
+  `device_settings.json` may project the documented first-run defaults; an
+  existing unreadable, malformed, schema-invalid, or unknown-field settings
+  file must fail closed before config display, config mutation, or stable
+  install-id generation.
+- Local API key default-token cache is credential projection state. Missing
+  `api_keys.local.toml` may mean no operator default token exists; an existing
+  unreadable, malformed, schema-invalid, unknown-field, or blank-token cache is
+  unavailable credential state and must not be swallowed into "no default key".
+- Runtime trust revocation side effects must classify local credential state
+  before mutating trust. A missing `credentials.json` may mean no local
+  connection-state projection is possible, but an existing unreadable,
+  malformed, or schema-invalid credentials file is unavailable identity state
+  and must fail before trust revoke commits.
+- Admission owner resolution must classify local credential state before
+  building owner facts. Missing `credentials.json` may mean no local device
+  owner fact exists; an existing unreadable, malformed, or schema-invalid
+  credentials file is unavailable identity state and must not be projected as
+  unresolved owner.
+- Local device owner projection is a shared admission authority seam. Callers
+  may treat absent credentials as no local owner fact, but malformed existing
+  credentials must propagate as unavailable identity state through both
+  bootstrap authority and policy principal construction.
+- Session authority subject binding is part of the canonical SDK runtime model,
+  not a daemon-only admission concern. Each SDK must reject session authority
+  whose subject is not a canonical user subject or canonical user-owned session
+  resource bound to the same `session_owner_user_id` and `session_id`.
+- Session preludes must distinguish absent paired-user state from unavailable
+  paired-user identity. Missing credentials may skip paired-user trust sync;
+  unreadable, malformed, schema-invalid, or all-zero paired credentials must
+  fail the prelude before `session.open` can expose a ready route.
+- Descriptor-ref route selection is a typed parse/admission state, not a
+  best-effort name lookup. Malformed descriptor refs, descriptor ability
+  extraction failures, and descriptor owner mismatches must return
+  descriptor-specific `ResolveRouteFailure` values before catalog lookup; they
+  must not collapse into `None`, public-name fallback, NXDOMAIN-style misses,
+  or timeout-driven discovery failures.
+- FFI descriptor resolution requires a known native runtime owner before it can
+  inspect local catalogs or issue a remote `meta.list_abilities` probe. A
+  missing or invalid `control.json` daemon identity is caller identity
+  unavailable state; it must not collapse into `Option::None`, descriptor-not-
+  found, caller-signer failure, owner-offline routing, or transport timeout.
+- Invocation history ledger identity is an owner projection, not optional UI
+  decoration. A daemon that has not joined may expose `ledger_ura: null`, but
+  unreadable hosted-identity state or malformed `host_device_agent_ura` must
+  fail the history response before the product treats an unbound ledger as
+  canonical evidence.
+- Realm ability discovery is a canonical descriptor projection, not an opaque
+  hub JSON cache. Hub-published ability rows may cross the federation wire as
+  JSON, but they must parse into `AbilityDescriptor` before entering the
+  runtime read-model; products must never see ability list rows without
+  canonical `ability_ura` and `descriptor_ref`.
+- FFI descriptor catalog dedupe is an integrity gate, not a lossy filter.
+  Schema-incomplete descriptor rows must fail closed at the catalog boundary
+  instead of being silently dropped and later reported as descriptor misses,
+  route invisibility, or remote timeout.
+- Federation session preludes must parse join and heartbeat receipts through
+  the typed federation receipt contract. Empty or malformed receipt bodies are
+  unavailable hub state and must fail the prelude/heartbeat transition; they
+  must not be ignored as a successful no-op.
+- Hub ability revision is part of the federation heartbeat state machine. A
+  heartbeat receipt with an empty diff but an advanced revision still commits
+  the revision cursor; revision-only updates must not be skipped because
+  `added` and `removed` are empty.
+- Federation heartbeat owner-projection refresh is a read-model state input,
+  not a best-effort optimization. A missing cursor store is a first-boot empty
+  state, but unreadable, schema-less, unsupported, or corrupt
+  `owner-projections.json` must fail closed before heartbeat submission instead
+  of being collapsed to an empty `refresh_owner_uras` list.
+- Python SDK session-authority subject admission must be derived from the same
+  canonical URA projection facts as the Go SDK. Owner-equivalent resource
+  admission may only inspect the parsed `owner_id` component; path substring
+  matches such as nested `resource/user.<owner>/...` fragments are not
+  authority facts and must fail before descriptor resolution or dispatch.
+- Daemon exact-route dispatch treats descriptor refs as a typed route selector,
+  not a function-name alias. Malformed descriptor refs, descriptor selector
+  projection failures, and descriptor-owner/envelope-callee mismatches must
+  fail before route table lookup or selected-route fallback.
+- Unary, stream, and bidi daemon exact-route ingress must share the same
+  descriptor-ref route projection. A descriptor-like bidi frame-0 route token
+  must fail before generic bidi dispatch when it cannot be projected to a
+  public route name for the envelope callee.
+- Namespace resolver authority projection must be derived from canonical
+  runtime identity input: a direct URA, a `route-ref::<ability_ura>`, or a
+  descriptor ref that projects to an Ability URA. Malformed or unavailable
+  query identity must project explicit unavailable authority state; it must not
+  fabricate `localhost` hub authority or zone evidence.
+- SDK invocation result receipt projection must not be language-specific. A
+  non-empty `terminal_receipt` in any SDK is canonical runtime receipt input
+  and must validate required identity, lifecycle, hash, and proof facts before
+  being exposed to product callers. Retired top-level `receipt` aliases must
+  fail closed instead of being ignored or treated as empty receipt state.
+- RuntimeReceipt owns receipt lifecycle/type consistency in every SDK. The
+  retired generic `terminal` receipt type is not canonical runtime state;
+  `receipt_type` must equal the lifecycle-derived canonical type
+  (`completed`, `failed`, `timed_out`, etc.) before any product observes the
+  receipt, even when the receipt is consumed directly rather than through
+  `InvocationResult`.
+- AbilityDescriptor descriptor identity is mandatory provider output. A
+  governed descriptor must derive a canonical `descriptor_ref` or fail closed
+  at the descriptor/read-model boundary; descriptor-ref construction failure
+  must never be projected as `None`, a missing row, route invisibility, or
+  remote discovery timeout.
+- FFI invocation result and stream payload JSON projections are schema-bound
+  read-model facts. If a payload declares a JSON content type, invalid JSON is
+  corrupt runtime output and must fail closed; `output_base64`/`payload_base64`
+  remains the lossless byte projection but must not repair schema corruption by
+  silently emitting `null` JSON.
+- Runtime trust user-key inventory is scoped by canonical User URA, not by a
+  generic Agent identity field. `identity.list_user_pubkeys` request, response,
+  schema, CLI callers, and RuntimeTrust snapshot state must use `user_ura` and
+  reject retired `agent_ura` input before reading trust rows.
+- Runtime trust writes must expose role-accurate tuple fields. Generic trust
+  registration uses `principal_ura` because it can write User, Device,
+  Backend, or Hub rows; user-key revocation uses `user_ura` because it is
+  user-only. `agent_ura` may remain in persisted trust-anchor row storage until
+  that schema is migrated, but it must not reappear as the request field or
+  intent accessor for `identity.register_pubkey` or
+  `identity.revoke_user_pubkey`.
+- Product Docker/EasyRemote e2e must validate invocation history through the
+  exact scoped `invocation list --ability-ura` read model. A broad
+  `invocation list --format json` scan is diagnostic data, not acceptance
+  evidence; it must not be used as a fallback to prove one product operation
+  produced exactly one finalized signed receipt chain.
+- `observe.health` is a runtime health contract, not an echo or smoke
+  diagnostics carrier. Its public response may expose `status`, `details`,
+  `uptime_ms`, `version`, and `components`; caller payloads must not be
+  reflected through top-level compatibility fields.
+- Cross-realm peer-hub dispatch has one route authority: operator-curated
+  `federated_peers`. Federated directory entries are read-model observations
+  for discovery and status only; their `hub_endpoint` fields must never be used
+  to synthesize Invocation dispatch endpoints, even behind an opt-in switch.
+- Retired daemon route policy keys are invalid configuration. In particular,
+  `allow_directory_auto_route` must fail at config parse time instead of being
+  ignored or preserved as a dormant compatibility flag.
+- Unsupported product capabilities must not be published as Operational
+  runtime abilities with placeholder outputs. A capability without a real
+  provider-backed implementation stays absent from live registry, baseline,
+  descriptor metadata, wire classifiers, and SDK/FFI live smoke contracts.
+- SDK Directory projection is provider-output validation, not read-model
+  repair. Missing/null optional facts may mean absent evidence, but malformed
+  present facts must fail closed and must never be rewritten into empty
+  objects, empty lists, or skipped route candidates.

@@ -8,6 +8,9 @@ pub mod discuss;
 pub(crate) mod dispatch;
 pub(crate) mod drivers;
 pub(crate) mod executors;
+pub(crate) mod invocation_gateway;
+pub mod orchestration;
+pub(crate) mod persisted_identity;
 pub(crate) mod process_runner;
 pub(crate) mod run_store;
 pub(crate) mod session;
@@ -16,7 +19,6 @@ pub(crate) mod timeline;
 pub(crate) mod toml_escape;
 pub(crate) mod workspace;
 
-pub mod dispatch_receipt;
 pub mod failure_codes;
 
 #[must_use = "mission context only stays installed while the returned guard is alive"]

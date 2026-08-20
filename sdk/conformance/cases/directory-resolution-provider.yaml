@@ -1,0 +1,21 @@
+id: directory/resolution_provider
+profile: directory
+required_for:
+  - go
+  - python
+description: Canonical directory resolution, paginated listing and resumable subscriptions share one product-neutral daemon provider contract.
+steps:
+  - action: require_ura_input
+  - action: require_bounded_page
+  - action: accept_opaque_list_cursor
+  - action: reject_repeated_list_cursor
+  - action: require_typed_resume_cursor
+  - action: forward_resume_cursor
+  - action: require_snapshot_before_live_events
+  - action: delegate_directory_event_wire_to_axon
+expect:
+  result: directory_resolution_provider
+  provider_state: provider-backed
+  resolve_provider: true
+  list_cursor_provider: true
+  resume_provider: true

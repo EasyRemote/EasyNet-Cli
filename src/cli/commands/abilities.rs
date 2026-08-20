@@ -29,12 +29,11 @@
 //     Invoke against the appropriate Agent ability
 //
 // regardless of `--node`. The replacement: invoke the daemon-hosted
-// metadata ability through Axon's local Invocation gRPC path, the
-// same route `easynet ability invoke` uses for local calls. One
-// Axon runtime; one source of truth for the catalogue. The `--node`
-// flag is reserved for a future federation-Invoke entry; passing a
-// remote node id today returns a precise error rather than silently
-// auto-routing local.
+// metadata ability through the canonical Invocation path, the same
+// route `easynet ability invoke` uses. Local targets enter the local
+// runtime; canonical remote Device URAs are resolved and dispatched
+// to the target runtime. One runtime model; one source of truth for
+// the catalogue.
 //
 // Filtering model
 // ---------------
@@ -44,9 +43,9 @@
 //   --agent-ura <URA>  Canonical owner URA scope; required for remote
 //                      owner filtering.
 //   --subject-ura <URA>
-//                      Owner URA or full Ability URA. Owner URAs
-//                      filter by publisher; Ability URAs filter to one
-//                      canonical ability.
+//                      Catalogue scope URA. Owner URAs are projected to
+//                      canonical owner_ura; Ability URAs are projected to
+//                      canonical ability_ura at the CLI facade boundary.
 //   --pattern <glob>   Glob filter on the fully qualified name. `*`
 //                      matches anything but `.`; `**` matches across
 //                      `.` boundaries.
@@ -72,10 +71,10 @@ pub struct AbilitiesArgs {
     /// Canonical owner URA. Filters the daemon catalogue by publisher.
     #[arg(long = "agent-ura", value_name = "URA")]
     pub agent_ura: Option<String>,
-    /// Owner URA or full Ability URA. Ability URAs filter to one canonical ability.
+    /// Catalogue scope URA. Owner URAs filter by owner; Ability URAs filter to one canonical ability.
     #[arg(long = "subject-ura", value_name = "URA")]
     pub subject_ura: Option<String>,
-    /// Reserved for federation routing — only the local node is accepted today; remote listing ships post-AXON-RFC-001 P1.5.
+    /// Target runtime: `local` or a canonical remote Device URA.
     #[arg(long, short = 'n', value_name = "NODE_ID")]
     pub node: Option<String>,
     /// Glob pattern to filter by ability name (e.g. fs.*, claude.*, *.health). Empty pattern is equivalent to omitting the flag.
@@ -90,10 +89,10 @@ pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
     let query = AbilityCatalogueQuery::from_args(&args)?;
     let client = AbilityCatalogueClient::new(query.clone());
     // Joint-plan unified path: `--node` is now wired through
-    // `federation.forward_invoke` against the target device URA.
+    // the canonical `Invocation::Invoke` RPC against the target device URA.
     // Each daemon's `meta.list_abilities` ability returns its OWN
     // catalogue; cross-device discovery is the caller's job
-    // (forward_invoke routes through the target's daemon).
+    // (canonical_invoke routes through the target's daemon).
     let abilities = match args.node.as_deref().map(str::trim) {
         None | Some("local") => client.fetch_local_abilities()?,
         Some("") => bail!(
@@ -120,7 +119,7 @@ pub fn run(args: AbilitiesArgs) -> anyhow::Result<()> {
     }
 
     if filtered.is_empty() {
-        let scope = scope_label(query.agent_ura(), query.subject_ura(), &args.pattern);
+        let scope = scope_label(query.owner_ura(), query.ability_ura(), &args.pattern);
         output::warn(&format!(
             "no abilities matched {scope} on the local node. Use \
              `easynet ability list --format json` to see the full catalogue, \
@@ -167,30 +166,84 @@ impl AbilityCatalogueQuery {
             (None, Some(explicit)) => Some(explicit.to_string()),
             (None, None) => None,
         };
-        let subject_ura = args
+        let scope_ura = args
             .subject_ura
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string);
+        let catalogue_scope = AbilityCatalogueScope::from_cli_scope(scope_ura)?;
+        let (scope_owner_ura, ability_ura) = catalogue_scope.into_parts();
+        let owner_ura = merge_catalogue_owner_scope(agent_ura, scope_owner_ura)?;
 
-        Ok(Self::new(agent_ura, subject_ura))
+        Ok(Self::new(owner_ura, ability_ura))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AbilityCatalogueScope {
+    All,
+    Owner(String),
+    Ability(String),
+}
+
+impl AbilityCatalogueScope {
+    fn from_cli_scope(scope_ura: Option<String>) -> anyhow::Result<Self> {
+        let Some(scope_ura) = scope_ura else {
+            return Ok(Self::All);
+        };
+        let parsed = parse_ura(&scope_ura)?;
+        match parsed.kind {
+            URAKind::Ability => Ok(Self::Ability(scope_ura)),
+            URAKind::Agent | URAKind::Service | URAKind::Device | URAKind::Authority => {
+                Ok(Self::Owner(scope_ura))
+            }
+            URAKind::User => bail!(
+                "--subject-ura cannot scope ability ownership to a User Principal; \
+                 use an explicit Agent, Service, SystemAgent, Authority, DeviceProfileProjection \
+                 migration row, or Ability URA"
+            ),
+            other => bail!("--subject-ura must be an owner URA or Ability URA, got {other:?}"),
+        }
+    }
+
+    fn into_parts(self) -> (Option<String>, Option<String>) {
+        match self {
+            Self::All => (None, None),
+            Self::Owner(owner_ura) => (Some(owner_ura), None),
+            Self::Ability(ability_ura) => (None, Some(ability_ura)),
+        }
+    }
+}
+
+fn merge_catalogue_owner_scope(
+    explicit_owner_ura: Option<String>,
+    catalogue_owner_ura: Option<String>,
+) -> anyhow::Result<Option<String>> {
+    match (explicit_owner_ura, catalogue_owner_ura) {
+        (Some(explicit), Some(scope_owner)) if explicit != scope_owner => {
+            bail!("--agent/--agent-ura owner scope does not match --subject-ura catalogue scope")
+        }
+        (Some(explicit), _) => Ok(Some(explicit)),
+        (None, Some(scope_owner)) => Ok(Some(scope_owner)),
+        (None, None) => Ok(None),
     }
 }
 
 fn local_agent_ura(agent: &str) -> anyhow::Result<String> {
-    let local = crate::daemon::persistence::local_agents::load()?;
-    crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "llm", agent).ok_or_else(
-        || {
+    let snapshot = crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_hosted_identity_snapshot()?;
+    snapshot
+        .hosted_llm_agent_ura(agent)
+        .map(str::to_string)
+        .ok_or_else(|| {
             anyhow::anyhow!(
                 "agent {agent:?} is not hosted in local-agents.json; use --agent-ura for a \
              canonical remote owner scope"
             )
-        },
-    )
+        })
 }
 
-/// Build owned (Device, Agent, User, Kind) cells for one ability
+/// Build owned (Device, Agent, Principal, Kind) cells for one ability
 /// entry. The three identity columns are projections of the
 /// owner URA — only the slots that the owner kind actually
 /// names get populated; the rest stay `-`.
@@ -222,24 +275,19 @@ fn extract_columns(entry: &Value) -> (String, String, String, String) {
     let parsed = parse_ura(owner_ura).ok();
 
     // KIND is read straight from the owner URA kind — that's the
-    // authoritative classifier. The legacy `fulfilled_by`
-    // descriptor field still wins when present (handlers that
-    // explicitly tag themselves, e.g. `mcp_proxy`); when absent
-    // we fall back to the owner-kind label rather than guessing
-    // from the ability name. The pre-migration default was
-    // `agent_chat`, which mis-labelled every device-owned and
-    // user-owned verb.
-    let kind = entry
-        .get("fulfilled_by")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| match parsed.as_ref().map(|p| p.kind) {
-            Some(URAKind::Device) => "system".to_string(),
-            Some(URAKind::Hub) => "hub".to_string(),
-            Some(URAKind::Agent) => "agent".to_string(),
-            Some(URAKind::User) => "user".to_string(),
-            _ => "-".to_string(),
-        });
+    // authoritative classifier. Handler implementation hints such as
+    // `fulfilled_by` describe how an ability runs, not who owns the catalogue
+    // row, so they cannot override owner classification. User rows are rendered
+    // only as legacy principal projections; target architecture uses Agent,
+    // Service, SystemAgent, Authority, or DeviceProfileProjection owners.
+    let kind = match parsed.as_ref().map(|p| p.kind) {
+        Some(URAKind::Device) => "system".to_string(),
+        Some(URAKind::Authority) => "hub".to_string(),
+        Some(URAKind::Agent) => "agent".to_string(),
+        Some(URAKind::Service) => "service".to_string(),
+        Some(URAKind::User) => "legacy_principal".to_string(),
+        _ => "-".to_string(),
+    };
 
     let dash = || "-".to_string();
     let (device, agent, user) = match parsed {
@@ -258,7 +306,11 @@ fn extract_columns(entry: &Value) -> (String, String, String, String) {
                 dash(),
                 p.user_id().map(str::to_string).unwrap_or_else(dash),
             ),
-            URAKind::Hub => (dash(), "hub".to_string(), dash()),
+            URAKind::Service => {
+                let (principal_id, service_id) = p.service_ids().unwrap_or(("-", "-"));
+                (dash(), service_id.to_string(), principal_id.to_string())
+            }
+            URAKind::Authority => (dash(), "hub".to_string(), dash()),
             _ => (dash(), dash(), dash()),
         },
         // Unparseable owner URA. We do not invent owner kinds from
@@ -289,7 +341,12 @@ enum GroupKey {
         agent: String,
         ura: String,
     },
-    User {
+    Service {
+        user: String,
+        service: String,
+        ura: String,
+    },
+    LegacyPrincipal {
         user: String,
         ura: String,
     },
@@ -304,7 +361,12 @@ impl GroupKey {
             GroupKey::Agent { user, agent, ura } => {
                 format!("AGENT {user}.{agent} ({ura})")
             }
-            GroupKey::User { user, ura } => format!("USER {user} ({ura})"),
+            GroupKey::Service { user, service, ura } => {
+                format!("SERVICE {user}.{service} ({ura})")
+            }
+            GroupKey::LegacyPrincipal { user, ura } => {
+                format!("LEGACY PRINCIPAL {user} ({ura})")
+            }
             GroupKey::Device(ura) => format!("DEVICE / SYSTEM ({ura})"),
             GroupKey::Other => "OTHER".to_string(),
         }
@@ -315,9 +377,10 @@ impl GroupKey {
         match self {
             GroupKey::Hub(_) => 0,
             GroupKey::Agent { .. } => 1,
-            GroupKey::User { .. } => 2,
-            GroupKey::Device(_) => 3,
-            GroupKey::Other => 4,
+            GroupKey::Service { .. } => 2,
+            GroupKey::LegacyPrincipal { .. } => 3,
+            GroupKey::Device(_) => 4,
+            GroupKey::Other => 5,
         }
     }
 }
@@ -326,7 +389,7 @@ fn group_for(entry: &Value) -> GroupKey {
     let owner_ura = entry.get("owner_ura").and_then(Value::as_str).unwrap_or("");
     match parse_ura(owner_ura) {
         Ok(p) => match p.kind {
-            URAKind::Hub => GroupKey::Hub(owner_ura.to_string()),
+            URAKind::Authority => GroupKey::Hub(owner_ura.to_string()),
             URAKind::Agent => {
                 let Some((user_id, agent_id)) = p.agent_ids() else {
                     return GroupKey::Other;
@@ -337,7 +400,17 @@ fn group_for(entry: &Value) -> GroupKey {
                     ura: owner_ura.to_string(),
                 }
             }
-            URAKind::User => GroupKey::User {
+            URAKind::Service => {
+                let Some((principal_id, service_id)) = p.service_ids() else {
+                    return GroupKey::Other;
+                };
+                GroupKey::Service {
+                    user: principal_id.to_string(),
+                    service: service_id.to_string(),
+                    ura: owner_ura.to_string(),
+                }
+            }
+            URAKind::User => GroupKey::LegacyPrincipal {
                 user: p.user_id().unwrap_or("-").to_string(),
                 ura: owner_ura.to_string(),
             },
@@ -365,7 +438,7 @@ fn render_grouped(filtered: &[Value]) {
     }
 
     let term_width = console::Term::stderr().size().1 as usize;
-    let headers = ["ABILITY", "KIND", "DESCRIPTION"];
+    let headers = ["ABILITY", "MODE", "HASH", "KIND", "DESCRIPTION"];
 
     eprintln!();
     for ((_, key), entries) in &groups {
@@ -376,7 +449,8 @@ fn render_grouped(filtered: &[Value]) {
         let header_style = match key {
             GroupKey::Hub(_) => style(&title).magenta().bold(),
             GroupKey::Agent { .. } => style(&title).green().bold(),
-            GroupKey::User { .. } => style(&title).yellow().bold(),
+            GroupKey::Service { .. } => style(&title).cyan().bold(),
+            GroupKey::LegacyPrincipal { .. } => style(&title).yellow().bold(),
             GroupKey::Device(_) => style(&title).blue().bold(),
             GroupKey::Other => style(&title).red().bold(),
         };
@@ -385,7 +459,7 @@ fn render_grouped(filtered: &[Value]) {
         // Per-section column widths: ability + kind only;
         // description reflows against the terminal so long
         // single-line descriptions don't wrap mid-row.
-        let mut rows: Vec<[String; 3]> = Vec::with_capacity(entries.len());
+        let mut rows: Vec<[String; 5]> = Vec::with_capacity(entries.len());
         for entry in entries {
             let name = entry
                 .get("name")
@@ -393,15 +467,37 @@ fn render_grouped(filtered: &[Value]) {
                 .unwrap_or("-")
                 .to_string();
             let (_d, _a, _u, kind) = extract_columns(entry);
+            // MODE + HASH disambiguate sibling invocation contracts that
+            // share one public name (e.g. `chat` publishes both an rpc and
+            // a stream descriptor with distinct hashes). The short hash
+            // prefix lets an operator match a resolved descriptor_ref to
+            // its catalogue row at a glance while debugging admission
+            // mismatches.
+            let mode = entry
+                .get("call_mode")
+                .and_then(Value::as_str)
+                .unwrap_or("-")
+                .to_string();
+            let hash = entry
+                .get("descriptor_hash")
+                .and_then(Value::as_str)
+                .map(|h| {
+                    h.strip_prefix("sha256:")
+                        .unwrap_or(h)
+                        .chars()
+                        .take(8)
+                        .collect::<String>()
+                })
+                .unwrap_or_else(|| "-".to_string());
             let description = entry
                 .get("description")
                 .and_then(Value::as_str)
                 .map(|s| s.lines().next().unwrap_or(s).to_string())
                 .unwrap_or_default();
-            rows.push([name, kind, description]);
+            rows.push([name, mode, hash, kind, description]);
         }
         let widths = column_widths(&headers, &rows);
-        let total_fixed: usize = widths[..2].iter().sum::<usize>() + 2 * 2; // 2-space gutters
+        let total_fixed: usize = widths[..4].iter().sum::<usize>() + 4 * 2; // 2-space gutters
         let desc_budget = term_width
             .saturating_sub(4 + total_fixed) // leading 4-space indent for grouped rows
             .max(20);
@@ -410,21 +506,25 @@ fn render_grouped(filtered: &[Value]) {
         // beyond the section title so the visual hierarchy reads
         // clearly even on a narrow terminal.
         eprintln!(
-            "    {}  {}  {}",
+            "    {}  {}  {}  {}  {}",
             style(pad(headers[0], widths[0])).dim(),
             style(pad(headers[1], widths[1])).dim(),
-            style(headers[2]).dim(),
+            style(pad(headers[2], widths[2])).dim(),
+            style(pad(headers[3], widths[3])).dim(),
+            style(headers[4]).dim(),
         );
-        let rule_width: usize = (widths[..2].iter().sum::<usize>() + 2 * 2 + desc_budget)
+        let rule_width: usize = (widths[..4].iter().sum::<usize>() + 4 * 2 + desc_budget)
             .min(term_width.saturating_sub(4).max(40));
         eprintln!("    {}", style("─".repeat(rule_width)).dim());
 
         for row in &rows {
-            let desc = truncate_display(&row[2], desc_budget);
+            let desc = truncate_display(&row[4], desc_budget);
             eprintln!(
-                "    {}  {}  {}",
+                "    {}  {}  {}  {}  {}",
                 style(pad(&row[0], widths[0])).cyan(),
-                style(pad(&row[1], widths[1])).dim(),
+                style(pad(&row[1], widths[1])).yellow(),
+                style(pad(&row[2], widths[2])).dim(),
+                style(pad(&row[3], widths[3])).dim(),
                 desc,
             );
         }
@@ -432,8 +532,8 @@ fn render_grouped(filtered: &[Value]) {
     }
 }
 
-fn column_widths(headers: &[&str; 3], rows: &[[String; 3]]) -> [usize; 3] {
-    let mut w = [0usize; 3];
+fn column_widths(headers: &[&str; 5], rows: &[[String; 5]]) -> [usize; 5] {
+    let mut w = [0usize; 5];
     for (i, h) in headers.iter().enumerate() {
         w[i] = measure_text_width(h);
     }
@@ -466,7 +566,7 @@ pub(crate) fn truncate_display(text: &str, max: usize) -> String {
     out
 }
 
-/// Apply `--pattern` filtering. Owner/subject scope is sent to
+/// Apply `--pattern` filtering. Catalogue scope is sent to
 /// `meta.list_abilities` so catalogue ownership is decided by
 /// canonical URAs at the daemon, not by name-prefix conventions.
 fn filter_abilities(abilities: Vec<Value>, pattern: &str) -> anyhow::Result<Vec<Value>> {
@@ -573,17 +673,17 @@ fn split_qualified(name: &str) -> (&str, &str) {
     }
 }
 
-fn scope_label(agent_ura: Option<&str>, subject_ura: Option<&str>, pattern: &str) -> String {
-    match (agent_ura, subject_ura, pattern.is_empty()) {
+fn scope_label(owner_ura: Option<&str>, ability_ura: Option<&str>, pattern: &str) -> String {
+    match (owner_ura, ability_ura, pattern.is_empty()) {
         (None, None, true) => "anything".to_string(),
         (None, None, false) => format!("pattern {pattern:?}"),
-        (Some(a), None, true) => format!("agent_ura {a:?}"),
-        (Some(a), None, false) => format!("agent_ura {a:?} + pattern {pattern:?}"),
-        (None, Some(s), true) => format!("subject_ura {s:?}"),
-        (None, Some(s), false) => format!("subject_ura {s:?} + pattern {pattern:?}"),
-        (Some(a), Some(s), true) => format!("agent_ura {a:?} + subject_ura {s:?}"),
+        (Some(a), None, true) => format!("owner_ura {a:?}"),
+        (Some(a), None, false) => format!("owner_ura {a:?} + pattern {pattern:?}"),
+        (None, Some(s), true) => format!("ability_ura {s:?}"),
+        (None, Some(s), false) => format!("ability_ura {s:?} + pattern {pattern:?}"),
+        (Some(a), Some(s), true) => format!("owner_ura {a:?} + ability_ura {s:?}"),
         (Some(a), Some(s), false) => {
-            format!("agent_ura {a:?} + subject_ura {s:?} + pattern {pattern:?}")
+            format!("owner_ura {a:?} + ability_ura {s:?} + pattern {pattern:?}")
         }
     }
 }
@@ -616,7 +716,7 @@ mod tests {
         assert_eq!(
             out.len(),
             4,
-            "owner scope belongs to meta.list_abilities agent_ura/subject_ura, not CLI name-prefix filtering"
+            "owner scope belongs to meta.list_abilities owner_ura/ability_ura, not CLI name-prefix filtering"
         );
     }
 
@@ -691,10 +791,105 @@ mod tests {
         })
         .unwrap();
         let body = query.to_request();
-        assert_eq!(body["agent_ura"], "easynet:///r/test/agent/user-1.alice");
+        assert_eq!(body["owner_ura"], "easynet:///r/test/agent/user-1.alice");
         assert_eq!(
-            body["subject_ura"],
+            body["ability_ura"],
             "easynet:///r/test/ability/user-1.alice.chat"
+        );
+    }
+
+    #[test]
+    fn catalogue_query_projects_cli_owner_scope_to_owner_filter() {
+        let query = AbilityCatalogueQuery::from_args(&AbilitiesArgs {
+            agent: None,
+            agent_ura: None,
+            subject_ura: Some("easynet:///r/test/device/dev-1".into()),
+            node: None,
+            pattern: String::new(),
+            format: OutputFormat::Json,
+        })
+        .unwrap();
+        let body = query.to_request();
+
+        assert_eq!(body["owner_ura"], "easynet:///r/test/device/dev-1");
+        assert!(body.get("ability_ura").is_none());
+        assert!(body.get("subject_ura").is_none());
+        assert!(body.get("agent_ura").is_none());
+    }
+
+    #[test]
+    fn catalogue_query_accepts_service_owner_scope() {
+        let query = AbilityCatalogueQuery::from_args(&AbilitiesArgs {
+            agent: None,
+            agent_ura: None,
+            subject_ura: Some("easynet:///r/test/service/alice.pages".into()),
+            node: None,
+            pattern: String::new(),
+            format: OutputFormat::Json,
+        })
+        .unwrap();
+        let body = query.to_request();
+
+        assert_eq!(body["owner_ura"], "easynet:///r/test/service/alice.pages");
+        assert!(body.get("ability_ura").is_none());
+        assert!(body.get("subject_ura").is_none());
+        assert!(body.get("agent_ura").is_none());
+    }
+
+    #[test]
+    fn extract_columns_projects_service_owner_identity() {
+        let entry = serde_json::json!({
+            "owner_ura": "easynet:///r/test/service/alice.pages",
+        });
+
+        let (device, agent, user, kind) = extract_columns(&entry);
+
+        assert_eq!(device, "-");
+        assert_eq!(agent, "pages");
+        assert_eq!(user, "alice");
+        assert_eq!(kind, "service");
+    }
+
+    #[test]
+    fn catalogue_scope_rejects_user_principal_as_owner_filter() {
+        let err =
+            AbilityCatalogueScope::from_cli_scope(Some("easynet:///r/test/user/alice".into()))
+                .unwrap_err()
+                .to_string();
+
+        assert!(
+            err.contains("User Principal"),
+            "user principals are accountability roots, not ability owners: {err}"
+        );
+    }
+
+    #[test]
+    fn catalogue_query_rejects_conflicting_cli_owner_scope() {
+        let err = AbilityCatalogueQuery::from_args(&AbilitiesArgs {
+            agent: None,
+            agent_ura: Some("easynet:///r/test/device/dev-1".into()),
+            subject_ura: Some("easynet:///r/test/device/dev-2".into()),
+            node: None,
+            pattern: String::new(),
+            format: OutputFormat::Json,
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("does not match"), "got {err}");
+    }
+
+    #[test]
+    fn catalogue_scope_rejects_non_catalogue_ura_kind() {
+        let err = AbilityCatalogueScope::from_cli_scope(Some(
+            "easynet:///r/test/resource/user.alice/runtime-state/read".into(),
+        ))
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            err.contains("owner URA or Ability URA"),
+            "wrong error: {err}"
         );
     }
 
@@ -702,7 +897,7 @@ mod tests {
     fn catalogue_query_rejects_conflicting_local_agent_selector() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
         let mut local = crate::daemon::persistence::local_agents::LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/test/device/dev-1".to_string(),
+            host_device_ura: "easynet:///r/test/device/dev-1".to_string(),
             hosted_agents: Vec::new(),
         };
         crate::daemon::persistence::local_agents::upsert_hosted_agent(
@@ -728,7 +923,7 @@ mod tests {
 
     /// Joint-plan phase 1.5: `--node <other>` no longer hard-bails;
     /// it forwards `meta.list_abilities` to the target device URA
-    /// through `federation.forward_invoke`. The forward path only
+    /// through the canonical `Invocation::Invoke` RPC. The remote path only
     /// exists in builds with `--features axon-pb`; without the
     /// feature `AbilityCatalogueClient::fetch_remote_abilities` short-circuits to
     /// `federation_not_wired_error`, which is asserted by
@@ -737,7 +932,7 @@ mod tests {
     /// features) AND `cargo test --features axon-pb` both pass.
     #[cfg(feature = "axon-pb")]
     #[test]
-    fn run_with_remote_node_routes_through_forward_invoke() {
+    fn run_with_remote_node_routes_through_canonical_invoke() {
         // In a unit-test environment the local daemon UDS is absent,
         // so the call surfaces as either "daemon not running" /
         // "cannot resolve node ... without local credentials" /
@@ -750,7 +945,7 @@ mod tests {
             agent: None,
             agent_ura: None,
             subject_ura: None,
-            node: Some("some-remote-node".into()),
+            node: Some("easynet:///r/test/device/remote-node".into()),
             pattern: String::new(),
             format: OutputFormat::Table,
         })
@@ -776,7 +971,7 @@ mod tests {
             agent: None,
             agent_ura: None,
             subject_ura: None,
-            node: Some("some-remote-node".into()),
+            node: Some("easynet:///r/test/device/remote-node".into()),
             pattern: String::new(),
             format: OutputFormat::Table,
         })
@@ -805,8 +1000,8 @@ mod tests {
     #[test]
     fn group_for_buckets_each_owner_kind_into_its_section() {
         // Pin the partition: hub URA → Hub, agent URA → Agent,
-        // user URA → User, device URA → Device. A future render
-        // change that loses or merges a bucket trips this test.
+        // historical user-owner URA → LegacyPrincipal, device URA → Device. A
+        // future render change that loses or merges a bucket trips this test.
         let hub = json!({
             "name": "hub.openai.chat_completions",
             "owner_ura": crate::core::ura::hub_ura("easynet.run"),
@@ -826,8 +1021,38 @@ mod tests {
         });
         assert!(matches!(group_for(&hub), GroupKey::Hub(_)));
         assert!(matches!(group_for(&agent), GroupKey::Agent { .. }));
-        assert!(matches!(group_for(&user), GroupKey::User { .. }));
+        assert!(matches!(group_for(&user), GroupKey::LegacyPrincipal { .. }));
         assert!(matches!(group_for(&device), GroupKey::Device(_)));
+    }
+
+    #[test]
+    fn extract_columns_ignores_fulfilled_by_as_kind_classifier() {
+        let device = json!({
+            "name": "fs.read",
+            "owner_ura":
+                "easynet:///r/easynet.run/device/00000000-0000-0000-0000-000000000001",
+            "fulfilled_by": "mcp_proxy",
+        });
+        let hub = json!({
+            "name": "hub.openai.chat_completions",
+            "owner_ura": crate::core::ura::hub_ura("easynet.run"),
+            "fulfilled_by": "agent_chat",
+        });
+        let agent = json!({
+            "name": "alice.codex.chat",
+            "owner_ura": "easynet:///r/easynet.run/agent/alice.codex",
+            "fulfilled_by": "shell",
+        });
+        let user = json!({
+            "name": "alice.api_key.create",
+            "owner_ura": "easynet:///r/easynet.run/user/alice",
+            "fulfilled_by": "device",
+        });
+
+        assert_eq!(extract_columns(&device).3, "system");
+        assert_eq!(extract_columns(&hub).3, "hub");
+        assert_eq!(extract_columns(&agent).3, "agent");
+        assert_eq!(extract_columns(&user).3, "legacy_principal");
     }
 
     #[test]
@@ -841,7 +1066,7 @@ mod tests {
 
     #[test]
     fn group_section_order_matches_render_priority() {
-        // Hub → Agent → User → Device → Other. Lower number prints
+        // Hub → Agent → legacy principal → Device → Other. Lower number prints
         // first.
         assert!(
             GroupKey::Hub("x".into()).section_order()
@@ -859,14 +1084,14 @@ mod tests {
                 ura: "x".into()
             }
             .section_order()
-                < GroupKey::User {
+                < GroupKey::LegacyPrincipal {
                     user: "u".into(),
                     ura: "x".into()
                 }
                 .section_order()
         );
         assert!(
-            GroupKey::User {
+            GroupKey::LegacyPrincipal {
                 user: "u".into(),
                 ura: "x".into()
             }

@@ -25,7 +25,7 @@ src/services/invocation_transport/daemon_invocation_service/
 ├── bidi_streams.rs         # SessionDownStream / LocalBidiDownStream / frame mappers
 ├── ledger_record.rs        # InvocationLedger record building (~free fns at the file tail)
 └── tests/
-    ├── mod.rs              # shared test fixtures (make_service, TEST_DAEMON_URI, etc.)
+    ├── mod.rs              # shared test fixtures (make_service, TEST_DAEMON_URA, etc.)
     ├── federation_arms.rs
     ├── self_session_accept.rs
     └── ...                 # one test file per arm module
@@ -66,7 +66,7 @@ pub struct FederationConfig {
 pub struct TrustWriteContext {
     pub register_pubkey: Option<Arc<RegisterPubkeyService>>,
     pub session_realm: Option<String>,
-    pub hub_signing_seed: Option<[u8; 32]>,
+    pub hub_signer: Option<Arc<dyn CanonicalSigner>>,
 }
 
 pub struct LedgerWiring {
@@ -374,7 +374,7 @@ These are the items the second-pass review identified that were small enough to 
 
 - **Status-code policy docstring** at top of `services/invocation_transport/daemon_invocation_service.rs` — three explicit classes (internal / invalid_argument / failed_precondition) plus not_found / permission_denied / unimplemented, each with a one-paragraph definition naming the caller's expected response. Future arm authors have the policy in front of them.
 - **`device.agent.{start,stop,refresh}` hard-Err on missing tokio runtime** when the hot registrar IS wired. The previous code returned a silent `runtime_not_ready` envelope that operators could mistake for the legitimate boot-window state. Now: registrar empty + no tokio = `runtime_not_ready` envelope + warn-class op_event; registrar wired + no tokio = anyhow::bail with the exact wiring step that's missing.
-- **`block_on_runtime` wrapper deleted** in `runtime/local_runtime_invoker.rs`; three call sites now reach `support::async_bridge::run_blocking(..., NoRuntimeFallback::BuildCurrentThreadTokio)` directly. `block_on_runtime_sync` retained in `ability_dispatch.rs` (7 call sites, all under the same in-memory-only invariant, documented in the helper's docstring).
+- **`block_on_runtime` wrapper deleted** in `runtime/local_runtime_invoker.rs`; call sites now reach `support::async_bridge::run_blocking(..., SyncBridgeRuntimePolicy::BuildCurrentThreadTokio)` directly. The sync bridge policy is named explicitly at each call site so runtime construction is a deliberate state-machine choice, not an implicit fallback.
 - **`stamp_bidi_down_sequence` helper extracted** in `daemon_invocation_service.rs`; the two byte-identical `stamp_sequence` methods on `LocalBidiDownStream` and `SessionDownStream` now both delegate. Future PR-A's per-arm split can move them anywhere without splitting the saturating_add semantic.
 - **`late_bound_rpc_handler` op_event** in `daemon/ability/dispatch.rs::invoke_rpc_json`. The self-heal path (handler in catalogue but missing from LocalRuntime) is no longer silent — operators see when boot's sync_runtime_ability is incomplete.
 - **`invoke_daemon_ability_required` helper** in `cli/agent.rs`. The four `invoke_daemon_agent_*_required` wrappers now delegate to one shared helper that owns the error-format policy. The wrappers stay as 1-line named entry points for `git grep`.

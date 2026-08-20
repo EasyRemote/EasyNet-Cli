@@ -21,24 +21,11 @@
 //
 // Why this module exists
 // ----------------------
-// EasyNet-Axon's SDK distinguishes two paths for "making something
-// callable from the network":
-//
-//   - `DendriteBridge::publish_capability(...)` — for a distributable
-//     *package* (tar.gz, signed) that the runtime will install and
-//     execute on a node. Semantically static: the payload is a
-//     serializable artifact that can be replicated between nodes.
-//
-//   - `AbilityToolAdapter::register(name, handler, spec)` — for a
-//     *live handler* that lives on *this* node only. Incoming RPC
-//     calls against the adapter dispatch directly to a local Rust
-//     closure; the capability is advertised via node labels
-//     (`a2a.agents_json[*].skills`) so discovery finds it.
-//
-// A locally-installed AI agent (Claude Code, Codex, …) is not a
-// distributable package — it is a subprocess binding that only
-// makes sense on the node where the operator installed it. The
-// adapter path is therefore the semantically correct one.
+// A locally-installed AI agent (Claude Code, Codex, ...) is a live
+// subprocess binding on this node, not a distributable capability
+// package. Its committed descriptor is registered in the daemon's
+// canonical control-plane catalogue, bound to daemon Invocation, and
+// published from the same live catalogue snapshot used by discovery.
 //
 // This module is the neutral ground between the registry
 // (`~/.easynet/agents.json`, which records what the operator has
@@ -50,7 +37,8 @@
 // each ability's arguments" — and answers it the same way from all
 // call sites:
 //
-//   1. `registry::a2a_labels::build` — to include in `a2a.agents_json[*].skills`
+//   1. `federation::read_model::a2a_labels::build` — to include in
+//      `a2a.agents_json[*].skills`
 //      so federated peers *discover* the abilities without calling
 //      anything.
 //   2. `daemon::ability::catalog::profiles::mcp` — to project
@@ -85,15 +73,17 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use serde_json::{json, Value};
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 
 use crate::daemon::execution::mission::directory::AgentDirectory;
 use crate::daemon::persistence::agent_registry::AgentEntry;
 
 /// One ability exposed by a locally-installed agent.
 ///
-/// The three fields are the intersection of what every consumer of
-/// this spec needs:
+/// The fields are the intersection of what every consumer of this
+/// discovery/hint spec needs:
 ///
 ///   * `name`      — the tool name as it will appear on the MCP wire
 ///                   and in `a2a.agents_json[*].skills[*].name`. Must
@@ -103,23 +93,16 @@ use crate::daemon::persistence::agent_registry::AgentEntry;
 ///                   by agent-side tool pickers when the agent is
 ///                   choosing which tool to call. Not a protocol
 ///                   field; may be tuned for readability.
-///   * `parameters` — JSON Schema describing the argument shape.
-///                   Must be a JSON object at the top level
-///                   (`{"type": "object", ...}`); that is the only
-///                   shape both OpenAI's tool-use contract and the
-///                   Axon SDK's ToolSpec accept.
 ///
-/// Private fields with public getters: callers construct specs via
-/// `AgentAbilitySpec::new(...)` (which validates the shape) or the
-/// module-level `abilities_for(...)`, never by field-wise struct
-/// literals. This keeps every instance well-formed by construction
-/// and makes "I'll just set description = empty" a compile error at
-/// the site, not a runtime regression downstream.
+/// `AgentAbilitySpec::new(...)` still accepts the manifest input
+/// schema and validates that it is a JSON object, but the schema is
+/// intentionally not retained here. `AbilityManifest` and descriptor
+/// projection own schema transport; this type is only the
+/// discovery/prompt DTO.
 #[derive(Debug, Clone)]
 pub struct AgentAbilitySpec {
     name: String,
     description: String,
-    parameters: Value,
 }
 
 impl AgentAbilitySpec {
@@ -160,13 +143,12 @@ impl AgentAbilitySpec {
         Ok(Self {
             name,
             description: description.into(),
-            parameters,
         })
     }
 
     /// The network-visible tool name. Stable; the identity under which
     /// this ability is both advertised (in `a2a.agents_json`) and
-    /// dispatched (by `AbilityToolAdapter`).
+    /// dispatched (through the daemon's committed catalogue binding).
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -176,73 +158,6 @@ impl AgentAbilitySpec {
     pub fn description(&self) -> &str {
         &self.description
     }
-
-    /// The JSON Schema for this ability's arguments. Always a JSON
-    /// object at the top level (enforced by `AgentAbilitySpec::new`).
-    pub fn parameters(&self) -> &Value {
-        &self.parameters
-    }
-
-    /// Serialise into the per-entry JSON object used inside
-    /// `a2a.agents_json[*].skills`.
-    ///
-    /// The shape is the v2 wire contract specified by
-    /// `docs/spec/node-roster-label-v2.md`: every skill carries
-    /// `name`, `description`, `input_schema`, `output_schema`, and
-    /// `timeout_seconds`.
-    ///
-    /// Chat has a deliberately stable public discovery schema
-    /// (`prompt` + optional `context`) rather than the larger internal
-    /// execution manifest schema. The internal schema includes local
-    /// routing controls such as sessions, driver overrides, tool
-    /// exposure, and attachments; those are available through manifest
-    /// and local tool surfaces, but they are not part of the
-    /// cross-stack node roster contract.
-    pub fn to_discovery_json(&self) -> Value {
-        json!({
-            "description": self.discovery_description(),
-            "input_schema": self.discovery_input_schema(),
-            "name": self.name,
-            "output_schema": serde_json::Value::Null,
-            "timeout_seconds": serde_json::Value::Null,
-        })
-    }
-
-    fn discovery_description(&self) -> String {
-        let Some((agent_name, "chat")) = self.name.split_once('.') else {
-            return self.description.clone();
-        };
-        format!(
-            "Send a chat prompt to the locally-installed `{agent_name}` agent. The agent runs \
-             as a subprocess on this node; the response is returned verbatim. Use `context` to \
-             prepend a system-style preamble when the agent supports one."
-        )
-    }
-
-    fn discovery_input_schema(&self) -> Value {
-        if matches!(self.name.split_once('.'), Some((_agent_name, "chat"))) {
-            return chat_discovery_input_schema();
-        }
-        self.parameters.clone()
-    }
-}
-
-fn chat_discovery_input_schema() -> Value {
-    json!({
-        "additionalProperties": false,
-        "properties": {
-            "context": {
-                "description": "Optional system-style preamble prepended before `prompt`.",
-                "type": "string"
-            },
-            "prompt": {
-                "description": "The user prompt sent to the agent.",
-                "type": "string"
-            }
-        },
-        "required": ["prompt"],
-        "type": "object"
-    })
 }
 
 /// Build the ability list for one agent entry.
@@ -266,62 +181,6 @@ pub fn abilities_for(agent_name: &str, entry: &AgentEntry) -> Vec<AgentAbilitySp
     abilities_from_manifests(agent_name, entry)
 }
 
-/// Build the publication/read-model ability list for one hosted agent.
-///
-/// This is deliberately wider than [`abilities_for`]. `abilities_for`
-/// is manifest-only and fails closed when `root_path` is missing; it is
-/// the dispatch source of truth. Publication has one extra rule from
-/// the hosted-agent read model: every registered LLM agent exposes its
-/// default `<agent>.chat` contract even before the AgentDirectory has
-/// been materialized on disk. Manifest-backed chat still wins when it
-/// exists, so operator-edited descriptions and schemas are preserved.
-pub fn abilities_for_publication(agent_name: &str, entry: &AgentEntry) -> Vec<AgentAbilitySpec> {
-    let mut specs = abilities_for(agent_name, entry);
-    let default_chat = crate::core::ability::spec::default_chat_manifest();
-    let qualified_chat = default_chat.qualified_name(agent_name);
-    if specs.iter().any(|spec| spec.name() == qualified_chat) {
-        return specs;
-    }
-    match AgentAbilitySpec::new(
-        qualified_chat,
-        default_chat.description().to_string(),
-        default_chat.input_schema().clone(),
-    ) {
-        Ok(spec) => specs.insert(0, spec),
-        Err(e) => {
-            eprintln!(
-                "abilities_for_publication[{agent_name}]: default chat manifest is malformed: {e}"
-            );
-        }
-    }
-    specs
-}
-
-/// Project a daemon-local agent ability key into the public ability
-/// name owned by `owner_ura`.
-///
-/// The daemon dispatch table stores implementation-qualified keys
-/// such as `anthropic.chat`. RFC-005 owner projections publish
-/// owner-local names such as `chat`. Prefer the URA-owned projection
-/// first; the local registry name is a fallback for transitional rows
-/// where the persisted agent URA's `agent_id` does not exactly match
-/// the local registry key.
-pub fn public_agent_ability_name(
-    owner_ura: &str,
-    local_agent_name: &str,
-    registry_name: &str,
-) -> String {
-    let projected = crate::core::ura::owner_local_ability_name(owner_ura, registry_name);
-    if projected != registry_name {
-        return projected;
-    }
-    registry_name
-        .strip_prefix(local_agent_name)
-        .and_then(|rest| rest.strip_prefix('.'))
-        .unwrap_or(registry_name)
-        .to_string()
-}
-
 /// Like `abilities_for`, but returns the full `AbilityManifest` for
 /// each ability rather than the discovery-trimmed `AgentAbilitySpec`.
 ///
@@ -339,7 +198,7 @@ pub fn public_agent_ability_name(
 pub fn manifests_for(
     agent_name: &str,
     entry: &AgentEntry,
-) -> Vec<crate::core::ability::spec::AbilityManifest> {
+) -> Vec<crate::daemon::ability::manifest::AbilityManifest> {
     (*manifests_for_shared(agent_name, entry)).clone()
 }
 
@@ -357,7 +216,7 @@ pub fn manifests_for(
 // for roots that leave the registry linger until process exit —
 // bounded by the number of distinct roots ever served.
 
-type SharedManifests = std::sync::Arc<Vec<crate::core::ability::spec::AbilityManifest>>;
+type SharedManifests = std::sync::Arc<Vec<crate::daemon::ability::manifest::AbilityManifest>>;
 
 #[derive(PartialEq, Eq)]
 struct ManifestDirSignature(Vec<(std::ffi::OsString, u64, Option<std::time::SystemTime>)>);
@@ -419,6 +278,12 @@ fn manifest_cache(
 /// discover) should prefer this; the owned-`Vec` wrapper exists for
 /// callers that mutate or consume the list.
 pub fn manifests_for_shared(agent_name: &str, entry: &AgentEntry) -> SharedManifests {
+    let Some(surface_name) = project_agent_surface_name(agent_name) else {
+        eprintln!(
+            "manifests_for[{agent_name}]: invalid Agent identifier for ability surface projection"
+        );
+        return SharedManifests::default();
+    };
     let Some(root) = entry.root_path.as_ref() else {
         eprintln!(
             "manifests_for[{agent_name}]: registry row is missing root_path; publishing no abilities"
@@ -480,7 +345,7 @@ pub fn manifests_for_shared(agent_name: &str, entry: &AgentEntry) -> SharedManif
         }
     };
 
-    if spec_name != agent_name {
+    if spec_name != surface_name {
         eprintln!(
             "manifests_for[{agent_name}]: root_path {} belongs to agent {spec_name:?}; publishing no abilities",
             root.display()
@@ -502,10 +367,13 @@ pub fn manifests_for_shared(agent_name: &str, entry: &AgentEntry) -> SharedManif
 /// fail-loud semantics.
 fn abilities_from_manifests(agent_name: &str, entry: &AgentEntry) -> Vec<AgentAbilitySpec> {
     let manifests = manifests_for_shared(agent_name, entry);
+    let Some(surface_name) = project_agent_surface_name(agent_name) else {
+        return Vec::new();
+    };
     let mut specs = Vec::with_capacity(manifests.len());
     for manifest in manifests.iter() {
         match AgentAbilitySpec::new(
-            manifest.qualified_name(agent_name),
+            manifest.qualified_name(&surface_name),
             manifest.description().to_string(),
             manifest.input_schema().clone(),
         ) {
@@ -521,6 +389,19 @@ fn abilities_from_manifests(agent_name: &str, entry: &AgentEntry) -> Vec<AgentAb
     specs
 }
 
+fn project_agent_surface_name(agent_identifier: &str) -> Option<String> {
+    if agent_identifier.contains('/') {
+        let agent_id = crate::core::agent::id::AgentId::parse(agent_identifier).ok()?;
+        if agent_id.to_string() != agent_identifier {
+            return None;
+        }
+        return Some(agent_id.name);
+    }
+    crate::core::agent::id::AgentId::new(crate::core::agent::id::DEFAULT_TENANT, agent_identifier)
+        .ok()
+        .map(|agent| agent.name)
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -531,15 +412,15 @@ mod tests {
     //! operator which promise just broke.
 
     use super::*;
-    use crate::core::ability::spec::AbilityManifest;
     use crate::core::agent::spec::AgentSpec;
+    use crate::core::agent::spec::RuntimeKind;
+    use crate::daemon::ability::manifest::AbilityManifest;
     use crate::daemon::execution::mission::directory::{
         AgentDirectory, Location, ABILITY_MANIFEST_SUFFIX,
     };
-    use crate::daemon::persistence::agent_registry::AgentType;
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    fn entry_named(name: &str, t: AgentType) -> AgentEntry {
+    fn entry_named(name: &str, t: RuntimeKind) -> AgentEntry {
         make_agent_on_disk(name, t).1
     }
 
@@ -548,28 +429,12 @@ mod tests {
         use crate::cli::commands::test_support::HomeGuard;
         let _g = HomeGuard::new();
 
-        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
         assert!(entry.root_path.is_none());
         let abilities = abilities_for("ghost-agent", &entry);
         assert!(
             abilities.is_empty(),
             "missing root_path must not synthesize ghost abilities: {abilities:?}"
-        );
-    }
-
-    #[test]
-    fn abilities_for_publication_synthesizes_default_chat_without_root_path() {
-        use crate::cli::commands::test_support::HomeGuard;
-        let _g = HomeGuard::new();
-
-        let entry = AgentEntry::new(AgentType::ClaudeCode, Some("sonnet".to_string()));
-        assert!(entry.root_path.is_none(), "precondition");
-        let abilities = abilities_for_publication("alice", &entry);
-        let names: Vec<&str> = abilities.iter().map(|ability| ability.name()).collect();
-        assert_eq!(
-            names,
-            vec!["alice.chat"],
-            "publication read model keeps hosted-agent default chat visible"
         );
     }
 
@@ -581,9 +446,9 @@ mod tests {
         // would break downstream consumers which assume a one-to-one
         // agent↔ability mapping.
         for t in [
-            AgentType::ClaudeCode,
-            AgentType::Codex,
-            AgentType::CodexAppServer,
+            RuntimeKind::ClaudeCode,
+            RuntimeKind::Codex,
+            RuntimeKind::CodexAppServer,
         ] {
             let entry = entry_named("test-agent", t);
             let abilities = abilities_for("test-agent", &entry);
@@ -598,10 +463,10 @@ mod tests {
     }
 
     #[test]
-    fn chat_manifest_schema_is_object_with_required_prompt() {
-        let entry = entry_named("claude", AgentType::ClaudeCode);
-        let abilities = abilities_for("claude", &entry);
-        let params = abilities[0].parameters();
+    fn chat_manifest_schema_is_object_with_typed_entry_shapes() {
+        let entry = entry_named("claude", RuntimeKind::ClaudeCode);
+        let manifests = manifests_for("claude", &entry);
+        let params = manifests[0].input_schema();
         // Top-level type is an object — every LLM tool-use contract
         // OpenAI / Anthropic / Axon emits assumes this. Verify it
         // here so a future "let me simplify the schema" patch can't
@@ -611,14 +476,18 @@ mod tests {
             Some("object"),
             "schema top-level type must be \"object\""
         );
-        let required = params
-            .get("required")
+        let one_of = params
+            .get("oneOf")
             .and_then(Value::as_array)
-            .expect("required must be an array");
-        assert!(
-            required.iter().any(|v| v.as_str() == Some("prompt")),
-            "prompt must appear in `required`"
-        );
+            .expect("oneOf entry-shape guard must be an array");
+        assert_eq!(one_of.len(), 2);
+        let properties = params
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("properties must be an object");
+        assert!(properties.contains_key("prompt"));
+        assert!(properties.contains_key("messages"));
+        assert!(properties.contains_key("execution"));
         // `additionalProperties: false` is load-bearing — it turns
         // callers sending unexpected args into a schema error rather
         // than silently dropping them, which makes debugging "why
@@ -631,15 +500,16 @@ mod tests {
     }
 
     #[test]
-    fn chat_manifest_parameters_declare_both_prompt_and_optional_context() {
-        let entry = entry_named("codex", AgentType::Codex);
-        let abilities = abilities_for("codex", &entry);
-        let props = abilities[0]
-            .parameters()
+    fn chat_manifest_parameters_declare_prompt_and_structured_inputs() {
+        let entry = entry_named("codex", RuntimeKind::Codex);
+        let manifests = manifests_for("codex", &entry);
+        let props = manifests[0]
+            .input_schema()
             .get("properties")
             .and_then(Value::as_object)
             .expect("properties must be an object");
         assert!(props.contains_key("prompt"));
+        assert!(props.contains_key("messages"));
         assert!(props.contains_key("context"));
         assert_eq!(
             props
@@ -658,67 +528,13 @@ mod tests {
     }
 
     #[test]
-    fn to_discovery_json_shape_is_pinned() {
-        // The discovery shape is a wire contract parsed by the EasyNet
-        // backend. It is specified by `docs/spec/node-roster-label-v2.md`.
-        // If this test breaks, the backend's companion parser must be
-        // updated in the same release window and
-        // `tests/fixtures/a2a-v2/golden.json` re-generated.
-        let entry = entry_named("claude", AgentType::ClaudeCode);
-        let spec = abilities_for("claude", &entry).into_iter().next().unwrap();
-        let json = spec.to_discovery_json();
-        let obj = json.as_object().expect("discovery json is an object");
-        assert_eq!(
-            obj.len(),
-            5,
-            "exactly 5 keys: description, input_schema, name, output_schema, timeout_seconds — got {obj:?}"
-        );
-        assert!(obj.contains_key("name"));
-        assert!(obj.contains_key("description"));
-        assert!(obj.contains_key("input_schema"));
-        assert!(obj.contains_key("output_schema"));
-        assert!(obj.contains_key("timeout_seconds"));
-        assert!(obj["output_schema"].is_null());
-        assert!(obj["timeout_seconds"].is_null());
-        assert!(
-            obj.get("has_input_schema").is_none(),
-            "v2 skill entries carry input_schema directly, not has_input_schema"
-        );
-        assert_eq!(
-            obj["description"],
-            "Send a chat prompt to the locally-installed `claude` agent. The agent runs as a subprocess on this node; the response is returned verbatim. Use `context` to prepend a system-style preamble when the agent supports one."
-        );
-        let input = obj["input_schema"]
-            .as_object()
-            .expect("input_schema object");
-        assert_eq!(input.get("type").and_then(Value::as_str), Some("object"));
-        assert_eq!(
-            input
-                .get("required")
-                .and_then(Value::as_array)
-                .expect("required array"),
-            &vec![json!("prompt")]
-        );
-        let props = input
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("properties object");
-        assert!(props.contains_key("prompt"));
-        assert!(props.contains_key("context"));
-        assert!(
-            !props.contains_key("session_id"),
-            "A2A roster uses public prompt/context schema, not the internal execution schema"
-        );
-    }
-
-    #[test]
     fn different_agent_names_produce_distinct_ability_names() {
         // Sanity: the `<agent>.chat` template must interpolate the
         // right name. A broken template that hardcoded "agent.chat"
         // would silently alias every agent to the same tool name on
         // the wire, which would make discovery and dispatch ambiguous.
-        let claude = entry_named("claude", AgentType::ClaudeCode);
-        let codex = entry_named("codex", AgentType::Codex);
+        let claude = entry_named("claude", RuntimeKind::ClaudeCode);
+        let codex = entry_named("codex", RuntimeKind::Codex);
         let a = abilities_for("claude", &claude);
         let b = abilities_for("codex", &codex);
         assert_ne!(a[0].name(), b[0].name());
@@ -733,7 +549,7 @@ mod tests {
         // Ability names always contain a `.` because
         // `validate_agent_name` rejects dots inside agent names.
         // Together that makes a name collision structurally impossible.
-        let entry = entry_named("claude", AgentType::ClaudeCode);
+        let entry = entry_named("claude", RuntimeKind::ClaudeCode);
         let abilities = abilities_for("claude", &entry);
         assert!(abilities[0].name().contains('.'));
         // Mirror a subset of the reserved network-tool names so a
@@ -801,7 +617,6 @@ mod tests {
         .expect("well-formed spec must be accepted");
         assert_eq!(spec.name(), "claude.chat");
         assert_eq!(spec.description(), "send a prompt");
-        assert!(spec.parameters().is_object());
     }
 
     /// Regression: `AgentAbilitySpec` must be `Clone` so a discovery
@@ -809,7 +624,7 @@ mod tests {
     /// on the registry. Compile-time check via a noop round-trip.
     #[test]
     fn spec_is_cloneable() {
-        let entry = entry_named("claude", AgentType::ClaudeCode);
+        let entry = entry_named("claude", RuntimeKind::ClaudeCode);
         let spec = abilities_for("claude", &entry).into_iter().next().unwrap();
         let _copy = spec.clone();
     }
@@ -825,7 +640,7 @@ mod tests {
     /// The temp root is leaked rather than tracked through a `TempDir`
     /// guard because these tests don't share state across cases and
     /// clutter from a few abandoned temp dirs is acceptable noise.
-    fn make_agent_on_disk(name: &str, agent_type: AgentType) -> (std::path::PathBuf, AgentEntry) {
+    fn make_agent_on_disk(name: &str, agent_type: RuntimeKind) -> (std::path::PathBuf, AgentEntry) {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let root = std::env::temp_dir()
@@ -833,8 +648,7 @@ mod tests {
             .join(format!("{name}-{n}-{}", std::process::id()));
         // Clean any leftover from a previous identical run.
         let _ = std::fs::remove_dir_all(&root);
-        let runtime = agent_type.runtime_kind();
-        let spec = AgentSpec::new(name.to_string(), runtime);
+        let spec = AgentSpec::new(name.to_string(), agent_type);
         AgentDirectory::create(&Location::Local { root: root.clone() }, spec)
             .expect("create agent directory");
         let mut entry = AgentEntry::new(agent_type, None);
@@ -847,7 +661,7 @@ mod tests {
         // The snapshot cache must never serve a stale catalog: editing
         // a manifest changes the stat signature (length and/or mtime)
         // and forces a rebuild on the next read.
-        let (root, entry) = make_agent_on_disk("editline", AgentType::ClaudeCode);
+        let (root, entry) = make_agent_on_disk("editline", RuntimeKind::ClaudeCode);
         let first = manifests_for("editline", &entry);
         assert_eq!(first.len(), 1, "seeded chat manifest visible");
 
@@ -873,7 +687,7 @@ mod tests {
         // A registry row whose name disagrees with the directory's
         // own agent.toml fails closed (empty list) — and must NOT
         // evict the rightful owner's snapshot while doing so.
-        let (_root, entry) = make_agent_on_disk("owner", AgentType::ClaudeCode);
+        let (_root, entry) = make_agent_on_disk("owner", RuntimeKind::ClaudeCode);
         assert_eq!(manifests_for("owner", &entry).len(), 1);
         assert!(
             manifests_for("impostor", &entry).is_empty(),
@@ -890,7 +704,7 @@ mod tests {
     fn manifest_driven_path_returns_chat_from_seeded_manifest() {
         // After `AgentDirectory::create`, `abilities/chat.ability.toml`
         // exists. `abilities_for` must read it — not synthesize.
-        let (_root, entry) = make_agent_on_disk("alice", AgentType::ClaudeCode);
+        let (_root, entry) = make_agent_on_disk("alice", RuntimeKind::ClaudeCode);
         let abilities = abilities_for("alice", &entry);
         assert_eq!(abilities.len(), 1);
         assert_eq!(abilities[0].name(), "alice.chat");
@@ -901,7 +715,7 @@ mod tests {
         // If the operator removes chat.ability.toml, discovery must not
         // recreate it through a migration seam. Ability identity is the
         // authored manifest set.
-        let (root, entry) = make_agent_on_disk("bob", AgentType::ClaudeCode);
+        let (root, entry) = make_agent_on_disk("bob", RuntimeKind::ClaudeCode);
         let chat_path = root
             .join("abilities")
             .join(format!("chat{ABILITY_MANIFEST_SUFFIX}"));
@@ -925,7 +739,7 @@ mod tests {
         // compatibility property the whole refactor exists for: an
         // operator who adds `voice.ability.toml` should see it
         // surface in discovery without recompiling the daemon.
-        let (root, entry) = make_agent_on_disk("carol", AgentType::ClaudeCode);
+        let (root, entry) = make_agent_on_disk("carol", RuntimeKind::ClaudeCode);
         let voice = AbilityManifest::new(
             "voice",
             "Speak a synthesized response.",
@@ -956,7 +770,7 @@ mod tests {
         // operator can edit description / schema without touching
         // code. Pin that the manifest's description wins over the
         // hardcoded fallback's interpolated string.
-        let (root, entry) = make_agent_on_disk("dave", AgentType::ClaudeCode);
+        let (root, entry) = make_agent_on_disk("dave", RuntimeKind::ClaudeCode);
         let edited = AbilityManifest::new(
             "chat",
             "Edited blurb that the operator typed by hand.",
@@ -977,7 +791,7 @@ mod tests {
 
     #[test]
     fn entry_without_root_path_publishes_no_abilities() {
-        let entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
         assert!(entry.root_path.is_none(), "precondition");
         let abilities = abilities_for("ephemeral", &entry);
         assert!(

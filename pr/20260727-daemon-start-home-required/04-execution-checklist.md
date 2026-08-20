@@ -1,0 +1,6 @@
+- [x] Add typed daemon home-resolution error.
+- [x] Convert launch path construction to fail closed.
+- [x] Update internal callers to propagate path resolution errors.
+- [x] Add regression tests for missing and blank home roots.
+- [x] Run focused daemon boot/process tests.
+- [x] Run format and convergence gates.

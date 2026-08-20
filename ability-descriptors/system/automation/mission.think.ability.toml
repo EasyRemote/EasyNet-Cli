@@ -1,6 +1,22 @@
-schema_version = "1"
+schema_version = "3"
 name = "mission.think"
+descriptor_version = "1.0.0"
 description = "Run a long-running task with a separate judge session. Each cycle: the worker session resumes its prior session_id and pushes the task forward; an independent judge session reads the worker's latest output, decides whether to terminate, and emits a memory- classification verdict (which Phase 5's curator turns into ability.publish or skill.publish)."
+exposure = "task"
+dedicated_surface = "none"
+subject_contract_kind = "explicit-ura"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "invoke"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

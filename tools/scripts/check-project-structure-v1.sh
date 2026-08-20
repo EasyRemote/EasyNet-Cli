@@ -36,6 +36,19 @@ contains_name() {
   return 1
 }
 
+is_generated_cache_dir() {
+  local name="$1"
+
+  case "$name" in
+    __pycache__|.pytest_cache)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 check_root_contract() {
   local allowed_files=(
     .dockerignore
@@ -44,20 +57,21 @@ check_root_contract() {
     Cargo.lock
     README.md
     README.pdf
+    PROJECT_STRUCTURE.md
     VERSION
     build.rs
   )
   local allowed_dirs=(
     .github
     ability-descriptors
-    benches
     docs
     examples
     gallery
     include
     packaging
-    platforms
     plugins
+    pr
+    provider_routes
     schemas
     sdk
     skills
@@ -106,6 +120,7 @@ require_only_dirs() {
   local actual name allowed
   while IFS= read -r actual; do
     name="$(basename "$actual")"
+    is_generated_cache_dir "$name" && continue
     allowed=false
     for expected_name in "${expected[@]}"; do
       if [[ "$name" == "$expected_name" ]]; then
@@ -146,13 +161,28 @@ require_only_files() {
   done
 }
 
+require_no_dirs() {
+  local parent="$1"
+  require_dir "$parent"
+  [[ -d "$ROOT/$parent" ]] || return 0
+
+  local actual name
+  while IFS= read -r actual; do
+    name="$(basename "$actual")"
+    is_generated_cache_dir "$name" && continue
+    fail "unexpected directory under $parent: $name"
+  done < <(find "$ROOT/$parent" -mindepth 1 -maxdepth 1 -type d | sort)
+}
+
 require_file Cargo.toml
 require_file Cargo.lock
 require_file README.md
 require_file README.pdf
+require_file PROJECT_STRUCTURE.md
 require_file VERSION
 require_file build.rs
 require_file include/easynet_cli.h
+require_file include/easynet_cli.exports.v7
 check_root_contract
 
 require_only_files src/bin \
@@ -161,13 +191,13 @@ require_only_files src/bin \
   easynet-keyring.rs \
   gen-ability-tomls.rs \
   real-user-smoke.rs \
-  real-publish-smoke.rs
+  verify-voice-contract.rs
 
 require_only_dirs src \
   bin core daemon cli ffi eal support
 
 require_only_dirs src/core \
-  ability agent identity ura domain
+  agent identity ura domain
 
 require_only_dirs src/daemon \
   boot control invocation ability execution resources identity trust keyring federation plugins persistence axon_bridge telemetry
@@ -185,13 +215,13 @@ require_only_dirs src/daemon/execution \
   pty mcp mission schedule loop_instance permission session
 
 require_only_dirs src/daemon/resources \
-  skills pages context files media remote_desktop
+  skills pages context files media
 
 require_only_dirs src/cli \
   commands presentation daemon_client mcp
 
 require_only_dirs src/ffi \
-  daemon client invocation errors strings
+  daemon client invocation errors features strings
 
 require_only_dirs src/eal \
   parser interpreter runtime diagnostics
@@ -200,10 +230,25 @@ require_only_dirs src/support \
   async_bridge shellguard platform
 
 require_only_dirs sdk \
-  go python node java swift
+  go python node java swift rust schemas conformance
+
+require_only_dirs sdk/conformance \
+  cases fixtures runner
 
 require_only_dirs ability-descriptors/system \
-  agents device_control resources automation integrations governance
+  agents federation device_control resources automation integrations governance
+
+require_no_dirs provider_routes
+require_only_files provider_routes \
+  runtime-access-control-routes.v1.json \
+  runtime-principal-lifecycle-routes.v1.json \
+  runtime-receipt-routes.v1.json \
+  runtime-admin-routes.v1.json \
+  generate_access_control_routes.py \
+  generate_principal_routes.py \
+  generate_receipt_routes.py \
+  generate_runtime_admin_routes.py \
+  route_generator.py
 
 require_dir schemas/descriptor
 require_dir schemas/receipt
@@ -215,12 +260,13 @@ require_dir skills
 require_dir examples
 require_dir gallery
 require_dir docs
-require_dir benches
 require_dir tools
+require_dir tools/benches
+require_dir tools/sdk-conformance-runner
+require_file tools/sdk-conformance-runner/Cargo.toml
+require_file tools/sdk-conformance-runner/src/main.rs
 require_dir packaging/docker
 require_dir packaging/release
-require_dir platforms/macos
-require_dir platforms/windows
 require_dir .github/workflows
 
 require_dir tests/e2e
@@ -231,12 +277,12 @@ require_dir tests/support
 
 for forbidden in \
   engineering \
+  benches \
   scripts \
   demos \
   crates \
   runtime \
   services \
-  sdk/rust \
   src/runtime \
   src/services \
   src/facade \
@@ -253,15 +299,15 @@ done < <(find "$ROOT/ability-descriptors/system" -mindepth 1 -maxdepth 1 -type f
 
 while IFS= read -r file; do
   fail "flat ffi source file is not final structure: ${file#$ROOT/}"
-done < <(find "$ROOT/src/ffi" -mindepth 1 -maxdepth 1 -type f ! -name 'mod.rs' 2>/dev/null | sort)
+done < <(find "$ROOT/src/ffi" -mindepth 1 -maxdepth 1 -type f -name '*.rs' ! -name 'mod.rs' 2>/dev/null | sort)
 
 while IFS= read -r file; do
   fail "flat eal source file is not final structure: ${file#$ROOT/}"
-done < <(find "$ROOT/src/eal" -mindepth 1 -maxdepth 1 -type f ! -name 'mod.rs' 2>/dev/null | sort)
+done < <(find "$ROOT/src/eal" -mindepth 1 -maxdepth 1 -type f -name '*.rs' ! -name 'mod.rs' 2>/dev/null | sort)
 
 while IFS= read -r file; do
   fail "flat support source file is not final structure: ${file#$ROOT/}"
-done < <(find "$ROOT/src/support" -mindepth 1 -maxdepth 1 -type f ! -name 'mod.rs' 2>/dev/null | sort)
+done < <(find "$ROOT/src/support" -mindepth 1 -maxdepth 1 -type f -name '*.rs' ! -name 'mod.rs' 2>/dev/null | sort)
 
 if ((${#failures[@]} > 0)); then
   printf 'project-structure-v1 failed:\n' >&2

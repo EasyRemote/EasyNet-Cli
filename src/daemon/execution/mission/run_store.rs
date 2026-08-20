@@ -3,11 +3,11 @@
 //
 // File: src/agent/run_store.rs
 // Description: Per-invocation persistence for agent runs. Every `agent send`
-//              call creates a timestamped directory under the agent's
-//              workspace containing prompt, response, and metadata.
+//              call creates a timestamped directory under the validated
+//              AgentDirectory root containing prompt, response, and metadata.
 //
 // Layout:
-//   ~/.easynet/workspaces/<agent>/runs/<YYYY-MM-DD_HHMMSS>/
+//   ~/.easynet/agents/<agent>/runs/<YYYY-MM-DD_HHMMSS>/
 //     ├── prompt.txt     — composed prompt (incl. context) sent to the agent
 //     ├── response.md    — final agent reply, as markdown
 //     └── meta.json      — timing, token counts, cost, model, exit status, invocation_id
@@ -29,8 +29,6 @@ use std::path::{Path, PathBuf};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 
-use super::workspace;
-
 /// A single persisted run directory. Holds per-run artefact paths
 /// (`prompt.txt`, `response.md`, `meta.json`). The stream event
 /// log lives in the Timeline (see module doc).
@@ -39,10 +37,15 @@ pub struct RunDir {
 }
 
 impl RunDir {
-    /// Create a new timestamped run directory under the agent's workspace.
-    pub fn create(agent_name: &str) -> anyhow::Result<Self> {
-        let ws = workspace::workspace_dir(agent_name);
-        let runs = ws.join("runs");
+    /// Create a new timestamped run directory under the verified agent root.
+    ///
+    /// The caller must pass the `AgentDirectory::root()` it already validated
+    /// from the registry row. Run persistence must not reconstruct an agent
+    /// directory from a name; that would reintroduce the retired
+    /// `agents_root()/name` directory authority next to the registry-owned
+    /// `root_path`.
+    pub fn create(agent_root: &Path) -> anyhow::Result<Self> {
+        let runs = agent_root.join("runs");
         fs::create_dir_all(&runs)?;
         let stamp = Local::now().format("%Y-%m-%d_%H%M%S").to_string();
         let path = allocate_unique_run_dir(&runs, &stamp)?;
@@ -52,9 +55,8 @@ impl RunDir {
     /// Write the composed prompt to `prompt.txt`.
     ///
     /// Returns `Result` rather than swallowing — a missed prompt write means
-    /// the run directory is no longer a faithful record, and a caller might
-    /// reasonably choose to fail loudly rather than continue with a half-
-    /// persisted run. The CLI dispatcher currently logs and proceeds.
+    /// the run directory is no longer a faithful record. The CLI dispatcher
+    /// treats this as a pre-invocation infrastructure failure.
     pub fn write_prompt(&self, prompt: &str) -> io::Result<()> {
         fs::write(self.path.join("prompt.txt"), prompt)
     }
@@ -123,15 +125,14 @@ pub struct RunMeta {
     pub agent: String,
     pub agent_type: String,
     pub model: Option<String>,
-    /// PersistentLog invocation_id for this run. Empty on a meta
-    /// written by a pre-PR-7 binary (legacy records). A populated
-    /// id lets an operator cross-reference the run directory with
+    /// PersistentLog invocation_id for this run. This is the required
+    /// runtime identity fact that cross-references the run directory with
     /// the on-disk event log at `$AXON_INVOCATION_LOG_DIR/<id>.jsonl`,
     /// which carries the P1-P6-compliant event stream (see
-    /// `daemon::execution::mission::session::Session`). `#[serde(default)]`
-    /// keeps deserialisation backward-compatible with meta.json files
-    /// written before this field existed.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    /// `daemon::execution::mission::session::Session`).
+    #[serde(
+        deserialize_with = "crate::daemon::execution::mission::persisted_identity::deserialize_non_empty_string"
+    )]
     pub invocation_id: String,
     pub started_at: String,
     pub duration_ms: u64,
@@ -201,5 +202,72 @@ mod tests {
             "expected {N} distinct paths, got {unique:?}"
         );
         let _ = fs::remove_dir_all(&*runs);
+    }
+
+    #[test]
+    fn run_dir_create_uses_supplied_agent_root() {
+        let agent_root = temp_runs().join("custom-agent-root");
+        let run = RunDir::create(&agent_root).expect("run dir under supplied root");
+
+        assert!(
+            run.path().starts_with(agent_root.join("runs")),
+            "run dir must be under the supplied AgentDirectory root, got {}",
+            run.path().display()
+        );
+
+        let _ = fs::remove_dir_all(agent_root);
+    }
+
+    #[test]
+    fn run_meta_requires_invocation_id_identity_fact() {
+        let legacy = r#"{
+            "agent": "alice",
+            "agent_type": "claude-code",
+            "model": null,
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "duration_ms": 7,
+            "exit_status": "ok",
+            "error": null,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "num_turns": 1,
+            "total_cost_usd": 0.0
+        }"#;
+        let error = serde_json::from_str::<RunMeta>(legacy)
+            .expect_err("meta.json without invocation_id must fail closed");
+        assert!(
+            error.to_string().contains("missing field `invocation_id`"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn run_meta_rejects_empty_invocation_id_identity_fact() {
+        let invalid = r#"{
+            "agent": "alice",
+            "agent_type": "claude-code",
+            "model": null,
+            "invocation_id": "",
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "duration_ms": 7,
+            "exit_status": "ok",
+            "error": null,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_tokens": 0,
+            "cache_creation_tokens": 0,
+            "num_turns": 1,
+            "total_cost_usd": 0.0
+        }"#;
+        let error = serde_json::from_str::<RunMeta>(invalid)
+            .expect_err("empty invocation_id must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("runtime identity fact must be a non-empty string"),
+            "unexpected error: {error}"
+        );
     }
 }

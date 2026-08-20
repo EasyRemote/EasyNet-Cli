@@ -1,6 +1,22 @@
-schema_version = "1"
+schema_version = "3"
 name = "agent.stop"
-description = "Remove an LLM sub-agent registry row by name or Agent URA. Idempotent: ack=false when the row didn't exist. Workspace files are deliberately NOT deleted — use `easynet agent remove --purge` for that."
+descriptor_version = "1.0.0"
+description = "Remove an LLM sub-agent registry row by name or Agent URA. Idempotent: ack=false when the row didn't exist. The registered root directory is always preserved."
+exposure = "operator"
+dedicated_surface = "none"
+subject_contract_kind = "explicit-ura"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

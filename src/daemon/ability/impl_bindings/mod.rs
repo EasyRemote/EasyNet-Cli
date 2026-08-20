@@ -59,9 +59,16 @@ impl RuntimeEnv {
         ))
     }
 
-    pub fn device_ability(exec_kind: &str) -> Self {
+    pub fn ability_deployment(exec_kind: &str) -> Self {
         Self::generated(format!(
-            "easynet-cli/{};device-ability:{exec_kind}",
+            "easynet-cli/{};ability-deployment:{exec_kind}",
+            env!("CARGO_PKG_VERSION")
+        ))
+    }
+
+    pub fn descriptor_only() -> Self {
+        Self::generated(format!(
+            "easynet-cli/{};descriptor-only",
             env!("CARGO_PKG_VERSION")
         ))
     }
@@ -74,6 +81,7 @@ impl RuntimeEnv {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AbilityImplSource {
+    DescriptorOnly,
     NativeDaemon,
     BuiltinPlugin,
     SidecarPlugin,
@@ -87,6 +95,7 @@ pub enum AbilityImplSource {
 impl AbilityImplSource {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::DescriptorOnly => "descriptor_only",
             Self::NativeDaemon => "native_daemon",
             Self::BuiltinPlugin => "builtin_plugin",
             Self::SidecarPlugin => "sidecar_plugin",
@@ -303,7 +312,7 @@ mod tests {
             "er.generate",
             "1.0.0",
             CallMode::Stream,
-            RuntimeEnv::device_ability("host_stream"),
+            RuntimeEnv::ability_deployment("host_stream"),
             AbilityImplSource::DeviceDeploy,
             Some(format!("sha256:{}", "a".repeat(64))),
         )
@@ -312,7 +321,7 @@ mod tests {
             "er.generate",
             "1.0.0",
             CallMode::Stream,
-            RuntimeEnv::device_ability("host_stream"),
+            RuntimeEnv::ability_deployment("host_stream"),
             AbilityImplSource::DeviceDeploy,
             Some(format!("sha256:{}", "b".repeat(64))),
         )

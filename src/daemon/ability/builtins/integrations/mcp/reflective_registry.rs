@@ -18,7 +18,7 @@
 //     registry refuses to overwrite an existing handler.
 //   - Axon protocol wire is untouched: reflection registers ordinary
 //     local abilities; cross-device dispatch reuses
-//     `federation.forward_invoke` like any other ability.
+//     the canonical `Invocation::Invoke` RPC like every other invocation.
 //
 // What this module does NOT do (kept narrow on purpose):
 //
@@ -43,11 +43,14 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::core::ability::spec::AbilityManifest;
 use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, ControlPlaneImplementation, OwnerKind};
+use crate::daemon::ability::manifest::AbilityManifest;
 use crate::daemon::ability::{AbilityImplSource, AuthorityScope, RuntimeEnv};
 use crate::daemon::execution::mcp::McpClientService;
+use crate::support::async_bridge::{
+    spawn_current_thread_tokio, try_run_blocking, SyncBridgeRuntimePolicy,
+};
 
 /// Stable prefix stamped into `AbilityDescriptor.source` for every
 /// reflectively-registered upstream MCP tool, before the
@@ -83,40 +86,26 @@ pub enum McpReflectionMode {
     /// Return daemon Ready first, then refresh the reflective
     /// catalogue in the dynamic registry overlay.
     Lazy,
-    /// Legacy / benchmark mode: finish reflection before returning
-    /// the registry to the caller.
+    /// Operator-selected blocking mode: finish reflection before
+    /// returning the registry to the caller.
     Eager,
 }
 
 impl McpReflectionMode {
-    /// Read the env-configured mode. Unknown / malformed values
-    /// fall back to `Lazy` AND emit a single `warn` op-event so the
-    /// operator who typo'd `EASYNET_MCP_REFLECTION=eagre` can find
-    /// the misconfiguration in the daemon log instead of silently
-    /// running the wrong mode for the lifetime of the process.
-    pub fn from_env() -> Self {
-        match std::env::var(ENV_MCP_REFLECTION_MODE) {
-            Err(_) => Self::Lazy,
-            Ok(raw) => match Self::parse(&raw) {
-                Ok(mode) => mode,
-                Err(UnknownReflectionMode(unknown)) => {
-                    crate::op_event!(
-                        component = mcp_reflective,
-                        kind = reflection_mode_unknown,
-                        level = "warn",
-                        env = ENV_MCP_REFLECTION_MODE,
-                        raw = unknown,
-                        fallback = Self::Lazy.as_str(),
-                    );
-                    Self::Lazy
-                }
-            },
-        }
+    /// Read the env-configured mode. Unknown or malformed values are
+    /// configuration errors; daemon registry assembly must fail before
+    /// advertising an MCP reflection lifecycle the operator did not
+    /// request.
+    pub fn from_env() -> Result<Self, UnknownReflectionMode> {
+        Self::from_env_value(std::env::var(ENV_MCP_REFLECTION_MODE).ok().as_deref())
+    }
+
+    fn from_env_value(raw: Option<&str>) -> Result<Self, UnknownReflectionMode> {
+        raw.map(Self::parse).unwrap_or(Ok(Self::Lazy))
     }
 
     /// Strict parser. Returns `Err(raw_lowercased)` for unknown
-    /// values so callers can choose between hard-fail (config
-    /// validators) and warn-and-fallback ([`Self::from_env`]).
+    /// values so callers can hard-fail configuration validation.
     /// Empty strings normalize to `Lazy` because env-var-as-empty
     /// is indistinguishable from env-var-absent on many shells.
     pub fn parse(raw: &str) -> Result<Self, UnknownReflectionMode> {
@@ -142,11 +131,59 @@ impl McpReflectionMode {
 pub const ENV_MCP_REFLECTION_MODE: &str = "EASYNET_MCP_REFLECTION";
 
 /// Env var controlling the lazy supervisor's per-server fan-out.
-/// Must parse as a positive integer; malformed values fall back to
-/// [`DEFAULT_MCP_REFLECTION_CONCURRENCY`].
+/// Must parse as a positive integer. Missing, empty, malformed, and
+/// non-positive values enter an explicit defaulted configuration state.
 pub const ENV_MCP_REFLECTION_CONCURRENCY: &str = "EASYNET_MCP_REFLECTION_CONCURRENCY";
 
 const DEFAULT_MCP_REFLECTION_CONCURRENCY: usize = 4;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum McpReflectionConcurrency {
+    Configured(usize),
+    Defaulted(McpReflectionConcurrencyDefaultReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum McpReflectionConcurrencyDefaultReason {
+    Missing,
+    Empty,
+    Invalid,
+    NonPositive,
+}
+
+impl McpReflectionConcurrency {
+    fn from_env() -> Self {
+        Self::from_env_value(
+            std::env::var(ENV_MCP_REFLECTION_CONCURRENCY)
+                .ok()
+                .as_deref(),
+        )
+    }
+
+    fn from_env_value(raw: Option<&str>) -> Self {
+        let Some(raw) = raw else {
+            return Self::Defaulted(McpReflectionConcurrencyDefaultReason::Missing);
+        };
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Self::Defaulted(McpReflectionConcurrencyDefaultReason::Empty);
+        }
+        let Ok(limit) = trimmed.parse::<usize>() else {
+            return Self::Defaulted(McpReflectionConcurrencyDefaultReason::Invalid);
+        };
+        if limit == 0 {
+            return Self::Defaulted(McpReflectionConcurrencyDefaultReason::NonPositive);
+        }
+        Self::Configured(limit)
+    }
+
+    fn limit(&self) -> usize {
+        match self {
+            Self::Configured(limit) => *limit,
+            Self::Defaulted(_) => DEFAULT_MCP_REFLECTION_CONCURRENCY,
+        }
+    }
+}
 
 /// Build the canonical `AbilityDescriptor.source` value for a tool
 /// reflected from upstream MCP server `server_name` whose
@@ -233,7 +270,7 @@ impl McpReflectionSupervisor {
             client,
             registry,
             owner_ura: owner_ura.into(),
-            concurrency_limit: mcp_reflection_concurrency(),
+            concurrency_limit: McpReflectionConcurrency::from_env().limit(),
         }
     }
 
@@ -257,30 +294,21 @@ impl McpReflectionSupervisor {
     /// callers that need orderly shutdown of the reflection pass
     /// must use [`Self::run_once`] from a tracked task instead.
     pub fn spawn_lazy(self) {
-        if let Err(e) = std::thread::Builder::new()
-            .name("easynet-mcp-reflection".to_string())
-            .spawn(move || {
-                let rt = match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(rt) => rt,
-                    Err(e) => {
-                        crate::op_event!(
-                            component = mcp_reflective,
-                            kind = lazy_reflection_skipped,
-                            level = "warn",
-                            reason = "runtime_build_failed",
-                            error = format!("{e}"),
-                        );
-                        return;
-                    }
-                };
-                rt.block_on(async move {
-                    self.run_lazy_once().await;
-                });
-            })
-        {
+        if let Err(e) = spawn_current_thread_tokio(
+            "easynet-mcp-reflection",
+            async move {
+                self.run_lazy_once().await;
+            },
+            |error| {
+                crate::op_event!(
+                    component = mcp_reflective,
+                    kind = lazy_reflection_skipped,
+                    level = "warn",
+                    reason = "runtime_build_failed",
+                    error = format!("{error}"),
+                );
+            },
+        ) {
             crate::op_event!(
                 component = mcp_reflective,
                 kind = lazy_reflection_skipped,
@@ -356,7 +384,11 @@ impl McpReflectionSupervisor {
         let snapshot = initially_reflected.clone();
         let this = self.clone();
         let fut = async move { this.attach_refresh_sinks(&snapshot).await };
-        if let Err(e) = run_blocking(fut, "build mcp-refresh-sink runtime") {
+        if let Err(e) = try_run_blocking(
+            fut,
+            SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
+            "build mcp-refresh-sink runtime",
+        ) {
             crate::op_event!(
                 component = mcp_reflective,
                 kind = hot_reload_sink_skipped,
@@ -426,7 +458,11 @@ pub fn run_eager_blocking(
         client.reset_connections().await;
         report
     };
-    match run_blocking(fut, "build mcp-reflect runtime") {
+    match try_run_blocking(
+        fut,
+        SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
+        "build mcp-reflect runtime",
+    ) {
         Ok(report) => {
             log_eager_reflect_report(&report);
             let per_server = reflected_names_by_server(&report);
@@ -486,37 +522,30 @@ impl PostArcReflection {
     /// [`op_event!`] so an operator reading the boot log can tell
     /// which path was taken without inspecting env state.
     ///
-    /// `pages_user` is the daemon's paired user (`None` ⇒ unpaired
-    /// daemon — bare-name projection gated off per AGENT_IDENTITY
-    /// §2). `realm` is the same realm the user-rooted ability
-    /// families used so a reflected tool's owner URA matches the
-    /// rest of the daemon's catalogue.
     pub fn plan(
         mode: McpReflectionMode,
-        pages_user: Option<&str>,
-        realm: &str,
         client: &McpClientService,
         registry: &mut AxonAbilityCatalog,
     ) -> Self {
-        let Some(user) = pages_user else {
-            // Unpaired daemons emit a single informational line so
-            // an operator who configured `mcps.json` but
-            // forgot to pair a user understands why their MCP tools
-            // are not showing up as bare-name abilities. We do NOT
-            // consult the service for its server count here — that
-            // requires the async lock, and this code path runs in
-            // the sync boot context — so the log is unconditional.
-            // False positives (printing this line when there are no
-            // servers configured either) are cheap; false silences
-            // would frustrate operators.
+        let Some(host_device_ura) = registry.hosted_device_authority_root() else {
             crate::op_event!(
                 component = mcp_reflective,
                 kind = reflection_skipped,
-                reason = "daemon_unpaired",
+                reason = "no_device_authority",
             );
             return Self::Skip;
         };
-        let owner_ura = easynet_axon::ura::agent_ura(realm, user, "mcp");
+        let Ok(host) = crate::core::ura::parse_ura(host_device_ura) else {
+            return Self::Skip;
+        };
+        let Some(device_id) = host.device_id() else {
+            return Self::Skip;
+        };
+        let owner_ura = crate::core::ura::device_agent_ura(
+            &host.realm,
+            device_id,
+            crate::daemon::ability::names::integrations::MCP_INTEGRATION_SYSTEM_AGENT_ID,
+        );
         match mode {
             McpReflectionMode::Off => {
                 crate::op_event!(
@@ -568,38 +597,6 @@ impl PostArcReflection {
             }
         }
     }
-}
-
-/// Run an async future to completion from a synchronous caller,
-/// reusing an ambient tokio runtime when present and constructing a
-/// short-lived current-thread runtime otherwise. The `bridge_label`
-/// is interpolated into the error message when runtime construction
-/// fails so the operator can tell which call site failed without
-/// reading the stack trace.
-fn run_blocking<F: std::future::Future<Output = T>, T>(
-    fut: F,
-    bridge_label: &str,
-) -> Result<T, String> {
-    match tokio::runtime::Handle::try_current() {
-        Ok(_) => Ok(tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(fut)
-        })),
-        Err(_) => match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(rt) => Ok(rt.block_on(fut)),
-            Err(e) => Err(format!("{bridge_label}: {e}")),
-        },
-    }
-}
-
-fn mcp_reflection_concurrency() -> usize {
-    std::env::var(ENV_MCP_REFLECTION_CONCURRENCY)
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(DEFAULT_MCP_REFLECTION_CONCURRENCY)
 }
 
 fn reflected_names_by_server(report: &ReflectResult) -> BTreeMap<String, Vec<String>> {
@@ -974,7 +971,7 @@ async fn refresh_server_inner<W: RegistryWriter>(
 /// `notifications/tools/list_changed` push after the registry has
 /// been frozen behind `Arc<AxonAbilityCatalog>` at daemon boot.
 ///
-/// The hot path's lookup order is static → dynamic → fallback, so
+/// The hot path's lookup order is static → dynamic → policy, so
 /// a dynamic-side rewrite is invisible to any boot-registered
 /// ability: a hot-listed tool whose name happens to collide with a
 /// system ability is silently shadowed by the static entry. See
@@ -1263,6 +1260,7 @@ fn register_one_tool<W: RegistryWriter>(
         description.clone()
     };
     let manifest = AbilityManifest::new(manifest_verb, desc_text.clone(), input_schema.clone())
+        .and_then(|manifest| manifest.with_admission_action("stream"))
         .map_err(|e| ReflectFailure {
             server: server_name.to_string(),
             tool: Some(upstream_tool.clone()),
@@ -1349,17 +1347,22 @@ fn register_one_tool<W: RegistryWriter>(
     // the URA the caller sees later is derived from `owner_ura`
     // + `local_name` (no `mcp_upstream` substring). Provenance goes
     // ONLY into `source`.
-    let descriptor = AbilityDescriptor::new(local_name.clone(), owner_ura, Visibility::Scoped)
-        .map_err(|e| ReflectFailure {
-            server: server_name.to_string(),
-            tool: Some(upstream_tool.clone()),
-            reason: format!("descriptor build failed: {e}"),
-        })?
-        .with_input_schema(input_schema)
-        .with_description(desc_text)
-        .with_source(provenance)
-        .with_metadata_entry("mcp_server", server_name.to_string())
-        .with_metadata_entry("mcp_tool", upstream_tool.clone());
+    let descriptor = AbilityDescriptor::new(
+        local_name.clone(),
+        owner_ura,
+        Visibility::Scoped,
+        crate::daemon::ability::descriptors::AdmissionAction::Stream,
+    )
+    .map_err(|e| ReflectFailure {
+        server: server_name.to_string(),
+        tool: Some(upstream_tool.clone()),
+        reason: format!("descriptor build failed: {e}"),
+    })?
+    .with_input_schema(input_schema)
+    .with_description(desc_text)
+    .with_source(provenance)
+    .with_metadata_entry("mcp_server", server_name.to_string())
+    .with_metadata_entry("mcp_tool", upstream_tool.clone());
 
     Ok(ReflectedAbility {
         ability_name: local_name,
@@ -1380,43 +1383,44 @@ fn descriptor_owner_authority(owner_ura: &str) -> Result<DescriptorOwnerAuthorit
         .map_err(|e| format!("owner URA parse failed: {e}"))?;
     let (owner_kind, owner_projection, authority_root) = match parsed.kind {
         crate::core::ura::URAKind::Agent => {
-            // DEC-F048: MCP reflective descriptors carry user-configured
-            // tooling. A device-sponsored System Agent carries no user
-            // identity and MUST NOT own them (RFC-005 §3.1.2) — explicit
-            // reject, not a missing-field error (F-047 verdict v2).
-            if parsed.device_agent_ids().is_some() {
-                return Err(format!(
-                    "owner {owner_ura} is a device-sponsored System Agent; \
-                     System Agents cannot own MCP reflective descriptors \
-                     (RFC-005 §3.1.2, DEC-F048)"
-                ));
+            if let Some((_, system_agent_id)) = parsed.device_agent_ids() {
+                if system_agent_id
+                    != crate::daemon::ability::names::integrations::MCP_INTEGRATION_SYSTEM_AGENT_ID
+                {
+                    return Err(format!(
+                        "owner {owner_ura} is not the MCP integration SystemAgent"
+                    ));
+                }
+                (
+                    OwnerKind::mcp_integration_system(),
+                    format!("system-agent:{system_agent_id}"),
+                    owner_ura.to_string(),
+                )
+            } else {
+                let Some((_, agent_id)) = parsed.agent_ids() else {
+                    return Err("owner agent URA is missing agent_id".to_string());
+                };
+                (
+                    OwnerKind::Agent(agent_id.to_string()),
+                    format!("agent:{agent_id}"),
+                    owner_ura.to_string(),
+                )
             }
-            let Some((_, agent_id)) = parsed.agent_ids() else {
-                return Err("owner agent URA is missing agent_id".to_string());
-            };
-            (
-                OwnerKind::Agent(agent_id.to_string()),
-                format!("agent:{agent_id}"),
-                owner_ura.to_string(),
-            )
         }
-        crate::core::ura::URAKind::Hub => {
-            (OwnerKind::Hub, "hub".to_string(), owner_ura.to_string())
-        }
-        crate::core::ura::URAKind::Device => (
-            OwnerKind::Device,
-            "device".to_string(),
+        crate::core::ura::URAKind::Authority => (
+            OwnerKind::RealmAuthority,
+            "authority".to_string(),
             owner_ura.to_string(),
         ),
+        crate::core::ura::URAKind::Device => {
+            return Err(
+                "Device cannot own MCP reflective descriptors; use an explicit hosted Agent or Authority owner URA".to_string(),
+            );
+        }
         crate::core::ura::URAKind::User => {
-            let Some(user_id) = parsed.user_id() else {
-                return Err("owner user URA is missing user_id".to_string());
-            };
-            (
-                OwnerKind::User(user_id.to_string()),
-                format!("user:{user_id}"),
-                crate::core::ura::agent_ura(&parsed.realm, user_id, "account"),
-            )
+            return Err(
+                "User Principal cannot own MCP reflective descriptors; use an explicit Agent or Authority owner URA".to_string(),
+            );
         }
         other => {
             return Err(format!(
@@ -1609,6 +1613,33 @@ mod tests {
     use crate::daemon::execution::mcp::{McpClientService, McpClientsFile, McpServerSpec};
     use std::collections::HashMap;
 
+    fn registry_for_mcp_owner(owner_ura: &str) -> AxonAbilityCatalog {
+        let owner = crate::core::ura::parse_ura(owner_ura).expect("canonical MCP owner URA");
+        let device_id = owner
+            .device_agent_ids()
+            .map(|(device_id, _)| device_id)
+            .unwrap_or("mcp-test-device");
+        let device_ura = crate::core::ura::device_ura(&owner.realm, device_id);
+        let authority_context = if owner.device_agent_ids().is_some() {
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots(
+                device_ura,
+            )
+        } else {
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots_with_hosted_agents(
+                device_ura,
+                vec![owner_ura.to_string()],
+            )
+        }
+        .expect("MCP test authority context");
+        AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            authority_context,
+        )
+    }
+
     #[test]
     fn descriptor_owner_kind_dual_shape() {
         // User-owned agent maps to OwnerKind::Agent.
@@ -1616,14 +1647,28 @@ mod tests {
             owner_kind_for_descriptor_owner("easynet:///r/localhost/agent/dev.claude").unwrap(),
             OwnerKind::Agent("claude".to_string())
         );
-        // Device-sponsored System Agent is refused: MCP reflective
-        // descriptors are user-configured tooling and System Agents
-        // carry no user identity (DEC-F048; F-047 verdict v2).
+        assert_eq!(
+            owner_kind_for_descriptor_owner("easynet:///r/localhost/authority").unwrap(),
+            OwnerKind::RealmAuthority
+        );
+        assert_eq!(
+            owner_kind_for_descriptor_owner(
+                "easynet:///r/localhost/agent/device.dev-1.mcp-integration"
+            )
+            .unwrap(),
+            OwnerKind::mcp_integration_system()
+        );
+        // An unrelated SystemAgent cannot acquire the MCP reflection surface.
         let err =
             owner_kind_for_descriptor_owner("easynet:///r/localhost/agent/device.dev-1.terminal")
-                .expect_err("System Agent cannot own MCP descriptors");
-        assert!(err.contains("RFC-005 §3.1.2"), "{err}");
-        assert!(err.contains("device-sponsored System Agent"), "{err}");
+                .expect_err("non-MCP SystemAgent cannot own MCP descriptors");
+        assert!(err.contains("not the MCP integration SystemAgent"), "{err}");
+        let err = owner_kind_for_descriptor_owner("easynet:///r/localhost/device/dev-1")
+            .expect_err("Device cannot own MCP descriptors");
+        assert!(
+            err.contains("Device cannot own MCP reflective descriptors"),
+            "{err}"
+        );
     }
 
     /// Build an in-process MCP client wrapping a small Python echo
@@ -1697,10 +1742,10 @@ while True:
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reflects_two_tools_with_clean_descriptors() {
         let (_dir, svc) = make_echo_client("echo");
-        let mut reg = AxonAbilityCatalog::new();
         // mcp-profile agent URA — same shape as the daemon would
         // construct: easynet:///r/<realm>/agent/<user>.mcp
         let owner = "easynet:///r/test-realm/agent/test-user.mcp";
+        let mut reg = registry_for_mcp_owner(owner);
 
         let result = reflect_all(&svc, &mut reg, owner).await;
 
@@ -1816,8 +1861,9 @@ while True:
                 ..Default::default()
             }],
         });
-        let mut reg = AxonAbilityCatalog::new();
-        let result = reflect_all(&svc, &mut reg, "easynet:///r/r/agent/u.mcp").await;
+        let owner = "easynet:///r/r/agent/u.mcp";
+        let mut reg = registry_for_mcp_owner(owner);
+        let result = reflect_all(&svc, &mut reg, owner).await;
 
         assert!(
             result.failed.is_empty(),
@@ -1836,10 +1882,22 @@ while True:
         // Pre-register a handler under the name the upstream tool
         // would claim, then verify reflection refuses to overwrite.
         let (_dir, svc) = make_echo_client("echo");
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc("echo_one", Arc::new(|_: Value| Ok(json!("local"))));
+        let owner = "easynet:///r/r/agent/u.mcp";
+        let mut reg = registry_for_mcp_owner(owner);
+        reg.register_rpc_with_spec_and_action(
+            "echo_one",
+            OwnerKind::Agent("mcp".into()),
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+            crate::daemon::ability::manifest::AbilityManifest::new(
+                "echo_one",
+                "Local test MCP collision fixture.",
+                json!({"type": "object", "additionalProperties": true}),
+            )
+            .expect("test collision manifest"),
+            Arc::new(|_: Value| Ok(json!("local"))),
+        );
 
-        let result = reflect_all(&svc, &mut reg, "easynet:///r/r/agent/u.mcp").await;
+        let result = reflect_all(&svc, &mut reg, owner).await;
 
         // echo_two registers; echo_one fails with a clear message
         // pointing the operator at the config knob.
@@ -1867,8 +1925,9 @@ while True:
         // against the operator running before they've configured
         // any upstreams.
         let svc = McpClientService::new();
-        let mut reg = AxonAbilityCatalog::new();
-        let result = reflect_all(&svc, &mut reg, "easynet:///r/r/agent/u.mcp").await;
+        let owner = "easynet:///r/r/agent/u.mcp";
+        let mut reg = registry_for_mcp_owner(owner);
+        let result = reflect_all(&svc, &mut reg, owner).await;
         assert!(result.registered.is_empty());
         assert!(result.failed.is_empty());
     }
@@ -1911,9 +1970,9 @@ while True:
     #[test]
     fn reflection_mode_parser_rejects_unknown_values() {
         // Typos must surface to the caller. `from_env` is the layer
-        // that turns this `Err` into a logged warning + lazy fallback;
-        // the parser itself stays honest so config validators can
-        // hard-fail when they need to.
+        // that reads process configuration; the parser itself stays
+        // honest so daemon registry assembly can hard-fail before
+        // advertising the wrong lifecycle.
         assert_eq!(
             McpReflectionMode::parse("eagre"),
             Err(UnknownReflectionMode("eagre".to_string()))
@@ -1922,6 +1981,62 @@ while True:
             McpReflectionMode::parse("not-a-mode"),
             Err(UnknownReflectionMode("not-a-mode".to_string()))
         );
+    }
+
+    #[test]
+    fn reflection_mode_from_env_value_rejects_unknown_instead_of_fallback() {
+        assert_eq!(
+            McpReflectionMode::from_env_value(None),
+            Ok(McpReflectionMode::Lazy)
+        );
+        assert_eq!(
+            McpReflectionMode::from_env_value(Some("")),
+            Ok(McpReflectionMode::Lazy)
+        );
+        assert_eq!(
+            McpReflectionMode::from_env_value(Some("eagre")),
+            Err(UnknownReflectionMode("eagre".to_string()))
+        );
+    }
+
+    #[test]
+    fn reflection_concurrency_resolution_records_default_reasons() {
+        let cases = [
+            (
+                None,
+                McpReflectionConcurrencyDefaultReason::Missing,
+                DEFAULT_MCP_REFLECTION_CONCURRENCY,
+            ),
+            (
+                Some(""),
+                McpReflectionConcurrencyDefaultReason::Empty,
+                DEFAULT_MCP_REFLECTION_CONCURRENCY,
+            ),
+            (
+                Some("not-a-number"),
+                McpReflectionConcurrencyDefaultReason::Invalid,
+                DEFAULT_MCP_REFLECTION_CONCURRENCY,
+            ),
+            (
+                Some("0"),
+                McpReflectionConcurrencyDefaultReason::NonPositive,
+                DEFAULT_MCP_REFLECTION_CONCURRENCY,
+            ),
+        ];
+
+        for (raw, reason, limit) in cases {
+            let resolution = McpReflectionConcurrency::from_env_value(raw);
+            assert_eq!(resolution, McpReflectionConcurrency::Defaulted(reason));
+            assert_eq!(resolution.limit(), limit);
+        }
+    }
+
+    #[test]
+    fn reflection_concurrency_resolution_accepts_positive_integer() {
+        let resolution = McpReflectionConcurrency::from_env_value(Some(" 8 "));
+
+        assert_eq!(resolution, McpReflectionConcurrency::Configured(8));
+        assert_eq!(resolution.limit(), 8);
     }
 
     /// Build an `McpClientService` with no configured upstreams. Used
@@ -1935,40 +2050,38 @@ while True:
     }
 
     #[test]
-    fn plan_unpaired_daemon_always_skips() {
-        // Unpaired daemons cannot construct the mcp-profile owner URA
-        // (no user segment), so reflection MUST short-circuit before
-        // any mode-dependent work. This invariant holds across all
-        // three modes — `pages_user = None` always wins.
+    fn plan_without_device_authority_always_skips() {
         let svc = empty_mcp();
-        let mut reg = AxonAbilityCatalog::new();
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
+                "easynet:///r/test-realm/authority",
+            )
+            .unwrap();
+        let mut reg =
+            AxonAbilityCatalog::new_metadata_only_with_authority_context(authority_context);
         for mode in [
             McpReflectionMode::Off,
             McpReflectionMode::Lazy,
             McpReflectionMode::Eager,
         ] {
-            let plan = PostArcReflection::plan(mode, None, "test-realm", &svc, &mut reg);
+            let plan = PostArcReflection::plan(mode, &svc, &mut reg);
             assert!(
                 matches!(plan, PostArcReflection::Skip),
-                "unpaired + {mode:?} must yield Skip, got {plan:?}",
+                "no Device authority + {mode:?} must yield Skip, got {plan:?}",
                 mode = mode.as_str()
             );
         }
     }
 
     #[test]
-    fn plan_off_mode_skips_even_when_paired() {
+    fn plan_off_mode_skips_with_device_authority() {
         // `EASYNET_MCP_REFLECTION=off` is the operator's explicit opt
         // out — pairing state is irrelevant, the plan stays Skip.
         let svc = empty_mcp();
-        let mut reg = AxonAbilityCatalog::new();
-        let plan = PostArcReflection::plan(
-            McpReflectionMode::Off,
-            Some("test-user"),
-            "test-realm",
-            &svc,
-            &mut reg,
+        let mut reg = registry_for_mcp_owner(
+            "easynet:///r/test-realm/agent/device.mcp-test-device.mcp-integration",
         );
+        let plan = PostArcReflection::plan(McpReflectionMode::Off, &svc, &mut reg);
         assert!(matches!(plan, PostArcReflection::Skip), "{plan:?}");
     }
 
@@ -1980,20 +2093,20 @@ while True:
         // is sufficient — the actual reflection happens later inside
         // the supervisor's spawned thread.
         let svc = empty_mcp();
-        let mut reg = AxonAbilityCatalog::new();
-        let plan = PostArcReflection::plan(
-            McpReflectionMode::Lazy,
-            Some("test-user"),
-            "test-realm",
-            &svc,
-            &mut reg,
+        let mut reg = registry_for_mcp_owner(
+            "easynet:///r/test-realm/agent/device.mcp-test-device.mcp-integration",
         );
+        let plan = PostArcReflection::plan(McpReflectionMode::Lazy, &svc, &mut reg);
         match plan {
             PostArcReflection::SpawnLazy { owner_ura } => {
                 assert_eq!(
                     owner_ura,
-                    easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp"),
-                    "lazy supervisor must receive the canonical mcp-profile URA"
+                    crate::core::ura::device_agent_ura(
+                        "test-realm",
+                        "mcp-test-device",
+                        crate::daemon::ability::names::integrations::MCP_INTEGRATION_SYSTEM_AGENT_ID,
+                    ),
+                    "lazy supervisor must receive the MCP SystemAgent URA"
                 );
             }
             other => panic!("Lazy + paired must yield SpawnLazy, got {other:?}"),
@@ -2010,7 +2123,9 @@ while True:
         // a future refactor that moved the index off the variant would
         // break the hot-reload sink attachment.
         let (_dir, svc) = make_echo_client("echo");
-        let reg = AxonAbilityCatalog::new();
+        let reg = registry_for_mcp_owner(
+            "easynet:///r/test-realm/agent/device.mcp-test-device.mcp-integration",
+        );
 
         // `PostArcReflection::plan` calls `run_eager_blocking`, which
         // uses `block_in_place` when an ambient runtime is available.
@@ -2020,13 +2135,7 @@ while True:
             let svc = Arc::clone(&svc);
             move || {
                 let mut reg_local = reg;
-                let plan = PostArcReflection::plan(
-                    McpReflectionMode::Eager,
-                    Some("test-user"),
-                    "test-realm",
-                    &svc,
-                    &mut reg_local,
-                );
+                let plan = PostArcReflection::plan(McpReflectionMode::Eager, &svc, &mut reg_local);
                 (plan, reg_local)
             }
         })
@@ -2040,7 +2149,11 @@ while True:
             } => {
                 assert_eq!(
                     owner_ura,
-                    easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp"),
+                    crate::core::ura::device_agent_ura(
+                        "test-realm",
+                        "mcp-test-device",
+                        crate::daemon::ability::names::integrations::MCP_INTEGRATION_SYSTEM_AGENT_ID,
+                    ),
                 );
                 let echo_entry = per_server
                     .get("echo")
@@ -2061,8 +2174,8 @@ while True:
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn lazy_supervisor_registers_reflected_tools_in_dynamic_overlay() {
         let (_dir, svc) = make_echo_client("echo");
-        let reg = Arc::new(AxonAbilityCatalog::new());
         let owner = "easynet:///r/test-realm/agent/test-user.mcp";
+        let reg = Arc::new(registry_for_mcp_owner(owner));
         let supervisor = McpReflectionSupervisor::new(Arc::clone(&svc), Arc::clone(&reg), owner);
 
         let result = supervisor.run_once().await;
@@ -2075,10 +2188,14 @@ while True:
             reg.control_plane_owner("echo_one"),
             Some(OwnerKind::Agent("mcp".to_string()))
         );
-        // Hot-registered MCP tool: its manifest is present in the
-        // control-plane store (the commit choke point dual-writes static
-        // and dynamic registrations alike).
-        assert!(reg.control_plane_manifest("echo_one").is_some());
+        let descriptor = reg
+            .control_plane_record_for_mode("echo_one", crate::daemon::ability::CallMode::Stream)
+            .expect("reflected descriptor lookup is unambiguous")
+            .expect("hot-registered MCP tool publishes a canonical descriptor");
+        assert_eq!(
+            descriptor.descriptor().call_mode(),
+            crate::daemon::ability::CallMode::Stream
+        );
         assert_eq!(
             reflected_names_by_server(&result).get("echo").cloned(),
             Some(vec!["echo_one".to_string(), "echo_two".to_string()])
@@ -2162,8 +2279,9 @@ while True:
                 ..Default::default()
             }],
         });
-        let mut reg = AxonAbilityCatalog::new();
-        let initial = reflect_all(&svc, &mut reg, "easynet:///r/test/agent/u.mcp").await;
+        let owner = "easynet:///r/test/agent/u.mcp";
+        let mut reg = registry_for_mcp_owner(owner);
+        let initial = reflect_all(&svc, &mut reg, owner).await;
         assert!(initial.failed.is_empty(), "{:?}", initial.failed);
         let prev_names: Vec<String> = initial
             .registered
@@ -2191,17 +2309,25 @@ while True:
                 ..Default::default()
             }],
         });
-        let mut reg2 = AxonAbilityCatalog::new();
+        let mut reg2 = registry_for_mcp_owner(owner);
         // Pre-seed reg2 with the "before" catalogue + a fake
         // descriptor source — refresh_server should keep `b`,
         // remove `a`, add `c`.
-        let pre = reflect_all(&svc2, &mut reg2, "easynet:///r/test/agent/u.mcp").await;
+        let pre = reflect_all(&svc2, &mut reg2, owner).await;
         // svc2's script advertises [b, c]; but we want to start
         // from the [a, b] state. Manually register `a` so the
         // diff has something to remove.
         use std::sync::Arc;
-        reg2.register_rpc(
+        reg2.register_rpc_with_spec_and_action(
             "a",
+            OwnerKind::Agent("mcp".into()),
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+            crate::daemon::ability::manifest::AbilityManifest::new(
+                "a",
+                "Local stale reflected MCP fixture.",
+                serde_json::json!({"type": "object", "additionalProperties": true}),
+            )
+            .expect("test stale reflected manifest"),
             Arc::new(|_: Value| Ok(serde_json::json!({"stale": "tool a"}))),
         );
         // After this seed, reg2 has [a, b, c]. previously_reflected
@@ -2313,8 +2439,9 @@ while True:
                 }],
             },
         );
-        let mut reg = AxonAbilityCatalog::new();
-        let result = reflect_all(&svc, &mut reg, "easynet:///r/test/agent/u.mcp").await;
+        let owner = "easynet:///r/test/agent/u.mcp";
+        let mut reg = registry_for_mcp_owner(owner);
+        let result = reflect_all(&svc, &mut reg, owner).await;
         assert!(result.failed.is_empty(), "{:?}", result.failed);
         assert!(reg.has_stream("slow_op"));
 

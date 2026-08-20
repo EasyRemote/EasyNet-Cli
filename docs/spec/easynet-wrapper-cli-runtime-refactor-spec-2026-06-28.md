@@ -459,9 +459,9 @@ OpenAI compatibility:
 必须建模的状态机:
 
 1. Federation init / status
-   - 状态必须以现有 `FederationInitOutcome` 为 canonical model: pre-set `boot_in_progress`，以及 `disabled`、`installed`、`already_installed`、`failed`。
-   - `federation.status` 只能读取该状态机投影。
-   - 不得另建 `ready/degraded` 等并行命名；如果产品需要更高层状态，只能从 `FederationInitOutcome::code()` projection 派生。
+   - 状态必须以 `JoinConnectionSnapshot` 为 canonical model，状态迁移由 `JoinConnectionState` 与 `JoinTransition` 表达。
+   - `federation.status` 只能读取该持久化状态机投影，并将其映射为稳定的 `{ok, code, outcome}` 外部形状。
+   - 不得另建 process-global probe、`ready/degraded` 或 federation init outcome 等并行状态源。
 2. Join token lifecycle
    - `minted -> redeemed | expired | revoked`
    - redeem 必须幂等可查询，重复 redeem 不得产生第二个 runtime join。
@@ -642,7 +642,7 @@ Daemon 负责:
    - 若保留 transitional alias，必须单独写 migration note、owner、expiry、negative canonical-baseline test。
 6. 明确 `federation.status`:
    - 实现 read-only daemon ability。
-   - 读取 `runtime::federation_init::FederationStatusProbe` / `FederationInitOutcome` 投影。
+   - 读取 `daemon::boot::join_connection_state::JoinConnectionSnapshot` 投影。
    - 不允许新建并行状态源。
 7. 给 Hub mode 与 Device mode 加 conformance tests；Hub daemon invocation surface 的 routes 必须从生产 dispatcher/exported route table 派生，不能在测试中手写第二份数组。
 8. 对 stream/bidi 能力补 terminal closure 测试。
@@ -1320,7 +1320,7 @@ Register user
 ### 14.1 已决事项
 
 1. `aggregate.list_abilities_catalog` 不进入 canonical daemon baseline。默认迁移到 `meta.list_abilities` + daemon catalog projection。
-2. `federation.status` 成为 daemon read-only ability，读取 `FederationStatusProbe` / `FederationInitOutcome` 投影。
+2. `federation.status` 成为 daemon read-only ability，直接投影 `JoinConnectionSnapshot`，不得维护第二套 federation 状态。
 3. Baseline contract canonical source 放在 EasyNet-Cli `src/daemon/ability/conformance.rs`，不是 `src/daemon/hub` 或 transport wrapper。
 4. 通配 ability group 必须在实现前展开成 typed rows。
 5. EasyNet backend 当前 `daemon_grpc` 是 daemon client 边界的具体实现；迁移不得并行制造第二套 runtime client。

@@ -1,11 +1,11 @@
 // EasyNet CLI — Node State Utilities
 // ===================================
 //
-// File: src/shared/node.rs
+// File: src/support/platform/node.rs
 // Description: Shared node state interpretation for consistent behavior across CLI commands.
 //
 // Extracted from devices.rs and status.rs to eliminate divergent is_online() implementations.
-// Aligned with axon/v1/types.proto NodeState enum.
+// Aligned with canonical directory read-model string states.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -28,11 +28,8 @@ pub fn is_online(n: &Value) -> bool {
 }
 
 /// Map a node's state field to a display string.
-/// Handles both string states and numeric protobuf enum values.
+/// Handles only canonical string states from the device directory read model.
 ///
-/// Aligned with axon/v1/types.proto `NodeState` enum:
-///   0=UNSPECIFIED, 1=JOINING, 2=PROBATION, 3=HEALTHY, 4=SUSPECT,
-///   5=QUARANTINED, 6=DRAINING, 7=REMOVED
 /// Known protocol states — used to return `&'static str` without allocation.
 const KNOWN_STATES: &[&str] = &[
     "UNSPECIFIED",
@@ -73,8 +70,10 @@ pub fn friendly_os(os: &str) -> &str {
 /// not own it), the runtime's `list_nodes` handler stamps the originating
 /// runtime into the node's `labels` map:
 ///
-///   - `axon.federation.runtime_label` — human-readable name (preferred)
-///   - `axon.federation.runtime_id`    — stable id (fallback)
+///   - `axon.federation.runtime_label` — human-readable name
+///
+/// Stable machine identifiers are not product display labels; this projection
+/// intentionally does not promote them into the operator-facing "via" suffix.
 ///
 /// Locally-owned nodes carry neither key and return `None`.
 ///
@@ -83,17 +82,11 @@ pub fn friendly_os(os: &str) -> &str {
 /// be worse than no hint at all.
 pub fn federation_label(n: &Value) -> Option<String> {
     let labels = n.get("labels")?.as_object()?;
-    for key in [
-        "axon.federation.runtime_label",
-        "axon.federation.runtime_id",
-    ] {
-        if let Some(s) = labels.get(key).and_then(Value::as_str) {
-            if !s.is_empty() {
-                return Some(s.to_string());
-            }
-        }
-    }
-    None
+    labels
+        .get("axon.federation.runtime_label")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 pub fn node_state_str(n: &Value) -> Cow<'_, str> {
@@ -107,11 +100,6 @@ pub fn node_state_str(n: &Value) -> Cow<'_, str> {
             Some(known) => Cow::Borrowed(*known),
             None => Cow::Borrowed(s),
         };
-    }
-    if let Some(num) = state.as_u64() {
-        // Protobuf numeric enum mapping (axon/v1/types.proto NodeState).
-        let idx = usize::try_from(num).unwrap_or(usize::MAX);
-        return Cow::Borrowed(KNOWN_STATES.get(idx).copied().unwrap_or("UNKNOWN"));
     }
     Cow::Borrowed("UNKNOWN")
 }
@@ -133,9 +121,9 @@ mod tests {
     }
 
     #[test]
-    fn federation_label_falls_back_to_runtime_id() {
+    fn federation_label_ignores_runtime_id_without_explicit_label() {
         let n = json!({"labels": {"axon.federation.runtime_id": "runtime-beta"}});
-        assert_eq!(federation_label(&n), Some("runtime-beta".to_string()));
+        assert_eq!(federation_label(&n), None);
     }
 
     #[test]
@@ -159,5 +147,19 @@ mod tests {
             }
         });
         assert_eq!(federation_label(&n), None);
+    }
+
+    #[test]
+    fn node_state_projection_rejects_numeric_legacy_enum_state() {
+        let n = json!({"state": 3});
+        assert_eq!(node_state_str(&n), "UNKNOWN");
+        assert!(!is_online(&n));
+    }
+
+    #[test]
+    fn node_state_projection_uses_only_canonical_string_state_for_online() {
+        let n = json!({"state": "HEALTHY"});
+        assert_eq!(node_state_str(&n), "HEALTHY");
+        assert!(is_online(&n));
     }
 }

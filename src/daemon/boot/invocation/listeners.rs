@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use easynet_axon::pb::axon::v1::invocation_server::InvocationServer;
+use axon_sdk::pb::axon::v1::invocation_server::InvocationServer;
 use tonic::transport::{Identity, Server, ServerTlsConfig};
 
 #[cfg(windows)]
@@ -15,11 +15,52 @@ use tonic::transport::server::Connected;
 #[cfg(unix)]
 use super::local_peer::{LocalPeerGate, PeerGateError};
 use super::paths::expand_home;
-use super::MAX_INVOCATION_GRPC_MESSAGE_BYTES;
 use crate::daemon::invocation::dispatch::daemon_invocation_service::DaemonInvocationService;
+use crate::daemon::invocation::transport::MAX_INVOCATION_GRPC_MESSAGE_BYTES;
 use crate::daemon::persistence::daemon_config::DaemonConfig;
 #[cfg(windows)]
 use crate::support::platform::named_pipe::PipeListener;
+
+const DEFAULT_INVOCATION_ACCEPT_QUEUE_CAPACITY: usize = 10_000;
+const DEFAULT_INVOCATION_MAX_CONCURRENT_STREAMS: u32 = 10_000;
+const DEFAULT_INVOCATION_CONCURRENCY_LIMIT_PER_CONNECTION: usize = 10_000;
+
+fn env_usize(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+fn env_u32(name: &str, default: u32) -> u32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+fn invocation_accept_queue_capacity() -> usize {
+    env_usize(
+        "EASYNET_INVOCATION_ACCEPT_QUEUE_CAPACITY",
+        DEFAULT_INVOCATION_ACCEPT_QUEUE_CAPACITY,
+    )
+}
+
+fn invocation_max_concurrent_streams() -> u32 {
+    env_u32(
+        "EASYNET_INVOCATION_MAX_CONCURRENT_STREAMS",
+        DEFAULT_INVOCATION_MAX_CONCURRENT_STREAMS,
+    )
+}
+
+fn invocation_concurrency_limit_per_connection() -> usize {
+    env_usize(
+        "EASYNET_INVOCATION_CONCURRENCY_LIMIT_PER_CONNECTION",
+        DEFAULT_INVOCATION_CONCURRENCY_LIMIT_PER_CONNECTION,
+    )
+}
 
 #[cfg(windows)]
 #[derive(Debug)]
@@ -81,9 +122,9 @@ pub(super) fn spawn_uds_listener(
     );
 
     if uds_path.exists() {
-        // The existing daemon's control.sock bind code unlinks
-        // before binding; mirror that semantic so a previous
-        // process's stale daemon.sock does not block us.
+        // Daemon main acquires the state root's process-lifetime lease before
+        // invocation transport boot. Therefore an existing inode is stale by
+        // construction; a competing live process cannot reach this bind path.
         if let Err(err) = std::fs::remove_file(&uds_path) {
             if err.kind() != std::io::ErrorKind::NotFound {
                 let uds_path_display = format!("{}", uds_path.display());
@@ -135,10 +176,15 @@ pub(super) fn spawn_uds_listener(
         kind = grpc_invocation_server_listening,
         transport = "uds",
         uds_path = uds_path_display,
+        accept_queue_capacity = invocation_accept_queue_capacity(),
+        max_concurrent_streams = invocation_max_concurrent_streams(),
+        concurrency_limit_per_connection = invocation_concurrency_limit_per_connection(),
     );
 
     let peer_gate = LocalPeerGate::for_current_process();
-    let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<tokio::net::UnixStream>>(32);
+    let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<tokio::net::UnixStream>>(
+        invocation_accept_queue_capacity(),
+    );
     let accept_uds_path = uds_path_display.clone();
     tokio::spawn(async move {
         loop {
@@ -171,6 +217,8 @@ pub(super) fn spawn_uds_listener(
             .http2_keepalive_interval(Some(Duration::from_secs(5)))
             .http2_keepalive_timeout(Some(Duration::from_secs(10)))
             .tcp_keepalive(Some(Duration::from_secs(15)))
+            .max_concurrent_streams(Some(invocation_max_concurrent_streams()))
+            .concurrency_limit_per_connection(invocation_concurrency_limit_per_connection())
             .add_service(
                 InvocationServer::new(service)
                     .max_decoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES)
@@ -248,9 +296,14 @@ pub(super) fn spawn_uds_listener(
         kind = grpc_invocation_server_listening,
         transport = "named_pipe",
         pipe_name = pipe_name_log,
+        accept_queue_capacity = invocation_accept_queue_capacity(),
+        max_concurrent_streams = invocation_max_concurrent_streams(),
+        concurrency_limit_per_connection = invocation_concurrency_limit_per_connection(),
     );
 
-    let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<NamedPipeGrpcIo>>(32);
+    let (tx, rx) = tokio::sync::mpsc::channel::<std::io::Result<NamedPipeGrpcIo>>(
+        invocation_accept_queue_capacity(),
+    );
     tokio::spawn(async move {
         loop {
             match listener.accept().await {
@@ -273,6 +326,8 @@ pub(super) fn spawn_uds_listener(
             .http2_keepalive_interval(Some(Duration::from_secs(5)))
             .http2_keepalive_timeout(Some(Duration::from_secs(10)))
             .tcp_keepalive(Some(Duration::from_secs(15)))
+            .max_concurrent_streams(Some(invocation_max_concurrent_streams()))
+            .concurrency_limit_per_connection(invocation_concurrency_limit_per_connection())
             .add_service(
                 InvocationServer::new(service)
                     .max_decoding_message_size(MAX_INVOCATION_GRPC_MESSAGE_BYTES)
@@ -355,6 +410,8 @@ pub(super) fn spawn_tcp_tls_listener(
         listen_tcp = listen_tcp_display,
         cert_pem = cert_path_display,
         key_pem = key_path_display,
+        max_concurrent_streams = invocation_max_concurrent_streams(),
+        concurrency_limit_per_connection = invocation_concurrency_limit_per_connection(),
     );
 
     // Production-WAN h2 hardening on the public TCP+TLS listener:
@@ -371,7 +428,9 @@ pub(super) fn spawn_tcp_tls_listener(
         Ok(b) => b
             .http2_keepalive_interval(Some(Duration::from_secs(5)))
             .http2_keepalive_timeout(Some(Duration::from_secs(10)))
-            .tcp_keepalive(Some(Duration::from_secs(15))),
+            .tcp_keepalive(Some(Duration::from_secs(15)))
+            .max_concurrent_streams(Some(invocation_max_concurrent_streams()))
+            .concurrency_limit_per_connection(invocation_concurrency_limit_per_connection()),
         Err(err) => {
             return Err(anyhow::anyhow!(
                 "daemon-invocation: tls_config rejected by tonic: {err}"

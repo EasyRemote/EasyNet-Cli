@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
+use axon_sdk::pb::axon::v1::invocation_client::InvocationClient;
 use tonic::transport::{Channel, Endpoint};
 
 use super::SessionError;
@@ -63,11 +63,5 @@ pub(super) async fn connect_session_channel(
 }
 
 pub(super) fn session_invocation_client(channel: Channel) -> InvocationClient<Channel> {
-    InvocationClient::new(channel)
-        .max_decoding_message_size(
-            crate::daemon::boot::invocation::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
-        )
-        .max_encoding_message_size(
-            crate::daemon::boot::invocation::MAX_INVOCATION_GRPC_MESSAGE_BYTES,
-        )
+    crate::daemon::invocation::transport::invocation_client(channel)
 }

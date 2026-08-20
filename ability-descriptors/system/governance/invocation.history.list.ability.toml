@@ -1,6 +1,22 @@
-schema_version = "1"
+schema_version = "3"
 name = "invocation.history.list"
-description = "List recent invocation ledger records for this device. Returns complete URAs from the persisted envelope plus digest/sealed payload metadata for audit and billing."
+descriptor_version = "1.0.0"
+description = "List bounded summaries of recent invocation ledger records for this runtime owner. Fetch one record through invocation.history.get for payload, diagnostic, causal, visibility, and receipt details."
+exposure = "operator"
+dedicated_surface = "none"
+subject_contract_kind = "explicit-ura"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
@@ -8,6 +24,14 @@ additionalProperties = false
 
 [input_schema.properties.compact]
 type = "boolean"
+description = "Accepted for request compatibility. List records are always bounded summaries; use invocation.history.get for complete records."
+deprecated = true
+
+[input_schema.properties.cursor]
+type = "string"
+description = "Opaque receipt history cursor returned by the previous invocation.history.list page."
+minLength = 1
+maxLength = 4096
 
 [input_schema.properties.exclude_ability_uras]
 type = "array"
@@ -28,13 +52,9 @@ description = "Canonical Ability URAs. Records match when ability_ura equals any
 minItems = 1
 uniqueItems = true
 
-[input_schema.properties.filter.properties.agent_ura]
-type = "string"
-description = "Ability owner/callee Agent URA. Equivalent to callee_ura for history scope."
-
 [input_schema.properties.filter.properties.callee_ura]
 type = "string"
-description = "Callee/owner Agent URA."
+description = "Callee principal URA."
 
 [input_schema.properties.filter.properties.caller_ura]
 type = "string"
@@ -56,6 +76,10 @@ uniqueItems = true
 
 [input_schema.properties.filter.properties.trace_id]
 type = "string"
+
+[input_schema.properties.include_attempts]
+type = "boolean"
+description = "When true, include pre-runtime invocation attempts and row diagnostics for UI history views."
 
 [input_schema.properties.key]
 type = "object"

@@ -1,0 +1,335 @@
+{
+  "schema_version": 1,
+  "case_id": "backend/hub_route_family_coverage",
+  "source_spec": "docs/spec/daemon-sdk-requirements-v1.md#29.2",
+  "families": [
+    {
+      "family_id": "health_readiness_liveness",
+      "route_family": "/health, daemon readiness, runtime liveness",
+      "backend_responsibility": "API process liveness, deployment status text, and product health response shape.",
+      "coverage_evidence": [
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/health-api-vs-runtime.yaml"
+        },
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/runtime-control-only.yaml"
+        }
+      ],
+      "sdk_primitives": [
+        "HealthClient",
+        "RuntimeHost",
+        "RuntimeClient"
+      ],
+      "backend_profile_refs": [
+        "health"
+      ]
+    },
+    {
+      "family_id": "identity_prepare_submit",
+      "route_family": "User signing keys, local identity, prepare/submit handoff",
+      "backend_responsibility": "Browser auth, user account ownership, and JWT/OAuth session checks.",
+      "coverage_evidence": [
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/canonical-addressing-provider.yaml"
+        },
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/invocation-presigned-submit.yaml"
+        }
+      ],
+      "sdk_primitives": [
+        "Addressing",
+        "RuntimeClient",
+        "InvocationBuilder",
+        "PreparedInvocation",
+        "SignedInvocation"
+      ],
+      "backend_profile_refs": [
+        "identity"
+      ]
+    },
+    {
+      "family_id": "pairing_credentials_revoke",
+      "route_family": "Device pairing preflight/validate, credential verification, device revoke",
+      "backend_responsibility": "Pairing token issuance UX, account-device DB binding, and rate limits.",
+      "coverage_evidence": [
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/canonical-addressing-provider.yaml"
+        },
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/sdk-product-neutrality.yaml"
+        }
+      ],
+      "sdk_primitives": [
+        "Addressing",
+        "RuntimeClient"
+      ],
+      "backend_profile_refs": [
+        "admin",
+        "identity",
+        "directory"
+      ]
+    },
+    {
+      "family_id": "device_agent_ability_catalog",
+      "route_family": "Device, agent, and ability catalog routes",
+      "backend_responsibility": "Product filtering, dashboard DTOs, and cached DB projections.",
+      "coverage_evidence": [
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/ability-descriptor-projection.yaml"
+        },
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/sdk-product-neutrality.yaml"
+        }
+      ],
+      "sdk_primitives": [
+        "Addressing",
+        "RuntimeClient"
+      ],
+      "backend_profile_refs": [
+        "directory",
+        "catalog"
+      ]
+    },
+    {
+      "family_id": "device_sessions_gateway_lifecycle",
+      "route_family": "Device sessions and gateway/agent lifecycle",
+      "backend_responsibility": "Browser session authorization and WebSocket upgrade routing.",
+      "coverage_evidence": [
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/bidi-close-send-not-cancel.yaml"
+        }
+      ],
+      "sdk_primitives": [
+        "RuntimeClient",
+        "BidiSession"
+      ],
+      "backend_profile_refs": [
+        "admin"
+      ]
+    },
+    {
+      "family_id": "ability_invoke_stream_bidi",
+      "route_family": "Ability invoke, signed invoke, stream, signed bidi bridge",
+      "backend_responsibility": "HTTP/WS route auth, request size limits, and response presentation.",
+      "coverage_evidence": [
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/invocation-complete-tuple.yaml"
+        },
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/terminal-receipt-facts.yaml"
+        },
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/stream-order-terminal.yaml"
+        },
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/bidi-close-send-not-cancel.yaml"
+        }
+      ],
+      "sdk_primitives": [
+        "RuntimeClient",
+        "InvocationBuilder",
+        "StreamHandle",
+        "BidiSession"
+      ],
+      "backend_profile_refs": [
+        "receipt"
+      ]
+    },
+    {
+      "family_id": "directory_session_invocation_events",
+      "route_family": "Directory, device, session, invocation, and SSE events",
+      "backend_responsibility": "Subscriber registry, tenant authorization, and browser SSE/WS fanout.",
+      "coverage_evidence": [
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/stream-order-terminal.yaml"
+        },
+        {
+          "kind": "static_gate",
+          "ref": "tools/scripts/check-backend-sdk-only-boundary.sh"
+        }
+      ],
+      "sdk_primitives": [
+        "RuntimeClient",
+        "StreamHandle"
+      ],
+      "backend_profile_refs": [
+        "events",
+        "directory"
+      ]
+    },
+    {
+      "family_id": "file_transfer_context_upload",
+      "route_family": "File transfer and context-file upload",
+      "backend_responsibility": "Multipart parsing, browser auth, and storage quota/policy.",
+      "coverage_evidence": [
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/invocation-complete-tuple.yaml"
+        },
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/sdk-product-neutrality.yaml"
+        }
+      ],
+      "sdk_primitives": [
+        "RuntimeClient"
+      ],
+      "backend_profile_refs": [
+        "wrappers"
+      ]
+    },
+    {
+      "family_id": "interactive_media_bridges",
+      "route_family": "Terminal, remote desktop, browser session, voice/media bridges",
+      "backend_responsibility": "WebSocket upgrade, per-user authorization, and UI protocol adaptation.",
+      "coverage_evidence": [
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/stream-order-terminal.yaml"
+        },
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/bidi-close-send-not-cancel.yaml"
+        }
+      ],
+      "sdk_primitives": [
+        "RuntimeClient",
+        "StreamHandle",
+        "BidiSession"
+      ],
+      "backend_profile_refs": [
+        "wrappers"
+      ]
+    },
+    {
+      "family_id": "pages_surface_manifests",
+      "route_family": "Page create/list/delete, public pages, surface manifests",
+      "backend_responsibility": "Public HTTP rendering, frontend route mounting, auth/cache/CDN policy.",
+      "coverage_evidence": [
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/canonical-addressing-provider.yaml"
+        },
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/health-api-vs-runtime.yaml"
+        }
+      ],
+      "sdk_primitives": [
+        "Addressing",
+        "RuntimeClient"
+      ],
+      "backend_profile_refs": [
+        "surface",
+        "directory"
+      ]
+    },
+    {
+      "family_id": "skill_plugin_lifecycle",
+      "route_family": "Skill/plugin install/list/remove/upgrade/file tree",
+      "backend_responsibility": "Product naming, upload UX, and marketplace/account policy.",
+      "coverage_evidence": [
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/ability-descriptor-projection.yaml"
+        },
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/sdk-product-neutrality.yaml"
+        }
+      ],
+      "sdk_primitives": [
+        "Addressing",
+        "RuntimeClient"
+      ],
+      "backend_profile_refs": [
+        "directory",
+        "catalog"
+      ]
+    },
+    {
+      "family_id": "openai_compatibility",
+      "route_family": "OpenAI-compatible models/chat/files",
+      "backend_responsibility": "Product API keys, billing/quota/rate limits, and HTTP compatibility response shape.",
+      "coverage_evidence": [
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/invocation-complete-tuple.yaml"
+        },
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/stream-order-terminal.yaml"
+        }
+      ],
+      "sdk_primitives": [
+        "Addressing",
+        "RuntimeClient",
+        "StreamHandle"
+      ],
+      "backend_profile_refs": [
+        "compatibility",
+        "wrappers"
+      ]
+    },
+    {
+      "family_id": "receipts_history_metrics",
+      "route_family": "Call history, receipts, failure location, metrics",
+      "backend_responsibility": "Product analytics aggregation, DB retention, and dashboard presentation.",
+      "coverage_evidence": [
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/terminal-receipt-facts.yaml"
+        },
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/error-typed-json.yaml"
+        }
+      ],
+      "sdk_primitives": [
+        "RuntimeClient"
+      ],
+      "backend_profile_refs": [
+        "receipt",
+        "events"
+      ]
+    },
+    {
+      "family_id": "federation_peer_hubs_remote_devices",
+      "route_family": "Federation, peer hubs, remote devices",
+      "backend_responsibility": "Peer trust policy, account-level federation settings, and product UX.",
+      "coverage_evidence": [
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/canonical-addressing-provider.yaml"
+        },
+        {
+          "kind": "sdk_conformance_case",
+          "ref": "sdk/conformance/cases/bidi-close-send-not-cancel.yaml"
+        }
+      ],
+      "sdk_primitives": [
+        "Addressing",
+        "RuntimeClient",
+        "BidiSession"
+      ],
+      "backend_profile_refs": [
+        "directory",
+        "admin"
+      ]
+    }
+  ]
+}

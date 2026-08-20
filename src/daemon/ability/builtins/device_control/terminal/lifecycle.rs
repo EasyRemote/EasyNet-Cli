@@ -35,17 +35,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::execution::pty::{PtyCreateSpec, PtyService, PtySessionId};
 
-pub const ABILITY_PTY_SESSION_CREATE: &str =
+pub const ABILITY_TERMINAL_CREATE: &str =
     crate::daemon::ability::names::device_control::TERMINAL_CREATE;
-pub const ABILITY_PTY_SESSION_LIST: &str =
+pub const ABILITY_TERMINAL_LIST: &str =
     crate::daemon::ability::names::device_control::TERMINAL_LIST;
-pub const ABILITY_PTY_SESSION_CLOSE: &str =
+pub const ABILITY_TERMINAL_CLOSE: &str =
     crate::daemon::ability::names::device_control::TERMINAL_CLOSE;
 
 /// Description published by the dispatcher's `description_for`
@@ -121,7 +121,7 @@ const DEFAULT_ROWS: u16 = 24;
 /// service handle is shared with the future `_attach` registration
 /// so the three handlers see the same session table.
 ///
-/// `io` is the optional companion I/O service (`pty_io_ability::
+/// `io` is the optional companion I/O service (`terminal_io_ability::
 /// PtyIoService`). When `Some`, the close handler also drops the
 /// session's I/O row — releasing the cached writer fd and the
 /// reader thread. None is acceptable for tests / fixtures that
@@ -132,19 +132,27 @@ pub fn register(
     io: Option<crate::daemon::ability::builtins::device_control::terminal::io::PtyIoService>,
 ) {
     use crate::daemon::ability::dispatch::LocalRpcHandler;
+    let owner = OwnerKind::terminal_system();
     let svc_for_create = Arc::clone(&pty);
     let create_h: LocalRpcHandler =
         Arc::new(move |args: Value| create_handler(&svc_for_create, args));
-    reg.register_rpc_with_owner("terminal.create", OwnerKind::Device, create_h);
+    reg.register_rpc_with_owner("terminal.create", owner.clone(), create_h);
 
     let svc_for_list = Arc::clone(&pty);
     let list_h: LocalRpcHandler = Arc::new(move |args: Value| list_handler(&svc_for_list, args));
-    reg.register_rpc_with_owner("terminal.list", OwnerKind::Device, list_h);
+    reg.register_rpc_with_owner("terminal.list", owner.clone(), list_h);
 
     let pty_for_close = pty;
-    let close_h: LocalRpcHandler =
-        Arc::new(move |args: Value| close_handler(&pty_for_close, io.as_ref(), args));
-    reg.register_rpc_with_owner("terminal.close", OwnerKind::Device, close_h);
+    let close_h = Arc::new(move |env, args: Value| {
+        let close_args = TerminalCloseArgs::parse(args)?;
+        super::authority::require_session_authority(
+            &env,
+            close_args.session_id(),
+            "terminal.close",
+        )?;
+        close_session(&pty_for_close, io.as_ref(), close_args)
+    });
+    reg.register_rpc_with_envelope_and_owner("terminal.close", owner, close_h);
 }
 
 /// `terminal.create` handler.
@@ -169,9 +177,7 @@ fn create_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
 /// Returns: `{ sessions: [{ session_id, status, created_unix_ms, command?,
 /// command_args?, cwd? }] }`.
 fn list_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
-    if !args.is_object() {
-        anyhow::bail!("args must be an object");
-    }
+    require_lifecycle_args(&args, "terminal.list", &[])?;
     let sessions = pty
         .list()
         .into_iter()
@@ -201,16 +207,56 @@ fn list_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
 ///   * exit_status is the child's exit code when waitable; absent
 ///     when the child was killed before the OS published a status
 ///     OR when ack=false (no child to wait on).
+#[cfg(test)]
 fn close_handler(
     pty: &Arc<PtyService>,
     io: Option<&crate::daemon::ability::builtins::device_control::terminal::io::PtyIoService>,
     args: Value,
 ) -> anyhow::Result<Value> {
-    let id = args
-        .get("session_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("`session_id` required"))?;
-    let session_id = PtySessionId::new(id);
+    close_session(pty, io, TerminalCloseArgs::parse(args)?)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TerminalCloseArgs {
+    session_id: String,
+}
+
+impl TerminalCloseArgs {
+    fn parse(args: Value) -> anyhow::Result<Self> {
+        let args = require_lifecycle_args(&args, "terminal.close", &["session_id"])?;
+        let session_id = required_non_empty_string(args, "session_id", "terminal.close")?;
+        Ok(Self { session_id })
+    }
+
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+}
+
+fn required_non_empty_string(
+    args: &Map<String, Value>,
+    key: &str,
+    ability: &str,
+) -> anyhow::Result<String> {
+    let value = args
+        .get(key)
+        .ok_or_else(|| anyhow::anyhow!("{ability}: `{key}` required"))?;
+    let string = value
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("{ability}: `{key}` must be a string"))?
+        .trim();
+    if string.is_empty() {
+        anyhow::bail!("{ability}: `{key}` must not be empty");
+    }
+    Ok(string.to_string())
+}
+
+fn close_session(
+    pty: &Arc<PtyService>,
+    io: Option<&crate::daemon::ability::builtins::device_control::terminal::io::PtyIoService>,
+    close_args: TerminalCloseArgs,
+) -> anyhow::Result<Value> {
+    let session_id = PtySessionId::new(&close_args.session_id);
     let outcome = pty.close(&session_id);
     // Drop the I/O row AFTER the lifecycle close so the reader
     // thread sees the PTY EOF first (clean exit), then the
@@ -227,17 +273,23 @@ fn close_handler(
 
 /// Parse the caller's args into a PtyCreateSpec, applying defaults.
 ///
-/// Validation policy: drop unknown fields silently (forward
-/// compatibility — a future schema addition mustn't break old
-/// callers), but reject malformed values (a `cols: "not-a-number"`
-/// is a caller bug, not a forward-compat scenario).
+/// Validation policy: reject unknown fields and malformed values. The
+/// published ability schema is the control-plane contract; accepting
+/// extra keys would let stale product/SDK argument shapes create live
+/// PTY lifecycle state.
 ///
 /// Error messages do NOT prefix the ability name; the dispatcher's
 /// outer wrapper already attaches it. (Same SR-6+9 lesson the Go
 /// half learned earlier — repeated prefixes are noise plus a
 /// rename hazard.)
 fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
-    fn u16_field(args: &Value, key: &str, default: u16) -> anyhow::Result<u16> {
+    let args = require_lifecycle_args(
+        args,
+        "terminal.create",
+        &["cols", "rows", "command", "command_args", "cwd", "env"],
+    )?;
+
+    fn u16_field(args: &Map<String, Value>, key: &str, default: u16) -> anyhow::Result<u16> {
         match args.get(key) {
             None | Some(Value::Null) => Ok(default),
             Some(Value::Number(n)) => n
@@ -248,16 +300,24 @@ fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
         }
     }
 
+    fn optional_string_field(
+        args: &Map<String, Value>,
+        key: &str,
+    ) -> anyhow::Result<Option<String>> {
+        match args.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::String(value)) => Ok(Some(value.clone())),
+            Some(other) => anyhow::bail!("`{key}` must be a string, got {other}"),
+        }
+    }
+
     let cols = u16_field(args, "cols", DEFAULT_COLS)?;
     let rows = u16_field(args, "rows", DEFAULT_ROWS)?;
     if cols == 0 || rows == 0 {
         anyhow::bail!("cols and rows must be > 0");
     }
 
-    let command = args
-        .get("command")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let command = optional_string_field(args, "command")?;
 
     let command_args: Vec<String> = match args.get("command_args") {
         None | Some(Value::Null) => Vec::new(),
@@ -272,7 +332,7 @@ fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
         Some(other) => anyhow::bail!("`command_args` must be an array, got {other}"),
     };
 
-    let cwd = args.get("cwd").and_then(Value::as_str).map(str::to_string);
+    let cwd = optional_string_field(args, "cwd")?;
 
     let mut env: HashMap<String, String> = match args.get("env") {
         None | Some(Value::Null) => HashMap::new(),
@@ -298,6 +358,22 @@ fn parse_create_spec(args: &Value) -> anyhow::Result<PtyCreateSpec> {
     })
 }
 
+fn require_lifecycle_args<'a>(
+    args: &'a Value,
+    ability: &str,
+    allowed_keys: &[&str],
+) -> anyhow::Result<&'a Map<String, Value>> {
+    let object = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{ability}: args must be an object"))?;
+    for key in object.keys() {
+        if !allowed_keys.contains(&key.as_str()) {
+            anyhow::bail!("{ability}: unknown argument `{key}`");
+        }
+    }
+    Ok(object)
+}
+
 fn normalize_terminal_env(env: &mut HashMap<String, String>) {
     let term_is_missing_or_dumb = env
         .get("TERM")
@@ -321,7 +397,7 @@ pub fn create_input_schema() -> Value {
         "properties": {
             "cols": {"type": "integer", "minimum": 1, "maximum": 65535},
             "rows": {"type": "integer", "minimum": 1, "maximum": 65535},
-            "command": {"type": "string"},
+            "command": {"type": "string", "minLength": 1},
             "command_args": {"type": "array", "items": {"type": "string"}},
             "cwd": {"type": "string"},
             "env": {
@@ -352,7 +428,7 @@ pub fn close_input_schema() -> Value {
         "type": "object",
         "required": ["session_id"],
         "properties": {
-            "session_id": {"type": "string"},
+            "session_id": {"type": "string", "minLength": 1},
         },
         "additionalProperties": false,
     })
@@ -380,13 +456,19 @@ mod tests {
         }
     }
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/terminal-lifecycle";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
     #[test]
     fn registration_makes_both_dispatchable() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(&mut reg, fresh_service(), None);
-        assert!(reg.get_rpc(ABILITY_PTY_SESSION_CREATE).is_some());
-        assert!(reg.get_rpc(ABILITY_PTY_SESSION_LIST).is_some());
-        assert!(reg.get_rpc(ABILITY_PTY_SESSION_CLOSE).is_some());
+        assert!(reg.get_rpc(ABILITY_TERMINAL_CREATE).is_some());
+        assert!(reg.get_rpc(ABILITY_TERMINAL_LIST).is_some());
+        assert!(reg.resolve_rpc_with_env(ABILITY_TERMINAL_CLOSE).is_some());
     }
 
     #[test]
@@ -494,6 +576,74 @@ mod tests {
     }
 
     #[test]
+    fn close_rejects_non_object_args_before_service_lookup() {
+        let svc = fresh_service();
+        let err = close_handler(&svc, None, Value::Null).unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("terminal.close: args must be an object"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn close_rejects_unknown_argument() {
+        let svc = fresh_service();
+        let err = close_handler(&svc, None, json!({"session_id": "ghost-id", "force": true}))
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("terminal.close: unknown argument `force`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn close_rejects_unknown_argument_before_idempotent_close_lookup() {
+        let svc = fresh_service();
+        let resp = create_handler(&svc, json!({"command": true_command()})).unwrap();
+        let id = resp["session_id"].as_str().unwrap().to_string();
+        let err = close_handler(
+            &svc,
+            None,
+            json!({"session_id": id.clone(), "legacy_mode": true}),
+        )
+        .unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("terminal.close: unknown argument `legacy_mode`"),
+            "unexpected error: {message}"
+        );
+        assert_eq!(
+            svc.live_count(),
+            1,
+            "unknown fields must fail before closing a live PTY"
+        );
+        svc.close(&PtySessionId::new(&id));
+    }
+
+    #[test]
+    fn close_rejects_wrong_typed_session_id_before_service_lookup() {
+        let svc = fresh_service();
+        let err = close_handler(&svc, None, json!({"session_id": 42})).unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("terminal.close: `session_id` must be a string"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn close_rejects_blank_session_id_before_idempotent_close_lookup() {
+        let svc = fresh_service();
+        let err = close_handler(&svc, None, json!({"session_id": "   "})).unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("terminal.close: `session_id` must not be empty"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
     fn close_is_idempotent_second_call_is_ack_false() {
         let svc = fresh_service();
         let resp = create_handler(&svc, json!({"command": true_command()})).unwrap();
@@ -508,17 +658,41 @@ mod tests {
     }
 
     #[test]
-    fn parse_create_spec_drops_unknown_fields_silently() {
-        // Forward compat: a future schema addition (e.g. `tty_name`)
-        // must NOT break old daemons. The parser ignores unknown
-        // top-level keys.
-        let spec = parse_create_spec(&json!({
+    fn list_rejects_unknown_argument() {
+        let svc = fresh_service();
+        let err = list_handler(&svc, json!({"include_closed": true})).unwrap_err();
+        assert!(
+            format!("{err}").contains("terminal.list: unknown argument `include_closed`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_create_spec_rejects_unknown_fields() {
+        let err = parse_create_spec(&json!({
             "cols": 100,
             "future_field_we_dont_know": true
         }))
-        .expect("unknown fields must be tolerated");
-        assert_eq!(spec.cols, 100);
-        assert_eq!(spec.rows, DEFAULT_ROWS);
+        .expect_err("unknown terminal.create fields must fail closed");
+        assert!(
+            format!("{err}")
+                .contains("terminal.create: unknown argument `future_field_we_dont_know`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_create_spec_rejects_non_string_command_and_cwd() {
+        let err = parse_create_spec(&json!({"command": true})).unwrap_err();
+        assert!(
+            format!("{err}").contains("`command` must be a string"),
+            "unexpected error: {err}"
+        );
+        let err = parse_create_spec(&json!({"cwd": 42})).unwrap_err();
+        assert!(
+            format!("{err}").contains("`cwd` must be a string"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -584,6 +758,7 @@ mod tests {
         assert_eq!(s["type"], "object");
         assert_eq!(s["additionalProperties"], false);
         assert_eq!(s["properties"]["cols"]["type"], "integer");
+        assert_eq!(s["properties"]["command"]["minLength"], 1);
         assert_eq!(s["properties"]["env"]["type"], "object");
     }
 
@@ -592,5 +767,6 @@ mod tests {
         let s = close_input_schema();
         let req = s["required"].as_array().unwrap();
         assert!(req.iter().any(|v| v == "session_id"));
+        assert_eq!(s["properties"]["session_id"]["minLength"], 1);
     }
 }

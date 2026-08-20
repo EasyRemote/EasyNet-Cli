@@ -1,0 +1,75 @@
+schema_version = "3"
+name = "authority.binding.check"
+descriptor_version = "1.0.0"
+description = "Run RFC-014 PolicyEngine.check in read-only mode."
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "route-target"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["owner_ura", "owner_source", "caller_ura", "principal_kind", "callee_ura", "subject_ura", "ability_ura", "action"]
+additionalProperties = false
+
+[input_schema.properties.ability_ura]
+type = "string"
+
+[input_schema.properties.action]
+type = "string"
+
+[input_schema.properties.authority_proof_id]
+type = "string"
+
+[input_schema.properties.callee_ura]
+type = "string"
+
+[input_schema.properties.caller_ura]
+type = "string"
+
+[input_schema.properties.canonical_hash]
+type = "string"
+
+[input_schema.properties.interactive_context_available]
+type = "boolean"
+
+[input_schema.properties.owner_source]
+type = "string"
+
+[input_schema.properties.owner_ura]
+type = "string"
+
+[input_schema.properties.principal_kind]
+type = "string"
+
+[input_schema.properties.principal_ura]
+type = "string"
+
+[input_schema.properties.rejector_ura]
+type = "string"
+
+[input_schema.properties.safe_read]
+type = "boolean"
+
+[input_schema.properties.signature_key_id]
+type = "string"
+
+[input_schema.properties.subject_ura]
+type = "string"
+
+[input_schema.properties.token_class]
+type = "string"
+
+[input_schema.properties.token_id]
+type = "string"

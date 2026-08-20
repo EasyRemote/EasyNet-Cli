@@ -14,11 +14,23 @@ if [[ -e src/runtime/hosted_receipt.rs ]]; then
 fi
 
 if rg -n 'pub mod hosted_receipt|crate::runtime::hosted_receipt|runtime::hosted_receipt' src tests -g '*.rs'; then
-  fail "hosted receipt callers must import easynet_axon::invocation::audit directly"
+  fail "hosted receipt callers must import axon_sdk::invocation::audit directly"
 fi
 
 if rg -n 'struct HostedAgentReceiptHeader|enum SigningModel|HostedReceiptError' src -g '*.rs'; then
   fail "CLI runtime must not redeclare Axon hosted receipt audit types"
+fi
+
+legacy_projection_roots=()
+for root in src/daemon/execution/mission src/support src/ffi; do
+  if [[ -d "$root" ]]; then
+    legacy_projection_roots+=("$root")
+  fi
+done
+
+if ((${#legacy_projection_roots[@]} > 0)) \
+  && rg -n 'dispatch_receipt|receipt_header|HostedAgentReceiptHeader' "${legacy_projection_roots[@]}" -g '*.rs'; then
+  fail "mission/support/FFI paths must not rebuild legacy hosted receipt headers"
 fi
 
 echo "check-hosted-receipt-axon-boundary: ok"

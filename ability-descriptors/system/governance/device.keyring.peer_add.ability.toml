@@ -1,0 +1,36 @@
+schema_version = "3"
+name = "device.keyring.peer_add"
+descriptor_version = "1.0.0"
+description = "Record a peer public key by trust-on-first-use metadata for later key resolution."
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "route-target"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["peer_ura", "public_key", "via_authority"]
+additionalProperties = false
+
+[input_schema.properties.peer_ura]
+type = "string"
+minLength = 1
+
+[input_schema.properties.public_key]
+type = "string"
+minLength = 1
+
+[input_schema.properties.via_authority]
+type = "string"
+minLength = 1

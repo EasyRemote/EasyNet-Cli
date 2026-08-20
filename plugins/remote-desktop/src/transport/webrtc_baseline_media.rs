@@ -1,0 +1,137 @@
+// EasyNet CLI — direct WebRTC baseline media paths
+// =================================================
+//
+// File: plugins/remote-desktop/src/transport/webrtc_baseline_media.rs
+// Description: xcap-backed baseline capture strategies for direct WebRTC.
+
+#[cfg(feature = "native-media")]
+use std::sync::mpsc::RecvTimeoutError;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use webrtc::media_stream::track_local::static_sample::TrackLocalStaticSample;
+
+#[cfg(feature = "native-media")]
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::rgba_bytes_to_rgb_frame;
+use crate::daemon::ability::builtins::resources::media::screen_snapshot::{
+    capture_rgb_with_xcap, ScreenCaptureOptions,
+};
+#[cfg(feature = "native-media")]
+use crate::daemon::plugins::remote_desktop::media::encode::latest_recorder_frame;
+use crate::daemon::plugins::remote_desktop::media::encode::{
+    build_openh264_encoder, even_rgb_frame, write_h264_sample, BuiltinH264Config,
+};
+use crate::daemon::plugins::remote_desktop::target::DiagnosticCaptureSubject;
+use crate::daemon::plugins::remote_desktop::transport::webrtc_media::DirectWebRtcMediaExecution;
+
+#[cfg(feature = "native-media")]
+const RECORDER_FRAME_TIMEOUT_MS: u64 = 250;
+
+/// Immutable inputs shared by xcap-backed WebRTC baseline streams.
+///
+/// This type is the strategy boundary for non-native capture paths. It is not
+/// a session owner and it does not decide whether baseline streaming should run;
+/// the parent media loop performs that load-time decision.
+pub(in crate::daemon::plugins::remote_desktop) struct BaselineMediaInputs<'a> {
+    pub(in crate::daemon::plugins::remote_desktop) track: &'a Arc<TrackLocalStaticSample>,
+    pub(in crate::daemon::plugins::remote_desktop) ssrc: u32,
+    pub(in crate::daemon::plugins::remote_desktop) payload_type: u8,
+    pub(in crate::daemon::plugins::remote_desktop) options: &'a ScreenCaptureOptions,
+    pub(in crate::daemon::plugins::remote_desktop) config: &'a BuiltinH264Config,
+}
+
+#[cfg(feature = "native-media")]
+pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_recorder_stream(
+    execution: &mut DirectWebRtcMediaExecution<'_>,
+    inputs: &BaselineMediaInputs<'_>,
+    recorder: xcap::VideoRecorder,
+    rx: std::sync::mpsc::Receiver<xcap::Frame>,
+) -> anyhow::Result<()> {
+    let BaselineMediaInputs {
+        track,
+        ssrc,
+        payload_type,
+        options,
+        config,
+    } = *inputs;
+    let mut encoder = build_openh264_encoder(config)?;
+    recorder.start()?;
+    let mut seq = 0_u64;
+    let mut media_ready_reported = false;
+    loop {
+        if execution.should_stop() {
+            break;
+        }
+        match rx.recv_timeout(Duration::from_millis(RECORDER_FRAME_TIMEOUT_MS)) {
+            Ok(frame) => {
+                let frame = latest_recorder_frame(&rx, frame);
+                let frame = rgba_bytes_to_rgb_frame(frame.raw, frame.width, frame.height, options)
+                    .map(even_rgb_frame)?;
+                let wrote_sample = write_h264_sample(
+                    track,
+                    ssrc,
+                    payload_type,
+                    &mut encoder,
+                    &frame,
+                    seq,
+                    config.fps,
+                )
+                .await?;
+                if wrote_sample && !media_ready_reported {
+                    execution.mark_media_ready();
+                    media_ready_reported = true;
+                }
+                seq = seq.saturating_add(1);
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let _ = recorder.stop();
+    Ok(())
+}
+
+pub(in crate::daemon::plugins::remote_desktop) async fn run_direct_webrtc_polling_stream(
+    execution: &mut DirectWebRtcMediaExecution<'_>,
+    inputs: &BaselineMediaInputs<'_>,
+    capture_subject: &DiagnosticCaptureSubject,
+) -> anyhow::Result<()> {
+    let BaselineMediaInputs {
+        track,
+        ssrc,
+        payload_type,
+        options,
+        config,
+    } = *inputs;
+    let entry = capture_subject.to_backend_resource_entry();
+    let mut encoder = build_openh264_encoder(config)?;
+    let interval = Duration::from_secs_f64(1.0 / config.fps as f64);
+    let mut seq = 0_u64;
+    let mut media_ready_reported = false;
+    loop {
+        if execution.should_stop() {
+            break;
+        }
+        let started = Instant::now();
+        let frame = capture_rgb_with_xcap(&entry, options).map(even_rgb_frame)?;
+        let wrote_sample = write_h264_sample(
+            track,
+            ssrc,
+            payload_type,
+            &mut encoder,
+            &frame,
+            seq,
+            config.fps,
+        )
+        .await?;
+        if wrote_sample && !media_ready_reported {
+            execution.mark_media_ready();
+            media_ready_reported = true;
+        }
+        seq = seq.saturating_add(1);
+        if let Some(remaining) = interval.checked_sub(started.elapsed()) {
+            std::thread::sleep(remaining);
+        }
+    }
+    Ok(())
+}

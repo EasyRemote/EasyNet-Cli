@@ -25,6 +25,7 @@
 
 use crate::daemon::control::discovery::DaemonIdentity;
 
+use super::super::identity_fact::DeviceNodeIdFact;
 use super::{RuntimeLifecycleError, RuntimeLifecycleStatus, RuntimeStatusReport};
 
 /// Requested daemon identity for start attach decisions.
@@ -38,6 +39,7 @@ pub struct RuntimeStartRequest {
     mode: RuntimeStartMode,
     realm: String,
     node_id: Option<String>,
+    require_paired_user_runtime_signer: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +55,7 @@ impl RuntimeStartRequest {
             mode: RuntimeStartMode::Device,
             realm: realm.into(),
             node_id: Some(node_id.into()),
+            require_paired_user_runtime_signer: true,
         }
     }
 
@@ -62,7 +65,17 @@ impl RuntimeStartRequest {
             mode: RuntimeStartMode::Hub,
             realm: realm.into(),
             node_id: None,
+            require_paired_user_runtime_signer: false,
         }
+    }
+
+    /// Select whether attaching to an already-running device daemon must prove
+    /// the paired User runtime signer capability. Bound user credentials should
+    /// leave this enabled. Federation-native device-only credentials must turn
+    /// it off explicitly instead of satisfying it with a placeholder User.
+    pub fn with_paired_user_runtime_signer_required(mut self, required: bool) -> Self {
+        self.require_paired_user_runtime_signer = required;
+        self
     }
 
     /// Requested realm.
@@ -130,15 +143,17 @@ pub(crate) fn preflight_start(
             RuntimeStartPreflightAction::AlreadyRunning
         }
         RuntimeLifecycleStatus::ControlOnlyInvocationDown => {
+            let endpoints = report.daemon().endpoints().ok_or_else(|| {
+                RuntimeLifecycleError::StartRefusedInvalidDaemonDiscovery {
+                    message: "daemon endpoint resolution is unavailable".to_string(),
+                }
+            })?;
             return Err(
                 RuntimeLifecycleError::StartRefusedControlOnlyInvocationDown {
-                    control: report.daemon().endpoints().control().to_path_buf(),
-                    invocation: report.daemon().endpoints().invocation().to_path_buf(),
+                    control: endpoints.control().to_path_buf(),
+                    invocation: endpoints.invocation().to_path_buf(),
                 },
             );
-        }
-        RuntimeLifecycleStatus::LegacyAxonBridge => {
-            return Err(RuntimeLifecycleError::StartRefusedLegacyAxonBridge);
         }
         RuntimeLifecycleStatus::IdentityMismatch => {
             return Err(RuntimeLifecycleError::StartRefusedIdentityMismatch {
@@ -150,9 +165,17 @@ pub(crate) fn preflight_start(
             });
         }
         RuntimeLifecycleStatus::StartProjectionCommitFailed
-        | RuntimeLifecycleStatus::StopTimedOut
-        | RuntimeLifecycleStatus::LegacyCleanupFailed => {
+        | RuntimeLifecycleStatus::StopTimedOut => {
             return Err(RuntimeLifecycleError::StartRefusedMissingDaemonIdentity);
+        }
+        RuntimeLifecycleStatus::DaemonDiscoveryInvalid => {
+            return Err(RuntimeLifecycleError::StartRefusedInvalidDaemonDiscovery {
+                message: report
+                    .daemon()
+                    .control_discovery_error()
+                    .unwrap_or("lifecycle invariant violated: invalid discovery status has no discovery error")
+                    .to_string(),
+            });
         }
     };
     Ok(RuntimeStartPreflightReport::new(action))
@@ -169,7 +192,32 @@ fn validate_attach_identity(
     validate_mode(request, identity)?;
     validate_realm(request, identity)?;
     validate_node_id(request, identity)?;
+    validate_attach_capabilities(request, report)?;
     Ok(())
+}
+
+fn validate_attach_capabilities(
+    request: &RuntimeStartRequest,
+    report: &RuntimeStatusReport,
+) -> Result<(), RuntimeLifecycleError> {
+    if !matches!(request.mode, RuntimeStartMode::Device) {
+        return Ok(());
+    }
+    if !request.require_paired_user_runtime_signer {
+        return Ok(());
+    }
+    if report
+        .daemon()
+        .has_capability_flag(crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER)
+    {
+        return Ok(());
+    }
+    Err(
+        RuntimeLifecycleError::StartRefusedMissingRuntimeCapability {
+            mode: "device",
+            capability: crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER,
+        },
+    )
 }
 
 fn validate_mode(
@@ -217,16 +265,15 @@ fn validate_node_id(
     if !matches!(request.mode, RuntimeStartMode::Device) {
         return Ok(());
     }
-    let requested = request.node_id.clone().unwrap_or_default();
-    let actual = identity.node_id.clone().unwrap_or_default();
-    if requested == actual {
-        Ok(())
-    } else {
-        Err(RuntimeLifecycleError::StartRefusedIdentityMismatch {
+    let requested = DeviceNodeIdFact::from_optional(request.node_id.as_deref());
+    let actual = DeviceNodeIdFact::from_optional(identity.node_id.as_deref());
+    match (requested.present_value(), actual.present_value()) {
+        (Some(requested), Some(actual)) if requested == actual => Ok(()),
+        _ => Err(RuntimeLifecycleError::StartRefusedIdentityMismatch {
             field: "node_id",
-            requested,
-            actual,
-        })
+            requested: requested.mismatch_value(),
+            actual: actual.mismatch_value(),
+        }),
     }
 }
 
@@ -264,8 +311,18 @@ mod tests {
             pid: std::process::id(),
             daemon_version: env!("CARGO_PKG_VERSION").to_string(),
             supported_ipc_versions: discovery::IpcVersionRange::single(discovery::IPC_VERSION_V1),
-            capability_flags: Vec::new(),
+            capability_flags: vec![discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string()],
             pages_port: None,
+        }
+    }
+
+    fn discovery_with_identity_and_flags(
+        identity: discovery::DaemonIdentity,
+        capability_flags: Vec<String>,
+    ) -> discovery::ControlDiscovery {
+        discovery::ControlDiscovery {
+            capability_flags,
+            ..discovery_with_identity(identity)
         }
     }
 
@@ -312,6 +369,52 @@ mod tests {
     }
 
     #[test]
+    fn start_preflight_refuses_invalid_daemon_discovery() {
+        let daemon =
+            DaemonDiscoverySnapshot::from_invalid_discovery("control.json malformed", endpoints());
+        let status = RuntimeStatusReport::from_parts(None, daemon);
+
+        let err = preflight_start(&RuntimeStartRequest::hub("tenant-test"), &status)
+            .expect_err("invalid daemon discovery must be refused");
+
+        assert!(
+            matches!(
+                err,
+                RuntimeLifecycleError::StartRefusedInvalidDaemonDiscovery { ref message }
+                    if message.contains("control.json malformed")
+            ),
+            "invalid discovery must remain the explicit refusal cause: {err}"
+        );
+    }
+
+    #[test]
+    fn start_preflight_refuses_device_attach_without_paired_user_signer_readiness() {
+        let daemon = DaemonDiscoverySnapshot::from_parts(
+            Some(discovery_with_identity_and_flags(identity(), Vec::new())),
+            Some(std::process::id()),
+            true,
+            true,
+            true,
+            endpoints(),
+        );
+        let status = RuntimeStatusReport::from_parts(None, daemon);
+
+        let err = preflight_start(
+            &RuntimeStartRequest::device("tenant-test", "node-test"),
+            &status,
+        )
+        .expect_err("device attach must require paired user signer readiness");
+
+        assert!(matches!(
+            err,
+            RuntimeLifecycleError::StartRefusedMissingRuntimeCapability {
+                capability: discovery::flags::PAIRED_USER_RUNTIME_SIGNER,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn start_preflight_refuses_identity_mismatch() {
         let daemon = DaemonDiscoverySnapshot::from_parts(
             Some(discovery_with_identity(identity())),
@@ -335,6 +438,148 @@ mod tests {
                 field: "node_id",
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn start_preflight_refuses_missing_requested_device_node_id() {
+        let daemon = DaemonDiscoverySnapshot::from_parts(
+            Some(discovery_with_identity(identity())),
+            Some(std::process::id()),
+            true,
+            true,
+            true,
+            endpoints(),
+        );
+        let status = RuntimeStatusReport::from_parts(None, daemon);
+        let request = RuntimeStartRequest {
+            mode: RuntimeStartMode::Device,
+            realm: "tenant-test".to_string(),
+            node_id: None,
+            require_paired_user_runtime_signer: true,
+        };
+
+        let err =
+            preflight_start(&request, &status).expect_err("missing requested node id must fail");
+
+        assert!(matches!(
+            err,
+            RuntimeLifecycleError::StartRefusedIdentityMismatch {
+                field: "node_id",
+                requested,
+                actual,
+            } if requested == "<missing>" && actual == "node-test"
+        ));
+    }
+
+    #[test]
+    fn start_preflight_accepts_device_only_attach_without_paired_user_signer_readiness() {
+        let daemon = DaemonDiscoverySnapshot::from_parts(
+            Some(discovery_with_identity_and_flags(identity(), Vec::new())),
+            Some(std::process::id()),
+            true,
+            true,
+            true,
+            endpoints(),
+        );
+        let status = RuntimeStatusReport::from_parts(None, daemon);
+
+        let report = preflight_start(
+            &RuntimeStartRequest::device("tenant-test", "node-test")
+                .with_paired_user_runtime_signer_required(false),
+            &status,
+        )
+        .expect("device-only attach must not require paired user signer readiness");
+
+        assert_eq!(
+            report.action(),
+            RuntimeStartPreflightAction::AttachAndRebuildProjection
+        );
+    }
+
+    #[test]
+    fn start_preflight_refuses_blank_requested_device_node_id() {
+        let daemon = DaemonDiscoverySnapshot::from_parts(
+            Some(discovery_with_identity(identity())),
+            Some(std::process::id()),
+            true,
+            true,
+            true,
+            endpoints(),
+        );
+        let status = RuntimeStatusReport::from_parts(None, daemon);
+        let request = RuntimeStartRequest::device("tenant-test", "   ");
+
+        let err =
+            preflight_start(&request, &status).expect_err("blank requested node id must fail");
+
+        assert!(matches!(
+            err,
+            RuntimeLifecycleError::StartRefusedIdentityMismatch {
+                field: "node_id",
+                requested,
+                actual,
+            } if requested == "<blank>" && actual == "node-test"
+        ));
+    }
+
+    #[test]
+    fn start_preflight_refuses_missing_discovered_device_node_id() {
+        let mut daemon_identity = identity();
+        daemon_identity.node_id = None;
+        let daemon = DaemonDiscoverySnapshot::from_parts(
+            Some(discovery_with_identity(daemon_identity)),
+            Some(std::process::id()),
+            true,
+            true,
+            true,
+            endpoints(),
+        );
+        let status = RuntimeStatusReport::from_parts(None, daemon);
+
+        let err = preflight_start(
+            &RuntimeStartRequest::device("tenant-test", "node-test"),
+            &status,
+        )
+        .expect_err("missing discovered node id must fail");
+
+        assert!(matches!(
+            err,
+            RuntimeLifecycleError::StartRefusedIdentityMismatch {
+                field: "node_id",
+                requested,
+                actual,
+            } if requested == "node-test" && actual == "<missing>"
+        ));
+    }
+
+    #[test]
+    fn start_preflight_refuses_blank_discovered_device_node_id() {
+        let mut daemon_identity = identity();
+        daemon_identity.node_id = Some("   ".to_string());
+        let daemon = DaemonDiscoverySnapshot::from_parts(
+            Some(discovery_with_identity(daemon_identity)),
+            Some(std::process::id()),
+            true,
+            true,
+            true,
+            endpoints(),
+        );
+        let status = RuntimeStatusReport::from_parts(None, daemon);
+
+        let err = preflight_start(
+            &RuntimeStartRequest::device("tenant-test", "node-test"),
+            &status,
+        )
+        .expect_err("blank discovered node id must fail");
+
+        assert!(matches!(
+            err,
+            RuntimeLifecycleError::StartRefusedIdentityMismatch {
+                field: "node_id",
+                requested,
+                actual,
+            } if requested == "node-test" && actual == "<blank>"
         ));
     }
 }

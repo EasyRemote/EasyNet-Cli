@@ -1,0 +1,14 @@
+Design:
+- Introduce an SDK-local child Invocation fact validator in each language.
+- Treat a child Invocation as an execution fact only when it carries:
+  - step id
+  - request id
+  - trace id
+  - ability
+  - invocation URA
+  - caller/callee/subject URAs
+  - metadata state
+  - ledger state
+- Preserve receipt optionality for running/non-terminal child steps, but when a receipt is present require receipt URA and receipt hash.
+- Extend MissionPlan child conformance with an `IncompleteFactSteps` set.
+- Report incomplete child facts through the existing `mission_child_invocation_mismatch` reason so callers keep stable error handling.

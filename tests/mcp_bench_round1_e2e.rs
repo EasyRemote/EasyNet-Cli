@@ -31,10 +31,86 @@
 
 use std::sync::Arc;
 
-use easynet_axon::invocation::LocalRuntime;
+#[path = "support/runtime_fixture.rs"]
+mod runtime_fixture;
+
+use axon_sdk::invocation::{
+    fresh_nonce, signing_key_from_bytes, AgentIdentity, AxonError, CallMode as AxonCallMode,
+    CausalContext, DescriptorBoundEnvelope, DescriptorBoundEnvelopeParts,
+    DescriptorBoundInvocationDraft, DescriptorBoundInvocationRequest, KeyResolver, LocalRuntime,
+    SubjectIdentity, UraProfile,
+};
 use easynet_cli::daemon::execution::mcp::{McpClientService, McpClientsFile, McpServerSpec};
-use easynet_cli::daemon::invocation::dispatch::local_runtime_invoker::open_local_stream;
-use easynet_cli::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+use ed25519_dalek::{SigningKey, VerifyingKey};
+
+struct FixedCallerKey(VerifyingKey);
+
+impl KeyResolver for FixedCallerKey {
+    fn resolve(&self, _agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+        Ok(self.0)
+    }
+}
+
+fn signed_test_runtime(signing_key: &SigningKey) -> Arc<LocalRuntime> {
+    runtime_fixture::runtime_with_key_resolver(Arc::new(FixedCallerKey(
+        signing_key.verifying_key(),
+    )))
+}
+
+async fn externally_signed_stream_request(
+    runtime: &Arc<LocalRuntime>,
+    signing_key: &SigningKey,
+    caller_ura: &str,
+    callee_ura: &str,
+    ability_ura: &str,
+    payload: Vec<u8>,
+) -> DescriptorBoundInvocationRequest {
+    let options = runtime
+        .ability_options(ability_ura)
+        .await
+        .expect("reflected stream ability must have runtime options");
+    let proof = options
+        .proof_for_mode(AxonCallMode::Stream)
+        .expect("reflected stream ability must have descriptor proof");
+    let descriptor_ref = format!(
+        "{ability_ura}@{}#{}!{}",
+        proof.descriptor_version,
+        hex::encode(proof.descriptor_hash),
+        proof.admission_action
+    );
+    let callee = AgentIdentity::new(callee_ura, UraProfile::StrictV2);
+    let envelope = DescriptorBoundEnvelope::from_parts(DescriptorBoundEnvelopeParts {
+        caller: AgentIdentity::new(caller_ura, UraProfile::StrictV2),
+        callee: callee.clone(),
+        ability: descriptor_ref,
+        subject: SubjectIdentity::from_callee(&callee),
+        invocation_nonce: fresh_nonce(),
+        causal_context: CausalContext::None,
+        args_bytes: &payload,
+    })
+    .expect("complete descriptor-bound MCP invocation envelope");
+    DescriptorBoundInvocationDraft::from_envelope(envelope)
+        .with_payload(payload)
+        .signed(AxonCallMode::Stream, signing_key, "mcp-bench-test-caller")
+        .expect("descriptor-bound MCP request")
+}
+
+fn registry_for_mcp_owner(
+    runtime: Arc<LocalRuntime>,
+    owner_ura: &str,
+) -> easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog {
+    let owner = easynet_cli::core::ura::parse_ura(owner_ura).expect("canonical MCP owner URA");
+    let device_ura = easynet_cli::core::ura::device_ura(&owner.realm, "mcp-test-device");
+    let authority_context = easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots_with_hosted_agents(
+        device_ura,
+        [owner_ura.to_string()],
+    )
+    .expect("MCP owner must be admitted by the test Device authority");
+    easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        runtime,
+        authority_context,
+    )
+}
 
 /// Build the in-process Python echo MCP server fixture used
 /// throughout this round. Same script shape as the `mcp`
@@ -128,11 +204,10 @@ async fn reflective_path_directly_through_mcp_service_round_trip() {
     let svc = McpClientService::from_path(&config_path).expect("from_path must accept");
     assert_eq!(svc.server_names().await, vec!["echo".to_string()]);
 
-    let runtime = LocalRuntime::new();
-    let mut reg = easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime(
-        Arc::clone(&runtime),
-    );
-    let owner_ura = easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp");
+    let caller_signing_key = signing_key_from_bytes(&[0x4d; 32]);
+    let runtime = signed_test_runtime(&caller_signing_key);
+    let owner_ura = axon_sdk::ura::agent_ura("test-realm", "test-user", "mcp");
+    let mut reg = registry_for_mcp_owner(Arc::clone(&runtime), &owner_ura);
     let result = easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all(
         &svc, &mut reg, &owner_ura,
     )
@@ -168,7 +243,7 @@ async fn reflective_path_directly_through_mcp_service_round_trip() {
     // surface so a regression on the build_registry path trips here.
     for rec in &result.registered {
         let derived_ura =
-            easynet_axon::ura::ability_ura("test-realm", "test-user", "mcp", &rec.ability_name);
+            axon_sdk::ura::ability_ura("test-realm", "test-user", "mcp", &rec.ability_name);
         assert!(
             !derived_ura.contains("mcp_upstream"),
             "URA must not leak mcp_upstream: {derived_ura}"
@@ -186,21 +261,23 @@ async fn reflective_path_directly_through_mcp_service_round_trip() {
     // intermediate frames would be `{type: "progress", ...}`
     // (echo upstream doesn't emit any — that's exercised by
     // mcp::tests::rpc_with_progress_routes_interleaved_progress_to_sink).
-    let weather_lookup_ura = easynet_axon::ura::owner_ability_ura(&owner_ura, "weather_lookup")
-        .expect("owner ability URA");
-    let mut rx = open_local_stream(
-        Arc::clone(&runtime),
-        InvocationTarget {
-            scope: TargetScope::Local,
-            ability: weather_lookup_ura,
-            normalized_args: serde_json::json!({"location": "Berlin"}),
-            call_mode: CallMode::Stream,
-            subject: None,
-            causal_context: None,
-        },
+    let weather_lookup_ura =
+        axon_sdk::ura::owner_ability_ura(&owner_ura, "weather_lookup").expect("owner ability URA");
+    let payload =
+        serde_json::to_vec(&serde_json::json!({"location": "Berlin"})).expect("MCP request JSON");
+    let request = externally_signed_stream_request(
+        &runtime,
+        &caller_signing_key,
+        "easynet:///r/test-realm/agent/u.mcp-bench-caller",
+        &owner_ura,
+        &weather_lookup_ura,
+        payload,
     )
-    .await
-    .expect("weather_lookup must be callable as stream through LocalRuntime");
+    .await;
+    let (mut rx, _) = runtime
+        .invoke_descriptor_bound_stream_request_async(request)
+        .await
+        .expect("weather_lookup must be callable as stream through LocalRuntime");
     let _keep_catalog_alive = reg;
 
     // Drain until we see the terminal `response` frame. Echo
@@ -281,11 +358,12 @@ async fn mcp_bench_translation_round_trips_into_live_reflection() {
     let parsed: McpClientsFile = serde_json::from_value(translated).unwrap();
     let svc = Arc::new(McpClientService::from_file(parsed));
 
-    let mut reg = easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog::new();
+    let owner_ura = "easynet:///r/test/agent/u.mcp";
+    let mut reg = registry_for_mcp_owner(runtime_fixture::rejecting_runtime(), owner_ura);
     let result = easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all(
         &svc,
         &mut reg,
-        "easynet:///r/test/agent/u.mcp",
+        owner_ura,
     )
     .await;
 
@@ -328,11 +406,12 @@ async fn broken_upstream_does_not_block_other_servers() {
         ],
     }));
 
-    let mut reg = easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog::new();
+    let owner_ura = "easynet:///r/test/agent/u.mcp";
+    let mut reg = registry_for_mcp_owner(runtime_fixture::rejecting_runtime(), owner_ura);
     let result = easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all(
         &svc,
         &mut reg,
-        "easynet:///r/test/agent/u.mcp",
+        owner_ura,
     )
     .await;
 

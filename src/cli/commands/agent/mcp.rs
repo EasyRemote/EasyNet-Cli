@@ -2,10 +2,9 @@
 // Split from cli/agent.rs (F-033 / T4.6); bodies are move-only.
 
 use serde_json::Value;
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use crate::daemon::execution::mission::directory::AgentDirectory;
-use crate::daemon::persistence::config;
 use crate::support::platform::output;
 
 use super::*;
@@ -25,11 +24,11 @@ pub(super) fn run_mcp(args: McpArgs) -> anyhow::Result<()> {
 ///   3. validate the user's `--tool` selection against the plan
 ///   4. materialise / dry-run the plans + render the operator summary
 pub(crate) fn run_mcp_add(args: McpAddArgs) -> anyhow::Result<()> {
-    let dir = open_registered_agent(&args.name)?;
     let config_path = args
         .config
         .clone()
-        .unwrap_or_else(crate::daemon::execution::mcp::McpClientService::default_config_path);
+        .map(Ok)
+        .unwrap_or_else(crate::daemon::execution::mcp::McpClientService::default_config_path)?;
     let svc = crate::daemon::execution::mcp::McpClientService::from_path(&config_path)?;
 
     let declared_cost = build_cost_meta(args.cost_kind, args.cost_label.as_deref())?;
@@ -49,8 +48,30 @@ pub(crate) fn run_mcp_add(args: McpAddArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let outcome = write_mcp_additions(&dir, &plan.planned, args.overwrite, args.dry_run)?;
-    report_write_outcome(&args.name, &dir, &plan, &outcome, args.dry_run);
+    let manifests = plan
+        .planned
+        .iter()
+        .map(mcp_manifest_for)
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let outcome = if args.dry_run {
+        let directory =
+            crate::cli::commands::agent_new_ability::preview_agent_directory(&args.name)?;
+        preview_mcp_additions(&directory, &manifests, args.overwrite)?
+    } else {
+        let committed = crate::cli::commands::agent_new_ability::commit_ability_manifests(
+            &args.name,
+            manifests,
+            args.overwrite,
+            crate::cli::commands::agent_new_ability::AbilityConflictPolicy::RetainSameBinding,
+        )?;
+        McpAdditionOutcome {
+            written: committed.written.len(),
+            skipped: committed.skipped.len(),
+            abilities_dir: committed.root_path.join("abilities"),
+            live_publication_count: committed.publication.len(),
+        }
+    };
+    report_write_outcome(&args.name, &plan, &outcome, args.dry_run);
     Ok(())
 }
 
@@ -69,12 +90,14 @@ struct McpAdditionPlan {
 struct McpAdditionOutcome {
     written: usize,
     skipped: usize,
+    abilities_dir: std::path::PathBuf,
+    live_publication_count: usize,
 }
 
 /// Build the manifest plan for one `easynet agent mcp add` invocation.
 ///
 /// Pure-ish: the only side effect is talking to `svc` (which itself
-/// reads the operator's `mcps.json` config). No filesystem
+/// reads the operator's `mcp_clients.json` config). No filesystem
 /// writes happen here — that's phase (4).
 /// Build the `CostMeta` value the manifest writer will stamp on every
 /// generated ability, or `None` when the operator did not pass
@@ -84,8 +107,8 @@ struct McpAdditionOutcome {
 pub(super) fn build_cost_meta(
     cost_kind: Option<CostKindArg>,
     cost_label: Option<&str>,
-) -> anyhow::Result<Option<crate::core::ability::spec::CostMeta>> {
-    use crate::core::ability::spec::CostMeta;
+) -> anyhow::Result<Option<crate::daemon::ability::manifest::CostMeta>> {
+    use crate::daemon::ability::manifest::CostMeta;
     let Some(kind) = cost_kind else {
         return Ok(None);
     };
@@ -111,7 +134,7 @@ fn plan_mcp_additions(
     tool_filter: &[String],
     prefix: &str,
     skip_unreachable: bool,
-    declared_cost: Option<&crate::core::ability::spec::CostMeta>,
+    declared_cost: Option<&crate::daemon::ability::manifest::CostMeta>,
 ) -> anyhow::Result<McpAdditionPlan> {
     let selected_servers = select_mcp_servers(svc, server_filter)?;
     if selected_servers.is_empty() {
@@ -197,37 +220,26 @@ pub(super) fn assert_tools_filter_satisfied(
     Ok(())
 }
 
-/// Phase (4): turn each plan into a manifest TOML and either print
-/// it (dry-run) or atomically write it to the agent's abilities
-/// directory. Returns the materialisation outcome so the caller can
-/// render the operator summary.
-fn write_mcp_additions(
+/// Read-only dry-run projection. The daemon remains the sole writer; this
+/// helper only preserves the existing preview/conflict UX.
+fn preview_mcp_additions(
     dir: &AgentDirectory,
-    planned: &[McpAbilityPlan],
+    manifests: &[crate::daemon::ability::manifest::AbilityManifest],
     overwrite: bool,
-    dry_run: bool,
 ) -> anyhow::Result<McpAdditionOutcome> {
-    if !dry_run {
-        std::fs::create_dir_all(dir.abilities_dir()).map_err(|e| {
-            anyhow::anyhow!(
-                "create abilities directory {}: {e}",
-                dir.abilities_dir().display()
-            )
-        })?;
-    }
-
-    let mut outcome = McpAdditionOutcome::default();
-    for plan in planned {
-        let manifest = mcp_manifest_for(plan)?;
+    let mut outcome = McpAdditionOutcome {
+        abilities_dir: dir.abilities_dir(),
+        ..Default::default()
+    };
+    for manifest in manifests {
         let body = manifest.to_toml_string()?;
         let path = dir
             .abilities_dir()
             .join(format!("{}.ability.toml", manifest.name()));
 
         if path.exists() && !overwrite {
-            let existing = std::fs::read_to_string(&path).ok();
-            if existing.as_deref().and_then(existing_mcp_binding).as_ref()
-                == Some(&(plan.server.clone(), plan.tool.clone()))
+            if existing_mcp_binding_from_path(&path)?.as_ref()
+                == proposed_mcp_binding(manifest).as_ref()
             {
                 outcome.skipped += 1;
                 continue;
@@ -238,14 +250,9 @@ fn write_mcp_additions(
             );
         }
 
-        if dry_run {
-            println!("--- {}", path.display());
-            print!("{body}");
-        } else {
-            config::atomic_write(&path, body.as_bytes())
-                .map_err(|e| anyhow::anyhow!("write {}: {e}", path.display()))?;
-            outcome.written += 1;
-        }
+        println!("--- {}", path.display());
+        print!("{body}");
+        outcome.written += 1;
     }
     Ok(outcome)
 }
@@ -269,7 +276,6 @@ fn report_empty_plan(list_failures: &[String]) {
 /// detail lines + trailing warnings for partial failures).
 fn report_write_outcome(
     agent_name: &str,
-    dir: &AgentDirectory,
     plan: &McpAdditionPlan,
     outcome: &McpAdditionOutcome,
     dry_run: bool,
@@ -291,10 +297,15 @@ fn report_write_outcome(
                 &format!("{} existing identical binding(s)", outcome.skipped),
             );
         }
-        output::detail("root", &dir.abilities_dir().display().to_string());
-        output::info(
-            "A running daemon can invoke these through the dynamic agent fallback immediately; restart or refresh catalogue surfaces if a UI needs to list them.",
+        output::detail("root", &outcome.abilities_dir.display().to_string());
+        output::detail(
+            "live",
+            &format!(
+                "{} committed Agent ability descriptor(s)",
+                outcome.live_publication_count
+            ),
         );
+        output::info("The daemon committed the MCP bindings to the live capability catalog.");
     }
     for failure in &plan.list_failures {
         output::warn(failure);
@@ -312,7 +323,7 @@ pub(super) struct McpAbilityPlan {
     /// `--cost-kind`/`--cost-label`. `None` writes a manifest with no
     /// `[cost]` table; the runtime falls back to the per-exec
     /// inference at metadata-emit time.
-    pub(super) cost: Option<crate::core::ability::spec::CostMeta>,
+    pub(super) cost: Option<crate::daemon::ability::manifest::CostMeta>,
 }
 
 fn select_mcp_servers(
@@ -427,8 +438,8 @@ fn toml_safe_json_value(value: Value) -> Value {
 
 pub(super) fn mcp_manifest_for(
     plan: &McpAbilityPlan,
-) -> anyhow::Result<crate::core::ability::spec::AbilityManifest> {
-    use crate::core::ability::spec::{AbilityExec, AbilityManifest, McpExec};
+) -> anyhow::Result<crate::daemon::ability::manifest::AbilityManifest> {
+    use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest, McpExec};
     let mut manifest = AbilityManifest::new(
         plan.verb.clone(),
         plan.description.clone(),
@@ -453,9 +464,31 @@ pub(super) fn mcp_manifest_for(
     Ok(manifest)
 }
 
-pub(super) fn existing_mcp_binding(body: &str) -> Option<(String, String)> {
-    use crate::core::ability::spec::AbilityExec;
-    let manifest = crate::core::ability::spec::AbilityManifest::from_toml_str(body).ok()?;
+fn existing_mcp_binding_from_path(path: &Path) -> anyhow::Result<Option<(String, String)>> {
+    let body = std::fs::read_to_string(path).map_err(|error| {
+        anyhow::anyhow!("read existing ability manifest {}: {error}", path.display())
+    })?;
+    existing_mcp_binding(&body).map_err(|error| {
+        anyhow::anyhow!(
+            "parse existing ability manifest {} for MCP binding: {error:#}",
+            path.display()
+        )
+    })
+}
+
+pub(super) fn existing_mcp_binding(body: &str) -> anyhow::Result<Option<(String, String)>> {
+    use crate::daemon::ability::manifest::AbilityExec;
+    let manifest = crate::daemon::ability::manifest::AbilityManifest::from_toml_str(body)?;
+    Ok(match manifest.exec() {
+        Some(AbilityExec::Mcp(exec)) => Some((exec.server.clone(), exec.tool.clone())),
+        _ => None,
+    })
+}
+
+fn proposed_mcp_binding(
+    manifest: &crate::daemon::ability::manifest::AbilityManifest,
+) -> Option<(String, String)> {
+    use crate::daemon::ability::manifest::AbilityExec;
     match manifest.exec()? {
         AbilityExec::Mcp(exec) => Some((exec.server.clone(), exec.tool.clone())),
         _ => None,
@@ -466,32 +499,50 @@ pub(super) fn generated_mcp_ability_name(prefix: &str, server: &str, tool: &str)
     let prefix_slug = slug_segment(prefix);
     let server_slug = slug_segment(server);
     let tool_slug = slug_segment(tool);
-    // Flat single-underscore form: `{prefix}_{server}_{tool}`. The
-    // earlier double-underscore at the server↔tool seam advertised
-    // the boundary visually but cost readability across the whole
-    // catalogue; user calls this trade-off in favour of a uniform
-    // separator. Two distinct server↔tool pairs that slugify to the
-    // same flat string would collide; the hash fallback below
-    // covers that case for empty / separator-only slugs.
     let base = if prefix_slug.is_empty() {
         format!("{server_slug}_{tool_slug}")
     } else {
         format!("{prefix_slug}_{server_slug}_{tool_slug}")
     };
-    // "Empty after slugify" means either the formatted string is
-    // literally empty OR it slugifies to nothing but separators
-    // (e.g. `"__"` from server=tool="…"). The hash fallback
-    // guarantees a deterministic, distinct ability name in both
-    // cases. We hash the RAW upstream identifiers (not the slugs)
-    // so that two upstream pairs that slugify to the same empty
-    // shape still receive distinct hashes — without this the test
-    // pair `("...", "///")` vs `("***", "===")` would collide on
-    // the empty-slug `":"` hash input.
-    let is_only_separators = !base.is_empty() && base.chars().all(|c| c == '_' || c == '-');
-    if base.is_empty() || is_only_separators {
-        format!("mcp_{}", short_hex(format!("{server}:{tool}").as_bytes()))
-    } else {
-        base
+    McpAbilityNameProjection::from_parts(base, server, tool).into_name()
+}
+
+/// Canonical projection from upstream MCP server/tool identifiers to an
+/// EasyNet ability name.
+///
+/// Flat names are the normal `{prefix}_{server}_{tool}` projection. Some
+/// upstream identifiers slugify to an empty or separator-only shape; those are
+/// not compatibility cases. They are a distinct, canonical projection state
+/// that binds the raw upstream identifiers into a deterministic digest so two
+/// punctuation-only tool pairs remain different.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum McpAbilityNameProjection {
+    Flat(String),
+    DigestDisambiguated { digest_input: String },
+}
+
+impl McpAbilityNameProjection {
+    fn from_parts(base: String, server: &str, tool: &str) -> Self {
+        if Self::requires_digest(&base) {
+            Self::DigestDisambiguated {
+                digest_input: format!("{server}:{tool}"),
+            }
+        } else {
+            Self::Flat(base)
+        }
+    }
+
+    fn requires_digest(base: &str) -> bool {
+        base.is_empty() || base.chars().all(|c| c == '_' || c == '-')
+    }
+
+    fn into_name(self) -> String {
+        match self {
+            Self::Flat(name) => name,
+            Self::DigestDisambiguated { digest_input } => {
+                format!("mcp_{}", short_hex(digest_input.as_bytes()))
+            }
+        }
     }
 }
 

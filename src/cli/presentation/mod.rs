@@ -21,4 +21,5 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 pub mod banner;
+pub mod identity;
 pub mod stage;

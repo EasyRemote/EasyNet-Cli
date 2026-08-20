@@ -47,7 +47,7 @@
 //
 // Layering rule
 // -------------
-// `core::agent_spec` must not import any other `crate::` module
+// `core::agent::spec` must not import any other `crate::` module
 // and must not pull in external crates beyond `serde` + `toml`.
 // Violations will be caught at review — the whole point of core/
 // is that lower layers can import it without pulling in the
@@ -67,7 +67,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Wire / disk encoding uses kebab-case (`claude-code`, not
 /// `claude_code` or `ClaudeCode`) to match the existing
-/// `crate::daemon::persistence::agent_registry::AgentType` display form. That parity
+/// `crate::core::agent::spec::RuntimeKind` display form. That parity
 /// is load-bearing: the registry and the on-disk spec must agree
 /// on the spelling, or a user who reads one file and writes the
 /// other will get a phantom "unknown runtime" at load time.
@@ -87,7 +87,7 @@ pub enum RuntimeKind {
 impl RuntimeKind {
     /// Stable wire form used by both the on-disk TOML and the
     /// `a2a.agents_json[*].type` discovery label. Mirrors
-    /// `AgentType::to_string()` so switching a caller from the
+    /// `RuntimeKind::to_string()` so switching a caller from the
     /// registry's enum to the spec's enum cannot change the
     /// observable string.
     pub fn as_wire_str(self) -> &'static str {
@@ -106,14 +106,26 @@ impl std::fmt::Display for RuntimeKind {
     }
 }
 
-/// The schema version this binary understands natively. An
-/// `agent.toml` carrying `schema_version = "1"` (or omitting the
-/// field entirely) is the "current implicit schema" — everything
-/// written by this release. Future releases that add fields which
-/// older consumers cannot interpret will bump this to `"2"` and
-/// teach `validate` to accept the new value. The const is the
-/// single source of truth so a future bump flips exactly one
-/// place.
+impl std::str::FromStr for RuntimeKind {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "claude-code" | "claude" => Ok(Self::ClaudeCode),
+            "codex" => Ok(Self::Codex),
+            "codex-app-server" | "codex-appserver" => Ok(Self::CodexAppServer),
+            "external" | "custom" => Ok(Self::External),
+            _ => anyhow::bail!(
+                "unknown agent runtime: {value} (expected: claude-code, codex, codex-app-server, external)"
+            ),
+        }
+    }
+}
+
+/// The schema version this binary writes and understands natively. Every
+/// canonical `agent.toml` must carry this stamp explicitly; missing
+/// `schema_version` is retired pre-stamp local state, not an implicit current
+/// schema.
 pub const CURRENT_SCHEMA_VERSION: &str = "1";
 
 /// Schema versions this binary accepts on read. Kept narrow on
@@ -144,24 +156,12 @@ const SUPPORTED_SCHEMA_VERSIONS: &[&str] = &["1"];
 ///   — otherwise unrelated patches show up as diffs in a
 ///   project-local agent root under git.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentSpec {
-    /// Self-describing schema version. Optional on read: an absent
-    /// field means "this file was written before the version stamp
-    /// was introduced" and is treated as `"1"` (the current
-    /// implicit schema). A future PR that adds required fields
-    /// will bump `CURRENT_SCHEMA_VERSION` to `"2"`, add it to
-    /// `SUPPORTED_SCHEMA_VERSIONS`, and teach `validate` / the
-    /// load-path how to upgrade a `"1"` on the fly.
-    ///
-    /// Why `Option<String>` rather than `String` with a default:
-    /// distinguishing "the user omitted this field" from "the user
-    /// wrote exactly the current version" matters for diffs — two
-    /// byte-identical agent.tomls must continue to survive
-    /// round-trip, and serde's `#[serde(default)]` would normalize
-    /// every read into an emitted field that wasn't there before.
-    /// We rely on `skip_serializing_if = "Option::is_none"` so a
-    /// spec that came in without the field goes back out without
-    /// it.
+    /// Self-describing schema version. Kept as `Option<String>` only so the
+    /// validator can report a precise error for retired pre-stamp files that
+    /// omit the field. Valid in-memory specs and every writer-produced TOML
+    /// carry `Some(CURRENT_SCHEMA_VERSION)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema_version: Option<String>,
 
@@ -228,21 +228,12 @@ pub struct AgentSpec {
 }
 
 impl AgentSpec {
-    /// Build a minimal spec with just the two required fields.
-    /// Every other field defaults to "absent"; the TOML writer
-    /// will omit them on disk so a fresh `agent new` produces
-    /// the smallest possible file.
-    ///
-    /// Note `schema_version` defaults to `None` here, not
-    /// `Some(CURRENT_SCHEMA_VERSION)`. Rationale: a spec
-    /// constructed programmatically and serialized back should
-    /// produce the smallest possible file (none of the version
-    /// stamps, just name + runtime). Readers that need to know
-    /// the effective version call `effective_schema_version()`
-    /// below.
+    /// Build a minimal canonical spec. The schema stamp is required because
+    /// `agent.toml` is durable runtime state; every other field remains absent
+    /// until the operator or caller supplies it.
     pub fn new(name: impl Into<String>, runtime: RuntimeKind) -> Self {
         Self {
-            schema_version: None,
+            schema_version: Some(CURRENT_SCHEMA_VERSION.to_string()),
             name: name.into(),
             runtime,
             model: None,
@@ -254,17 +245,6 @@ impl AgentSpec {
             timeout_secs: None,
             env: BTreeMap::new(),
         }
-    }
-
-    /// Resolve the effective schema version: either the value
-    /// the operator wrote, or the current implicit default.
-    /// Exposed as a helper so readers that branch on version
-    /// (future migration code) don't have to open-code the
-    /// `None → "1"` fallback everywhere.
-    pub fn effective_schema_version(&self) -> &str {
-        self.schema_version
-            .as_deref()
-            .unwrap_or(CURRENT_SCHEMA_VERSION)
     }
 
     /// Parse `agent.toml` contents. Errors carry enough context
@@ -281,6 +261,7 @@ impl AgentSpec {
     /// Serialize back to a TOML document. Stable ordering
     /// guaranteed by serde + our BTreeMap choice for `env`.
     pub fn to_toml_string(&self) -> anyhow::Result<String> {
+        self.validate()?;
         let s = toml::to_string_pretty(self)?;
         Ok(s)
     }
@@ -343,24 +324,23 @@ impl AgentSpec {
             );
         }
 
-        // Schema version gate. An absent field is the pre-stamp
-        // shape (accepted as `"1"`); any string present must be in
-        // `SUPPORTED_SCHEMA_VERSIONS`. Silently accepting unknown
-        // versions would let a `"3"` file from a newer release
-        // deserialize into this binary's `"1"` layout, losing any
-        // required fields the future release added. Refusing here
-        // instead lets the operator see "this CLI is too old, use
-        // a newer release" rather than a silent semantic drift.
-        if let Some(v) = self.schema_version.as_deref() {
-            if !SUPPORTED_SCHEMA_VERSIONS.contains(&v) {
-                anyhow::bail!(
-                    "agent.toml: schema_version = {:?} is not supported by this binary \
-                     (supported: {:?}). Upgrade the CLI or remove the field to default to \
-                     the current implicit schema.",
-                    v,
-                    SUPPORTED_SCHEMA_VERSIONS
-                );
-            }
+        // Schema version gate. Missing stamps are retired pre-stamp local
+        // state. Silently accepting them would make current runtime code
+        // continue to treat old files as canonical input.
+        let Some(v) = self.schema_version.as_deref() else {
+            anyhow::bail!(
+                "agent.toml: missing schema_version; recreate or republish the agent so the \
+                 canonical agent spec writer can stamp schema_version = {:?}",
+                CURRENT_SCHEMA_VERSION
+            );
+        };
+        if !SUPPORTED_SCHEMA_VERSIONS.contains(&v) {
+            anyhow::bail!(
+                "agent.toml: schema_version = {:?} is not supported by this binary \
+                 (supported: {:?}). Upgrade the CLI or recreate the agent with a supported schema.",
+                v,
+                SUPPORTED_SCHEMA_VERSIONS
+            );
         }
 
         // `timeout_secs = 0` is a footgun, not an expressive choice.
@@ -405,17 +385,17 @@ mod tests {
 
     #[test]
     fn minimal_spec_serializes_with_only_required_fields() {
-        // A spec built via `AgentSpec::new` carries only `name`
-        // and `runtime`. Every other field is absent; the TOML
-        // output must reflect that — no `model = ""`, no
-        // `description = ""`, no empty `[env]` table.
+        // A spec built via `AgentSpec::new` carries the schema stamp plus
+        // `name` and `runtime`. Every optional field is absent; the TOML output
+        // must reflect that — no `model = ""`, no `description = ""`, no empty
+        // `[env]` table.
         let s = AgentSpec::new("alice", RuntimeKind::ClaudeCode);
         let toml = s.to_toml_string().unwrap();
+        assert!(toml.contains("schema_version = \"1\""));
         assert!(toml.contains("name = \"alice\""));
         assert!(toml.contains("runtime = \"claude-code\""));
         // None of the optional fields may appear.
         for unexpected in [
-            "schema_version",
             "model",
             "mode",
             "system_prompt",
@@ -479,13 +459,11 @@ mod tests {
     }
 
     #[test]
-    fn runtime_wire_strings_match_registry_agent_type() {
-        // Load-bearing parity: the spec's on-disk runtime string
-        // must equal the registry's AgentType::to_string(). If a
-        // refactor ever changes one without the other, a user's
-        // agent.toml written today would fail to load tomorrow.
-        // We encode the contract as a literal comparison so a
-        // future kebab-vs-snake flip trips the test loudly.
+    fn runtime_wire_strings_are_stable() {
+        // Load-bearing contract: the spec's on-disk runtime string is also the
+        // registry row's runtime enum string. A future kebab-vs-snake flip must
+        // trip this test loudly because existing `agent.toml` and `agents.json`
+        // rows use this exact vocabulary.
         assert_eq!(RuntimeKind::ClaudeCode.as_wire_str(), "claude-code");
         assert_eq!(RuntimeKind::Codex.as_wire_str(), "codex");
         assert_eq!(
@@ -493,6 +471,14 @@ mod tests {
             "codex-app-server"
         );
         assert_eq!(RuntimeKind::External.as_wire_str(), "external");
+        assert_eq!(
+            "claude".parse::<RuntimeKind>().unwrap(),
+            RuntimeKind::ClaudeCode
+        );
+        assert_eq!(
+            "custom".parse::<RuntimeKind>().unwrap(),
+            RuntimeKind::External
+        );
     }
 
     // ── failure path ────────────────────────────────────────────────────────
@@ -500,6 +486,7 @@ mod tests {
     #[test]
     fn reject_missing_name_field() {
         let src = r#"
+            schema_version = "1"
             runtime = "claude-code"
         "#;
         let err = AgentSpec::from_toml_str(src).expect_err("missing `name` must error");
@@ -513,6 +500,7 @@ mod tests {
     #[test]
     fn reject_missing_runtime_field() {
         let src = r#"
+            schema_version = "1"
             name = "alice"
         "#;
         let err = AgentSpec::from_toml_str(src).expect_err("missing `runtime` must error");
@@ -529,6 +517,7 @@ mod tests {
         // kebab) must not be silently accepted — mis-routing to
         // the wrong driver silently is worse than a loud error.
         let src = r#"
+            schema_version = "1"
             name = "alice"
             runtime = "claude_code"
         "#;
@@ -582,6 +571,7 @@ mod tests {
         // `from_toml_str` must compose with `validate()` so
         // callers get one-stop loading.
         let src = r#"
+            schema_version = "1"
             name = "team/alice"
             runtime = "claude-code"
         "#;
@@ -612,7 +602,7 @@ mod tests {
         // description field; a serializer that fumbles non-ASCII
         // here would corrupt every EasyNet Frontend card.
         let s = AgentSpec {
-            schema_version: None,
+            schema_version: Some(CURRENT_SCHEMA_VERSION.to_string()),
             name: "alice".into(),
             runtime: RuntimeKind::ClaudeCode,
             description: Some("高级代码审查员 — 对 Rust / TypeScript 项目尤其严格。🔍".into()),
@@ -645,23 +635,22 @@ mod tests {
     }
 
     #[test]
-    fn unknown_top_level_keys_are_ignored_for_forward_compat() {
-        // TOML allows extra keys; the serde derive drops them by
-        // default. We DO want that permissive behavior: a
-        // newer version of the binary that adds a field must not
-        // break when an operator later downgrades and reads
-        // their own file. Pin the contract so a future
-        // `#[serde(deny_unknown_fields)]` flip is a deliberate
-        // decision, not an accident.
+    fn unknown_top_level_keys_fail_closed() {
+        // agent.toml is durable lifecycle state. Unknown fields are usually
+        // misspelled runtime/lifecycle knobs, so accepting them would collapse
+        // an operator's intent into a consumer default.
         let src = r#"
+            schema_version = "1"
             name = "alice"
             runtime = "claude-code"
-            future_field = "from-next-release"
+            runtmie = "typo"
         "#;
-        let s = AgentSpec::from_toml_str(src)
-            .expect("unknown keys must be tolerated for forward compat");
-        assert_eq!(s.name, "alice");
-        assert_eq!(s.runtime, RuntimeKind::ClaudeCode);
+        let err =
+            AgentSpec::from_toml_str(src).expect_err("unknown agent.toml fields must fail closed");
+        assert!(
+            err.to_string().contains("unknown field `runtmie`"),
+            "unknown field should be reported explicitly: {err}"
+        );
     }
 
     #[test]
@@ -711,27 +700,16 @@ mod tests {
     // ── schema_version ──────────────────────────────────────────────────────
 
     #[test]
-    fn schema_version_absent_round_trips_without_emitting() {
-        // A spec built without `schema_version` must serialize
-        // without the field, parse back to `None`, and still
-        // report the current version as the effective one. This
-        // is the "pre-stamp compatibility" contract — an
-        // agent.toml written by an earlier release before the
-        // stamp existed must not grow the field after a read /
-        // write cycle, or every first-open of a legacy file
-        // would be a git-visible modification.
-        let s = AgentSpec::new("alice", RuntimeKind::ClaudeCode);
-        assert!(s.schema_version.is_none());
-
-        let toml = s.to_toml_string().unwrap();
-        assert!(
-            !toml.contains("schema_version"),
-            "None must not emit `schema_version`, got:\n{toml}"
-        );
-
-        let back = AgentSpec::from_toml_str(&toml).unwrap();
-        assert!(back.schema_version.is_none());
-        assert_eq!(back.effective_schema_version(), CURRENT_SCHEMA_VERSION);
+    fn schema_version_absent_is_rejected() {
+        let src = r#"
+            name = "alice"
+            runtime = "claude-code"
+        "#;
+        let err = AgentSpec::from_toml_str(src)
+            .expect_err("missing schema_version must be retired local state");
+        let msg = format!("{err}");
+        assert!(msg.contains("schema_version"), "{msg}");
+        assert!(msg.contains("missing"), "{msg}");
     }
 
     #[test]
@@ -752,7 +730,6 @@ mod tests {
 
         let back = AgentSpec::from_toml_str(&toml).unwrap();
         assert_eq!(back.schema_version.as_deref(), Some(CURRENT_SCHEMA_VERSION));
-        assert_eq!(back.effective_schema_version(), CURRENT_SCHEMA_VERSION);
     }
 
     #[test]
@@ -788,19 +765,12 @@ mod tests {
     }
 
     #[test]
-    fn effective_schema_version_never_returns_empty() {
+    fn schema_version_empty_is_rejected() {
         // Defensive: even a caller who sets `schema_version =
-        // Some(String::new())` (semantically "no version") must
-        // be caught at `validate`. We don't want
-        // `effective_schema_version()` to ever hand back an
-        // empty string to a downstream consumer.
+        // Some(String::new())` (semantically "no version") must be caught at
+        // `validate`.
         let mut s = AgentSpec::new("alice", RuntimeKind::ClaudeCode);
         s.schema_version = Some(String::new());
-        // Empty string is not in SUPPORTED_SCHEMA_VERSIONS, so
-        // validate must refuse it. This keeps the reachable
-        // space for `effective_schema_version()` confined to
-        // non-empty strings from the supported list plus the
-        // static `CURRENT_SCHEMA_VERSION` fallback.
         assert!(s.validate().is_err());
     }
 }

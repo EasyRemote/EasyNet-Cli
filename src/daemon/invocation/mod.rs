@@ -26,8 +26,8 @@
 // - Ability dispatch — `daemon::ability::dispatch` continues to own
 //   the AxonAbilityCatalog and the registered handler set; this
 //   module routes inbound RPC calls into that runtime surface
-// - Federation `session.open` / `runtime.invoke_remote` reverse-
-//   channel liveness — that lives in `presence_registry` and the
+// - `session.open` reverse-channel liveness — that lives in the presence
+//   registry and the
 //   session-specific modules below, not in the top-level service
 //   namespace
 //
@@ -45,9 +45,9 @@
 //
 // What it does NOT own
 // --------------------
-// This module is not a second Axon runtime and not a product policy
+// This module is not a second Axon runtime and not a runtime admission
 // singleton. It embeds Axon protocol/runtime primitives inside
-// `easynet-daemon`, while EasyNet product policy remains daemon-owned
+// `easynet-daemon`, while EasyNet runtime admission remains daemon-owned
 // and Axon protocol semantics remain Axon-owned.
 //
 // Why feature-gated
@@ -70,21 +70,44 @@
 #![allow(clippy::result_large_err)]
 
 pub mod admission;
+#[cfg(feature = "axon-pb")]
 pub mod bidi;
+#[cfg(feature = "axon-pb")]
+pub(crate) mod caller_signature;
+pub(crate) mod causal_context_projection;
 pub mod dispatch;
 pub mod receipts;
 pub mod routing;
+#[cfg(feature = "axon-pb")]
 pub mod streams;
+pub(crate) mod transport;
 
-pub use crate::daemon::boot::invocation::{start_daemon_invocation_transport, SessionShutdown};
-pub use admission::admission_facade::AdmissionFacade;
-pub use admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
-pub use admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
-pub use admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
-pub use bidi::invoke_remote_initiator::{
-    invoke_remote, InvokeRemoteDown, InvokeRemoteFrame, InvokeRemoteUp, SessionDispatch,
-    ABILITY_INVOKE_REMOTE, INVOKE_REMOTE_STREAM_ID,
+#[cfg(feature = "axon-pb")]
+pub use crate::daemon::boot::invocation::{
+    build_invocation_federation_runtime, start_daemon_invocation_transport,
+    InvocationFederationRuntime, InvocationTransportDependencies, SessionShutdown,
 };
+#[cfg(feature = "axon-pb")]
+pub use admission::admission_facade::AdmissionFacade;
+#[cfg(feature = "axon-pb")]
+pub use admission::list_user_pubkeys::ABILITY_IDENTITY_LIST_USER_PUBKEYS;
+#[cfg(feature = "axon-pb")]
+pub use admission::register_device_pubkey::ABILITY_IDENTITY_REGISTER_PUBKEY;
+#[cfg(feature = "axon-pb")]
+pub use admission::revoke_user_pubkey::ABILITY_IDENTITY_REVOKE_USER_PUBKEY;
+#[cfg(feature = "axon-pb")]
+pub use bidi::session_wire::SessionDispatch;
+#[cfg(feature = "axon-pb")]
 pub use dispatch::daemon_invocation_service::DaemonInvocationService;
-pub use dispatch::invocation_wire::{ProtoEnvelope, DEFAULT_URA_PROFILE};
-pub use dispatch::{DaemonInvocation, DaemonInvocationBuilder};
+#[cfg(feature = "axon-pb")]
+pub use dispatch::invocation_wire::{
+    InvocationDerivationPolicy, ProtoEnvelope, RootInvocationDerivationIssuer, DEFAULT_URA_PROFILE,
+};
+#[cfg(feature = "axon-pb")]
+pub use dispatch::{
+    CallerSignatureMaterial, DaemonInvocation, DaemonInvocationBuilder, InvocationArgsSet,
+    InvocationArgsUnset, InvocationDraft, InvocationTuple,
+    KeyServiceProviderManagedInvocationSigner, PrepareOptions, PreparedInvocation,
+    ProviderManagedInvocationSigner, SignedInvocation, SignerPolicy, SignerPolicyMode,
+    SigningMaterial,
+};

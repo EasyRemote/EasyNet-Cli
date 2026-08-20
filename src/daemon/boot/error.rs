@@ -16,6 +16,15 @@ pub enum DaemonError {
     EmptyNodeId,
     #[error("daemon binary path must not be empty")]
     EmptyBinaryPath,
+    #[error("daemon working directory must not be empty")]
+    EmptyWorkingDir,
+    #[error("daemon runtime HOME is required for {context}")]
+    DaemonHomeUnavailable { context: &'static str },
+    #[error("daemon state root is unavailable for {context}: {source}")]
+    DaemonStateRootUnavailable {
+        context: &'static str,
+        source: anyhow::Error,
+    },
     #[error("failed to create daemon log directory {path}: {source}")]
     CreateLogDir {
         path: PathBuf,
@@ -40,6 +49,21 @@ pub enum DaemonError {
     WritePid {
         path: PathBuf,
         source: std::io::Error,
+    },
+    #[error("failed to acquire daemon process lease at {path}: {source}")]
+    AcquireProcessLease {
+        path: PathBuf,
+        source: anyhow::Error,
+    },
+    #[error("daemon process lease at {path} is already held by {owner}")]
+    ProcessLeaseHeld { path: PathBuf, owner: String },
+    #[error(
+        "daemon pid {pid} is alive while runtime endpoints are unavailable: control={control}, invocation={invocation}"
+    )]
+    ProcessAliveEndpointsDown {
+        pid: u32,
+        control: PathBuf,
+        invocation: PathBuf,
     },
     #[error("failed to probe daemon child pid {pid}: {source}")]
     ProbeChild { pid: u32, source: std::io::Error },
@@ -133,4 +157,153 @@ pub enum DaemonError {
     #[cfg(feature = "axon-pb")]
     #[error("daemon bidi session for {ability} is closed")]
     InvokeBidiClosed { ability: String },
+}
+
+/// Typed daemon invocation failure projection for adapter boundaries.
+///
+/// FFI and language bindings consume this enum instead of inspecting
+/// `DaemonError` display strings. The daemon SDK boundary owns the small
+/// amount of transport-detail classification needed to preserve canonical
+/// runtime readiness states across the process boundary.
+#[cfg(feature = "axon-pb")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DaemonInvocationErrorProjection {
+    DaemonDown,
+    CallerSignerUnavailable,
+    DescriptorOwnerOffline,
+    TransportEnvelopeExceeded,
+    Status(tonic::Code),
+    InvalidInvocation,
+    Cancelled,
+    Generic,
+}
+
+#[cfg(feature = "axon-pb")]
+impl DaemonError {
+    pub fn invocation_error_projection(&self) -> DaemonInvocationErrorProjection {
+        use crate::daemon::runtime_failure::RuntimeFailureFacts;
+
+        match self {
+            Self::InvocationEndpointDown { .. }
+            | Self::InvocationEndpointMissing { .. }
+            | Self::Connect { .. } => DaemonInvocationErrorProjection::DaemonDown,
+            Self::InvokeStatus { code, message, .. }
+            | Self::InvokeStreamStatus { code, message, .. }
+            | Self::InvokeBidiStatus { code, message, .. }
+                if RuntimeFailureFacts::is_descriptor_owner_offline_status(*code, message) =>
+            {
+                DaemonInvocationErrorProjection::DescriptorOwnerOffline
+            }
+            Self::InvokeStatus { code, message, .. }
+            | Self::InvokeStreamStatus { code, message, .. }
+            | Self::InvokeBidiStatus { code, message, .. }
+                if matches!(
+                    code,
+                    tonic::Code::OutOfRange | tonic::Code::ResourceExhausted
+                ) && message.contains("message length too large") =>
+            {
+                DaemonInvocationErrorProjection::TransportEnvelopeExceeded
+            }
+            Self::InvokeStatus { code, .. }
+            | Self::InvokeStreamStatus { code, .. }
+            | Self::InvokeBidiStatus { code, .. } => DaemonInvocationErrorProjection::Status(*code),
+            Self::InvalidInvocation(message)
+                if RuntimeFailureFacts::is_caller_signer_unavailable_message(message) =>
+            {
+                DaemonInvocationErrorProjection::CallerSignerUnavailable
+            }
+            Self::InvalidInvocation(_) => DaemonInvocationErrorProjection::InvalidInvocation,
+            Self::InvokeBidiClosed { .. } => DaemonInvocationErrorProjection::Cancelled,
+            _ => DaemonInvocationErrorProjection::Generic,
+        }
+    }
+}
+
+#[cfg(all(test, feature = "axon-pb"))]
+mod tests {
+    use super::{DaemonError, DaemonInvocationErrorProjection};
+
+    #[test]
+    fn projects_caller_signer_unavailable_without_adapter_message_parsing() {
+        let error = DaemonError::InvalidInvocation(
+            "CALLER_SIGNER_UNAVAILABLE: remote invocation requires a caller signer".to_string(),
+        );
+
+        assert_eq!(
+            error.invocation_error_projection(),
+            DaemonInvocationErrorProjection::CallerSignerUnavailable
+        );
+    }
+
+    #[test]
+    fn projects_descriptor_owner_offline_without_adapter_message_parsing() {
+        let error = DaemonError::InvokeStatus {
+            ability: "meta.list_abilities".to_string(),
+            code: tonic::Code::Unavailable,
+            message: "DESCRIPTOR_OWNER_OFFLINE: descriptor owner is not online".to_string(),
+        };
+
+        assert_eq!(
+            error.invocation_error_projection(),
+            DaemonInvocationErrorProjection::DescriptorOwnerOffline
+        );
+    }
+
+    #[test]
+    fn route_text_does_not_project_descriptor_owner_offline() {
+        let error = DaemonError::InvokeStatus {
+            ability: "meta.list_abilities".to_string(),
+            code: tonic::Code::Unavailable,
+            message: "ROUTE_NEGATIVE: namespace.resolve negative: \
+                 NEGATIVE_REASON_NXDOMAIN: owner is not online"
+                .to_string(),
+        };
+
+        assert_eq!(
+            error.invocation_error_projection(),
+            DaemonInvocationErrorProjection::Status(tonic::Code::Unavailable)
+        );
+    }
+
+    #[test]
+    fn preserves_plain_unavailable_as_daemon_down_projection() {
+        let error = DaemonError::InvokeStatus {
+            ability: "observe.health".to_string(),
+            code: tonic::Code::Unavailable,
+            message: "transport unavailable".to_string(),
+        };
+
+        assert_eq!(
+            error.invocation_error_projection(),
+            DaemonInvocationErrorProjection::Status(tonic::Code::Unavailable)
+        );
+    }
+
+    #[test]
+    fn projects_decoded_message_overflow_as_transport_capacity() {
+        let error = DaemonError::InvokeStatus {
+            ability: "invocation.history.list".to_string(),
+            code: tonic::Code::OutOfRange,
+            message: "Error, decoded message length too large: found 6607756 bytes, the limit is: 4194304 bytes".to_string(),
+        };
+
+        assert_eq!(
+            error.invocation_error_projection(),
+            DaemonInvocationErrorProjection::TransportEnvelopeExceeded
+        );
+    }
+
+    #[test]
+    fn preserves_domain_out_of_range_as_status() {
+        let error = DaemonError::InvokeStatus {
+            ability: "media.seek".to_string(),
+            code: tonic::Code::OutOfRange,
+            message: "position exceeds media duration".to_string(),
+        };
+
+        assert_eq!(
+            error.invocation_error_projection(),
+            DaemonInvocationErrorProjection::Status(tonic::Code::OutOfRange)
+        );
+    }
 }

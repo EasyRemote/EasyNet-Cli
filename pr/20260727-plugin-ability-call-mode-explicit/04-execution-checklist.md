@@ -1,0 +1,6 @@
+- [x] Remove `call_mode` serde default.
+- [x] Delete `default_call_mode`.
+- [x] Add missing-call-mode regression test.
+- [x] Migrate all repository plugin manifest snippets to explicit `call_mode`.
+- [x] Run focused plugin manifest/package/host tests.
+- [x] Run architecture and SPEC gates.

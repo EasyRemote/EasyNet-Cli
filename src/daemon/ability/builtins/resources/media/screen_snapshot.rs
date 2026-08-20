@@ -18,16 +18,19 @@
 //
 // The backend trait keeps stub / synthetic / real switchable per
 // the AXON-RFC-005-device-backend-selection note. The xcap backend
-// resolves display resources by monitor id/index metadata when
-// present, falls back to the primary monitor, and captures
-// window/application resources through xcap window selection.
+// resolves display resources by one explicit selector state: monitor
+// id, monitor discovery index, or unpinned primary selection. Exact
+// selectors never fall back to another display. Window/application
+// resources are captured through xcap window selection.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "native-media")]
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
+#[cfg(feature = "native-media")]
 use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -44,6 +47,7 @@ use crate::daemon::ability::builtins::resources::media::{
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
 use crate::daemon::persistence::resources::{ResourceEntry, ResourceType};
+use crate::daemon::resources::context::device_scope::ContextDeviceScope;
 
 /// 2 MiB inline cap — same shape as camera.snapshot. This keeps
 /// base64-expanded receipts below Axon's 4 MiB IPC frame limit while
@@ -138,12 +142,15 @@ pub trait ScreenSnapshotBackend: Send + Sync {
 // ── XcapBackend (real) ───────────────────────────────────────
 
 /// xcap-backed real backend. Display captures select by resource metadata
-/// (`monitor_id` or `monitor_index`) when available and otherwise fall back
-/// to the primary monitor. Window/application captures select an xcap window
-/// by recorded id, pid, title, or application name.
+/// (`monitor_id` or `monitor_index`) when available and otherwise use the
+/// primary monitor only for intentionally unpinned resources. Window/application
+/// captures select an xcap window by recorded id, pid, title, or application
+/// name.
 #[derive(Debug, Default)]
+#[cfg(feature = "native-media")]
 pub struct XcapBackend;
 
+#[cfg(feature = "native-media")]
 impl ScreenSnapshotBackend for XcapBackend {
     fn capture_jpeg(
         &self,
@@ -203,6 +210,7 @@ impl ScreenSnapshotBackend for XcapBackend {
     }
 }
 
+#[cfg(feature = "native-media")]
 fn capture_screen_with_xcap(
     entry: &ResourceEntry,
     options: &ScreenCaptureOptions,
@@ -216,6 +224,7 @@ fn capture_screen_with_xcap(
     })
 }
 
+#[cfg(feature = "native-media")]
 pub fn capture_rgb_with_xcap(
     entry: &ResourceEntry,
     options: &ScreenCaptureOptions,
@@ -233,6 +242,19 @@ pub fn capture_rgb_with_xcap(
     }
 }
 
+#[cfg(not(feature = "native-media"))]
+pub fn capture_rgb_with_xcap(
+    entry: &ResourceEntry,
+    _options: &ScreenCaptureOptions,
+) -> anyhow::Result<RawRgbFrame> {
+    anyhow::bail!(
+        "{ABILITY_SCREEN_SNAPSHOT}: native xcap screen capture is not compiled for subject type {}; \
+         reason={REASON_RESOURCE_UNAVAILABLE}",
+        entry.kind.as_str()
+    )
+}
+
+#[cfg(feature = "native-media")]
 fn capture_display_rgb_with_xcap(
     entry: &ResourceEntry,
     options: &ScreenCaptureOptions,
@@ -254,6 +276,7 @@ fn capture_display_rgb_with_xcap(
     rgba_image_to_rgb_frame(rgba, options)
 }
 
+#[cfg(feature = "native-media")]
 fn capture_window_rgb_with_xcap(
     entry: &ResourceEntry,
     options: &ScreenCaptureOptions,
@@ -268,6 +291,7 @@ fn capture_window_rgb_with_xcap(
     rgba_image_to_rgb_frame(rgba, options)
 }
 
+#[cfg(feature = "native-media")]
 fn rgba_image_to_rgb_frame(
     rgba: xcap::image::RgbaImage,
     options: &ScreenCaptureOptions,
@@ -305,38 +329,144 @@ pub fn rgba_bytes_to_rgb_frame(
     })
 }
 
+pub fn bgra_bytes_to_rgb_frame(
+    bgra: &[u8],
+    source_width: u32,
+    source_height: u32,
+    source_stride: usize,
+    options: &ScreenCaptureOptions,
+) -> anyhow::Result<RawRgbFrame> {
+    let minimum_stride = source_width as usize * 4;
+    if source_width == 0
+        || source_height == 0
+        || source_stride < minimum_stride
+        || bgra.len() < source_stride.saturating_mul(source_height as usize)
+    {
+        anyhow::bail!(
+            "{ABILITY_SCREEN_SNAPSHOT}: invalid BGRA frame dimensions {source_width}x{source_height} stride={source_stride}; \
+             reason={REASON_RESOURCE_UNAVAILABLE}"
+        );
+    }
+
+    let region = options.region.unwrap_or(CaptureRegion {
+        x: 0,
+        y: 0,
+        w: source_width,
+        h: source_height,
+    });
+    validate_region(region, source_width, source_height)?;
+
+    let mut rgb = Vec::with_capacity((region.w * region.h * 3) as usize);
+    for y in region.y..region.y + region.h {
+        let row_start = y as usize * source_stride + region.x as usize * 4;
+        let row_end = row_start + region.w as usize * 4;
+        let row = &bgra[row_start..row_end];
+        for px in row.chunks_exact(4) {
+            rgb.push(px[2]);
+            rgb.push(px[1]);
+            rgb.push(px[0]);
+        }
+    }
+
+    let mut width = region.w;
+    let mut height = region.h;
+    if let Some(target) = options.resolution {
+        rgb = resize_rgb_nearest(&rgb, width, height, target.width, target.height);
+        width = target.width;
+        height = target.height;
+    }
+    Ok(RawRgbFrame {
+        rgb_bytes: rgb,
+        width,
+        height,
+    })
+}
+
+pub fn rgb_frame_to_jpeg(frame: RawRgbFrame) -> anyhow::Result<EncodedFrame> {
+    let jpeg = encode_jpeg_checked(&frame.rgb_bytes, frame.width, frame.height)?;
+    Ok(EncodedFrame {
+        jpeg_bytes: jpeg,
+        width: frame.width,
+        height: frame.height,
+    })
+}
+
+#[cfg(feature = "native-media")]
 fn select_monitor(
     monitors: Vec<xcap::Monitor>,
     entry: &ResourceEntry,
 ) -> anyhow::Result<xcap::Monitor> {
-    let expected_id = entry.metadata.get("monitor_id").and_then(|v| v.as_u64());
-    let expected_index = entry.metadata.get("monitor_index").and_then(|v| v.as_u64());
-    let mut fallback_primary = None;
-    for (idx, monitor) in monitors.into_iter().enumerate() {
-        if expected_id.is_some_and(|expected| {
-            monitor
-                .id()
-                .ok()
-                .map(|actual| actual as u64 == expected)
-                .unwrap_or(false)
-        }) {
-            return Ok(monitor);
+    match display_monitor_selector(entry)? {
+        DisplayMonitorSelector::PlatformId(expected_id) => {
+            for monitor in monitors {
+                if monitor
+                    .id()
+                    .ok()
+                    .is_some_and(|actual| actual as u64 == expected_id)
+                {
+                    return Ok(monitor);
+                }
+            }
+            Err(display_monitor_unavailable(
+                "requested monitor_id is no longer available",
+            ))
         }
-        if expected_index.is_some_and(|expected| idx as u64 == expected) {
-            return Ok(monitor);
+        DisplayMonitorSelector::DiscoveryIndex(expected_index) => {
+            for (idx, monitor) in monitors.into_iter().enumerate() {
+                if idx as u64 == expected_index {
+                    return Ok(monitor);
+                }
+            }
+            Err(display_monitor_unavailable(
+                "requested monitor_index is no longer available",
+            ))
         }
-        if fallback_primary.is_none() && monitor.is_primary().unwrap_or(false) {
-            fallback_primary = Some(monitor);
-        }
+        DisplayMonitorSelector::PrimaryUnpinned => monitors
+            .into_iter()
+            .find(|monitor| monitor.is_primary().unwrap_or(false))
+            .ok_or_else(|| display_monitor_unavailable("no primary monitor reported by xcap")),
     }
-    fallback_primary.ok_or_else(|| {
-        anyhow::anyhow!(
-            "{ABILITY_SCREEN_SNAPSHOT}: no matching or primary monitor reported by \
-             xcap; reason={REASON_RESOURCE_UNAVAILABLE}"
-        )
-    })
 }
 
+#[cfg(feature = "native-media")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DisplayMonitorSelector {
+    PlatformId(u64),
+    DiscoveryIndex(u64),
+    PrimaryUnpinned,
+}
+
+#[cfg(feature = "native-media")]
+fn display_monitor_selector(entry: &ResourceEntry) -> anyhow::Result<DisplayMonitorSelector> {
+    if let Some(value) = entry.metadata.get("monitor_id") {
+        return value
+            .as_u64()
+            .map(DisplayMonitorSelector::PlatformId)
+            .ok_or_else(|| {
+                display_monitor_unavailable(
+                    "display resource monitor_id metadata must be an integer",
+                )
+            });
+    }
+    if let Some(value) = entry.metadata.get("monitor_index") {
+        return value
+            .as_u64()
+            .map(DisplayMonitorSelector::DiscoveryIndex)
+            .ok_or_else(|| {
+                display_monitor_unavailable(
+                    "display resource monitor_index metadata must be an integer",
+                )
+            });
+    }
+    Ok(DisplayMonitorSelector::PrimaryUnpinned)
+}
+
+#[cfg(feature = "native-media")]
+fn display_monitor_unavailable(detail: &str) -> anyhow::Error {
+    anyhow::anyhow!("{ABILITY_SCREEN_SNAPSHOT}: {detail}; reason={REASON_RESOURCE_UNAVAILABLE}")
+}
+
+#[cfg(feature = "native-media")]
 pub fn open_display_recorder_with_xcap(
     entry: &ResourceEntry,
 ) -> anyhow::Result<(xcap::VideoRecorder, Receiver<xcap::Frame>)> {
@@ -362,6 +492,7 @@ pub fn open_display_recorder_with_xcap(
     })
 }
 
+#[cfg(feature = "native-media")]
 fn select_window(entry: &ResourceEntry) -> anyhow::Result<xcap::Window> {
     let windows = xcap::Window::all().map_err(|e| {
         anyhow::anyhow!(
@@ -376,6 +507,23 @@ fn select_window(entry: &ResourceEntry) -> anyhow::Result<xcap::Window> {
     }
 }
 
+/// Resolve the resource-entry's remembered window against the live window
+/// list.
+///
+/// `window_id` is preferred but not load-bearing on its own: macOS recycles
+/// window IDs across close/reopen and Space changes, so an exact ID match is
+/// a fast-path hit, not a correctness requirement. The fallback identifies a
+/// window by the stable pair `(pid, app_name)` — the process and app name
+/// cannot change without the window itself closing. `title` is excluded
+/// from the fallback's match requirement: it is the most volatile field a
+/// window exposes (a browser tab, a terminal prompt, or an editor's
+/// unsaved-changes marker can all change it between `meta.list_resources`
+/// discovery and this snapshot), and requiring it verbatim made every
+/// window with a dynamic title falsely report "no longer available" even
+/// though the window was still open. When more than one window shares a
+/// `(pid, app_name)`, `title` still breaks the tie among live candidates —
+/// it just no longer disqualifies a window outright when it has moved on.
+#[cfg(feature = "native-media")]
 fn select_window_by_id_or_name(
     windows: Vec<xcap::Window>,
     entry: &ResourceEntry,
@@ -384,19 +532,19 @@ fn select_window_by_id_or_name(
     let expected_pid = entry.metadata.get("pid").and_then(Value::as_u64);
     let expected_title = entry.metadata.get("title").and_then(Value::as_str);
     let expected_app = entry.metadata.get("app_name").and_then(Value::as_str);
-    windows
+
+    if let Some(id) = expected_id {
+        if let Some(window) = windows
+            .iter()
+            .find(|window| window.id().ok().is_some_and(|actual| actual as u64 == id))
+        {
+            return Ok(window.clone());
+        }
+    }
+
+    let mut candidates: Vec<xcap::Window> = windows
         .into_iter()
-        .find(|window| {
-            let id_matches = expected_id.is_some_and(|id| {
-                window
-                    .id()
-                    .ok()
-                    .map(|actual| actual as u64 == id)
-                    .unwrap_or(false)
-            });
-            if id_matches {
-                return true;
-            }
+        .filter(|window| {
             let pid_matches = expected_pid.is_some_and(|pid| {
                 window
                     .pid()
@@ -411,23 +559,30 @@ fn select_window_by_id_or_name(
                     .map(|actual| actual == app)
                     .unwrap_or(false)
             });
-            let title_matches = expected_title.is_some_and(|title| {
-                window
-                    .title()
-                    .ok()
-                    .map(|actual| actual == title)
-                    .unwrap_or(false)
-            });
-            pid_matches && app_matches && title_matches
+            pid_matches && app_matches
         })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "{ABILITY_SCREEN_SNAPSHOT}: requested window is no longer available; \
-                 reason={REASON_RESOURCE_UNAVAILABLE}"
-            )
-        })
+        .collect();
+
+    if candidates.is_empty() {
+        anyhow::bail!(
+            "{ABILITY_SCREEN_SNAPSHOT}: requested window is no longer available; \
+             reason={REASON_RESOURCE_UNAVAILABLE}"
+        );
+    }
+    if candidates.len() > 1 {
+        if let Some(title) = expected_title {
+            if let Some(index) = candidates
+                .iter()
+                .position(|window| window.title().ok().as_deref() == Some(title))
+            {
+                return Ok(candidates.swap_remove(index));
+            }
+        }
+    }
+    Ok(candidates.remove(0))
 }
 
+#[cfg(feature = "native-media")]
 fn select_application_window(
     windows: Vec<xcap::Window>,
     entry: &ResourceEntry,
@@ -754,7 +909,7 @@ impl ScreenSnapshotBackend for SyntheticScreenBackend {
         entry: ResourceEntry,
         options: ScreenCaptureOptions,
     ) -> anyhow::Result<broadcast::Receiver<Value>> {
-        let (tx, rx) = broadcast::channel::<Value>(8);
+        let (tx, rx) = broadcast::channel::<Value>(BROADCAST_CAPACITY);
         let seq = Arc::new(AtomicU64::new(0));
         let frame = self.capture_jpeg(&entry, &options)?;
         let _ = tx.send(build_screen_frame(&seq, &entry.hardware_id, frame));
@@ -771,7 +926,7 @@ pub fn register_with_backend(
     let snapshot_backend = Arc::clone(&backend);
     reg.register_rpc_with_envelope_and_spec(
         ABILITY_SCREEN_SNAPSHOT,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_SCREEN_SNAPSHOT),
         Arc::new(move |env: EnvelopeContext, args: Value| {
             snapshot_handler(&snapshot_backend, env, args)
@@ -779,7 +934,7 @@ pub fn register_with_backend(
     );
     reg.register_stream_with_envelope_and_spec(
         ABILITY_SCREEN_SUBSCRIBE,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_SCREEN_SUBSCRIBE),
         Arc::new(move |env: EnvelopeContext, args: Value| subscribe_handler(&backend, env, args)),
     );
@@ -792,7 +947,10 @@ pub fn register_with_backend(
 /// `register_with_backend(reg, Arc::new(SyntheticScreenBackend))`
 /// instead.
 pub fn register(reg: &mut AxonAbilityCatalog) {
+    #[cfg(feature = "native-media")]
     register_with_backend(reg, Arc::new(XcapBackend));
+    #[cfg(all(not(feature = "native-media"), feature = "headless-media"))]
+    register_with_backend(reg, Arc::new(SyntheticScreenBackend));
 }
 
 // ── Handler core ─────────────────────────────────────────────
@@ -803,6 +961,7 @@ fn snapshot_handler(
     args: Value,
 ) -> anyhow::Result<Value> {
     let entry = resolve_screen_subject(&env, &args, ABILITY_SCREEN_SNAPSHOT)?;
+    let device_scope = ContextDeviceScope::from_execution_actor(env.callee())?;
 
     let options = parse_capture_options(&args, false)?;
     ensure_region_allowed(&entry, &options)?;
@@ -821,14 +980,12 @@ fn snapshot_handler(
         );
     }
 
-    // Context-surface persistence: the device daemon keeps every
-    // snapshot under `context/captures/screen.snapshot/` so the
-    // Context page can browse it as <device>/<ability>/<artifact>.
-    // Best-effort by design — a full disk must not fail the snapshot
-    // the caller is waiting on.
-    if let Err(err) = crate::daemon::persistence::context_store::record_capture(
+    // Snapshot success includes durable Context persistence. Returning an
+    // inline image while silently losing its catalog entry would expose two
+    // conflicting terminal states for the same capture.
+    let capture = crate::daemon::persistence::context_store::record_capture(
         crate::daemon::persistence::context_store::CaptureRecord {
-            device: env.callee(),
+            device: device_scope.as_str(),
             ability: ABILITY_SCREEN_SNAPSHOT,
             ext: "jpg",
             bytes: &jpeg_bytes,
@@ -838,26 +995,23 @@ fn snapshot_handler(
             duration_ms: None,
             preview: format!("Screenshot {width}x{height}"),
         },
-    ) {
-        crate::op_event!(
-            component = context,
-            kind = capture_persist_failed,
-            level = "warn",
-            ability = ABILITY_SCREEN_SNAPSHOT,
-            error = err,
-        );
-    }
+    )?;
+    let local_path = crate::daemon::persistence::context_store::captures_dir()
+        .join(ABILITY_SCREEN_SNAPSHOT)
+        .join(&capture.file);
 
     let image_bytes_b64 = BASE64_STANDARD.encode(&jpeg_bytes);
-    let captured_at = chrono::Utc::now().to_rfc3339();
     Ok(json!({
         "image_bytes_b64": image_bytes_b64,
         "content_type":    "image/jpeg",
         "width":           width,
         "height":          height,
         "byte_size":       jpeg_bytes.len(),
-        "captured_at":     captured_at,
+        "captured_at":     capture.timestamp,
         "hardware_id":     entry.hardware_id,
+        "capture_id":      capture.id,
+        "capture_file":    capture.file,
+        "local_path":      local_path.display().to_string(),
     }))
 }
 
@@ -897,48 +1051,73 @@ fn resolve_screen_subject(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::invocation::routing::target::CallMode;
     use crate::daemon::persistence::resources::{
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
 
     fn seed_display(file: &mut ResourcesFile, hardware_id: &str) -> String {
+        seed_display_with_metadata(file, hardware_id, json!({}))
+    }
+
+    fn seed_display_with_metadata(
+        file: &mut ResourcesFile,
+        hardware_id: &str,
+        metadata: Value,
+    ) -> String {
         upsert_resource(
             file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 kind: ResourceType::Display,
                 binding: ResourceBinding::LocalDevice,
                 hardware_id,
                 display_name: "Test Display",
-                metadata: json!({}),
+                metadata,
             },
         )
+        .expect("seed display resource")
     }
 
     fn register_with_synthetic(reg: &mut AxonAbilityCatalog) {
         register_with_backend(reg, Arc::new(SyntheticScreenBackend));
     }
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/screen-snapshot";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
+    fn executable_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_runtime_for_device_authority(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            TEST_DEVICE_URA,
+        )
+    }
+
     #[test]
-    fn registration_publishes_screen_manifests_to_catalog_snapshot() {
-        let mut reg = AxonAbilityCatalog::new();
+    fn registration_publishes_screen_descriptors_to_catalog_snapshot() {
+        let mut reg = metadata_test_catalog();
         register_with_synthetic(&mut reg);
-        let rows = reg.ability_catalog_snapshot();
+        let rows = reg.authority_ability_catalog_snapshot();
 
         for ability in [ABILITY_SCREEN_SNAPSHOT, ABILITY_SCREEN_SUBSCRIBE] {
-            let manifest = rows
+            let descriptor = rows
                 .iter()
                 .find(|row| row.name == ability)
-                .and_then(|row| row.manifest.as_ref())
-                .unwrap_or_else(|| panic!("{ability} must publish schema manifest"));
+                .map(|row| &row.descriptor)
+                .unwrap_or_else(|| panic!("{ability} must publish canonical descriptor"));
             assert_eq!(
-                manifest.description(),
+                descriptor.description,
                 media::description(ability).expect("screen description")
             );
             assert_eq!(
-                manifest.input_schema(),
+                descriptor.input_schema(),
                 &media::input_schema(ability).expect("screen schema")
             );
         }
@@ -962,23 +1141,83 @@ mod tests {
         ); // EOI
     }
 
+    #[cfg(feature = "native-media")]
+    #[test]
+    fn display_monitor_selector_prefers_platform_monitor_id() {
+        let mut file = ResourcesFile::default();
+        seed_display_with_metadata(
+            &mut file,
+            "h-display-selector-id",
+            json!({"monitor_id": 42, "monitor_index": 7}),
+        );
+
+        assert_eq!(
+            display_monitor_selector(&file.resources[0]).unwrap(),
+            DisplayMonitorSelector::PlatformId(42),
+            "platform monitor id is the stable selector and must not fall through to index"
+        );
+    }
+
+    #[cfg(feature = "native-media")]
+    #[test]
+    fn display_monitor_selector_uses_index_only_without_monitor_id() {
+        let mut file = ResourcesFile::default();
+        seed_display_with_metadata(
+            &mut file,
+            "h-display-selector-index",
+            json!({"monitor_index": 2}),
+        );
+
+        assert_eq!(
+            display_monitor_selector(&file.resources[0]).unwrap(),
+            DisplayMonitorSelector::DiscoveryIndex(2)
+        );
+    }
+
+    #[cfg(feature = "native-media")]
+    #[test]
+    fn display_monitor_selector_allows_primary_only_for_unpinned_resource() {
+        let mut file = ResourcesFile::default();
+        seed_display(&mut file, "h-display-selector-unpinned");
+
+        assert_eq!(
+            display_monitor_selector(&file.resources[0]).unwrap(),
+            DisplayMonitorSelector::PrimaryUnpinned
+        );
+    }
+
+    #[cfg(feature = "native-media")]
+    #[test]
+    fn display_monitor_selector_rejects_malformed_metadata_instead_of_primary_fallback() {
+        let mut file = ResourcesFile::default();
+        seed_display_with_metadata(
+            &mut file,
+            "h-display-selector-malformed",
+            json!({"monitor_id": "42"}),
+        );
+
+        let error = display_monitor_selector(&file.resources[0])
+            .expect_err("malformed monitor_id must fail before primary fallback");
+        let message = error.to_string();
+        assert!(message.contains("monitor_id metadata must be an integer"));
+        assert!(message.contains(REASON_RESOURCE_UNAVAILABLE));
+    }
+
     #[test]
     fn handler_returns_receipt_with_base64_jpeg_when_subject_resolves() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut file = ResourcesFile::default();
         let ura = seed_display(&mut file, "h-display-e2e");
         resources::save(&file).unwrap();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: Some(ura),
-            causal_context: None,
-        };
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            ABILITY_SCREEN_SNAPSHOT,
+            json!({}),
+            CallMode::Rpc,
+            ura,
+        );
         let resp = dispatcher.execute_rpc(target).unwrap();
         for field in [
             "image_bytes_b64",
@@ -988,6 +1227,9 @@ mod tests {
             "byte_size",
             "captured_at",
             "hardware_id",
+            "capture_id",
+            "capture_file",
+            "local_path",
         ] {
             assert!(
                 resp.get(field).is_some(),
@@ -996,6 +1238,14 @@ mod tests {
         }
         assert_eq!(resp["content_type"], "image/jpeg");
         assert_eq!(resp["hardware_id"], "h-display-e2e");
+        let captures = crate::daemon::persistence::context_store::list_captures(
+            TEST_DEVICE_URA,
+            Some(ABILITY_SCREEN_SNAPSHOT),
+            10,
+        )
+        .unwrap();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].id, resp["capture_id"].as_str().unwrap());
     }
 
     #[test]
@@ -1004,17 +1254,15 @@ mod tests {
         let mut file = ResourcesFile::default();
         let ura = seed_display(&mut file, "h-display-stream");
         resources::save(&file).unwrap();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_SCREEN_SUBSCRIBE.to_string(),
-            normalized_args: json!({"fps": 5, "resolution": "320x180"}),
-            call_mode: CallMode::Stream,
-            subject: Some(ura),
-            causal_context: None,
-        };
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            ABILITY_SCREEN_SUBSCRIBE,
+            json!({"fps": 5, "resolution": "320x180"}),
+            CallMode::Stream,
+            ura,
+        );
         let frames = dispatcher.execute_stream(target).unwrap().into_snapshot();
         assert!(
             !frames.is_empty(),
@@ -1045,17 +1293,15 @@ mod tests {
     #[test]
     fn handler_rejects_missing_subject_with_subject_required_reason() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: None,
-            causal_context: None,
-        };
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                ABILITY_SCREEN_SNAPSHOT,
+                json!({}),
+                CallMode::Rpc,
+            );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(err.to_string().contains(REASON_SUBJECT_REQUIRED));
     }
@@ -1068,26 +1314,25 @@ mod tests {
             &mut file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 kind: ResourceType::Camera, // wrong type for screen.snapshot
                 binding: ResourceBinding::LocalDevice,
                 hardware_id: "h-cam-not-screen",
                 display_name: "Not A Screen",
                 metadata: json!({}),
             },
-        );
+        )
+        .expect("seed wrong-type camera resource");
         resources::save(&file).unwrap();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: Some(cam_ura),
-            causal_context: None,
-        };
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            ABILITY_SCREEN_SNAPSHOT,
+            json!({}),
+            CallMode::Rpc,
+            cam_ura,
+        );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(err.to_string().contains(REASON_RESOURCE_TYPE_MISMATCH));
     }
@@ -1096,17 +1341,15 @@ mod tests {
     fn handler_rejects_unknown_subject_with_resource_not_found_reason() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         resources::save(&ResourcesFile::default()).unwrap();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: Some("easynet:///r/acme/resource/01NEVER".into()),
-            causal_context: None,
-        };
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            ABILITY_SCREEN_SNAPSHOT,
+            json!({}),
+            CallMode::Rpc,
+            "easynet:///r/acme/resource/01NEVER",
+        );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(err.to_string().contains(REASON_RESOURCE_NOT_FOUND));
     }
@@ -1114,17 +1357,15 @@ mod tests {
     #[test]
     fn handler_rejects_subject_in_args() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_with_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_SCREEN_SNAPSHOT.to_string(),
-            normalized_args: json!({"subject": "easynet:///r/x/resource/y"}),
-            call_mode: CallMode::Rpc,
-            subject: Some("easynet:///r/acme/resource/01SCR".into()),
-            causal_context: None,
-        };
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            ABILITY_SCREEN_SNAPSHOT,
+            json!({"subject": "easynet:///r/x/resource/y"}),
+            CallMode::Rpc,
+            "easynet:///r/acme/resource/01SCR",
+        );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(err.to_string().contains(REASON_SUBJECT_IN_ARGS));
     }

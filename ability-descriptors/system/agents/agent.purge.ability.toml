@@ -1,0 +1,32 @@
+schema_version = "3"
+name = "agent.purge"
+descriptor_version = "1.0.0"
+description = "Destructively remove an LLM sub-agent and the exact canonical root_path stored in its registry row. Requires Manage authority. The daemon commits local state and identity-bound deletion before handing external Hub publication to a durable retry outbox."
+exposure = "operator"
+dedicated_surface = "none"
+subject_contract_kind = "explicit-ura"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":true,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+additionalProperties = false
+anyOf = [{ required = ["name"] }, { required = ["agent_ura"] }]
+
+[input_schema.properties.agent_ura]
+type = "string"
+minLength = 1
+
+[input_schema.properties.name]
+type = "string"
+minLength = 1

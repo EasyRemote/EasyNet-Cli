@@ -1,5 +1,77 @@
 use super::*;
 
+const TEST_BIDI_ABILITY: &str = "test.bidi";
+
+#[tokio::test]
+async fn exact_bidi_route_family_registers_hub_owned_session_open() {
+    let hub_ura = crate::core::ura::hub_ura("test-realm");
+    let service = make_unregistered_service_for_route_owner(&hub_ura);
+    service
+        .register_daemon_bidi_routes(&hub_ura)
+        .await
+        .expect("register Hub exact bidi route family");
+    let runtime = service
+        .runtime
+        .local_runtime()
+        .expect("test service has shared LocalRuntime");
+    let runtime_ability = crate::daemon::axon_bridge::descriptor_ref::ability_ura_for_wire(
+        &hub_ura,
+        ABILITY_SESSION_OPEN,
+    )
+    .expect("session.open runtime key");
+    let options = runtime
+        .ability_options(&runtime_ability)
+        .await
+        .expect("session.open runtime options");
+    assert!(matches!(
+        options.backpressure,
+        axon_sdk::invocation::BackpressurePolicy::Block { .. }
+    ));
+    let binding =
+        crate::daemon::invocation::dispatch::descriptor_binding::RuntimeBoundAbility::from_wire_target(
+            "daemon exact bidi registration test",
+            runtime.as_ref(),
+            &hub_ura,
+            ABILITY_SESSION_OPEN,
+        )
+        .await
+        .expect("session.open must be runtime-registered under the Hub");
+    assert!(binding.supports_mode(CallMode::Bidi));
+    binding
+        .descriptor_ref_for_mode(
+            "daemon exact bidi registration test",
+            &hub_ura,
+            CallMode::Bidi,
+            None,
+        )
+        .expect("session.open must retain its governed Bidi descriptor proof");
+}
+
+#[tokio::test]
+async fn exact_bidi_route_registration_rejects_device_owner() {
+    let service = make_unregistered_service_for_route_owner(TEST_DAEMON_URA);
+    let error = service
+        .register_daemon_bidi_routes(TEST_DAEMON_URA)
+        .await
+        .expect_err("session.open cannot register under a Device owner");
+    assert!(
+        error
+            .to_string()
+            .contains("canonical realm Authority owner"),
+        "{error}"
+    );
+}
+
+fn forwarded_binary_chunk(frame: LocalBidiHandlerFrame) -> BinaryChunk {
+    match frame {
+        LocalBidiHandlerFrame::Forward(frame) => match frame.payload {
+            Some(DownPayload::BinaryChunk(chunk)) => chunk,
+            other => panic!("expected forwarded BinaryChunk, got {other:?}"),
+        },
+        other => panic!("expected forwarded BinaryChunk, got {other:?}"),
+    }
+}
+
 #[test]
 fn remote_bidi_target_ura_preserves_canonical_device_ura() {
     let open = make_envelope_open_with_callee("  easynet:///r/test-realm/device/dev-B  ");
@@ -26,14 +98,18 @@ fn extract_envelope_open_returns_inner_for_envelope_open_frame() {
         sequence: 0,
         mac: Vec::new(),
         payload: Some(UpPayload::EnvelopeOpen(make_envelope_open(
-            ABILITY_INVOKE_REMOTE,
+            TEST_BIDI_ABILITY,
             b"{}".to_vec(),
         ))),
     };
     let eo = extract_envelope_open(&frame).expect("extracted");
     assert_eq!(
-        eo.target.as_ref().unwrap().ability_name,
-        ABILITY_INVOKE_REMOTE
+        crate::daemon::invocation::dispatch::invocation_wire::function_name_from_invocation_target(
+            "test bidi frame",
+            eo.target.as_ref(),
+        )
+        .unwrap(),
+        TEST_BIDI_ABILITY
     );
 }
 
@@ -43,7 +119,7 @@ fn validate_and_extract_bidi_frame0_rejects_non_zero_sequence() {
         sequence: 7,
         mac: Vec::new(),
         payload: Some(UpPayload::EnvelopeOpen(make_envelope_open(
-            ABILITY_INVOKE_REMOTE,
+            TEST_BIDI_ABILITY,
             b"{}".to_vec(),
         ))),
     };
@@ -58,7 +134,7 @@ fn validate_and_extract_bidi_frame0_rejects_non_zero_sequence() {
 
 #[test]
 fn validate_and_extract_bidi_frame0_rejects_non_strict_ordering() {
-    let mut envelope_open = make_envelope_open(ABILITY_INVOKE_REMOTE, b"{}".to_vec());
+    let mut envelope_open = make_envelope_open(TEST_BIDI_ABILITY, b"{}".to_vec());
     envelope_open.streams.push(StreamDescriptor {
         stream_id: 9,
         ordering: "UNORDERED".to_string(),
@@ -125,20 +201,13 @@ fn map_local_bidi_handler_stdout_decodes_to_binary_chunk() {
         }),
         7,
     );
-    match frame {
-        LocalBidiHandlerFrame::Forward(InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(chunk)),
-            ..
-        }) => {
-            assert_eq!(chunk.stream_id, 7);
-            assert_eq!(chunk.data, b"hello");
-        }
-        other => panic!("expected stdout → BinaryChunk, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    assert_eq!(chunk.stream_id, 7);
+    assert_eq!(chunk.data, b"hello");
 }
 
 #[test]
-fn map_local_bidi_handler_exit_becomes_completed_receipt() {
+fn map_local_bidi_handler_exit_remains_data_until_runtime_terminal() {
     let frame = map_local_bidi_handler_frame(
         LocalBidiWireKind::Pty,
         &serde_json::json!({
@@ -147,22 +216,11 @@ fn map_local_bidi_handler_exit_becomes_completed_receipt() {
         }),
         1,
     );
-    match frame {
-        LocalBidiHandlerFrame::Terminal(InvokeBidiDown {
-            payload: Some(DownPayload::Receipt(receipt)),
-            ..
-        }) => {
-            assert_eq!(
-                receipt.state,
-                easynet_axon::invocation::InvocationState::Completed.to_wire_i32()
-            );
-            assert!(
-                receipt.reason.contains("23"),
-                "exit status should surface in the terminal receipt reason"
-            );
-        }
-        other => panic!("expected exit → terminal receipt, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    let payload: serde_json::Value =
+        serde_json::from_slice(&chunk.data).expect("exit JSON payload");
+    assert_eq!(payload["type"], "exit");
+    assert_eq!(payload["status"], 23);
 }
 
 #[test]
@@ -177,20 +235,13 @@ fn map_local_bidi_handler_file_transfer_chunk_decodes_to_binary_chunk() {
         }),
         11,
     );
-    match frame {
-        LocalBidiHandlerFrame::Forward(InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(chunk)),
-            ..
-        }) => {
-            assert_eq!(chunk.stream_id, 11);
-            assert_eq!(chunk.data, b"file-bytes");
-        }
-        other => panic!("expected file_transfer chunk → BinaryChunk, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    assert_eq!(chunk.stream_id, 11);
+    assert_eq!(chunk.data, b"file-bytes");
 }
 
 #[test]
-fn map_local_bidi_handler_file_transfer_complete_becomes_receipt_with_payload() {
+fn map_local_bidi_handler_file_transfer_complete_remains_data_until_runtime_terminal() {
     let frame = map_local_bidi_handler_frame(
         LocalBidiWireKind::FileTransfer,
         &serde_json::json!({
@@ -200,35 +251,14 @@ fn map_local_bidi_handler_file_transfer_complete_becomes_receipt_with_payload() 
         }),
         1,
     );
-    match frame {
-        LocalBidiHandlerFrame::Terminal(InvokeBidiDown {
-            payload: Some(DownPayload::Receipt(receipt)),
-            ..
-        }) => {
-            assert_eq!(
-                receipt.state,
-                easynet_axon::invocation::InvocationState::Completed.to_wire_i32()
-            );
-            assert_eq!(receipt.payload_content_type, "application/json");
-            assert!(
-                receipt.cleanup_complete,
-                "terminal file_transfer completion receipt must close the bidi lifecycle"
-            );
-            assert!(
-                receipt.failure.is_none(),
-                "completed receipts must not carry typed failure"
-            );
-            let payload: serde_json::Value =
-                serde_json::from_slice(&receipt.payload).expect("json payload");
-            assert_eq!(payload["sha256"], "deadbeef");
-            assert_eq!(payload["bytes"], 9);
-        }
-        other => panic!("expected file_transfer complete → terminal receipt, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    let payload: serde_json::Value = serde_json::from_slice(&chunk.data).expect("json payload");
+    assert_eq!(payload["sha256"], "deadbeef");
+    assert_eq!(payload["bytes"], 9);
 }
 
 #[test]
-fn map_local_bidi_handler_file_transfer_error_becomes_failed_receipt_with_payload() {
+fn map_local_bidi_handler_file_transfer_error_remains_data_until_runtime_terminal() {
     let frame = map_local_bidi_handler_frame(
         LocalBidiWireKind::FileTransfer,
         &serde_json::json!({
@@ -238,108 +268,10 @@ fn map_local_bidi_handler_file_transfer_error_becomes_failed_receipt_with_payloa
         }),
         1,
     );
-    match frame {
-        LocalBidiHandlerFrame::Terminal(InvokeBidiDown {
-            payload: Some(DownPayload::Receipt(receipt)),
-            ..
-        }) => {
-            assert_eq!(
-                receipt.state,
-                easynet_axon::invocation::InvocationState::Failed.to_wire_i32()
-            );
-            assert!(receipt.reason.contains("disk_full"));
-            assert!(receipt.reason.contains("no space left on device"));
-            let failure = receipt.failure.as_ref().expect("typed receipt failure");
-            assert_eq!(failure.code, "DISK_FULL");
-            assert_eq!(failure.message, receipt.reason);
-            assert_eq!(failure.stage, ErrorStage::Execution as i32);
-            let payload: serde_json::Value =
-                serde_json::from_slice(&receipt.payload).expect("json payload");
-            assert_eq!(payload["type"], "error");
-        }
-        other => panic!("expected file_transfer error → failed receipt, got {other:?}"),
-    }
-}
-
-#[test]
-fn terminal_receipt_extracts_admission_failure_code_from_reason() {
-    let frame = build_bidi_terminal_receipt(
-        easynet_axon::invocation::InvocationState::Failed,
-        "CALLER_SIGNATURE_INVALID: rejected session.open",
-    );
-    match frame {
-        InvokeBidiDown {
-            payload: Some(DownPayload::Receipt(receipt)),
-            ..
-        } => {
-            let failure = receipt.failure.as_ref().expect("typed receipt failure");
-            assert_eq!(failure.code, "CALLER_SIGNATURE_INVALID");
-            assert_eq!(failure.stage, ErrorStage::CallerAuthentication as i32);
-            assert_eq!(failure.security_class, SecurityClass::Authentication as i32);
-        }
-        other => panic!("expected failed receipt, got {other:?}"),
-    }
-}
-
-#[test]
-fn terminal_receipt_extracts_presence_registry_failure_code_from_reason() {
-    let frame = build_bidi_terminal_receipt(
-        easynet_axon::invocation::InvocationState::Failed,
-        "target device is not in PresenceRegistry; the owning daemon is offline",
-    );
-    match frame {
-        InvokeBidiDown {
-            payload: Some(DownPayload::Receipt(receipt)),
-            ..
-        } => {
-            let failure = receipt.failure.as_ref().expect("typed receipt failure");
-            assert_eq!(failure.code, "TARGET_NOT_IN_PRESENCE_REGISTRY");
-            assert_eq!(failure.stage, ErrorStage::Transport as i32);
-            assert_eq!(failure.security_class, SecurityClass::Transport as i32);
-        }
-        other => panic!("expected failed receipt, got {other:?}"),
-    }
-}
-
-#[test]
-fn terminal_receipt_projects_route_negative_to_resolution_stage() {
-    let frame = build_bidi_terminal_receipt(
-        easynet_axon::invocation::InvocationState::Failed,
-        "ROUTE_NEGATIVE: namespace.resolve negative for `browser.open`: NEGATIVE_REASON_NOROUTE",
-    );
-    match frame {
-        InvokeBidiDown {
-            payload: Some(DownPayload::Receipt(receipt)),
-            ..
-        } => {
-            let failure = receipt.failure.as_ref().expect("typed receipt failure");
-            assert_eq!(failure.code, "ROUTE_NEGATIVE");
-            assert_eq!(failure.stage, ErrorStage::AbilityResolution as i32);
-            assert_eq!(failure.security_class, SecurityClass::Unspecified as i32);
-        }
-        other => panic!("expected failed receipt, got {other:?}"),
-    }
-}
-
-#[test]
-fn terminal_receipt_marks_timeout_retryable() {
-    let frame = build_bidi_terminal_receipt(
-        easynet_axon::invocation::InvocationState::TimedOut,
-        "terminal read timed out",
-    );
-    match frame {
-        InvokeBidiDown {
-            payload: Some(DownPayload::Receipt(receipt)),
-            ..
-        } => {
-            let failure = receipt.failure.as_ref().expect("typed receipt failure");
-            assert_eq!(failure.code, "INVOCATION_TIMED_OUT");
-            assert_eq!(failure.stage, ErrorStage::Execution as i32);
-            assert_eq!(failure.security_class, SecurityClass::Unspecified as i32);
-            assert!(failure.retryable);
-        }
-        other => panic!("expected timed-out receipt, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    let payload: serde_json::Value = serde_json::from_slice(&chunk.data).expect("json payload");
+    assert_eq!(payload["type"], "error");
+    assert_eq!(payload["code"], "disk_full");
 }
 
 #[test]
@@ -370,7 +302,7 @@ fn map_local_bidi_up_payload_translates_file_transfer_eof_control() {
     let mapped = map_local_bidi_up_payload(
         LocalBidiWireKind::FileTransfer,
         UpPayload::Control(BidiControl {
-            control: Some(easynet_axon::pb::axon::v1::bidi_control::Control::Eof(true)),
+            control: Some(axon_sdk::pb::axon::v1::bidi_control::Control::Eof(true)),
         }),
     );
     match mapped {
@@ -403,24 +335,17 @@ fn map_local_bidi_handler_json_frames_preserves_json_payload() {
         }),
         3,
     );
-    match frame {
-        LocalBidiHandlerFrame::Forward(InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(chunk)),
-            ..
-        }) => {
-            assert_eq!(chunk.stream_id, 3);
-            let payload: serde_json::Value =
-                serde_json::from_slice(&chunk.data).expect("json frame payload");
-            assert_eq!(payload["type"], "frame");
-            assert_eq!(payload["seq"], 7);
-            assert_eq!(payload["image_bytes_b64"], "abc");
-        }
-        other => panic!("expected JSON frame → BinaryChunk, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    assert_eq!(chunk.stream_id, 3);
+    let payload: serde_json::Value =
+        serde_json::from_slice(&chunk.data).expect("json frame payload");
+    assert_eq!(payload["type"], "frame");
+    assert_eq!(payload["seq"], 7);
+    assert_eq!(payload["image_bytes_b64"], "abc");
 }
 
 #[test]
-fn map_local_bidi_handler_json_frames_error_becomes_failed_receipt() {
+fn map_local_bidi_handler_json_error_remains_data_until_runtime_terminal() {
     let frame = map_local_bidi_handler_frame(
         LocalBidiWireKind::JsonFrames,
         &serde_json::json!({
@@ -430,33 +355,14 @@ fn map_local_bidi_handler_json_frames_error_becomes_failed_receipt() {
         }),
         3,
     );
-    match frame {
-        LocalBidiHandlerFrame::Terminal(InvokeBidiDown {
-            payload: Some(DownPayload::Receipt(receipt)),
-            ..
-        }) => {
-            assert_eq!(
-                receipt.state,
-                easynet_axon::invocation::InvocationState::Failed.to_wire_i32()
-            );
-            assert_eq!(receipt.payload_content_type, "application/json");
-            assert_eq!(
-                receipt.reason,
-                "permission_denied: screen capture permission denied"
-            );
-            let failure = receipt.failure.as_ref().expect("typed receipt failure");
-            assert_eq!(failure.code, "PERMISSION_DENIED");
-            assert_eq!(failure.message, receipt.reason);
-            let payload: serde_json::Value =
-                serde_json::from_slice(&receipt.payload).expect("json payload");
-            assert_eq!(payload["type"], "error");
-        }
-        other => panic!("expected JSON error → failed receipt, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    let payload: serde_json::Value = serde_json::from_slice(&chunk.data).expect("json payload");
+    assert_eq!(payload["type"], "error");
+    assert_eq!(payload["code"], "permission_denied");
 }
 
 #[test]
-fn map_local_bidi_handler_json_frames_closed_becomes_completed_receipt() {
+fn map_local_bidi_handler_json_closed_remains_data_until_runtime_terminal() {
     let frame = map_local_bidi_handler_frame(
         LocalBidiWireKind::JsonFrames,
         &serde_json::json!({
@@ -465,23 +371,9 @@ fn map_local_bidi_handler_json_frames_closed_becomes_completed_receipt() {
         }),
         3,
     );
-    match frame {
-        LocalBidiHandlerFrame::Terminal(InvokeBidiDown {
-            payload: Some(DownPayload::Receipt(receipt)),
-            ..
-        }) => {
-            assert_eq!(
-                receipt.state,
-                easynet_axon::invocation::InvocationState::Completed.to_wire_i32()
-            );
-            assert!(receipt.failure.is_none());
-            assert_eq!(receipt.payload_content_type, "application/json");
-            let payload: serde_json::Value =
-                serde_json::from_slice(&receipt.payload).expect("json payload");
-            assert_eq!(payload["type"], "closed");
-        }
-        other => panic!("expected JSON closed → completed receipt, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    let payload: serde_json::Value = serde_json::from_slice(&chunk.data).expect("json payload");
+    assert_eq!(payload["type"], "closed");
 }
 
 #[test]
@@ -495,16 +387,23 @@ fn map_local_bidi_ability_json_frames_forwards_raw_binary_payload() {
         },
         9,
     );
-    match frame {
-        LocalBidiHandlerFrame::Forward(InvokeBidiDown {
-            payload: Some(DownPayload::BinaryChunk(chunk)),
-            ..
-        }) => {
-            assert_eq!(chunk.stream_id, 9);
-            assert_eq!(chunk.data, b"\xff\xd8raw-jpeg\xff\xd9");
-        }
-        other => panic!("expected raw binary JsonFrames payload → BinaryChunk, got {other:?}"),
-    }
+    let chunk = forwarded_binary_chunk(frame);
+    assert_eq!(chunk.stream_id, 9);
+    assert_eq!(chunk.data, b"\xff\xd8raw-jpeg\xff\xd9");
+}
+
+#[test]
+fn map_local_bidi_ability_terminal_defers_to_runtime_receipt_projection() {
+    let frame = map_local_bidi_ability_frame(
+        LocalBidiWireKind::JsonFrames,
+        AbilityFrame {
+            payload: br#"{"type":"closed"}"#.to_vec(),
+            content_type: "application/json".to_string(),
+            terminal: true,
+        },
+        9,
+    );
+    assert!(matches!(frame, LocalBidiHandlerFrame::Terminal));
 }
 
 #[test]
@@ -526,7 +425,7 @@ fn map_local_bidi_up_payload_json_frames_forwards_json_control() {
 }
 
 #[tokio::test]
-async fn local_bidi_down_stream_emits_admission_receipt_before_handler_frames() {
+async fn local_bidi_down_stream_preserves_supplied_initial_frame_before_handler_frames() {
     use futures::StreamExt as _;
 
     let (down_tx, down_rx) = tokio::sync::mpsc::channel::<Result<InvokeBidiDown, Status>>(1);
@@ -543,21 +442,21 @@ async fn local_bidi_down_stream_emits_admission_receipt_before_handler_frames() 
         .expect("enqueue payload frame");
     drop(down_tx);
 
-    let mut stream = LocalBidiDownStream::new(down_rx);
+    let initial = InvokeBidiDown {
+        payload: Some(DownPayload::Control(BidiControl::default())),
+        ..InvokeBidiDown::default()
+    };
+    let mut stream = LocalBidiDownStream::with_admission(down_rx, initial);
     let first = stream
         .next()
         .await
-        .expect("admission receipt frame")
-        .expect("receipt is ok");
+        .expect("initial frame")
+        .expect("frame is ok");
     match first.payload {
-        Some(DownPayload::Receipt(receipt)) => {
+        Some(DownPayload::Control(_)) => {
             assert_eq!(first.sequence, 0);
-            assert_eq!(
-                receipt.state,
-                easynet_axon::invocation::InvocationState::Admitted.to_wire_i32()
-            );
         }
-        other => panic!("expected admission receipt at sequence 0, got {other:?}"),
+        other => panic!("expected supplied initial frame at sequence 0, got {other:?}"),
     }
 
     let second = stream
@@ -626,11 +525,11 @@ fn validate_session_realm_accepts_cross_realm_when_trust_anchor_has_caller() {
     // but the local trust anchor on realm-a's hub has an
     // explicit entry for it. Mirrors the admission gate's
     // existing FederatedKeyResolver hit; closes LB-49.
-    use crate::daemon::trust::anchor::{TrustedAgent, TrustedAgentRole};
+    use crate::daemon::trust::anchor::{TrustAnchorRole, TrustedAgent};
     let entry = TrustedAgent {
         agent_ura: "easynet:///r/realm-b/device/device-1".to_string(),
         public_key_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
-        role: TrustedAgentRole::Device,
+        role: TrustAnchorRole::Device,
         added_at_unix_ms: 1_777_640_000_000,
         origin_realm: Some("federated-tenant".to_string()),
         hub_endpoint: None,
@@ -654,91 +553,69 @@ fn validate_session_realm_rejects_malformed_ura() {
     assert!(err.message().contains("canonical"));
 }
 
-#[test]
-fn build_remote_bidi_open_dispatch_frame_carries_resource_binding() {
-    let frame = build_remote_bidi_open_dispatch_frame(
-        43,
-        "easynet:///r/realm/device/dev",
-        Some("easynet:///r/realm/resource/display-1"),
-        "remote_desktop.attach",
-        br#"{"session_id":"rd-1"}"#,
-        HashMap::new(),
-    )
-    .expect("built");
-    let payload = match frame.frame.payload.expect("frame has payload") {
-        DownPayload::BinaryChunk(chunk) => chunk,
-        _ => panic!("expected BinaryChunk"),
-    };
-    assert_eq!(payload.stream_id, INVOKE_REMOTE_STREAM_ID);
-    let parsed: SessionDispatch =
-        serde_json::from_slice(&payload.data).expect("decode SessionDispatch");
-    match parsed {
-        SessionDispatch::BidiOpen {
-            call_id,
-            callee_ura,
-            subject_ura,
-            ability,
-            args,
-            ..
-        } => {
-            assert_eq!(call_id, 43);
-            assert_eq!(callee_ura.as_deref(), Some("easynet:///r/realm/device/dev"));
-            assert_eq!(
-                subject_ura.as_deref(),
-                Some("easynet:///r/realm/resource/display-1")
-            );
-            assert_eq!(ability, "remote_desktop.attach");
-            assert_eq!(args, br#"{"session_id":"rd-1"}"#);
-        }
-        _ => panic!("expected BidiOpen variant"),
-    }
-}
-
-/// step-3b hub arm (DEC-F004): the bidi-open carrier follows the
-/// execution host's negotiated contract. Three cells: v1 host with a
-/// seven-tuple envelope rides the canonical DispatchCall (selected
-/// callee transplanted, open_bidi set); a v1 host WITHOUT an envelope
-/// pins to JSON (hollow-canonical-frame doctrine, mirroring the unary
-/// slot fallback); a v0 host keeps JSON for the deletion window.
+/// Remote bidi open has exactly one frame shape: canonical DispatchCall.
+/// Missing envelopes and non-bidi call modes fail closed; neither can fall
+/// back to the retired JSON BidiOpen projection.
 #[tokio::test]
-async fn remote_bidi_open_frame_rides_carrier_by_negotiated_contract() {
-    use easynet_axon::pb::axon::v1::EnvelopeOpen;
+async fn remote_bidi_open_frame_is_canonical_and_fail_closed() {
+    use axon_sdk::pb::axon::v1::EnvelopeOpen;
 
     let svc = make_service().with_session_realm("test-realm");
-    let target_ura = "easynet:///r/test-realm/device/bidi-target";
-    publish_test_route(&svc, target_ura, "remote_desktop.attach");
+    let target_device_ura = "easynet:///r/test-realm/device/bidi-target";
+    let target_callee_ura = publish_test_remote_system_agent_route_with_mode(
+        &svc,
+        target_device_ura,
+        "remote_desktop.attach",
+        crate::daemon::ability::CallMode::Bidi,
+    );
     let route = svc
         .target_gate()
         .route_resolver()
         .await
-        .resolve_route(target_ura, "remote_desktop.attach")
+        .resolve_route_with_call_mode(
+            &target_callee_ura,
+            "remote_desktop.attach",
+            axon_sdk::invocation::CallMode::Bidi,
+        )
         .expect("published route resolves");
 
+    let initial_args = br#"{"session_id":"rd-9"}"#.to_vec();
     let envelope_open = EnvelopeOpen {
-        envelope: Some(
-            crate::daemon::invocation::ProtoEnvelope::targeted(
-                "easynet:///r/test-realm/user/alice",
-                "easynet:///r/test-realm/device/caller-supplied",
-                "easynet:///r/test-realm/device/caller-supplied",
+        envelope: Some(signed_test_envelope(
+            "easynet:///r/test-realm/user/alice",
+            &target_callee_ura,
+            &target_callee_ura,
+            "remote_desktop.attach",
+            &initial_args,
+            &test_device_signing_key(),
+        )),
+        target: Some(
+            wire_invocation_target(
+                test_descriptor_ref(&target_callee_ura, "remote_desktop.attach"),
+                "remote_desktop.attach",
             )
-            .expect("valid remote bidi open envelope")
-            .into_inner(),
+            .expect("typed descriptor target"),
         ),
-        initial_args: br#"{"session_id":"rd-9"}"#.to_vec(),
+        initial_args,
         ..Default::default()
     };
 
-    // Cell 1: v1 + envelope → canonical frame, callee re-selected.
-    let frame = build_remote_bidi_open_frame_for_contract(true, 7, &route, &envelope_open)
-        .expect("v1 frame builds");
+    let frame = build_remote_bidi_open_frame(7, &route, &envelope_open, CallMode::Bidi)
+        .expect("canonical bidi frame builds");
     match frame.frame.payload.expect("payload") {
-        easynet_axon::pb::axon::v1::invoke_bidi_down::Payload::DispatchCall(call) => {
+        axon_sdk::pb::axon::v1::invoke_bidi_down::Payload::DispatchCall(call) => {
             assert_eq!(call.call_id, 7);
-            assert!(call.open_bidi, "bidi open must set open_bidi");
+            assert_eq!(
+                crate::daemon::invocation::bidi::session_wire::canonical_dispatch_call_mode(
+                    call.call_mode
+                ),
+                Ok(CallMode::Bidi),
+                "bidi open must carry bidi call_mode"
+            );
             let request = call
                 .request
                 .expect("complete InvokeRequest rides the frame");
-            assert_eq!(request.function_name, route.dispatch_key());
+            assert_eq!(invocation_function_name(&request), route.dispatch_key());
             assert_eq!(request.arguments, envelope_open.initial_args);
             assert_eq!(
                 request
@@ -751,94 +628,91 @@ async fn remote_bidi_open_frame_rides_carrier_by_negotiated_contract() {
                 "resolver-selected callee must replace the caller-supplied one"
             );
         }
-        other => panic!("expected DispatchCall on a v1 host, got {other:?}"),
+        other => panic!("expected canonical DispatchCall, got {other:?}"),
     }
 
-    // Cell 2: v1 host, no envelope → JSON (hollow canonical frame pin).
     let hollow = EnvelopeOpen {
         envelope: None,
         ..envelope_open.clone()
     };
-    let frame = build_remote_bidi_open_frame_for_contract(true, 8, &route, &hollow)
-        .expect("fallback frame builds");
-    assert!(
-        matches!(
-            frame.frame.payload,
-            Some(easynet_axon::pb::axon::v1::invoke_bidi_down::Payload::BinaryChunk(_))
-        ),
-        "v1 host without an envelope must still ride JSON"
-    );
+    let err = build_remote_bidi_open_frame(8, &route, &hollow, CallMode::Bidi)
+        .expect_err("hollow canonical frame must reject");
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
 
-    // Cell 3: v0 host → JSON regardless of envelope.
-    let frame = build_remote_bidi_open_frame_for_contract(false, 9, &route, &envelope_open)
-        .expect("v0 frame builds");
-    assert!(
-        matches!(
-            frame.frame.payload,
-            Some(easynet_axon::pb::axon::v1::invoke_bidi_down::Payload::BinaryChunk(_))
+    let err = build_remote_bidi_open_frame(9, &route, &envelope_open, CallMode::Rpc)
+        .expect_err("non-bidi route cannot construct a bidi-open carrier");
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+}
+
+#[tokio::test]
+async fn remote_bidi_rejects_governance_catalogue_route_before_carrier_frame() {
+    use axon_sdk::pb::axon::v1::EnvelopeOpen;
+
+    const TARGET_DEVICE_URA: &str = "easynet:///r/test-realm/device/bidi-catalogue-target";
+    const CATALOGUE_READ: &str = crate::daemon::ability::names::governance::META_LIST_ABILITIES;
+
+    let svc = make_service().with_session_realm("test-realm");
+    let target_callee_ura = publish_test_remote_system_agent_route_with_mode(
+        &svc,
+        TARGET_DEVICE_URA,
+        CATALOGUE_READ,
+        crate::daemon::ability::CallMode::Bidi,
+    );
+    let route = svc
+        .target_gate()
+        .route_resolver()
+        .await
+        .resolve_route_with_call_mode(
+            &target_callee_ura,
+            CATALOGUE_READ,
+            axon_sdk::invocation::CallMode::Bidi,
+        )
+        .expect("published bidi catalogue route resolves before governance gate");
+
+    let initial_args = br#"{"scope":"local"}"#.to_vec();
+    let descriptor_ref = test_descriptor_ref(&target_callee_ura, CATALOGUE_READ);
+    let envelope_open = EnvelopeOpen {
+        envelope: Some(signed_test_envelope_with_descriptor_ref(
+            "easynet:///r/test-realm/user/alice",
+            &target_callee_ura,
+            &target_callee_ura,
+            descriptor_ref.clone(),
+            &initial_args,
+            &test_device_signing_key(),
+        )),
+        target: Some(
+            wire_invocation_target(&descriptor_ref, CATALOGUE_READ)
+                .expect("typed descriptor target"),
         ),
-        "v0 host keeps the JSON shape until the deletion window"
+        initial_args,
+        ..Default::default()
+    };
+
+    let err = build_remote_bidi_open_frame(10, &route, &envelope_open, CallMode::Bidi)
+        .expect_err("bidi catalogue read must use the unary catalogue path");
+
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    assert!(
+        err.message().contains("CANONICAL_CATALOGUE_READ_REQUIRED")
+            && err.message().contains("InvokeBidi")
+            && err.message().contains(CATALOGUE_READ)
+            && err
+                .message()
+                .contains("canonical unary Invoke catalogue read path"),
+        "unexpected bidi catalogue route denial: {}",
+        err.message()
     );
 }
 
-#[test]
-fn invoke_remote_up_request_serde_round_trip_via_session_dispatch_pin() {
-    // Pins the invariant that PR-3 sub-spec §2.1 frame-0 JSON
-    // (InvokeRemoteUp::Request) and PR-3 sub-spec §2.3 session
-    // dispatch JSON (SessionDispatch::Dispatch) are *separate*
-    // wire shapes. A regression that conflates them would let
-    // a frame from one side decode into the other type — this
-    // test asserts they don't.
-    let req_json = serde_json::to_vec(&InvokeRemoteUp::Request {
-        subject_device: "easynet:///r/realm/device/dev-B".into(),
-        subject_ura: "easynet:///r/realm/device/dev-B".into(),
-        ability_ura: "easynet:///r/realm/ability/device.dev-B.echo".into(),
-        args: b"hi".to_vec(),
-        args_content_envelope: SessionContentEnvelope::plaintext_json(),
-        metadata: HashMap::new(),
-        origin_caller: None,
-    })
-    .unwrap();
-    // Decoding as the wrong type must fail.
-    let mistaken: Result<SessionDispatch, _> = serde_json::from_slice(&req_json);
-    assert!(
-        mistaken.is_err(),
-        "InvokeRemoteUp::Request must NOT decode as SessionDispatch — \
-         the discriminator tags differ ('request' vs 'dispatch')"
-    );
-}
-
-// dispatch_invoke_remote happy/sad-path integration tests
-// require a real `tonic::Streaming<InvokeBidiUp>` which is
-// gRPC-codegen-only constructible (no public `new_empty()`
-// ctor). The same constraint that `#[ignore]`-marked
-// `invoke_bidi_test_deferred_to_pr2_tier1` above applies here:
-// those paths land as Tier 1 integration tests once PR-2's
-// `session.open` accept enables a real round-trip. Until
-// then the helpers below pin the units this method composes.
-//
-// Coverage assertion: every early-return code path of
-// `dispatch_invoke_remote` is reachable from the helpers
-// tested above:
-//   * malformed initial_args → serde_json::from_slice (covered
-//     by invoke_remote_up_request_serde_round_trip in
-//     `invoke_remote_initiator::tests`)
-//   * pending map None → trivial Option::ok_or_else (no-op
-//     to test in isolation)
-//   * target offline → PresenceRegistry::lookup returns None
-//     (covered by presence_registry tests)
-//   * try_send Full / Closed → matched by literal pattern,
-//     same shape as commit 8/9's try_push_forward_invoke_frame
-//     which is integration-tested
-//   * pending oneshot dropped → covered by pending_dispatch
-//     `dropped_completer_surfaces_to_handle_as_recv_error`
+// Remote canonical relay coverage lives in canonical_relay.rs.
+// Legacy JSON dispatch tests were removed with the wrapper protocol.
 
 #[tokio::test]
 async fn pending_stream_presence_offline_watcher_delivers_terminal_failure() {
     let presence = Arc::new(PresenceRegistry::new());
     let admission = AdmissionFacade::new(
         Arc::new(RealmTrustAnchor::default()),
-        Some(TEST_DAEMON_URI.to_string()),
+        Some(TEST_DAEMON_URA.to_string()),
     );
     let pending_stream = Arc::new(PendingStreamDispatchMap::new());
     let _svc = DaemonInvocationService::new(Arc::clone(&presence), admission)
@@ -856,7 +730,8 @@ async fn pending_stream_presence_offline_watcher_delivers_terminal_failure() {
             let (sender, _rx) = tokio::sync::mpsc::channel::<
                 Result<crate::daemon::invocation::bidi::state::presence::DispatchFrame, tonic::Status>,
             >(1);
-            presence.insert(target_ura.to_string(), sender);
+            insert_test_dispatch_presence(&presence, target_ura, sender)
+                .expect("canonical presence key");
             presence.remove(
                 target_ura,
                 crate::daemon::invocation::bidi::state::presence::OfflineReason::StreamClosed,
@@ -865,6 +740,9 @@ async fn pending_stream_presence_offline_watcher_delivers_terminal_failure() {
             match tokio::time::timeout(std::time::Duration::from_millis(20), handle.recv()).await {
                 Ok(Some(crate::daemon::invocation::bidi::state::pending_dispatch::DispatchStreamEvent::Chunk(bytes))) => {
                     assert_eq!(bytes, b"partial");
+                }
+                Ok(Some(crate::daemon::invocation::bidi::state::pending_dispatch::DispatchStreamEvent::Admission(_))) => {
+                    panic!("offline cancellation fixture did not dispatch an invocation");
                 }
                 Ok(Some(crate::daemon::invocation::bidi::state::pending_dispatch::DispatchStreamEvent::Terminal(
                     result,
@@ -892,50 +770,50 @@ async fn pending_stream_presence_offline_watcher_delivers_terminal_failure() {
 // ── PR-N1 commit 3a/N: federation client plumbing tests ──
 
 #[test]
-fn parse_realm_from_ura_extracts_realm_component() {
+fn realm_from_ura_extracts_realm_component() {
     assert_eq!(
-        parse_realm_from_ura("easynet:///r/realm-a/device/laptop-1"),
+        realm_from_ura("easynet:///r/realm-a/device/laptop-1"),
         Some("realm-a".to_string())
     );
     assert_eq!(
-        parse_realm_from_ura("easynet:///r/realm-a/device/device-1"),
+        realm_from_ura("easynet:///r/realm-a/device/device-1"),
         Some("realm-a".to_string())
     );
     assert_eq!(
-        parse_realm_from_ura(&crate::core::ura::hub_ura("peer-realm")),
+        realm_from_ura(&crate::core::ura::hub_ura("peer-realm")),
         Some("peer-realm".to_string())
     );
     assert_eq!(
-        parse_realm_from_ura("easynet:///r/peer-realm/hub"),
+        realm_from_ura("easynet:///r/peer-realm/authority"),
         Some("peer-realm".to_string())
     );
     assert_eq!(
-        parse_realm_from_ura("easynet:///r/peer-realm/hub/extra"),
+        realm_from_ura("easynet:///r/peer-realm/authority/extra"),
         None
     );
 }
 
 #[test]
-fn parse_realm_from_ura_rejects_noncanonical_extra_path_segments() {
+fn realm_from_ura_rejects_noncanonical_extra_path_segments() {
     // Realm extraction goes through the canonical URA parser, so
     // malformed alias path tails no longer slip through.
     assert_eq!(
-        parse_realm_from_ura("easynet:///r/realm-a/agent/n1/skill/foo"),
+        realm_from_ura("easynet:///r/realm-a/agent/n1/skill/foo"),
         None
     );
 }
 
 #[test]
-fn parse_realm_from_ura_rejects_non_easynet_scheme() {
-    assert_eq!(parse_realm_from_ura("https://example.com/foo"), None);
-    assert_eq!(parse_realm_from_ura("file:///r/realm/agent/x"), None);
+fn realm_from_ura_rejects_non_easynet_scheme() {
+    assert_eq!(realm_from_ura("https://example.com/foo"), None);
+    assert_eq!(realm_from_ura("file:///r/realm/agent/x"), None);
 }
 
 #[test]
-fn parse_realm_from_ura_rejects_empty_realm() {
+fn realm_from_ura_rejects_empty_realm() {
     // Malformed URA with empty realm component must reject —
     // never silently treat as `realm = ""` which would always
     // miss the federated_peers map and surface as
     // "realm unknown" instead of "URA malformed".
-    assert_eq!(parse_realm_from_ura("easynet:///r//device/n1"), None);
+    assert_eq!(realm_from_ura("easynet:///r//device/n1"), None);
 }

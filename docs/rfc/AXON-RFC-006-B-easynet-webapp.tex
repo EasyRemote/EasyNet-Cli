@@ -36,11 +36,6 @@
 % Companion (page sibling):       AXON-RFC-006-A-easynet-pages.tex
 % Companion (URA + ontology):     AXON-RFC-001-plan-v4.1.5.md
 % Companion (ontology theorem):   EasyNet-Axon/document/concepts/ONTOLOGY_AGENT_ABILITY.md
-% Backups:
-%   AXON-RFC-006-B-easynet-webapp.v0.3.tex.bak     (state-type detour)
-%   AXON-RFC-006-B-easynet-webapp.v0.4.tex.bak     (resource-as-state-type)
-%   AXON-RFC-006-B-easynet-webapp.v0.5.tex.bak     (project-as-resource, dot-only)
-%   AXON-RFC-006-B-easynet-webapp.v0.5.1.tex.bak   (feature-design last form)
 % ──────────────────────────────────────────────────────────────────────────
 
 \usepackage[margin=1in]{geometry}
@@ -100,7 +95,7 @@
     keywordstyle=\color{blue!70!black}\bfseries,
     commentstyle=\color{green!40!black}\itshape,
     stringstyle=\color{red!60!black},
-    morekeywords={resource,kind,realm,owner,uri,meta,ability,subject,caller,callee,receipt,call,let,mission,with,timeout,on,fn,struct,impl,pub,async,await,assume,axiom,invariant},
+    morekeywords={resource,kind,realm,owner,ura,meta,ability,subject,caller,callee,receipt,call,let,mission,with,timeout,on,fn,struct,impl,pub,async,await,assume,axiom,invariant},
     columns=fullflexible,
     keepspaces=true,
     aboveskip=0.6em,
@@ -281,7 +276,7 @@ The Model is intentionally narrower than ``everything that has
 URA''. Not every resource is a Resource-Execution-Model citizen;
 only those for which a system declares
 \texttt{create/read/delete} primitives over the resource and
-binds them to ability URIs. v0.6 establishes Pages as the first
+binds them to ability URAs. v0.6 establishes Pages as the first
 such instantiation; v0.7 will lift the Model to a standalone
 specification that this appendix references.
 \end{notebox}
@@ -347,7 +342,7 @@ belongs to exactly one Agent.'' v0.6 assumes the equivalent
 post-amendment statement: ``Ability belongs to exactly one of
 \(\{\)user, agent, hub, resource\(\}\).'' The Phase B
 amendment (this plan) discharges this assumption. Until it
-lands, v0.6 reads the wider claim into v4.1.5 ability URI
+lands, v0.6 reads the wider claim into v4.1.5 ability URA
 grammar (whose tail is already \texttt{<owner-id>.<name>}, with
 \texttt{<owner-id>} typed as ``the URA kind that names the
 owner'').
@@ -512,9 +507,9 @@ creates a project resource and registers its
 \texttt{page.fetch} ability.
 
 \begin{lstlisting}
-caller   = caller_uri                       (typically the publishing user
+caller   = caller_ura                       (typically the publishing user
                                              or one of their agents)
-callee   = callee_uri                       (the user URA hosting the project)
+callee   = callee_ura                       (the user URA hosting the project)
 ability  = ability/<user>.pages.publish
 subject  = user/<user>                      (creating-self transition;
                                              the project resource does not
@@ -539,7 +534,7 @@ receipt's \texttt{state\_transition} payload \textbf{MUST}
 carry:
 
 \begin{itemize}[leftmargin=2em,itemsep=0.1em]
-    \item \texttt{post\_resource\_uri}: the minted resource URA
+    \item \texttt{post\_resource\_ura}: the minted resource URA
     \item \texttt{identity\_form}: \texttt{"v0\_user\_defined"}
     or \texttt{"v1\_content\_hash"} (per INV-2)
     \item \texttt{visibility}
@@ -552,9 +547,9 @@ carry:
 reads bytes from the project resource.
 
 \begin{lstlisting}
-caller   = caller_uri                       (typically hub/01HUB during
+caller   = caller_ura                       (typically hub/01HUB during
                                              HTTP-adapted invocation)
-callee   = callee_uri                       (host agent of the project)
+callee   = callee_ura                       (host agent of the project)
 ability  = ability/<user>.<project>.page.fetch
 subject  = resource/<user>.<project>/<path>
 args     = { path: <path> }
@@ -578,8 +573,8 @@ invariant verifiable from the receipt alone.
 revokes the resource.
 
 \begin{lstlisting}
-caller   = caller_uri
-callee   = callee_uri                       (host agent of the project)
+caller   = caller_ura
+callee   = callee_ura                       (host agent of the project)
 ability  = ability/<user>.pages.unpublish
 subject  = resource/<user>.<project>
 args     = {}
@@ -709,7 +704,7 @@ is translated, by \texttt{ability/01HUB.pages.serve}, into:
 
 \begin{lstlisting}
 caller   = hub/01HUB
-callee   = callee_uri (host of <user>.<project>)
+callee   = callee_ura (host of <user>.<project>)
 ability  = ability/<user>.<project>.page.fetch
 subject  = resource/<user>.<project>/<path>
 args     = { path: "<path>" }
@@ -765,11 +760,10 @@ the Go-backend Hub for production, the
 \texttt{forward\_invoke} dispatch path, the bounded operational
 receipt ring buffer.
 
-The v0.5.1 backup file is canonical for those details:
-\texttt{AXON-RFC-006-B-easynet-webapp.v0.5.1.tex.bak} in
-\texttt{docs/rfc/}. Where v0.5.1 contradicts v0.6's invariants
-(it does not, in any place this author has identified, but
-future readers should verify), v0.6 wins.
+The implementation details retained from v0.5.1 are consolidated
+below. This v0.6 document is the only canonical specification;
+deleted historical snapshots are not normative inputs to an
+implementation or conformance review.
 
 \subsection{The MVP: a witness, not a deliverable}
 

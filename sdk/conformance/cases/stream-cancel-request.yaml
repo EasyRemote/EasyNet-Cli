@@ -1,0 +1,15 @@
+id: stream/cancel_request
+profile: runtime_core
+required_for:
+  - go
+  - python
+description: Runtime Core stream cancellation is an explicit non-terminal request acknowledgement; terminal cancellation facts must arrive through runtime terminal events.
+steps:
+  - action: open_stream
+    fixture: invocation.complete.v4.json
+  - action: request_stream_cancel
+  - action: reject_synthetic_terminal_cancel_ack
+expect:
+  result: cancel_request_observed
+  cancel_ack_terminal: false
+  terminal_cancel_ack_rejected: true

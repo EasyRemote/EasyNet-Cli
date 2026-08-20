@@ -2,117 +2,126 @@
 // ======================================================
 //
 // File: src/support/remote_device.rs
-// Description: Canonical helper for CLI surfaces that accept either a
-//              device URA or a bare node UUID and need to forward a
-//              call to the right remote device.
+// Description: Canonical helper for CLI surfaces that forward a call
+//              to an explicitly addressed remote runtime owner.
 //
 // Why this exists
 // ---------------
-// Several CLI surfaces historically open-coded the same routing rule:
-//
-//   1. If the user passes a canonical `easynet:///r/<realm>/device/<id>`
-//      URA, validate and use it directly.
-//   2. If the user passes a bare UUID, first ask the local daemon's
-//      federated directory (`federation.discover`) whether that node is
-//      currently known under a DIFFERENT realm.
-//   3. Only if the directory cannot answer, fall back to wrapping the
-//      UUID in the caller's local realm.
-//
-// Before this helper existed, `device show` had the fixed two-stage
-// lookup while `auth abilities`, `ability list/show`, and
-// `ability exec` still used the old "always wrap in local realm"
-// branch. That drift is exactly how a cross-hub UUID regressed in one
-// CLI surface after being fixed in another.
-//
-// The helper centralises the routing rule so every caller keeps the
-// same semantics and future bug fixes land in one place.
+// Remote invocation ingress must not repair product-directory identifiers into
+// invocation targets. The canonical runtime tuple names its callee as a URA;
+// directory search belongs to discovery UX before invocation planning, not to
+// the signed request builder.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use anyhow::anyhow;
-use serde_json::Value;
+use anyhow::{anyhow, Context};
 
-/// Best-effort caller URA for federation-forwarded requests.
+use crate::core::identity::RuntimeIdentityUra;
+use crate::core::ura::URAKind;
+
+/// Paired identities available to a CLI-originated accountable mutation.
 ///
-/// When local credentials are present and non-empty, returns the
-/// canonical device URA for this caller. Otherwise returns `None` and
-/// the lower-level federation helper falls back to its own synthetic
-/// `easynet:///r/cli/device/local` caller.
-pub(crate) fn caller_device_ura_from_credentials() -> Option<String> {
-    crate::daemon::persistence::config::load_credentials()
-        .ok()
-        .filter(|creds| !creds.realm.trim().is_empty() && !creds.node_id.trim().is_empty())
-        .map(|creds| crate::core::ura::device_ura(creds.realm.trim(), creds.node_id.trim()))
+/// The User is the signed caller/accountability root. The Device is only the
+/// local execution host used for locality decisions. Keeping both identities
+/// in one typed value prevents command-specific paths from silently replacing
+/// the User caller with Device custody.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PairedInvocationIdentity {
+    caller_user_ura: String,
+    local_device_ura: String,
 }
 
-/// Resolve a CLI `node` argument into a canonical device URA.
+impl PairedInvocationIdentity {
+    pub(crate) fn load(surface: &str) -> anyhow::Result<Self> {
+        let credentials = crate::daemon::persistence::config::load_credentials()
+            .with_context(|| format!("load paired credentials for {surface}"))?;
+        let caller_user_ura = match credentials.runtime_user_binding()? {
+            crate::daemon::persistence::config::RuntimeUserBinding::Bound { user_ura } => user_ura,
+            crate::daemon::persistence::config::RuntimeUserBinding::Unbound { reason } => {
+                anyhow::bail!(
+                    "{surface} requires an accountable User Principal caller; runtime user binding is {reason}"
+                )
+            }
+        };
+        let local_device_ura = caller_device_ura(&credentials)?;
+        Ok(Self {
+            caller_user_ura,
+            local_device_ura,
+        })
+    }
+
+    pub(crate) fn caller_user_ura(&self) -> &str {
+        &self.caller_user_ura
+    }
+
+    pub(crate) fn local_device_ura(&self) -> &str {
+        &self.local_device_ura
+    }
+}
+
+fn caller_device_ura(
+    credentials: &crate::daemon::persistence::config::Credentials,
+) -> anyhow::Result<String> {
+    let realm = credentials.realm.trim();
+    let node_id = credentials.node_id.trim();
+    if realm.is_empty() || node_id.is_empty() {
+        return Err(anyhow!(
+            "remote invocation requires paired device credentials with non-empty realm and node_id"
+        ));
+    }
+    Ok(crate::core::ura::device_ura(realm, node_id))
+}
+
+/// Resolve a CLI remote target argument into a canonical Device URA.
 ///
-/// Resolution order:
-/// 1. Canonical URA passes through after strict validation.
-/// 2. Bare UUID hits the local daemon's federated directory first so
-///    cross-hub devices preserve their real realm.
-/// 3. Only if the directory cannot answer do we fall back to wrapping
-///    in the local realm from `credentials.json`.
+/// Public remote invocation ingress is URA-only. Bare node ids and product
+/// directory aliases are rejected before descriptor resolution so the caller
+/// cannot accidentally build a signed tuple for a target inferred from stale
+/// discovery state.
 pub(crate) fn resolve_target_device_ura(node: &str) -> anyhow::Result<String> {
-    let local_tenant = crate::daemon::persistence::config::load_credentials()
-        .ok()
-        .and_then(|creds| {
-            let tenant = creds.realm.trim();
-            if tenant.is_empty() {
-                None
-            } else {
-                Some(tenant.to_string())
-            }
-        });
-    resolve_target_device_ura_with_lookup(
-        node,
-        local_tenant.as_deref(),
-        lookup_node_ura_in_directory,
-    )
-}
-
-fn resolve_target_device_ura_with_lookup<F>(
-    node: &str,
-    local_tenant: Option<&str>,
-    lookup: F,
-) -> anyhow::Result<String>
-where
-    F: FnOnce(&str) -> Option<String>,
-{
     let trimmed = node.trim();
-    if crate::core::ura::parse_ura(trimmed).is_ok() {
-        return crate::daemon::invocation::routing::federation_invoke::parse_node_ura(trimmed);
+    if trimmed.is_empty() {
+        anyhow::bail!("remote device target must not be empty; pass a canonical Device URA");
     }
-    if let Some(ura) = lookup(trimmed) {
-        return Ok(ura);
+    let identity = RuntimeIdentityUra::parse(trimmed).map_err(|error| {
+        anyhow!(
+            "remote device target {trimmed:?} is not a canonical URA: {error}; \
+             pass `easynet:///r/<realm>/device/<id>`"
+        )
+    })?;
+    if identity.kind() != URAKind::Device {
+        anyhow::bail!(
+            "remote device target {trimmed:?} has kind {}; expected a canonical Device URA",
+            identity.kind()
+        );
     }
-    if let Some(local_tenant) = local_tenant.filter(|tenant| !tenant.is_empty()) {
-        return Ok(crate::core::ura::device_ura(local_tenant, trimmed));
-    }
-    Err(anyhow!(
-        "cannot resolve node {trimmed:?}: federation.discover returned no match and \
-         no local realm is wired (pair this device first or pass a canonical \
-         `easynet:///r/<realm>/device/<id>` URA)"
-    ))
+    Ok(identity.into_string())
 }
 
-/// Walk the local daemon's federated directory for a `DirectoryEntry`
-/// whose `node_id` equals `node`. Returns the entry's canonical
-/// device URA. Best-effort only: discover failures must not block the
-/// legacy local-realm fallback.
-fn lookup_node_ura_in_directory(node: &str) -> Option<String> {
-    let entries =
-        crate::daemon::invocation::routing::federation_invoke::invoke_federation_discover(None)
-            .ok()?;
-    for entry in entries {
-        if entry.get("node_id").and_then(Value::as_str) == Some(node) {
-            if let Some(ura) = entry.get("agent_ura").and_then(Value::as_str) {
-                return Some(ura.to_string());
-            }
-        }
+/// Resolve a CLI device-target flag into a canonical Device URA.
+///
+/// Human-facing commands may keep the ergonomic `local` selector. The selector
+/// is consumed at the CLI boundary and never enters daemon ability arguments.
+/// Remote targets are URA-only; bare node ids are not repaired from directory
+/// state because mutation admission must bind to one explicit runtime owner.
+pub(crate) fn resolve_cli_device_target_ura(
+    raw: Option<&str>,
+    surface: &str,
+) -> anyhow::Result<String> {
+    let target = raw.unwrap_or("local").trim();
+    if target.is_empty() {
+        anyhow::bail!("{surface} target must not be empty; pass `local` or a canonical Device URA");
     }
-    None
+    if target == "local" {
+        return crate::daemon::identity::local_invocation::local_device_ura()
+            .with_context(|| format!("resolve local {surface} target Device URA"));
+    }
+    resolve_target_device_ura(target).map_err(|error| {
+        anyhow!(
+            "{surface} target must be a canonical Device URA; failed to resolve {target:?}: {error}"
+        )
+    })
 }
 
 #[cfg(test)]
@@ -122,35 +131,53 @@ mod tests {
     #[test]
     fn canonical_ura_passes_through() {
         let ura = "easynet:///r/peer/device/node-1";
-        let resolved = resolve_target_device_ura_with_lookup(ura, Some("local"), |_| None)
-            .expect("canonical URA");
+        let resolved = resolve_target_device_ura(ura).expect("canonical URA");
         assert_eq!(resolved, ura);
     }
 
     #[test]
-    fn directory_hit_beats_local_realm_fallback() {
-        let resolved = resolve_target_device_ura_with_lookup("node-1", Some("realm-a"), |_| {
-            Some("easynet:///r/realm-b/device/node-1".to_string())
-        })
-        .expect("directory hit");
-        assert_eq!(resolved, "easynet:///r/realm-b/device/node-1");
-    }
-
-    #[test]
-    fn local_realm_fallback_is_used_when_directory_misses() {
-        let resolved = resolve_target_device_ura_with_lookup("node-2", Some("realm-a"), |_| None)
-            .expect("fallback");
-        assert_eq!(resolved, "easynet:///r/realm-a/device/node-2");
-    }
-
-    #[test]
-    fn missing_directory_and_realm_surfaces_actionable_error() {
-        let err = resolve_target_device_ura_with_lookup("node-3", None, |_| None)
-            .expect_err("missing realm must fail");
+    fn bare_node_id_is_rejected_before_directory_lookup() {
+        let err = resolve_target_device_ura("node-2")
+            .expect_err("bare node id must not be repaired from directory state");
         let msg = err.to_string();
         assert!(
-            msg.contains("pair this device first"),
-            "error must explain the recovery path, got: {msg}"
+            msg.contains("not a canonical URA"),
+            "unexpected error: {msg}"
+        );
+        assert!(
+            msg.contains("easynet:///r/<realm>/device/<id>"),
+            "error must explain the canonical recovery path, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn authority_ura_is_not_a_device_target() {
+        let err = resolve_target_device_ura("easynet:///r/peer/authority")
+            .expect_err("device-specific ingress must reject an Authority URA");
+        assert!(
+            err.to_string().contains("expected a canonical Device URA"),
+            "unexpected target-kind error: {err}"
+        );
+    }
+
+    #[test]
+    fn empty_target_rejects_before_remote_dispatch() {
+        let err = resolve_target_device_ura("   ").expect_err("empty target must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must not be empty"),
+            "empty target failure must remain local, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn cli_device_target_rejects_bare_node_id_before_directory_lookup() {
+        let err = resolve_cli_device_target_ura(Some("node-2"), "ability deploy")
+            .expect_err("bare node id must not be repaired from directory state");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("canonical URA"),
+            "unexpected CLI target error: {msg}"
         );
     }
 }

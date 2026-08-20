@@ -1,0 +1,52 @@
+schema_version = "3"
+name = "browser.capture_viewport"
+descriptor_version = "1.0.0"
+description = "Emit a bounded finite sequence of real viewport frames from Page.startScreencast. Frames are acknowledged to Chrome before Axon downstream backpressure, and Page.stopScreencast is issued on every terminal path. This is an observation stream; interactive automation should use browser.attach_session."
+exposure = "operator"
+dedicated_surface = "browser"
+subject_contract_kind = "dedicated-surface"
+call_mode = "stream"
+capability_state = "provider_backed"
+admission_action = "stream"
+visibility = "SCOPED"
+scope_subjects_kind = "only_ura_kinds"
+scope_subjects_uras = ["resource"]
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":false,\"streaming_only\":true,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.format]
+type = "string"
+enum = ["jpeg", "png"]
+
+[input_schema.properties.max_frames]
+type = "integer"
+minimum = 1
+maximum = 300
+
+[input_schema.properties.max_height]
+type = "integer"
+minimum = 1
+maximum = 4320
+
+[input_schema.properties.max_width]
+type = "integer"
+minimum = 1
+maximum = 7680
+
+[input_schema.properties.quality]
+type = "integer"
+minimum = 0
+maximum = 100
+
+[input_schema.properties.timeout_seconds]
+type = "integer"
+minimum = 1
+maximum = 120

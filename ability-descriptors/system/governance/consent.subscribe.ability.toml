@@ -1,6 +1,22 @@
-schema_version = "1"
+schema_version = "3"
 name = "consent.subscribe"
+descriptor_version = "1.0.0"
 description = "Subscribe to the approval-broker pending queue. v1 returns a one-shot snapshot of all pending PermissionRequests; live updates land with PR-INVOCATION-EXEC-UNITY."
+exposure = "operator"
+dedicated_surface = "none"
+subject_contract_kind = "explicit-ura"
+call_mode = "stream"
+capability_state = "cutover_ready"
+admission_action = "invoke"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":true,\"streaming_only\":true,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

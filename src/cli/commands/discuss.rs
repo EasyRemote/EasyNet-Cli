@@ -15,11 +15,12 @@
 //                                        skip a cycle, or
 //                                        max_cycles is reached.
 //
-// After the sub-turn returns, the CLI reads the room transcript
-// via `discuss.subscribe`-style snapshot (we use plain
-// `easynet.invoke` against the subscribe ability's snapshot half
-// for v1) and prints what was said. The operator can then choose
-// to post another turn (`--continue`) or end the discussion.
+// After the sub-turn returns, the CLI prints the embedded room
+// transcript returned by `mission.discuss_round`. Optional markdown
+// export reads the full transcript through `discuss.list_turns`.
+// Every local ability call is issued through a named subject-bound
+// daemon-system issuer; this CLI must not use the generic local
+// invocation shortcut.
 //
 // Why one room, many sub-turns
 // ----------------------------
@@ -39,7 +40,7 @@ use clap::Args;
 use console::style;
 use serde_json::{json, Value};
 
-use crate::support::platform::local_invoke::invoke_local_ability;
+use crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer;
 
 #[derive(Debug, Args)]
 pub struct DiscussArgs {
@@ -83,6 +84,130 @@ pub struct DiscussArgs {
     pub output: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiscussCreateRequest {
+    participants: Vec<String>,
+    topic: String,
+}
+
+impl DiscussCreateRequest {
+    fn from_cli(agents: &str, topic: &str) -> anyhow::Result<Self> {
+        let participants: Vec<String> = agents
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if participants.is_empty() {
+            bail!("--agents was provided but parsed empty; pass 'claude,codex,...'");
+        }
+        Ok(Self {
+            participants,
+            topic: topic.to_string(),
+        })
+    }
+
+    fn to_payload(&self) -> Value {
+        json!({
+            "participants": self.participants,
+            "topic":        self.topic,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiscussHumanTurnRequest {
+    room_id: String,
+    message: String,
+}
+
+impl DiscussHumanTurnRequest {
+    fn new(room_id: &str, message: &str) -> Self {
+        Self {
+            room_id: room_id.to_string(),
+            message: message.to_string(),
+        }
+    }
+
+    fn to_payload(&self) -> Value {
+        json!({
+            "room_id": self.room_id,
+            "speaker": "human",
+            "message": self.message,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiscussRoundRequest {
+    room_id: String,
+    agents: Vec<String>,
+    max_cycles: u32,
+    topic: String,
+    roles: serde_json::Map<String, Value>,
+}
+
+impl DiscussRoundRequest {
+    fn new(
+        room_id: &str,
+        agents: &[String],
+        max_cycles: u32,
+        topic: &str,
+        roles: serde_json::Map<String, Value>,
+    ) -> Self {
+        Self {
+            room_id: room_id.to_string(),
+            agents: agents.to_vec(),
+            max_cycles,
+            topic: topic.to_string(),
+            roles,
+        }
+    }
+
+    fn to_payload(&self) -> Value {
+        let mut payload = json!({
+            "room_id":    self.room_id,
+            "agents":     self.agents,
+            "max_cycles": self.max_cycles,
+            "topic":      self.topic,
+        });
+        if !self.roles.is_empty() {
+            payload["roles"] = Value::Object(self.roles.clone());
+        }
+        payload
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DiscussListTurnsRequest {
+    room_id: String,
+    since_seq: i64,
+}
+
+impl DiscussListTurnsRequest {
+    fn new(room_id: &str, since_seq: i64) -> Self {
+        Self {
+            room_id: room_id.to_string(),
+            since_seq,
+        }
+    }
+
+    fn to_payload(&self) -> Value {
+        json!({
+            "room_id":   self.room_id,
+            "since_seq": self.since_seq,
+        })
+    }
+}
+
+struct MissionDiscussIssuer;
+
+impl MissionDiscussIssuer {
+    fn invoke(ability: &str, args: Value) -> anyhow::Result<Value> {
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity(ability, args)
+            .with_context(|| format!("invoke {ability}"))
+    }
+}
+
 pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
     // Resolve participants + room id. New discussion: caller
     // provides --agents, we mint a room. Continuation: caller
@@ -94,22 +219,8 @@ pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
             (rid.clone(), participants)
         }
         (None, Some(agents)) => {
-            let participants: Vec<String> = agents
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
-            if participants.is_empty() {
-                bail!("--agents was provided but parsed empty; pass 'claude,codex,...'");
-            }
-            let create_resp = invoke_local_ability(
-                "discuss.create",
-                json!({
-                    "participants": participants,
-                    "topic":        args.topic,
-                }),
-            )
-            .context("invoke discuss.create")?;
+            let request = DiscussCreateRequest::from_cli(agents, &args.topic)?;
+            let create_resp = MissionDiscussIssuer::invoke("discuss.create", request.to_payload())?;
             let rid = create_resp
                 .get("room_id")
                 .and_then(Value::as_str)
@@ -117,7 +228,7 @@ pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
                     anyhow::anyhow!("discuss.create returned no room_id: {create_resp}")
                 })?
                 .to_string();
-            (rid, participants)
+            (rid, request.participants)
         }
         (None, None) => bail!(
             "either --agents (to start a new discussion) or --room <id> (to continue an \
@@ -136,13 +247,9 @@ pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
     // Post the human turn. On a fresh room this is the first
     // utterance the agents see; on a continuation it's the next
     // human turn after the prior sub-turn ended.
-    let _ = invoke_local_ability(
+    let _ = MissionDiscussIssuer::invoke(
         "discuss.post",
-        json!({
-            "room_id": room_id,
-            "speaker": "human",
-            "message": args.topic,
-        }),
+        DiscussHumanTurnRequest::new(&room_id, &args.topic).to_payload(),
     )
     .context("invoke discuss.post (human turn)")?;
 
@@ -160,26 +267,7 @@ pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
     // entry contributes to the `roles` map passed into the
     // ability; malformed (missing `=`) entries surface a precise
     // CLI error rather than being silently dropped.
-    let mut role_map = serde_json::Map::new();
-    for entry in &args.roles {
-        match entry.split_once('=') {
-            Some((agent, role)) => {
-                let agent = agent.trim();
-                let role = role.trim();
-                if agent.is_empty() || role.is_empty() {
-                    bail!(
-                        "--role {entry:?} parsed empty agent or role; \
-                         expected `<agent>=<role description>`"
-                    );
-                }
-                role_map.insert(agent.to_string(), Value::String(role.to_string()));
-            }
-            None => bail!(
-                "--role {entry:?} is missing '='; expected '<agent>=<role description>' \
-                 (e.g. --role claude=skeptic)"
-            ),
-        }
-    }
+    let role_map = parse_discuss_roles(&args.roles)?;
 
     // Run one sub-turn. mission.discuss_round handles the
     // parallel cycle loop. The handler embeds the full room
@@ -188,17 +276,14 @@ pub fn run(args: DiscussArgs) -> anyhow::Result<()> {
     // `easynet mcp serve` subprocess the chat dispatch may have
     // started, since multiple listeners on the same control.sock
     // load-balance connections.
-    let mut round_args = json!({
-        "room_id":    room_id,
-        "agents":     participants,
-        "max_cycles": args.max_cycles,
-        "topic":      args.topic,
-    });
-    if !role_map.is_empty() {
-        round_args["roles"] = Value::Object(role_map);
-    }
-    let result = invoke_local_ability("mission.discuss_round", round_args)
-        .context("invoke mission.discuss_round")?;
+    let round_request = DiscussRoundRequest::new(
+        &room_id,
+        &participants,
+        args.max_cycles,
+        &args.topic,
+        role_map,
+    );
+    let result = MissionDiscussIssuer::invoke("mission.discuss_round", round_request.to_payload())?;
 
     // Print every agent turn from the embedded snapshot. We skip
     // the human turn (already echoed above) to avoid printing the
@@ -302,12 +387,9 @@ fn read_room_participants(room_id: &str) -> anyhow::Result<Vec<String>> {
 /// rendering shares the same surface every other invocation does
 /// — no direct DiscussService access from CLI code.
 fn read_turns_from(room_id: &str, since_seq: i64) -> anyhow::Result<Vec<Value>> {
-    let resp = invoke_local_ability(
+    let resp = MissionDiscussIssuer::invoke(
         "discuss.list_turns",
-        json!({
-            "room_id":   room_id,
-            "since_seq": since_seq,
-        }),
+        DiscussListTurnsRequest::new(room_id, since_seq).to_payload(),
     )
     .with_context(|| format!("invoke discuss.list_turns for room {room_id}"))?;
     Ok(resp
@@ -315,6 +397,30 @@ fn read_turns_from(room_id: &str, since_seq: i64) -> anyhow::Result<Vec<Value>> 
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default())
+}
+
+fn parse_discuss_roles(entries: &[String]) -> anyhow::Result<serde_json::Map<String, Value>> {
+    let mut role_map = serde_json::Map::new();
+    for entry in entries {
+        match entry.split_once('=') {
+            Some((agent, role)) => {
+                let agent = agent.trim();
+                let role = role.trim();
+                if agent.is_empty() || role.is_empty() {
+                    bail!(
+                        "--role {entry:?} parsed empty agent or role; \
+                         expected `<agent>=<role description>`"
+                    );
+                }
+                role_map.insert(agent.to_string(), Value::String(role.to_string()));
+            }
+            None => bail!(
+                "--role {entry:?} is missing '='; expected '<agent>=<role description>' \
+                 (e.g. --role claude=skeptic)"
+            ),
+        }
+    }
+    Ok(role_map)
 }
 
 // Pre-rewrite the CLI took a snapshot of the room's max sequence
@@ -350,6 +456,111 @@ fn render_markdown(room_id: &str, participants: &[String], turns: &[Value]) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discuss_create_request_projects_payload() {
+        let request = DiscussCreateRequest::from_cli(" claude, codex ,,", "what next?").unwrap();
+
+        assert_eq!(
+            request.to_payload(),
+            json!({
+                "participants": ["claude", "codex"],
+                "topic": "what next?",
+            })
+        );
+    }
+
+    #[test]
+    fn discuss_create_request_rejects_empty_agents() {
+        let err = DiscussCreateRequest::from_cli(" , ,,", "topic").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("--agents was provided but parsed empty"));
+    }
+
+    #[test]
+    fn discuss_human_turn_request_projects_payload() {
+        let request = DiscussHumanTurnRequest::new("room-a", "continue");
+
+        assert_eq!(
+            request.to_payload(),
+            json!({
+                "room_id": "room-a",
+                "speaker": "human",
+                "message": "continue",
+            })
+        );
+    }
+
+    #[test]
+    fn discuss_round_request_projects_roles_when_present() {
+        let roles =
+            parse_discuss_roles(&["claude = skeptic".to_string(), "codex=builder".to_string()])
+                .unwrap();
+        let request = DiscussRoundRequest::new(
+            "room-a",
+            &["claude".to_string(), "codex".to_string()],
+            3,
+            "what next?",
+            roles,
+        );
+
+        assert_eq!(
+            request.to_payload(),
+            json!({
+                "room_id": "room-a",
+                "agents": ["claude", "codex"],
+                "max_cycles": 3,
+                "topic": "what next?",
+                "roles": {
+                    "claude": "skeptic",
+                    "codex": "builder",
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn discuss_round_request_omits_roles_when_absent() {
+        let request = DiscussRoundRequest::new(
+            "room-a",
+            &["claude".to_string(), "codex".to_string()],
+            3,
+            "what next?",
+            serde_json::Map::new(),
+        );
+
+        assert!(request.to_payload().get("roles").is_none());
+    }
+
+    #[test]
+    fn discuss_list_turns_request_projects_payload() {
+        let request = DiscussListTurnsRequest::new("room-a", 12);
+
+        assert_eq!(
+            request.to_payload(),
+            json!({
+                "room_id": "room-a",
+                "since_seq": 12,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_discuss_roles_rejects_missing_separator_or_empty_values() {
+        let missing = parse_discuss_roles(&["claude skeptic".to_string()]).unwrap_err();
+        assert!(missing.to_string().contains("is missing '='"));
+
+        let empty_agent = parse_discuss_roles(&[" = skeptic".to_string()]).unwrap_err();
+        assert!(empty_agent
+            .to_string()
+            .contains("parsed empty agent or role"));
+
+        let empty_role = parse_discuss_roles(&["claude = ".to_string()]).unwrap_err();
+        assert!(empty_role
+            .to_string()
+            .contains("parsed empty agent or role"));
+    }
 
     #[test]
     fn render_markdown_includes_participants_and_turns() {

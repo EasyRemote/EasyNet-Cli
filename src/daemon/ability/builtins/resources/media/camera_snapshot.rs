@@ -3,9 +3,9 @@
 //
 // File: src/daemon/ability/builtins/resources/media/camera_snapshot.rs
 //
-// Replaces the `query_stub` entries in the media metadata table for
-// `camera.snapshot`, `camera.subscribe`, `camera.record_start`, and
-// `camera.record_stop` with envelope-aware real handlers that:
+// Binds the metadata-only media capability contracts for `camera.snapshot`,
+// `camera.subscribe`, `camera.record_start`, and `camera.record_stop` to
+// envelope-aware real handlers that:
 //
 //   1. Reads `EnvelopeContext.subject` (per **INV-SUBJECT-ENVELOPE**:
 //      handler MUST get subject from the envelope, NOT from args).
@@ -17,7 +17,7 @@
 //        * type ≠ camera      → terminal failure with reason="resource_type_mismatch"
 //        * resource present but unavailable → "resource_unavailable"
 //   4. Captures a still photo via the configured backend. Production
-//      uses AVFoundation `AVCapturePhotoOutput` on macOS and nokhwa on
+//      uses an AVFoundation video-frame session on macOS and nokhwa on
 //      non-macOS. Tests use `SyntheticBackend` for hardware-free runs.
 //   5. base64-encodes the JPEG bytes (per the design discussion —
 //      base64 inline is the right tradeoff for snapshot-shaped
@@ -53,7 +53,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 use std::sync::atomic::AtomicU64;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -70,10 +70,9 @@ use crate::daemon::ability::builtins::resources::media::{
 };
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
-use crate::daemon::persistence::config::{
-    atomic_write_with_permissions, state_dir, WritePermissions,
-};
+use crate::daemon::persistence::config::state_dir;
 use crate::daemon::persistence::resources::{ResourceEntry, ResourceType};
+use crate::daemon::resources::context::device_scope::ContextDeviceScope;
 
 /// Maximum inline image size, in encoded JPEG bytes (NOT the base64
 /// expansion). Above this the handler refuses with an explicit
@@ -91,7 +90,7 @@ const DEFAULT_RECORDING_MAX_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_RECORDING_MAX_BYTES: u64 = 256 * 1024 * 1024;
 const RECORDING_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const RECORDING_BOUNDARY: &str = "easynet-camera-frame";
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 const NOKHWA_CAPTURE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Reason strings the handler emits on terminal failures. Pinned
@@ -233,8 +232,10 @@ fn recording_sessions() -> &'static Mutex<HashMap<String, CameraRecordingSession
 /// `resource_not_found` (handled by the dispatch layer above)
 /// and `resource_unavailable` (this branch).
 #[derive(Debug, Default)]
+#[cfg(feature = "native-media")]
 pub struct NokhwaBackend;
 
+#[cfg(feature = "native-media")]
 impl SnapshotBackend for NokhwaBackend {
     fn capture_jpeg(&self, entry: &ResourceEntry) -> anyhow::Result<EncodedFrame> {
         #[cfg(target_os = "macos")]
@@ -261,7 +262,7 @@ impl SnapshotBackend for NokhwaBackend {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 fn capture_jpeg_with_nokhwa_with_timeout(entry: &ResourceEntry) -> anyhow::Result<EncodedFrame> {
     let entry = entry.clone();
     let (tx, rx) = std::sync::mpsc::channel();
@@ -278,7 +279,7 @@ fn capture_jpeg_with_nokhwa_with_timeout(entry: &ResourceEntry) -> anyhow::Resul
     })?
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 fn capture_jpeg_with_nokhwa(entry: &ResourceEntry) -> anyhow::Result<EncodedFrame> {
     let mut cam =
         open_camera_with_nokhwa(entry, ABILITY_CAMERA_SNAPSHOT, None, DEFAULT_CAMERA_FPS)?;
@@ -287,7 +288,7 @@ fn capture_jpeg_with_nokhwa(entry: &ResourceEntry) -> anyhow::Result<EncodedFram
     capture_open_nokhwa_frame(&mut cam, ABILITY_CAMERA_SNAPSHOT, true)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 fn open_camera_with_nokhwa(
     entry: &ResourceEntry,
     ability: &'static str,
@@ -353,7 +354,7 @@ fn open_camera_with_nokhwa(
     Ok(cam)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 fn open_nokhwa_stream(cam: &mut nokhwa::Camera, ability: &'static str) -> anyhow::Result<()> {
     cam.open_stream().map_err(|e| {
         anyhow::anyhow!(
@@ -363,7 +364,7 @@ fn open_nokhwa_stream(cam: &mut nokhwa::Camera, ability: &'static str) -> anyhow
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 fn capture_open_nokhwa_frame(
     cam: &mut nokhwa::Camera,
     ability: &'static str,
@@ -409,7 +410,7 @@ fn capture_open_nokhwa_frame(
     })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "native-media", not(target_os = "macos")))]
 fn open_stream_with_nokhwa(
     entry: ResourceEntry,
     options: CameraStreamOptions,
@@ -482,42 +483,6 @@ fn open_stream_with_nokhwa(
             )
         })?;
     Ok(rx)
-}
-
-fn persist_camera_snapshot(
-    entry: &ResourceEntry,
-    captured_at: &str,
-    jpeg_bytes: &[u8],
-) -> anyhow::Result<PathBuf> {
-    let resource_id = entry
-        .resource_ura
-        .rsplit('/')
-        .next()
-        .filter(|s| !s.is_empty())
-        .unwrap_or("unknown-resource");
-    let safe_resource_id = safe_path_component(resource_id);
-    let safe_timestamp = safe_path_component(captured_at);
-    let dir = state_dir()
-        .join("captures")
-        .join("camera")
-        .join(safe_resource_id);
-    fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{safe_timestamp}.jpg"));
-    atomic_write_with_permissions(&path, jpeg_bytes, WritePermissions::OwnerReadWrite)?;
-    Ok(path)
-}
-
-fn safe_path_component(input: &str) -> String {
-    input
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 // ── Synthetic backend (tests) ────────────────────────────────
@@ -615,32 +580,40 @@ impl SnapshotBackend for SyntheticBackend {
 pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn SnapshotBackend>) {
     let subscribe_backend = Arc::clone(&backend);
     let record_start_backend = Arc::clone(&backend);
-    reg.register_rpc_with_envelope_and_spec(
+    reg.register_rpc_with_envelope_and_spec_and_semantics(
         ABILITY_CAMERA_SNAPSHOT,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_CAMERA_SNAPSHOT),
+        media::receipt_semantics(ABILITY_CAMERA_SNAPSHOT)
+            .expect("camera.snapshot receipt semantics"),
         Arc::new(move |env: EnvelopeContext, args: Value| snapshot_handler(&backend, env, args)),
     );
-    reg.register_stream_with_envelope_and_spec(
+    reg.register_stream_with_envelope_and_spec_and_semantics(
         ABILITY_CAMERA_SUBSCRIBE,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_CAMERA_SUBSCRIBE),
+        media::receipt_semantics(ABILITY_CAMERA_SUBSCRIBE)
+            .expect("camera.subscribe receipt semantics"),
         Arc::new(move |env: EnvelopeContext, args: Value| {
             subscribe_handler(&subscribe_backend, env, args)
         }),
     );
-    reg.register_rpc_with_envelope_and_spec(
+    reg.register_rpc_with_envelope_and_spec_and_semantics(
         ABILITY_CAMERA_RECORD_START,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_CAMERA_RECORD_START),
+        media::receipt_semantics(ABILITY_CAMERA_RECORD_START)
+            .expect("camera.record_start receipt semantics"),
         Arc::new(move |env: EnvelopeContext, args: Value| {
             record_start_handler(&record_start_backend, env, args)
         }),
     );
-    reg.register_rpc_with_envelope_and_spec(
+    reg.register_rpc_with_envelope_and_spec_and_semantics(
         ABILITY_CAMERA_RECORD_STOP,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_CAMERA_RECORD_STOP),
+        media::receipt_semantics(ABILITY_CAMERA_RECORD_STOP)
+            .expect("camera.record_stop receipt semantics"),
         Arc::new(record_stop_handler),
     );
 }
@@ -654,7 +627,10 @@ pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn Snap
 /// instead — the trait keeps the dispatch / receipt code
 /// backend-agnostic.
 pub fn register(reg: &mut AxonAbilityCatalog) {
+    #[cfg(feature = "native-media")]
     register_with_backend(reg, Arc::new(NokhwaBackend));
+    #[cfg(all(not(feature = "native-media"), feature = "headless-media"))]
+    register_with_backend(reg, Arc::new(SyntheticBackend));
 }
 
 // ── Handler core ─────────────────────────────────────────────
@@ -665,6 +641,7 @@ fn snapshot_handler(
     args: Value,
 ) -> anyhow::Result<Value> {
     let entry = resolve_camera_subject(&env, &args, ABILITY_CAMERA_SNAPSHOT)?;
+    let device_scope = ContextDeviceScope::from_execution_actor(env.callee())?;
 
     // Capture + encode.
     let EncodedFrame {
@@ -682,15 +659,9 @@ fn snapshot_handler(
         );
     }
 
-    let captured_at = chrono::Utc::now().to_rfc3339();
-    let local_path = persist_camera_snapshot(&entry, &captured_at, &jpeg_bytes)?;
-    // Context-surface persistence (best-effort): browsable in the
-    // Context page as <device>/camera.snapshot/<artifact>. The
-    // legacy captures/camera tree above stays — it is keyed by
-    // resource and consumed by the CLI; this one feeds the UI index.
-    if let Err(err) = crate::daemon::persistence::context_store::record_capture(
+    let capture = crate::daemon::persistence::context_store::record_capture(
         crate::daemon::persistence::context_store::CaptureRecord {
-            device: env.callee(),
+            device: device_scope.as_str(),
             ability: ABILITY_CAMERA_SNAPSHOT,
             ext: "jpg",
             bytes: &jpeg_bytes,
@@ -700,15 +671,10 @@ fn snapshot_handler(
             duration_ms: None,
             preview: format!("Photo {width}x{height}"),
         },
-    ) {
-        crate::op_event!(
-            component = context,
-            kind = capture_persist_failed,
-            level = "warn",
-            ability = ABILITY_CAMERA_SNAPSHOT,
-            error = err,
-        );
-    }
+    )?;
+    let local_path = crate::daemon::persistence::context_store::captures_dir()
+        .join(ABILITY_CAMERA_SNAPSHOT)
+        .join(&capture.file);
     let image_bytes_b64 = BASE64_STANDARD.encode(&jpeg_bytes);
 
     Ok(json!({
@@ -717,8 +683,10 @@ fn snapshot_handler(
         "width":           width,
         "height":          height,
         "byte_size":       jpeg_bytes.len(),
-        "captured_at":     captured_at,
+        "captured_at":     capture.timestamp,
         "local_path":      local_path.display().to_string(),
+        "capture_id":      capture.id,
+        "capture_file":    capture.file,
         // hardware_id surfaces here (NOT in meta.list_resources's
         // wire shape, which keeps it audit-only) because a snapshot
         // receipt is the natural place to record "which physical
@@ -744,6 +712,7 @@ fn record_start_handler(
     args: Value,
 ) -> anyhow::Result<Value> {
     let entry = resolve_camera_subject(&env, &args, ABILITY_CAMERA_RECORD_START)?;
+    let device_scope = ContextDeviceScope::from_execution_actor(env.callee())?;
     let options = parse_recording_options(&args)?;
     let session_id = format!("camera-rec-{}", uuid::Uuid::new_v4().simple());
     let started_at = chrono::Utc::now().to_rfc3339();
@@ -757,7 +726,7 @@ fn record_start_handler(
 
     let session = CameraRecordingSession {
         id: session_id.clone(),
-        device_ura: env.callee().to_string(),
+        device_ura: device_scope.as_str().to_string(),
         resource_ura: entry.resource_ura.clone(),
         hardware_id: entry.hardware_id.clone(),
         started_at: started_at.clone(),
@@ -1252,7 +1221,7 @@ fn parse_positive_u32(ability: &'static str, raw: &str, name: &str) -> anyhow::R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::invocation::routing::target::CallMode;
     use crate::daemon::persistence::resources::{
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
@@ -1266,7 +1235,7 @@ mod tests {
             file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 kind: ResourceType::Camera,
                 binding: ResourceBinding::LocalDevice,
                 hardware_id,
@@ -1274,6 +1243,7 @@ mod tests {
                 metadata: json!({}),
             },
         )
+        .expect("seed camera resource")
     }
 
     /// Test register helper. Tests use SyntheticBackend so the
@@ -1283,6 +1253,22 @@ mod tests {
     /// device.
     fn register_synthetic(reg: &mut AxonAbilityCatalog) {
         register_with_backend(reg, Arc::new(SyntheticBackend));
+    }
+
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/camera-snapshot";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
+    fn executable_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_runtime_for_device_authority(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            TEST_DEVICE_URA,
+        )
     }
 
     fn clear_recording_sessions_for_test() {
@@ -1297,10 +1283,10 @@ mod tests {
     }
 
     #[test]
-    fn registration_publishes_camera_manifests_to_catalog_snapshot() {
-        let mut reg = AxonAbilityCatalog::new();
+    fn registration_publishes_camera_descriptors_to_catalog_snapshot() {
+        let mut reg = metadata_test_catalog();
         register_synthetic(&mut reg);
-        let rows = reg.ability_catalog_snapshot();
+        let rows = reg.authority_ability_catalog_snapshot();
 
         for ability in [
             ABILITY_CAMERA_SNAPSHOT,
@@ -1308,17 +1294,17 @@ mod tests {
             ABILITY_CAMERA_RECORD_START,
             ABILITY_CAMERA_RECORD_STOP,
         ] {
-            let manifest = rows
+            let descriptor = rows
                 .iter()
                 .find(|row| row.name == ability)
-                .and_then(|row| row.manifest.as_ref())
-                .unwrap_or_else(|| panic!("{ability} must publish schema manifest"));
+                .map(|row| &row.descriptor)
+                .unwrap_or_else(|| panic!("{ability} must publish canonical descriptor"));
             assert_eq!(
-                manifest.description(),
+                descriptor.description,
                 media::description(ability).expect("camera description")
             );
             assert_eq!(
-                manifest.input_schema(),
+                descriptor.input_schema(),
                 &media::input_schema(ability).expect("camera schema")
             );
         }
@@ -1391,17 +1377,15 @@ mod tests {
         let ura = seed_camera(&mut file, "h-cam-e2e");
         resources::save(&file).unwrap();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_CAMERA_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: Some(ura),
-            causal_context: None,
-        };
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            ABILITY_CAMERA_SNAPSHOT,
+            json!({}),
+            CallMode::Rpc,
+            ura,
+        );
         let resp = dispatcher.execute_rpc(target).unwrap();
 
         // Required receipt fields (matches the docstring contract).
@@ -1413,6 +1397,9 @@ mod tests {
             "byte_size",
             "captured_at",
             "hardware_id",
+            "capture_id",
+            "capture_file",
+            "local_path",
         ] {
             assert!(
                 resp.get(field).is_some(),
@@ -1432,6 +1419,46 @@ mod tests {
         assert_eq!(decoded[..2], [0xff, 0xd8]); // JPEG SOI
         assert_eq!(decoded[decoded.len() - 2..], [0xff, 0xd9]); // EOI
         assert_eq!(decoded.len(), resp["byte_size"].as_u64().unwrap() as usize);
+        let captures = crate::daemon::persistence::context_store::list_captures(
+            TEST_DEVICE_URA,
+            Some(ABILITY_CAMERA_SNAPSHOT),
+            10,
+        )
+        .unwrap();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].id, resp["capture_id"].as_str().unwrap());
+        assert_eq!(
+            std::fs::read(resp["local_path"].as_str().unwrap()).unwrap(),
+            decoded
+        );
+    }
+
+    #[test]
+    fn snapshot_fails_when_context_media_cannot_be_committed() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let mut file = ResourcesFile::default();
+        let ura = seed_camera(&mut file, "h-cam-storage-failure");
+        resources::save(&file).unwrap();
+        std::fs::create_dir_all(crate::daemon::persistence::context_store::context_dir()).unwrap();
+        std::fs::write(
+            crate::daemon::persistence::context_store::captures_dir(),
+            b"not a directory",
+        )
+        .unwrap();
+
+        let mut reg = executable_catalog();
+        register_synthetic(&mut reg);
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            ABILITY_CAMERA_SNAPSHOT,
+            json!({}),
+            CallMode::Rpc,
+            ura,
+        );
+
+        let error = Arc::new(reg)
+            .execute_rpc(target)
+            .expect_err("snapshot cannot report success without durable Context media");
+        assert!(error.to_string().contains("Not a directory"), "{error:#}");
     }
 
     #[test]
@@ -1441,17 +1468,15 @@ mod tests {
         let ura = seed_camera(&mut file, "h-cam-preview");
         resources::save(&file).unwrap();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_CAMERA_SUBSCRIBE.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Stream,
-            subject: Some(ura),
-            causal_context: None,
-        };
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            ABILITY_CAMERA_SUBSCRIBE,
+            json!({}),
+            CallMode::Stream,
+            ura,
+        );
         let source = dispatcher.execute_stream(target).unwrap();
         let (snapshot, mut rx) = match source {
             StreamSource::Live(rx) => (Vec::new(), rx),
@@ -1480,31 +1505,27 @@ mod tests {
         let ura = seed_camera(&mut file, "h-cam-recording");
         resources::save(&file).unwrap();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let start = dispatcher
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: ABILITY_CAMERA_RECORD_START.to_string(),
-                normalized_args: json!({"fps": 5, "max_duration_ms": 5000}),
-                call_mode: CallMode::Rpc,
-                subject: Some(ura.clone()),
-                causal_context: None,
-            })
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+                ABILITY_CAMERA_RECORD_START,
+                json!({"fps": 5, "max_duration_ms": 5000}),
+                CallMode::Rpc,
+                ura.clone(),
+            ))
             .unwrap();
         let session_id = start["recording_session_id"].as_str().unwrap().to_string();
         assert_eq!(start["state"], "recording");
 
         let stop = dispatcher
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: ABILITY_CAMERA_RECORD_STOP.to_string(),
-                normalized_args: json!({"recording_session_id": session_id}),
-                call_mode: CallMode::Rpc,
-                subject: Some(ura),
-                causal_context: None,
-            })
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+                ABILITY_CAMERA_RECORD_STOP,
+                json!({"recording_session_id": session_id}),
+                CallMode::Rpc,
+                ura,
+            ))
             .unwrap();
         assert_eq!(stop["state"], "stopped");
         assert_eq!(stop["content_type"], recording_content_type());
@@ -1531,31 +1552,27 @@ mod tests {
         let ura = seed_camera(&mut file, "h-cam-recording-duplicate");
         resources::save(&file).unwrap();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
         let start_args = json!({"fps": 5, "max_duration_ms": 5000, "max_bytes": 1048576});
         let first = dispatcher
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: ABILITY_CAMERA_RECORD_START.to_string(),
-                normalized_args: start_args.clone(),
-                call_mode: CallMode::Rpc,
-                subject: Some(ura.clone()),
-                causal_context: None,
-            })
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+                ABILITY_CAMERA_RECORD_START,
+                start_args.clone(),
+                CallMode::Rpc,
+                ura.clone(),
+            ))
             .unwrap();
         let session_id = first["recording_session_id"].as_str().unwrap().to_string();
 
         let duplicate_err = dispatcher
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: ABILITY_CAMERA_RECORD_START.to_string(),
-                normalized_args: start_args,
-                call_mode: CallMode::Rpc,
-                subject: Some(ura.clone()),
-                causal_context: None,
-            })
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+                ABILITY_CAMERA_RECORD_START,
+                start_args,
+                CallMode::Rpc,
+                ura.clone(),
+            ))
             .unwrap_err()
             .to_string();
         assert!(
@@ -1575,14 +1592,12 @@ mod tests {
         }
 
         let stop = dispatcher
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: ABILITY_CAMERA_RECORD_STOP.to_string(),
-                normalized_args: json!({"recording_session_id": session_id}),
-                call_mode: CallMode::Rpc,
-                subject: Some(ura),
-                causal_context: None,
-            })
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+                ABILITY_CAMERA_RECORD_STOP,
+                json!({"recording_session_id": session_id}),
+                CallMode::Rpc,
+                ura,
+            ))
             .unwrap();
         assert_eq!(stop["state"], "stopped");
         clear_recording_sessions_for_test();
@@ -1591,17 +1606,15 @@ mod tests {
     #[test]
     fn camera_subscribe_stream_preview_errors_name_subscribe_ability() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_CAMERA_SUBSCRIBE.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Stream,
-            subject: None,
-            causal_context: None,
-        };
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                ABILITY_CAMERA_SUBSCRIBE,
+                json!({}),
+                CallMode::Stream,
+            );
         let err = dispatcher.execute_stream(target).unwrap_err().to_string();
 
         assert!(
@@ -1615,24 +1628,21 @@ mod tests {
     }
 
     /// INV-SUBJECT-ENVELOPE positive half: invocation with no
-    /// envelope subject (`subject: None`) MUST fail with
-    /// reason="subject_required". Without this the handler would
+    /// envelope subject MUST fail with reason="subject_required". Without this the handler would
     /// either crash or silently capture from "the first camera",
     /// either of which makes auditing a lie.
     #[test]
     fn handler_rejects_missing_subject_with_subject_required_reason() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_CAMERA_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: None, // no envelope subject
-            causal_context: None,
-        };
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                ABILITY_CAMERA_SNAPSHOT,
+                json!({}),
+                CallMode::Rpc,
+            );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(
             err.to_string().contains(REASON_SUBJECT_REQUIRED),
@@ -1650,17 +1660,15 @@ mod tests {
         // Save an empty resources.json so load() returns Default
         // rather than picking up some prior test's state.
         resources::save(&ResourcesFile::default()).unwrap();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_CAMERA_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: Some("easynet:///r/acme/resource/01NEVER-EXISTED".into()),
-            causal_context: None,
-        };
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            ABILITY_CAMERA_SNAPSHOT,
+            json!({}),
+            CallMode::Rpc,
+            "easynet:///r/acme/resource/01NEVER-EXISTED",
+        );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(
             err.to_string().contains(REASON_RESOURCE_NOT_FOUND),
@@ -1680,27 +1688,26 @@ mod tests {
             &mut file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 kind: ResourceType::Mic, // not a camera
                 binding: ResourceBinding::LocalDevice,
                 hardware_id: "h-mic-not-camera",
                 display_name: "Not A Camera",
                 metadata: json!({}),
             },
-        );
+        )
+        .expect("seed wrong-type mic resource");
         resources::save(&file).unwrap();
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_CAMERA_SNAPSHOT.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Rpc,
-            subject: Some(mic_ura),
-            causal_context: None,
-        };
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            ABILITY_CAMERA_SNAPSHOT,
+            json!({}),
+            CallMode::Rpc,
+            mic_ura,
+        );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(
             err.to_string().contains(REASON_RESOURCE_TYPE_MISMATCH),
@@ -1716,17 +1723,15 @@ mod tests {
     #[test]
     fn handler_rejects_subject_in_args_even_on_envelope_path() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_CAMERA_SNAPSHOT.to_string(),
-            normalized_args: json!({"subject": "easynet:///r/x/resource/y"}),
-            call_mode: CallMode::Rpc,
-            subject: Some("easynet:///r/acme/resource/01CAM".into()),
-            causal_context: None,
-        };
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            ABILITY_CAMERA_SNAPSHOT,
+            json!({"subject": "easynet:///r/x/resource/y"}),
+            CallMode::Rpc,
+            "easynet:///r/acme/resource/01CAM",
+        );
         let err = dispatcher.execute_rpc(target).unwrap_err();
         assert!(
             err.to_string().contains(REASON_SUBJECT_IN_ARGS),

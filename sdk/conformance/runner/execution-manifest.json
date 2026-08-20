@@ -1,0 +1,1525 @@
+{
+  "schema_version": 1,
+  "bindings": [
+    {
+      "language": "c_abi",
+      "case_id": "bidi/close_send_not_cancel",
+      "selector": "invocation_bidi_send_eof_also_half_closes_local_send",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "bidi/frame0_required",
+      "selector": "invocation_bidi_open_rejects_missing_frame_zero_before_session_entry",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "runtime_host/permission_denied",
+      "selector": "daemon_status_error_records_typed_last_error",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "error/retry_hint",
+      "selector": "last_error_json_projects_coded_tls_error",
+      "evidence": [
+        "src/ffi/errors/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "error/typed_json",
+      "selector": "error_json_projects_abi_codes_to_canonical_runtime_codes",
+      "evidence": [
+        "src/ffi/errors/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "health/api_vs_runtime",
+      "selector": "runtime_health_json_uses_shared_health_dto_shape",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "invocation/builder_handle_state",
+      "selector": "invocation_builder_inspect_and_build_preserve_complete_tuple_state",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "invocation/canonical_material",
+      "selector": "invocation_prepare_and_sign_prepared_allocate_state_handles",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "invocation/complete_tuple",
+      "selector": "parse_invocation_json_requires_complete_axiom_fields",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "invocation/provider_managed_signing_boundary",
+      "selector": "invocation_sign_prepared_local_uses_default_provider_key_inventory",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "invocation/prepared_not_submittable",
+      "selector": "invocation_prepare_material_only_does_not_allocate_a_prepared_handle",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "invocation/presigned_submit",
+      "selector": "invocation_handle_submit_rejects_invalid_client_before_consuming_signed",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "invocation/submitted_handle_authority",
+      "selector": "invocation_handle_provider_authority_conformance",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "invocation/terminal_monotonicity",
+      "selector": "invocation_handle_cancel_is_request_then_canonical_terminal",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "runtime/control_only",
+      "selector": "init_returns_daemon_down_when_control_json_missing",
+      "evidence": [
+        "src/ffi/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "runtime_core/feature_discovery",
+      "selector": "feature_catalog_matches_shared_conformance_fixture",
+      "evidence": [
+        "src/ffi/features/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "stream/order_terminal",
+      "selector": "stream_chunk_json_decodes_json_payload",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "version/abi_compatible",
+      "selector": "abi_version_reports_constant",
+      "evidence": [
+        "src/ffi/mod.rs"
+      ]
+    },
+    {
+      "language": "c_abi",
+      "case_id": "version/abi_incompatible",
+      "selector": "abi_version_is_nonzero_to_distinguish_from_uninitialized_memory",
+      "evidence": [
+        "src/ffi/mod.rs"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "ability/descriptor_projection",
+      "selector": "TestRuntimeAbilityDescriptorProviderListsRuntimeDescriptors",
+      "evidence": [
+        "sdk/go/ability_descriptor_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "access_control/provider",
+      "selector": "TestRuntimeAccessControlProviderGrantsWithCanonicalPrincipalURAs",
+      "evidence": [
+        "sdk/go/access_control_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "authority/metadata",
+      "selector": "TestInvocationBuilderAttachesOneAuthorityMetadata",
+      "evidence": [
+        "sdk/go/authority_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "authority/mutual_exclusion",
+      "selector": "TestInvocationBuilderRejectsAmbiguousAuthorityMetadata",
+      "evidence": [
+        "sdk/go/authority_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "bidi/cancel_request",
+      "selector": "TestCABIRuntimeProviderRequestsBidiCancelBeforeCanonicalTerminal",
+      "evidence": [
+        "sdk/go/cabi_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "bidi/close_send_not_cancel",
+      "selector": "TestCABIRuntimeProviderKeepsCloseSendDistinctFromCancel",
+      "evidence": [
+        "sdk/go/cabi_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "bidi/deadline_owner",
+      "selector": "TestCABIRuntimeProviderOwnsBidiReceiveDeadline",
+      "evidence": [
+        "sdk/go/cabi_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "bidi/dispatch_provider",
+      "selector": "TestCABIRuntimeProviderDispatchesBidiBeforeTerminal",
+      "evidence": [
+        "sdk/go/cabi_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "bidi/frame0_required",
+      "selector": "TestCABIRuntimeProviderRejectsMissingBidiFrameZero",
+      "evidence": [
+        "sdk/go/cabi_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime_host/permission_denied",
+      "selector": "TestErrorClassForCodeProjectsStableClasses",
+      "evidence": [
+        "sdk/go/errors_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "directory/resolution_provider",
+      "selector": "TestDirectoryClientDelegatesResolveToInjectedProvider",
+      "evidence": [
+        "sdk/go/directory_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "environment/process_root",
+      "selector": "TestSdkEnvironmentOwnsProcessRootAndConnectsRuntime",
+      "evidence": [
+        "sdk/go/environment_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "error/profile_source_refs",
+      "selector": "TestSDKErrorProfileAndSourceRefAccessors",
+      "evidence": [
+        "sdk/go/errors_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "error/retry_hint",
+      "selector": "TestDecodeTransportErrorJSONPreservesRuntimeRefsAndRetryability",
+      "evidence": [
+        "sdk/go/errors_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "error/typed_json",
+      "selector": "TestDecodeTransportErrorJSONDecodesFixtureShape",
+      "evidence": [
+        "sdk/go/errors_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "health/api_vs_runtime",
+      "selector": "TestRuntimeHealthDecodesReadyFixture",
+      "evidence": [
+        "sdk/go/health_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "invocation/builder_handle_state",
+      "selector": "TestInvocationBuilderInspectDoesNotConsumeAndBuildConsumes",
+      "evidence": [
+        "sdk/go/invocation_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "invocation/canonical_material",
+      "selector": "TestDescriptorBoundInvocationBytesUseStableAxonEncoding",
+      "evidence": [
+        "sdk/go/invocation_canonical_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "invocation/complete_tuple",
+      "selector": "TestInvocationBuilderBuildsCompleteTuple",
+      "evidence": [
+        "sdk/go/invocation_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "invocation/provider_managed_signing_boundary",
+      "selector": "TestPreparedInvocationDecodesSigningMaterialFixture",
+      "evidence": [
+        "sdk/go/signing_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "invocation/prepared_not_submittable",
+      "selector": "TestPreparedInvocationRejectsSubmitReadyPreparedPayload",
+      "evidence": [
+        "sdk/go/signing_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "invocation/presigned_submit",
+      "selector": "TestRuntimeClientSubmitSignedPreservesSignature",
+      "evidence": [
+        "sdk/go/runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "invocation/receipt_proof_required",
+      "selector": "TestRuntimeReceiptProofFactsRequired",
+      "evidence": [
+        "sdk/go/runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "invocation/terminal_monotonicity",
+      "selector": "TestStreamHandleRejectsDuplicateTerminal",
+      "evidence": [
+        "sdk/go/stream_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "invocation/terminal_receipt_facts",
+      "selector": "TestInvocationResultSeparatesAdmissionAndTerminalReceipts",
+      "evidence": [
+        "sdk/go/runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "managed_signing/provider_lifecycle",
+      "selector": "TestManagedSigningClientConformsToRuntimeKeyServiceProtocol",
+      "evidence": [
+        "sdk/go/managed_signing_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "principal/lifecycle_provider",
+      "selector": "TestRuntimePrincipalProviderLowersLifecycleTransitions",
+      "evidence": [
+        "sdk/go/principal_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "principal/lifecycle_seam",
+      "selector": "TestPrincipalLifecycleContractIsComplete",
+      "evidence": [
+        "sdk/go/principal_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "receipt/history_provider",
+      "selector": "TestRuntimeReceiptProviderUsesCanonicalHistoryAndTraceAbilities",
+      "evidence": [
+        "sdk/go/receipt_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime/ability_child_dispatch",
+      "selector": "TestRuntimeAbilityChildContextDispatchesWithParentReceiptCausality",
+      "evidence": [
+        "sdk/go/runtime_ability_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime/ability_deadline_owner",
+      "selector": "TestRuntimeAbilityClientDeadlineIsProviderOwned",
+      "evidence": [
+        "sdk/go/runtime_ability_direct_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime/ability_lowering",
+      "selector": "TestRuntimeAbilityClientBuildsCompleteCanonicalDraft",
+      "evidence": [
+        "sdk/go/runtime_ability_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime/ability_provider_lifecycle",
+      "selector": "TestRuntimeAbilityClientDispatchesProviderLifecycleSurfaces",
+      "evidence": [
+        "sdk/go/runtime_ability_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime/ability_restart_recover",
+      "selector": "TestRuntimeAbilityClientRestartRecoverDelegatesToProvider",
+      "evidence": [
+        "sdk/go/runtime_ability_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime/ability_start_provider",
+      "selector": "TestNativeRuntimeHandleProvidesRuntimeAbilityFacade",
+      "evidence": [
+        "sdk/go/native_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime/administration_seam",
+      "selector": "TestRuntimeAdminReadinessComposesLifecycleAndHealth",
+      "evidence": [
+        "sdk/go/runtime_admin_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime/control_only",
+      "selector": "TestRuntimeHealthExposesControlOnlyState",
+      "evidence": [
+        "sdk/go/health_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime/deadline_owner",
+      "selector": "TestDirectRuntimeInvokeDeadlineIsTypedTimeout",
+      "evidence": [
+        "sdk/go/direct_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime/events_seam",
+      "selector": "TestRuntimeEventClientReadsBoundedTypedPage",
+      "evidence": [
+        "sdk/go/runtime_events_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime/restart_recovery",
+      "selector": "TestRuntimeClientRestartRecoveryProviderContract",
+      "evidence": [
+        "sdk/go/runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime_core/canonical_addressing_provider",
+      "selector": "TestCanonicalAddressingBuildsDescriptorAndSubjectWithoutIdentityProfile",
+      "evidence": [
+        "sdk/go/addressing_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "runtime_core/feature_discovery",
+      "selector": "TestFeatureDiscoveryDecodesRuntimeCoreFacts",
+      "evidence": [
+        "sdk/go/client_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "sdk/product_neutrality",
+      "selector": "TestConformanceSDKProductNeutrality",
+      "evidence": [
+        "sdk/go/conformance_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "sdk/seven_language_capability_matrix",
+      "selector": "TestConformanceSevenLanguageCapabilityMatrix",
+      "evidence": [
+        "sdk/go/conformance_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "stream/backpressure_bound",
+      "selector": "TestCABIRuntimeProviderEnforcesCallbackBackpressure",
+      "evidence": [
+        "sdk/go/cabi_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "stream/cancel_request",
+      "selector": "TestCABIRuntimeProviderRequestsStreamCancelBeforeCanonicalTerminal",
+      "evidence": [
+        "sdk/go/cabi_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "stream/deadline_owner",
+      "selector": "TestCABIRuntimeProviderOwnsStreamReceiveDeadline",
+      "evidence": [
+        "sdk/go/cabi_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "stream/dispatch_provider",
+      "selector": "TestCABIRuntimeProviderDispatchesStreamBeforeTerminal",
+      "evidence": [
+        "sdk/go/cabi_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "stream/order_terminal",
+      "selector": "TestCABIRuntimeProviderPreservesStreamOrderAndSingleTerminal",
+      "evidence": [
+        "sdk/go/cabi_runtime_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "version/abi_compatible",
+      "selector": "TestRequireABIAcceptsExactVersion",
+      "evidence": [
+        "sdk/go/client_test.go"
+      ]
+    },
+    {
+      "language": "go",
+      "case_id": "version/abi_incompatible",
+      "selector": "TestRequireABIReturnsTypedVersionMismatch",
+      "evidence": [
+        "sdk/go/client_test.go"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "authority/mutual_exclusion",
+      "selector": "authorityMetadataIsTypedAndMutuallyExclusive",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "bidi/close_send_not_cancel",
+      "selector": "streamAndBidiLifecyclesAreBounded",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "bidi/frame0_required",
+      "selector": "bidiFrame0IsRequiredBeforeRuntimeSessionEntry",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "error/retry_hint",
+      "selector": "retryHintsPreserveRetryability",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "error/typed_json",
+      "selector": "typedErrorsPreserveStableCategories",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "health/api_vs_runtime",
+      "selector": "healthKeepsLivenessSeparateFromReadiness",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "invocation/canonical_material",
+      "selector": "canonicalSigningMaterialComesFromPrepare",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "invocation/complete_tuple",
+      "selector": "completeTupleRejectsMissingCaller",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "invocation/prepared_not_submittable",
+      "selector": "preparedInvocationCannotBeSubmitted",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "invocation/presigned_submit",
+      "selector": "invocationPrepareSignSubmitPreservesTheCompleteTuple",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "invocation/terminal_receipt_facts",
+      "selector": "invocationResultUsesTerminalReceipt",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "runtime_core/feature_discovery",
+      "selector": "discoveryAndLifecycleAreExplicit",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "stream/backpressure_bound",
+      "selector": "streamAndBidiBackpressureAreBounded",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "stream/order_terminal",
+      "selector": "streamOrderAndTerminalArePreserved",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "version/abi_compatible",
+      "selector": "abiCompatibleAcceptsExactVersion",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "java",
+      "case_id": "version/abi_incompatible",
+      "selector": "abiIncompatibleRejectsMismatch",
+      "evidence": [
+        "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "authority/mutual_exclusion",
+      "selector": "conformance authority metadata rejects ambiguity",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "bidi/close_send_not_cancel",
+      "selector": "conformance bidi close send does not cancel receive",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "bidi/frame0_required",
+      "selector": "conformance bidi frame0 is required before runtime session entry",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "error/profile_source_refs",
+      "selector": "conformance profile source reference is explicit",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "error/retry_hint",
+      "selector": "conformance retry hint controls retryability",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "error/typed_json",
+      "selector": "conformance typed error preserves stable JSON fields",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "health/api_vs_runtime",
+      "selector": "conformance health separates liveness and readiness",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "invocation/builder_handle_state",
+      "selector": "conformance builder handle is consumed by build",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "invocation/canonical_material",
+      "selector": "conformance prepare exposes delegated canonical material",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "invocation/complete_tuple",
+      "selector": "conformance complete tuple rejects a missing field",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "invocation/prepared_not_submittable",
+      "selector": "conformance prepared invocation cannot be submitted",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "invocation/presigned_submit",
+      "selector": "conformance presigned submit preserves caller signature",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "invocation/terminal_monotonicity",
+      "selector": "conformance terminal handle state is monotonic",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "invocation/terminal_receipt_facts",
+      "selector": "conformance terminal receipt facts are explicit",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "runtime_core/feature_discovery",
+      "selector": "conformance feature discovery projects runtime facts",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "stream/backpressure_bound",
+      "selector": "conformance stream and bidi backpressure are bounded",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "stream/order_terminal",
+      "selector": "conformance stream preserves order and terminal",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "version/abi_compatible",
+      "selector": "conformance version compatible accepts exact ABI",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "node",
+      "case_id": "version/abi_incompatible",
+      "selector": "conformance version incompatible rejects mismatched ABI",
+      "evidence": [
+        "sdk/node/test/conformance-cases.test.mjs"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "ability/descriptor_projection",
+      "selector": "test_runtime_ability_descriptor_provider_lists_runtime_descriptors",
+      "evidence": [
+        "sdk/python/tests/test_ability_descriptor.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "access_control/provider",
+      "selector": "test_runtime_provider_grants_with_canonical_principal_uras",
+      "evidence": [
+        "sdk/python/tests/test_access_control.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "authority/metadata",
+      "selector": "test_invocation_builder_attaches_one_authority_metadata",
+      "evidence": [
+        "sdk/python/tests/test_authority.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "authority/mutual_exclusion",
+      "selector": "test_invocation_builder_rejects_ambiguous_authority_metadata",
+      "evidence": [
+        "sdk/python/tests/test_authority.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "bidi/cancel_request",
+      "selector": "test_cabi_provider_requests_bidi_cancel_before_canonical_terminal",
+      "evidence": [
+        "sdk/python/tests/test_cabi.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "bidi/close_send_not_cancel",
+      "selector": "test_cabi_provider_keeps_close_send_distinct_from_cancel",
+      "evidence": [
+        "sdk/python/tests/test_cabi.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "bidi/deadline_owner",
+      "selector": "test_cabi_provider_owns_bidi_receive_deadline",
+      "evidence": [
+        "sdk/python/tests/test_cabi.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "bidi/dispatch_provider",
+      "selector": "test_cabi_provider_dispatches_bidi_before_terminal",
+      "evidence": [
+        "sdk/python/tests/test_cabi.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "bidi/frame0_required",
+      "selector": "test_cabi_provider_rejects_missing_bidi_frame_zero",
+      "evidence": [
+        "sdk/python/tests/test_cabi.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime_host/permission_denied",
+      "selector": "test_error_class_for_code_projects_stable_classes",
+      "evidence": [
+        "sdk/python/tests/test_errors.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "directory/resolution_provider",
+      "selector": "test_directory_client_delegates_resolve_to_injected_provider",
+      "evidence": [
+        "sdk/python/tests/test_directory.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "environment/process_root",
+      "selector": "test_native_runtime_owns_runtime_and_health",
+      "evidence": [
+        "sdk/python/tests/test_environment.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "error/profile_source_refs",
+      "selector": "test_sdk_error_profile_and_source_ref_accessors",
+      "evidence": [
+        "sdk/python/tests/test_errors.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "error/retry_hint",
+      "selector": "test_from_json_preserves_runtime_refs_and_retryability",
+      "evidence": [
+        "sdk/python/tests/test_errors.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "error/typed_json",
+      "selector": "test_from_json_decodes_fixture_shape",
+      "evidence": [
+        "sdk/python/tests/test_errors.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "health/api_vs_runtime",
+      "selector": "test_runtime_health_decodes_ready_fixture",
+      "evidence": [
+        "sdk/python/tests/test_health.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "invocation/builder_handle_state",
+      "selector": "test_builder_inspect_does_not_consume_and_build_consumes",
+      "evidence": [
+        "sdk/python/tests/test_invocation.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "invocation/canonical_material",
+      "selector": "test_prepared_invocation_decodes_signing_material_fixture",
+      "evidence": [
+        "sdk/python/tests/test_signing.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "invocation/complete_tuple",
+      "selector": "test_builder_builds_complete_tuple",
+      "evidence": [
+        "sdk/python/tests/test_invocation.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "invocation/provider_managed_signing_boundary",
+      "selector": "test_signer_provider_signs_with_daemon_authorized_handle",
+      "evidence": [
+        "sdk/python/tests/test_signing.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "invocation/prepared_not_submittable",
+      "selector": "test_prepared_invocation_rejects_submit_ready_payload",
+      "evidence": [
+        "sdk/python/tests/test_signing.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "invocation/presigned_submit",
+      "selector": "test_submit_signed_preserves_signature",
+      "evidence": [
+        "sdk/python/tests/test_runtime.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "invocation/receipt_proof_required",
+      "selector": "test_runtime_receipt_proof_facts_required",
+      "evidence": [
+        "sdk/python/tests/test_runtime.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "invocation/terminal_monotonicity",
+      "selector": "test_result_rejects_inconsistent_failure",
+      "evidence": [
+        "sdk/python/tests/test_runtime.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "invocation/terminal_receipt_facts",
+      "selector": "test_invocation_result_separates_admission_and_terminal_receipts",
+      "evidence": [
+        "sdk/python/tests/test_runtime.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "managed_signing/provider_lifecycle",
+      "selector": "test_client_conforms_to_runtime_key_service_protocol",
+      "evidence": [
+        "sdk/python/tests/test_managed_signing.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "principal/lifecycle_provider",
+      "selector": "test_runtime_principal_provider_lowers_lifecycle_transitions",
+      "evidence": [
+        "sdk/python/tests/test_principal.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "principal/lifecycle_seam",
+      "selector": "test_principal_state_vocabulary_matches_go_contract",
+      "evidence": [
+        "sdk/python/tests/test_principal.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "receipt/history_provider",
+      "selector": "test_runtime_receipt_list_projects_typed_query_and_axon_record",
+      "evidence": [
+        "sdk/python/tests/test_receipt.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/ability_child_dispatch",
+      "selector": "test_child_context_anchors_child_invocation_to_parent_receipt",
+      "evidence": [
+        "sdk/python/tests/test_ability_invocation.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/ability_deadline_owner",
+      "selector": "test_runtime_ability_deadline_is_provider_owned",
+      "evidence": [
+        "sdk/python/tests/test_direct_runtime.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/ability_lowering",
+      "selector": "test_runtime_ability_builds_complete_canonical_draft",
+      "evidence": [
+        "sdk/python/tests/test_runtime_ability.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/ability_provider_lifecycle",
+      "selector": "test_provider_lifecycle_surfaces_dispatch_stream_bidi_cancel_and_receipts",
+      "evidence": [
+        "sdk/python/tests/test_ability_invocation.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/ability_restart_recover",
+      "selector": "test_runtime_ability_delegates_restart_recovery",
+      "evidence": [
+        "sdk/python/tests/test_runtime_ability.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/ability_start_provider",
+      "selector": "test_native_runtime_handle_provides_runtime_ability_facade",
+      "evidence": [
+        "sdk/python/tests/test_environment.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/administration_seam",
+      "selector": "test_runtime_admin_readiness_composes_lifecycle_and_health",
+      "evidence": [
+        "sdk/python/tests/test_runtime_admin.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/control_only",
+      "selector": "test_reads_discovery_and_negotiates_v1",
+      "evidence": [
+        "sdk/python/tests/test_control_ipc.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/deadline_owner",
+      "selector": "test_unary_pool_retires_timed_out_owned_transport",
+      "evidence": [
+        "sdk/python/tests/test_transport.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/events_seam",
+      "selector": "test_runtime_event_client_reads_bounded_typed_page",
+      "evidence": [
+        "sdk/python/tests/test_runtime_events.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime/restart_recovery",
+      "selector": "test_recover_delegates_to_provider",
+      "evidence": [
+        "sdk/python/tests/test_runtime.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime_core/canonical_addressing_provider",
+      "selector": "test_environment_provider_builds_descriptor_and_subject",
+      "evidence": [
+        "sdk/python/tests/test_axon_addressing.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "runtime_core/feature_discovery",
+      "selector": "test_invoke_returns_typed_result",
+      "evidence": [
+        "sdk/python/tests/test_runtime.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "sdk/product_neutrality",
+      "selector": "test_sdk_product_neutrality_gate_scans_all_canonical_roots",
+      "evidence": [
+        "sdk/python/tests/test_conformance_gates.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "sdk/seven_language_capability_matrix",
+      "selector": "test_seven_language_capability_matrix_self_test",
+      "evidence": [
+        "sdk/python/tests/test_conformance_gates.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "stream/backpressure_bound",
+      "selector": "test_cabi_provider_enforces_callback_backpressure",
+      "evidence": [
+        "sdk/python/tests/test_cabi.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "stream/cancel_request",
+      "selector": "test_cabi_provider_requests_stream_cancel_before_canonical_terminal",
+      "evidence": [
+        "sdk/python/tests/test_cabi.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "stream/deadline_owner",
+      "selector": "test_cabi_provider_owns_stream_receive_deadline",
+      "evidence": [
+        "sdk/python/tests/test_cabi.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "stream/dispatch_provider",
+      "selector": "test_cabi_provider_dispatches_stream_before_terminal",
+      "evidence": [
+        "sdk/python/tests/test_cabi.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "stream/order_terminal",
+      "selector": "test_cabi_provider_preserves_stream_order_and_single_terminal",
+      "evidence": [
+        "sdk/python/tests/test_cabi.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "version/abi_compatible",
+      "selector": "test_feature_discovery_decodes_runtime_core_facts",
+      "evidence": [
+        "sdk/python/tests/test_client.py"
+      ]
+    },
+    {
+      "language": "python",
+      "case_id": "version/abi_incompatible",
+      "selector": "test_require_abi_returns_typed_version_mismatch",
+      "evidence": [
+        "sdk/python/tests/test_client.py"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "bidi/close_send_not_cancel",
+      "selector": "invocation_bidi_send_eof_also_half_closes_local_send",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "bidi/frame0_required",
+      "selector": "rust_bidi_open_rejects_missing_frame_zero_before_session_entry",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "runtime_host/permission_denied",
+      "selector": "quota_meters_user_abilities_but_exempts_control_plane",
+      "evidence": [
+        "src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "error/retry_hint",
+      "selector": "last_error_json_projects_coded_tls_error",
+      "evidence": [
+        "src/ffi/errors/mod.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "error/typed_json",
+      "selector": "error_json_projects_abi_codes_to_canonical_runtime_codes",
+      "evidence": [
+        "src/ffi/errors/mod.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "health/api_vs_runtime",
+      "selector": "runtime_health_json_uses_shared_health_dto_shape",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "invocation/builder_handle_state",
+      "selector": "invocation_builder_inspect_and_build_preserve_complete_tuple_state",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "invocation/canonical_material",
+      "selector": "sdk_prepare_projects_descriptor_bound_signing_material",
+      "evidence": [
+        "src/daemon/invocation/dispatch/request.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "invocation/complete_tuple",
+      "selector": "parse_invocation_json_requires_complete_axiom_fields",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "invocation/provider_managed_signing_boundary",
+      "selector": "sdk_provider_managed_signer_uses_provider_inventory",
+      "evidence": [
+        "src/daemon/invocation/dispatch/request.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "invocation/prepared_not_submittable",
+      "selector": "invocation_prepare_material_only_does_not_allocate_a_prepared_handle",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "invocation/presigned_submit",
+      "selector": "sdk_signed_invocation_preserves_caller_signature",
+      "evidence": [
+        "src/daemon/invocation/dispatch/request.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "invocation/terminal_monotonicity",
+      "selector": "invocation_handle_cancel_is_request_then_canonical_terminal",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "runtime/control_only",
+      "selector": "init_returns_daemon_down_when_control_json_missing",
+      "evidence": [
+        "src/ffi/mod.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "runtime_core/feature_discovery",
+      "selector": "feature_catalog_matches_shared_conformance_fixture",
+      "evidence": [
+        "src/ffi/features/mod.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "stream/order_terminal",
+      "selector": "stream_chunk_json_decodes_json_payload",
+      "evidence": [
+        "src/ffi/invocation/mod.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "version/abi_compatible",
+      "selector": "abi_version_reports_constant",
+      "evidence": [
+        "src/ffi/mod.rs"
+      ]
+    },
+    {
+      "language": "rust",
+      "case_id": "version/abi_incompatible",
+      "selector": "abi_version_is_nonzero_to_distinguish_from_uninitialized_memory",
+      "evidence": [
+        "src/ffi/mod.rs"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "authority/mutual_exclusion",
+      "selector": "testAuthorityMetadataIsTypedAndMutuallyExclusive",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "bidi/close_send_not_cancel",
+      "selector": "testStreamAndBidiStateMachinesAreBounded",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "bidi/frame0_required",
+      "selector": "testBidiFrame0IsRequiredBeforeRuntimeSessionEntry",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "error/retry_hint",
+      "selector": "testRetryHintsPreserveRetryability",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "error/typed_json",
+      "selector": "testTypedErrorsPreserveStableCategories",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "health/api_vs_runtime",
+      "selector": "testHealthSeparatesLivenessFromReadiness",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "invocation/canonical_material",
+      "selector": "testCanonicalSigningMaterialComesFromPrepare",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "invocation/complete_tuple",
+      "selector": "testCompleteTupleRejectsMissingCaller",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "invocation/prepared_not_submittable",
+      "selector": "testPreparedInvocationCannotBeSubmitted",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "invocation/presigned_submit",
+      "selector": "testInvocationPrepareSignSubmitPreservesCompleteTuple",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "invocation/terminal_receipt_facts",
+      "selector": "testInvocationResultUsesTerminalReceipt",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "runtime_core/feature_discovery",
+      "selector": "testDiscoveryAndLifecycleAreExplicit",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "stream/backpressure_bound",
+      "selector": "testStreamAndBidiBackpressureAreBounded",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "stream/order_terminal",
+      "selector": "testStreamOrderAndTerminalArePreserved",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "version/abi_compatible",
+      "selector": "testABICompatibleAcceptsExactVersion",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    },
+    {
+      "language": "swift",
+      "case_id": "version/abi_incompatible",
+      "selector": "testABIIncompatibleRejectsMismatch",
+      "evidence": [
+        "sdk/swift/Tests/RuntimeSDKTests/RuntimeCoreSeamTests.swift"
+      ]
+    }
+  ]
+}

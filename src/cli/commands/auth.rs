@@ -34,27 +34,31 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use clap::Args;
-use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
-use crate::cli::commands::ability_catalog_row::AbilityCatalogueRow;
+use crate::cli::presentation::identity::runtime_user_binding_display;
 use crate::core::ura;
-use crate::daemon::identity::self_identity::{KeyringClient, SelfIdentity, SelfIdentityError};
 use crate::daemon::persistence::config::{
     self, atomic_write_with_permissions, state_dir, WritePermissions,
 };
 use crate::support::platform::output;
 
-const DEFAULT_HUB_URL: &str = "http://127.0.0.1:8080";
+pub const DEFAULT_HUB_URL: &str = "http://127.0.0.1:8080";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Persisted auth session. Lives at `~/.easynet/auth.json` mode 0600.
 /// Every auth-aware CLI command reads this to find the JWT bearer
 /// token + the hub URL it was minted against.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthSession {
     /// JWT access token. Bearer-prefixed when sent.
     pub token: String,
+    /// Refresh token returned by the backend. Keeping the refresh credential
+    /// with the access credential lets every CLI HTTP operation use the same
+    /// authenticated session instead of failing after the access JWT expires.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
     /// Hub HTTP URL the token was minted against. Defaults to
     /// `http://127.0.0.1:8080` when login is run with no `--hub`.
     pub hub_url: String,
@@ -63,17 +67,36 @@ pub struct AuthSession {
     pub email: String,
     /// User UUID from the JWT. Sourced from `/auth/login`'s
     /// `user.id` field; used by `whoami`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user_id: Option<String>,
+    pub user_id: String,
     /// Display nickname returned by the backend.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub nickname: Option<String>,
     /// Stable username slug used in canonical user/agent URAs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
+    pub username: String,
 }
 
-fn auth_session_path() -> PathBuf {
+impl AuthSession {
+    fn validated(self) -> anyhow::Result<Self> {
+        validate_non_blank("token", &self.token)?;
+        validate_non_blank("hub_url", &self.hub_url)?;
+        validate_non_blank("email", &self.email)?;
+        validate_non_blank("user_id", &self.user_id)?;
+        if crate::core::identity::is_all_zero_principal_id(&self.user_id) {
+            bail!("auth session carries all-zero user_id — run `easynet login <user>@<realm>`");
+        }
+        validate_non_blank("username", &self.username)?;
+        Ok(self)
+    }
+}
+
+fn validate_non_blank(field: &str, value: &str) -> anyhow::Result<()> {
+    if value.trim().is_empty() {
+        bail!("auth session {field} must not be blank");
+    }
+    Ok(())
+}
+
+pub(crate) fn auth_session_path() -> PathBuf {
     state_dir().join("auth.json")
 }
 
@@ -90,10 +113,17 @@ pub fn load_session() -> anyhow::Result<Option<AuthSession>> {
     };
     let session: AuthSession =
         serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
+    let session = session
+        .validated()
+        .with_context(|| format!("validate {}", path.display()))?;
     Ok(Some(session))
 }
 
-fn save_session(session: &AuthSession) -> anyhow::Result<()> {
+pub(crate) fn save_session(session: &AuthSession) -> anyhow::Result<()> {
+    session
+        .clone()
+        .validated()
+        .context("validate auth session before save")?;
     let dir = state_dir();
     std::fs::create_dir_all(&dir)?;
     let json = serde_json::to_string_pretty(session)? + "\n";
@@ -105,12 +135,79 @@ fn save_session(session: &AuthSession) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn clear_session() -> anyhow::Result<()> {
+pub(crate) fn clear_session() -> anyhow::Result<()> {
     let path = auth_session_path();
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => bail!("remove {}: {e}", path.display()),
+    }
+}
+
+fn authenticated_session() -> anyhow::Result<AuthSession> {
+    let session = load_session()?
+        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
+    if let Ok(credentials) = config::load_credentials() {
+        if let Ok(device_user_id) = credentials.user_id() {
+            let session_user_id = session.user_id.trim();
+            if session_user_id != device_user_id {
+                bail!(
+                    "authenticated user {session_user_id} does not own paired device {} (owner {device_user_id}); log in as the paired owner or rejoin the device",
+                    credentials.node_id
+                );
+            }
+        }
+    }
+    Ok(session)
+}
+
+fn refresh_session(session: &mut AuthSession) -> anyhow::Result<()> {
+    let refresh_token = session
+        .refresh_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+        .ok_or_else(|| anyhow!("access token expired and no refresh token is stored; run 'easynet auth login <email>'"))?;
+    let url = format!("{}/api/v1/auth/refresh", session.hub_url);
+    let auth: RefreshResp =
+        http_post_json(&url, &serde_json::json!({"refresh_token": refresh_token}))?;
+    session.token = auth.token;
+    if auth.refresh_token.is_some() {
+        session.refresh_token = auth.refresh_token;
+    }
+    save_session(session)
+}
+
+fn auth_post_json<T: for<'de> Deserialize<'de>>(
+    path: &str,
+    body: &serde_json::Value,
+    timeout: Duration,
+) -> anyhow::Result<T> {
+    let mut session = authenticated_session()?;
+    let url = format!("{}{}", session.hub_url, path);
+    let mut refreshed = false;
+    loop {
+        let result = ureq::post(&url)
+            .timeout(timeout)
+            .set("Authorization", &format!("Bearer {}", session.token))
+            .set("Content-Type", "application/json")
+            .send_json(body.clone());
+        match result {
+            Ok(response) => return response.into_json().context("parse response JSON"),
+            Err(ureq::Error::Status(401, response)) if !refreshed => {
+                let _ = response.into_string();
+                refresh_session(&mut session)?;
+                refreshed = true;
+            }
+            Err(ureq::Error::Status(401, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                bail!("HTTP 401 from {url}: token expired or invalid: {body}");
+            }
+            Err(ureq::Error::Status(code, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                bail!("HTTP {code} from {url}: {body}");
+            }
+            Err(ureq::Error::Transport(error)) => bail!("transport to {url}: {error}"),
+        }
     }
 }
 
@@ -144,24 +241,66 @@ pub struct LoginArgs {
     pub nickname: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
 struct AuthResp {
     token: String,
     #[serde(default)]
-    user: Option<UserResp>,
+    refresh_token: Option<String>,
+    #[serde(default)]
+    expires_in: Option<i64>,
+    user: UserResp,
 }
 
-#[derive(Deserialize)]
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
 struct UserResp {
+    id: String,
     #[serde(default)]
-    id: Option<String>,
+    account_key: Option<String>,
+    #[serde(default)]
+    ura: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    phone: Option<String>,
     #[serde(default)]
     nickname: Option<String>,
+    username: String,
     #[serde(default)]
-    username: Option<String>,
+    avatar: Option<String>,
+    #[serde(default)]
+    passkey_public_key_count: Option<i64>,
+    #[serde(default)]
+    account_public_keys: Option<Vec<AccountPublicKeyResp>>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct AccountPublicKeyResp {
+    id: String,
+    name: String,
+    credential_id: String,
+    public_key: String,
+    fingerprint: String,
+    backed_up: bool,
+    created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RefreshResp {
+    token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
 }
 
 pub fn run_login(args: LoginArgs) -> anyhow::Result<()> {
+    let session = login_and_save(args)?;
+    render_login_success(&session);
+    Ok(())
+}
+
+pub(crate) fn login_and_save(args: LoginArgs) -> anyhow::Result<AuthSession> {
     let password = match args.password.clone() {
         Some(p) => p,
         None => rpassword::prompt_password("Password: ").context("read password")?,
@@ -188,25 +327,24 @@ pub fn run_login(args: LoginArgs) -> anyhow::Result<()> {
         }
     };
 
-    let user_id = auth.user.as_ref().and_then(|u| u.id.clone());
-    let nickname = auth.user.as_ref().and_then(|u| u.nickname.clone());
-    let username = auth.user.as_ref().and_then(|u| u.username.clone());
     let session = AuthSession {
         token: auth.token,
+        refresh_token: auth.refresh_token,
         hub_url: hub,
         email: args.email,
-        user_id,
-        nickname,
-        username,
+        user_id: auth.user.id,
+        nickname: auth.user.nickname,
+        username: auth.user.username,
     };
     save_session(&session)?;
+    Ok(session)
+}
+
+pub(crate) fn render_login_success(session: &AuthSession) {
     println!("✓ logged in as {}", session.email);
-    if let Some(uid) = &session.user_id {
-        println!("  user_id: {uid}");
-    }
+    println!("  user_id: {}", session.user_id);
     println!("  hub:     {}", session.hub_url);
     println!("  saved to {}", auth_session_path().display());
-    Ok(())
 }
 
 fn post_login(hub: &str, email: &str, password: &str) -> anyhow::Result<AuthResp> {
@@ -294,7 +432,8 @@ pub struct WhoamiArgs;
 /// 3. Neither → tell the user what to do.
 pub fn run_whoami(_args: WhoamiArgs) -> anyhow::Result<()> {
     let session = load_session()?;
-    let creds = config::load_credentials().ok();
+    let creds = config::load_credentials_optional()
+        .context("load device credentials for identity projection")?;
 
     match (session, creds) {
         (Some(s), creds) => {
@@ -307,13 +446,11 @@ pub fn run_whoami(_args: WhoamiArgs) -> anyhow::Result<()> {
             let device_ura = creds
                 .as_ref()
                 .map(|c| ura::device_ura(c.realm_str(), &c.node_id));
-            let mut rows: Vec<(&str, &str)> = vec![("email", s.email.as_str())];
-            if let Some(uid) = s.user_id.as_deref() {
-                rows.push(("user_id", uid));
-            }
-            if let Some(username) = s.username.as_deref() {
-                rows.push(("username", username));
-            }
+            let mut rows: Vec<(&str, &str)> = vec![
+                ("email", s.email.as_str()),
+                ("user_id", s.user_id.as_str()),
+                ("username", s.username.as_str()),
+            ];
             if let Some(nick) = s.nickname.as_deref() {
                 rows.push(("nickname", nick));
             }
@@ -337,13 +474,11 @@ pub fn run_whoami(_args: WhoamiArgs) -> anyhow::Result<()> {
             let realm = c.realm_str().to_string();
             let hub_ura = ura::hub_ura(&realm);
             let device_ura = ura::device_ura(&realm, &c.node_id);
-            let user_ura = c.user_ura().ok();
             println!("(no interactive auth session on this host)");
             println!("paired as a device:");
             let mut rows: Vec<(&str, &str)> = vec![("Hub", hub_ura.as_str())];
-            if let Some(ref u) = user_ura {
-                rows.push(("Current user", u.as_str()));
-            }
+            let user_binding = runtime_user_binding_display(&c);
+            rows.push(("Current user", user_binding.value()));
             rows.push(("Current device", device_ura.as_str()));
             rows.push(("Realm", realm.as_str()));
             output::kv_section_stdout(&rows);
@@ -374,45 +509,32 @@ pub struct PairArgs {
     pub quiet: bool,
 }
 
-#[derive(Deserialize)]
-struct PairingResp {
-    pairing_token: String,
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct PairingResp {
+    pub pairing_token: String,
     #[serde(default)]
-    realm: Option<String>,
+    pub realm: Option<String>,
     #[serde(default)]
-    endpoint: Option<String>,
+    pub endpoint: Option<String>,
     #[serde(default)]
-    node_id: Option<String>,
+    pub node_id: Option<String>,
     #[serde(default)]
-    expires_in: Option<i64>,
+    pub expires_in: Option<i64>,
+}
+
+pub(crate) fn mint_pairing_token() -> anyhow::Result<PairingResp> {
+    auth_post_json(
+        "/api/v1/devices/pairing",
+        &serde_json::json!({}),
+        HTTP_TIMEOUT,
+    )
 }
 
 pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
-    let session = load_session()?
-        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
-
-    let url = format!("{}/api/v1/devices/pairing", session.hub_url);
-    let resp: PairingResp = ureq::post(&url)
-        .timeout(HTTP_TIMEOUT)
-        .set("Authorization", &format!("Bearer {}", session.token))
-        .set("Content-Type", "application/json")
-        .send_json(serde_json::json!({}))
-        .map_err(|e| match e {
-            ureq::Error::Status(code, resp) => {
-                let body = resp.into_string().unwrap_or_default();
-                if code == 401 {
-                    anyhow!(
-                        "HTTP 401 from {url}: token expired or invalid — run \
-                         `easynet auth login <email>` to refresh.\nBody: {body}"
-                    )
-                } else {
-                    anyhow!("HTTP {code} from {url}: {body}")
-                }
-            }
-            ureq::Error::Transport(e) => anyhow!("transport to {url}: {e}"),
-        })?
-        .into_json()
-        .context("parse pairing response")?;
+    let resp = mint_pairing_token()?;
+    let session_hub = load_session()?
+        .map(|session| session.hub_url.trim_end_matches('/').to_string())
+        .filter(|hub| !hub.is_empty());
 
     if args.quiet {
         println!("{}", resp.pairing_token);
@@ -435,7 +557,10 @@ pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
     }
     println!();
     println!("Next:");
-    println!("  easynet device join {}", resp.pairing_token);
+    match session_hub {
+        Some(hub) => println!("  easynet device join {} --hub {}", resp.pairing_token, hub),
+        None => println!("  easynet device join {}", resp.pairing_token),
+    }
     Ok(())
 }
 
@@ -447,33 +572,48 @@ pub fn run_pair(args: PairArgs) -> anyhow::Result<()> {
 //
 // Why not under `easynet device` (the existing group)?
 // `easynet device list` already exists and talks to the LOCAL
-// daemon UDS via `node.list` (device-mode CLI: "what does
-// THIS device see in its hub federation?"). Operator-mode HTTP
+// daemon through the canonical federation discovery path
+// (device-mode CLI: "what does THIS device see in its hub federation?").
+// Operator-mode HTTP
 // is a different lens entirely: "what does the BACKEND know about
 // the realm, viewed as the logged-in user?". Keeping the two
 // surfaces separate avoids overloading verbs that already have a
 // well-known meaning.
+//
+// These response DTOs are presentation projections over backend read-models,
+// not canonical runtime contracts. They intentionally validate required facts
+// and collection shapes while ignoring additive backend fields. Strict schema
+// rejection belongs at canonical boundaries such as persisted credentials,
+// pairing credential envelopes, daemon control frames, and Invocation/Receipt
+// wire objects.
 
 fn auth_get_json<T: for<'de> Deserialize<'de>>(path: &str) -> anyhow::Result<T> {
-    let session = load_session()?
-        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
+    let mut session = authenticated_session()?;
     let url = format!("{}{}", session.hub_url, path);
-    let resp = ureq::get(&url)
-        .timeout(HTTP_TIMEOUT)
-        .set("Authorization", &format!("Bearer {}", session.token))
-        .call()
-        .map_err(|e| match e {
-            ureq::Error::Status(401, _) => anyhow!(
-                "HTTP 401 — token expired or invalid. Run 'easynet auth login <email>' to refresh."
-            ),
-            ureq::Error::Status(code, resp) => {
-                let body = resp.into_string().unwrap_or_default();
-                anyhow!("HTTP {code} from {url}: {body}")
+    let mut refreshed = false;
+    loop {
+        match ureq::get(&url)
+            .timeout(HTTP_TIMEOUT)
+            .set("Authorization", &format!("Bearer {}", session.token))
+            .call()
+        {
+            Ok(response) => return response.into_json().context("parse response JSON"),
+            Err(ureq::Error::Status(401, response)) if !refreshed => {
+                let _ = response.into_string();
+                refresh_session(&mut session)?;
+                refreshed = true;
             }
-            ureq::Error::Transport(e) => anyhow!("transport to {url}: {e}"),
-        })?;
-    let parsed: T = resp.into_json().context("parse response JSON")?;
-    Ok(parsed)
+            Err(ureq::Error::Status(401, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                bail!("HTTP 401 from {url}: token expired or invalid: {body}");
+            }
+            Err(ureq::Error::Status(code, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                bail!("HTTP {code} from {url}: {body}");
+            }
+            Err(ureq::Error::Transport(error)) => bail!("transport to {url}: {error}"),
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -483,9 +623,11 @@ pub struct DevicesArgs {
     pub json: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct DeviceListResp {
     items: Vec<DeviceItem>,
+    #[serde(default)]
+    resolve_unavailable: Vec<ResolveUnavailable>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -501,6 +643,80 @@ struct DeviceItem {
     arch: Option<String>,
     #[serde(default)]
     realm: Option<String>,
+    #[serde(default)]
+    trust_level: Option<String>,
+    #[serde(default)]
+    device_group: Option<String>,
+    #[serde(default)]
+    auth_binding: Option<String>,
+    #[serde(default)]
+    credential_provisioned: Option<bool>,
+    #[serde(default)]
+    public_key_registered: Option<bool>,
+    #[serde(default)]
+    device_public_key: Option<String>,
+    #[serde(default)]
+    device_public_key_fingerprint: Option<String>,
+    #[serde(default)]
+    credential_token: Option<String>,
+    #[serde(default)]
+    hub_endpoint: Option<String>,
+    #[serde(default)]
+    username: Option<String>,
+    #[serde(default)]
+    user_id: Option<String>,
+    #[serde(default)]
+    deploy_signature: Option<String>,
+    #[serde(default)]
+    federated_peers: Vec<FederatedPeerEntry>,
+    #[serde(default)]
+    ura: Option<String>,
+    #[serde(default)]
+    last_seen_unix_ms: Option<i64>,
+    #[serde(default)]
+    resolve_unavailable: Vec<ResolveUnavailable>,
+    #[serde(default)]
+    state_code: Option<String>,
+    #[serde(default)]
+    transition_id: Option<String>,
+    #[serde(default)]
+    interrupted_transition: Option<String>,
+    #[serde(default)]
+    failure: Option<ConnectionFailure>,
+}
+
+#[derive(Deserialize, Debug, serde::Serialize)]
+struct FederatedPeerEntry {
+    realm: String,
+    peer_hub_url: String,
+    #[serde(default)]
+    peer_hub_pubkey: Option<String>,
+}
+
+#[derive(Deserialize, Debug, serde::Serialize)]
+struct ResolveUnavailable {
+    source: String,
+    reason: String,
+    #[serde(default)]
+    query_name: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    stage: Option<String>,
+    #[serde(default)]
+    retryable: Option<bool>,
+    #[serde(default)]
+    retry_after_unix_ms: Option<i64>,
+}
+
+#[derive(Deserialize, Debug, serde::Serialize)]
+struct ConnectionFailure {
+    code: String,
+    message: String,
+    stage: String,
+    retryable: bool,
 }
 
 pub fn run_devices(args: DevicesArgs) -> anyhow::Result<()> {
@@ -513,10 +729,31 @@ pub fn run_devices(args: DevicesArgs) -> anyhow::Result<()> {
                     "node_id": d.node_id,
                     "display_name": d.display_name,
                     "state": d.state,
+                    "trust_level": d.trust_level,
+                    "device_group": d.device_group,
                     "os": d.os,
                     "arch": d.arch,
                     "realm": d.realm,
-                })).collect::<Vec<_>>()
+                    "auth_binding": d.auth_binding,
+                    "credential_provisioned": d.credential_provisioned,
+                    "public_key_registered": d.public_key_registered,
+                    "device_public_key": d.device_public_key,
+                    "device_public_key_fingerprint": d.device_public_key_fingerprint,
+                    "credential_token": d.credential_token,
+                    "hub_endpoint": d.hub_endpoint,
+                    "username": d.username,
+                    "user_id": d.user_id,
+                    "deploy_signature": d.deploy_signature,
+                    "ura": d.ura,
+                    "last_seen_unix_ms": d.last_seen_unix_ms,
+                    "state_code": d.state_code,
+                    "transition_id": d.transition_id,
+                    "interrupted_transition": d.interrupted_transition,
+                    "failure": d.failure,
+                    "resolve_unavailable": d.resolve_unavailable,
+                    "federated_peers": d.federated_peers,
+                })).collect::<Vec<_>>(),
+                "resolve_unavailable": resp.resolve_unavailable,
             }))?
         );
         return Ok(());
@@ -551,61 +788,57 @@ pub struct AbilitiesArgs {
     pub json: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct AbilityListResp {
     items: Vec<AbilityItem>,
+    #[serde(default)]
+    resolve_unavailable: Vec<ResolveUnavailable>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct AbilityItem {
     #[serde(default)]
+    ura: Option<String>,
+    #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
+    tool_name: Option<String>,
     #[serde(default)]
     ability_ura: Option<String>,
     #[serde(default)]
     version: Option<String>,
     #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
     state: Option<String>,
+    #[serde(default)]
+    install_id: Option<String>,
+    #[serde(default)]
+    owner_ura: Option<String>,
 }
 
 pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
-    let session = load_session()?
-        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
     let path = format!("/api/v1/devices/{}/abilities", args.node_id);
-    let url = format!("{}{}", session.hub_url, path);
-    let resp: AbilityListResp = match ureq::get(&url)
-        .timeout(HTTP_TIMEOUT)
-        .set("Authorization", &format!("Bearer {}", session.token))
-        .call()
-    {
-        Ok(resp) => resp.into_json().context("parse response JSON")?,
-        Err(ureq::Error::Status(401, _)) => bail!(
-            "HTTP 401 — token expired or invalid. Run 'easynet auth login <email>' to refresh."
-        ),
-        Err(ureq::Error::Status(404, resp)) => {
-            let body = resp.into_string().unwrap_or_default();
-            fallback_device_abilities_from_local_daemon(&args.node_id).map_err(|fallback_err| {
-                anyhow!(
-                    "HTTP 404 from {url}: {body}\nlocal federation fallback failed: {fallback_err}"
-                )
-            })?
-        }
-        Err(ureq::Error::Status(code, resp)) => {
-            let body = resp.into_string().unwrap_or_default();
-            bail!("HTTP {code} from {url}: {body}");
-        }
-        Err(ureq::Error::Transport(e)) => bail!("transport to {url}: {e}"),
-    };
+    let resp: AbilityListResp = auth_get_json(&path)?;
     if args.json {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "items": resp.items.iter().map(|a| serde_json::json!({
+                    "ura": a.ura,
                     "name": a.name,
+                    "tool_name": a.tool_name,
                     "ability_ura": a.ability_ura,
                     "version": a.version,
+                    "category": a.category,
+                    "description": a.description,
                     "state": a.state,
-                })).collect::<Vec<_>>()
+                    "install_id": a.install_id,
+                    "owner_ura": a.owner_ura,
+                })).collect::<Vec<_>>(),
+                "resolve_unavailable": resp.resolve_unavailable,
             }))?
         );
         return Ok(());
@@ -631,96 +864,6 @@ pub fn run_abilities(args: AbilitiesArgs) -> anyhow::Result<()> {
         );
     }
     Ok(())
-}
-
-/// Joint-plan unified path: when the backend HTTP API can't find a
-/// device (typically cross-hub), fall back to the daemon's
-/// `node.describe` ability — the same surface
-/// `easynet device show` uses post-phase-1.2.
-///
-/// Routing matches the rest of the CLI:
-///   * `node_id` matches this device's own node id → invoke
-///     `node.describe` locally over the control socket.
-///   * Otherwise → resolve the target as a canonical device URA:
-///     cross-hub directory hit first, local-realm fallback second,
-///     then forward_invoke `node.describe`.
-///     The backend HTTP API surface only exposes bare uuid today,
-///     but a canonical URA still lands here correctly if passed by
-///     a future caller.
-///
-/// The legacy `node.describe` path handled both arms server-
-/// side; the daemon-side handler is on the phase 4 cull list. This
-/// helper preserves the operator-visible behaviour while the
-/// dependency moves.
-fn fallback_device_abilities_from_local_daemon(node_id: &str) -> anyhow::Result<AbilityListResp> {
-    let node = describe_node_via_unified_path(node_id)
-        .with_context(|| format!("invoke node.describe for node {node_id}"))?;
-    let abilities = node
-        .get("abilities")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow!("node.describe returned no 'abilities' array"))?;
-    let items = abilities
-        .iter()
-        .map(ability_item_from_descriptor)
-        .collect::<Vec<_>>();
-    Ok(AbilityListResp { items })
-}
-
-fn describe_node_via_unified_path(node_id: &str) -> anyhow::Result<serde_json::Value> {
-    let trimmed = node_id.trim();
-    let creds = crate::daemon::persistence::config::load_credentials().ok();
-    let local_node = creds
-        .as_ref()
-        .map(|c| c.node_id.clone())
-        .unwrap_or_default();
-    let local_tenant = creds.as_ref().map(|c| c.realm.clone()).unwrap_or_default();
-
-    let is_local = !local_node.is_empty() && trimmed == local_node;
-    if is_local {
-        return crate::support::platform::local_invoke::invoke_local_ability(
-            "node.describe",
-            serde_json::json!({"node_id": "local"}),
-        )
-        .context("invoke node.describe (local)");
-    }
-
-    describe_node_remote(trimmed, &local_tenant)
-}
-
-#[cfg(feature = "axon-pb")]
-fn describe_node_remote(node: &str, local_tenant: &str) -> anyhow::Result<serde_json::Value> {
-    let _ = local_tenant;
-    let target_ura = crate::support::platform::remote_device::resolve_target_device_ura(node)?;
-    let caller_ura = crate::support::platform::remote_device::caller_device_ura_from_credentials();
-    let target_call = crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
-        &target_ura,
-        "node.describe",
-    )?;
-    crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target(
-        &target_call,
-        serde_json::json!({"node_id": "local"}),
-        caller_ura.as_deref(),
-    )
-    .with_context(|| format!("forward node.describe to target={target_ura}"))
-}
-
-#[cfg(not(feature = "axon-pb"))]
-fn describe_node_remote(node: &str, _local_tenant: &str) -> anyhow::Result<serde_json::Value> {
-    Err(
-        crate::support::platform::local_invoke::federation_not_wired_error(&format!(
-            "describing remote device {node:?}"
-        )),
-    )
-}
-
-fn ability_item_from_descriptor(value: &serde_json::Value) -> AbilityItem {
-    let row = AbilityCatalogueRow::from_value(value);
-    AbilityItem {
-        name: Some(row.label().to_string()),
-        ability_ura: row.ability_ura().map(str::to_string),
-        version: row.version().map(str::to_string),
-        state: Some(row.state().to_string()),
-    }
 }
 
 #[derive(Debug, Args)]
@@ -751,13 +894,10 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
         bail!("no command — usage: easynet auth exec <node_id> -- <cmd> [args ...]");
     }
     let tool_name = canonical_auth_exec_tool_name(&args.tool)?.to_string();
-    let session = load_session()?
-        .ok_or_else(|| anyhow!("not logged in — run 'easynet auth login <email>' first"))?;
     // Backend's POST /api/v1/abilities/invoke is what the frontend
     // uses for ad-hoc exec — `node_id` selects the target device,
     // `tool_name` picks the canonical ability advertised by the
     // device's daemon.
-    let url = format!("{}/api/v1/abilities/invoke", session.hub_url);
     let arguments = match tool_name.as_str() {
         // shell.run / process.exec take a full command string.
         "shell.run" | "process.exec" => {
@@ -773,23 +913,11 @@ pub fn run_exec(args: ExecArgs) -> anyhow::Result<()> {
         "arguments": arguments,
         "timeout_ms": args.timeout_ms,
     });
-    let resp: serde_json::Value = ureq::post(&url)
-        .timeout(Duration::from_millis(args.timeout_ms as u64 + 5_000))
-        .set("Authorization", &format!("Bearer {}", session.token))
-        .set("Content-Type", "application/json")
-        .send_json(body)
-        .map_err(|e| match e {
-            ureq::Error::Status(401, _) => {
-                anyhow!("HTTP 401 — token expired. Run 'easynet auth login <email>' to refresh.")
-            }
-            ureq::Error::Status(code, resp) => {
-                let body = resp.into_string().unwrap_or_default();
-                anyhow!("HTTP {code} from {url}: {body}")
-            }
-            ureq::Error::Transport(e) => anyhow!("transport to {url}: {e}"),
-        })?
-        .into_json()
-        .context("parse invoke response")?;
+    let resp: serde_json::Value = auth_post_json(
+        "/api/v1/abilities/invoke",
+        &body,
+        Duration::from_millis(args.timeout_ms as u64 + 5_000),
+    )?;
     if args.json {
         println!("{}", serde_json::to_string_pretty(&resp)?);
         return Ok(());
@@ -877,9 +1005,64 @@ pub struct AgentsArgs {
     pub json: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct AgentListResp {
-    items: Vec<serde_json::Value>,
+    items: Vec<AgentItem>,
+    #[serde(default)]
+    resolve_unavailable: Vec<ResolveUnavailable>,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+struct AgentItem {
+    agent_id: String,
+    display_name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    runtime: Option<String>,
+    #[serde(default)]
+    base_runtime: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    base_model: Option<String>,
+    tags: Vec<String>,
+    node_id: String,
+    #[serde(default)]
+    host_device_ura: Option<String>,
+    #[serde(default)]
+    skills: Vec<SkillInfo>,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+struct SkillInfo {
+    skill_id: String,
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    state: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AgentTableProjection {
+    agent_id: String,
+    display_name: String,
+    node_id: String,
+    skill_count: usize,
+}
+
+impl AgentTableProjection {
+    fn from_backend_row(row: &AgentItem) -> Self {
+        Self {
+            agent_id: row.agent_id.clone(),
+            display_name: row.display_name.clone(),
+            node_id: row.node_id.clone(),
+            skill_count: row.skills.len(),
+        }
+    }
 }
 
 pub fn run_agents(args: AgentsArgs) -> anyhow::Result<()> {
@@ -889,6 +1072,7 @@ pub fn run_agents(args: AgentsArgs) -> anyhow::Result<()> {
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "items": resp.items,
+                "resolve_unavailable": resp.resolve_unavailable,
             }))?
         );
         return Ok(());
@@ -897,38 +1081,19 @@ pub fn run_agents(args: AgentsArgs) -> anyhow::Result<()> {
         println!("(no agents — daemon may be offline, or no hosted agents joined)");
         return Ok(());
     }
-    // Backend's `/api/v1/agents` shape (listAgentsLogic.go) is
-    // {agent_id, display_name, node_id, tags, skills:[...]} — no
-    // top-level `ura` or `status` fields. The pre-fix renderer
-    // looked for `ura` / `status` and printed `-` for every row,
-    // which made every agent look offline / unidentified even when
-    // the response carried real data. Render the device that hosts
-    // each agent (NODE_ID) and the skill count so the operator
-    // sees both identity and "what can this agent do".
+    // Backend's `/api/v1/agents` shape (listAgentsLogic.go) is the
+    // canonical table contract: {agent_id, display_name, node_id, tags,
+    // skills:[...]}. The CLI table projects that shape directly and does not
+    // repair retired row aliases into identity facts.
     println!(
         "{:<60} {:<28} {:<38} {:>6}",
         "AGENT_ID", "DISPLAY_NAME", "NODE_ID", "SKILLS"
     );
     for a in &resp.items {
-        let agent_id = a
-            .get("agent_id")
-            .or_else(|| a.get("ura"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("-");
-        let name = a
-            .get("display_name")
-            .or_else(|| a.get("name"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("-");
-        let node_id = a.get("node_id").and_then(|v| v.as_str()).unwrap_or("-");
-        let skills = a
-            .get("skills")
-            .and_then(|v| v.as_array())
-            .map(|s| s.len())
-            .unwrap_or(0);
+        let row = AgentTableProjection::from_backend_row(a);
         println!(
             "{:<60} {:<28} {:<38} {:>6}",
-            agent_id, name, node_id, skills
+            row.agent_id, row.display_name, row.node_id, row.skill_count
         );
     }
     Ok(())
@@ -1065,8 +1230,9 @@ pub fn run_events(args: EventsArgs) -> anyhow::Result<()> {
 // Wrapper→CLI thesis: a user signing key is a long-lived identity
 // credential, so the DAEMON (the runtime trust source) owns it — not the
 // browser and not the product backend. This command is the CLI facade for
-// that: it generates a fresh user keypair locally and registers the public
-// key by invoking the daemon's `identity.register_pubkey` ability directly
+// that: it asks the daemon key service to create or project a managed user
+// signing key and registers that public projection through
+// the daemon's `identity.register_pubkey` ability directly
 // over the local UDS socket. The backend's `POST /me/signing-keys` is the
 // browser's equivalent facade onto the same daemon ability — neither one
 // is the source of truth.
@@ -1088,8 +1254,6 @@ pub struct SigningKeyRegisterArgs {
 }
 
 pub fn run_signing_key_register(args: SigningKeyRegisterArgs) -> anyhow::Result<()> {
-    use rand::RngCore as _;
-
     // The user URA's realm MUST equal the daemon realm (the trust-anchor
     // writer pins user-row realm to the daemon realm; only device rows may
     // be cross-realm). The credentials realm is the realm this host paired
@@ -1098,195 +1262,31 @@ pub fn run_signing_key_register(args: SigningKeyRegisterArgs) -> anyhow::Result<
         .context("load device credentials (run `easynet device join <token>` first)")?;
     let user_ura = creds.user_ura()?;
 
-    let keyring = KeyringClient::default_path();
-    let key = ensure_user_signing_key(&keyring, &user_ura, |seed| {
-        // Random ed25519 keypair. Unlike the device key
-        // (deterministically derived from realm+node_id), the user key
-        // MUST be random: the user UUID/username is not secret, so a
-        // deterministic user key would let anyone holding the
-        // realm+user-id forge the user's signature.
-        rand::rngs::OsRng.fill_bytes(seed);
-    })?;
-    let public_key_b64 = key.public_key_b64;
-
-    // Register the PUBLIC key with the daemon trust anchor
-    // (loopback-admitted). The public key must be derived from the
-    // keyring's persisted seed, never from a fresh seed that failed to
-    // persist because the user already had a local signing key.
-    if !registered_user_pubkey(&user_ura, &public_key_b64)? {
-        let register_result =
-            crate::support::platform::local_invoke::invoke_local_ability_with_subject(
-                "identity.register_pubkey",
-                serde_json::json!({
-                    "agent_ura": user_ura.as_str(),
-                    "public_key_b64": public_key_b64.as_str(),
-                    "role": "user",
-                }),
-                Some(user_ura.clone()),
-            );
-        if let Err(err) = register_result {
-            if registered_user_pubkey(&user_ura, &public_key_b64).unwrap_or(false) {
-                output::detail(
-                    "identity",
-                    "user signing key was already registered by a concurrent caller",
-                );
-            } else {
-                return Err(err).context("invoke identity.register_pubkey");
-            }
-        }
-    }
+    let outcome = super::user_signing_identity::reconcile_local_user_signing_identity(&user_ura)?;
 
     output::success(&format!("Registered user signing key for {user_ura}"));
     if args.show_pubkey {
-        println!("{public_key_b64}");
+        println!("{}", outcome.public_key_b64);
     }
     Ok(())
-}
-
-struct UserSigningKey {
-    public_key_b64: String,
-}
-
-trait UserSigningKeyStore {
-    fn public_key(&self, user_ura: &str) -> Result<VerifyingKey, SelfIdentityError>;
-    fn put_seed(&self, user_ura: &str, seed_hex: String) -> Result<(), SelfIdentityError>;
-}
-
-impl UserSigningKeyStore for KeyringClient {
-    fn public_key(&self, user_ura: &str) -> Result<VerifyingKey, SelfIdentityError> {
-        SelfIdentity::public_key(self, user_ura)
-    }
-
-    fn put_seed(&self, user_ura: &str, seed_hex: String) -> Result<(), SelfIdentityError> {
-        self.put(user_ura, Vec::new(), seed_hex)
-    }
-}
-
-fn ensure_user_signing_key(
-    store: &impl UserSigningKeyStore,
-    user_ura: &str,
-    fill_seed: impl FnOnce(&mut [u8; 32]),
-) -> anyhow::Result<UserSigningKey> {
-    match store.public_key(user_ura) {
-        Ok(public_key) => {
-            return Ok(UserSigningKey {
-                public_key_b64: public_key_b64(public_key),
-            });
-        }
-        Err(SelfIdentityError::Rejected { kind, .. }) if kind == "not_found" => {}
-        Err(err) => {
-            return Err(anyhow::anyhow!(
-                "read existing user signing key from keyring: {err}"
-            ));
-        }
-    }
-
-    let mut seed = [0u8; 32];
-    fill_seed(&mut seed);
-    let generated_public_key = SigningKey::from_bytes(&seed).verifying_key();
-    match store.put_seed(user_ura, hex::encode(seed)) {
-        Ok(()) => Ok(UserSigningKey {
-            public_key_b64: public_key_b64(generated_public_key),
-        }),
-        Err(SelfIdentityError::Rejected { kind, .. }) if kind == "already_exists" => {
-            let public_key = store.public_key(user_ura).map_err(|err| {
-                anyhow::anyhow!(
-                    "keyring reported an existing user signing key but could not derive it: {err}"
-                )
-            })?;
-            Ok(UserSigningKey {
-                public_key_b64: public_key_b64(public_key),
-            })
-        }
-        Err(err) => Err(anyhow::anyhow!("store user signing key in keyring: {err}")),
-    }
-}
-
-fn public_key_b64(public_key: VerifyingKey) -> String {
-    B64.encode(public_key.to_bytes())
-}
-
-fn registered_user_pubkey(user_ura: &str, public_key_b64: &str) -> anyhow::Result<bool> {
-    let response = crate::support::platform::local_invoke::invoke_local_ability(
-        "identity.list_user_pubkeys",
-        serde_json::json!({ "agent_ura": user_ura }),
-    )
-    .context("invoke identity.list_user_pubkeys")?;
-    let keys = response
-        .get("keys")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow!("identity.list_user_pubkeys returned no keys array"))?;
-    Ok(keys.iter().any(|key| {
-        key.get("public_key_b64")
-            .and_then(serde_json::Value::as_str)
-            == Some(public_key_b64)
-    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
-    use std::collections::VecDeque;
+    use crate::cli::commands::test_support::HomeGuard;
 
-    fn rejected(kind: &str) -> SelfIdentityError {
-        SelfIdentityError::Rejected {
-            kind: kind.to_string(),
-            message: format!("{kind} from fake keyring"),
-        }
+    fn write_auth_session(body: &str) {
+        std::fs::create_dir_all(config::state_dir()).expect("state dir");
+        std::fs::write(auth_session_path(), body).expect("write auth session");
     }
 
-    fn verifying_key(seed: [u8; 32]) -> VerifyingKey {
-        SigningKey::from_bytes(&seed).verifying_key()
-    }
-
-    struct FakeUserSigningKeyStore {
-        public_key_results: RefCell<VecDeque<Result<VerifyingKey, SelfIdentityError>>>,
-        put_results: RefCell<VecDeque<Result<(), SelfIdentityError>>>,
-        put_seeds: RefCell<Vec<String>>,
-    }
-
-    impl FakeUserSigningKeyStore {
-        fn new(
-            public_key_results: impl IntoIterator<Item = Result<VerifyingKey, SelfIdentityError>>,
-            put_results: impl IntoIterator<Item = Result<(), SelfIdentityError>>,
-        ) -> Self {
-            Self {
-                public_key_results: RefCell::new(public_key_results.into_iter().collect()),
-                put_results: RefCell::new(put_results.into_iter().collect()),
-                put_seeds: RefCell::new(Vec::new()),
-            }
-        }
-    }
-
-    impl UserSigningKeyStore for FakeUserSigningKeyStore {
-        fn public_key(&self, _user_ura: &str) -> Result<VerifyingKey, SelfIdentityError> {
-            self.public_key_results
-                .borrow_mut()
-                .pop_front()
-                .unwrap_or_else(|| Err(rejected("not_found")))
-        }
-
-        fn put_seed(&self, _user_ura: &str, seed_hex: String) -> Result<(), SelfIdentityError> {
-            self.put_seeds.borrow_mut().push(seed_hex);
-            self.put_results.borrow_mut().pop_front().unwrap_or(Ok(()))
-        }
-    }
-
-    #[test]
-    fn ability_item_projection_maps_ura_descriptor_shape() {
-        let item = ability_item_from_descriptor(&serde_json::json!({
-            "name": "shell.run",
-            "ability_ura": "easynet:///r/test/ability/device.dev-1.shell.run",
-            "ability_version": "1",
-        }));
-        assert_eq!(item.name.as_deref(), Some("shell.run"));
-        assert_eq!(
-            item.ability_ura.as_deref(),
-            Some("easynet:///r/test/ability/device.dev-1.shell.run")
+    fn assert_auth_session_failure_contains(error: anyhow::Error, expected: &str) {
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(expected),
+            "expected {expected:?} in auth session error: {message}"
         );
-        assert_eq!(item.version.as_deref(), Some("1"));
-        assert_eq!(item.state.as_deref(), Some("ACTIVE"));
     }
 
     #[test]
@@ -1327,60 +1327,501 @@ mod tests {
     }
 
     #[test]
-    fn ensure_user_signing_key_reuses_keyring_key_without_generation() {
-        let existing_key = verifying_key([0x11; 32]);
-        let expected_public_key_b64 = B64.encode(existing_key.to_bytes());
-        let store = FakeUserSigningKeyStore::new([Ok(existing_key)], []);
+    fn auth_agents_table_uses_canonical_backend_fields() {
+        let response = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [{
+            "agent_id": "agent-1",
+            "display_name": "Agent One",
+            "tags": [],
+            "node_id": "device-1",
+            "skills": [
+                    { "skill_id": "skill-1", "name": "shell.run" },
+                    { "skill_id": "skill-2", "name": "terminal.create" }
+                ]
+            }]
+        }))
+        .expect("agent list row should decode through the typed backend contract");
+        let row = AgentTableProjection::from_backend_row(&response.items[0]);
 
-        let key = ensure_user_signing_key(&store, "easynet:///r/local/user/alice", |_| {
-            panic!("existing key must not generate a replacement seed");
-        })
-        .unwrap();
+        assert_eq!(
+            row,
+            AgentTableProjection {
+                agent_id: "agent-1".to_string(),
+                display_name: "Agent One".to_string(),
+                node_id: "device-1".to_string(),
+                skill_count: 2,
+            }
+        );
+    }
 
-        assert_eq!(key.public_key_b64, expected_public_key_b64);
+    #[test]
+    fn auth_agents_table_rejects_rows_missing_canonical_identity_fields() {
+        let error = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [{
+                "ura": "easynet:///r/test/agent/legacy",
+                "name": "Legacy Agent",
+                "tags": [],
+                "node_id": "device-1",
+                "skills": []
+            }]
+        }))
+        .expect_err("agent list rows must require canonical backend identity fields");
+
         assert!(
-            store.put_seeds.borrow().is_empty(),
-            "existing key must not write a replacement seed"
+            error.to_string().contains("agent_id"),
+            "schema error should name the missing canonical field: {error}"
         );
     }
 
     #[test]
-    fn ensure_user_signing_key_generates_and_persists_missing_key() {
-        let generated_seed = [0x22; 32];
-        let expected_public_key_b64 = B64.encode(verifying_key(generated_seed).to_bytes());
-        let store = FakeUserSigningKeyStore::new([Err(rejected("not_found"))], [Ok(())]);
+    fn whoami_rejects_malformed_credentials_instead_of_rendering_unpaired() {
+        let _home = HomeGuard::new();
+        std::fs::create_dir_all(config::state_dir()).expect("state dir");
+        std::fs::write(config::state_dir().join("credentials.json"), "{ not json")
+            .expect("malformed credentials");
 
-        let key = ensure_user_signing_key(&store, "easynet:///r/local/user/alice", |seed| {
-            *seed = generated_seed;
-        })
-        .unwrap();
+        let error = run_whoami(WhoamiArgs {}).expect_err("malformed credentials must fail closed");
 
-        assert_eq!(key.public_key_b64, expected_public_key_b64);
-        assert_eq!(
-            store.put_seeds.borrow().as_slice(),
-            &[hex::encode(generated_seed)]
+        assert!(
+            error.to_string().contains("load device credentials"),
+            "whoami must expose credential projection failure: {error}"
         );
     }
 
     #[test]
-    fn ensure_user_signing_key_uses_existing_key_after_concurrent_insert() {
-        let existing_key = verifying_key([0x33; 32]);
-        let expected_public_key_b64 = B64.encode(existing_key.to_bytes());
-        let discarded_seed = [0x44; 32];
-        let store = FakeUserSigningKeyStore::new(
-            [Err(rejected("not_found")), Ok(existing_key)],
-            [Err(rejected("already_exists"))],
+    fn missing_auth_session_is_logged_out_state() {
+        let _home = HomeGuard::new();
+
+        let session = load_session().expect("missing auth session should be readable state");
+
+        assert!(session.is_none());
+    }
+
+    #[test]
+    fn auth_session_rejects_missing_user_id_owner_fact() {
+        let _home = HomeGuard::new();
+        write_auth_session(
+            r#"{
+  "token": "token",
+  "hub_url": "https://hub.example",
+  "email": "alice@example.test",
+  "username": "alice"
+}"#,
         );
 
-        let key = ensure_user_signing_key(&store, "easynet:///r/local/user/alice", |seed| {
-            *seed = discarded_seed;
-        })
-        .unwrap();
+        let error = load_session().expect_err("auth session without user_id must fail");
 
-        assert_eq!(key.public_key_b64, expected_public_key_b64);
+        assert_auth_session_failure_contains(error, "missing field `user_id`");
+    }
+
+    #[test]
+    fn auth_session_rejects_missing_username_owner_fact() {
+        let _home = HomeGuard::new();
+        write_auth_session(
+            r#"{
+  "token": "token",
+  "hub_url": "https://hub.example",
+  "email": "alice@example.test",
+  "user_id": "user-alice"
+}"#,
+        );
+
+        let error = load_session().expect_err("auth session without username must fail");
+
+        assert_auth_session_failure_contains(error, "missing field `username`");
+    }
+
+    #[test]
+    fn auth_session_rejects_all_zero_user_id_owner_fact() {
+        let _home = HomeGuard::new();
+        write_auth_session(
+            r#"{
+  "token": "token",
+  "hub_url": "https://hub.example",
+  "email": "alice@example.test",
+  "user_id": "00000000-0000-0000-0000-000000000000",
+  "username": "alice"
+}"#,
+        );
+
+        let error = load_session().expect_err("auth session all-zero user_id must fail");
+
+        assert_auth_session_failure_contains(error, "all-zero user_id");
+    }
+
+    #[test]
+    fn auth_session_rejects_unknown_legacy_fields() {
+        let _home = HomeGuard::new();
+        write_auth_session(
+            r#"{
+  "token": "token",
+  "hub_url": "https://hub.example",
+  "email": "alice@example.test",
+  "user_id": "user-alice",
+  "username": "alice",
+  "legacy_subject": "alice"
+}"#,
+        );
+
+        let error = load_session().expect_err("unknown auth session fields must fail");
+
+        assert_auth_session_failure_contains(error, "unknown field `legacy_subject`");
+    }
+
+    #[test]
+    fn login_response_requires_user_owner_facts() {
+        let missing_user = serde_json::from_value::<AuthResp>(serde_json::json!({
+            "token": "token"
+        }))
+        .expect_err("login response without user must fail");
+        assert!(
+            missing_user.to_string().contains("missing field `user`"),
+            "unexpected error: {missing_user}"
+        );
+
+        let missing_username = serde_json::from_value::<AuthResp>(serde_json::json!({
+            "token": "token",
+            "user": { "id": "user-alice" }
+        }))
+        .expect_err("login response without username must fail");
+        assert!(
+            missing_username
+                .to_string()
+                .contains("missing field `username`"),
+            "unexpected error: {missing_username}"
+        );
+    }
+
+    #[test]
+    fn login_response_accepts_backend_public_user_projection() {
+        let response = serde_json::from_value::<AuthResp>(serde_json::json!({
+            "token": "token",
+            "refresh_token": "refresh",
+            "expires_in": 3600,
+            "user": {
+                "id": "user-alice",
+                "account_key": "user-alice",
+                "ura": "easynet:///r/acme/user/user-alice",
+                "username": "alice",
+                "email": "alice@example.test",
+                "phone": "",
+                "nickname": "Alice",
+                "avatar": "",
+                "passkey_public_key_count": 0,
+                "account_public_keys": []
+            }
+        }))
+        .expect("CLI auth response DTO must accept the backend public UserResp contract");
+
+        assert_eq!(response.user.id, "user-alice");
+        assert_eq!(response.user.username, "alice");
+        assert_eq!(response.user.nickname.as_deref(), Some("Alice"));
+    }
+
+    #[test]
+    fn login_response_ignores_additive_backend_fields() {
+        let response = serde_json::from_value::<AuthResp>(serde_json::json!({
+            "token": "token",
+            "refresh_token": "refresh",
+            "user": {
+                "id": "user-alice",
+                "username": "alice",
+                "user_ura": "easynet:///r/acme/user/user-alice",
+                "account_public_keys": []
+            },
+            "state_code": "J200"
+        }))
+        .expect("auth facade must ignore additive backend fields it does not consume");
+
+        assert_eq!(response.user.id, "user-alice");
+        assert_eq!(response.user.username, "alice");
+    }
+
+    #[test]
+    fn login_response_rejects_rows_missing_canonical_user_fields() {
+        let nested = serde_json::from_value::<AuthResp>(serde_json::json!({
+            "token": "token",
+            "user": {
+                "user_ura": "easynet:///r/acme/user/user-alice"
+            }
+        }))
+        .expect_err("login user projection must require canonical owner facts");
+        assert!(
+            nested.to_string().contains("id"),
+            "schema error should name the missing canonical field: {nested}"
+        );
+    }
+
+    #[test]
+    fn refresh_response_does_not_require_user_owner_facts() {
+        let response = serde_json::from_value::<RefreshResp>(serde_json::json!({
+            "token": "new-token"
+        }))
+        .expect("refresh response is token-only");
+
+        assert_eq!(response.token, "new-token");
+        assert!(response.refresh_token.is_none());
+    }
+
+    #[test]
+    fn refresh_response_ignores_additive_backend_fields() {
+        let response = serde_json::from_value::<RefreshResp>(serde_json::json!({
+            "token": "new-token",
+            "state_code": "J200"
+        }))
+        .expect("refresh facade must ignore additive backend fields it does not consume");
+
+        assert_eq!(response.token, "new-token");
+    }
+
+    #[test]
+    fn pairing_token_response_ignores_additive_backend_fields() {
+        let response = serde_json::from_value::<PairingResp>(serde_json::json!({
+            "pairing_token": "token_123",
+            "realm": "acme",
+            "state_code": "J200"
+        }))
+        .expect("pairing-token mint facade must ignore additive backend fields");
+
+        assert_eq!(response.pairing_token, "token_123");
+    }
+
+    #[test]
+    fn device_list_response_accepts_backend_read_model_contract() {
+        let response = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+            "items": [{
+                "node_id": "dev-1",
+                "display_name": "Device",
+                "state": "online",
+                "trust_level": "",
+                "device_group": "",
+                "os": "darwin",
+                "arch": "arm64",
+                "realm": "acme",
+                "ura": "easynet:///r/acme/device/dev-1",
+                "last_seen_unix_ms": 42,
+                "resolve_unavailable": [],
+                "state_code": "J800",
+                "transition_id": "T11_REFETCH_READ_MODEL",
+                "interrupted_transition": "T11_REFETCH_READ_MODEL",
+                "failure": {
+                    "code": "RESOLVE_UNAVAILABLE",
+                    "message": "namespace resolver unavailable",
+                    "stage": "resolve",
+                    "retryable": true
+                }
+            }],
+            "resolve_unavailable": [{
+                "source": "backend_namespace_resolve",
+                "reason": "NOT_FOUND",
+                "query_name": "easynet:///r/acme/device/dev-1",
+                "message": "owner is not online",
+                "code": "ROUTE_NEGATIVE",
+                "stage": "resolve",
+                "retryable": true,
+                "retry_after_unix_ms": 1000
+            }]
+        }))
+        .expect(
+            "operator-mode device list must accept backend public DeviceResp read-model fields",
+        );
+
+        assert_eq!(response.items[0].state_code.as_deref(), Some("J800"));
         assert_eq!(
-            store.put_seeds.borrow().as_slice(),
-            &[hex::encode(discarded_seed)]
+            response.resolve_unavailable[0].source,
+            "backend_namespace_resolve"
+        );
+    }
+
+    #[test]
+    fn device_list_response_ignores_additive_backend_fields() {
+        let response = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+            "items": [],
+            "cursor": "legacy"
+        }))
+        .expect("operator-mode device list must ignore additive envelope fields");
+
+        assert!(response.items.is_empty());
+
+        let item = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+            "items": [{
+                "node_id": "dev-1",
+                "display_name": "Device",
+                "state": "online",
+                "legacy_state_code": "J200"
+            }]
+        }))
+        .expect("operator-mode device rows must ignore additive row fields");
+
+        assert_eq!(item.items[0].node_id, "dev-1");
+    }
+
+    #[test]
+    fn device_list_response_rejects_null_collections() {
+        let top_level = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+            "items": null
+        }))
+        .expect_err("device list items must be a canonical JSON array");
+        assert!(
+            top_level.to_string().contains("sequence"),
+            "schema error should reject null list collections: {top_level}"
+        );
+
+        let nested = serde_json::from_value::<DeviceListResp>(serde_json::json!({
+            "items": [{
+                "node_id": "dev-1",
+                "federated_peers": null
+            }]
+        }))
+        .expect_err("device row federated_peers must be a canonical JSON array when present");
+        assert!(
+            nested.to_string().contains("sequence"),
+            "schema error should reject null nested collections: {nested}"
+        );
+    }
+
+    #[test]
+    fn ability_list_response_accepts_backend_public_contract() {
+        let response = serde_json::from_value::<AbilityListResp>(serde_json::json!({
+            "items": [{
+                "ura": "easynet:///r/acme/ability/system-agent.dev-1.plugin-management.browser.open_session",
+                "name": "browser.open_session",
+                "tool_name": "browser.open_session",
+                "ability_ura": "easynet:///r/acme/ability/system-agent.dev-1.plugin-management.browser.open_session",
+                "version": "1.0.0",
+                "category": "browser",
+                "description": "Open a browser session",
+                "state": "available",
+                "install_id": "install-1",
+                "owner_ura": "easynet:///r/acme/agent/device.dev-1.plugin-management"
+            }],
+            "resolve_unavailable": []
+        }))
+        .expect("operator-mode ability list must accept backend public AbilityResp fields");
+
+        assert_eq!(
+            response.items[0].owner_ura.as_deref(),
+            Some("easynet:///r/acme/agent/device.dev-1.plugin-management")
+        );
+    }
+
+    #[test]
+    fn ability_list_response_ignores_additive_backend_fields() {
+        let response = serde_json::from_value::<AbilityListResp>(serde_json::json!({
+            "items": [{
+                "name": "browser.open_session",
+                "ability_ura": "easynet:///r/acme/ability/system-agent.dev-1.plugin-management.browser.open_session",
+                "version": "1.0.0",
+                "state": "available",
+                "descriptor_ref": "legacy"
+            }]
+        }))
+        .expect("operator-mode ability rows must ignore additive backend fields");
+
+        assert_eq!(
+            response.items[0].name.as_deref(),
+            Some("browser.open_session")
+        );
+    }
+
+    #[test]
+    fn ability_list_response_rejects_null_collections() {
+        let error = serde_json::from_value::<AbilityListResp>(serde_json::json!({
+            "items": null
+        }))
+        .expect_err("ability list items must be a canonical JSON array");
+
+        assert!(
+            error.to_string().contains("sequence"),
+            "schema error should reject null ability collections: {error}"
+        );
+    }
+
+    #[test]
+    fn agent_list_response_ignores_additive_envelope_fields() {
+        let response = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [],
+            "state_code": "J200"
+        }))
+        .expect("operator-mode agent list must ignore additive envelope fields");
+
+        assert!(response.items.is_empty());
+    }
+
+    #[test]
+    fn agent_list_response_accepts_backend_public_contract() {
+        let response = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [{
+                "agent_id": "easynet:///r/acme/agent/alice.claude",
+                "display_name": "Claude",
+                "description": "Agent roster row",
+                "runtime": "claude-code",
+                "base_runtime": "claude-code",
+                "model": "sonnet",
+                "base_model": "sonnet",
+                "tags": [],
+                "node_id": "dev-1",
+                "host_device_ura": "easynet:///r/acme/device/dev-1",
+                "skills": [{
+                    "skill_id": "skill-1",
+                    "name": "read",
+                    "description": "Read files",
+                    "tags": ["files"],
+                    "state": "enabled"
+                }]
+            }],
+            "resolve_unavailable": []
+        }))
+        .expect("operator-mode agent list must accept backend public AgentResp fields");
+
+        let row = AgentTableProjection::from_backend_row(&response.items[0]);
+        assert_eq!(row.agent_id, "easynet:///r/acme/agent/alice.claude");
+        assert_eq!(row.skill_count, 1);
+    }
+
+    #[test]
+    fn agent_list_response_ignores_additive_row_fields() {
+        let response = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [{
+                "agent_id": "easynet:///r/acme/agent/alice.claude",
+                "display_name": "Claude",
+                "tags": [],
+                "node_id": "dev-1",
+                "legacy_agent_id": "alice"
+            }]
+        }))
+        .expect("operator-mode agent rows must ignore additive backend fields");
+
+        assert_eq!(
+            response.items[0].agent_id,
+            "easynet:///r/acme/agent/alice.claude"
+        );
+    }
+
+    #[test]
+    fn agent_list_response_rejects_null_collections() {
+        let top_level = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": null
+        }))
+        .expect_err("agent list items must be a canonical JSON array");
+        assert!(
+            top_level.to_string().contains("sequence"),
+            "schema error should reject null agent collections: {top_level}"
+        );
+
+        let nested = serde_json::from_value::<AgentListResp>(serde_json::json!({
+            "items": [{
+                "agent_id": "easynet:///r/acme/agent/alice.claude",
+                "display_name": "Claude",
+                "tags": null,
+                "node_id": "dev-1",
+                "skills": []
+            }]
+        }))
+        .expect_err("agent row tags must be a canonical JSON array");
+        assert!(
+            nested.to_string().contains("sequence"),
+            "schema error should reject null nested agent collections: {nested}"
         );
     }
 }

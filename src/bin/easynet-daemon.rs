@@ -3,32 +3,29 @@
 //
 // File: src/bin/easynet-daemon.rs
 // Description: Long-running daemon entry — one process owns the
-//              Control-plane IPC server, daemon Invocation, runtime
-//              dispatch, and ability hosting. Directory liveness is
-//              the session-lifetime federation.heartbeat loop inside
-//              the invocation transport (the legacy heartbeat sidecar
-//              was retired in F-049/T1.5-1).
+//              Control-plane IPC server, daemon Invocation, and ability
+//              hosting. Directory liveness is owned by the
+//              session-lifetime federation.heartbeat loop inside the
+//              invocation transport.
 //
 // Current shape
 // -------------
 // - Always: spin up a tokio multi-thread runtime and run the daemon
-//   IPC surfaces on it: boot/status control, daemon Invocation, and
-//   runtime-dispatch for Axon local-tool delegation.
+//   IPC surfaces on it: boot/status control and daemon Invocation.
 //
 // What is NOT here yet
 // --------------------
 // - Schedule tick (PR-SCHED).
 // - Nothing on control.sock dispatches product abilities. Product
-//   calls enter through daemon Invocation; Axon-owned delegated calls
-//   enter through runtime-dispatch.
+//   calls enter through daemon Invocation.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context as _;
 use chrono::Utc;
 use easynet_cli::core::domain::{NodeId, ScheduleId, TenantId};
 use easynet_cli::daemon::ability::builtins::agents::{
@@ -38,23 +35,17 @@ use easynet_cli::daemon::ability::catalog as ability_catalog;
 use easynet_cli::daemon::ability::conformance::{
     BaselineConformanceReport, DeviceBaseline, HubBaseline, RegistryConformance,
 };
-#[cfg(feature = "axon-pb")]
 use easynet_cli::daemon::ability::conformance::{DaemonInvocationSurface, RuntimeAdminConformance};
 use easynet_cli::daemon::ability::health as ability_health;
 use easynet_cli::daemon::boot::kernel::api::KernelApi;
 use easynet_cli::daemon::boot::kernel::Kernel;
 use easynet_cli::daemon::control::boot_events::{BootBus, BootEvent};
 use easynet_cli::daemon::control::discovery::DaemonIdentity;
-use easynet_cli::daemon::control::runtime_dispatch_adapter::RuntimeDispatchAdapter;
-use easynet_cli::daemon::control::{discovery, runtime_dispatch, server};
+use easynet_cli::daemon::control::{discovery, server};
 use easynet_cli::daemon::execution::loop_instance::KernelLoopInvocationDriver;
+use easynet_cli::daemon::execution::runtime_identity::LocalRuntimeInvocationIdentity;
 use easynet_cli::daemon::execution::schedule::ScheduleService;
-use easynet_cli::daemon::federation::gateway::NoopGateway;
-use easynet_cli::daemon::federation::read_model::hub_published_abilities::HubPublishedAbilityStore;
-use easynet_cli::daemon::invocation::receipts::runtime_record::{
-    RuntimeCausalContext, RuntimeInvocation,
-};
-use easynet_cli::daemon::invocation::routing::target::{LocalNodeResolver, TargetResolver};
+use easynet_cli::daemon::federation::read_model::authority_published_abilities::AuthorityPublishedAbilityStore;
 use easynet_cli::daemon::persistence::config;
 use easynet_cli::daemon::persistence::daemon_config::{
     default_config_path, resolved_local_uds_path_with_env_override, DaemonConfig, DaemonMode,
@@ -64,31 +55,39 @@ use easynet_cli::daemon::resources::context::clipboard_tracker;
 const ENV_BOOTSTRAP_MEDIA_RESOURCES: &str = "EASYNET_BOOTSTRAP_MEDIA_RESOURCES";
 const DEFAULT_PAGES_LISTENER_PORT: u16 = 8787;
 
-fn device_ability_replay_fatal_message(
+fn ability_deployment_replay_fatal_message(
     report: &easynet_cli::daemon::ability::builtins::device_control::ability_management::registrar::ReplayReport,
 ) -> Option<String> {
     if report.runtime_not_ready || report.store_unreadable || report.stale > 0 || report.errored > 0
     {
         return Some(format!(
-            "device ability replay failed before daemon start: runtime_not_ready={}, \
-             store_unreadable={}, stale={}, errored={}",
-            report.runtime_not_ready, report.store_unreadable, report.stale, report.errored
+            "ability deployment replay failed before daemon start: runtime_not_ready={}, \
+             store_unreadable={}, stale={}, lease_pending={}, quarantined={}, errored={}, outcomes={}",
+            report.runtime_not_ready,
+            report.store_unreadable,
+            report.stale,
+            report.lease_pending,
+            report.quarantined,
+            report.errored,
+            report.outcomes_json()
         ));
     }
     None
 }
 
-fn report_device_ability_replay(
+fn report_ability_deployment_replay(
     report: &easynet_cli::daemon::ability::builtins::device_control::ability_management::registrar::ReplayReport,
 ) -> anyhow::Result<()> {
-    if let Some(message) = device_ability_replay_fatal_message(report) {
+    if let Some(message) = ability_deployment_replay_fatal_message(report) {
         anyhow::bail!(message);
     }
     eprintln!(
-        "[device-ability] replay: {} registered, {} stale, {} errored, \
+        "[ability-deployment] replay: {} registered, {} lease-pending, {} stale, {} quarantined, {} errored, \
          runtime_not_ready={}, store_unreadable={}, outcomes={}",
         report.registered,
+        report.lease_pending,
         report.stale,
+        report.quarantined,
         report.errored,
         report.runtime_not_ready,
         report.store_unreadable,
@@ -118,17 +117,14 @@ fn assert_daemon_baseline_conformance(
     if matches!(mode, DaemonMode::Hub | DaemonMode::Both) {
         let hub = HubBaseline::required_abilities();
         collect_baseline_failure(&mut failures, registry_conformance.check("hub", hub));
-        #[cfg(feature = "axon-pb")]
-        {
-            collect_baseline_failure(
-                &mut failures,
-                DaemonInvocationSurface::from_daemon_surface().check("hub", hub),
-            );
-            collect_baseline_failure(
-                &mut failures,
-                RuntimeAdminConformance::from_daemon_surface().check("hub", hub),
-            );
-        }
+        collect_baseline_failure(
+            &mut failures,
+            DaemonInvocationSurface::from_daemon_surface().check("hub", hub),
+        );
+        collect_baseline_failure(
+            &mut failures,
+            RuntimeAdminConformance::from_daemon_surface().check("hub", hub),
+        );
     }
 
     if failures.is_empty() {
@@ -136,6 +132,56 @@ fn assert_daemon_baseline_conformance(
     } else {
         Err(failures.join("\n"))
     }
+}
+
+fn ensure_daemon_runtime_identity(config: &DaemonConfig) -> anyhow::Result<()> {
+    use easynet_cli::daemon::identity::self_identity::KeyringClient;
+
+    easynet_cli::daemon::keyring::lifecycle::ensure_daemon_key_service_running()
+        .context("establish daemon-owned key service")?;
+    let client = KeyringClient::default_path();
+
+    // `_system.local` is the daemon's internal caller identity. It uses the
+    // same daemon-owned custody service as Device and Hub identities; a
+    // process-local generated key would create a second authentication root.
+    easynet_cli::daemon::identity::self_identity::ensure_daemon_local_system_identity(&client)
+        .map_err(|error| anyhow::anyhow!("ensure daemon-local runtime identity: {error}"))?;
+
+    match config.mode() {
+        DaemonMode::Hub => {
+            let hub_ura = easynet_cli::core::ura::hub_ura(config.realm());
+            client
+                .ensure(&hub_ura)
+                .map_err(|error| anyhow::anyhow!("ensure Hub runtime identity: {error}"))?;
+        }
+        DaemonMode::Device | DaemonMode::Both => {
+            let credentials = config::load_credentials().with_context(|| {
+                format!(
+                    "{} daemon requires paired credentials before identity provisioning",
+                    config.mode().as_str()
+                )
+            })?;
+            if credentials.realm_str() != config.realm() {
+                anyhow::bail!(
+                    "daemon credentials realm `{}` does not match configured realm `{}`",
+                    credentials.realm_str(),
+                    config.realm()
+                );
+            }
+            let owner_ura =
+                easynet_cli::core::ura::device_ura(credentials.realm_str(), &credentials.node_id);
+            client
+                .ensure(&owner_ura)
+                .map_err(|error| anyhow::anyhow!("ensure Device runtime identity: {error}"))?;
+            if config.mode() == DaemonMode::Both {
+                let hub_ura = easynet_cli::core::ura::hub_ura(config.realm());
+                client
+                    .ensure(&hub_ura)
+                    .map_err(|error| anyhow::anyhow!("ensure Hub runtime identity: {error}"))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -164,18 +210,30 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(2);
     }
 
-    // v1: a Kernel wrapping a NoopGateway is sufficient for the
-    // loop scheduler and permission/session services. The daemon installs the
-    // SubscriberBroker permission variant so a Client UI
-    // connected to consent.subscribe sees real pending
-    // requests when an agent dispatch is gated. (When no Client
-    // is subscribed the broker auto-allows — a daemon running
-    // headless does not freeze on permission gates.)
+    // One state root has exactly one daemon process authority. Hold this
+    // operating-system lease before starting custody, binding sockets, or
+    // publishing any runtime owner. Without it a second process could unlink
+    // the first process's UDS files while the first retained its Hub session
+    // and Pages listener, splitting catalog, presence, and execution state.
+    let _process_lease = easynet_cli::daemon::boot::DaemonProcessLease::acquire_current()
+        .context("acquire daemon process lease")?;
+
+    // The key service is a detached custody process so that it cannot be
+    // inherited accidentally by arbitrary child commands. Its lifecycle is
+    // nevertheless owned by this daemon: every normal shutdown and every
+    // boot failure must reclaim only the child this daemon started. The guard
+    // preserves that terminal transition across all early-return boot paths.
+    let _key_service_shutdown = KeyServiceShutdownGuard;
+
+    // The daemon installs the interactive Kernel for loop,
+    // permission, and session services. A Client UI connected to
+    // consent.subscribe sees real pending requests when an agent
+    // dispatch is gated. When no Client is subscribed, the broker
+    // uses the explicit headless policy so unattended daemon work
+    // does not freeze on permission gates.
     let boot_bus = BootBus::new();
     boot_bus.emit_started("kernel");
-    let kernel = Arc::new(Kernel::new_with_subscriber_broker(Arc::new(
-        NoopGateway::new(),
-    )));
+    let kernel = Arc::new(Kernel::new_interactive());
     boot_bus.emit_ok("kernel");
 
     boot_bus.emit_started("daemon-config");
@@ -190,16 +248,33 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Bind sub-services that have a disk-backed store to the
-    // current tenant so persistence actually works across daemon
-    // restarts. Without this call, ScheduleService and LoopService
-    // operate on an in-memory cache only — schedules and loops
-    // vanish on every reboot.
+    boot_bus.emit_started("daemon-key-service");
+    if let Err(error) = ensure_daemon_runtime_identity(&daemon_config) {
+        boot_bus.emit_failed("daemon-key-service", error.to_string());
+        return Err(error);
+    }
+    boot_bus.emit_ok("daemon-key-service");
+
+    // Bind runtime state services to the current daemon identity.
+    // Session/discuss read models must carry the same node/tenant
+    // facts that the signer, descriptor resolver, and admission
+    // authority validate. ScheduleService and LoopService also bind
+    // tenant-scoped stores here so their state survives restarts.
     //
-    // v1 single-tenant: hardcode `TenantId::default_v1()`. v2 will
-    // route this from credentials.json via IPC handshake.
-    let tenant = TenantId::default_v1();
+    let tenant = TenantId::new(daemon_config.realm().to_string());
     boot_bus.emit_started("tenant-stores");
+    let daemon_identity = ready_daemon_identity(&daemon_config)?;
+    if let Some(node_id) = daemon_identity.node_id.as_deref() {
+        let runtime_node = NodeId::new(node_id);
+        kernel
+            .session_service()
+            .bind_runtime(runtime_node.clone(), tenant.clone())
+            .map_err(|err| anyhow::anyhow!("bind session runtime identity: {err:#}"))?;
+        kernel
+            .discuss_service()
+            .bind_runtime(runtime_node, tenant.clone())
+            .map_err(|err| anyhow::anyhow!("bind discuss runtime identity: {err:#}"))?;
+    }
     if let Err(e) = kernel.schedule_service().bind(&tenant) {
         eprintln!("[daemon] schedule store bind failed: {e:#}");
     }
@@ -208,25 +283,24 @@ async fn main() -> anyhow::Result<()> {
     }
     boot_bus.emit_ok("tenant-stores");
 
+    let runtime_invocation_identity = local_runtime_invocation_identity(&daemon_config)?;
+
     boot_bus.emit_started("loop-controller");
-    let local_node = std::env::var("EASYNET_NODE_ID")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .map(NodeId::new)
-        .unwrap_or_else(|| NodeId::new("self"));
     if media_resource_bootstrap_enabled() {
-        match config::load_credentials() {
-            Ok(creds) => {
-                let owner_agent =
-                    easynet_cli::core::ura::device_ura(creds.realm_str(), &creds.node_id);
+        match media_resource_bootstrap_owner_agent(&daemon_config, &daemon_identity) {
+            Ok(Some(owner_agent)) => {
                 match easynet_cli::daemon::ability::builtins::resources::media::resource_bootstrap::seed_default_device_resources(
-                    creds.realm_str(),
+                    daemon_config.realm(),
                     &owner_agent,
                 ) {
                     Ok(count) => eprintln!("[daemon] media resources ready: {count} known"),
                     Err(err) => eprintln!("[daemon] media resource bootstrap failed: {err:#}"),
                 }
             }
+            Ok(None) => eprintln!(
+                "[daemon] media resource bootstrap skipped: {} mode has no device runtime identity",
+                daemon_config.mode().as_str()
+            ),
             Err(err) => {
                 eprintln!("[daemon] media resource bootstrap skipped: {err}");
             }
@@ -235,15 +309,21 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("[daemon] media resource bootstrap skipped: {ENV_BOOTSTRAP_MEDIA_RESOURCES}=0");
     }
     let kernel_api: Arc<dyn KernelApi> = Arc::clone(&kernel) as Arc<dyn KernelApi>;
-    let loop_driver = Arc::new(KernelLoopInvocationDriver::new(
-        Arc::clone(&kernel_api),
-        local_node.clone(),
-    ));
-    if let Err(e) = kernel.loop_service().install_driver(loop_driver) {
-        eprintln!("[daemon] loop controller install failed: {e:#}");
-    }
-    if let Err(e) = kernel.loop_service().resume_inflight() {
-        eprintln!("[daemon] loop resume failed: {e:#}");
+    if let Some(identity) = runtime_invocation_identity.clone() {
+        let loop_driver = Arc::new(KernelLoopInvocationDriver::new(
+            Arc::clone(&kernel_api),
+            identity,
+        ));
+        if let Err(e) = kernel.loop_service().install_driver(loop_driver) {
+            eprintln!("[daemon] loop controller install failed: {e:#}");
+        }
+        if let Err(e) = kernel.loop_service().resume_inflight() {
+            eprintln!("[daemon] loop resume failed: {e:#}");
+        }
+    } else {
+        eprintln!(
+            "[daemon] loop controller has no local device invocation identity; driver not installed"
+        );
     }
     boot_bus.emit_ok("loop-controller");
 
@@ -256,8 +336,8 @@ async fn main() -> anyhow::Result<()> {
     // Kernel — silently breaking session.list / discuss.subscribe.
     // Snapshot the sub-service handles used by the tick runner. The
     // schedule handle reads due work; the kernel handle is the C*
-    // unity entry — the tick runner constructs a RuntimeInvocation and
-    // routes through Kernel::invoke.
+    // unity entry — the tick runner constructs an SDK descriptor-bound
+    // request and routes it through Kernel::invoke.
     let schedule_for_tick = kernel.schedule_service();
     let kernel_for_tick: Arc<Kernel> = Arc::clone(&kernel);
 
@@ -274,18 +354,102 @@ async fn main() -> anyhow::Result<()> {
     // we pass None. A test or the standalone MCP server that
     // wants chat without any context injection passes
     // Some(Arc::new(Vec::new())) instead.
-    // Resolve user-rooted ability identity ONCE at daemon boot.
+    // Resolve user-scoped ability identity ONCE at daemon boot.
     // EASYNET_PAGES_USER + credentials.json get read here and
     // never again — the resolved value flows through to
     // build_registry_for_daemon as an explicit argument so the
     // registry build is deterministic and free of global env
     // state.
     boot_bus.emit_started("ability-registry");
-    let pages_identity =
-        easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::from_env();
+    let pages_identity = match daemon_config.mode() {
+        DaemonMode::Device | DaemonMode::Both => {
+            easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::try_from_env()
+                .context("resolve Pages identity for ability registry")?
+        }
+        DaemonMode::Hub => {
+            easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::default()
+        }
+    };
     let invocation_ledger = open_invocation_ledger();
-    let local_runtime = easynet_axon::invocation::LocalRuntime::new();
-    let hub_published_abilities = HubPublishedAbilityStore::new();
+    let authority_published_abilities = AuthorityPublishedAbilityStore::new();
+    let voice_calls = match daemon_config.mode() {
+        DaemonMode::Hub | DaemonMode::Both => {
+            easynet_cli::daemon::persistence::voice_calls::HubRealmVoiceCallRepository::from_env(
+                daemon_config.realm(),
+            )?
+        }
+        DaemonMode::Device => None,
+    };
+    let mut receipt_owner_uras = Vec::new();
+    let mut hosted_agent_device_ura = None;
+    let authority_context = match daemon_config.mode() {
+        DaemonMode::Hub => {
+            let hub_ura = easynet_cli::core::ura::hub_ura(daemon_config.realm());
+            receipt_owner_uras.push(hub_ura.clone());
+            easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
+                hub_ura,
+            )?
+        }
+        DaemonMode::Device | DaemonMode::Both => {
+            let creds = config::load_credentials().map_err(|err| {
+                anyhow::anyhow!(
+                    "daemon ability registry requires paired credentials in {} mode: {err}",
+                    daemon_config.mode().as_str()
+                )
+            })?;
+            let device_ura = easynet_cli::core::ura::device_ura(creds.realm_str(), &creds.node_id);
+            receipt_owner_uras.push(device_ura.clone());
+            let hosted_agent_uras = easynet_cli::daemon::persistence::hosted_agent_authority_roots(
+            )
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "daemon ability registry requires readable hosted-agent lifecycle state: {err}"
+                )
+            })?;
+            hosted_agent_device_ura = Some(device_ura.clone());
+            match daemon_config.mode() {
+                DaemonMode::Device => easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(device_ura, hosted_agent_uras)?,
+                DaemonMode::Both => {
+                    receipt_owner_uras.push(easynet_cli::core::ura::hub_ura(daemon_config.realm()));
+                    easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_combined_authority_roots_with_hosted_agents(device_ura, hosted_agent_uras)?
+                },
+                DaemonMode::Hub => unreachable!("Hub mode handled above"),
+            }
+        }
+    };
+    let mut receipt_authority_config =
+        easynet_cli::daemon::axon_bridge::runtime_factory::ProductionReceiptAuthorityConfig::new(
+            receipt_owner_uras,
+        );
+    if let Some(device_ura) = hosted_agent_device_ura {
+        let inventory = authority_context
+            .hosted_agent_signing_inventory()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "hosted-Agent receipt authority requires the catalog-owned inventory"
+                )
+            })?;
+        receipt_authority_config =
+            receipt_authority_config.with_hosted_agent_inventory(device_ura, inventory);
+    }
+    let runtime_trust_anchor = easynet_cli::daemon::trust::cell::SharedTrustAnchor::new(Arc::new(
+        easynet_cli::daemon::trust::anchor::RealmTrustAnchor::default(),
+    ));
+    let federation_runtime = easynet_cli::daemon::invocation::build_invocation_federation_runtime(
+        &daemon_config,
+        runtime_trust_anchor.clone(),
+    )
+    .context("build canonical invocation federation providers")?;
+    let daemon_runtime =
+        easynet_cli::daemon::axon_bridge::runtime_factory::build_production_local_runtime(
+            receipt_authority_config,
+            federation_runtime.trusted_identity_resolver(),
+            easynet_cli::daemon::axon_bridge::runtime_factory::RuntimePersistenceConfig::persistent(
+                config::state_dir().join("axon-invocations"),
+            ),
+        )
+        .map_err(|error| anyhow::anyhow!("build owner-bound Axon receipt runtime: {error}"))?;
+    let local_runtime = daemon_runtime.runtime();
     // **Phase 5c**. The `HotAgentRegistrar` cell is constructed
     // here so it can be shared between:
     //   * the registry's `agent.start` / `.stop` handler
@@ -309,25 +473,42 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(discover_ability::DeferredDiscoverFederationResolver::new());
     let discover_federation_resolver: discover_ability::SharedDiscoverFederationResolver =
         discover_federation_resolver_cell.clone();
+    let access_control_stores = Arc::new(
+        easynet_cli::daemon::persistence::access_control::AccessControlStoreRegistry::default(),
+    );
     let built_registry = ability_catalog::build_registry_for_daemon_result(
         ability_catalog::RegistryDaemonBuildConfig {
-            services: ability_catalog::RegistryBuildServices::new(
+            services: ability_catalog::RegistryBuildServices::new_with_access_control_stores(
                 kernel.session_service(),
                 kernel.permission_service(),
                 kernel.discuss_service(),
                 kernel.schedule_service(),
                 kernel.loop_service(),
+                Arc::clone(&access_control_stores),
             )
             .with_discover_federation_resolver(Arc::clone(&discover_federation_resolver)),
             invocation_ledger: invocation_ledger.clone(),
             loaders: None,
             pages_identity,
             local_runtime: Some(Arc::clone(&local_runtime)),
-            authority_context: None,
+            authority_context,
             hot_agent_registrar_cell: Arc::clone(&hot_agent_registrar_cell),
-            shared_stores: ability_catalog::RegistrySharedStores::new(Arc::clone(
-                &hub_published_abilities,
-            )),
+            shared_stores: {
+                let stores = ability_catalog::RegistrySharedStores::new(Arc::clone(
+                    &authority_published_abilities,
+                ));
+                match voice_calls {
+                    Some(repository) => {
+                        let provider =
+                            easynet_cli::daemon::ability::builtins::resources::voice_contract::VoiceCallProviderAssembly::try_new(
+                                repository,
+                            )
+                            .map_err(|error| anyhow::anyhow!("assemble Hub Voice provider: {error}"))?;
+                        stores.with_voice_call_provider_assembly(provider)
+                    }
+                    None => stores,
+                }
+            },
         },
     )?;
     let registry = Arc::clone(&built_registry.catalog);
@@ -353,20 +534,20 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // Attach the live runtime to the device-ability registrar and replay
-    // any durably-installed device abilities back into it. This is the
-    // boot half of the `ability.deploy` install transaction: without it
-    // the registrar's runtime cell stays empty and deploy fails honestly
-    // ("registrar not wired"); with it, every previously-deployed device
-    // ability (host_stream generators, shell forwarders) is re-bound and
-    // routable before the first invocation can land. Boot replay is
-    // idempotent and reports stale/errored rows rather than skipping
-    // silently (plan invariant 7).
-    if let Some(device_registrar) = built_registry.device_registrar_cell.get() {
-        device_registrar.set_control_plane_catalog(Arc::downgrade(&registry))?;
-        device_registrar.set_runtime(Arc::clone(&local_runtime))?;
-        let report = device_registrar.replay_from_store().await;
-        report_device_ability_replay(&report)?;
+    // Attach and replay the ability deployment registrar only when this process
+    // actually hosts Device authority. Hub-only mode has no Device runtime
+    // plane, so it must not read or materialize durable ability deployments.
+    // In Device/Both this is the boot half of the `ability.deploy` install
+    // transaction and remains fail-closed on stale or errored rows.
+    if matches!(daemon_config.mode(), DaemonMode::Device | DaemonMode::Both) {
+        if let Some(ability_deployment_registrar) =
+            built_registry.ability_deployment_registrar_cell.get()
+        {
+            ability_deployment_registrar.set_control_plane_catalog(Arc::downgrade(&registry))?;
+            ability_deployment_registrar.set_runtime(Arc::clone(&local_runtime))?;
+            let report = ability_deployment_registrar.replay_from_store().await;
+            report_ability_deployment_replay(&report)?;
+        }
     }
 
     // Keep the registry object alive for dynamic side tables whose
@@ -374,34 +555,33 @@ async fn main() -> anyhow::Result<()> {
     // execution itself goes through `local_runtime`.
     let _registry = Arc::clone(&registry);
 
-    // Stage-1 resolver. Local node id from EASYNET_NODE_ID env (set
-    // by the supervisor from credentials.json) or "self" as a
-    // harness default; controls loopback-vs-remote routing.
-    let resolver: Arc<dyn TargetResolver> = Arc::new(LocalNodeResolver::new(local_node));
-    let adapter = RuntimeDispatchAdapter::new_with_runtime(Arc::clone(&local_runtime), resolver);
-
-    // Daemon RuntimeInvocation transport: gRPC InvocationServer.
+    // Canonical daemon Invocation transport: gRPC InvocationServer.
     // Start this BEFORE any other daemon listener binds so
     // `daemon-config.toml` is validated at the top of the boot order
-    // rather than after control/runtime-dispatch sockets already
-    // exist. That keeps the PR-1 "load config before any listener
-    // bind" invariant honest whenever the feature-gated transport is compiled in.
+    // rather than after the control socket already exists. That preserves
+    // the PR-1 invariant that config loads before any listener binds whenever
+    // the feature-gated transport is compiled in.
     // Hold the session-shutdown handle for the daemon's lifetime;
     // dropping it at shutdown drains the live `session.open` dial
     // (F-007 — was Box::leak'd). Bound directly from the boot result:
     // Ok yields the handle, Err returns, so there is no never-read
     // placeholder.
-    #[cfg(feature = "axon-pb")]
     let session_shutdown = {
         boot_bus.emit_started("daemon-invocation-transport");
-        match easynet_cli::daemon::invocation::start_daemon_invocation_transport(
-            Arc::clone(&local_runtime),
+        let dependencies = easynet_cli::daemon::invocation::InvocationTransportDependencies {
+            daemon_runtime: daemon_runtime.clone(),
+            federation_runtime: federation_runtime.clone(),
+            runtime_trust_anchor: runtime_trust_anchor.clone(),
+            local_ability_catalog: Arc::clone(&registry),
+            access_control_stores: Arc::clone(&access_control_stores),
+            invocation_cancellations: built_registry.invocation_cancellations.clone(),
             invocation_ledger,
-            Arc::clone(&hot_agent_registrar_cell),
-            Some(Arc::clone(&built_registry.plugin_runtime_manager)),
-            Arc::clone(&hub_published_abilities),
-            Some(Arc::clone(&discover_federation_resolver_cell)),
-        ) {
+            hot_agent_registrar_cell: Arc::clone(&hot_agent_registrar_cell),
+            plugin_runtime_manager: Some(Arc::clone(&built_registry.plugin_runtime_manager)),
+            authority_published_abilities: Arc::clone(&authority_published_abilities),
+            discover_federation_resolver: Some(Arc::clone(&discover_federation_resolver_cell)),
+        };
+        match easynet_cli::daemon::invocation::start_daemon_invocation_transport(dependencies) {
             Ok(handle) => {
                 boot_bus.emit_ok("daemon-invocation-transport");
                 handle
@@ -413,10 +593,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     };
-    #[cfg(not(feature = "axon-pb"))]
-    {
-        boot_bus.emit_skipped("daemon-invocation-transport");
-    }
+    let invocation_capability_flags = session_shutdown.capability_flags().to_vec();
 
     // Clipboard tracker (Context surface). Always spawned; the thread
     // is inert (config-stat + sleep) until `easynet context clipboard
@@ -437,39 +614,19 @@ async fn main() -> anyhow::Result<()> {
     boot_bus.emit_ok("ability-health");
 
     // Schedule tick runner. Fires due schedules every TICK_PERIOD
-    // by constructing a RuntimeInvocation adapter record per fire and routing it
-    // through Kernel::invoke. The Kernel admits the Session,
+    // by constructing a canonical descriptor-bound request per fire and routing
+    // it through Kernel::invoke. The Kernel admits the Session,
     // dispatches the agent, and terminates — Clients subscribed
     // to session.attach see the same lifecycle they would
     // see for a Client-initiated invoke.
     boot_bus.emit_started("schedule-tick");
-    spawn_schedule_tick(kernel_for_tick, schedule_for_tick);
-    boot_bus.emit_ok("schedule-tick");
-
-    // Step-3 runtime-dispatch UDS responder. Listens on a
-    // separate socket from `control.sock` because the runtime side
-    // talks newline-delimited single-line JSON, while the CLI/MCP IPC
-    // server speaks length-delimited frames. axon-runtime opens this
-    // socket only when it has resolved a `runtime_local_tools` entry
-    // whose `dispatch_endpoint` points at it — i.e., one of the
-    // abilities the daemon registered via `runtime.register_local_tool`
-    // at boot. Binding failure is a boot failure because a daemon that
-    // cannot accept runtime-local delegation is not fully Ready.
-    boot_bus.emit_started("runtime-dispatch");
-    let runtime_dispatch_server = match runtime_dispatch::RuntimeDispatchServer::bind().await {
-        Ok(server) => server,
-        Err(err) => {
-            boot_bus.emit_failed("runtime-dispatch", err.to_string());
-            return Err(err);
-        }
-    };
-    let dispatch_adapter = adapter.clone();
-    tokio::spawn(async move {
-        if let Err(e) = runtime_dispatch_server.serve(dispatch_adapter).await {
-            eprintln!("[runtime-dispatch] responder exited: {e:#}");
-        }
-    });
-    boot_bus.emit_ok("runtime-dispatch");
+    if let Some(identity) = runtime_invocation_identity {
+        spawn_schedule_tick(kernel_for_tick, schedule_for_tick, identity);
+        boot_bus.emit_ok("schedule-tick");
+    } else {
+        eprintln!("[daemon] schedule tick has no local device invocation identity; skipped");
+        boot_bus.emit_skipped("schedule-tick");
+    }
 
     // RFC-006-B v0.6 — Pages reference system listener.
     //
@@ -512,7 +669,7 @@ async fn main() -> anyhow::Result<()> {
                 return Err(err);
             }
         };
-    let runtime_discovery = match ready_runtime_discovery() {
+    let runtime_discovery = match ready_runtime_discovery(invocation_capability_flags) {
         Ok(snapshot) => snapshot,
         Err(err) => {
             boot_bus.emit_failed("control-discovery", err.to_string());
@@ -525,8 +682,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // The control server remains a boot/status socket. Product
-    // ability calls use daemon.sock Invocation; `runtime-dispatch`
-    // remains the daemon-internal bridge for Axon local tool calls.
+    // ability calls use daemon.sock Invocation and dispatch to the
+    // embedded LocalRuntime in process.
     boot_bus.emit_started("control-ready");
     boot_bus.emit_ok("control-ready");
     boot_bus.emit_ready();
@@ -534,10 +691,19 @@ async fn main() -> anyhow::Result<()> {
     wait_for_shutdown_signal().await;
     // Cancel the session supervisor (drains the live `session.open`
     // dial -> clean Eof at the hub) before tearing down control sockets.
-    #[cfg(feature = "axon-pb")]
     drop(session_shutdown);
     cleanup_control_discovery();
     Ok(())
+}
+
+struct KeyServiceShutdownGuard;
+
+impl Drop for KeyServiceShutdownGuard {
+    fn drop(&mut self) {
+        if let Err(error) = easynet_cli::daemon::keyring::lifecycle::shutdown_key_service() {
+            eprintln!("[daemon] key-service shutdown failed: {error:#}");
+        }
+    }
 }
 
 fn resolve_pages_start_port() -> anyhow::Result<u16> {
@@ -558,20 +724,158 @@ fn resolve_pages_start_port() -> anyhow::Result<u16> {
     }
 }
 
-fn ready_runtime_discovery() -> anyhow::Result<server::ControlRuntimeDiscovery> {
+fn ready_runtime_discovery(
+    capability_flags: Vec<String>,
+) -> anyhow::Result<server::ControlRuntimeDiscovery> {
     let config = DaemonConfig::load(&default_config_path())?;
-    let node_id = std::env::var("EASYNET_NODE_ID")
-        .ok()
-        .map(|raw| raw.trim().to_string())
-        .filter(|raw| !raw.is_empty());
+    let ready_identity = ready_daemon_runtime_identity(&config)?;
+    let capabilities = ReadyRuntimeCapabilities::new(capability_flags);
+    capabilities.validate_for_mode(
+        config.mode(),
+        ready_identity.paired_user_runtime_signer_required,
+    )?;
     Ok(server::ControlRuntimeDiscovery {
         invocation_endpoint: resolved_local_uds_path_with_env_override(),
+        daemon_identity: ready_identity.daemon_identity,
+        capability_flags: capabilities.into_flags(),
+    })
+}
+
+#[derive(Debug, Clone)]
+struct ReadyRuntimeCapabilities {
+    flags: Vec<String>,
+}
+
+impl ReadyRuntimeCapabilities {
+    fn new(flags: Vec<String>) -> Self {
+        Self { flags }
+    }
+
+    fn contains(&self, flag: &str) -> bool {
+        self.flags.iter().any(|candidate| candidate == flag)
+    }
+
+    fn validate_for_mode(
+        &self,
+        mode: DaemonMode,
+        paired_user_runtime_signer_required: bool,
+    ) -> anyhow::Result<()> {
+        match mode {
+            DaemonMode::Hub => Ok(()),
+            DaemonMode::Device | DaemonMode::Both => {
+                if !paired_user_runtime_signer_required
+                    || self.contains(discovery::flags::PAIRED_USER_RUNTIME_SIGNER)
+                {
+                    Ok(())
+                } else {
+                    anyhow::bail!(
+                        "{} daemon ready discovery requires invocation boot proof `{}`; \
+                         refusing to advertise Ready before paired User caller-signer custody is available",
+                        mode.as_str(),
+                        discovery::flags::PAIRED_USER_RUNTIME_SIGNER
+                    )
+                }
+            }
+        }
+    }
+
+    fn into_flags(self) -> Vec<String> {
+        self.flags
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ReadyDaemonRuntimeIdentity {
+    daemon_identity: DaemonIdentity,
+    paired_user_runtime_signer_required: bool,
+}
+
+fn ready_daemon_runtime_identity(
+    config: &DaemonConfig,
+) -> anyhow::Result<ReadyDaemonRuntimeIdentity> {
+    let (node_id, paired_user_runtime_signer_required) = match config.mode() {
+        DaemonMode::Hub => (None, false),
+        DaemonMode::Device | DaemonMode::Both => {
+            let credentials = config::load_credentials().with_context(|| {
+                format!(
+                    "{} daemon ready discovery requires paired credentials",
+                    config.mode().as_str()
+                )
+            })?;
+            if credentials.realm_str() != config.realm() {
+                anyhow::bail!(
+                    "daemon ready discovery credentials realm `{}` does not match configured realm `{}`",
+                    credentials.realm_str(),
+                    config.realm()
+                );
+            }
+            let node_id = credentials.node_id.trim();
+            if node_id.is_empty() {
+                anyhow::bail!("daemon ready discovery paired credentials node_id is empty");
+            }
+            (
+                Some(node_id.to_string()),
+                matches!(
+                    credentials.runtime_user_binding()?,
+                    config::RuntimeUserBinding::Bound { .. }
+                ),
+            )
+        }
+    };
+    Ok(ReadyDaemonRuntimeIdentity {
         daemon_identity: DaemonIdentity {
             mode: config.mode().as_str().to_string(),
             realm: config.realm().to_string(),
             node_id,
         },
+        paired_user_runtime_signer_required,
     })
+}
+
+fn ready_daemon_identity(config: &DaemonConfig) -> anyhow::Result<DaemonIdentity> {
+    Ok(ready_daemon_runtime_identity(config)?.daemon_identity)
+}
+
+fn local_runtime_invocation_identity(
+    config: &DaemonConfig,
+) -> anyhow::Result<Option<LocalRuntimeInvocationIdentity>> {
+    let identity = ready_daemon_identity(config)?;
+    let Some(node_id) = identity.node_id else {
+        return Ok(None);
+    };
+    LocalRuntimeInvocationIdentity::new(identity.realm, NodeId::new(node_id)).map(Some)
+}
+
+fn media_resource_bootstrap_owner_agent(
+    config: &DaemonConfig,
+    identity: &DaemonIdentity,
+) -> anyhow::Result<Option<String>> {
+    if matches!(config.mode(), DaemonMode::Hub) {
+        return Ok(None);
+    }
+    if identity.realm != config.realm() {
+        anyhow::bail!(
+            "media resource bootstrap identity realm `{}` does not match configured realm `{}`",
+            identity.realm,
+            config.realm()
+        );
+    }
+    let node_id = identity
+        .node_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{} media resource bootstrap requires daemon_identity.node_id",
+                config.mode().as_str()
+            )
+        })?;
+    Ok(Some(easynet_cli::core::ura::device_agent_ura(
+        config.realm(),
+        node_id,
+        easynet_cli::daemon::ability::names::resources::MEDIA_SYSTEM_AGENT_ID,
+    )))
 }
 
 fn media_resource_bootstrap_enabled() -> bool {
@@ -608,7 +912,13 @@ async fn wait_for_shutdown_signal() {
 }
 
 fn cleanup_control_discovery() {
-    let path = discovery::default_path();
+    let path = match discovery::try_default_path() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("[daemon] skipped control discovery cleanup: {err:#}");
+            return;
+        }
+    };
     if let Err(err) = discovery::remove(&path) {
         eprintln!(
             "[daemon] failed to remove control discovery file at {}: {err:#}",
@@ -617,7 +927,7 @@ fn cleanup_control_discovery() {
     }
 }
 
-fn open_invocation_ledger() -> Option<Arc<easynet_axon::invocation::InvocationLedger>> {
+fn open_invocation_ledger() -> Option<Arc<axon_sdk::invocation::InvocationLedger>> {
     let config = match DaemonConfig::load(&default_config_path()) {
         Ok(config) => config,
         Err(err) => {
@@ -626,7 +936,7 @@ fn open_invocation_ledger() -> Option<Arc<easynet_axon::invocation::InvocationLe
         }
     };
     let path = config.ledger_dir().join("invocations.redb");
-    match easynet_axon::invocation::InvocationLedger::open(&path) {
+    match axon_sdk::invocation::InvocationLedger::open(&path) {
         Ok(ledger) => Some(Arc::new(ledger)),
         Err(err) => {
             eprintln!(
@@ -640,57 +950,58 @@ fn open_invocation_ledger() -> Option<Arc<easynet_axon::invocation::InvocationLe
 
 /// Spawn the schedule tick runner. Every `TICK_PERIOD` it asks the
 /// ScheduleService for due fires and routes each through
-/// `Kernel::invoke` as a RuntimeInvocation adapter record:
+/// `Kernel::invoke` as an SDK descriptor-bound request:
 ///
 ///   ability       = "<target_agent>.chat"
-///   caller        = local node URA
-///   callee        = local node URA (v1 single-node)
+///   caller        = persisted accountable User Principal
+///   callee        = persisted hosted Agent URA
+///   execution host = the Agent placement's Device URA
 ///   subject       = schedule URA
 ///   nonce         = fresh
-///   causal_context = Null   (v1; v2 will cite prior receipt)
+///   causal_context = descriptor-bound User root; the schedule fire ledger
+///                    carries durable create/fire causality
 ///   args          = { "prompt": "scheduled fire of <id> at <time>" }
 ///
-/// Kernel::invoke admits a Session keyed by invocation_id and
+/// Kernel::invoke admits a Session keyed by Axon's invocation id and
 /// emits the lifecycle events Clients subscribe to via
-/// session.attach. Failed agent dispatches surface as
-/// `Failed(reason)` Receipts — operators see the same diagnostic
-/// they would see if they dispatched the agent manually.
+/// session.attach. Failed agent dispatches surface through Axon's signed
+/// terminal receipt, so operators see the same diagnostic they would see if
+/// they dispatched the agent manually.
 ///
-/// v1 idempotency: an in-memory `last_fire_at` map keyed by
-/// `schedule_id` keeps a fire from re-emitting on the next tick if
-/// the cron expression's resolution is finer than the tick period.
-/// Daemon restart loses this state — schedules due since the last
-/// fire will refire once on resume per their misfire policy.
-fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
+/// Idempotency is durable: the Schedule aggregate reserves a fire before
+/// dispatch and stores its terminal receipt/error afterward.
+fn spawn_schedule_tick(
+    kernel: Arc<Kernel>,
+    schedule: Arc<ScheduleService>,
+    identity: LocalRuntimeInvocationIdentity,
+) {
     const TICK_PERIOD: Duration = Duration::from_secs(15);
     tokio::spawn(async move {
-        let last_fire: Arc<Mutex<HashMap<ScheduleId, i64>>> = Arc::new(Mutex::new(HashMap::new()));
         let mut interval = tokio::time::interval(TICK_PERIOD);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let _ = interval.tick().await; // skip the immediate-fire tick
         loop {
             interval.tick().await;
             let now = Utc::now();
-            let lookup_last = {
-                let lf = Arc::clone(&last_fire);
-                move |id: &ScheduleId| -> Option<i64> {
-                    lf.lock().ok().and_then(|g| g.get(id).copied())
+            let due = match schedule.due(now) {
+                Ok(due) => due,
+                Err(err) => {
+                    eprintln!("[schedule-tick] due selection failed: {err:#}");
+                    continue;
                 }
             };
-            let due = schedule.due(now, lookup_last);
             if due.is_empty() {
                 continue;
             }
             for fire in due {
-                let now_ms = now.timestamp_millis();
-                if let Ok(mut g) = last_fire.lock() {
-                    g.insert(fire.schedule_id.clone(), now_ms);
-                }
-                let entry = match schedule
-                    .list()
-                    .into_iter()
-                    .find(|s| s.id == fire.schedule_id)
-                {
+                let schedules = match schedule.list() {
+                    Ok(schedules) => schedules,
+                    Err(err) => {
+                        eprintln!("[schedule-tick] schedule snapshot failed: {err:#}");
+                        continue;
+                    }
+                };
+                let entry = match schedules.into_iter().find(|s| s.id == fire.schedule_id) {
                     Some(e) => e,
                     None => {
                         eprintln!(
@@ -701,42 +1012,74 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                     }
                 };
                 let agent = entry.target_agent.as_str().to_string();
-                // Use the schedule's prompt template if present;
-                // otherwise fall back to a heartbeat-style placeholder.
                 // The template renderer substitutes {{schedule_id}},
                 // {{fire_at_iso}}, {{catch_up}}, {{target_agent}}.
-                let prompt = match &entry.prompt {
-                    Some(template) => easynet_cli::daemon::execution::schedule::render_prompt(
-                        template,
-                        fire.schedule_id.as_str(),
-                        &fire.fire_at,
-                        fire.catch_up,
-                        &agent,
-                    ),
-                    None => format!(
-                        "Scheduled fire of {} at {} (catch_up={})",
-                        fire.schedule_id, fire.fire_at, fire.catch_up
-                    ),
-                };
-                let local_device_ura =
-                    easynet_cli::core::ura::device_ura("default", entry.target_node.as_str());
-                let schedule_subject_ura = easynet_cli::core::ura::resource_dot_ura(
-                    "default",
-                    &format!("schedule.{}", fire.schedule_id.as_str()),
-                    "",
+                let prompt = easynet_cli::daemon::execution::schedule::render_prompt(
+                    &entry.prompt,
+                    fire.schedule_id.as_str(),
+                    &fire.fire_at,
+                    fire.catch_up,
+                    &agent,
                 );
-                let inv = match RuntimeInvocation::try_new(
-                    local_device_ura.clone(),
-                    local_device_ura,
-                    format!("{}.chat", agent),
-                    schedule_subject_ura,
-                    RuntimeCausalContext::Null,
-                    serde_json::json!({"prompt": prompt}),
-                ) {
-                    Ok(inv) => inv,
+                if entry.target_node != *identity.local_node() {
+                    eprintln!(
+                        "[schedule-tick] schedule {} targets node {} but this local runner owns {}; remote scheduled dispatch requires the routed invocation path",
+                        fire.schedule_id,
+                        entry.target_node,
+                        identity.local_node()
+                    );
+                    continue;
+                }
+                if entry.authority.execution_host_ura != identity.local_device_ura() {
+                    eprintln!(
+                        "[schedule-tick] schedule {} authority host does not match this runtime",
+                        fire.schedule_id
+                    );
+                    continue;
+                }
+                let fire_at_unix_ms = fire.fire_at.timestamp_millis();
+                if let Err(err) = schedule.reserve_fire(&fire) {
+                    eprintln!(
+                        "[schedule-tick] reserve {} fire {} failed: {err:#}",
+                        fire.schedule_id, fire_at_unix_ms
+                    );
+                    continue;
+                }
+                let target_agent_ura = entry.authority.target_callee_ura.clone();
+                let (target_agent_ura, schedule_subject_ura) =
+                    schedule_tick_invocation_uras(&identity, &target_agent_ura, &fire.schedule_id);
+                let payload = match serde_json::to_vec(&serde_json::json!({"prompt": prompt})) {
+                    Ok(payload) => payload,
                     Err(err) => {
+                        let _ = schedule.fail_fire(
+                            &fire.schedule_id,
+                            fire_at_unix_ms,
+                            format!("encode invocation payload: {err:#}"),
+                        );
                         eprintln!(
-                            "[schedule-tick] invalid invocation for {}: {err:#}",
+                            "[schedule-tick] encode invocation for {}: {err:#}",
+                            fire.schedule_id
+                        );
+                        continue;
+                    }
+                };
+                let request = match kernel.prepare_accountable_user_rpc(
+                    &entry.authority.accountable_user_ura,
+                    &target_agent_ura,
+                    &format!("{}.chat", agent),
+                    &schedule_subject_ura,
+                    payload,
+                    axon_sdk::invocation::CausalContext::None,
+                ) {
+                    Ok(request) => request,
+                    Err(err) => {
+                        let _ = schedule.fail_fire(
+                            &fire.schedule_id,
+                            fire_at_unix_ms,
+                            format!("prepare canonical invocation: {err:#}"),
+                        );
+                        eprintln!(
+                            "[schedule-tick] prepare canonical invocation for {}: {err:#}",
                             fire.schedule_id
                         );
                         continue;
@@ -747,14 +1090,28 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
                     fire.schedule_id, agent, fire.fire_at
                 );
                 let kernel_clone = Arc::clone(&kernel);
-                tokio::task::spawn_blocking(move || match kernel_clone.invoke(inv) {
-                    Ok(receipt) => {
+                let schedule_clone = Arc::clone(&schedule);
+                let schedule_id = fire.schedule_id.clone();
+                tokio::task::spawn_blocking(move || match kernel_clone.invoke(request) {
+                    Ok(finalized) => {
+                        let _ = schedule_clone.complete_fire(
+                            &schedule_id,
+                            fire_at_unix_ms,
+                            finalized.terminal_receipt.invocation_id(),
+                            finalized.terminal_receipt.self_hash(),
+                        );
                         eprintln!(
                             "[schedule-tick]   receipt {} → {:?}",
-                            receipt.invocation_id, receipt.terminal
+                            finalized.terminal_receipt.invocation_id(),
+                            finalized.terminal_state
                         );
                     }
                     Err(e) => {
+                        let _ = schedule_clone.fail_fire(
+                            &schedule_id,
+                            fire_at_unix_ms,
+                            format!("{e:#}"),
+                        );
                         eprintln!("[schedule-tick]   invoke error: {e:#}");
                     }
                 });
@@ -763,33 +1120,385 @@ fn spawn_schedule_tick(kernel: Arc<Kernel>, schedule: Arc<ScheduleService>) {
     });
 }
 
+fn schedule_tick_invocation_uras(
+    identity: &LocalRuntimeInvocationIdentity,
+    target_agent_ura: &str,
+    schedule_id: &ScheduleId,
+) -> (String, String) {
+    (
+        target_agent_ura.to_string(),
+        identity.resource_subject_ura(&format!("schedule.{}", schedule_id.as_str()), ""),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use easynet_cli::daemon::ability::builtins::device_control::ability_management::registrar::ReplayReport;
+    use easynet_cli::daemon::ability::builtins::device_control::ability_management::registrar::{
+        ReplayOutcome, ReplayOutcomeStatus, ReplayReport,
+    };
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    struct TestHomeGuard {
+        _lock: MutexGuard<'static, ()>,
+        temp: tempfile::TempDir,
+        previous_home: Option<String>,
+        previous_node_id: Option<String>,
+    }
+
+    impl TestHomeGuard {
+        fn new() -> Self {
+            static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+            let lock = LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let temp = tempfile::tempdir().expect("temp home");
+            let previous_home = std::env::var("HOME").ok();
+            let previous_node_id = std::env::var("EASYNET_NODE_ID").ok();
+            std::env::set_var("HOME", temp.path());
+            std::env::remove_var("EASYNET_NODE_ID");
+            Self {
+                _lock: lock,
+                temp,
+                previous_home,
+                previous_node_id,
+            }
+        }
+    }
+
+    impl Drop for TestHomeGuard {
+        fn drop(&mut self) {
+            match &self.previous_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match &self.previous_node_id {
+                Some(value) => std::env::set_var("EASYNET_NODE_ID", value),
+                None => std::env::remove_var("EASYNET_NODE_ID"),
+            }
+            let _ = self.temp.path();
+        }
+    }
+
+    fn write_daemon_config(raw: &str) {
+        let path = default_config_path();
+        std::fs::create_dir_all(path.parent().expect("daemon config parent")).expect("mkdir");
+        std::fs::write(path, raw).expect("write daemon config");
+    }
+
+    fn paired_credentials(
+        realm: &str,
+        node_id: &str,
+    ) -> easynet_cli::daemon::persistence::config::Credentials {
+        easynet_cli::daemon::persistence::config::Credentials {
+            node_id: node_id.into(),
+            credential_token: "token".into(),
+            hub_endpoint: "https://hub.example:50443".into(),
+            realm: realm.into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        }
+    }
+
+    fn federation_device_only_credentials(
+        realm: &str,
+        node_id: &str,
+    ) -> easynet_cli::daemon::persistence::config::Credentials {
+        let mut credentials = paired_credentials(realm, node_id);
+        credentials.credential_token.clear();
+        credentials.username = None;
+        credentials.user_id = None;
+        credentials.hub_pubkey_b64 = Some("hub-pubkey".into());
+        credentials.join_receipt_hash = Some("sha256:test-join-receipt".into());
+        credentials
+    }
 
     #[test]
-    fn device_replay_boot_policy_rejects_stale_rows() {
+    fn ability_deployment_replay_boot_policy_rejects_stale_rows() {
         let report = ReplayReport {
             stale: 1,
             errored: 1,
             ..ReplayReport::default()
         };
 
-        assert!(device_ability_replay_fatal_message(&report)
+        assert!(ability_deployment_replay_fatal_message(&report)
             .unwrap()
             .contains("stale=1"));
     }
 
     #[test]
-    fn device_replay_boot_policy_still_rejects_runtime_wiring_bug() {
+    fn ability_deployment_replay_boot_policy_still_rejects_runtime_wiring_bug() {
         let report = ReplayReport {
             runtime_not_ready: true,
             ..ReplayReport::default()
         };
 
-        assert!(device_ability_replay_fatal_message(&report)
+        assert!(ability_deployment_replay_fatal_message(&report)
             .unwrap()
             .contains("runtime_not_ready=true"));
+    }
+
+    #[test]
+    fn ability_deployment_replay_boot_policy_reports_outcome_details() {
+        let report = ReplayReport {
+            errored: 1,
+            outcomes: vec![ReplayOutcome {
+                public_name: "er.generate".to_string(),
+                ability_ura: "easynet:///r/localhost/ability/device.old.er.generate".to_string(),
+                install_id: "dev-old".to_string(),
+                status: ReplayOutcomeStatus::Errored,
+                detail: "explicit authority scope rejected".to_string(),
+            }],
+            ..ReplayReport::default()
+        };
+
+        let message = ability_deployment_replay_fatal_message(&report).unwrap();
+        assert!(message.contains("errored=1"), "{message}");
+        assert!(message.contains("er.generate"), "{message}");
+        assert!(
+            message.contains("explicit authority scope rejected"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn ready_discovery_uses_paired_credentials_node_id_not_env() {
+        let _home = TestHomeGuard::new();
+        std::env::set_var("EASYNET_NODE_ID", "stale-env-node");
+        write_daemon_config(
+            r#"[daemon]
+mode = "device"
+realm = "tenant-a"
+hub_endpoint = "https://hub.example:50443"
+"#,
+        );
+        config::save_credentials(&paired_credentials("tenant-a", "credential-node"))
+            .expect("save paired credentials");
+
+        let discovery = ready_runtime_discovery(vec![
+            easynet_cli::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string(),
+        ])
+        .expect("ready discovery");
+
+        assert_eq!(
+            discovery.daemon_identity.node_id.as_deref(),
+            Some("credential-node")
+        );
+        assert!(
+            discovery.capability_flags.iter().any(|flag| {
+                flag == easynet_cli::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
+            }),
+            "device ready discovery must advertise signer readiness when boot proved it"
+        );
+    }
+
+    #[test]
+    fn ready_discovery_rejects_device_without_paired_user_signer_proof() {
+        let _home = TestHomeGuard::new();
+        write_daemon_config(
+            r#"[daemon]
+mode = "device"
+realm = "tenant-a"
+hub_endpoint = "https://hub.example:50443"
+"#,
+        );
+        config::save_credentials(&paired_credentials("tenant-a", "credential-node"))
+            .expect("save paired credentials");
+
+        let error =
+            ready_runtime_discovery(Vec::new()).expect_err("device Ready requires signer proof");
+
+        assert!(
+            error.to_string().contains(
+                easynet_cli::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
+            ),
+            "missing paired signer proof must be explicit: {error:#}"
+        );
+    }
+
+    #[test]
+    fn ready_discovery_accepts_device_only_credentials_without_paired_user_signer_proof() {
+        let _home = TestHomeGuard::new();
+        write_daemon_config(
+            r#"[daemon]
+mode = "device"
+realm = "tenant-a"
+hub_endpoint = "https://hub.example:50443"
+"#,
+        );
+        config::save_credentials(&federation_device_only_credentials(
+            "tenant-a",
+            "credential-node",
+        ))
+        .expect("save device-only credentials");
+
+        let discovery = ready_runtime_discovery(Vec::new())
+            .expect("device-only Ready must not require User signer proof");
+
+        assert_eq!(
+            discovery.daemon_identity.node_id.as_deref(),
+            Some("credential-node")
+        );
+        assert!(
+            discovery.capability_flags.iter().all(|flag| {
+                flag != easynet_cli::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER
+            }),
+            "device-only Ready must not advertise unproven paired-user signer readiness"
+        );
+    }
+
+    #[test]
+    fn ready_discovery_keeps_hub_independent_from_paired_user_signer_proof() {
+        let _home = TestHomeGuard::new();
+        write_daemon_config(
+            r#"[daemon]
+mode = "hub"
+realm = "tenant-a"
+"#,
+        );
+
+        let discovery = ready_runtime_discovery(Vec::new()).expect("hub ready discovery");
+
+        assert_eq!(discovery.daemon_identity.mode, "hub");
+        assert!(discovery.daemon_identity.node_id.is_none());
+        assert!(
+            discovery.capability_flags.is_empty(),
+            "hub ready discovery must not invent device paired-user signer proof"
+        );
+    }
+
+    #[test]
+    fn local_runtime_invocation_identity_uses_paired_credentials_not_env() {
+        let _home = TestHomeGuard::new();
+        std::env::set_var("EASYNET_NODE_ID", "stale-env-node");
+        write_daemon_config(
+            r#"[daemon]
+mode = "device"
+realm = "tenant-a"
+hub_endpoint = "https://hub.example:50443"
+"#,
+        );
+        config::save_credentials(&paired_credentials("tenant-a", "credential-node"))
+            .expect("save paired credentials");
+        let config = DaemonConfig::load(&default_config_path()).expect("load config");
+
+        let identity = local_runtime_invocation_identity(&config)
+            .expect("runtime identity")
+            .expect("device identity");
+
+        assert_eq!(
+            identity.local_device_ura(),
+            "easynet:///r/tenant-a/device/credential-node"
+        );
+        assert!(!identity.local_device_ura().contains("stale-env-node"));
+        assert!(!identity.local_device_ura().contains("/r/default/"));
+    }
+
+    #[test]
+    fn local_runtime_invocation_identity_is_absent_for_hub_without_device_node() {
+        let _home = TestHomeGuard::new();
+        write_daemon_config(
+            r#"[daemon]
+mode = "hub"
+realm = "tenant-a"
+listen_tcp = "127.0.0.1:50443"
+tls_cert_pem = "/tmp/cert.pem"
+tls_key_pem = "/tmp/key.pem"
+"#,
+        );
+        let config = DaemonConfig::load(&default_config_path()).expect("load config");
+
+        let identity = local_runtime_invocation_identity(&config).expect("runtime identity");
+
+        assert!(identity.is_none());
+    }
+
+    #[test]
+    fn media_resource_bootstrap_owner_uses_ready_identity() {
+        let _home = TestHomeGuard::new();
+        std::env::set_var("EASYNET_NODE_ID", "stale-env-node");
+        write_daemon_config(
+            r#"[daemon]
+mode = "device"
+realm = "tenant-a"
+hub_endpoint = "https://hub.example:50443"
+"#,
+        );
+        config::save_credentials(&paired_credentials("tenant-a", "credential-node"))
+            .expect("save paired credentials");
+        let config = DaemonConfig::load(&default_config_path()).expect("load config");
+        let identity = ready_daemon_identity(&config).expect("ready identity");
+
+        let owner_agent = media_resource_bootstrap_owner_agent(&config, &identity)
+            .expect("media owner")
+            .expect("device media owner");
+
+        assert_eq!(
+            owner_agent,
+            "easynet:///r/tenant-a/agent/device.credential-node.media"
+        );
+        assert!(!owner_agent.contains("stale-env-node"));
+    }
+
+    #[test]
+    fn media_resource_bootstrap_owner_is_absent_for_hub() {
+        let _home = TestHomeGuard::new();
+        write_daemon_config(
+            r#"[daemon]
+mode = "hub"
+realm = "tenant-a"
+"#,
+        );
+        let config = DaemonConfig::load(&default_config_path()).expect("load config");
+        let identity = ready_daemon_identity(&config).expect("ready identity");
+
+        let owner_agent =
+            media_resource_bootstrap_owner_agent(&config, &identity).expect("media owner");
+
+        assert!(owner_agent.is_none());
+    }
+
+    #[test]
+    fn schedule_tick_invocation_uras_use_runtime_realm() {
+        let identity =
+            LocalRuntimeInvocationIdentity::new("tenant-a", NodeId::new("local-node")).unwrap();
+        let schedule_id = ScheduleId::new("nightly");
+        let target_agent_ura = "easynet:///r/tenant-a/agent/user-a.reporter";
+
+        let (callee, subject) =
+            schedule_tick_invocation_uras(&identity, target_agent_ura, &schedule_id);
+
+        assert_eq!(callee, target_agent_ura);
+        assert_eq!(subject, "easynet:///r/tenant-a/resource/schedule.nightly");
+        assert!(!callee.contains("/r/default/"));
+        assert!(!subject.contains("/r/default/"));
+    }
+
+    #[test]
+    fn ready_discovery_rejects_credentials_realm_mismatch() {
+        let _home = TestHomeGuard::new();
+        write_daemon_config(
+            r#"[daemon]
+mode = "device"
+realm = "tenant-a"
+hub_endpoint = "https://hub.example:50443"
+"#,
+        );
+        config::save_credentials(&paired_credentials("tenant-b", "credential-node"))
+            .expect("save paired credentials");
+
+        let err =
+            ready_runtime_discovery(Vec::new()).expect_err("realm mismatch must not publish ready");
+
+        assert!(
+            err.to_string().contains("does not match configured realm"),
+            "error should name the ready identity split: {err:#}"
+        );
     }
 }

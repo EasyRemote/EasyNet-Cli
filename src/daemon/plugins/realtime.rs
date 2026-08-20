@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::daemon::ability::builtins::resources::media;
 use crate::daemon::plugins::manifest::{
@@ -15,7 +15,7 @@ use crate::daemon::plugins::manifest::{
 };
 
 /// Runtime readiness for one plugin realtime capability declaration.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginRealtimeActivationStatus {
     /// The daemon ability catalog was not supplied, so readiness is unknown.
@@ -36,7 +36,7 @@ pub enum PluginRealtimeActivationStatus {
 /// This is not an AbilityDescriptor and it does not register handlers. It only
 /// tells the UI/CLI which existing daemon abilities can activate the declared
 /// realtime surface, and which gaps still need implementation.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PluginRealtimeActivationPlan {
     pub package_id: String,
     pub package_version: String,
@@ -65,12 +65,10 @@ impl PluginRealtimeActivationPlan {
     }
 }
 
-/// Readiness of a declared realtime transport and its optional fallback.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+/// Readiness of the declared realtime transport.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PluginRealtimeTransportReadiness {
     pub primary: PluginRealtimeTransport,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fallback: Option<PluginRealtimeTransport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<PluginRealtimeTransport>,
     pub status: PluginRealtimeTransportReadinessStatus,
@@ -81,7 +79,6 @@ impl Default for PluginRealtimeTransportReadiness {
     fn default() -> Self {
         Self {
             primary: PluginRealtimeTransport::InvokeBidi,
-            fallback: None,
             selected: None,
             status: PluginRealtimeTransportReadinessStatus::Unknown,
             adapters: Vec::new(),
@@ -89,16 +86,15 @@ impl Default for PluginRealtimeTransportReadiness {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginRealtimeTransportReadinessStatus {
     Unknown,
     Ready,
-    FallbackReady,
     Blocked,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PluginRealtimeTransportAdapterReadiness {
     pub transport: PluginRealtimeTransport,
     pub required_abilities: Vec<String>,
@@ -109,7 +105,7 @@ pub struct PluginRealtimeTransportAdapterReadiness {
     pub status: PluginRealtimeTransportAdapterStatus,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginRealtimeTransportAdapterStatus {
     Unknown,
@@ -117,7 +113,7 @@ pub enum PluginRealtimeTransportAdapterStatus {
     Blocked,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PluginRealtimeTransportRoleReadiness {
     pub role: String,
     pub required: bool,
@@ -126,7 +122,7 @@ pub struct PluginRealtimeTransportRoleReadiness {
     pub status: PluginRealtimeTransportRoleStatus,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginRealtimeTransportRoleStatus {
     Unknown,
@@ -157,53 +153,24 @@ impl PluginRealtimeTransportAdapterRegistry {
             package_abilities,
             daemon_abilities,
         );
-        let fallback = capability.fallback_transport().map(|transport| {
-            adapter_readiness_for_transport(
-                transport,
-                required_abilities,
-                package_abilities,
-                daemon_abilities,
-            )
-        });
         let selected = if primary.status == PluginRealtimeTransportAdapterStatus::Ready {
             Some(primary.transport)
         } else {
-            fallback
-                .as_ref()
-                .filter(|readiness| readiness.status == PluginRealtimeTransportAdapterStatus::Ready)
-                .map(|readiness| readiness.transport)
+            None
         };
-        let status = match (
-            daemon_abilities,
-            selected,
-            primary.status,
-            fallback.as_ref(),
-        ) {
-            (None, _, _, _) => PluginRealtimeTransportReadinessStatus::Unknown,
-            (Some(_), Some(selected), _, _) if selected == capability.transport() => {
-                PluginRealtimeTransportReadinessStatus::Ready
-            }
-            (Some(_), Some(_), _, _) => PluginRealtimeTransportReadinessStatus::FallbackReady,
-            (Some(_), None, PluginRealtimeTransportAdapterStatus::Unknown, _) => {
+        let status = match (daemon_abilities, selected, primary.status) {
+            (None, _, _) => PluginRealtimeTransportReadinessStatus::Unknown,
+            (Some(_), Some(_), _) => PluginRealtimeTransportReadinessStatus::Ready,
+            (Some(_), None, PluginRealtimeTransportAdapterStatus::Unknown) => {
                 PluginRealtimeTransportReadinessStatus::Unknown
             }
-            (Some(_), None, _, Some(fallback))
-                if fallback.status == PluginRealtimeTransportAdapterStatus::Unknown =>
-            {
-                PluginRealtimeTransportReadinessStatus::Unknown
-            }
-            (Some(_), None, _, _) => PluginRealtimeTransportReadinessStatus::Blocked,
+            (Some(_), None, _) => PluginRealtimeTransportReadinessStatus::Blocked,
         };
-        let mut adapters = vec![primary];
-        if let Some(fallback) = fallback {
-            adapters.push(fallback);
-        }
         PluginRealtimeTransportReadiness {
             primary: capability.transport(),
-            fallback: capability.fallback_transport(),
             selected,
             status,
-            adapters,
+            adapters: vec![primary],
         }
     }
 }
@@ -625,7 +592,7 @@ resources = ["display"]
     }
 
     #[test]
-    fn activation_plan_maps_webrtc_transport_and_fallback_adapter() {
+    fn activation_plan_maps_webrtc_transport_adapter() {
         let manifest = PluginPackageManifest::parse(
             "plugins/test/plugin.toml",
             &test_manifest(
@@ -659,7 +626,6 @@ call_mode = "bidi"
 kind = "screen"
 modes = ["subscribe", "record"]
 transport = "webrtc"
-fallback_transport = "invoke_bidi"
 activation_abilities = [
   "test.screen.create_session",
   "test.screen.set_description",
@@ -687,10 +653,6 @@ resources = ["display"]
             PluginRealtimeTransport::Webrtc
         );
         assert_eq!(
-            plans[0].transport_adapter.fallback,
-            Some(PluginRealtimeTransport::InvokeBidi)
-        );
-        assert_eq!(
             plans[0].transport_adapter.selected,
             Some(PluginRealtimeTransport::Webrtc)
         );
@@ -698,7 +660,7 @@ resources = ["display"]
             plans[0].transport_adapter.status,
             PluginRealtimeTransportReadinessStatus::Ready
         );
-        assert_eq!(plans[0].transport_adapter.adapters.len(), 2);
+        assert_eq!(plans[0].transport_adapter.adapters.len(), 1);
         assert_eq!(
             plans[0].transport_adapter.adapters[0].status,
             PluginRealtimeTransportAdapterStatus::Ready

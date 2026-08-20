@@ -103,6 +103,77 @@ pub struct ResolvedFilesystemPath {
     pub virtual_root_path: Option<PathBuf>,
 }
 
+/// Validated authority for one daemon-local filesystem resource plane.
+///
+/// Device catalogs construct this once and inject it into filesystem ability
+/// providers. ResourceRef operations therefore never rediscover authority from
+/// HOME, credentials, or other ambient process state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilesystemResourceProvider {
+    owner_ura: String,
+}
+
+impl FilesystemResourceProvider {
+    pub fn for_device(owner_ura: impl Into<String>) -> Result<Self> {
+        let owner_ura = owner_ura.into();
+        validate_device_owner_ura(&owner_ura)?;
+        Ok(Self { owner_ura })
+    }
+
+    pub fn owner_ura(&self) -> &str {
+        &self.owner_ura
+    }
+
+    pub fn resource_ref_for_local_path(
+        &self,
+        path: &Path,
+        capability: FilesystemResourceCapability,
+    ) -> Result<Value> {
+        let mapped = map_local_path_to_virtual_resource(path)?;
+        self.resource_ref_for_virtual_path(&mapped.virtual_root, &mapped.relative_path, capability)
+    }
+
+    pub(crate) fn resource_ref_for_target_tmp_relative_path(
+        &self,
+        relative_path: &str,
+        capability: FilesystemResourceCapability,
+    ) -> Result<Value> {
+        validate_relative_path(relative_path)?;
+        self.resource_ref_for_virtual_path(VIRTUAL_ROOT_TMP, relative_path, capability)
+    }
+
+    pub(crate) fn resolve_filesystem_path(
+        &self,
+        args: &Value,
+        requested_capability: FilesystemResourceCapability,
+    ) -> Result<ResolvedFilesystemPath> {
+        resolve_filesystem_path_for_owner(args, requested_capability, true, &self.owner_ura)
+    }
+
+    pub(crate) fn resolve_filesystem_path_without_existing_target(
+        &self,
+        args: &Value,
+        requested_capability: FilesystemResourceCapability,
+    ) -> Result<ResolvedFilesystemPath> {
+        resolve_filesystem_path_for_owner(args, requested_capability, false, &self.owner_ura)
+    }
+
+    fn resource_ref_for_virtual_path(
+        &self,
+        virtual_root: &str,
+        relative_path: &str,
+        capability: FilesystemResourceCapability,
+    ) -> Result<Value> {
+        resource_ref_value_owned_by(
+            virtual_root,
+            relative_path,
+            capability,
+            now_unix_ms().saturating_add(DEFAULT_LOCAL_RESOURCE_REF_TTL_MS),
+            &self.owner_ura,
+        )
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct FilesystemResourceRef {
     resource_ura: String,
@@ -128,48 +199,27 @@ struct FilesystemResourceParts {
     relative_path: String,
 }
 
-/// Create a short-lived local filesystem ResourceRef for a host path.
+/// Create a target-local tmp ResourceRef for a previously selected Device URA.
 ///
-/// The returned object is suitable for tests, local session dispatch, and
-/// daemon-internal request construction. It refuses paths outside the built-in
-/// virtual roots; callers cannot mint arbitrary raw host path references.
-pub fn resource_ref_for_local_path(
-    path: &Path,
+/// This is used by remote invocation facades that first upload bytes into the
+/// target daemon's tmp resource plane and then pass the resulting ResourceRef
+/// to another target-owned SystemAgent ability. It deliberately does not make
+/// ResourceRefs federated: the target daemon still rejects the reference unless
+/// `owner_ura` is its own local Device identity.
+pub(crate) fn resource_ref_for_target_tmp_relative_path(
+    relative_path: &str,
     capability: FilesystemResourceCapability,
+    owner_ura: &str,
 ) -> Result<Value> {
-    let mapped = map_local_path_to_virtual_resource(path)?;
-    let expires_unix_ms = now_unix_ms().saturating_add(DEFAULT_LOCAL_RESOURCE_REF_TTL_MS);
-    Ok(resource_ref_value(
-        &mapped.virtual_root,
-        &mapped.relative_path,
-        capability,
-        expires_unix_ms,
-    ))
+    FilesystemResourceProvider::for_device(owner_ura.to_string())?
+        .resource_ref_for_target_tmp_relative_path(relative_path, capability)
 }
 
-/// Resolve and revalidate the `resource_ref` field from ability args.
-pub(crate) fn resolve_filesystem_path(
-    args: &Value,
-    requested_capability: FilesystemResourceCapability,
-) -> Result<ResolvedFilesystemPath> {
-    resolve_filesystem_path_with_mode(args, requested_capability, true)
-}
-
-/// Resolve a `resource_ref` while allowing a missing final target.
-///
-/// Used by upload-style abilities that need to create the target after
-/// validating that its nearest existing ancestor remains inside the root.
-pub(crate) fn resolve_filesystem_path_without_existing_target(
-    args: &Value,
-    requested_capability: FilesystemResourceCapability,
-) -> Result<ResolvedFilesystemPath> {
-    resolve_filesystem_path_with_mode(args, requested_capability, false)
-}
-
-fn resolve_filesystem_path_with_mode(
+fn resolve_filesystem_path_for_owner(
     args: &Value,
     requested_capability: FilesystemResourceCapability,
     canonicalize_existing_target: bool,
+    owner_ura: &str,
 ) -> Result<ResolvedFilesystemPath> {
     let resource_ref = args
         .get("resource_ref")
@@ -180,6 +230,7 @@ fn resolve_filesystem_path_with_mode(
         reference,
         requested_capability,
         canonicalize_existing_target && requested_capability != FilesystemResourceCapability::Write,
+        owner_ura,
     )
 }
 
@@ -187,6 +238,7 @@ fn resolve_resource_ref(
     reference: FilesystemResourceRef,
     requested_capability: FilesystemResourceCapability,
     canonicalize_existing_target: bool,
+    local_owner_ura: &str,
 ) -> Result<ResolvedFilesystemPath> {
     if reference.namespace != RESOURCE_NAMESPACE_FS {
         return Err(anyhow!(
@@ -225,6 +277,15 @@ fn resolve_resource_ref(
             reference.owner_ura
         ));
     }
+    if reference.owner_ura != local_owner_ura {
+        return Err(anyhow!(
+            "resource_ref: owner {} is not this daemon's local Device {}; \
+             filesystem ResourceRefs are daemon-local and must be materialized \
+             on the target Device before use",
+            reference.owner_ura,
+            local_owner_ura
+        ));
+    }
     let root = virtual_root_path(&parts.virtual_root).ok_or_else(|| {
         anyhow!(
             "resource_ref: virtual root {} has no local mapping",
@@ -251,31 +312,16 @@ fn resolve_resource_ref(
     })
 }
 
-fn resource_ref_value(
+fn resource_ref_value_owned_by(
     virtual_root: &str,
     relative_path: &str,
     capability: FilesystemResourceCapability,
     expires_unix_ms: i64,
-) -> Value {
-    // Bind the local-mapping ResourceRef to this device's REAL paired identity
-    // (realm + node_id), not a fixed `localhost`/`local-device` placeholder. The
-    // realm is hub-issued at join and every other URA mint honours it; this was
-    // the one production site that advertised `easynet:///r/localhost/...` while
-    // the device's real URA lives under its paired realm. Fall back to the
-    // canonical unpaired sentinel (default/local) when no credentials exist,
-    // mirroring `local_invocation_identity::local_device_ura`.
-    let (realm, device_id) = crate::daemon::persistence::config::load_credentials()
-        .ok()
-        .map(|c| (c.realm, c.node_id))
-        .unwrap_or_else(|| {
-            (
-                crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_REALM.to_string(),
-                crate::daemon::identity::local_invocation::UNPAIRED_LOCAL_DEVICE_ID.to_string(),
-            )
-        });
+    owner_ura: &str,
+) -> Result<Value> {
+    let (realm, device_id) = validate_device_owner_ura(owner_ura)?;
     let owner_token = format!("device.{device_id}");
-    let owner_ura = crate::core::ura::device_ura(&realm, &device_id);
-    json!({
+    Ok(json!({
         "resource_ura": crate::core::ura::resource_dot_ura(
             &realm,
             &owner_token,
@@ -287,7 +333,23 @@ fn resource_ref_value(
         "capability": capability.as_str(),
         "expires_unix_ms": expires_unix_ms,
         "revision": LOCAL_RESOURCE_REF_REVISION
-    })
+    }))
+}
+
+fn validate_device_owner_ura(owner_ura: &str) -> Result<(String, String)> {
+    let parsed_owner = crate::core::ura::parse_ura(owner_ura)
+        .map_err(|error| anyhow!("resource_ref: local device owner is invalid: {error}"))?;
+    if parsed_owner.kind != crate::core::ura::URAKind::Device {
+        return Err(anyhow!(
+            "resource_ref: local device owner must be a Device URA, got {}",
+            parsed_owner.kind
+        ));
+    }
+    let device_id = parsed_owner
+        .device_id()
+        .ok_or_else(|| anyhow!("resource_ref: local device owner omitted device id"))?
+        .to_string();
+    Ok((parsed_owner.realm, device_id))
 }
 
 fn map_local_path_to_virtual_resource(path: &Path) -> Result<LocalFilesystemResourcePath> {
@@ -334,7 +396,7 @@ fn relative_path_under_root(path: &Path, root: &Path) -> Result<Option<String>> 
         return relative_path_to_wire(relative).map(Some);
     }
 
-    let existing = nearest_existing_ancestor(&root_spelled_path);
+    let existing = nearest_existing_ancestor(&root_spelled_path)?;
     let canonical_existing = std::fs::canonicalize(&existing)
         .map_err(|e| anyhow!("resource_ref: path ancestor {existing:?} unavailable: {e}"))?;
     if !canonical_existing.starts_with(&canonical_root) {
@@ -473,19 +535,33 @@ fn virtual_root_path(virtual_root: &str) -> Option<PathBuf> {
 
 /// Ensure the nearest existing parent for a future write stays inside `root`.
 pub(crate) fn ensure_write_parent_under_root(path: &Path, root: &Path) -> Result<()> {
-    let parent = path.parent().unwrap_or(root);
-    let existing = nearest_existing_ancestor(parent);
+    if !path.is_absolute() {
+        return Err(anyhow!(
+            "resource_ref: write target {path:?} must be an absolute path resolved from a virtual root"
+        ));
+    }
+    if !root.is_absolute() {
+        return Err(anyhow!(
+            "resource_ref: virtual root mapping {root:?} must be absolute"
+        ));
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("resource_ref: write target {path:?} has no parent"))?;
+    let existing = nearest_existing_ancestor(parent)?;
     ensure_path_under_root(&existing, root)
 }
 
-fn nearest_existing_ancestor(path: &Path) -> PathBuf {
+fn nearest_existing_ancestor(path: &Path) -> Result<PathBuf> {
     let mut current = path.to_path_buf();
     loop {
         if current.exists() {
-            return current;
+            return Ok(current);
         }
         if !current.pop() {
-            return PathBuf::from(".");
+            return Err(anyhow!(
+                "resource_ref: path {path:?} has no existing ancestor"
+            ));
         }
     }
 }
@@ -540,17 +616,27 @@ fn now_unix_ms() -> i64 {
 }
 
 #[cfg(test)]
-pub(crate) fn resource_ref_for_tmp_relative_path(
-    relative_path: &str,
-    capability: FilesystemResourceCapability,
-    expires_unix_ms: i64,
-) -> Value {
-    resource_ref_value(VIRTUAL_ROOT_TMP, relative_path, capability, expires_unix_ms)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
+
+    fn filesystem_provider() -> FilesystemResourceProvider {
+        FilesystemResourceProvider::for_device(crate::core::ura::device_ura("acme", "dev-a"))
+            .expect("test filesystem Device authority")
+    }
+
+    fn resource_ref_for_local_path(
+        path: &Path,
+        capability: FilesystemResourceCapability,
+    ) -> Result<Value> {
+        filesystem_provider().resource_ref_for_local_path(path, capability)
+    }
+
+    fn resolve_filesystem_path(
+        args: &Value,
+        capability: FilesystemResourceCapability,
+    ) -> Result<ResolvedFilesystemPath> {
+        filesystem_provider().resolve_filesystem_path(args, capability)
+    }
 
     fn uuid_suffix() -> String {
         uuid::Uuid::new_v4().simple().to_string()
@@ -569,7 +655,14 @@ mod tests {
         capability: FilesystemResourceCapability,
         expires_unix_ms: i64,
     ) -> Value {
-        resource_ref_for_tmp_relative_path(relative_path, capability, expires_unix_ms)
+        resource_ref_value_owned_by(
+            VIRTUAL_ROOT_TMP,
+            relative_path,
+            capability,
+            expires_unix_ms,
+            &crate::core::ura::device_ura("acme", "dev-a"),
+        )
+        .expect("test filesystem ResourceRef")
     }
 
     #[test]
@@ -583,6 +676,43 @@ mod tests {
         assert!(err
             .to_string()
             .contains("outside built-in filesystem virtual roots"));
+    }
+
+    #[test]
+    fn filesystem_provider_rejects_non_device_authority() {
+        let err = FilesystemResourceProvider::for_device(crate::core::ura::hub_ura("acme"))
+            .expect_err("filesystem provider must require an explicit Device authority");
+        assert!(
+            err.to_string()
+                .contains("local device owner must be a Device URA"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resource_ref_for_local_path_binds_explicit_device_owner() {
+        let rel = unique_resource_rel("owner.txt");
+        let local = std::env::temp_dir().join(&rel);
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::write(&local, "metadata").unwrap();
+
+        let reference = resource_ref_for_local_path(&local, FilesystemResourceCapability::Read)
+            .expect("filesystem ResourceRef minted with local device identity");
+
+        assert_eq!(
+            reference["owner_ura"],
+            crate::core::ura::device_ura("acme", "dev-a")
+        );
+        assert!(reference["resource_ura"]
+            .as_str()
+            .expect("resource_ura string")
+            .starts_with(&crate::core::ura::resource_dot_ura(
+                "acme",
+                "device.dev-a",
+                "fs/tmp/"
+            )));
+        std::fs::remove_file(&local).ok();
+        std::fs::remove_dir_all(local.parent().unwrap()).ok();
     }
 
     #[test]
@@ -629,6 +759,34 @@ mod tests {
         assert_eq!(resolved.local_path, local);
         assert_eq!(resolved.display_path, format!("tmp/{rel}"));
         std::fs::remove_dir_all(local.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn write_parent_rejects_relative_target_before_current_directory_fallback() {
+        let root = std::env::current_dir().expect("current directory");
+        let err = ensure_write_parent_under_root(Path::new("missing-parent/write.txt"), &root)
+            .expect_err("relative write target must not be accepted through cwd");
+
+        assert!(
+            err.to_string()
+                .contains("must be an absolute path resolved from a virtual root"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn write_parent_rejects_relative_root_before_current_directory_fallback() {
+        let target = std::env::current_dir()
+            .expect("current directory")
+            .join("missing-parent/write.txt");
+        let err = ensure_write_parent_under_root(&target, Path::new("."))
+            .expect_err("relative root must not be accepted through cwd");
+
+        assert!(
+            err.to_string()
+                .contains("virtual root mapping \".\" must be absolute"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -745,6 +903,65 @@ mod tests {
             err.to_string().contains("no local mapping"),
             "expected unmapped virtual-root rejection, got: {err}"
         );
+    }
+
+    #[test]
+    fn foreign_device_resource_ref_rejects_before_local_path_resolution() {
+        let reference = resource_ref_value_owned_by(
+            VIRTUAL_ROOT_TMP,
+            &unique_resource_rel("foreign-owner.txt"),
+            FilesystemResourceCapability::Read,
+            expires_in_ms(60_000),
+            &crate::core::ura::device_ura("acme", "dev-b"),
+        )
+        .expect("foreign Device ResourceRef shape is valid");
+
+        let err = resolve_filesystem_path(
+            &json!({ "resource_ref": reference }),
+            FilesystemResourceCapability::Read,
+        )
+        .expect_err("foreign Device ResourceRef must not resolve on this daemon");
+
+        assert!(
+            err.to_string()
+                .contains("filesystem ResourceRefs are daemon-local"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn target_tmp_resource_ref_is_shaped_for_selected_device_owner() {
+        let owner_ura = crate::core::ura::device_ura("acme", "remote-dev");
+        let reference = resource_ref_for_target_tmp_relative_path(
+            "easynet-deploy/staged.tar.gz",
+            FilesystemResourceCapability::Write,
+            &owner_ura,
+        )
+        .expect("target tmp ResourceRef");
+
+        assert_eq!(reference["owner_ura"], owner_ura);
+        assert_eq!(reference["namespace"], "fs");
+        assert_eq!(reference["capability"], "write");
+        let parsed =
+            crate::core::ura::parse_ura(reference["resource_ura"].as_str().expect("resource URA"))
+                .expect("target tmp ResourceRef URA parses");
+        assert_eq!(parsed.resource_owner_id(), Some("device.remote-dev"));
+        assert_eq!(
+            parsed.resource_path(),
+            Some("fs/tmp/easynet-deploy/staged.tar.gz")
+        );
+    }
+
+    #[test]
+    fn target_tmp_resource_ref_rejects_path_traversal() {
+        let err = resource_ref_for_target_tmp_relative_path(
+            "../staged.tar.gz",
+            FilesystemResourceCapability::Write,
+            &crate::core::ura::device_ura("acme", "remote-dev"),
+        )
+        .expect_err("target tmp ResourceRef must reject traversal");
+
+        assert!(err.to_string().contains("traversal"), "{err}");
     }
 
     #[cfg(unix)]

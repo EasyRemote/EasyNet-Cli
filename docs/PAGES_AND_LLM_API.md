@@ -235,7 +235,7 @@ The `choices` and `usage` shapes are byte-equivalent to OpenAI's. Token counts a
 ### 3.3 The four normative invariants (RFC-006-C v0.1)
 
   - **INV-1 Adapter Purity** — `01HUB.openai.chat_completions` is hub-rooted. No state mutation beyond a single auth-trail receipt. No caching, no rewriting. Forwards via the live registry.
-  - **INV-2 Capability-URI Key** — bearer is `easynet-sk-<256-bit hex>`, addressed as `resource/api_key.<full-id>` URA. Stored as sha256(token) in `~/.easynet/api_keys.toml` mode 0600. Revocation = one ability call. No OAuth.
+  - **INV-2 Capability-URA Key** — bearer is `easynet-sk-<256-bit hex>`, addressed as `resource/api_key.<full-id>` URA. Stored as sha256(token) in `~/.easynet/api_keys.toml` mode 0600. Revocation = one ability call. No OAuth.
   - **INV-3 Filter Determinism** — same chat-ability output → same SSE chunk list, byte for byte. v0.1 fakes streaming by chunking a unary reply at 64 chars per chunk (deterministic by construction); v0.2 swaps in a real bidi without changing the invariant.
   - **INV-4 Auth Receipt Trail** — every request mints one canonical receipt against the API-key URA; dispatch sub-receipts cite it via `causal_context.Scalar`. v0.1 acknowledges this; v0.2 wires the explicit canonical-receipt mint.
 

@@ -105,7 +105,7 @@ Proposed cluster (per §1.6 AbilityDescriptor):
 
 ```
 media.call.create
-  owner_agent_uri:  <sfu-profile or backend-profile> URA
+  owner_agent_ura:  <sfu-profile or backend-profile> URA
   visibility:       SCOPED
   scope_subjects:   [creating operator URA]
   source:           manifest:abilities/media/call_create.ability.toml

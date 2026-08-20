@@ -24,6 +24,46 @@ my-plugin/
 metadata. `abilities/*.ability.toml` declares descriptor-facing schema and
 description. The executable or builtin Rust binding supplies handlers.
 
+`easynet plugin init <path>` creates the default Python developer version of
+this shape: a declarative exec Hello World package with one governed echo
+ability. The generated Python package is intentionally installable as-is so a
+contributor can run the full product loop before adding product-specific logic:
+
+```bash
+easynet plugin init hello-plugin
+cd hello-plugin
+easynet plugin install .
+```
+
+`easynet plugin init --language go <path>` creates a compiled Go source
+project. It must be built before install:
+
+```bash
+easynet plugin init --language go hello-go-plugin
+cd hello-go-plugin
+make build
+easynet plugin install .
+```
+
+The plugin runtime is not Python-only. Declarative exec plugins are executable
+sidecar processes; Python, Go, Rust, Node, Java, C++, or another runtime can be
+used if the package supplies the executable declared by `[declarative].argv`.
+
+Generated executables do not hand-write sidecar JSON frames. Python templates
+import `easynet_sdk.providers.runtime.plugin_exec`; Go templates import
+`easynet.run/cli/sdk/go/provider/runtime/pluginexec`. Each template implements
+only a `SidecarInvocation -> result` handler. The daemon/provider frame grammar
+remains owned by CLI SDK provider helpers; plugin code should not construct
+`call_id`, `result`, `error`, stream, or bidi protocol frames directly.
+
+The scaffold separates the two load-bearing versions:
+
+- `plugin.toml` `version` is the package lifecycle version used by
+  install/update/remove.
+- `abilities/*.ability.toml` `descriptor_version` is the governed interface
+  version that enters descriptor refs, authority bindings, implementation
+  bindings, and receipts.
+
 ## Runtime Boundary
 
 The runtime path is:
@@ -55,11 +95,32 @@ The contribution deliberately does not contain:
 
 Those remain daemon/Axon responsibilities.
 
+## Collision Rule
+
+Plugin templates reduce accidental naming collisions, but they are not the
+authority. Collision prevention is enforced in the daemon path:
+
+1. Installer/index rejects duplicate package identity: `package_id@version`.
+2. Active package state keeps one active version per package id for update
+   semantics.
+3. Runtime bind rejects duplicate ability ownership under the same daemon owner.
+4. Descriptor binding rejects conflicting descriptor facts for the same
+   ability/version/call-mode identity.
+5. Resource and permission brokers report blocked/partial readiness instead of
+   granting authority or silently publishing an unsafe ability.
+
+A plugin package never becomes an authority root. The daemon binds
+`PluginAbilityImpl` through the device-sponsored `plugin-management`
+SystemAgent; callers only see the resulting governed `AbilityDescriptor`.
+The Device remains the plugin runtime execution host and custody substrate, not
+the public descriptor owner/callee.
+
 ## Authority Rule
 
-The daemon binder applies the current owner policy (`OwnerKind::Device` today)
-when it binds a plugin contribution. This keeps plugin packages from becoming
-authority roots by accident.
+The daemon binder applies `OwnerKind::plugin_management_system()` when it binds
+a plugin contribution. This keeps plugin packages from becoming authority roots
+by accident while also preventing plugin abilities from falling back to direct
+Device ownership.
 
 If a future plugin needs a distinct authority projection, that must be added as
 a daemon policy decision in the binder or policy broker, not as arbitrary

@@ -13,7 +13,9 @@ make_sandbox() {
     local sandbox
     sandbox="$(mktemp -d)"
     mkdir -p "$sandbox/src/daemon/ability/builtins/resources/skills"
+    mkdir -p "$sandbox/src/daemon/resources/skills"
     cp "$REPO_ROOT/src/daemon/ability/builtins/resources/skills/list.rs" "$sandbox/src/daemon/ability/builtins/resources/skills/list.rs"
+    cp "$REPO_ROOT/src/daemon/resources/skills/store.rs" "$sandbox/src/daemon/resources/skills/store.rs"
     echo "$sandbox"
 }
 
@@ -27,21 +29,21 @@ run_check "$SB" >/dev/null 2>&1 || { rm -rf "$SB"; fail "happy: skill list manag
 rm -rf "$SB"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/root\.join\("\.claude"\)\.join\("skills"\)/root.join("skills")/' "$SB/src/daemon/ability/builtins/resources/skills/list.rs"
+perl -0pi -e 's/root\.join\("\.claude"\)\.join\("skills"\)/root.join("skills")/' "$SB/src/daemon/resources/skills/store.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "claude-code root-level skills path should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-echo '// legacy <root>/skills compatibility scan' >> "$SB/src/daemon/ability/builtins/resources/skills/list.rs"
+echo '// legacy <root>/skills compatibility scan' >> "$SB/src/daemon/resources/skills/store.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
 [[ "$rc" == "1" ]] || fail "legacy scan language should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's/fn managed_skill_dir_for_agent_type/fn retired_managed_skill_dir_for_agent_type/' "$SB/src/daemon/ability/builtins/resources/skills/list.rs"
+perl -0pi -e 's/fn managed_skill_dir_for/fn retired_managed_skill_dir_for/' "$SB/src/daemon/resources/skills/store.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"

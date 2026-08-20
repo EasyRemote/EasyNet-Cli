@@ -63,12 +63,14 @@ enum Captured {
 /// Spawn the tracker thread. Called once from daemon boot; never
 /// fails — a spawn error is logged and the daemon continues without
 /// clipboard capture. The capturing device's URA is resolved here
-/// (not passed in) because `persistence::local_agents` is crate-
-/// private and the daemon bin only links the public surface.
+/// (not passed in) because hosted identity projection belongs to the
+/// daemon persistence aggregate, not the daemon binary surface.
 pub fn spawn() {
-    let device_ura = crate::daemon::persistence::local_agents::load()
-        .map(|f| f.host_device_agent_ura)
-        .unwrap_or_default();
+    let device_ura =
+        crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_hosted_identity_status()
+            .ok()
+            .and_then(|status| status.host_device_ura().map(str::to_string))
+            .unwrap_or_default();
     if let Err(e) = std::thread::Builder::new()
         .name("clipboard-tracker".into())
         .spawn(move || run_loop(&device_ura))
@@ -80,7 +82,14 @@ pub fn spawn() {
 fn run_loop(device_ura: &str) {
     let mut last_hash: Option<[u8; 32]> = None;
     loop {
-        if !context_store::clipboard_tracking() {
+        let tracking_enabled = match context_store::clipboard_tracking() {
+            Ok(enabled) => enabled,
+            Err(error) => {
+                eprintln!("[clipboard-tracker] tracking config unavailable: {error:#}");
+                false
+            }
+        };
+        if !tracking_enabled {
             std::thread::sleep(IDLE_TICK);
             continue;
         }
@@ -233,7 +242,7 @@ mod tests {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let huge = "y".repeat(TEXT_CAP_BYTES + 10);
         record_text("easynet:///r/localhost/device/d1", &huge).unwrap();
-        let clips = crate::daemon::persistence::context_store::list_clips(1);
+        let clips = crate::daemon::persistence::context_store::list_clips(1).unwrap();
         assert_eq!(clips.len(), 1);
         let stored = clips[0].text.as_deref().unwrap();
         assert!(stored.len() < TEXT_CAP_BYTES);

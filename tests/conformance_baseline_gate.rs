@@ -20,10 +20,9 @@
 //!   * `DaemonInvocation` — checked against the production route tables
 //!     exported beside the tonic `Invoke` / `InvokeStream` match arms.
 
-use easynet_cli::daemon::ability::conformance::{
-    DaemonInvocationSurface, DeviceBaseline, HubBaseline, RegistryConformance,
-    RuntimeAdminConformance,
-};
+#[cfg(feature = "axon-pb")]
+use easynet_cli::daemon::ability::conformance::{DaemonInvocationSurface, RuntimeAdminConformance};
+use easynet_cli::daemon::ability::conformance::{DeviceBaseline, HubBaseline, RegistryConformance};
 
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -84,22 +83,33 @@ fn device_mode_registry_satisfies_device_baseline() {
     assert!(report.is_conformant(), "{}", report.panic_message());
 }
 
-/// Hub mode shares the same local registry; its `LocalRegistry` baseline
-/// rows (e.g. `meta.list_abilities` introspection) must also be present.
+/// Hub mode must expose its own `LocalRegistry` baseline without admitting
+/// direct DeviceProfileProjection rows into the Hub authority plane.
 #[test]
 fn hub_mode_registry_satisfies_hub_local_registry_slice() {
     let _home = HomeGuard::new();
-    let registry = easynet_cli::daemon::ability::catalog::build_registry();
+    let hub_ura = easynet_cli::core::ura::hub_ura("conformance-test");
+    let authority_context =
+        easynet_cli::daemon::ability::dispatch::AbilityAuthorityContext::for_realm_authority_root(
+            &hub_ura,
+        )
+        .expect("Hub authority context");
+    let registry =
+        easynet_cli::daemon::ability::catalog::build_registry_snapshot_with_authority_context(
+            authority_context,
+        )
+        .expect("build Hub registry snapshot");
     let report =
         RegistryConformance::new(&registry).check("hub", HubBaseline::required_abilities());
     assert!(report.is_conformant(), "{}", report.panic_message());
 }
 
-/// The daemon runtime-admin surface (`session.open`, `runtime.invoke_remote`
+/// The daemon runtime-admin surface (`session.open`, `canonical session dispatch`
 /// bidi carriers + `runtime.bootstrap_self_identity`) must be installed.
 /// The installed set is derived from the production dispatcher constant via
 /// `from_daemon_surface`, so this gate cannot pass on a hand-mirrored list.
 #[test]
+#[cfg(feature = "axon-pb")]
 fn daemon_runtime_admin_surface_satisfies_hub_baseline() {
     let report = RuntimeAdminConformance::from_daemon_surface()
         .check("hub", HubBaseline::required_abilities());
@@ -109,6 +119,7 @@ fn daemon_runtime_admin_surface_satisfies_hub_baseline() {
 /// Hub mode's daemon-owned Invocation routes must be present in the actual
 /// production route surface, not a test-local mirror.
 #[test]
+#[cfg(feature = "axon-pb")]
 fn daemon_invocation_surface_satisfies_hub_baseline() {
     let report = DaemonInvocationSurface::from_daemon_surface()
         .check("hub", HubBaseline::required_abilities());

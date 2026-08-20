@@ -3,19 +3,22 @@
 //
 // File: src/bin/gen-ability-tomls.rs
 // Description: Regenerates daemon ability descriptors. Built-in daemon
-//              descriptors come from the live system registry; plugin-owned
-//              descriptors come from the plugin package index, independent of
-//              this boot's runtime load plan.
+//              operational descriptors come from the live system registry;
+//              Seam/Unsupported contracts come from capability-state
+//              evidence. Plugin-owned descriptors come from the plugin package
+//              index, independent of this boot's runtime load plan.
 //
 // Usage
 // -----
 //   cargo run --bin gen-ability-tomls
 //   cargo run --no-default-features --bin gen-ability-tomls
+//   cargo run --bin gen-ability-tomls -- --check
 //
 // Behaviour:
-//   1. Walk `published_system_abilities()` for system abilities only
-//      (`<agent>.chat` is excluded by the same filter the rest of
-//      the discovery surface applies).
+//   1. Walk `system_ability_contract_inventory()` for system contracts.
+//      Operational rows originate from the live registry; non-operational
+//      rows originate from capability-state evidence and never become live
+//      handlers merely because their TOML is generated.
 //   2. Walk the builtin `PluginPackageIndex` for repo-owned plugin abilities,
 //      without consulting env flags, platform gates, the runtime load plan, or
 //      user-local installed plugins. Builtin plugin bindings remain compile-
@@ -59,14 +62,25 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use easynet_cli::daemon::ability::catalog::{
-    ability_toml, descriptor_path_for, published_system_abilities, system_ability_descriptor_root,
-    SYSTEM_ABILITY_DESCRIPTOR_ROOT,
+    ability_toml, descriptor_path_for, system_ability_contract_inventory,
+    system_ability_descriptor_root, SYSTEM_ABILITY_DESCRIPTOR_ROOT,
 };
 use easynet_cli::daemon::plugins::{
-    PluginDescriptorProjector, PluginPackageIndex, PluginWireRegistry,
+    plugin_ability_contract, PluginDescriptorProjector, PluginPackageIndex, PluginWireRegistry,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GenerationMode {
+    Write,
+    Check,
+}
+
 fn main() -> anyhow::Result<()> {
+    let mode = match std::env::args().skip(1).collect::<Vec<_>>().as_slice() {
+        [] => GenerationMode::Write,
+        [flag] if flag == "--check" => GenerationMode::Check,
+        args => anyhow::bail!("usage: gen-ability-tomls [--check], got {args:?}"),
+    };
     let target_dir = system_ability_descriptor_root();
     if !target_dir.exists() {
         anyhow::bail!(
@@ -78,8 +92,8 @@ fn main() -> anyhow::Result<()> {
     let package_index = PluginPackageIndex::builtin()?;
     let plugin_wire = PluginWireRegistry::new(&package_index);
 
-    let all_system_metas = published_system_abilities();
-    let collisions: Vec<_> = all_system_metas
+    let system_contracts = system_ability_contract_inventory();
+    let collisions: Vec<_> = system_contracts
         .iter()
         .filter(|m| plugin_wire.ability_descriptor_path(&m.name).is_some())
         .map(|m| m.name.clone())
@@ -91,29 +105,34 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    let metas: Vec<_> = all_system_metas.into_iter().collect();
-    let live_system_names: BTreeSet<String> = metas.iter().map(|m| m.name.clone()).collect();
+    let contract_system_names: BTreeSet<String> = system_contracts
+        .iter()
+        .map(|contract| contract.name.clone())
+        .collect();
 
     let mut written: Vec<String> = Vec::new();
     let mut unchanged: Vec<String> = Vec::new();
-    for meta in &metas {
-        let body =
-            ability_toml::render_ability_toml(&meta.name, &meta.description, &meta.input_schema);
-        let path = PathBuf::from(descriptor_path_for(&meta.name));
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+    for descriptor in &system_contracts {
+        let body = ability_toml::render_ability_contract_toml(descriptor);
+        let path = PathBuf::from(descriptor_path_for(&descriptor.name));
+        if mode == GenerationMode::Write {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
         }
         let prior = std::fs::read_to_string(&path).ok();
         if prior.as_deref() == Some(body.as_str()) {
-            unchanged.push(meta.name.clone());
+            unchanged.push(descriptor.name.clone());
             continue;
         }
-        std::fs::write(&path, body)?;
-        written.push(meta.name.clone());
+        if mode == GenerationMode::Write {
+            std::fs::write(&path, body)?;
+        }
+        written.push(descriptor.name.clone());
     }
 
     let mut deleted: Vec<String> = Vec::new();
-    delete_stale_descriptors(&target_dir, &live_system_names, &mut deleted)?;
+    delete_stale_descriptors(&target_dir, &contract_system_names, mode, &mut deleted)?;
 
     let plugin_metas = PluginDescriptorProjector::project(&package_index)?;
     for plugin in package_index.packages() {
@@ -127,31 +146,41 @@ fn main() -> anyhow::Result<()> {
             .iter()
             .filter(|meta| live_plugin_names.contains(&meta.name))
         {
-            let body = ability_toml::render_ability_toml(
-                &meta.name,
-                &meta.description,
-                &meta.input_schema,
-            );
+            let contract = plugin_ability_contract(meta);
+            let body = ability_toml::render_ability_contract_toml(&contract);
             let path = plugin_wire
                 .ability_descriptor_path(&meta.name)
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from(descriptor_path_for(&meta.name)));
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
+            if mode == GenerationMode::Write {
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
             }
             let prior = std::fs::read_to_string(&path).ok();
             if prior.as_deref() == Some(body.as_str()) {
                 unchanged.push(meta.name.clone());
             } else {
-                std::fs::write(&path, body)?;
+                if mode == GenerationMode::Write {
+                    std::fs::write(&path, body)?;
+                }
                 written.push(meta.name.clone());
             }
         }
         delete_stale_descriptors(
             Path::new(plugin.manifest().descriptor_dir()),
             &live_plugin_names,
+            mode,
             &mut deleted,
         )?;
+    }
+
+    if mode == GenerationMode::Check && (!written.is_empty() || !deleted.is_empty()) {
+        anyhow::bail!(
+            "descriptor contract drift: would update {:?}; would delete {:?}",
+            written,
+            deleted
+        );
     }
 
     println!(
@@ -171,18 +200,22 @@ fn main() -> anyhow::Result<()> {
 
 fn delete_stale_descriptors(
     dir: &Path,
-    live_names: &BTreeSet<String>,
+    contract_names: &BTreeSet<String>,
+    mode: GenerationMode,
     deleted: &mut Vec<String>,
 ) -> anyhow::Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
     // Stale-file removal. Any `<name>.ability.toml` whose name is NOT in
-    // `live_names` AND whose body parses as TOML gets deleted. Files that
+    // `contract_names` AND whose body parses as TOML gets deleted. Files that
     // don't match the strict descriptor suffix are left alone.
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            delete_stale_descriptors(&path, live_names, deleted)?;
-            if std::fs::read_dir(&path)?.next().is_none() {
+            delete_stale_descriptors(&path, contract_names, mode, deleted)?;
+            if mode == GenerationMode::Write && std::fs::read_dir(&path)?.next().is_none() {
                 std::fs::remove_dir(&path)?;
             }
             continue;
@@ -195,16 +228,67 @@ fn delete_stale_descriptors(
             Some(s) => s,
             None => continue,
         };
-        if !live_names.contains(stripped) {
+        if !contract_names.contains(stripped) {
             // Confirm it parses as TOML before deleting, so a
             // human-edited unrelated file isn't silently nuked.
             if let Ok(body) = std::fs::read_to_string(&path) {
                 if toml::from_str::<toml::Value>(&body).is_ok() {
-                    std::fs::remove_file(&path)?;
+                    if mode == GenerationMode::Write {
+                        std::fs::remove_file(&path)?;
+                    }
                     deleted.push(path.display().to_string());
                 }
             }
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn check_mode_reports_stale_contract_without_deleting_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stale = dir.path().join("voice.stale.ability.toml");
+        std::fs::write(&stale, "schema_version = \"1\"\nname = \"voice.stale\"\n")
+            .expect("write stale descriptor");
+        let mut deleted = Vec::new();
+
+        delete_stale_descriptors(
+            dir.path(),
+            &BTreeSet::new(),
+            GenerationMode::Check,
+            &mut deleted,
+        )
+        .expect("dry-run stale scan");
+
+        assert_eq!(deleted, vec![stale.display().to_string()]);
+        assert!(stale.exists(), "check mode must never delete descriptors");
+    }
+
+    #[test]
+    fn contract_inventory_name_is_not_considered_stale() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let retained = dir.path().join("voice.join_call.ability.toml");
+        std::fs::write(
+            &retained,
+            "schema_version = \"1\"\nname = \"voice.join_call\"\n",
+        )
+        .expect("write retained descriptor");
+        let contract_names = BTreeSet::from(["voice.join_call".to_string()]);
+        let mut deleted = Vec::new();
+
+        delete_stale_descriptors(
+            dir.path(),
+            &contract_names,
+            GenerationMode::Write,
+            &mut deleted,
+        )
+        .expect("scan contract descriptor");
+
+        assert!(deleted.is_empty());
+        assert!(retained.exists(), "contract descriptor must be retained");
+    }
 }

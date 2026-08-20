@@ -51,7 +51,7 @@ else
 fi
 
 step "2. Confirm seeded skills exist in agent's workspace"
-WORKSPACE="$HOME/.easynet/workspaces/$AGENT"
+WORKSPACE="$HOME/.easynet/agents/$AGENT"
 SKILLS_DIR="$WORKSPACE/.claude/skills"
 [ -d "$SKILLS_DIR/easynet-pages-author" ] && ok "easynet-pages-author skill seeded"     || warn "missing pages-author skill"
 [ -d "$SKILLS_DIR/easynet-ability-author" ] && ok "easynet-ability-author skill seeded" || warn "missing ability-author skill"

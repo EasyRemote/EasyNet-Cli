@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::daemon::persistence::resources::ResourcesFile;
 use crate::daemon::plugins::manifest::PluginRealtimeCapability;
@@ -171,7 +171,7 @@ impl PluginPolicyBroker {
         } else if !request_abilities.is_empty() {
             PluginRealtimePermissionStatus::RequestAbilityAvailable
         } else {
-            PluginRealtimePermissionStatus::Unknown
+            PluginRealtimePermissionStatus::ActionUnavailable
         };
         PluginRealtimePermissionReadiness {
             required,
@@ -182,7 +182,7 @@ impl PluginPolicyBroker {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PluginRealtimeResourceReadiness {
     pub required: Vec<String>,
@@ -191,14 +191,14 @@ pub struct PluginRealtimeResourceReadiness {
     pub ready: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PluginRealtimeResourceMatch {
     pub kind: String,
     pub count: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PluginRealtimePermissionReadiness {
     pub required: Vec<String>,
@@ -207,16 +207,16 @@ pub struct PluginRealtimePermissionReadiness {
     pub status: PluginRealtimePermissionStatus,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginRealtimePermissionStatus {
     NotRequired,
     StatusAbilityAvailable,
     RequestAbilityAvailable,
-    Unknown,
+    ActionUnavailable,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PluginRealtimeActivationOutcome {
     pub package_id: String,
@@ -238,7 +238,7 @@ pub struct PluginRealtimeActivationOutcome {
 }
 
 /// Typed response returned by `plugin.activate_realtime`.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PluginRealtimeActivationReport {
     pub ok: bool,
@@ -248,7 +248,7 @@ pub struct PluginRealtimeActivationReport {
     pub outcomes: Vec<PluginRealtimeActivationOutcome>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginRealtimeOutcomeStatus {
     Ready,
@@ -258,7 +258,7 @@ pub enum PluginRealtimeOutcomeStatus {
     Unknown,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PluginRealtimePublishReadiness {
     pub local_runtime: String,
@@ -277,7 +277,6 @@ fn outcome_status(
                 && matches!(
                     transport_status,
                     PluginRealtimeTransportReadinessStatus::Ready
-                        | PluginRealtimeTransportReadinessStatus::FallbackReady
                 ) =>
         {
             PluginRealtimeOutcomeStatus::Ready
@@ -421,6 +420,53 @@ permissions = ["camera"]
     }
 
     #[test]
+    fn policy_broker_reports_missing_permission_action_path_as_action_unavailable() {
+        let manifest = PluginPackageManifest::parse(
+            "plugins/test/plugin.toml",
+            r#"
+schema_version = "1"
+id = "test.permissions"
+version = "0.1.0"
+kind = "sidecar"
+entrypoint = "bin/plugin"
+abilities = ["abilities/*.ability.toml"]
+permissions = []
+resources = []
+platforms = []
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[[ability_metadata]]
+name = "test.camera.open"
+layer = "operational"
+call_mode = "stream"
+
+[[realtime_capability]]
+kind = "camera"
+modes = ["snapshot"]
+transport = "invoke_stream"
+activation_abilities = ["test.camera.open"]
+permissions = ["camera"]
+"#,
+        )
+        .expect("manifest");
+        let daemon = BTreeSet::from(["test.camera.open".to_string()]);
+        let plans =
+            activation_plans_for_manifest("test.permissions", "0.1.0", &manifest, Some(&daemon));
+
+        let readiness = PluginPolicyBroker.readiness(&["camera".to_string()], &plans[0]);
+
+        assert_eq!(
+            readiness.status,
+            PluginRealtimePermissionStatus::ActionUnavailable
+        );
+        assert!(readiness.status_abilities.is_empty());
+        assert!(readiness.request_abilities.is_empty());
+    }
+
+    #[test]
     fn activation_broker_blocks_webrtc_when_signaling_roles_are_missing() {
         let manifest = PluginPackageManifest::parse(
             "plugins/test/plugin.toml",
@@ -466,6 +512,8 @@ resources = ["display"]
                 descriptor_published: true,
                 runtime_published: true,
                 invokable: true,
+                companion: None,
+                companion_error: None,
                 realtime_activation_plans: activation_plans_for_manifest(
                     "test.webrtc",
                     "0.1.0",

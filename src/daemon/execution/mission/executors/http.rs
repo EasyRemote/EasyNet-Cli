@@ -29,7 +29,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use crate::core::ability::spec::HttpExec;
+use crate::daemon::ability::manifest::HttpExec;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 

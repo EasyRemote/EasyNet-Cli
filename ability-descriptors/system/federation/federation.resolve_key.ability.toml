@@ -1,0 +1,32 @@
+schema_version = "3"
+name = "federation.resolve_key"
+descriptor_version = "1.0.0"
+description = "Resolve the Ed25519 verification key for a trusted federation Agent URA."
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "route-target"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["agent_ura"]
+additionalProperties = false
+
+[input_schema.properties.agent_ura]
+type = "string"
+description = "Agent, Device, User, or Authority URA whose verifying key is requested."
+
+[input_schema.properties.presented_pubkey_b64]
+type = "string"
+description = "Optional base64 Ed25519 public key observed on the caller envelope; used to pin multi-key principal lookup."

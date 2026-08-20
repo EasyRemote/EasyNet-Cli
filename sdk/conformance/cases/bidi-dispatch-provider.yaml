@@ -1,0 +1,18 @@
+id: bidi/dispatch_provider
+profile: runtime_core
+required_for:
+  - go
+  - python
+description: Runtime Core bidi providers enter dispatch through the shared runtime provider before accepting session data or projecting a terminal receipt.
+steps:
+  - action: dispatch_bidi_draft
+    fixture: invocation.complete.v4.json
+  - action: observe_bidi_provider_frame_after_dispatch
+    schema: bidi-frame.schema.json
+  - action: observe_bidi_terminal_after_dispatch
+    schema: bidi-frame.schema.json
+expect:
+  result: bidi_dispatch_observed
+  frame0_entered_provider: true
+  provider_frame_before_terminal: true
+  terminal_receipt_after_dispatch: true

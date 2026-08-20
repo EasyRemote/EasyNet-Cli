@@ -1,0 +1,38 @@
+id: invocation/submitted_handle_authority
+profile: conformance
+required_for:
+  - c_abi
+description: C ABI submitted invocation handles are one-shot provider resources bound to a live client-session incarnation, and cancellation reports request lifecycle without fabricating target terminal state.
+steps:
+  - action: submit_signed_handle
+  - action: reject_stale_same_handle_incarnation
+  - action: reject_cross_session_await
+  - action: reject_cross_session_cancel
+  - action: reject_cross_session_events
+  - action: reject_cross_session_free
+  - action: cancel_handle
+  - action: free_handle
+  - action: reject_post_free_await
+  - action: reject_post_free_cancel
+  - action: reject_post_free_events
+  - action: reject_post_free_free
+expect:
+  result: provider_authority_enforced
+  stale_same_handle_error: ERR_INVALID_HANDLE
+  cross_session_errors:
+    await: ERR_INVALID_HANDLE
+    cancel: ERR_INVALID_HANDLE
+    events: ERR_INVALID_HANDLE
+    free: ERR_INVALID_HANDLE
+  post_free_errors:
+    await: ERR_INVALID_HANDLE
+    cancel: ERR_INVALID_HANDLE
+    events: ERR_INVALID_HANDLE
+    free: ERR_INVALID_HANDLE
+  cancel_json_fields:
+    - request_accepted
+    - deduplicated
+    - cancelled
+    - state
+    - terminal
+  cancel_requested_terminal: false

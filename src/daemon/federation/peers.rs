@@ -6,7 +6,7 @@
 //              operator-curated `realm → hub_endpoint` map. Built once
 //              at boot from `DaemonConfig::federated_peers`,
 //              shared by `DaemonInvocationService::dispatch_federation_
-//              forward_invoke`'s cross-realm routing arm.
+//              canonical_invoke`'s cross-realm routing arm.
 //
 // Why this cell exists
 // --------------------

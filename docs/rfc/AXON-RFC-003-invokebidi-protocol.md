@@ -389,7 +389,7 @@ Order of checks (already implemented in `bidi_handler.rs`):
    - `admission_gate::run_admission_gate` (signature verify
      against caller pubkey, nonce uniqueness, AXIOM tuple
      validity)
-   - `membership_gate` (caller URI in directory or §A6 genesis
+   - `membership_gate` (caller URA in directory or §A6 genesis
      exception)
    - `delegation_gate` (per §1.5 RFC-001 if subject ≠ caller)
 

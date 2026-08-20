@@ -46,13 +46,12 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::cli::commands::receipt_verification::CliReceiptChainVerification;
-use crate::daemon::ability::builtins::governance::invocation_history::ABILITY_TRACE_GET;
-use crate::support::platform::local_invoke::invoke_local_ability;
+use crate::support::platform::local_invoke::LocalRuntimeGovernanceReadIssuer;
 use crate::support::platform::output;
 
-type Record = easynet_axon::invocation::InvocationLedgerRecord;
-use easynet_axon::invocation::axiom::InvocationUsage;
-use easynet_axon::invocation::InvocationState;
+type Record = axon_sdk::invocation::InvocationLedgerRecord;
+use axon_sdk::invocation::axiom::InvocationUsage;
+use axon_sdk::invocation::InvocationState;
 
 /// Poll cadence for `--follow`. A constant, not a flag: the ledger
 /// read is daemon-local and cheap, and a knob would only invite
@@ -517,12 +516,25 @@ impl FollowEngine {
     }
 }
 
-/// `{trace_id, nodes}` subset of the `invocation.trace.get` response.
+/// Exact `invocation.trace.get` response contract.
+///
+/// Watch currently projects state from the canonical Axon records. It still
+/// decodes the source and edge fields so daemon/CLI schema drift fails closed
+/// instead of being silently ignored.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TraceSnapshot {
+    #[serde(rename = "ledger_ura")]
+    _ledger_ura: String,
+    #[serde(rename = "ledger_path")]
+    _ledger_path: String,
     trace_id: String,
     #[serde(default)]
     nodes: Vec<Record>,
+    #[serde(default, rename = "edges")]
+    _edges: Vec<axon_sdk::invocation::InvocationTraceEdge>,
+    #[serde(rename = "edge_semantics")]
+    _edge_semantics: String,
 }
 
 /// What one watch entry resolves to: a trace id and the records of
@@ -533,8 +545,7 @@ struct CausalSet {
 }
 
 fn fetch_trace(trace_id: &str) -> anyhow::Result<CausalSet> {
-    let resp = invoke_local_ability(
-        ABILITY_TRACE_GET,
+    let resp = LocalRuntimeGovernanceReadIssuer::invocation_trace_get(
         json!({ "key": { "trace_id": trace_id } }),
     )
     .context("read trace from the invocation ledger")?;
@@ -551,7 +562,7 @@ fn reject_empty_unknown_trace(trace_id: &str, nodes: &[Record]) -> anyhow::Resul
     if nodes.is_empty() && !mission_run_exists(trace_id) {
         anyhow::bail!(
             "trace {trace_id:?} has no invocation records in the ledger; \
-             check the trace id or start with `easynet invocation history list`"
+             check the trace id or start with `easynet invocation list`"
         );
     }
     Ok(())
@@ -571,11 +582,9 @@ fn fetch_causal_set(args: &WatchArgs) -> anyhow::Result<CausalSet> {
     let ura = args.invocation.as_deref().ok_or_else(|| {
         anyhow::anyhow!("invocation watch requires either an invocation URA or --trace <trace_id>")
     })?;
-    let resp = invoke_local_ability(
-        crate::daemon::ability::builtins::governance::invocation_history::ABILITY_HISTORY_GET,
-        json!({ "key": { "ura": ura } }),
-    )
-    .context("read the invocation's ledger record")?;
+    let resp =
+        LocalRuntimeGovernanceReadIssuer::invocation_record_get(json!({ "key": { "ura": ura } }))
+            .context("read the invocation's ledger record")?;
     let record: Record = serde_json::from_value(
         resp.get("record")
             .cloned()
@@ -1135,6 +1144,21 @@ mod tests {
     }
 
     #[test]
+    fn trace_snapshot_rejects_unknown_envelope_fields() {
+        let err = serde_json::from_value::<TraceSnapshot>(json!({
+            "trace_id": "trace-1",
+            "nodes": [],
+            "state_code": "J200"
+        }))
+        .expect_err("watch trace snapshot must reject read-model drift");
+
+        assert!(
+            err.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {err}"
+        );
+    }
+
+    #[test]
     fn follow_engine_emits_pending_once_then_stops_empty_running_trace_after_timeout() {
         let mut engine = FollowEngine::with_test_budget("trace-empty".into(), 3);
         let first = engine
@@ -1195,21 +1219,30 @@ mod tests {
     /// One non-terminal ledger record, decoded the same way the
     /// production `fetch_trace` path decodes a trace snapshot.
     fn running_record(ura: &str, state: &str) -> Record {
-        serde_json::from_value(json!({
-            "invocation_ura": ura,
-            "request_id": "req-1",
-            "trace_id": "trace-stuck",
-            "span_id": "span-1",
-            "caller_ura": "easynet:///r/acme/agent/user.caller",
-            "callee_ura": "easynet:///r/acme/agent/user.callee",
-            "subject_ura": "easynet:///r/acme/agent/user.callee",
-            "ability_ura": "easynet:///r/acme/ability/user.callee.fs.read",
-            "ability_name": "fs.read",
-            "state": state,
-            "started_unix_ms": 0,
-            "args": { "kind": "digest", "content_type": "application/json", "sha256": "00", "size_bytes": 0 },
-        }))
-        .expect("minimal running ledger record decodes")
+        let record = axon_sdk::invocation::InvocationLedgerRecordBuilder::new()
+            .invocation_ura(ura)
+            .request_id("req-1")
+            .trace_id("trace-stuck")
+            .span_id("span-1")
+            .caller_ura("easynet:///r/acme/agent/user.caller")
+            .callee_ura("easynet:///r/acme/agent/user.callee")
+            .subject_ura("easynet:///r/acme/agent/user.callee")
+            .ability_ura("easynet:///r/acme/ability/user.callee.fs.read")
+            .ability_name("fs.read")
+            .state(state)
+            .started_unix_ms(0)
+            .authority_form("self+identity")
+            .args(axon_sdk::invocation::LedgerEventPayload::Digest {
+                content_type: "application/json".to_string(),
+                sha256: "00".to_string(),
+                size_bytes: 0,
+            })
+            .build()
+            .expect("canonical running ledger fixture");
+        serde_json::from_value(
+            serde_json::to_value(record).expect("running ledger fixture serializes"),
+        )
+        .expect("running ledger fixture decodes")
     }
 
     #[test]
@@ -1402,7 +1435,7 @@ mod tests {
                 ability: "testbot.echo".into(),
                 state: "COMPLETED".into(),
                 caller: "easynet:///r/cli/agent/user.owner".into(),
-                callee: "easynet:///r/cli/device/local".into(),
+                callee: "easynet:///r/cli/agent/user.testbot".into(),
                 subject: "easynet:///r/cli/agent/user.target".into(),
                 elapsed_ms: Some(12),
                 usage: InvocationUsage {

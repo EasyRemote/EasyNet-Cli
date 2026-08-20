@@ -63,7 +63,7 @@ impl RuntimeTrustInvalidation {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct RuntimeTrustConnectionStateProjector {
     current_user_ura: String,
     credentials: Credentials,
@@ -71,19 +71,22 @@ pub(crate) struct RuntimeTrustConnectionStateProjector {
 }
 
 impl RuntimeTrustConnectionStateProjector {
-    #[must_use]
-    pub(crate) fn from_local_credentials(source: impl Into<String>) -> Option<Self> {
-        let credentials = crate::daemon::persistence::config::load_credentials().ok()?;
-        Self::from_credentials(credentials, source)
+    pub(crate) fn from_local_credentials(
+        source: impl Into<String>,
+    ) -> anyhow::Result<Option<Self>> {
+        let Some(credentials) = crate::daemon::persistence::config::load_credentials_optional()?
+        else {
+            return Ok(None);
+        };
+        Self::from_credentials(credentials, source).map(Some)
     }
 
-    #[must_use]
     pub(crate) fn from_credentials(
         credentials: Credentials,
         source: impl Into<String>,
-    ) -> Option<Self> {
-        let current_user_ura = credentials.user_ura().ok()?;
-        Some(Self {
+    ) -> anyhow::Result<Self> {
+        let current_user_ura = credentials.user_ura()?;
+        Ok(Self {
             current_user_ura,
             credentials,
             source: source.into(),
@@ -195,12 +198,40 @@ mod tests {
     use crate::daemon::federation::read_model::advertised_agents::{
         AdvertisedAgentRecord, AdvertisedAgentSigningAuthority,
     };
-    use crate::daemon::invocation::bidi::state::presence::DISPATCH_CHANNEL_CAPACITY;
+    use crate::daemon::invocation::bidi::state::presence::{
+        SessionContract, SessionTrustContext, CANONICAL_SESSION_CARRIER_VERSION,
+        DISPATCH_CHANNEL_CAPACITY,
+    };
     use crate::daemon::persistence::config::Credentials;
 
     fn sender() -> crate::daemon::invocation::bidi::state::presence::DispatchSender {
         let (tx, _rx) = tokio::sync::mpsc::channel(DISPATCH_CHANNEL_CAPACITY);
         tx
+    }
+
+    fn canonical_test_contract() -> SessionContract {
+        SessionContract::new(CANONICAL_SESSION_CARRIER_VERSION, vec![0; 16])
+    }
+
+    fn insert_test_presence(registry: &PresenceRegistry, ura: impl Into<String>) {
+        registry
+            .insert_negotiated(ura.into(), sender(), canonical_test_contract())
+            .expect("canonical presence key");
+    }
+
+    fn insert_test_presence_with_user_key(
+        registry: &PresenceRegistry,
+        ura: impl Into<String>,
+        public_key_b64: &str,
+    ) {
+        registry
+            .insert_negotiated_with_trust(
+                ura.into(),
+                sender(),
+                canonical_test_contract(),
+                SessionTrustContext::user_pubkey(public_key_b64),
+            )
+            .expect("canonical presence key");
     }
 
     fn credentials(username: &str) -> Credentials {
@@ -220,11 +251,39 @@ mod tests {
     }
 
     #[test]
+    fn local_connection_state_projector_returns_none_when_credentials_missing() {
+        let _home = HomeGuard::new();
+
+        let projector = RuntimeTrustConnectionStateProjector::from_local_credentials("test")
+            .expect("missing credentials should be classified");
+
+        assert!(projector.is_none());
+    }
+
+    #[test]
+    fn local_connection_state_projector_rejects_malformed_credentials() {
+        let _home = HomeGuard::new();
+        let state_dir = crate::daemon::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("create isolated state dir");
+        std::fs::write(state_dir.join("credentials.json"), b"{")
+            .expect("write malformed credentials");
+
+        let error = RuntimeTrustConnectionStateProjector::from_local_credentials("test")
+            .expect_err("malformed credentials must fail before trust revoke side effects");
+
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("parse credentials"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
     fn idempotent_revoke_does_not_remove_presence() {
         let presence = Arc::new(PresenceRegistry::new());
         let advertised = Arc::new(AdvertisedAgentStore::new());
         let subject = "easynet:///r/local/user/user-1";
-        presence.insert(subject.to_string(), sender());
+        insert_test_presence(&presence, subject);
 
         let invalidator = RuntimeTrustInvalidator::new(Arc::clone(&presence), advertised);
         let outcome = invalidator.invalidate_revoked_subject(subject, Some("pubkey-a"), false);
@@ -238,14 +297,7 @@ mod tests {
         let presence = Arc::new(PresenceRegistry::new());
         let advertised = Arc::new(AdvertisedAgentStore::new());
         let subject = "easynet:///r/local/user/user-1";
-        presence.insert_negotiated_with_trust(
-            subject.to_string(),
-            sender(),
-            crate::daemon::invocation::bidi::state::presence::SessionContract::legacy(),
-            crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
-                "pubkey-a",
-            ),
-        );
+        insert_test_presence_with_user_key(&presence, subject, "pubkey-a");
 
         let invalidator = RuntimeTrustInvalidator::new(Arc::clone(&presence), advertised);
         let outcome = invalidator.invalidate_revoked_subject(subject, Some("pubkey-a"), true);
@@ -260,14 +312,7 @@ mod tests {
         let presence = Arc::new(PresenceRegistry::new());
         let advertised = Arc::new(AdvertisedAgentStore::new());
         let subject = "easynet:///r/local/user/user-1";
-        presence.insert_negotiated_with_trust(
-            subject.to_string(),
-            sender(),
-            crate::daemon::invocation::bidi::state::presence::SessionContract::legacy(),
-            crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
-                "pubkey-b",
-            ),
-        );
+        insert_test_presence_with_user_key(&presence, subject, "pubkey-b");
 
         let invalidator = RuntimeTrustInvalidator::new(Arc::clone(&presence), advertised);
         let outcome = invalidator.invalidate_revoked_subject(subject, Some("pubkey-a"), true);
@@ -283,14 +328,7 @@ mod tests {
         let presence = Arc::new(PresenceRegistry::new());
         let advertised = Arc::new(AdvertisedAgentStore::new());
         let subject = crate::core::ura::user_ura("local", "user-alice");
-        presence.insert_negotiated_with_trust(
-            subject.clone(),
-            sender(),
-            crate::daemon::invocation::bidi::state::presence::SessionContract::legacy(),
-            crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
-                "pubkey-a",
-            ),
-        );
+        insert_test_presence_with_user_key(&presence, subject.clone(), "pubkey-a");
 
         let projector =
             RuntimeTrustConnectionStateProjector::from_credentials(credentials("alice"), "test")
@@ -321,14 +359,7 @@ mod tests {
         let presence = Arc::new(PresenceRegistry::new());
         let advertised = Arc::new(AdvertisedAgentStore::new());
         let subject = crate::core::ura::user_ura("local", "user-bob");
-        presence.insert_negotiated_with_trust(
-            subject.clone(),
-            sender(),
-            crate::daemon::invocation::bidi::state::presence::SessionContract::legacy(),
-            crate::daemon::invocation::bidi::state::presence::SessionTrustContext::user_pubkey(
-                "pubkey-a",
-            ),
-        );
+        insert_test_presence_with_user_key(&presence, subject.clone(), "pubkey-a");
 
         let projector =
             RuntimeTrustConnectionStateProjector::from_credentials(credentials("alice"), "test")
@@ -351,9 +382,10 @@ mod tests {
         let advertised = Arc::new(AdvertisedAgentStore::new());
         let subject = "easynet:///r/local/agent/alice.helper";
         let host = "easynet:///r/local/device/dev-1";
-        presence.insert(host.to_string(), sender());
+        insert_test_presence(&presence, host);
         advertised.upsert(AdvertisedAgentRecord {
             agent_ura: subject.to_string(),
+            generation: 1,
             public_key_hex: String::new(),
             host_node_id: Some("dev-1".to_string()),
             signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
@@ -377,13 +409,14 @@ mod tests {
         let advertised = Arc::new(AdvertisedAgentStore::new());
         let user = "easynet:///r/local/user/alice";
         let host = "easynet:///r/local/device/dev-1";
-        presence.insert(host.to_string(), sender());
+        insert_test_presence(&presence, host);
         for agent_ura in [
             "easynet:///r/local/agent/alice.helper",
             "easynet:///r/local/agent/alice.researcher",
         ] {
             advertised.upsert(AdvertisedAgentRecord {
                 agent_ura: agent_ura.to_string(),
+                generation: 1,
                 public_key_hex: String::new(),
                 host_node_id: Some("dev-1".to_string()),
                 signing_authority: AdvertisedAgentSigningAuthority::HostedBy {
@@ -393,6 +426,7 @@ mod tests {
         }
         advertised.upsert(AdvertisedAgentRecord {
             agent_ura: "easynet:///r/local/agent/bob.helper".to_string(),
+            generation: 1,
             public_key_hex: String::new(),
             host_node_id: Some("dev-2".to_string()),
             signing_authority: AdvertisedAgentSigningAuthority::HostedBy {

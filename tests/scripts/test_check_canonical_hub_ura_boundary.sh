@@ -31,11 +31,13 @@ make_sandbox() {
         "$sandbox/tools/scripts" \
         "$sandbox/axon"
     cp "$REPO_ROOT/src/core/ura/mod.rs" "$sandbox/src/core/ura/mod.rs"
-    cp "$REPO_ROOT/src/daemon/invocation/routing/federation_invoke.rs" "$sandbox/src/daemon/invocation/routing/federation_invoke.rs"
+    cp "$REPO_ROOT/src/daemon/invocation/routing/remote_invoke.rs" "$sandbox/src/daemon/invocation/routing/remote_invoke.rs"
+    cp "$REPO_ROOT/src/daemon/invocation/routing/route_target.rs" "$sandbox/src/daemon/invocation/routing/route_target.rs"
     cp "$REPO_ROOT/src/daemon/invocation/admission/admission_facade.rs" "$sandbox/src/daemon/invocation/admission/admission_facade.rs"
     cp "$REPO_ROOT/src/daemon/invocation/dispatch/daemon_invocation_service.rs" "$sandbox/src/daemon/invocation/dispatch/daemon_invocation_service.rs"
     cp "$REPO_ROOT/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs" "$sandbox/src/daemon/invocation/dispatch/daemon_invocation_service_tests.rs"
     cp "$REPO_ROOT/src/daemon/invocation/admission/register_device_pubkey.rs" "$sandbox/src/daemon/invocation/admission/register_device_pubkey.rs"
+    cp "$REPO_ROOT/src/daemon/invocation/admission/runtime_trust.rs" "$sandbox/src/daemon/invocation/admission/runtime_trust.rs"
     copy_if_present "$REPO_ROOT/docs/spec/owner-truth-table/ability-owner-truth-table.tex" "$sandbox/docs/spec/owner-truth-table/ability-owner-truth-table.tex"
     cp "$REPO_ROOT/../EasyNet-Axon/core/ura-rs/src/lib.rs" "$sandbox/axon/lib.rs"
     echo "$sandbox"
@@ -65,21 +67,54 @@ RS
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "Axon hub-with-tail generation should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "Axon Hub generation should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's#whose clean protocol identity is `easynet:///r/<realm>/hub`#whose clean protocol identity is `easynet:///r/<realm>/hub/<realm>`#' "$SB/src/daemon/invocation/routing/federation_invoke.rs"
+perl -0pi -e 's#Authority inputs are exact callees#Hub inputs are exact callees#' "$SB/src/daemon/invocation/routing/route_target.rs"
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "stale parse_node_ura docs should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "stale route target /hub docs should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
-perl -0pi -e 's#assert!\(!facade\.is_federated_caller\("easynet:///r/peer-realm/hub/extra"\)\);#assert!(facade.is_federated_caller("easynet:///r/peer-realm/hub/extra"));#' "$SB/src/daemon/invocation/admission/admission_facade.rs"
+python3 - "$SB/src/daemon/invocation/routing/route_target.rs" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+match = re.search(r"impl RemoteAbilityRouteTarget \{.*?^}", text, flags=re.M | re.S)
+if not match:
+    raise SystemExit("RemoteAbilityRouteTarget impl not found")
+body, replacements = re.subn(
+    r"RuntimeIdentityUra::parse\(trimmed\)",
+    "crate::core::ura::parse_ura(trimmed)",
+    match.group(0),
+    count=1,
+)
+if replacements != 1:
+    raise SystemExit("typed route parser RuntimeIdentityUra call not found")
+path.write_text(text[:match.start()] + body + text[match.end():], encoding="utf-8")
+PY
 rc=0
 run_check "$SB" >/dev/null 2>&1 || rc=$?
 rm -rf "$SB"
-[[ "$rc" == "1" ]] || fail "admission hub-with-tail acceptance should exit 1 (got $rc)"
+[[ "$rc" == "1" ]] || fail "direct parse_ura route parser should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's#assert!\(!facade\.is_federated_caller\("easynet:///r/peer-realm/authority/extra"\)\);#assert!(facade.is_federated_caller("easynet:///r/peer-realm/authority/extra"));#' "$SB/src/daemon/invocation/admission/admission_facade.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "admission authority-with-tail acceptance should exit 1 (got $rc)"
+
+SB="$(make_sandbox)"
+perl -0pi -e 's#"easynet:///r/realm/authority/extra"\.to_string\(\)#hub_ura.clone()#' "$SB/src/daemon/invocation/admission/runtime_trust.rs"
+rc=0
+run_check "$SB" >/dev/null 2>&1 || rc=$?
+rm -rf "$SB"
+[[ "$rc" == "1" ]] || fail "runtime trust missing Authority-tail rejection should exit 1 (got $rc)"
 
 SB="$(make_sandbox)"
 mkdir -p "$SB/docs/stale"

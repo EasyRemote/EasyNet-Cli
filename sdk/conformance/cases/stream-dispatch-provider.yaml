@@ -1,0 +1,18 @@
+id: stream/dispatch_provider
+profile: runtime_core
+required_for:
+  - go
+  - python
+description: Runtime Core stream providers enter dispatch through the shared runtime provider and expose non-terminal runtime selection before the terminal receipt.
+steps:
+  - action: dispatch_stream_draft
+    fixture: invocation.complete.v4.json
+  - action: observe_stream_runtime_selection
+    schema: stream-event.schema.json
+  - action: observe_stream_terminal_after_dispatch
+    schema: stream-event.schema.json
+expect:
+  result: stream_dispatch_observed
+  first_event_terminal: false
+  runtime_selection_observable: true
+  terminal_receipt_after_dispatch: true

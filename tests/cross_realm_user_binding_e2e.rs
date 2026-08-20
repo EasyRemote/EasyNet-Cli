@@ -35,42 +35,146 @@
 // Author: Silan.Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::sync::Arc;
+use std::io::Read;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+use easynet_cli::daemon::identity::self_identity::KeyringClient;
 use easynet_cli::daemon::keyring::abilities::{
     handle_consume_federate_user_token, handle_create, handle_federate_user_identity_token,
 };
 use easynet_cli::daemon::keyring::federated_bindings::FederatedBindingsStore;
-use easynet_cli::daemon::keyring::handle::KeyringHandle;
+use easynet_cli::daemon::keyring::managed_signing_provider::ManagedSigningProvider;
 use easynet_cli::daemon::keyring::resolver::{FederatedUserOutcome, FederatedUserResolver};
 
+static TEST_KEY_SERVICE_SERIAL: Mutex<()> = Mutex::new(());
+const KEY_SERVICE_START_TIMEOUT: Duration = Duration::from_secs(15);
+
+struct TestKeyService {
+    child: Child,
+    _home: tempfile::TempDir,
+    _serial: MutexGuard<'static, ()>,
+}
+
+impl Drop for TestKeyService {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn start_test_key_service() -> (Arc<dyn ManagedSigningProvider>, TestKeyService) {
+    // The production KDF is deliberately expensive. Running four debug
+    // key-service initialisations in parallel makes readiness depend on host
+    // CPU scheduling rather than the behavior this suite verifies, so each
+    // test retains an isolated service while process startup is serialized.
+    let serial = TEST_KEY_SERVICE_SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let home = tempfile::tempdir().expect("test key service home");
+    let socket_path = home.path().join("key-service.sock");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_easynet-keyring"))
+        .env("HOME", home.path())
+        .env("EASYNET_KEYRING_SOCKET_PATH", &socket_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn test key service");
+    let health_client = KeyringClient::new(&socket_path).with_timeout(Duration::from_millis(500));
+    let deadline = Instant::now() + KEY_SERVICE_START_TIMEOUT;
+    loop {
+        if health_client.health().is_ok() {
+            break;
+        }
+        if let Some(status) = child.try_wait().expect("poll test key service") {
+            panic!(
+                "test key service exited before readiness: status={status}, stderr={}",
+                child_stderr(&mut child)
+            );
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let status = child.wait().expect("reap timed-out test key service");
+            panic!(
+                "test key service did not become ready within {KEY_SERVICE_START_TIMEOUT:?}: \
+                 status={status}, stderr={}",
+                child_stderr(&mut child)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    (
+        Arc::new(KeyringClient::new(&socket_path)),
+        TestKeyService {
+            child,
+            _home: home,
+            _serial: serial,
+        },
+    )
+}
+
+fn child_stderr(child: &mut Child) -> String {
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        let _ = pipe.read_to_string(&mut stderr);
+    }
+    let trimmed = stderr.trim();
+    if trimmed.is_empty() {
+        "<empty>".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// Stand up realm A's daemon: keyring + agent_signing entry +
-/// bound device subject. Returns the handle plus the user URI
+/// bound user subject. Returns the provider plus the user URA
 /// so the test driver can pass it to the consumer side later.
-fn boot_realm_a_daemon() -> (Arc<KeyringHandle>, String, tempfile::TempDir) {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("realm_a_keyring.json");
-    let h = Arc::new(KeyringHandle::open_or_create(path, "passphrase-a").unwrap());
+fn boot_realm_a_daemon() -> (
+    Arc<dyn ManagedSigningProvider>,
+    String,
+    String,
+    TestKeyService,
+) {
+    let (h, service) = start_test_key_service();
     let user_ura = "easynet:///r/realm-a/user/user-c".to_string();
-    h.set_device_subject(user_ura.clone()).unwrap();
-    handle_create(&h, json!({"purpose": "agent_signing"})).unwrap();
-    (h, user_ura, dir)
+    let created = handle_create(
+        &h,
+        json!({
+            "purpose": "agent_signing",
+            "bound_subject": user_ura,
+        }),
+    )
+    .unwrap();
+    (
+        h,
+        user_ura,
+        created["key_id"].as_str().unwrap().to_string(),
+        service,
+    )
+}
+
+fn issuer_args(source_user_ura: &str, key_id: &str, target_realm: &str, issued_at: u64) -> Value {
+    json!({
+        "source_user_ura": source_user_ura,
+        "managed_key_id": key_id,
+        "target_realm": target_realm,
+        "issued_at_unix_ms": issued_at,
+    })
 }
 
 #[test]
 fn full_round_trip_realm_a_issues_realm_b_consumes_resolver_finds() {
     // ── Realm A: issue token ──
-    let (a_keyring, source_user_ura, _a_dir) = boot_realm_a_daemon();
+    let (a_keyring, source_user_ura, key_id, _a_dir) = boot_realm_a_daemon();
     let issued_at_ms: u64 = 1_714_500_000_000;
 
     let token_resp = handle_federate_user_identity_token(
         &a_keyring,
-        json!({
-            "target_realm": "realm-b",
-            "issued_at_unix_ms": issued_at_ms,
-        }),
+        issuer_args(&source_user_ura, &key_id, "realm-b", issued_at_ms),
     )
     .expect("realm A issues token");
     assert_eq!(token_resp["transport_hint"], json!("jwt-custom-claim"));
@@ -108,11 +212,11 @@ fn full_round_trip_realm_a_issues_realm_b_consumes_resolver_finds() {
         FederatedUserOutcome::BoundLocalUser(local_user_id_on_b.clone())
     );
 
-    // Cross-check: a different user URI in realm A is NOT bound.
+    // Cross-check: a different user URA in realm A is NOT bound.
     let unbound_outcome = resolver.resolve_user("easynet:///r/realm-a/user/user-other");
     assert_eq!(unbound_outcome, FederatedUserOutcome::NotBound);
 
-    // Realm B's own URI is `Local` (no federated lookup
+    // Realm B's own URA is `Local` (no federated lookup
     // needed — INV-3).
     let local_outcome = resolver.resolve_user("easynet:///r/realm-b/user/user-on-b");
     assert_eq!(local_outcome, FederatedUserOutcome::Local);
@@ -122,14 +226,11 @@ fn full_round_trip_realm_a_issues_realm_b_consumes_resolver_finds() {
 fn replay_attempt_after_successful_consume_rejected() {
     // Same flow as above, but try to consume the SAME token
     // twice. Second attempt must reject with replay detected.
-    let (a_keyring, _source_user_ura, _a_dir) = boot_realm_a_daemon();
+    let (a_keyring, source_user_ura, key_id, _a_dir) = boot_realm_a_daemon();
     let issued_at_ms: u64 = 1_714_500_000_000;
     let token_resp = handle_federate_user_identity_token(
         &a_keyring,
-        json!({
-            "target_realm": "realm-b",
-            "issued_at_unix_ms": issued_at_ms,
-        }),
+        issuer_args(&source_user_ura, &key_id, "realm-b", issued_at_ms),
     )
     .unwrap();
     let token = token_resp["token"].clone();
@@ -156,13 +257,10 @@ fn token_for_wrong_realm_rejected_at_target_check() {
     // Realm A issues a token targeting realm B; realm C tries
     // to consume — must reject at target_realm check before
     // any expensive crypto runs.
-    let (a_keyring, _source_user_ura, _a_dir) = boot_realm_a_daemon();
+    let (a_keyring, source_user_ura, key_id, _a_dir) = boot_realm_a_daemon();
     let token_resp = handle_federate_user_identity_token(
         &a_keyring,
-        json!({
-            "target_realm": "realm-b",
-            "issued_at_unix_ms": 1_714_500_000_000_u64,
-        }),
+        issuer_args(&source_user_ura, &key_id, "realm-b", 1_714_500_000_000),
     )
     .unwrap();
 
@@ -188,14 +286,11 @@ fn binding_persists_across_resolver_construction() {
     // Once written to the store, the binding survives
     // constructing a fresh resolver — readers don't need to be
     // alive at consume time.
-    let (a_keyring, source_user_ura, _a_dir) = boot_realm_a_daemon();
+    let (a_keyring, source_user_ura, key_id, _a_dir) = boot_realm_a_daemon();
     let issued_at_ms: u64 = 1_714_500_000_000;
     let token = handle_federate_user_identity_token(
         &a_keyring,
-        json!({
-            "target_realm": "realm-b",
-            "issued_at_unix_ms": issued_at_ms,
-        }),
+        issuer_args(&source_user_ura, &key_id, "realm-b", issued_at_ms),
     )
     .unwrap()["token"]
         .clone();

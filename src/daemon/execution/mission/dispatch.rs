@@ -6,7 +6,7 @@
 //              recursion guard.
 //
 // Every call creates a timestamped run directory under the agent's workspace
-// (`~/.easynet/workspaces/<agent>/runs/<stamp>/`) that stores the composed
+// (`~/.easynet/agents/<agent>/runs/<stamp>/`) that stores the composed
 // prompt, the raw stream trace, the final markdown response, and a meta.json
 // with timing / token counts. The run directory path is surfaced on the
 // returned `AgentResponse` so CLI callers can show it to the user.
@@ -14,7 +14,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::daemon::persistence::agent_registry::AgentEntry;
 
-use super::adapter::InvokeOpts;
+use super::adapter::{AdapterOutput, DriverCommand, DriverIsolation, InvokeOpts};
 use super::context::{self, DispatchContext};
 use super::drivers::adapter_for;
 use super::run_store::{RunDir, RunMeta};
@@ -32,6 +32,21 @@ use super::{directory::AgentDirectory, workspace};
 
 /// Maximum recursion depth for agent dispatch (prevents infinite loops).
 const MAX_AGENT_DEPTH: u32 = 2;
+
+/// Hard upper bound for a caller-selected one-shot agent timeout. Persistent
+/// agent configuration may still choose its existing runtime timeout; this cap
+/// applies only to the new per-invocation execution contract.
+pub const MAX_INVOCATION_TIMEOUT_MS: u64 = 900_000;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentExecution {
+    /// Agent-root-relative working directory. `None` preserves the registered
+    /// agent root used by legacy prompt calls.
+    pub cwd: Option<PathBuf>,
+    /// Daemon-enforced child process timeout.
+    pub timeout: Option<Duration>,
+    pub isolation: DriverIsolation,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AgentUsage {
@@ -54,8 +69,8 @@ pub struct AgentUsage {
 /// dispatch surface.
 #[derive(Debug, Clone, Default)]
 pub struct DriverOverrides {
-    /// Override the agent's default model (`agent.toml::model` or
-    /// `entry.model`). Wins over both when `Some`.
+    /// Override the agent's default model (`agent.toml::model`).
+    /// Wins over the persistent spec when `Some`.
     pub model: Option<String>,
     /// Honored by future drivers; current claude-code / codex CLIs
     /// ignore this field. A one-shot warning prints on first ignored
@@ -130,6 +145,11 @@ pub struct AgentResponse {
     /// expose tool-call observability (codex today) leave this empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
+    /// Compact driver progress timeline captured from the same stream
+    /// that powers `easynet agent send` live output. Each entry carries
+    /// local elapsed time plus the driver's raw progress payload.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timeline: Vec<serde_json::Value>,
     /// Driver-assigned conversation id. Set by drivers whose backing
     /// CLI/runtime persists multi-turn state under a stable id (codex
     /// emits `thread.started` with a UUIDv7; claude-code does not yet
@@ -147,39 +167,190 @@ pub struct AgentDispatchRequest<'a> {
     pub entry: &'a AgentEntry,
     pub prompt: &'a str,
     pub context: Option<&'a str>,
-    pub extra_trace_path: Option<&'a Path>,
+    pub system_prompt: Option<&'a str>,
+    pub execution: Option<&'a AgentExecution>,
     pub depth_override: Option<u32>,
     pub overrides: Option<&'a DriverOverrides>,
     pub progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
 }
 
-/// Resolve the dispatch timeout from spec + entry precedence.
+/// Resolve the dispatch timeout from AgentDirectory runtime configuration.
 ///
 /// `spec_timeout_secs = Some(n)` — operator set a timeout in
 /// `agent.toml`; use it verbatim. `None` — no operator choice
-/// in the spec; fall through to the v1/legacy
-/// `entry.timeout_secs` so pre-migration rows keep working.
+/// in the spec; use the canonical agent runtime default. Registry-row
+/// `entry.timeout_secs` is deliberately not consulted because v1 migration
+/// writes customized timeouts into `agent.toml`.
 ///
 /// Extracted so production and tests call the same code: see
 /// the doc block at the call site in `send_to_agent_with_depth`
 /// for why.
-pub(crate) fn resolve_timeout(spec_timeout_secs: Option<u64>, entry_timeout_secs: u64) -> Duration {
-    Duration::from_secs(spec_timeout_secs.unwrap_or(entry_timeout_secs))
+pub(crate) fn resolve_timeout(spec_timeout_secs: Option<u64>) -> Duration {
+    Duration::from_secs(
+        spec_timeout_secs.unwrap_or_else(
+            crate::daemon::persistence::agent_registry::default_timeout_for_new_rows,
+        ),
+    )
 }
 
-/// Resolve the dispatch model from spec + entry precedence.
+fn resolve_execution_timeout(
+    spec_timeout_secs: Option<u64>,
+    execution: Option<&AgentExecution>,
+) -> anyhow::Result<Duration> {
+    let Some(timeout) = execution.and_then(|value| value.timeout) else {
+        return Ok(resolve_timeout(spec_timeout_secs));
+    };
+    let timeout_ms = u64::try_from(timeout.as_millis())
+        .map_err(|_| anyhow::anyhow!("agent execution timeout is too large"))?;
+    if timeout_ms == 0 || timeout_ms > MAX_INVOCATION_TIMEOUT_MS {
+        anyhow::bail!(
+            "agent execution timeout_ms must be between 1 and {MAX_INVOCATION_TIMEOUT_MS}"
+        );
+    }
+    Ok(timeout)
+}
+
+fn resolve_execution_cwd(
+    agent_root: &Path,
+    execution: Option<&AgentExecution>,
+) -> anyhow::Result<PathBuf> {
+    let Some(execution) = execution else {
+        return Ok(agent_root.to_path_buf());
+    };
+    let Some(relative) = execution.cwd.as_deref() else {
+        if execution.isolation == DriverIsolation::Strict {
+            anyhow::bail!("strict agent execution requires a relative cwd");
+        }
+        return Ok(agent_root.to_path_buf());
+    };
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        anyhow::bail!("agent execution cwd must be a non-empty relative descendant path");
+    }
+
+    let root = std::fs::canonicalize(agent_root).map_err(|error| {
+        anyhow::anyhow!(
+            "canonicalize registered agent root {}: {error}",
+            agent_root.display()
+        )
+    })?;
+    let mut candidate = root.clone();
+    for component in relative.components() {
+        let Component::Normal(component) = component else {
+            unreachable!("execution cwd components were validated above");
+        };
+        candidate.push(component);
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                anyhow::bail!(
+                    "agent execution cwd {} contains a symbolic link",
+                    candidate.display()
+                );
+            }
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => {
+                anyhow::bail!(
+                    "agent execution cwd component {} is not a directory",
+                    candidate.display()
+                );
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&candidate).map_err(|error| {
+                    anyhow::anyhow!(
+                        "create agent execution cwd component {}: {error}",
+                        candidate.display()
+                    )
+                })?;
+            }
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "inspect agent execution cwd component {}: {error}",
+                    candidate.display()
+                ));
+            }
+        }
+        let resolved = std::fs::canonicalize(&candidate).map_err(|error| {
+            anyhow::anyhow!(
+                "canonicalize agent execution cwd component {}: {error}",
+                candidate.display()
+            )
+        })?;
+        if !resolved.starts_with(&root) || resolved == root {
+            anyhow::bail!(
+                "agent execution cwd {} escapes the registered agent root",
+                resolved.display()
+            );
+        }
+        candidate = resolved;
+    }
+    let candidate = std::fs::canonicalize(&candidate).map_err(|error| {
+        anyhow::anyhow!(
+            "canonicalize agent execution cwd {}: {error}",
+            candidate.display()
+        )
+    })?;
+    if !candidate.starts_with(&root) || candidate == root {
+        anyhow::bail!(
+            "agent execution cwd {} escapes the registered agent root",
+            candidate.display()
+        );
+    }
+
+    if execution.isolation == DriverIsolation::Strict && !candidate.join(".git").exists() {
+        let output = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&candidate)
+            .output()
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "create strict execution repository boundary at {}: {error}",
+                    candidate.display()
+                )
+            })?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "create strict execution repository boundary at {} failed: {}",
+                candidate.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+    }
+    Ok(candidate)
+}
+
+fn structured_audit_prompt(
+    system_prompt: Option<&str>,
+    user_prompt: &str,
+) -> anyhow::Result<String> {
+    let Some(system_prompt) = system_prompt else {
+        return Ok(user_prompt.to_string());
+    };
+    serde_json::to_string_pretty(&serde_json::json!({
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+    }))
+    .map_err(Into::into)
+}
+
+/// Resolve the dispatch model from invocation override + spec precedence.
 ///
 /// `spec_model = Some(_)` — operator named a model in
 /// `agent.toml`; it wins. `spec_model = None` — operator did
-/// not name one; fall through to the v1/legacy `entry.model`
-/// so pre-migration rows keep dispatching to the model their
-/// registry row names. If both are `None`, the result is
-/// `None` (the runtime driver picks its own default).
+/// not name one, so the result is `None` unless the invocation
+/// carries a per-call override. The runtime driver then picks its own
+/// default. Registry-row `entry.model` is deliberately not consulted:
+/// `agent.toml` is the single persistent Agent runtime configuration
+/// authority.
 ///
 /// Extracted so production and tests call the same code.
 ///
-/// Three-tier model resolution:
-/// per-call override > agent.toml spec > legacy entry.
+/// Two-tier model resolution:
+/// per-call override > agent.toml spec.
 ///
 /// Extracted as its own helper (rather than inlined at the call site)
 /// so production and tests bind to the same code path — the chat-ability
@@ -188,17 +359,13 @@ pub(crate) fn resolve_timeout(spec_timeout_secs: Option<u64>, entry_timeout_secs
 pub(crate) fn resolve_model_with_overrides(
     override_model: Option<String>,
     spec_model: Option<String>,
-    entry_model: Option<String>,
 ) -> Option<String> {
-    override_model.or(spec_model).or(entry_model)
+    override_model.or(spec_model)
 }
 
 #[cfg(test)]
-pub(crate) fn resolve_model(
-    spec_model: Option<String>,
-    entry_model: Option<String>,
-) -> Option<String> {
-    spec_model.or(entry_model)
+pub(crate) fn resolve_model(spec_model: Option<String>) -> Option<String> {
+    spec_model
 }
 
 /// Send a prompt to a registered agent on behalf of an *external* caller —
@@ -208,7 +375,7 @@ pub(crate) fn resolve_model(
 /// This is the production entry point for remote `<agent>.chat`
 /// invocations — the agent's default-input ability surfaced
 /// over MCP. When a remote caller invokes that ability against
-/// this node via [`AbilityToolAdapter`], the request originates
+/// this node through daemon Invocation, the request originates
 /// outside any local mission, so recursion depth starts at 0
 /// and no parent-mission id is propagated to the child
 /// subprocess. Functionally equivalent to
@@ -248,7 +415,7 @@ pub fn send_external(
     prompt: &str,
     context: Option<&str>,
 ) -> anyhow::Result<AgentResponse> {
-    send_to_agent_with_depth(agent_name, entry, prompt, context, None, Some(0), None)
+    send_to_agent_with_depth(agent_name, entry, prompt, context, Some(0), None)
 }
 
 /// Pin per-call driver knobs (model, temperature, max_tokens) when
@@ -263,7 +430,32 @@ pub fn send_external_with_overrides(
     context: Option<&str>,
     overrides: Option<&DriverOverrides>,
 ) -> anyhow::Result<AgentResponse> {
-    send_to_agent_with_depth(agent_name, entry, prompt, context, None, Some(0), overrides)
+    send_to_agent_with_depth(agent_name, entry, prompt, context, Some(0), overrides)
+}
+
+/// Dispatch a structured single-turn request. The system/developer content is
+/// carried independently from the user prompt all the way to the runtime
+/// driver, and the execution policy is enforced inside the daemon.
+pub fn send_external_structured(
+    agent_name: &str,
+    entry: &AgentEntry,
+    user_prompt: &str,
+    system_prompt: Option<&str>,
+    overrides: Option<&DriverOverrides>,
+    execution: &AgentExecution,
+    progress_tx: Option<Arc<dyn Fn(serde_json::Value) + Send + Sync>>,
+) -> anyhow::Result<AgentResponse> {
+    send_to_agent_with_depth_and_progress(AgentDispatchRequest {
+        agent_name,
+        entry,
+        prompt: user_prompt,
+        context: None,
+        system_prompt,
+        execution: Some(execution),
+        depth_override: Some(0),
+        overrides,
+        progress_tx,
+    })
 }
 
 /// Same as `send_external_with_overrides` but threads a
@@ -283,7 +475,8 @@ pub fn send_external_with_overrides_and_progress(
         entry,
         prompt,
         context,
-        extra_trace_path: None,
+        system_prompt: None,
+        execution: None,
         depth_override: Some(0),
         overrides,
         progress_tx,
@@ -306,7 +499,7 @@ pub fn send_external_with_overrides_and_progress(
 ///
 ///   Stage 1 (presence): a `DispatchContext` must be active for this
 ///   thread (installed via `mission_runs::run_inproc`'s guard, or
-///   inherited from a parent process via the env-var fallback).
+///   inherited from a parent process via the process-environment handoff).
 ///   Stage 2 (anti-forgery): the context's `mission_id` must correspond
 ///   to an existing mission run dir on disk under
 ///   `~/.easynet/missions/runs/`. This catches the trivial-forgery case
@@ -322,7 +515,6 @@ pub fn send_to_agent_with_depth(
     entry: &AgentEntry,
     prompt: &str,
     context: Option<&str>,
-    extra_trace_path: Option<&Path>,
     depth_override: Option<u32>,
     overrides: Option<&DriverOverrides>,
 ) -> anyhow::Result<AgentResponse> {
@@ -331,7 +523,8 @@ pub fn send_to_agent_with_depth(
         entry,
         prompt,
         context,
-        extra_trace_path,
+        system_prompt: None,
+        execution: None,
         depth_override,
         overrides,
         progress_tx: None,
@@ -355,7 +548,8 @@ pub fn send_to_agent_with_depth_and_progress(
         entry,
         prompt,
         context,
-        extra_trace_path,
+        system_prompt,
+        execution,
         depth_override,
         overrides,
         progress_tx,
@@ -383,7 +577,6 @@ pub fn send_to_agent_with_depth_and_progress(
             depth: d,
             mission_run_dir: None,
             origin_agent: None,
-            parent_invocation: None,
         })
         .or_else(context::current);
 
@@ -397,8 +590,19 @@ pub fn send_to_agent_with_depth_and_progress(
         );
     }
 
-    // Build full prompt with context.
-    let full_prompt = compose_prompt(prompt, context);
+    if system_prompt.is_some() && context.is_some() {
+        anyhow::bail!("agent dispatch cannot combine legacy context with a system prompt");
+    }
+
+    // Legacy callers keep their established context composition. Structured
+    // callers preserve role separation and send only the user content as the
+    // driver prompt.
+    let driver_prompt = if system_prompt.is_some() {
+        prompt.to_string()
+    } else {
+        compose_prompt(prompt, context)
+    };
+    let audit_prompt = structured_audit_prompt(system_prompt, &driver_prompt)?;
 
     // ── Project the registered AgentDirectory ──
     //
@@ -419,17 +623,16 @@ pub fn send_to_agent_with_depth_and_progress(
             directory.spec().name
         );
     }
-    let cwd = workspace::ensure_from_directory(&directory)?;
+    let agent_root = workspace::ensure_from_directory(&directory)?;
+    let cwd = resolve_execution_cwd(&agent_root, execution)?;
     let spec_source = directory.spec().clone();
-    // ── Resolve dispatch knobs from spec (falling back to entry) ──
+    // ── Resolve dispatch knobs from canonical runtime config ──
     //
     // Precedence per field:
     //
     //   * `timeout`: `spec.timeout_secs` (Some = explicit user
-    //     choice) wins; else `entry.timeout_secs` (v1 / legacy).
-    //     Matches `AgentSpec::validate`'s timeout-0 rejection —
-    //     if the spec says 60, the dispatch uses 60 even if a
-    //     stale registry row still carries 300.
+    //     choice) wins; else the canonical agent runtime default.
+    //     Matches `AgentSpec::validate`'s timeout-0 rejection.
     //   * `max_output_bytes`: no spec field yet — stays on
     //     entry. Future `agent.toml` addition will plug in the
     //     same way.
@@ -442,10 +645,10 @@ pub fn send_to_agent_with_depth_and_progress(
     //     clears `entry.env` on v2 rows). A v2 row has
     //     `entry.env` empty; a v1 row still carries it and
     //     migration will move it on the next load.
-    //   * `model`: `spec.model` wins when set; else
-    //     `entry.model`. A post-`agent add` edit to
-    //     `agent.toml` setting a new model takes effect on the
-    //     next dispatch without re-running the CLI.
+    //   * `model`: per-call override wins when set; else
+    //     `spec.model`. `entry.model` is not a dispatch input because
+    //     the registry row is placement/state, while `agent.toml` is
+    //     the Agent runtime configuration authority.
     //
     // The two `resolve_*` helpers below are the single
     // implementation of the timeout and model precedence rules.
@@ -458,16 +661,15 @@ pub fn send_to_agent_with_depth_and_progress(
     // and tests bound to the same code path: a refactor that
     // inverts the order must touch the function, and the test
     // calling that function breaks.
-    let timeout = resolve_timeout(spec_source.timeout_secs, entry.timeout_secs);
+    let timeout = resolve_execution_timeout(spec_source.timeout_secs, execution)?;
     let max_output = entry.max_output_bytes;
-    // Per-call overrides win over spec / entry defaults. The chat
+    // Per-call overrides win over spec defaults. The chat
     // ability handler threads its `driver.model` arg through here so
     // a single chat call can pin a different model than what
     // agent.toml carries, without touching the manifest.
     let effective_model = resolve_model_with_overrides(
         overrides.and_then(|o| o.model.clone()),
         spec_source.model.clone(),
-        entry.model.clone(),
     );
 
     // The other DriverOverrides fields (temperature, max_tokens)
@@ -495,47 +697,29 @@ pub fn send_to_agent_with_depth_and_progress(
     let mut env = entry.env.clone();
     active.child(agent_name).serialize_to_env(&mut env);
 
-    // Create a per-run directory. If creation fails (e.g. workspace dir is
-    // unwritable), skip persistence — the agent call still runs, but we
-    // surface the reason so the operator knows the run is unrecorded.
-    let run_dir: Option<Arc<RunDir>> = match RunDir::create(agent_name) {
-        Ok(dir) => Some(Arc::new(dir)),
-        Err(e) => {
-            let err_msg = format!("{e}");
-            crate::op_event!(
-                component = dispatch,
-                kind = run_dir_create_failed,
-                level = "warn",
-                agent = agent_name,
-                error = err_msg,
-                fallback = "no_per_run_persistence",
-            );
-            None
-        }
-    };
-    if let Some(dir) = &run_dir {
-        if let Err(e) = dir.write_prompt(&full_prompt) {
-            let path_display = format!("{}", dir.path().display());
-            let err_msg = format!("{e}");
-            crate::op_event!(
-                component = dispatch,
-                kind = prompt_write_failed,
-                level = "warn",
-                run_path = path_display,
-                error = err_msg,
-            );
-        }
-    }
+    // Create the per-run directory before invoking the runtime. Local Agent
+    // dispatch no longer has a "run without audit" mode: a call that cannot
+    // establish its human-facing run store is an infrastructure failure, not a
+    // valid invocation with a missing side artifact.
+    let run_dir = Arc::new(RunDir::create(root).map_err(|e| {
+        anyhow::anyhow!(
+            "agent dispatch requires per-run persistence under {}: {e}",
+            root.display()
+        )
+    })?);
+    run_dir.write_prompt(&audit_prompt).map_err(|e| {
+        anyhow::anyhow!(
+            "agent dispatch requires prompt persistence at {}: {e}",
+            run_dir.path().display()
+        )
+    })?;
 
-    // Allocate a PR-7 Session for this dispatch. The Session's
-    // invocation_id becomes the cross-reference key between the
-    // legacy `runs/<ts>/` directory (human-facing artefacts) and
-    // the PersistentLog event log (machine-auditable stream,
-    // P1-P6 compliant). Commit 1 of PR-7: dual-write — emit
-    // admitted + terminal events to the Timeline alongside the
-    // existing run_dir writes. Mid-stream progress events stay
-    // in run_dir/trace.jsonl for now; Commit 2 routes them
-    // through the Timeline broadcast path.
+    // Allocate a Session for this dispatch. The Session's invocation_id is the
+    // cross-reference key between the per-run directory (human-facing
+    // artifacts) and the PersistentLog event log (machine-auditable stream,
+    // P1-P6 compliant). The Timeline is the stream authority; the run directory
+    // records prompt/response/meta artifacts and never substitutes for a failed
+    // Timeline write.
     //
     // Session construction is infallible: PersistentLog uses its
     // own env-var / tempdir default when the caller passes None.
@@ -550,44 +734,28 @@ pub fn send_to_agent_with_depth_and_progress(
     let admitted_payload = serde_json::json!({
         "agent": agent_name,
         "depth": current_depth,
-        "prompt_len": full_prompt.len(),
+        "prompt_len": driver_prompt.len(),
         // `origin_agent` names the root of the dispatch chain
         // when one is active; absent otherwise. "local" for a
         // CLI-direct invocation (`agent send`) with no mission
         // context, or the root agent name inside a mission.
         "origin_agent": active.origin_agent.clone(),
         "mission_id": active.mission_id.clone(),
-        "parent_invocation": active
-            .parent_invocation
-            .as_ref()
-            .map(|ctx| ctx.to_json_value()),
         "context_present": context.is_some(),
+        "system_prompt_present": system_prompt.is_some(),
+        "isolation": match execution.map(|value| value.isolation).unwrap_or_default() {
+            DriverIsolation::Agent => "agent",
+            DriverIsolation::Strict => "strict",
+        },
     });
-    if let Err(e) = session.writer().emit("admitted", Some(admitted_payload)) {
-        let err_msg = format!("{e}");
-        crate::op_event!(
-            component = dispatch,
-            kind = timeline_admitted_emit_failed,
-            level = "warn",
-            agent = agent_name,
-            error = err_msg,
-            fallback = "run_dir_write_is_authoritative",
-        );
-    }
-
-    // Legacy `--trace <path>` still supported: mirror the prompt next to the
-    // user-supplied trace file.
-    if let Some(tp) = extra_trace_path {
-        if let Some(parent) = tp.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let prompt_path = tp.with_extension("prompt.txt");
-        let _ = std::fs::write(&prompt_path, &full_prompt);
-    }
+    session
+        .writer()
+        .emit("admitted", Some(admitted_payload))
+        .map_err(|e| anyhow::anyhow!("agent dispatch requires admitted timeline event: {e}"))?;
 
     let started_at = Local::now().to_rfc3339();
     // Dispatch through the trait. `adapter_for` is the single place
-    // the runtime layer matches on `AgentType`; adding a new runtime
+    // the runtime layer matches on `RuntimeKind`; adding a new runtime
     // is one arm there plus one `impl AgentAdapter` block, not a
     // sweep of this function. The `cwd` handed to the adapter is
     // the already-resolved workspace — we clone into `InvokeOpts`
@@ -605,12 +773,14 @@ pub fn send_to_agent_with_depth_and_progress(
     entry_for_adapter.model = effective_model.clone();
     let run_result = adapter.invoke(
         &entry_for_adapter,
-        &full_prompt,
+        &driver_prompt,
         InvokeOpts {
             timeout,
             max_output_bytes: max_output,
             env,
             cwd: cwd.clone(),
+            system_prompt: system_prompt.map(str::to_string),
+            isolation: execution.map(|value| value.isolation).unwrap_or_default(),
             // Commit 2: the driver emits mid-stream progress
             // events through the Timeline instead of (previously)
             // through run_dir/trace.jsonl. The writer_arc is the
@@ -620,15 +790,12 @@ pub fn send_to_agent_with_depth_and_progress(
             // sequence order.
             timeline: Some(session.writer_arc()),
             progress_tx: progress_tx.clone(),
-            // Honor the operator-supplied binary override. Each
-            // driver substitutes its own default when this is
-            // empty (see `ClaudeOptions::resolved_command` and
-            // `CodexOptions::resolved_command`). Plumbing it here
-            // is what makes `dummy_entry`'s bogus command in
-            // tests actually take effect and what lets operators
-            // with a custom install path route through without
-            // editing driver source.
-            command: entry.command.clone(),
+            // Honor the operator-supplied binary override. The
+            // persisted registry string is converted once into a
+            // typed command state; built-in drivers own their
+            // default binary names, while external drivers require
+            // an explicit executable.
+            command: DriverCommand::from_registry_value(&entry.command),
             // Conversation resume: `None` is fresh, `Some(id)` tells
             // a resume-capable driver (codex) to continue under that
             // thread id. Sourced from the chat ability's caller via
@@ -637,69 +804,21 @@ pub fn send_to_agent_with_depth_and_progress(
         },
     );
 
-    // Write meta.json regardless of success/failure so failed runs are still
-    // inspectable.
+    // Persist terminal artifacts before emitting the terminal Timeline event.
+    // Artifact persistence participates in the terminal decision: a completed
+    // adapter run with an incomplete run directory is a failed dispatch, not a
+    // successful invocation with missing audit files.
     let duration_ms = start.elapsed().as_millis() as u64;
-    if let Some(dir) = &run_dir {
-        let (exit_status, error, content_for_meta, usage_for_meta) = match &run_result {
-            Ok(out) => (
-                "ok".to_string(),
-                None,
-                Some(out.content.as_str()),
-                out.usage.clone(),
-            ),
-            Err(e) => ("error".to_string(), Some(e.to_string()), None, None),
-        };
-        if let Some(text) = content_for_meta {
-            if let Err(e) = dir.write_response(text) {
-                let path_display = format!("{}", dir.path().display());
-                let err_msg = format!("{e}");
-                crate::op_event!(
-                    component = dispatch,
-                    kind = response_write_failed,
-                    level = "warn",
-                    run_path = path_display,
-                    error = err_msg,
-                );
-            }
-        }
-        let u = usage_for_meta.unwrap_or_default();
-        let meta = RunMeta {
-            agent: agent_name.to_string(),
-            agent_type: entry.agent_type.to_string(),
-            // Record the model actually dispatched, which is
-            // spec-resolved above. A stale entry.model on the
-            // registry row must not shadow the spec's choice in
-            // the audit trail.
-            model: effective_model.clone(),
-            // Cross-reference key to the PersistentLog event log.
-            // Operators grepping for this id under
-            // `$AXON_INVOCATION_LOG_DIR/<id>.jsonl` find the
-            // P1-P6-compliant stream of events for this run.
-            invocation_id: session.invocation_id().to_string(),
-            started_at,
-            duration_ms,
-            exit_status,
-            error,
-            input_tokens: u.input_tokens,
-            output_tokens: u.output_tokens,
-            cache_read_tokens: u.cache_read_tokens,
-            cache_creation_tokens: u.cache_creation_tokens,
-            num_turns: u.num_turns,
-            total_cost_usd: u.total_cost_usd,
-        };
-        if let Err(e) = dir.write_meta(&meta) {
-            let path_display = format!("{}", dir.path().display());
-            let err_msg = format!("{e}");
-            crate::op_event!(
-                component = dispatch,
-                kind = meta_write_failed,
-                level = "warn",
-                run_path = path_display,
-                error = err_msg,
-            );
-        }
-    }
+    let artifact_error = persist_terminal_run_artifacts(TerminalRunArtifacts {
+        run_dir: run_dir.as_ref(),
+        agent_name,
+        entry,
+        effective_model: effective_model.clone(),
+        invocation_id: session.invocation_id(),
+        started_at,
+        duration_ms,
+        run_result: &run_result,
+    });
 
     // Terminal timeline event. One of `completed` / `failed`
     // matches the INVOCATION_STATE_MACHINE.md §2 event kinds.
@@ -715,8 +834,10 @@ pub fn send_to_agent_with_depth_and_progress(
     // The fsync on this emit is what gives the log its P4 terminal
     // idempotence: a reader opening the log after we exit finds
     // the terminal state durably recorded.
-    let (terminal_type, terminal_payload) = match &run_result {
-        Ok(out) => (
+    let final_error_message =
+        terminal_dispatch_error_message(&run_result, artifact_error.as_deref());
+    let (terminal_type, terminal_payload) = match (&run_result, final_error_message.as_deref()) {
+        (Ok(out), None) => (
             "completed",
             serde_json::json!({
                 "content_len": out.content.len(),
@@ -725,24 +846,30 @@ pub fn send_to_agent_with_depth_and_progress(
                 "tool_call_count": out.tool_calls.len(),
             }),
         ),
-        Err(e) => (
+        _ => (
             "failed",
-            dispatch_terminal_failure_payload(&e.to_string(), duration_ms),
+            dispatch_terminal_failure_payload(
+                final_error_message
+                    .as_deref()
+                    .unwrap_or("agent dispatch failed"),
+                duration_ms,
+            ),
         ),
     };
-    if let Err(e) = session.writer().emit(terminal_type, Some(terminal_payload)) {
-        let err_msg = format!("{e}");
-        crate::op_event!(
-            component = dispatch,
-            kind = timeline_terminal_emit_failed,
-            level = "warn",
-            agent = agent_name,
-            error = err_msg,
-            fallback = "run_dir_meta_is_authoritative",
-        );
-    }
+    session
+        .writer()
+        .emit(terminal_type, Some(terminal_payload))
+        .map_err(|e| anyhow::anyhow!("agent dispatch requires terminal timeline event: {e}"))?;
 
+    if let Some(error) = final_error_message {
+        anyhow::bail!("{error}");
+    }
     let output = run_result?;
+
+    let timeline = session
+        .writer()
+        .progress_projection()
+        .map_err(|error| anyhow::anyhow!("project durable agent progress timeline: {error}"))?;
 
     Ok(AgentResponse {
         agent: agent_name.to_string(),
@@ -753,14 +880,106 @@ pub fn send_to_agent_with_depth_and_progress(
         duration_ms,
         truncated: false,
         usage: output.usage,
-        run_dir: run_dir.as_ref().map(|d| d.path().to_path_buf()),
+        run_dir: Some(run_dir.path().to_path_buf()),
         tool_calls: output.tool_calls,
+        timeline,
         thread_id: output.thread_id,
     })
 }
 
+struct TerminalRunArtifacts<'a> {
+    run_dir: &'a RunDir,
+    agent_name: &'a str,
+    entry: &'a AgentEntry,
+    effective_model: Option<String>,
+    invocation_id: &'a str,
+    started_at: String,
+    duration_ms: u64,
+    run_result: &'a anyhow::Result<AdapterOutput>,
+}
+
+fn persist_terminal_run_artifacts(artifacts: TerminalRunArtifacts<'_>) -> Option<String> {
+    let TerminalRunArtifacts {
+        run_dir,
+        agent_name,
+        entry,
+        effective_model,
+        invocation_id,
+        started_at,
+        duration_ms,
+        run_result,
+    } = artifacts;
+
+    let mut artifact_errors = Vec::new();
+    if let Ok(output) = run_result {
+        if let Err(error) = run_dir.write_response(&output.content) {
+            artifact_errors.push(format!(
+                "agent dispatch requires response persistence at {}: {error}",
+                run_dir.path().display()
+            ));
+        }
+    }
+
+    let runtime_error = run_result.as_ref().err().map(|error| error.to_string());
+    let terminal_error = artifact_errors
+        .first()
+        .cloned()
+        .or_else(|| runtime_error.clone());
+    let usage = run_result
+        .as_ref()
+        .ok()
+        .and_then(|output| output.usage.clone())
+        .unwrap_or_default();
+    let meta = RunMeta {
+        agent: agent_name.to_string(),
+        agent_type: entry.agent_type.to_string(),
+        model: effective_model,
+        invocation_id: invocation_id.to_string(),
+        started_at,
+        duration_ms,
+        exit_status: if terminal_error.is_some() {
+            "error".to_string()
+        } else {
+            "ok".to_string()
+        },
+        error: terminal_error,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_read_tokens: usage.cache_read_tokens,
+        cache_creation_tokens: usage.cache_creation_tokens,
+        num_turns: usage.num_turns,
+        total_cost_usd: usage.total_cost_usd,
+    };
+    if let Err(error) = run_dir.write_meta(&meta) {
+        artifact_errors.push(format!(
+            "agent dispatch requires meta persistence at {}: {error}",
+            run_dir.path().display()
+        ));
+    }
+
+    if artifact_errors.is_empty() {
+        None
+    } else {
+        Some(artifact_errors.join("; "))
+    }
+}
+
+fn terminal_dispatch_error_message(
+    run_result: &anyhow::Result<AdapterOutput>,
+    artifact_error: Option<&str>,
+) -> Option<String> {
+    match (run_result, artifact_error) {
+        (Ok(_), None) => None,
+        (Ok(_), Some(artifact)) => Some(artifact.to_string()),
+        (Err(runtime), None) => Some(runtime.to_string()),
+        (Err(runtime), Some(artifact)) => Some(format!(
+            "agent dispatch failed and terminal artifact persistence failed: runtime={runtime}; artifact={artifact}"
+        )),
+    }
+}
+
 fn dispatch_terminal_failure_payload(message: &str, duration_ms: u64) -> serde_json::Value {
-    let code = crate::daemon::execution::mission::failure_codes::FailureCodeClassifier::classify_or(
+    let code = crate::daemon::execution::mission::failure_codes::FailureCodeClassifier::classify_or_default(
         message,
         "INVOCATION_FAILED",
     );
@@ -866,8 +1085,8 @@ mod compose_prompt_tests {
 ///
 /// Stage 1 — presence: a `DispatchContext` must be active for this
 /// thread, either installed via `with_context` (the typed in-process
-/// channel) or recovered from the env-var fallback (the cross-process
-/// channel for spawned subprocesses).
+/// channel) or recovered from the process-environment handoff (the
+/// cross-process channel for spawned subprocesses).
 /// Stage 2 — anti-forgery: the context's mission id must correspond to
 /// an existing mission run directory under `~/.easynet/missions/runs/`.
 ///
@@ -897,7 +1116,7 @@ fn check_mission_context_invariant() -> anyhow::Result<()> {
     // fake dir — but it eliminates the trivial-forgery case and
     // catches the common bug pattern of "user set the env var by
     // mistake".
-    let mission_run_dir = crate::cli::commands::mission_runs::root_dir().join(&mission_id);
+    let mission_run_dir = super::orchestration::root_dir().join(&mission_id);
     if !mission_run_dir.exists() {
         anyhow::bail!(
             "mission_id={} does not correspond to an existing \
@@ -917,8 +1136,9 @@ fn check_mission_context_invariant() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::agent::spec::RuntimeKind;
     use crate::daemon::execution::mission::adapter::AgentAdapter;
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentType};
+    use crate::daemon::persistence::agent_registry::AgentEntry;
 
     /// Construct a dummy `AgentEntry` for tests that exercise the
     /// dispatch guard logic in isolation.
@@ -944,7 +1164,7 @@ mod tests {
     /// Claude Code is interactive-by-default and would wait on stdin
     /// for the full `timeout_secs` window.
     fn dummy_entry() -> AgentEntry {
-        let mut e = AgentEntry::new(AgentType::ClaudeCode, None);
+        let mut e = AgentEntry::new(RuntimeKind::ClaudeCode, None);
         e.command = "easynet-test-nonexistent-agent-binary".to_string();
         e.timeout_secs = 1;
         e
@@ -956,8 +1176,7 @@ mod tests {
     #[test]
     fn recursion_guard_blocks_at_depth_2() {
         let entry = dummy_entry();
-        let res =
-            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(2), None);
+        let res = send_to_agent_with_depth("claude", &entry, "any prompt", None, Some(2), None);
         let err = res.expect_err("depth=2 must error");
         let msg = format!("{err}");
         assert!(
@@ -974,8 +1193,7 @@ mod tests {
     fn recursion_guard_allows_depth_1() {
         let entry = dummy_entry();
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let res =
-            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(1), None);
+        let res = send_to_agent_with_depth("claude", &entry, "any prompt", None, Some(1), None);
         match res {
             Ok(_) => panic!("expected an error from missing claude binary"),
             Err(e) => {
@@ -992,7 +1210,7 @@ mod tests {
     fn dispatch_rejects_registry_row_without_root_path() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let entry = dummy_entry();
-        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None)
+        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, Some(1), None)
             .expect_err("missing root_path must stop dispatch");
         let msg = format!("{err}");
         assert!(
@@ -1017,12 +1235,54 @@ mod tests {
 
         let mut entry = dummy_entry();
         entry.root_path = Some(root);
-        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None)
+        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, Some(1), None)
             .expect_err("spec name mismatch must stop dispatch");
         let msg = format!("{err}");
         assert!(
             msg.contains("agent.toml names \"bob\""),
             "expected spec-name mismatch, got: {msg}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_rejects_run_store_creation_failure_before_adapter_spawn() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let root = crate::daemon::persistence::config::agents_root().join("alice");
+        let spec = crate::core::agent::spec::AgentSpec::new(
+            "alice",
+            crate::core::agent::spec::RuntimeKind::ClaudeCode,
+        );
+        crate::daemon::execution::mission::directory::AgentDirectory::create(
+            &crate::daemon::execution::mission::directory::Location::Local { root: root.clone() },
+            spec,
+        )
+        .unwrap();
+        let runs_dir = root.join("runs");
+        let mut blocked_permissions = std::fs::metadata(&runs_dir).unwrap().permissions();
+        blocked_permissions.set_mode(0o500);
+        std::fs::set_permissions(&runs_dir, blocked_permissions).unwrap();
+
+        let mut entry = dummy_entry();
+        entry.root_path = Some(root.clone());
+        let result = send_to_agent_with_depth("alice", &entry, "prompt", None, Some(1), None);
+
+        let mut restored_permissions = std::fs::metadata(&runs_dir).unwrap().permissions();
+        restored_permissions.set_mode(0o700);
+        std::fs::set_permissions(&runs_dir, restored_permissions).unwrap();
+
+        let err = result.expect_err("run-store creation failure must stop before adapter spawn");
+        let msg = format!("{err:#}");
+
+        assert!(
+            msg.contains("requires per-run persistence"),
+            "expected required run-store error, got: {msg}"
+        );
+        assert!(
+            !msg.contains("easynet-test-nonexistent-agent-binary"),
+            "adapter command must not be spawned when run-store authority is unavailable: {msg}"
         );
     }
 
@@ -1038,8 +1298,7 @@ mod tests {
         // mission-context check.
         std::env::remove_var("EASYNET_MISSION_ID");
         let entry = dummy_entry();
-        let res =
-            send_to_agent_with_depth("claude", &entry, "any prompt", None, None, Some(2), None);
+        let res = send_to_agent_with_depth("claude", &entry, "any prompt", None, Some(2), None);
         assert!(res.is_err());
         let msg = format!("{}", res.unwrap_err());
         assert!(msg.contains("depth limit reached"));
@@ -1051,7 +1310,7 @@ mod tests {
         std::env::remove_var("EASYNET_MISSION_ID");
         std::env::remove_var("EASYNET_AGENT_DEPTH");
         let entry = dummy_entry();
-        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, None, None)
+        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, None)
             .expect_err("missing mission context must stop dispatch");
         let msg = format!("{err}");
         assert!(
@@ -1070,7 +1329,7 @@ mod tests {
         std::env::set_var("EASYNET_MISSION_ID", "forged-mission");
         std::env::set_var("EASYNET_AGENT_DEPTH", "0");
         let entry = dummy_entry();
-        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, None, None)
+        let err = send_to_agent_with_depth("alice", &entry, "prompt", None, None, None)
             .expect_err("unknown mission id must stop dispatch");
         std::env::remove_var("EASYNET_MISSION_ID");
         std::env::remove_var("EASYNET_AGENT_DEPTH");
@@ -1117,8 +1376,7 @@ mod tests {
     /// Safe unit test: pin that `send_external` is a one-line
     /// delegation to `send_to_agent_with_depth` with
     /// `depth_override = Some(0)`. We cannot run `send_external`
-    /// inline (it would spawn the real `claude` binary — see the
-    /// `#[ignore]` notes on the e2e tests below), so we symbolically
+    /// inline without crossing the process adapter boundary, so we symbolically
     /// test the two halves of its contract via the already-guarded
     /// inner function:
     ///
@@ -1129,32 +1387,22 @@ mod tests {
     /// The equality `send_external(x) == send_to_agent_with_depth(x, Some(0))`
     /// is enforced structurally by the implementation (single
     /// delegation line, see `send_external`'s body). If a future
-    /// refactor breaks that structural equality, the `#[ignore]`
-    /// e2e tests will catch the behavioural regression when run.
+    /// refactor breaks that structural equality, the direct
+    /// `send_external` tests below catch the behavioural regression.
     #[test]
     fn send_external_depth_guard_pins_at_max_not_below() {
         let entry = dummy_entry();
 
-        let tripped = send_to_agent_with_depth(
-            "claude",
-            &entry,
-            "p",
-            None,
-            None,
-            Some(MAX_AGENT_DEPTH),
-            None,
-        );
+        let tripped =
+            send_to_agent_with_depth("claude", &entry, "p", None, Some(MAX_AGENT_DEPTH), None);
         let msg = format!("{}", tripped.expect_err("override=MAX must trip"));
         assert!(
             msg.contains("depth limit"),
             "override=MAX must trip the guard; got: {msg}"
         );
 
-        // The inverse — "override < MAX does not trip the guard" —
-        // cannot be tested inline without spawning the real binary,
-        // because the path past the early-check leads straight to
-        // `adapter.invoke()`. That's what the `#[ignore]` tests
-        // below pin. Here we only verify the MAX boundary.
+        // The direct tests below cover the inverse through a fixture command
+        // that fails after the guard, without depending on an installed agent.
     }
 
     #[test]
@@ -1216,151 +1464,6 @@ mod tests {
             assert!(!msg.contains("depth limit"));
             assert!(!msg.contains("mission context"));
         }
-    }
-
-    // The next two tests are end-to-end and require external binaries
-    // (claude CLI with auth, MCP server child, etc.). They are gated
-    // by `#[ignore]` so they only run under
-    // `cargo test -- --ignored`. They exist to validate the full
-    // production path that the unit tests above only exercise in
-    // pieces.
-
-    /// End-to-end recursion guard via the MCP server. Spawns
-    /// `easynet mcp serve --enable-agent-dispatch --agent claude` as
-    /// a child with `EASYNET_AGENT_DEPTH=2` pre-set, then sends a
-    /// `tools/call` for `send_to_agent`. The response must contain
-    /// the depth-limit error.
-    ///
-    /// Inline JSON-RPC over stdio — no dev-dep added. ~30 lines.
-    #[test]
-    #[ignore]
-    fn recursion_guard_e2e() {
-        use std::io::{BufRead, BufReader, Write};
-        use std::process::{Command, Stdio};
-        use std::time::Duration;
-
-        // Locate the binary the test was built against. Falls back to
-        // `easynet` on PATH if neither path exists, but in practice
-        // `cargo test` ensures `target/debug/easynet` is fresh.
-        let bin = if std::path::Path::new("./target/release/easynet").exists() {
-            "./target/release/easynet"
-        } else if std::path::Path::new("./target/debug/easynet").exists() {
-            "./target/debug/easynet"
-        } else {
-            "easynet"
-        };
-
-        let mut child = Command::new(bin)
-            .args([
-                "mcp",
-                "serve",
-                "--enable-agent-dispatch",
-                "--agent",
-                "claude",
-            ])
-            .env("EASYNET_AGENT_DEPTH", "2")
-            // Set a fake mission id pointing at a tmp dir we control
-            // so the anti-forgery check passes.
-            .env("EASYNET_MISSION_ID", "test-recursion-guard-e2e")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn easynet mcp serve");
-
-        // Create the fake mission run dir so the anti-forgery check
-        // doesn't fire before the depth check does.
-        let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let runs_root = crate::daemon::persistence::config::state_dir()
-            .join("missions")
-            .join("runs");
-        let _ = std::fs::create_dir_all(runs_root.join("test-recursion-guard-e2e"));
-
-        let stdin = child.stdin.as_mut().expect("child stdin");
-        let init = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "test", "version": "1"},
-            },
-        });
-        writeln!(stdin, "{init}").unwrap();
-
-        let call = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": "send_to_agent",
-                "arguments": {
-                    "agent": "claude",
-                    "prompt": "hi",
-                },
-            },
-        });
-        writeln!(stdin, "{call}").unwrap();
-
-        // Read responses until we see the call result or timeout.
-        let stdout = child.stdout.take().expect("child stdout");
-        let mut reader = BufReader::new(stdout);
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        let mut found_depth_error = false;
-        let mut line = String::new();
-        while std::time::Instant::now() < deadline {
-            line.clear();
-            if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                break;
-            }
-            if line.contains("depth limit") {
-                found_depth_error = true;
-                break;
-            }
-        }
-        let _ = child.kill();
-        let _ = child.wait();
-        assert!(
-            found_depth_error,
-            "expected 'depth limit' in MCP server response stream"
-        );
-    }
-
-    /// End-to-end success path: `easynet agent send claude "say only
-    /// OK"` desugars to a mission and produces a real reply. Requires
-    /// local claude CLI + auth.
-    #[test]
-    #[ignore]
-    fn agent_send_desugar_e2e() {
-        use std::process::Command;
-
-        let bin = if std::path::Path::new("./target/release/easynet").exists() {
-            "./target/release/easynet"
-        } else if std::path::Path::new("./target/debug/easynet").exists() {
-            "./target/debug/easynet"
-        } else {
-            "easynet"
-        };
-
-        let out = Command::new(bin)
-            .args(["agent", "send", "claude", "say only the word OK"])
-            .output()
-            .expect("run easynet agent send");
-
-        assert!(out.status.success(), "non-zero exit: {:?}", out);
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        assert!(
-            stdout.to_uppercase().contains("OK"),
-            "expected 'OK' in stdout, got: {stdout}"
-        );
-
-        // The dispatching banner must appear on stderr.
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(
-            stderr.contains("dispatching via mission runtime"),
-            "expected mission-runtime banner on stderr, got: {stderr}"
-        );
     }
 
     // ── AgentAdapter trait contract ─────────────────────────────────
@@ -1427,9 +1530,11 @@ mod tests {
             max_output_bytes: 1024,
             env: std::collections::BTreeMap::new(),
             cwd: std::path::PathBuf::from("."),
+            system_prompt: None,
+            isolation: DriverIsolation::Agent,
             timeline: None,
             progress_tx: None,
-            command: String::new(),
+            command: DriverCommand::Default,
             resume_thread_id: None,
         };
         let out = adapter
@@ -1458,9 +1563,11 @@ mod tests {
             max_output_bytes: 64,
             env: std::collections::BTreeMap::new(),
             cwd: std::path::PathBuf::from("."),
+            system_prompt: None,
+            isolation: DriverIsolation::Agent,
             timeline: None,
             progress_tx: None,
-            command: String::new(),
+            command: DriverCommand::Default,
             resume_thread_id: None,
         };
         let out = adapter.invoke(&entry, "p", opts).unwrap();
@@ -1498,9 +1605,11 @@ mod tests {
             max_output_bytes: 64,
             env: std::collections::BTreeMap::new(),
             cwd: std::path::PathBuf::from("."),
+            system_prompt: None,
+            isolation: DriverIsolation::Agent,
             timeline: None,
             progress_tx: None,
-            command: String::new(),
+            command: DriverCommand::Default,
             resume_thread_id: None,
         };
         let out = adapter.invoke(&entry, "p", opts).unwrap();
@@ -1511,22 +1620,22 @@ mod tests {
 
     #[test]
     fn adapter_for_returns_distinct_singletons_per_agent_type() {
-        // Each AgentType must map to its own adapter. The runtime_id
+        // Each RuntimeKind must map to its own adapter. The runtime_id
         // accessor is the visible fingerprint — if a future mapper
         // accidentally aliases two types to one adapter, the id's
         // drift from `agent_type.to_string()` immediately.
         use crate::daemon::execution::mission::drivers::adapter_for;
-        let a = adapter_for(AgentType::ClaudeCode);
-        let b = adapter_for(AgentType::Codex);
-        let c = adapter_for(AgentType::CodexAppServer);
-        let d = adapter_for(AgentType::External);
+        let a = adapter_for(RuntimeKind::ClaudeCode);
+        let b = adapter_for(RuntimeKind::Codex);
+        let c = adapter_for(RuntimeKind::CodexAppServer);
+        let d = adapter_for(RuntimeKind::External);
         assert_eq!(a.runtime_id(), "claude-code");
         assert_eq!(b.runtime_id(), "codex");
         assert_eq!(c.runtime_id(), "codex-app-server");
         assert_eq!(d.runtime_id(), "external");
     }
 
-    // ── spec-over-entry precedence (PR-3b.5 / 3b.5.1) ───────────────────
+    // ── runtime config authority (PR-3b.5 / 3b.5.1) ─────────────────────
     //
     // These tests exercise the real `send_to_agent_with_depth`
     // code path rather than restate its equation in the test
@@ -1534,13 +1643,13 @@ mod tests {
     //
     //   1. Materialize an AgentDirectory with a distinct
     //      spec.model / spec.timeout_secs.
-    //   2. Build an AgentEntry carrying conflicting
+    //   2. Build an AgentEntry carrying stale/conflicting
     //      entry.model / entry.timeout_secs values.
     //   3. Call `send_to_agent_with_depth` with
     //      `depth_override = Some(1)` so the real dispatch
     //      flows: `AgentDirectory::open` validates the registered
-    //      root, `effective_model` / `effective_timeout` resolve
-    //      from spec, and the adapter invoke fails fast
+    //      root, `effective_model` resolves from spec/override only,
+    //      `effective_timeout` resolves from spec/default only, and the adapter invoke fails fast
     //      (dummy_entry's bogus `command` → ENOENT in ms).
     //   4. Inspect `<run-dir>/meta.json` — the authoritative
     //      audit record the dispatcher wrote BEFORE returning
@@ -1620,7 +1729,7 @@ mod tests {
         // enforcement (see recursion_guard_allows_depth_1's
         // rationale) and lets the dispatch reach the spawn
         // step, where `dummy_entry`'s bogus command fails fast.
-        let res = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None);
+        let res = send_to_agent_with_depth("alice", &entry, "prompt", None, Some(1), None);
         // Failure is expected — we don't need the response.
         // meta.json is written whether the run succeeded or
         // failed (see dispatch.rs's "Write meta.json regardless"
@@ -1638,24 +1747,23 @@ mod tests {
     }
 
     #[test]
-    fn entry_model_is_used_when_spec_model_is_none() {
-        // Legacy path: spec carries no model, entry does.
-        // dispatcher must fall back to entry.model in meta.json
-        // so pre-v2 registry rows continue to dispatch to the
-        // model their row names — operators whose agents have
-        // not been touched since upgrade must see no regression.
+    fn entry_model_is_ignored_when_spec_model_is_none() {
+        // The registry row may still carry stale model data, but
+        // dispatch must not treat it as runtime configuration.
+        // `agent.toml` is the persistent authority; when the spec
+        // carries no model, meta.json records no model and the
+        // driver chooses its own default.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let mut entry = seed_agent_with_spec("alice", None, None);
-        entry.model = Some("legacy-entry-model".into());
+        entry.model = Some("stale-registry-model".into());
         let root = entry.root_path.clone().unwrap();
 
-        let _ = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None);
+        let _ = send_to_agent_with_depth("alice", &entry, "prompt", None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json must exist");
-        assert_eq!(
-            meta.model.as_deref(),
-            Some("legacy-entry-model"),
-            "spec.model = None must fall back to entry.model; got {:?}",
+        assert!(
+            meta.model.is_none(),
+            "spec.model = None must ignore entry.model; got {:?}",
             meta.model
         );
     }
@@ -1673,7 +1781,7 @@ mod tests {
         entry.model = None;
         let root = entry.root_path.clone().unwrap();
 
-        let _ = send_to_agent_with_depth("alice", &entry, "prompt", None, None, Some(1), None);
+        let _ = send_to_agent_with_depth("alice", &entry, "prompt", None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json must exist");
         assert!(
@@ -1683,21 +1791,22 @@ mod tests {
         );
     }
 
-    // ── resolve_timeout / resolve_model (spec-over-entry rule) ──
+    // ── resolve_timeout / resolve_model (runtime config authority) ──
     //
-    // These two helpers are the single implementation of the
-    // spec-vs-entry precedence rule for timeouts and model
-    // selection. Production `send_to_agent_with_depth` calls
-    // them; these tests call the same functions.
+    // These helpers are the single implementation of the runtime config
+    // precedence rule: timeout comes from agent.toml or the canonical
+    // agent runtime default; model comes from invocation override or
+    // agent.toml. Registry-row `entry.model` / `entry.timeout_secs` are not
+    // dispatch-time runtime config authorities.
+    // Production `send_to_agent_with_depth` calls these helpers; tests call
+    // the same functions.
     //
     // This is the honest form of the rule we pin: the tests
     // are not "recompute the equation and assert the result"
     // (the test-theatre shape the earlier iteration took);
     // they are "drive the one function production uses and
-    // observe its output". A refactor that inverts the
-    // precedence order in `resolve_timeout` (say, swaps to
-    // `entry_timeout_secs.unwrap_or(spec_timeout_secs)` or
-    // somesuch) flips these test outputs and the tests break.
+    // observe its output". A refactor that reintroduces registry-row
+    // fallback flips these test outputs and the tests break.
     //
     // The sibling `*_is_written_to_meta_json_when_set` tests
     // above complete the picture by proving that the resolved
@@ -1709,71 +1818,140 @@ mod tests {
 
     #[test]
     fn resolve_timeout_prefers_spec_when_set() {
-        let t = resolve_timeout(Some(42), 300);
+        let t = resolve_timeout(Some(42));
         assert_eq!(t, Duration::from_secs(42));
     }
 
     #[test]
-    fn resolve_timeout_falls_back_to_entry_when_spec_none() {
-        let t = resolve_timeout(None, 300);
-        assert_eq!(t, Duration::from_secs(300));
+    fn resolve_timeout_uses_canonical_default_when_spec_none() {
+        let t = resolve_timeout(None);
+        assert_eq!(
+            t,
+            Duration::from_secs(
+                crate::daemon::persistence::agent_registry::default_timeout_for_new_rows()
+            )
+        );
     }
 
     #[test]
-    fn resolve_timeout_spec_trumps_entry_even_when_entry_is_smaller() {
-        // Guard against "pick the smaller of the two" drift
-        // — some tempting but wrong rules would satisfy the
-        // simple "spec wins when larger" case. If a refactor
-        // ever changes to `.min(entry_timeout_secs)` this
-        // test catches it.
-        let t = resolve_timeout(Some(600), 30);
+    fn resolve_timeout_has_no_entry_timeout_fallback() {
+        let t = resolve_timeout(Some(600));
         assert_eq!(t, Duration::from_secs(600));
     }
 
     #[test]
+    fn execution_timeout_overrides_spec_within_daemon_bound() {
+        let execution = AgentExecution {
+            timeout: Some(Duration::from_millis(300_000)),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_execution_timeout(Some(1), Some(&execution)).unwrap(),
+            Duration::from_millis(300_000)
+        );
+    }
+
+    #[test]
+    fn execution_timeout_rejects_zero_and_values_above_daemon_bound() {
+        for timeout in [
+            Duration::ZERO,
+            Duration::from_millis(MAX_INVOCATION_TIMEOUT_MS + 1),
+        ] {
+            let execution = AgentExecution {
+                timeout: Some(timeout),
+                ..Default::default()
+            };
+            assert!(resolve_execution_timeout(None, Some(&execution)).is_err());
+        }
+    }
+
+    #[test]
+    fn execution_cwd_rejects_absolute_and_parent_paths() {
+        let root = tempfile::tempdir().unwrap();
+        for cwd in [PathBuf::from("/tmp/outside"), PathBuf::from("../outside")] {
+            let execution = AgentExecution {
+                cwd: Some(cwd),
+                isolation: DriverIsolation::Strict,
+                ..Default::default()
+            };
+            assert!(resolve_execution_cwd(root.path(), Some(&execution)).is_err());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn execution_cwd_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), root.path().join("escaped")).unwrap();
+        let execution = AgentExecution {
+            cwd: Some(PathBuf::from("escaped/must-not-be-created")),
+            isolation: DriverIsolation::Strict,
+            ..Default::default()
+        };
+
+        assert!(resolve_execution_cwd(root.path(), Some(&execution)).is_err());
+        assert!(!outside.path().join("must-not-be-created").exists());
+    }
+
+    #[test]
+    fn strict_execution_cwd_creates_nested_repository_boundary() {
+        let root = tempfile::tempdir().unwrap();
+        let execution = AgentExecution {
+            cwd: Some(PathBuf::from("benchmark/case-1")),
+            isolation: DriverIsolation::Strict,
+            ..Default::default()
+        };
+
+        let resolved = resolve_execution_cwd(root.path(), Some(&execution)).unwrap();
+
+        assert_eq!(
+            resolved,
+            std::fs::canonicalize(root.path())
+                .unwrap()
+                .join("benchmark/case-1")
+        );
+        assert!(resolved.join(".git").is_dir());
+    }
+
+    #[test]
     fn resolve_model_prefers_spec_when_set() {
-        let m = resolve_model(Some("spec-model".into()), Some("entry-model".into()));
+        let m = resolve_model(Some("spec-model".into()));
         assert_eq!(m.as_deref(), Some("spec-model"));
     }
 
     #[test]
-    fn resolve_model_falls_back_to_entry_when_spec_none() {
-        let m = resolve_model(None, Some("entry-model".into()));
-        assert_eq!(m.as_deref(), Some("entry-model"));
-    }
-
-    #[test]
-    fn resolve_model_both_none_yields_none() {
-        let m = resolve_model(None, None);
+    fn resolve_model_returns_none_when_spec_none() {
+        let m = resolve_model(None);
         assert_eq!(m, None);
     }
 
     #[test]
-    fn resolve_model_spec_some_overrides_entry_none() {
-        // The asymmetric case: a spec that explicitly names a
-        // model must not be shadowed by a None on the entry
-        // row. This one tripped the original "or_else vs or"
-        // choice — `Option::or_else` evaluates the entry
-        // closure only when spec is None, which is the shape
-        // we want.
-        let m = resolve_model(Some("spec-model".into()), None);
+    fn resolve_model_both_none_yields_none() {
+        let m = resolve_model(None);
+        assert_eq!(m, None);
+    }
+
+    #[test]
+    fn resolve_model_has_no_entry_model_fallback() {
+        let m = resolve_model(Some("spec-model".into()));
         assert_eq!(m.as_deref(), Some("spec-model"));
     }
 
     // ── resolve_model_with_overrides (chat ability driver.model) ────────────
 
     #[test]
-    fn resolve_model_with_overrides_per_call_wins_over_spec_and_entry() {
+    fn resolve_model_with_overrides_per_call_wins_over_spec() {
         // The whole point of the chat `driver.model` field: a
-        // per-invocation override beats both the agent.toml spec
-        // and the legacy entry default. Pin that explicitly so a
+        // per-invocation override beats the agent.toml spec.
+        // Pin that explicitly so a
         // refactor of `or` chains here can't silently invert
         // precedence.
-        let m = resolve_model_with_overrides(
-            Some("override-model".into()),
-            Some("spec-model".into()),
-            Some("entry-model".into()),
-        );
+        let m =
+            resolve_model_with_overrides(Some("override-model".into()), Some("spec-model".into()));
         assert_eq!(m.as_deref(), Some("override-model"));
     }
 
@@ -1781,37 +1959,28 @@ mod tests {
     fn resolve_model_with_overrides_falls_through_to_spec_when_override_none() {
         // No per-call override → spec wins (matches resolve_model's
         // pre-overrides contract).
-        let m = resolve_model_with_overrides(
-            None,
-            Some("spec-model".into()),
-            Some("entry-model".into()),
-        );
+        let m = resolve_model_with_overrides(None, Some("spec-model".into()));
         assert_eq!(m.as_deref(), Some("spec-model"));
     }
 
     #[test]
-    fn resolve_model_with_overrides_falls_through_to_entry_when_override_and_spec_none() {
-        let m = resolve_model_with_overrides(None, None, Some("entry-model".into()));
-        assert_eq!(m.as_deref(), Some("entry-model"));
+    fn resolve_model_with_overrides_returns_none_when_override_and_spec_none() {
+        let m = resolve_model_with_overrides(None, None);
+        assert_eq!(m, None);
     }
 
     #[test]
     fn resolve_model_with_overrides_all_none_yields_none() {
-        let m = resolve_model_with_overrides(None, None, None);
+        let m = resolve_model_with_overrides(None, None);
         assert_eq!(m, None);
     }
 
     #[test]
     fn resolve_model_with_overrides_override_none_does_not_shadow_spec() {
-        // An explicit `Some("...")` on a lower tier must not be
-        // shadowed by `None` from a higher tier. `Option::or` has
-        // the right semantics here; pin it because a `unwrap_or`
-        // chain or a `match` statement could easily invert the
-        // shape.
-        let m = resolve_model_with_overrides(None, Some("spec".into()), None);
+        // A lower-tier spec value must not be shadowed by `None`
+        // from the per-call override tier.
+        let m = resolve_model_with_overrides(None, Some("spec".into()));
         assert_eq!(m.as_deref(), Some("spec"));
-        let m = resolve_model_with_overrides(None, None, Some("entry".into()));
-        assert_eq!(m.as_deref(), Some("entry"));
     }
 
     // ── PR-7 Session + Timeline dispatch integration ────────────────────────
@@ -1832,7 +2001,7 @@ mod tests {
         // HomeGuard-equivalent tempdir redirect) or a shared
         // tempdir by default. Open a bare PersistentLog on the
         // same dir the dispatch wrote to and read by id.
-        use easynet_axon::invocation::persistence::PersistentLog;
+        use axon_sdk::invocation::persistence::PersistentLog;
         let log = PersistentLog::new(None);
         Some(log.read_events(&meta.invocation_id, 0))
     }
@@ -1849,7 +2018,7 @@ mod tests {
         let entry = seed_agent_with_spec("alice", Some("model-x"), None);
         let root = entry.root_path.clone().unwrap();
 
-        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
+        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json must exist");
         assert!(
@@ -1928,6 +2097,62 @@ mod tests {
     }
 
     #[test]
+    fn terminal_artifact_response_failure_turns_success_into_failed_outcome() {
+        let root = tempfile::tempdir().unwrap();
+        let run_dir = RunDir {
+            path: root.path().to_path_buf(),
+        };
+        std::fs::create_dir(run_dir.path().join("response.md")).unwrap();
+        let entry = dummy_entry();
+        let run_result = Ok(AdapterOutput {
+            content: "synthetic response".to_string(),
+            usage: Some(AgentUsage {
+                input_tokens: 1,
+                output_tokens: 2,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        let artifact_error = persist_terminal_run_artifacts(TerminalRunArtifacts {
+            run_dir: &run_dir,
+            agent_name: "alice",
+            entry: &entry,
+            effective_model: Some("model-x".to_string()),
+            invocation_id: "cli-test",
+            started_at: "2026-07-24T00:00:00+08:00".to_string(),
+            duration_ms: 7,
+            run_result: &run_result,
+        })
+        .expect("response artifact failure must be reported");
+
+        assert!(
+            artifact_error.contains("requires response persistence"),
+            "expected response persistence error, got: {artifact_error}"
+        );
+        let final_error =
+            terminal_dispatch_error_message(&run_result, Some(&artifact_error)).unwrap();
+        assert!(
+            final_error.contains("requires response persistence"),
+            "artifact failure must become terminal dispatch error, got: {final_error}"
+        );
+        let meta: RunMeta = serde_json::from_str(
+            &std::fs::read_to_string(run_dir.path().join("meta.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(meta.exit_status, "error");
+        assert_eq!(meta.invocation_id, "cli-test");
+        assert!(
+            meta.error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("requires response persistence"),
+            "meta must record the artifact failure, got {:?}",
+            meta.error
+        );
+    }
+
+    #[test]
     fn terminal_event_marks_index_terminal_on_disk() {
         // P4 (terminal idempotence) composed with dispatch: after
         // a failed run, a fresh PersistentLog reader must see the
@@ -1938,10 +2163,10 @@ mod tests {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let entry = seed_agent_with_spec("alice", None, None);
         let root = entry.root_path.clone().unwrap();
-        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
+        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json");
-        use easynet_axon::invocation::persistence::PersistentLog;
+        use axon_sdk::invocation::persistence::PersistentLog;
         let log = PersistentLog::new(None);
         let idx = log
             .read_index(&meta.invocation_id)
@@ -2071,7 +2296,7 @@ mod tests {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let entry = seed_agent_with_spec("alice", None, None);
         let root = entry.root_path.clone().unwrap();
-        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
+        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, Some(1), None);
 
         // Find the latest run directory.
         let runs = root.join("runs");
@@ -2109,10 +2334,10 @@ mod tests {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let entry = seed_agent_with_spec("alice", None, None);
         let root = entry.root_path.clone().unwrap();
-        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, None, Some(1), None);
+        let _ = send_to_agent_with_depth("alice", &entry, "hello", None, Some(1), None);
 
         let meta = read_latest_meta(&root).expect("meta.json");
-        use easynet_axon::invocation::persistence::PersistentLog;
+        use axon_sdk::invocation::persistence::PersistentLog;
         let log = PersistentLog::new(None);
         let expected_path = log.events_path(&meta.invocation_id);
         assert!(

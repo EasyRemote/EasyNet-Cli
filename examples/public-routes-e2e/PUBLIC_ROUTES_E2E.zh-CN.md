@@ -31,7 +31,7 @@ bash scripts/demo-public-routes.sh
 
 ━━ 9. Publish a folder on caller-a + GET /web/<u>/<p>/
     Published.
-      project_uri:  easynet:///r/easynet.run/resource/<u>.probe/
+      project_ura:  easynet:///r/easynet.run/resource/<u>.probe/
       url_root:     http://probe.<u>.pages.localhost:8787/
   ✓ GET /web/<u>/probe/ → 200
       <!doctype html><h1>hello from probe</h1>
@@ -89,12 +89,12 @@ curl -X POST http://127.0.0.1:19080/v1/chat/completions \
 backend Go handler `chat_completions.go`:
 
 ```go
-calleeURA := axon.AgentURI(realm, username, modelStr)
+calleeURA := axon.AgentURA(realm, username, modelStr)
 // = "easynet:///r/hub-a.local/agent/<username>.probe-agent"
 ```
 
-backend → daemon-grpc → hub daemon's `runtime.invoke_remote` →
-hub `lookup_target_with_agent_fallback(agent/<u>.probe-agent)` 查 AdvertisedAgentStore 找到 host_uri = `<caller-a device URI>` → 通过 PresenceRegistry 取到 caller-a 的 bidi sender → push dispatch frame → caller-a daemon's `matches_self_target_uri` 接受 (本地 host 这个 agent) → 派发到 `probe-agent.chat` → reply 返回原路.
+backend → daemon-grpc canonical `Invocation.Invoke` → hub route selection →
+hub `lookup_target_with_agent_fallback(agent/<u>.probe-agent)` 查 AdvertisedAgentStore 找到 host_ura = `<caller-a device URA>` → 通过 PresenceRegistry 取到 caller-a 的 bidi sender → push dispatch frame → caller-a daemon's `matches_self_target_ura` 接受 (本地 host 这个 agent) → 派发到 `probe-agent.chat` → reply 返回原路.
 
 streaming case: 同样路由, daemon 内 `01HUB.openai.chat_completions` adapter 把 chat ability 的 unary reply 切 chunks 在 64 字符边界, 发回 backend, backend 写 `text/event-stream`.
 
@@ -113,10 +113,10 @@ curl http://127.0.0.1:19080/web/$USERNAME/probe/
 backend Go handler `pages_public/serve.go`:
 
 ```go
-calleeURA := axon.AgentURI(realm, username, "pages")
+calleeURA := axon.AgentURA(realm, username, "pages")
 // = "easynet:///r/hub-a.local/agent/<username>.pages"
 ability  := fmt.Sprintf("%s.%s.page.fetch", username, project)
-subjectURI := axon.PagesResourceURI(realm, username, project, rest)
+subjectURA := axon.PagesResourceURA(realm, username, project, rest)
 // = "easynet:///r/hub-a.local/resource/<username>.probe/index.html"
 ```
 
@@ -124,13 +124,13 @@ caller-a daemon 在 prelude 时已经把 `agent/<u>.pages` advertise 给了 hub.
 
 ## 这个 demo 在哪些层面证明了 Phase 9 真的对
 
-1. **wire 全标准 v4.1.5**: callee = `easynet:///r/<realm>/agent/<u>.<a>` (不是旧的 `agent/<bare-uuid>` 也不是 `r/prv/...`); subject = `resource/<...>` 用 `axon.ApiKeyResourceURI` / `axon.PagesResourceURI` helpers; ability = `<owner>.<agent>.<verb>` 三段 dot-tail.
+1. **wire 全标准 v4.1.5**: callee = `easynet:///r/<realm>/agent/<u>.<a>` (不是旧的 `agent/<bare-uuid>` 也不是 `r/prv/...`); subject = `resource/<...>` 用 `axon.ApiKeyResourceURA` / `axon.PagesResourceURA` helpers; ability = `<owner>.<agent>.<verb>` 三段 dot-tail.
 
-2. **AdvertisedAgentStore round-trip 真的发生**: 没这个 store 的 host_uri 反查, agent URA callee → `target_offline`. demo 里 `/v1/chat/completions` 和 `/web/<u>/<p>/` 都通过 agent URA, 说明 advertise prelude 的 wire 调用真的到了 hub, 真的被 upsert 了.
+2. **AdvertisedAgentStore round-trip 真的发生**: 没这个 store 的 host_ura 反查, agent URA callee → `target_offline`. demo 里 `/v1/chat/completions` 和 `/web/<u>/<p>/` 都通过 agent URA, 说明 advertise prelude 的 wire 调用真的到了 hub, 真的被 upsert 了.
 
 3. **kernel 沙箱真的保护**: `RESOLVE_BENEATH` 拦截任何 `..` 跳出. 直接 `curl http://localhost:19080/web/$USERNAME/probe/../../etc/passwd` 会 404 (file not found beneath project root), 不会 leak.
 
-4. **bearer auth 通过 Subject + Delegation 而非 token forward**: backend 用 ApiKey ent 表 resolve bearer → 拿 user_id + username → 构造 `subject = api_key URA` + sign envelope. daemon side 不重新校验 bearer, 直接信任 envelope. RFC-006-C v0.1 §INV-2 的 capability-URI 模型.
+4. **bearer auth 通过 Subject + Delegation 而非 token forward**: backend 用 ApiKey ent 表 resolve bearer → 拿 user_id + username → 构造 `subject = api_key URA` + sign envelope. daemon side 不重新校验 bearer, 直接信任 envelope. RFC-006-C v0.1 §INV-2 的 capability-URA 模型.
 
 ## 怎么改成在 silan Mac 上裸跑 (不走 docker)
 
@@ -139,10 +139,10 @@ caller-a daemon 在 prelude 时已经把 `agent/<u>.pages` advertise 给了 hub.
 ## 涉及的 commits (Phase 8 + 9)
 
 - EasyNet `05119cd` — `/v1/chat/completions` + `/v1/models` + `/web/<u>/<p>/` 三个 handler
-- EasyNet-Cli `caf92ea` — daemon `matches_self_target_uri` 接受 agent URA
-- EasyNet-Cli `326c1a0` — 杀光 `r/prv/{hub,reg}` legacy URI shape
-- EasyNet `008582a` — backend 删 dead `AbilityResourceURI` + 加 `ApiKeyResourceURI` / `PagesResourceURI` helpers
+- EasyNet-Cli `caf92ea` — daemon `matches_self_target_ura` 接受 agent URA
+- EasyNet-Cli `326c1a0` — 杀光 `r/prv/{hub,reg}` legacy address shape
+- EasyNet `008582a` — backend 删 dead `AbilityResourceURA` + 加 `ApiKeyResourceURA` / `PagesResourceURA` helpers
 - EasyNet-Cli `fb91b98` — daemon session prelude `federation.advertise_agent` × N
 - EasyNet `f9ee1c0` — backend wire callee = `agent/<username>.<agent>`
 
-跨两 repo, 6 个 commit. 全部 v4.1.5 严格符合, 没有 legacy URI 形态在 wire 上出现.
+跨两 repo, 6 个 commit. 全部 v4.1.5 严格符合, 没有 legacy URA 形态在 wire 上出现.

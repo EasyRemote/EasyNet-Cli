@@ -1,0 +1,23 @@
+id: stream/order_terminal
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+  - node
+  - java
+  - swift
+description: Runtime Core stream adapters preserve ordered data frames and project exactly one schema-shaped terminal event.
+steps:
+  - action: open_stream
+    fixture: invocation.complete.v4.json
+  - action: project_stream_terminal_event
+    schema: stream-event.schema.json
+  - action: close_stream
+expect:
+  result: stream_terminal_observed
+  stream_terminal_schema: stream-event.schema.json
+  terminal_event_count: 1
+  stream_close_unknown_is_idempotent: true
+  stream_cross_owner_close_error: ERR_INVALID_HANDLE

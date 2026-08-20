@@ -1,6 +1,22 @@
-schema_version = "1"
+schema_version = "3"
 name = "voice.report_metrics"
+descriptor_version = "1.0.0"
 description = "Report QoS metrics from a participant (jitter, packet loss, bitrate). The metrics value is appended to the call's event log and stored as the participant's `last_metrics` snapshot."
+exposure = "task"
+dedicated_surface = "voice"
+subject_contract_kind = "dedicated-surface"
+call_mode = "rpc"
+capability_state = "seam"
+admission_action = "invoke"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{\"additionalProperties\":false,\"properties\":{\"ack\":{\"type\":\"boolean\"},\"call_id\":{\"type\":\"string\"},\"participant_id\":{\"type\":\"string\"}},\"required\":[\"call_id\",\"participant_id\",\"ack\"],\"type\":\"object\"}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

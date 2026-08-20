@@ -45,6 +45,7 @@
 //         "ability":        "weather",
 //         "description":    "...",
 //         "input_schema":   { ... },
+//         "call_modes":     ["rpc"],
 //         "visibility":     "device",
 //         "score":          0.92,
 //         "reason":         "title match + tag match",
@@ -63,23 +64,26 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
 use serde_json::{json, Value};
 
-use crate::core::ability::spec::{AbilityManifest, Visibility};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
-use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
+use crate::daemon::ability::manifest::{AbilityManifest, ManifestAccessScope};
+use crate::daemon::invocation::routing::target::{
+    CallMode, InvocationTarget, PublicInvocationTargetIssuer,
+};
+use crate::daemon::persistence::agent_aggregate::AgentAggregateSnapshot;
+use crate::daemon::persistence::agent_registry::AgentRegistry;
 
 /// Verb portion of the per-agent discover ability. Combined with the
 /// owning agent's name to form the wire-level `<agent>.discover`.
-pub const ABILITY_VERB: &str = crate::daemon::ability::names::agents::DISCOVER;
-/// Daemon-owned aggregate discover entry used by top-level
+pub const ABILITY_VERB: &str = crate::daemon::ability::names::agents::DISCOVER_VERB;
+/// Daemon-owned `agent.discover` aggregate used by top-level
 /// `easynet discover` when the caller does not select a self agent.
-/// The owner is already `OwnerKind::Device`, so the dispatch key must
-/// stay owner-local instead of duplicating a `device.` prefix.
+/// The owner is the Agent-management SystemAgent, so the dispatch key must
+/// stay owner-local instead of duplicating a device substrate prefix.
 pub const DEVICE_DISCOVER_ABILITY: &str = crate::daemon::ability::names::agents::DISCOVER;
 
 /// Shared resolver object for federation-backed discover tiers.
@@ -88,7 +92,7 @@ pub const DEVICE_DISCOVER_ABILITY: &str = crate::daemon::ability::names::agents:
 /// not own how a daemon reaches the realm directory. Production daemon
 /// boot injects a local read-model resolver so `<agent>.discover`
 /// does not re-enter the daemon over its own UDS. Bridge-only harnesses
-/// use [`BridgeDiscoverFederationResolver`] to preserve the historical
+/// use [`DetachedDiscoverFederationResolver`] to make the missing dependency
 /// Axon runtime path.
 pub type SharedDiscoverFederationResolver = Arc<dyn DiscoverFederationResolver>;
 
@@ -121,40 +125,26 @@ pub trait DiscoverFederationResolver: Send + Sync {
     >;
 }
 
-/// Axon-bridge resolver used by historical bridge runtimes and
-/// narrow unit tests that do not boot the daemon Invocation service.
+/// Explicit unresolved directory dependency used by deterministic catalogue
+/// tests. Production daemon assembly replaces it with the late-bound local
+/// directory resolver before any public-tier discovery can succeed.
 #[derive(Debug, Default)]
-pub struct BridgeDiscoverFederationResolver;
+pub struct DetachedDiscoverFederationResolver;
 
-impl DiscoverFederationResolver for BridgeDiscoverFederationResolver {
+impl DiscoverFederationResolver for DetachedDiscoverFederationResolver {
     fn resolve_agents(
         &self,
-        tenant: &str,
-        realm: &str,
-        caller_ura: String,
-        tenant_filter: Option<String>,
+        _tenant: &str,
+        _realm: &str,
+        _caller_ura: String,
+        _tenant_filter: Option<String>,
     ) -> Result<
         Vec<crate::daemon::federation::client::ability_contract::ResolvedAgent>,
         DiscoverFederationResolveError,
     > {
-        let (bridge, _) = crate::daemon::persistence::config::load_and_connect().map_err(|e| {
-            DiscoverFederationResolveError::NotJoined(format!(
-                "no usable Axon bridge runtime ({e}); start the daemon and join a realm before \
-                 scope=\"user\" or scope=\"public\""
-            ))
-        })?;
-        let invoker = crate::daemon::federation::advertise::BridgeAbilityInvoker::with_caller_ura(
-            &bridge, caller_ura,
-        );
-        crate::daemon::federation::advertise::resolve_agents_with_filter(
-            &invoker,
-            tenant,
-            realm,
-            "",
-            true,
-            tenant_filter,
-        )
-        .map_err(DiscoverFederationResolveError::Unavailable)
+        Err(DiscoverFederationResolveError::NotJoined(
+            "daemon directory resolver is not attached".to_string(),
+        ))
     }
 }
 
@@ -213,7 +203,7 @@ pub struct LocalDirectoryDiscoverFederationResolver {
         Arc<crate::daemon::federation::read_model::advertised_agents::AdvertisedAgentStore>,
     ability_catalog:
         Arc<crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore>,
-    self_device_ura: Option<String>,
+    local_ability_catalog: Arc<OnceLock<Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>>>,
 }
 
 #[cfg(feature = "axon-pb")]
@@ -228,13 +218,15 @@ impl LocalDirectoryDiscoverFederationResolver {
         ability_catalog: Arc<
             crate::daemon::federation::read_model::ability_catalog::AbilityCatalogStore,
         >,
-        self_device_ura: Option<String>,
+        local_ability_catalog: Arc<
+            OnceLock<Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog>>,
+        >,
     ) -> Self {
         Self {
             presence,
             advertised_agents,
             ability_catalog,
-            self_device_ura,
+            local_ability_catalog,
         }
     }
 }
@@ -252,18 +244,22 @@ impl DiscoverFederationResolver for LocalDirectoryDiscoverFederationResolver {
         DiscoverFederationResolveError,
     > {
         let ura_prefix = local_resolve_prefix(tenant, realm, tenant_filter.as_deref())?;
-        let request = crate::daemon::invocation::dispatch::federation_wrappers::ResolveRequest {
-            ura_prefix,
-            include_abilities: true,
-            filter: None,
-        };
+        let request =
+            crate::daemon::invocation::dispatch::federation_wrappers::ResolveRequest::with_filter(
+                ura_prefix, true,
+            );
         let response = crate::daemon::invocation::dispatch::federation_wrappers::handle_resolve(
             &request,
             &self.presence,
             Some(self.advertised_agents.as_ref()),
-            Some(self.ability_catalog.as_ref()),
-            self.self_device_ura.as_deref(),
-        );
+            self.ability_catalog.as_ref(),
+            self.local_ability_catalog.get().map(Arc::as_ref),
+        )
+        .map_err(|error| {
+            DiscoverFederationResolveError::Unavailable(format!(
+                "federation.resolve ability projection: {error}"
+            ))
+        })?;
         let value = serde_json::to_value(response)
             .map_err(|e| DiscoverFederationResolveError::Unavailable(e.to_string()))?;
         let receipt: crate::daemon::federation::client::ability_contract::ResolveReceipt =
@@ -315,41 +311,87 @@ fn local_resolve_prefix(
 /// `agent_registry_provider` is invoked at handler-call time so that
 /// hot-added or hot-removed peer agents are reflected on the next
 /// discover call without re-registration.
-pub fn register_for_agent<F>(
+pub(crate) type AgentDirectoryProvider =
+    Arc<dyn Fn() -> anyhow::Result<AgentAggregateSnapshot> + Send + Sync>;
+
+/// Adapter for infallible in-memory fixtures and fallible durable providers.
+/// Production providers return `anyhow::Result`; the infallible implementation
+/// keeps deterministic unit fixtures concise without introducing a runtime
+/// fallback.
+pub(crate) trait IntoAgentDirectoryLoadResult {
+    fn into_agent_directory_load_result(self) -> anyhow::Result<AgentAggregateSnapshot>;
+}
+
+#[cfg(test)]
+impl IntoAgentDirectoryLoadResult for AgentRegistry {
+    fn into_agent_directory_load_result(self) -> anyhow::Result<AgentAggregateSnapshot> {
+        Ok(AgentAggregateSnapshot::new(
+            self,
+            crate::daemon::persistence::local_agents::load_for_fresh_host_projection()?,
+        ))
+    }
+}
+
+#[cfg(test)]
+impl IntoAgentDirectoryLoadResult for anyhow::Result<AgentRegistry> {
+    fn into_agent_directory_load_result(self) -> anyhow::Result<AgentAggregateSnapshot> {
+        self?.into_agent_directory_load_result()
+    }
+}
+
+impl IntoAgentDirectoryLoadResult for AgentAggregateSnapshot {
+    fn into_agent_directory_load_result(self) -> anyhow::Result<AgentAggregateSnapshot> {
+        Ok(self)
+    }
+}
+
+impl IntoAgentDirectoryLoadResult for anyhow::Result<AgentAggregateSnapshot> {
+    fn into_agent_directory_load_result(self) -> anyhow::Result<AgentAggregateSnapshot> {
+        self
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn register_for_agent<F, R>(
     reg: &mut AxonAbilityCatalog,
     agent_name: String,
     agent_registry_provider: F,
     dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) where
-    F: Fn() -> AgentRegistry + Send + Sync + 'static,
+    F: Fn() -> R + Send + Sync + 'static,
+    R: IntoAgentDirectoryLoadResult,
 {
     register_for_agent_with_resolver(
         reg,
         agent_name,
         agent_registry_provider,
         dispatch_registry_handle,
-        Arc::new(BridgeDiscoverFederationResolver),
+        Arc::new(DetachedDiscoverFederationResolver),
     );
 }
 
 /// Same as [`register_for_agent`] with an explicit federation
 /// resolver dependency.
-pub fn register_for_agent_with_resolver<F>(
+#[cfg(test)]
+pub(crate) fn register_for_agent_with_resolver<F, R>(
     reg: &mut AxonAbilityCatalog,
     agent_name: String,
     agent_registry_provider: F,
     dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     federation_resolver: SharedDiscoverFederationResolver,
 ) where
-    F: Fn() -> AgentRegistry + Send + Sync + 'static,
+    F: Fn() -> R + Send + Sync + 'static,
+    R: IntoAgentDirectoryLoadResult,
 {
     use crate::daemon::ability::dispatch::OwnerKind;
-    let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(agent_registry_provider);
+    let provider: AgentDirectoryProvider =
+        Arc::new(move || agent_registry_provider().into_agent_directory_load_result());
     let qualified = format!("{agent_name}.{ABILITY_VERB}");
     let agent = agent_name.clone();
-    reg.register_rpc_with_spec(
+    reg.register_rpc_with_spec_and_action(
         &qualified,
         OwnerKind::Agent(agent_name),
+        crate::daemon::ability::descriptors::AdmissionAction::Read,
         manifest(),
         Arc::new(move |args: Value| {
             dispatch(
@@ -363,26 +405,29 @@ pub fn register_for_agent_with_resolver<F>(
     );
 }
 
-/// Register the daemon-owned device aggregate discover entry.
+/// Register the daemon-owned `agent.discover` aggregate entry.
 ///
 /// This is intentionally a thin owner wrapper over [`dispatch`], not a
 /// second discovery implementation. Passing an empty `self_agent` means local
 /// fan-in has no self tier: `visibility = self` helpers stay hidden and the
 /// top-level CLI sees the device aggregate without choosing an arbitrary
 /// first agent as caller identity.
-pub fn register_device_aggregate_with_resolver<F>(
+pub(crate) fn register_device_aggregate_with_resolver<F, R>(
     reg: &mut AxonAbilityCatalog,
     agent_registry_provider: F,
     dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     federation_resolver: SharedDiscoverFederationResolver,
 ) where
-    F: Fn() -> AgentRegistry + Send + Sync + 'static,
+    F: Fn() -> R + Send + Sync + 'static,
+    R: IntoAgentDirectoryLoadResult,
 {
     use crate::daemon::ability::dispatch::OwnerKind;
-    let provider: Arc<dyn Fn() -> AgentRegistry + Send + Sync> = Arc::new(agent_registry_provider);
-    reg.register_rpc_with_spec(
+    let provider: AgentDirectoryProvider =
+        Arc::new(move || agent_registry_provider().into_agent_directory_load_result());
+    reg.register_rpc_with_spec_and_action(
         DEVICE_DISCOVER_ABILITY,
-        OwnerKind::Device,
+        OwnerKind::agent_management_system(),
+        crate::daemon::ability::descriptors::AdmissionAction::Read,
         manifest(),
         Arc::new(move |args: Value| {
             dispatch(
@@ -412,9 +457,9 @@ pub fn register_device_aggregate_with_resolver<F>(
 /// hot-added agent and materialise it in LocalRuntime without
 /// re-running this module's `register_for_agent` (which requires
 /// `&mut AxonAbilityCatalog`).
-pub fn dispatch(
+pub(crate) fn dispatch(
     self_agent: &str,
-    agent_registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
+    agent_registry_provider: &AgentDirectoryProvider,
     dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     federation_resolver: &dyn DiscoverFederationResolver,
     args: Value,
@@ -467,36 +512,12 @@ pub fn dispatch(
         return resolve_via_federation(federation_resolver, scope, query.as_deref(), source_window);
     }
 
-    let agents = agent_registry_provider();
-    let local_agent_uras = match LocalAgentAbilityOwners::load() {
-        Ok(owners) => owners,
-        Err(error) => {
-            return Ok(error_envelope(
-                "local_agents_unavailable",
-                &format!("cannot read local agent identity projection: {error}"),
-                scope,
-                query.as_deref(),
-            ));
-        }
-    };
-    let mut rows: Vec<Candidate> = Vec::new();
-    for (peer_name, peer_entry) in agents.agents.iter() {
-        let manifests =
-            crate::daemon::execution::mission::agent_ability_specs::manifests_for_shared(
-                peer_name, peer_entry,
-            );
-        for m in manifests.iter() {
-            push_candidate(
-                &mut rows,
-                &local_agent_uras,
-                self_agent,
-                peer_name,
-                peer_entry,
-                m,
-                scope,
-            );
-        }
-    }
+    let catalog = dispatch_registry_handle.get().ok_or_else(|| {
+        anyhow::anyhow!(
+            "discover: canonical local Ability catalog is not attached; retry after daemon boot"
+        )
+    })?;
+    let mut rows = local_catalog_candidates(catalog, self_agent, scope)?;
 
     if let Some(q) = &query {
         score_against_query(&mut rows, q);
@@ -538,22 +559,24 @@ pub fn dispatch(
 /// recursion-trigger.
 fn delegate_to_provider(
     provider_name: &str,
-    agent_registry_provider: &Arc<dyn Fn() -> AgentRegistry + Send + Sync>,
+    agent_registry_provider: &AgentDirectoryProvider,
     dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
     args: Value,
 ) -> anyhow::Result<Value> {
     DiscoverProviderName::parse(provider_name)?;
-    let agents = agent_registry_provider();
+    let directory = agent_registry_provider()
+        .map_err(|error| anyhow::anyhow!("discover: load Agent directory: {error:#}"))?;
     let registry = dispatch_registry_handle.get().ok_or_else(|| {
         anyhow::anyhow!(
             "internal_error: dispatch registry handle not yet set; \
              discover provider routing requires the daemon's live registry"
         )
     })?;
-    let provider = DiscoverProviderTarget::resolve(provider_name, &agents, registry)?;
+    let provider = DiscoverProviderTarget::resolve(provider_name, &directory.registry, registry)?;
     let provider_registry_name = provider.registry_name().to_string();
+    let provider_target = provider.into_invocation_target(args)?;
     registry
-        .invoke_rpc_target_json(provider.into_invocation_target(args))
+        .invoke_rpc_target_json(provider_target)
         .map_err(|err| {
             anyhow::anyhow!(
                 "discover: provider {provider_registry_name:?} is not registered or failed. Pick a registered \
@@ -594,7 +617,12 @@ impl DiscoverProviderTarget {
             })?;
         Ok(Self {
             registry_name,
-            ability_ura: record.descriptor().ability_ura().to_string(),
+            ability_ura: record.descriptor().canonical_ability_ura().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "discover: provider {:?} has no canonical Ability URA",
+                    record.ability()
+                )
+            })?,
             subject_ura: record.authority().scope().authority_root().to_string(),
         })
     }
@@ -603,15 +631,14 @@ impl DiscoverProviderTarget {
         &self.registry_name
     }
 
-    fn into_invocation_target(self, args: Value) -> InvocationTarget {
-        InvocationTarget {
-            scope: TargetScope::Local,
-            ability: self.ability_ura,
-            normalized_args: args,
-            call_mode: CallMode::Rpc,
-            subject: Some(self.subject_ura),
-            causal_context: Some(easynet_axon::invocation::CausalContext::None),
-        }
+    fn into_invocation_target(self, args: Value) -> anyhow::Result<InvocationTarget> {
+        PublicInvocationTargetIssuer::local_explicit_tuple(
+            self.ability_ura,
+            args,
+            CallMode::Rpc,
+            self.subject_ura,
+            axon_sdk::invocation::CausalContext::None,
+        )
     }
 }
 
@@ -703,12 +730,8 @@ fn resolve_via_federation(
         ));
     }
 
-    // Pin the caller URA to the daemon's own device-profile Agent
-    // URA. Without this the bridge synthesises a hub-literal caller
-    // (`agents/easynet:prv:hub:<realm>`) and the hub's membership
-    // gate rejects with AXON_MEMBERSHIP_REQUIRED — same caller-URA
-    // fix we apply at the daemon-boot advertise call site (see
-    // `cli::start::republish_via_federation_best_effort`).
+    // Pin the caller URA to the daemon's own Device URA. The session
+    // membership gate requires this exact joined identity.
     let device_caller_ura = crate::core::ura::device_ura(tenant, &creds.node_id);
     // Tenant_filter wire shape mirrors RFC-002 §5 update:
     //   * User scope → None: hub auto-fills caller_tenant.
@@ -775,7 +798,21 @@ fn resolve_via_federation(
         // compiles regardless of the `axon-pb` feature. With the
         // feature off, the reader returns an explicit capability error
         // rather than fabricating an empty directory.
-        match crate::daemon::federation::directory_reader::read_federated_directory(None) {
+        let local_user_id = match creds.user_id() {
+            Ok(user_id) => user_id,
+            Err(error) => {
+                return Ok(error_envelope(
+                    "federation_not_joined",
+                    &format!("credentials cannot identify the calling user: {error}"),
+                    scope,
+                    query,
+                ));
+            }
+        };
+        match crate::daemon::federation::directory_reader::read_federated_directory_for_user(
+            None,
+            local_user_id,
+        ) {
             Ok(entries) => rows.extend(federated_directory_candidates(&entries)),
             Err(error) if rows.is_empty() => {
                 return Ok(error_envelope(
@@ -820,7 +857,7 @@ fn resolve_via_federation(
 }
 
 /// Where the call wants to look. Mirrors the `[access].visibility`
-/// tiers exposed in `core::ability_spec::Visibility` but is a
+/// tiers exposed in `daemon::ability::manifest::ManifestAccessScope` but is a
 /// caller-side concept: "search at most this far".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scope {
@@ -965,39 +1002,14 @@ struct Candidate {
     ability: String,
     description: String,
     input_schema: Value,
-    visibility: Visibility,
+    call_modes: BTreeSet<String>,
+    visibility: ManifestAccessScope,
     scope_matched: Scope,
     score: f64,
     reason: String,
     fulfilled_by: Option<&'static str>,
     identity_state: &'static str,
     diagnostic: Option<String>,
-}
-
-#[derive(Debug, Clone, Default)]
-struct LocalAgentAbilityOwners {
-    local_agents: crate::daemon::persistence::local_agents::LocalAgentsFile,
-}
-
-impl LocalAgentAbilityOwners {
-    fn load() -> anyhow::Result<Self> {
-        Ok(Self {
-            local_agents: crate::daemon::persistence::local_agents::load()?,
-        })
-    }
-
-    fn owner_ura_for(&self, agent_name: &str) -> Option<String> {
-        crate::daemon::persistence::local_agents::lookup_hosted_ura(
-            &self.local_agents,
-            "llm",
-            agent_name,
-        )
-    }
-
-    fn ability_ura_for(&self, agent_name: &str, public_name: &str) -> Option<String> {
-        let owner_ura = self.owner_ura_for(agent_name)?;
-        crate::core::ura::owner_ability_ura(&owner_ura, public_name)
-    }
 }
 
 impl Candidate {
@@ -1012,6 +1024,7 @@ impl Candidate {
             "ability":        self.ability,
             "description":    self.description,
             "input_schema":   self.input_schema,
+            "call_modes":     self.call_modes,
             "visibility":     self.visibility.as_wire_str(),
             "scope_matched":  self.scope_matched.as_str(),
             "score":          self.score,
@@ -1050,7 +1063,8 @@ fn candidate_from_federated_summary(
         ability: public_name,
         description: summary.callable_summary.description.clone(),
         input_schema,
-        visibility: Visibility::Public,
+        call_modes: BTreeSet::from([summary.callable_summary.call_mode.as_str().to_string()]),
+        visibility: ManifestAccessScope::Public,
         scope_matched: scope,
         score: 0.0,
         reason: String::new(),
@@ -1060,111 +1074,94 @@ fn candidate_from_federated_summary(
     })
 }
 
-/// Decide whether one peer ability satisfies the requested scope and
-/// the ability's own `[access]` policy, then push a row.
-fn push_candidate(
-    out: &mut Vec<Candidate>,
-    local_agent_uras: &LocalAgentAbilityOwners,
+/// Canonical local discovery projection. Descriptor identity, schema, access
+/// policy, and callability come from committed control-plane records only.
+/// Agent manifests are authoring inputs and never participate in this read
+/// model after registration.
+fn local_catalog_candidates(
+    catalog: &AxonAbilityCatalog,
     self_agent: &str,
-    peer_name: &str,
-    _peer_entry: &AgentEntry,
-    manifest: &crate::core::ability::spec::AbilityManifest,
     scope: Scope,
-) {
-    let access = manifest.access();
-    let visibility = access.visibility;
+) -> anyhow::Result<Vec<Candidate>> {
+    use crate::daemon::ability::descriptors::Visibility;
+    use crate::daemon::ability::dispatch::OwnerKind;
 
-    let is_self = peer_name == self_agent;
-    let scope_matched = match (is_self, visibility) {
-        (true, _) => Scope::Selfish,
-        // A peer ability with `visibility = "self"` is invisible to
-        // other agents regardless of caller scope — the access policy
-        // strictly trumps the caller's reach.
-        (false, Visibility::Selfish) => return,
-        (false, Visibility::Device) => Scope::Device,
-        (false, Visibility::Public) => Scope::Device,
-    };
-
-    // Skip candidates whose `scope_matched` exceeds the caller's
-    // requested `scope`. e.g. a `scope = "self"` query must not see
-    // peer entries even if their visibility allows it — the caller is
-    // saying "only show me MY abilities".
-    let allowed = match (scope, scope_matched) {
-        (Scope::Selfish, Scope::Selfish) => true,
-        (Scope::Selfish, _) => false,
-        (Scope::Device, _) => true,
-        // User and Public are federation-only; the local fan-in
-        // path doesn't run for them but is_federated() guards make
-        // sure we never reach this match arm under those scopes.
-        // Keep the arms exhaustive for the compiler.
-        (Scope::User, _) => true,
-        (Scope::Public, _) => true,
-    };
-    if !allowed {
-        return;
+    let snapshot = catalog.authority_ability_catalog_snapshot();
+    let caller_ura = if self_agent.is_empty() {
+        catalog.hosted_device_authority_root().map(str::to_string)
+    } else {
+        snapshot.iter().find_map(|row| match &row.owner {
+            OwnerKind::Agent(agent) if agent == self_agent => {
+                Some(row.descriptor.owner_ura.clone())
+            }
+            _ => None,
+        })
     }
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "discover: caller {self_agent:?} has no authority in the canonical local Ability catalog"
+        )
+    })?;
 
-    let (qualified_name, identity_state, mut diagnostic) =
-        match local_agent_uras.ability_ura_for(peer_name, manifest.name()) {
-            Some(qualified_name) => (qualified_name, "minted", None),
-            None => (
-                String::new(),
-                "identity_not_minted",
-                Some(format!(
-                    "agent {peer_name:?} has no hosted URA in local-agents.json; \
-                     ability exists on disk but is not invocable until identity minting completes"
-                )),
-            ),
+    let mut candidates = BTreeMap::<String, Candidate>::new();
+    for row in snapshot {
+        let is_self = matches!(&row.owner, OwnerKind::Agent(agent) if agent == self_agent);
+        if matches!(scope, Scope::Selfish) && !is_self {
+            continue;
+        }
+        if !row.descriptor.is_visible_to(&caller_ura, &caller_ura) {
+            continue;
+        }
+        let Some(qualified_name) = row.descriptor.canonical_ability_ura() else {
+            continue;
         };
-    let fulfilled_by = classify_fulfilled_by(manifest);
-    if fulfilled_by == Some("unbound_manifest") && diagnostic.is_none() {
-        diagnostic = Some(format!(
-            "ability manifest {peer_name}.{} has no [exec] binding; publish it with a \
-             shell/http/eal/mcp/host_stream executor before invoking",
-            manifest.name()
-        ));
+        let visibility = match row.descriptor.visibility {
+            Visibility::Private => ManifestAccessScope::Selfish,
+            Visibility::Scoped => ManifestAccessScope::Device,
+            Visibility::Public => ManifestAccessScope::Public,
+        };
+        // The committed descriptor already carries the canonical owner URA.
+        // Re-resolving an Agent label through the persistence aggregate would
+        // introduce a second identity authority and make discovery depend on
+        // unrelated authoring-state availability.
+        let owner = row.descriptor.owner_ura.clone();
+        let call_mode = row.descriptor.call_mode().as_str().to_string();
+        match candidates.entry(qualified_name.clone()) {
+            std::collections::btree_map::Entry::Occupied(mut existing) => {
+                existing.get_mut().call_modes.insert(call_mode);
+            }
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(Candidate {
+                    qualified_name,
+                    owner,
+                    ability: row.descriptor.public_name(),
+                    description: row.descriptor.description.clone(),
+                    input_schema: row.descriptor.input_schema().clone(),
+                    call_modes: BTreeSet::from([call_mode]),
+                    visibility,
+                    scope_matched: if is_self {
+                        Scope::Selfish
+                    } else {
+                        Scope::Device
+                    },
+                    score: 0.0,
+                    reason: String::new(),
+                    fulfilled_by: Some("local_catalog"),
+                    identity_state: "minted",
+                    diagnostic: None,
+                });
+            }
+        }
     }
-    out.push(Candidate {
-        qualified_name,
-        owner: peer_name.to_string(),
-        ability: manifest.name().to_string(),
-        description: manifest.description().to_string(),
-        input_schema: manifest.input_schema().clone(),
-        visibility,
-        scope_matched,
-        score: 0.0,
-        reason: String::new(),
-        fulfilled_by,
-        identity_state,
-        diagnostic,
-    });
-}
-
-/// Tag a manifest with how the call would actually run, so the LLM can
-/// budget for latency. `shell` (sub-second deterministic) vs
-/// `http` / `mcp` / `host_stream` is the load-bearing distinction. A
-/// manifest without `[exec]` is an unbound declaration, not a callable
-/// route.
-fn classify_fulfilled_by(
-    manifest: &crate::core::ability::spec::AbilityManifest,
-) -> Option<&'static str> {
-    use crate::core::ability::spec::AbilityExec;
-    match manifest.exec() {
-        Some(AbilityExec::Shell(_)) => Some("shell"),
-        Some(AbilityExec::Http(_)) => Some("http"),
-        Some(AbilityExec::Eal(_)) => Some("eal"),
-        Some(AbilityExec::Mcp(_)) => Some("mcp"),
-        Some(AbilityExec::HostStream(_)) => Some("host_stream"),
-        None => Some("unbound_manifest"),
-    }
+    Ok(candidates.into_values().collect())
 }
 
 /// Project a federated-directory entry list into discover candidates.
 ///
 /// RFC-005 forbids synthesizing ability identities from presence
 /// facts. A directory entry proves that an owner exists or is online;
-/// it does not prove that `<owner>.forward_invoke` is a real public
-/// Ability. Cross-hub routing still uses `federation.forward_invoke`
+/// it does not prove that `<owner>.canonical_invoke` is a real public
+/// ability. Cross-hub routing still uses the canonical `Invocation::Invoke` RPC
 /// internally, but discover must only expose callable abilities when
 /// a federated ability summary carries a canonical `ability_ura`.
 ///
@@ -1336,6 +1333,15 @@ pub fn input_schema() -> Value {
 
 pub fn manifest() -> AbilityManifest {
     AbilityManifest::new(ABILITY_VERB, description(), input_schema())
+        .and_then(|manifest| {
+            manifest.with_exposure(crate::daemon::ability::manifest::AbilityExposure::Task)
+        })
+        .and_then(|manifest| {
+            manifest.with_subject_contract(
+                crate::daemon::ability::manifest::AbilitySubjectContractKind::AuthenticatedUser,
+                None,
+            )
+        })
         .expect("discover ability manifest is static and validated by tests")
 }
 
@@ -1354,10 +1360,9 @@ pub fn description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::ability::spec::{AbilityManifest, AccessPolicy, Visibility};
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
-    use std::path::PathBuf;
-    use tempfile::TempDir;
+    use crate::core::agent::spec::RuntimeKind;
+    use crate::daemon::ability::manifest::{AbilityManifest, AccessPolicy, ManifestAccessScope};
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
 
     fn obj_schema() -> Value {
         json!({"type": "object"})
@@ -1366,7 +1371,7 @@ mod tests {
     #[test]
     fn register_publishes_discover_manifest_description() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = runtime_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1374,79 +1379,99 @@ mod tests {
             Arc::new(std::sync::OnceLock::new()),
         );
 
-        let manifest = reg
-            .control_plane_manifest("claude.discover")
-            .expect("discover registration must publish its manifest");
-        assert_eq!(manifest.description(), description());
-        assert_eq!(manifest.input_schema(), &input_schema());
+        let record = reg
+            .control_plane_record_for_mode("claude.discover", crate::daemon::ability::CallMode::Rpc)
+            .expect("discover descriptor lookup is unambiguous")
+            .expect("discover registration must publish its canonical descriptor");
+        assert_eq!(record.descriptor().description, description());
+        assert_eq!(record.descriptor().input_schema(), &input_schema());
+        assert_eq!(record.descriptor().metadata["exposure"], "task");
     }
 
-    /// Build a temp workspace with `<root>/abilities/<verb>.ability.toml`
-    /// for every (verb, manifest) pair, return the entry so the
-    /// `manifests_for` reader can find it. The TempDir is returned so
-    /// the caller keeps it alive for the duration of the test.
-    ///
-    /// Writes the minimal `agent.toml` `AgentDirectory::open` requires
-    /// — without it the manifests reader hits "missing agent.toml" and
-    /// silently falls back to an empty list, which would mask any
-    /// scope/access regression behind a "no candidates" green.
-    fn workspace_with_manifests(
-        agent_name: &str,
-        manifests: &[(&str, AbilityManifest)],
-    ) -> (TempDir, PathBuf, AgentEntry) {
-        let dir = TempDir::new().unwrap();
-        let root = dir.path().to_path_buf();
-        let abilities_dir = root.join("abilities");
-        std::fs::create_dir_all(&abilities_dir).unwrap();
-        std::fs::write(
-            root.join("agent.toml"),
-            format!("name = \"{agent_name}\"\nruntime = \"claude-code\"\n"),
+    #[test]
+    fn discover_manifest_declares_task_catalog_exposure() {
+        assert_eq!(
+            manifest().exposure(),
+            Some(crate::daemon::ability::manifest::AbilityExposure::Task)
+        );
+    }
+
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/agent-discover";
+
+    fn test_authority() -> crate::daemon::ability::dispatch::AbilityAuthorityContext {
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+            TEST_DEVICE_URA,
+            [
+                crate::core::ura::agent_ura("test", "local", "claude"),
+                crate::core::ura::agent_ura("test", "local", "userx"),
+            ],
         )
-        .unwrap();
-        for (verb, m) in manifests {
-            let toml = m.to_toml_string().unwrap();
-            std::fs::write(
-                abilities_dir.join(format!("{verb}.ability.toml")),
-                toml.as_bytes(),
-            )
-            .unwrap();
+        .expect("discover fixture hosted Agent authority")
+    }
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_metadata_only_with_authority_context(test_authority())
+    }
+
+    fn runtime_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            test_authority(),
+        )
+    }
+
+    fn local_discovery_catalog(
+        self_agent: &str,
+        abilities: Vec<(
+            String,
+            crate::daemon::ability::dispatch::OwnerKind,
+            AbilityManifest,
+        )>,
+    ) -> Arc<AxonAbilityCatalog> {
+        let mut hosted_agents = std::collections::BTreeSet::from([self_agent.to_string()]);
+        for (_, owner, _) in &abilities {
+            if let crate::daemon::ability::dispatch::OwnerKind::Agent(agent) = owner {
+                hosted_agents.insert(agent.clone());
+            }
         }
-        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
-        entry.root_path = Some(root.clone());
-        (dir, root, entry)
-    }
-
-    fn one_agent(name: &str, entry: AgentEntry) -> AgentRegistry {
-        let mut reg = AgentRegistry::default();
-        reg.agents.insert(name.to_string(), entry);
-        reg
-    }
-
-    fn seed_local_agent_uras(
-        entries: &[(&str, &str)],
-    ) -> crate::cli::commands::test_support::HomeGuard {
-        let guard = crate::cli::commands::test_support::HomeGuard::new();
-        let mut local = crate::daemon::persistence::local_agents::LocalAgentsFile {
-            host_device_agent_ura: "easynet:///r/acme/device/01DEV".into(),
-            hosted_agents: Vec::new(),
-        };
-        for (agent_name, owner_ura) in entries {
-            crate::daemon::persistence::local_agents::upsert_hosted_agent(
-                &mut local, "llm", agent_name, owner_ura,
+        let authority = crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+            TEST_DEVICE_URA,
+            hosted_agents
+                .into_iter()
+                .map(|agent| crate::core::ura::agent_ura("test", "local", &agent)),
+        )
+        .expect("test hosted Agent authority roots");
+        let mut catalog = AxonAbilityCatalog::new_metadata_only_with_authority_context(authority);
+        for (registry_name, owner, manifest) in abilities {
+            catalog.register_rpc_with_spec_and_action(
+                &registry_name,
+                owner,
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+                manifest,
+                Arc::new(|_| Ok(Value::Null)),
             );
         }
-        crate::daemon::persistence::local_agents::save(&local).expect("seed local-agents.json");
-        guard
-    }
-
-    fn ability_ura(owner_ura: &str, public_name: &str) -> String {
-        crate::core::ura::owner_ability_ura(owner_ura, public_name).expect("test ability URA")
+        let handle = Arc::new(std::sync::OnceLock::new());
+        register_for_agent(
+            &mut catalog,
+            self_agent.to_string(),
+            AgentRegistry::default,
+            Arc::clone(&handle),
+        );
+        let catalog = Arc::new(catalog);
+        handle
+            .set(Arc::clone(&catalog))
+            .expect("local discovery catalog attached once");
+        catalog
     }
 
     #[test]
     fn unknown_scope_is_rejected() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = runtime_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1456,6 +1481,16 @@ mod tests {
         let h = reg.get_rpc("claude.discover").unwrap();
         let err = h(json!({"scope": "galaxy"})).unwrap_err();
         assert!(format!("{err}").contains("scope"));
+    }
+
+    #[test]
+    fn local_discovery_does_not_depend_on_agent_manifest_registry() {
+        let catalog = local_discovery_catalog("claude", Vec::new());
+        let handler = catalog.get_rpc("claude.discover").unwrap();
+        let response = handler(json!({"scope": "self"})).unwrap();
+        assert!(response["candidates"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["ability"] == "discover")));
     }
 
     /// **Schema/parser parity pin**.
@@ -1572,7 +1607,7 @@ mod tests {
         // The user tier is the canonical same-realm federation scope.
         // Under HomeGuard it should fail softly with a typed envelope.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1592,7 +1627,7 @@ mod tests {
     #[test]
     fn public_scope_falls_through_when_not_joined() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1616,7 +1651,7 @@ mod tests {
         // a typed envelope so the LLM falls through gracefully.
         // Pin the wire-level code so a SKILL.md grep stays stable.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1636,193 +1671,167 @@ mod tests {
 
     #[test]
     fn self_scope_returns_only_calling_agents_abilities() {
-        let _home = seed_local_agent_uras(&[
-            ("claude", "easynet:///r/acme/agent/user-1.claude"),
-            ("codex", "easynet:///r/acme/agent/user-1.codex"),
-        ]);
         let weather = AbilityManifest::new("weather", "Fetch weather", obj_schema()).unwrap();
-        let (_dir_a, _, entry_a) = workspace_with_manifests("claude", &[("weather", weather)]);
         let summary = AbilityManifest::new("summarize", "Summarise text", obj_schema()).unwrap();
-        let (_dir_b, _, entry_b) = workspace_with_manifests("codex", &[("summarize", summary)]);
-
-        let mut agents = AgentRegistry::default();
-        agents.agents.insert("claude".into(), entry_a);
-        agents.agents.insert("codex".into(), entry_b);
-        let agents_clone = agents.clone();
-
-        let mut reg = AxonAbilityCatalog::new();
-        register_for_agent(
-            &mut reg,
-            "claude".into(),
-            move || agents_clone.clone(),
-            Arc::new(std::sync::OnceLock::new()),
+        let catalog = local_discovery_catalog(
+            "claude",
+            vec![
+                (
+                    "claude.weather".into(),
+                    crate::daemon::ability::dispatch::OwnerKind::Agent("claude".into()),
+                    weather,
+                ),
+                (
+                    "codex.summarize".into(),
+                    crate::daemon::ability::dispatch::OwnerKind::Agent("codex".into()),
+                    summary,
+                ),
+            ],
         );
-        let h = reg.get_rpc("claude.discover").unwrap();
+        let h = catalog.get_rpc("claude.discover").unwrap();
         let resp = h(json!({"scope": "self"})).unwrap();
         let cands = resp["candidates"].as_array().unwrap();
-        let names: Vec<&str> = cands
-            .iter()
-            .filter_map(|c| c["qualified_name"].as_str())
-            .collect();
-        // Claude's own weather manifest appears; Codex's summarize must
-        // NOT appear under self scope.
-        let claude_owner = crate::core::ura::agent_ura("acme", "user-1", "claude");
-        assert!(names.iter().all(|n| {
-            crate::core::ura::AbilitySelector::parse(n)
-                .map(|selector| selector.owner_ura() == claude_owner)
-                .unwrap_or(false)
-        }));
-        let claude_weather = crate::core::ura::ability_ura("acme", "user-1", "claude", "weather");
-        let codex_summarize = crate::core::ura::ability_ura("acme", "user-1", "codex", "summarize");
-        assert!(names.contains(&claude_weather.as_str()));
-        assert!(!names.contains(&codex_summarize.as_str()));
+        assert!(cands.iter().any(|row| row["ability"] == "weather"));
+        assert!(!cands.iter().any(|row| row["ability"] == "summarize"));
     }
 
     #[test]
-    fn discover_marks_manifest_without_exec_as_unbound_and_not_callable() {
-        let _home = seed_local_agent_uras(&[("claude", "easynet:///r/acme/agent/user-1.claude")]);
-        let weather = AbilityManifest::new("weather", "Fetch weather", obj_schema()).unwrap();
-        let (_dir, _, entry) = workspace_with_manifests("claude", &[("weather", weather)]);
-        let agents = one_agent("claude", entry);
-        let agents_clone = agents.clone();
-
-        let mut reg = AxonAbilityCatalog::new();
-        register_for_agent(
-            &mut reg,
-            "claude".into(),
-            move || agents_clone.clone(),
-            Arc::new(std::sync::OnceLock::new()),
-        );
-        let h = reg.get_rpc("claude.discover").unwrap();
+    fn authoring_manifest_without_live_binding_is_not_discoverable() {
+        let catalog = local_discovery_catalog("claude", Vec::new());
+        let h = catalog.get_rpc("claude.discover").unwrap();
         let resp = h(json!({"scope": "self", "query": "weather"})).unwrap();
-        let candidate = resp["candidates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|candidate| candidate["ability"] == "weather")
-            .expect("weather candidate");
-        assert_eq!(candidate["fulfilled_by"], "unbound_manifest");
-        assert_eq!(candidate["callable"], false);
-        assert!(
-            candidate["diagnostic"]
-                .as_str()
-                .unwrap_or("")
-                .contains("no [exec] binding"),
-            "{candidate:#?}"
-        );
+        assert!(resp["candidates"].as_array().unwrap().is_empty());
     }
 
     #[test]
     fn device_scope_includes_peers_with_device_visibility() {
-        let _home = seed_local_agent_uras(&[
-            ("claude", "easynet:///r/acme/agent/user-1.claude"),
-            ("codex", "easynet:///r/acme/agent/user-1.codex"),
-        ]);
         let weather = AbilityManifest::new("weather", "Fetch weather", obj_schema())
             .unwrap()
             .with_access(AccessPolicy {
-                visibility: Visibility::Device,
+                visibility: ManifestAccessScope::Device,
                 ..Default::default()
             })
             .unwrap();
-        let (_dir, _, entry) = workspace_with_manifests("claude", &[("weather", weather)]);
-
-        let mut agents = AgentRegistry::default();
-        agents.agents.insert("claude".into(), entry);
-        // The caller (codex) has nothing of its own. We inject a
-        // bare entry so the agent registry has both names.
-        let mut codex_entry = AgentEntry::new(AgentType::Codex, None);
-        codex_entry.root_path = Some(PathBuf::from("/nonexistent"));
-        agents.agents.insert("codex".into(), codex_entry);
-        let agents_clone = agents.clone();
-
-        let mut reg = AxonAbilityCatalog::new();
-        register_for_agent(
-            &mut reg,
-            "codex".into(),
-            move || agents_clone.clone(),
-            Arc::new(std::sync::OnceLock::new()),
+        let catalog = local_discovery_catalog(
+            "codex",
+            vec![(
+                "claude.weather".into(),
+                crate::daemon::ability::dispatch::OwnerKind::Agent("claude".into()),
+                weather,
+            )],
         );
-        let h = reg.get_rpc("codex.discover").unwrap();
+        let h = catalog.get_rpc("codex.discover").unwrap();
         let resp = h(json!({"scope": "device", "query": "weather"})).unwrap();
         let cands = resp["candidates"].as_array().unwrap();
-        let weather_ura = ability_ura("easynet:///r/acme/agent/user-1.claude", "weather");
-        assert!(cands
-            .iter()
-            .any(|c| c["qualified_name"] == weather_ura.as_str()));
-        // Each peer entry must report which tier it matched.
-        let weather_entry = cands
-            .iter()
-            .find(|c| c["qualified_name"] == weather_ura.as_str())
-            .unwrap();
+        let weather_entry = cands.iter().find(|c| c["ability"] == "weather").unwrap();
         assert_eq!(weather_entry["scope_matched"], "device");
         assert_eq!(weather_entry["visibility"], "device");
     }
 
     #[test]
+    fn device_scope_includes_live_system_agent_owned_easyremote_ability() {
+        let inference =
+            AbilityManifest::new("ai_inference", "Run local AI inference", obj_schema())
+                .unwrap()
+                .with_admission_action("stream")
+                .unwrap()
+                .with_access(AccessPolicy {
+                    visibility: ManifestAccessScope::Device,
+                    ..Default::default()
+                })
+                .unwrap();
+        let authority = crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+            TEST_DEVICE_URA,
+            [crate::core::ura::agent_ura("test", "local", "codex-smoke")],
+        )
+        .expect("test hosted Agent authority root");
+        let mut catalog = AxonAbilityCatalog::new_metadata_only_with_authority_context(authority);
+        catalog.register_stream_with_spec(
+            "er.ai_inference",
+            crate::daemon::ability::dispatch::OwnerKind::plugin_management_system(),
+            inference,
+            Arc::new(|_| anyhow::bail!("stream execution is outside discovery test scope")),
+        );
+        let handle = Arc::new(std::sync::OnceLock::new());
+        register_for_agent(
+            &mut catalog,
+            "codex-smoke".to_string(),
+            AgentRegistry::default,
+            Arc::clone(&handle),
+        );
+        let catalog = Arc::new(catalog);
+        handle
+            .set(Arc::clone(&catalog))
+            .expect("local discovery catalog attached once");
+
+        let response = catalog.get_rpc("codex-smoke.discover").unwrap()(
+            json!({"scope": "device", "query": "ai inference"}),
+        )
+        .unwrap();
+        let candidate = response["candidates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["ability"] == "er.ai_inference")
+            .expect("live Device-hosted, Agent-owned EasyRemote ability");
+        assert_eq!(candidate["fulfilled_by"], "local_catalog");
+        assert_eq!(candidate["callable"], true);
+        assert_eq!(candidate["call_modes"], json!(["stream"]));
+        assert_eq!(candidate["scope_matched"], "device");
+    }
+
+    #[test]
     fn device_scope_hides_peer_abilities_marked_self_visibility() {
-        let _home = seed_local_agent_uras(&[
-            ("claude", "easynet:///r/acme/agent/user-1.claude"),
-            ("codex", "easynet:///r/acme/agent/user-1.codex"),
-        ]);
         // An author who marked an ability as `[access] visibility = "self"`
         // is opting out of peer discovery. The discover handler must
         // honour that even when the caller asks for scope=device.
         let private = AbilityManifest::new("internal", "private helper", obj_schema())
             .unwrap()
             .with_access(AccessPolicy {
-                visibility: Visibility::Selfish,
+                visibility: ManifestAccessScope::Selfish,
                 ..Default::default()
             })
             .unwrap();
-        let (_dir, _, entry) = workspace_with_manifests("claude", &[("internal", private)]);
-
-        let mut agents = one_agent("claude", entry);
-        let mut codex_entry = AgentEntry::new(AgentType::Codex, None);
-        codex_entry.root_path = Some(PathBuf::from("/nonexistent"));
-        agents.agents.insert("codex".into(), codex_entry);
-        let agents_clone = agents.clone();
-
-        let mut reg = AxonAbilityCatalog::new();
-        register_for_agent(
-            &mut reg,
-            "codex".into(),
-            move || agents_clone.clone(),
-            Arc::new(std::sync::OnceLock::new()),
+        let catalog = local_discovery_catalog(
+            "codex",
+            vec![(
+                "claude.internal".into(),
+                crate::daemon::ability::dispatch::OwnerKind::Agent("claude".into()),
+                private,
+            )],
         );
-        let h = reg.get_rpc("codex.discover").unwrap();
+        let h = catalog.get_rpc("codex.discover").unwrap();
         let resp = h(json!({"scope": "device"})).unwrap();
         let cands = resp["candidates"].as_array().unwrap();
         assert!(
-            cands
-                .iter()
-                .all(|c| c["qualified_name"] != "easynet:///r/acme/ability/user-1.claude.internal"),
+            cands.iter().all(|c| c["ability"] != "internal"),
             "self-visibility ability leaked to peer: {cands:#?}"
         );
     }
 
     #[test]
     fn query_scoring_orders_exact_name_match_first() {
-        let _home = seed_local_agent_uras(&[("claude", "easynet:///r/acme/agent/user-1.claude")]);
         let weather =
             AbilityManifest::new("weather", "Fetches weather data via wttr.in", obj_schema())
                 .unwrap();
         let news =
             AbilityManifest::new("news", "Daily weather and news digest", obj_schema()).unwrap();
-        let (_dir, _, entry) =
-            workspace_with_manifests("claude", &[("weather", weather), ("news", news)]);
-
-        let agents = one_agent("claude", entry);
-        let agents_clone = agents.clone();
-
-        let mut reg = AxonAbilityCatalog::new();
-        register_for_agent(
-            &mut reg,
-            "claude".into(),
-            move || agents_clone.clone(),
-            Arc::new(std::sync::OnceLock::new()),
+        let catalog = local_discovery_catalog(
+            "claude",
+            vec![
+                (
+                    "claude.weather".into(),
+                    crate::daemon::ability::dispatch::OwnerKind::Agent("claude".into()),
+                    weather,
+                ),
+                (
+                    "claude.news".into(),
+                    crate::daemon::ability::dispatch::OwnerKind::Agent("claude".into()),
+                    news,
+                ),
+            ],
         );
-        let h = reg.get_rpc("claude.discover").unwrap();
+        let h = catalog.get_rpc("claude.discover").unwrap();
         let resp = h(json!({"scope": "self", "query": "weather"})).unwrap();
         let cands = resp["candidates"].as_array().unwrap();
         assert_eq!(cands[0]["ability"], "weather");
@@ -1830,21 +1839,17 @@ mod tests {
 
     #[test]
     fn query_tokenization_splits_symbol_separated_terms() {
-        let _home = seed_local_agent_uras(&[("claude", "easynet:///r/acme/agent/user-1.claude")]);
         let screen =
             AbilityManifest::new("screen_snapshot", "Capture pixels", obj_schema()).unwrap();
-        let (_dir, _, entry) = workspace_with_manifests("claude", &[("screen_snapshot", screen)]);
-        let agents = one_agent("claude", entry);
-        let agents_clone = agents.clone();
-
-        let mut reg = AxonAbilityCatalog::new();
-        register_for_agent(
-            &mut reg,
-            "claude".into(),
-            move || agents_clone.clone(),
-            Arc::new(std::sync::OnceLock::new()),
+        let catalog = local_discovery_catalog(
+            "claude",
+            vec![(
+                "claude.screen_snapshot".into(),
+                crate::daemon::ability::dispatch::OwnerKind::Agent("claude".into()),
+                screen,
+            )],
         );
-        let h = reg.get_rpc("claude.discover").unwrap();
+        let h = catalog.get_rpc("claude.discover").unwrap();
         let resp = h(json!({"scope": "self", "query": "screen-snapshot"})).unwrap();
         let cands = resp["candidates"].as_array().unwrap();
 
@@ -1857,7 +1862,7 @@ mod tests {
     #[test]
     fn top_k_zero_is_rejected() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1871,36 +1876,25 @@ mod tests {
 
     #[test]
     fn source_window_all_returns_complete_source() {
-        let _home = seed_local_agent_uras(&[("claude", "easynet:///r/acme/agent/user-1.claude")]);
-        let owned_manifests: Vec<(String, AbilityManifest)> = (0..25)
+        let abilities = (0..25)
             .map(|idx| {
                 let name = format!("ability_{idx:02}");
                 let manifest =
                     AbilityManifest::new(&name, format!("Ability {idx}"), obj_schema()).unwrap();
-                (name, manifest)
+                (
+                    format!("claude.{name}"),
+                    crate::daemon::ability::dispatch::OwnerKind::Agent("claude".into()),
+                    manifest,
+                )
             })
             .collect();
-        let manifests: Vec<(&str, AbilityManifest)> = owned_manifests
-            .iter()
-            .map(|(name, manifest)| (name.as_str(), manifest.clone()))
-            .collect();
-        let (_dir, _, entry) = workspace_with_manifests("claude", &manifests);
-        let agents = one_agent("claude", entry);
-        let agents_clone = agents.clone();
-
-        let mut reg = AxonAbilityCatalog::new();
-        register_for_agent(
-            &mut reg,
-            "claude".into(),
-            move || agents_clone.clone(),
-            Arc::new(std::sync::OnceLock::new()),
-        );
-        let h = reg.get_rpc("claude.discover").unwrap();
+        let catalog = local_discovery_catalog("claude", abilities);
+        let h = catalog.get_rpc("claude.discover").unwrap();
         let resp = h(json!({"scope": "self", "source_window": "all"})).unwrap();
 
-        assert_eq!(resp["candidates"].as_array().unwrap().len(), 25);
-        assert_eq!(resp["source"]["available"], json!(25));
-        assert_eq!(resp["source"]["returned"], json!(25));
+        assert_eq!(resp["candidates"].as_array().unwrap().len(), 26);
+        assert_eq!(resp["source"]["available"], json!(26));
+        assert_eq!(resp["source"]["returned"], json!(26));
         assert!(resp["source"]["limit"].is_null());
         assert_eq!(resp["source"]["truncated"], json!(false));
     }
@@ -1908,7 +1902,7 @@ mod tests {
     #[test]
     fn source_window_all_rejects_top_k() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -1943,20 +1937,28 @@ mod tests {
             });
 
         // Build a registry with the provider handler + the per-agent
-        // discover. Wire the OnceLock to the same registry so the
-        // builtin discover can resolve the provider.
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc("userx.discover", provider_handler);
+        // discover. Wire the OnceLock to the same runtime-backed registry so
+        // the provider delegation exercises the same LocalRuntime boundary as
+        // daemon dispatch.
+        let mut reg = runtime_test_catalog();
+        reg.register_rpc_with_spec_and_action(
+            "userx.discover",
+            crate::daemon::ability::dispatch::OwnerKind::Agent("userx".to_string()),
+            crate::daemon::ability::descriptors::AdmissionAction::Read,
+            manifest(),
+            provider_handler,
+        );
         let handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
             Arc::new(std::sync::OnceLock::new());
         let mut agents = AgentRegistry::default();
         agents.agents.insert(
             "claude".to_string(),
-            AgentEntry::new(AgentType::ClaudeCode, None),
+            AgentEntry::new(RuntimeKind::ClaudeCode, None),
         );
-        agents
-            .agents
-            .insert("userx".to_string(), AgentEntry::new(AgentType::Codex, None));
+        agents.agents.insert(
+            "userx".to_string(),
+            AgentEntry::new(RuntimeKind::Codex, None),
+        );
         let agents_clone = agents.clone();
         register_for_agent(
             &mut reg,
@@ -1984,19 +1986,25 @@ mod tests {
 
     #[test]
     fn provider_target_is_descriptor_bound_with_explicit_subject() {
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc(
+        let mut reg = metadata_test_catalog();
+        reg.register_rpc_with_spec_and_action(
             "userx.discover",
+            crate::daemon::ability::dispatch::OwnerKind::Agent("userx".to_string()),
+            crate::daemon::ability::descriptors::AdmissionAction::Read,
+            manifest(),
             Arc::new(|_args| Ok(json!({"candidates": []}))),
         );
         let mut agents = AgentRegistry::default();
-        agents
-            .agents
-            .insert("userx".to_string(), AgentEntry::new(AgentType::Codex, None));
+        agents.agents.insert(
+            "userx".to_string(),
+            AgentEntry::new(RuntimeKind::Codex, None),
+        );
 
         let target =
             DiscoverProviderTarget::resolve("userx.discover", &agents, &reg).expect("provider");
-        let invocation_target = target.into_invocation_target(json!({"query": "weather"}));
+        let invocation_target = target
+            .into_invocation_target(json!({"query": "weather"}))
+            .expect("valid provider invocation target");
 
         assert!(
             crate::core::ura::AbilitySelector::parse(&invocation_target.ability).is_ok(),
@@ -2009,16 +2017,18 @@ mod tests {
                 .is_some_and(|subject| { crate::core::ura::parse_ura(subject).is_ok() }),
             "provider delegation must not rely on a missing subject default"
         );
-        assert!(
-            invocation_target.causal_context.is_some(),
-            "provider delegation must state a causal context, even when it is none"
-        );
+        assert!(matches!(
+            invocation_target.causal_context,
+            crate::daemon::invocation::routing::target::InvocationCausalContext::Explicit(
+                axon_sdk::invocation::CausalContext::None
+            )
+        ));
     }
 
     #[test]
     fn provider_without_dot_is_rejected() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register_for_agent(
             &mut reg,
             "claude".into(),
@@ -2033,13 +2043,14 @@ mod tests {
     #[test]
     fn provider_not_registered_returns_typed_error() {
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         let handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>> =
             Arc::new(std::sync::OnceLock::new());
         let mut agents = AgentRegistry::default();
-        agents
-            .agents
-            .insert("userx".to_string(), AgentEntry::new(AgentType::Codex, None));
+        agents.agents.insert(
+            "userx".to_string(),
+            AgentEntry::new(RuntimeKind::Codex, None),
+        );
         let agents_clone = agents.clone();
         register_for_agent(
             &mut reg,
@@ -2124,7 +2135,7 @@ mod tests {
         assert_eq!(candidate.qualified_name, ability_ura);
         assert_eq!(candidate.owner, "easynet:///r/acme/agent/alice.bot");
         assert_eq!(candidate.ability, "chat");
-        assert_eq!(candidate.visibility, Visibility::Public);
+        assert_eq!(candidate.visibility, ManifestAccessScope::Public);
         assert_eq!(candidate.fulfilled_by, Some("federation"));
     }
 
@@ -2155,7 +2166,7 @@ mod tests {
 
         assert!(
             out.is_empty(),
-            "directory presence must not synthesize a forward_invoke Ability candidate"
+            "directory presence must not synthesize a canonical_invoke Ability candidate"
         );
     }
 
@@ -2197,7 +2208,8 @@ mod tests {
             ability: "fs.read".to_string(),
             description: "read a file from disk".to_string(),
             input_schema: json!({"type": "object"}),
-            visibility: Visibility::Device,
+            call_modes: BTreeSet::from(["rpc".to_string()]),
+            visibility: ManifestAccessScope::Device,
             scope_matched: Scope::Device,
             score: 0.0,
             reason: String::new(),

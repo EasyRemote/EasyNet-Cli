@@ -1,0 +1,20 @@
+id: bidi/frame0_required
+profile: runtime_core
+required_for:
+  - c_abi
+  - go
+  - java
+  - node
+  - python
+  - rust
+  - swift
+description: Runtime Core bidi open rejects a missing or non-EnvelopeOpen frame0 before entering a runtime session.
+steps:
+  - action: open_bidi_without_frame0
+    fixture: invocation.complete.v4.json
+  - action: reject_before_runtime_session_entry
+expect:
+  result: invalid_argument_before_session_entry
+  error_code: INVALID_ARGUMENT
+  frame0_required: true
+  runtime_session_started: false

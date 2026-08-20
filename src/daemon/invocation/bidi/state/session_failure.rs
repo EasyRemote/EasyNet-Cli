@@ -15,14 +15,12 @@ use serde::{Deserialize, Serialize};
 /// frames. This mirrors the stable fields of Axon `Error` without making the
 /// product session wire depend on prost's generated message serde behavior.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SessionFailure {
     pub code: String,
     pub message: String,
-    #[serde(default)]
     pub retryable: bool,
-    #[serde(default)]
     pub stage: i32,
-    #[serde(default)]
     pub security_class: i32,
 }
 
@@ -43,12 +41,12 @@ impl SessionFailure {
         }
     }
 
-    pub fn from_reason(reason: impl Into<String>, fallback_code: &str, retryable: bool) -> Self {
+    pub fn from_reason(reason: impl Into<String>, default_code: &str, retryable: bool) -> Self {
         let message = reason.into();
         let code =
-            crate::daemon::execution::mission::failure_codes::FailureCodeClassifier::classify_or(
+            crate::daemon::execution::mission::failure_codes::FailureCodeClassifier::classify_or_default(
                 &message,
-                fallback_code,
+                default_code,
             );
         Self::from_code_and_message(code, message, retryable)
     }
@@ -59,7 +57,7 @@ impl SessionFailure {
         retryable: bool,
     ) -> Self {
         let code =
-            crate::daemon::execution::mission::failure_codes::FailureCodeClassifier::normalize(
+            crate::daemon::execution::mission::failure_codes::FailureCodeClassifier::normalize_or_default(
                 &code.into(),
                 "INVOCATION_FAILED",
             );
@@ -90,5 +88,64 @@ impl SessionFailure {
             failure_class.stage.axon_number(),
             failure_class.security_class.axon_number(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionFailure;
+
+    #[test]
+    fn session_failure_wire_requires_retry_and_classification_facts() {
+        let legacy = serde_json::json!({
+            "code": "TARGET_OFFLINE",
+            "message": "target device is offline"
+        });
+
+        let error = serde_json::from_value::<SessionFailure>(legacy)
+            .expect_err("session failure wire must reject missing typed failure facts");
+        let message = error.to_string();
+        assert!(
+            message.contains("retryable")
+                || message.contains("stage")
+                || message.contains("security_class"),
+            "missing typed failure facts must be surfaced as a schema failure: {message}"
+        );
+    }
+
+    #[test]
+    fn session_failure_wire_rejects_unknown_fields() {
+        let legacy = serde_json::json!({
+            "code": "TARGET_OFFLINE",
+            "message": "target device is offline",
+            "retryable": true,
+            "stage": 3,
+            "security_class": 1,
+            "state_code": "legacy"
+        });
+
+        let error = serde_json::from_value::<SessionFailure>(legacy)
+            .expect_err("session failure wire must reject read-model drift");
+
+        assert!(
+            error.to_string().contains("state_code"),
+            "decode error should name the noncanonical field: {error}"
+        );
+    }
+
+    #[test]
+    fn session_failure_wire_round_trips_complete_facts() {
+        let failure =
+            SessionFailure::from_reason("target device is offline", "TARGET_OFFLINE", true);
+        let encoded = serde_json::to_value(&failure).expect("session failure serializes");
+        assert_eq!(encoded["code"], "TARGET_OFFLINE");
+        assert_eq!(encoded["message"], "target device is offline");
+        assert_eq!(encoded["retryable"], true);
+        assert!(encoded.get("stage").is_some());
+        assert!(encoded.get("security_class").is_some());
+
+        let decoded: SessionFailure =
+            serde_json::from_value(encoded).expect("complete session failure wire decodes");
+        assert_eq!(decoded, failure);
     }
 }

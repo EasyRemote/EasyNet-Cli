@@ -1,0 +1,183 @@
+{
+  "report_kind": "java_runtime_core_seam_tests",
+  "language": "java",
+  "records": [
+    {
+      "case_id": "authority/mutual_exclusion",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "bidi/close_send_not_cancel",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "bidi/frame0_required",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "error/retry_hint",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "error/typed_json",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "health/api_vs_runtime",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "health"
+    },
+    {
+      "case_id": "invocation/canonical_material",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/complete_tuple",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/prepared_not_submittable",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/presigned_submit",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/terminal_receipt_facts",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "runtime_core/feature_discovery",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "stream/backpressure_bound",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "stream/order_terminal",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "version/abi_compatible",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "version/abi_incompatible",
+      "evidence": [
+        {
+          "kind": "java_test",
+          "ref_path": "sdk/java/src/test/java/run/runtime/sdk/RuntimeCoreSeamTest.java",
+          "sha256": "bc7a83ac67346802c7bbead65b01bc649d0533358800555c01177f634b2b6837"
+        }
+      ],
+      "profile": "runtime_core"
+    }
+  ],
+  "schema_version": 2
+}

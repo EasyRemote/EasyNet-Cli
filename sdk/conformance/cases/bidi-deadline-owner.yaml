@@ -1,0 +1,19 @@
+id: bidi/deadline_owner
+profile: runtime_core
+required_for:
+  - go
+  - python
+description: Runtime Core bidi providers own invocation deadlines and surface typed timeout outcomes without making the parent runtime transport unreusable.
+steps:
+  - action: open_bidi_with_deadline
+    fixture: invocation.complete.v4.json
+  - action: observe_bidi_typed_timeout
+  - action: release_timed_out_bidi
+  - action: retry_bidi_after_deadline_cleanup
+expect:
+  result: timeout_observed
+  error_code: TIMEOUT
+  retry: safe
+  terminal_success_fabricated: false
+  cleanup_before_reuse: true
+  bounded_wait: true

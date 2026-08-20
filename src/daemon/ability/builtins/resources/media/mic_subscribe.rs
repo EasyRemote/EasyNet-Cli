@@ -3,9 +3,8 @@
 //
 // File: src/daemon/ability/builtins/resources/media/mic_subscribe.rs
 //
-// PR3 server-stream slice. Replaces the `stream_stub` in
-// the media metadata table for the `mic.subscribe` name with a real
-// envelope-aware handler that:
+// Provider-backed server-stream slice. Binds the metadata-only
+// `mic.subscribe` capability contract to a real envelope-aware handler that:
 //
 //   1. Reads `EnvelopeContext.subject` (per INV-SUBJECT-ENVELOPE)
 //   2. Resolves subject → `ResourceEntry`, rejects mismatched
@@ -37,7 +36,9 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(feature = "native-media")]
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -53,6 +54,7 @@ use crate::daemon::ability::builtins::resources::media::{self, ABILITY_MIC_SUBSC
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, EnvelopeContext, StreamSource};
 use crate::daemon::persistence::resources::{ResourceEntry, ResourceType};
+use crate::daemon::resources::context::device_scope::ContextDeviceScope;
 
 pub const REASON_SUBJECT_REQUIRED: &str = resource_subject::REASON_SUBJECT_REQUIRED;
 pub const REASON_SUBJECT_IN_ARGS: &str = resource_subject::REASON_SUBJECT_IN_ARGS;
@@ -87,8 +89,10 @@ pub trait MicBackend: Send + Sync {
 /// shaped frame on the broadcast channel, and ends when the
 /// channel's last receiver drops.
 #[derive(Debug, Default)]
+#[cfg(feature = "native-media")]
 pub struct CpalMicBackend;
 
+#[cfg(feature = "native-media")]
 impl MicBackend for CpalMicBackend {
     fn open(&self, entry: &ResourceEntry) -> anyhow::Result<broadcast::Receiver<Value>> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -188,6 +192,7 @@ impl MicBackend for CpalMicBackend {
     }
 }
 
+#[cfg(feature = "native-media")]
 struct MicInputStreamParams {
     tx: broadcast::Sender<Value>,
     seq: Arc<AtomicU64>,
@@ -200,6 +205,7 @@ struct MicInputStreamParams {
 /// Build a cpal input stream for sample type `T`. Each callback
 /// converts the buffer to S16LE PCM and broadcasts a JSON frame.
 /// `Send`-bound on `T` so the closure can be moved into cpal.
+#[cfg(feature = "native-media")]
 fn build_input_stream<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
@@ -266,10 +272,12 @@ fn build_frame(
 /// PCM sample → S16LE conversion helper. Implemented for the
 /// three cpal default sample formats we route in
 /// `CpalMicBackend::open`.
+#[cfg(feature = "native-media")]
 trait ToS16Pcm {
     fn to_s16(&self) -> i16;
 }
 
+#[cfg(feature = "native-media")]
 impl ToS16Pcm for f32 {
     fn to_s16(&self) -> i16 {
         let v = (*self * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32);
@@ -277,12 +285,14 @@ impl ToS16Pcm for f32 {
     }
 }
 
+#[cfg(feature = "native-media")]
 impl ToS16Pcm for i16 {
     fn to_s16(&self) -> i16 {
         *self
     }
 }
 
+#[cfg(feature = "native-media")]
 impl ToS16Pcm for u16 {
     fn to_s16(&self) -> i16 {
         // Map [0, 65535] → [-32768, 32767]
@@ -314,14 +324,17 @@ impl MicBackend for SyntheticMicBackend {
 pub fn register_with_backend(reg: &mut AxonAbilityCatalog, backend: Arc<dyn MicBackend>) {
     reg.register_stream_with_envelope_and_spec(
         ABILITY_MIC_SUBSCRIBE,
-        OwnerKind::Device,
+        OwnerKind::media_system(),
         media::registry_manifest(ABILITY_MIC_SUBSCRIBE),
         Arc::new(move |env: EnvelopeContext, args: Value| handler(&backend, env, args)),
     );
 }
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
+    #[cfg(feature = "native-media")]
     register_with_backend(reg, Arc::new(CpalMicBackend));
+    #[cfg(all(not(feature = "native-media"), feature = "headless-media"))]
+    register_with_backend(reg, Arc::new(SyntheticMicBackend));
 }
 
 // ── Handler core ─────────────────────────────────────────────
@@ -341,10 +354,11 @@ fn handler(
             allowed_label: "mic",
         },
     )?;
+    let device_scope = ContextDeviceScope::from_execution_actor(env.callee())?;
     let rx = backend.open(&entry)?;
     Ok(StreamSource::Live(tee_recording(
         rx,
-        env.callee().to_string(),
+        device_scope.as_str().to_string(),
     )?))
 }
 
@@ -498,7 +512,7 @@ fn wav_from_s16le(pcm: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::invocation::routing::target::CallMode;
     use crate::daemon::persistence::resources::{
         self, upsert_resource, ResourceBinding, ResourceUpsert, ResourcesFile,
     };
@@ -508,7 +522,7 @@ mod tests {
             file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 kind: ResourceType::Mic,
                 binding: ResourceBinding::LocalDevice,
                 hardware_id,
@@ -516,29 +530,46 @@ mod tests {
                 metadata: json!({}),
             },
         )
+        .expect("seed mic resource")
     }
 
     fn register_synthetic(reg: &mut AxonAbilityCatalog) {
         register_with_backend(reg, Arc::new(SyntheticMicBackend));
     }
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/mic-subscribe";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
+    fn runtime_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_runtime_for_device_authority(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            TEST_DEVICE_URA,
+        )
+    }
+
     #[test]
-    fn registration_publishes_mic_manifest_to_catalog_snapshot() {
-        let mut reg = AxonAbilityCatalog::new();
+    fn registration_publishes_mic_descriptor_to_catalog_snapshot() {
+        let mut reg = metadata_test_catalog();
         register_synthetic(&mut reg);
-        let rows = reg.ability_catalog_snapshot();
-        let manifest = rows
+        let rows = reg.authority_ability_catalog_snapshot();
+        let descriptor = rows
             .iter()
             .find(|row| row.name == ABILITY_MIC_SUBSCRIBE)
-            .and_then(|row| row.manifest.as_ref())
-            .expect("mic.subscribe must publish schema manifest");
+            .map(|row| &row.descriptor)
+            .expect("mic.subscribe must publish canonical descriptor");
 
         assert_eq!(
-            manifest.description(),
+            descriptor.description,
             media::description(ABILITY_MIC_SUBSCRIBE).expect("mic description")
         );
         assert_eq!(
-            manifest.input_schema(),
+            descriptor.input_schema(),
             &media::input_schema(ABILITY_MIC_SUBSCRIBE).expect("mic schema")
         );
     }
@@ -549,17 +580,15 @@ mod tests {
         let mut file = ResourcesFile::default();
         let ura = seed_mic(&mut file, "h-mic-e2e");
         resources::save(&file).unwrap();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = runtime_test_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_MIC_SUBSCRIBE.to_string(),
-            normalized_args: json!({"sample_rate": 48000, "channels": 1, "codec": "opus"}),
-            call_mode: CallMode::Stream,
-            subject: Some(ura),
-            causal_context: None,
-        };
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            ABILITY_MIC_SUBSCRIBE,
+            json!({"sample_rate": 48000, "channels": 1, "codec": "opus"}),
+            CallMode::Stream,
+            ura,
+        );
         let src = dispatcher.execute_stream(target).unwrap();
         let frame = match src {
             StreamSource::Snapshot(mut frames) => {
@@ -573,6 +602,7 @@ mod tests {
                 assert_eq!(frames.len(), 1);
                 frames.remove(0)
             }
+            StreamSource::Finite(_) => panic!("mic.subscribe must not return a finite stream"),
         };
         assert!(
             frame.get("samples_b64").is_some(),
@@ -611,26 +641,25 @@ mod tests {
             &mut file,
             ResourceUpsert {
                 realm: "acme",
-                owner_agent: "easynet:///r/acme/device/01DEV",
+                owner_agent: "easynet:///r/acme/agent/device.01DEV.media",
                 kind: ResourceType::Camera, // wrong type
                 binding: ResourceBinding::LocalDevice,
                 hardware_id: "h-cam-not-mic",
                 display_name: "Not A Mic",
                 metadata: json!({}),
             },
-        );
+        )
+        .expect("seed wrong-type camera resource");
         resources::save(&file).unwrap();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = runtime_test_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_MIC_SUBSCRIBE.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Stream,
-            subject: Some(cam_ura),
-            causal_context: None,
-        };
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            ABILITY_MIC_SUBSCRIBE,
+            json!({}),
+            CallMode::Stream,
+            cam_ura,
+        );
         let err = dispatcher.execute_stream(target).unwrap_err();
         assert!(err.to_string().contains(REASON_RESOURCE_TYPE_MISMATCH));
     }
@@ -638,17 +667,15 @@ mod tests {
     #[test]
     fn handler_rejects_subject_in_args() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = runtime_test_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_MIC_SUBSCRIBE.to_string(),
-            normalized_args: json!({"subject": "easynet:///r/x/resource/y"}),
-            call_mode: CallMode::Stream,
-            subject: Some("easynet:///r/acme/resource/01MIC".into()),
-            causal_context: None,
-        };
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            ABILITY_MIC_SUBSCRIBE,
+            json!({"subject": "easynet:///r/x/resource/y"}),
+            CallMode::Stream,
+            "easynet:///r/acme/resource/01MIC",
+        );
         let err = dispatcher.execute_stream(target).unwrap_err();
         assert!(err.to_string().contains(REASON_SUBJECT_IN_ARGS));
     }
@@ -661,17 +688,15 @@ mod tests {
             .expect("create state dir");
         std::fs::write(&path, b"{not-json").expect("write corrupt resources table");
 
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = runtime_test_catalog();
         register_synthetic(&mut reg);
         let dispatcher = Arc::new(reg);
-        let target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: ABILITY_MIC_SUBSCRIBE.to_string(),
-            normalized_args: json!({}),
-            call_mode: CallMode::Stream,
-            subject: Some("easynet:///r/acme/resource/01MIC".into()),
-            causal_context: None,
-        };
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            ABILITY_MIC_SUBSCRIBE,
+            json!({}),
+            CallMode::Stream,
+            "easynet:///r/acme/resource/01MIC",
+        );
 
         let err = dispatcher.execute_stream(target).unwrap_err();
         let message = err.to_string();
@@ -726,9 +751,11 @@ mod tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         loop {
             let captures = crate::daemon::persistence::context_store::list_captures(
+                "easynet:///r/acme/device/01DEV",
                 Some(ABILITY_MIC_SUBSCRIBE),
                 10,
-            );
+            )
+            .unwrap();
             if let Some(capture) = captures.first() {
                 assert_eq!(capture.content_type, "audio/wav");
                 assert_eq!(capture.duration_ms, Some(10));
@@ -741,6 +768,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "native-media")]
     #[test]
     fn s16_conversions_are_correct() {
         assert_eq!(0.0f32.to_s16(), 0);

@@ -17,15 +17,16 @@
 //
 // schema_version handling
 // -----------------------
-// v1 writes `1`; readers tolerate a missing field and treat
-// absent as `1`. A future v2 schema bump will read both versions
-// for one release window before retiring v1.
+// v1 writes `1`; readers require it. Missing schema facts are
+// obsolete state, not permission to repair legacy files at every
+// read site.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::path::PathBuf;
 
+use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 
 use crate::core::domain::{ScheduleEntry, ScheduleId, TenantId};
@@ -35,14 +36,9 @@ const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct OnDisk {
-    #[serde(default = "default_schema_version")]
     schema_version: u32,
     #[serde(flatten)]
     entry: ScheduleEntry,
-}
-
-fn default_schema_version() -> u32 {
-    SCHEMA_VERSION
 }
 
 /// JSON-file store for one tenant's schedules.
@@ -59,9 +55,9 @@ impl ScheduleStore {
     }
 
     /// Read every `*.json` file under the store's directory and
-    /// parse into `ScheduleEntry`. Files that fail to parse are
-    /// logged to stderr and skipped — one corrupt schedule must
-    /// not poison the rest of the daemon.
+    /// parse into `ScheduleEntry`. A corrupt or obsolete record is an
+    /// explicit boot error: silently dropping durable automation would make
+    /// the runtime's state disagree with its authoritative store.
     pub fn load_all(&self) -> anyhow::Result<Vec<ScheduleEntry>> {
         let mut out = Vec::new();
         let entries = match std::fs::read_dir(&self.dir) {
@@ -70,30 +66,16 @@ impl ScheduleStore {
             Err(e) => return Err(e.into()),
         };
         for ent in entries {
-            let ent = match ent {
-                Ok(e) => e,
-                Err(e) => {
-                    eprintln!("[schedule] read_dir entry error: {e}");
-                    continue;
-                }
-            };
+            let ent = ent.context("read schedule directory entry")?;
             let path = ent.path();
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
             }
-            match std::fs::read_to_string(&path) {
-                Ok(s) => match serde_json::from_str::<OnDisk>(&s) {
-                    Ok(d) => out.push(d.entry),
-                    Err(e) => eprintln!(
-                        "[schedule] failed to parse {}: {e} (skipping)",
-                        path.display()
-                    ),
-                },
-                Err(e) => eprintln!(
-                    "[schedule] failed to read {}: {e} (skipping)",
-                    path.display()
-                ),
-            }
+            let body = std::fs::read_to_string(&path)
+                .with_context(|| format!("read schedule record {}", path.display()))?;
+            let record = parse_on_disk_schedule(&body)
+                .with_context(|| format!("parse schedule record {}", path.display()))?;
+            out.push(record.entry);
         }
         Ok(out)
     }
@@ -106,7 +88,7 @@ impl ScheduleStore {
             schema_version: SCHEMA_VERSION,
             entry: entry.clone(),
         };
-        let body = serde_json::to_string_pretty(&on_disk)?;
+        let body = serialize_on_disk_schedule(&on_disk)?;
         let final_path = self.dir.join(format!("{}.json", entry.id.as_str()));
         let tmp_path = self.dir.join(format!("{}.json.tmp", entry.id.as_str()));
         std::fs::write(&tmp_path, body)?;
@@ -133,11 +115,41 @@ impl ScheduleStore {
     }
 }
 
+fn parse_on_disk_schedule(input: &str) -> anyhow::Result<OnDisk> {
+    let value: serde_json::Value = serde_json::from_str(input)?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("schedule record must be a JSON object"))?;
+    let schema_version = object
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| anyhow::anyhow!("schedule record missing explicit schema_version"))?;
+    if schema_version != u64::from(SCHEMA_VERSION) {
+        anyhow::bail!(
+            "schedule record schema_version {schema_version} is not supported by this runtime"
+        );
+    }
+    let prompt = object
+        .get("prompt")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("schedule record missing explicit prompt string"))?;
+    if prompt.trim().is_empty() {
+        anyhow::bail!("schedule record prompt must be non-empty");
+    }
+    Ok(serde_json::from_value(value)?)
+}
+
+fn serialize_on_disk_schedule(on_disk: &OnDisk) -> anyhow::Result<String> {
+    let value = serde_json::to_value(on_disk)?;
+    Ok(serde_json::to_string_pretty(&value)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::domain::{
-        AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId,
+        AgentId, DeferredInvocationAuthority, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId,
+        TenantId,
     };
 
     fn temp_tenant() -> TenantId {
@@ -153,11 +165,23 @@ mod tests {
             tenant: TenantId::default_v1(),
             target_node: NodeId::new("self"),
             target_agent: AgentId::new("alice"),
+            authority: DeferredInvocationAuthority {
+                accountable_user_ura: crate::core::ura::user_ura("default", "test-user"),
+                creator_invocation_id: "test-schedule-create".to_string(),
+                controller_callee_ura: crate::core::ura::device_agent_ura(
+                    "default",
+                    "self",
+                    crate::daemon::ability::names::automation::AUTOMATION_SYSTEM_AGENT_ID,
+                ),
+                target_callee_ura: crate::core::ura::agent_ura("default", "test-user", "alice"),
+                execution_host_ura: crate::core::ura::device_ura("default", "self"),
+            },
             cron_expr: "0 9 * * *".into(),
             misfire_policy: MisfirePolicy::Skip,
             catch_up_window_secs: None,
             enabled: true,
-            prompt: None,
+            prompt: "Run {{target_agent}} for {{schedule_id}}".to_string(),
+            fire_ledger: std::collections::BTreeMap::new(),
         }
     }
 
@@ -170,6 +194,11 @@ mod tests {
         let store = ScheduleStore::open(&tenant).unwrap();
         let e = entry("rt-1");
         store.save(&e).unwrap();
+        let raw = std::fs::read_to_string(store.dir().join("rt-1.json")).unwrap();
+        assert!(
+            raw.contains("\"prompt\": \"Run {{target_agent}} for {{schedule_id}}\""),
+            "current schedule schema must write explicit prompt string: {raw}"
+        );
         let loaded = store.load_all().unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].id, ScheduleId::new("rt-1"));
@@ -180,19 +209,106 @@ mod tests {
     }
 
     #[test]
-    fn load_all_skips_unparseable_files_without_failing() {
-        // Spirit: a hand-edited corrupt schedule must not stop the
-        // daemon from booting. Plant a bogus file alongside a
-        // valid one and assert load_all returns the valid one.
+    fn load_all_rejects_unparseable_files() {
         let tenant = temp_tenant();
         let store = ScheduleStore::open(&tenant).unwrap();
         store.save(&entry("good")).unwrap();
         std::fs::write(store.dir().join("bad.json"), "{ not valid json").unwrap();
-        let loaded = store.load_all().unwrap();
-        assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded[0].id, ScheduleId::new("good"));
+        let error = store
+            .load_all()
+            .expect_err("corrupt durable state must fail closed");
+        assert!(error.to_string().contains("bad.json"), "{error:#}");
         // Cleanup.
         std::fs::remove_dir_all(store.dir()).ok();
+    }
+
+    #[test]
+    fn load_all_rejects_records_missing_current_schema_facts() {
+        let tenant = temp_tenant();
+        let store = ScheduleStore::open(&tenant).unwrap();
+        store.save(&entry("good")).unwrap();
+
+        let missing_prompt = serde_json::to_value(OnDisk {
+            schema_version: SCHEMA_VERSION,
+            entry: entry("missing-prompt"),
+        })
+        .unwrap();
+        let mut missing_prompt = missing_prompt.as_object().unwrap().clone();
+        missing_prompt.remove("prompt");
+        std::fs::write(
+            store.dir().join("missing-prompt.json"),
+            serde_json::to_string_pretty(&missing_prompt).unwrap(),
+        )
+        .unwrap();
+
+        let mut null_prompt = serde_json::to_value(OnDisk {
+            schema_version: SCHEMA_VERSION,
+            entry: entry("null-prompt"),
+        })
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone();
+        null_prompt.insert("prompt".to_string(), serde_json::Value::Null);
+        std::fs::write(
+            store.dir().join("null-prompt.json"),
+            serde_json::to_string_pretty(&null_prompt).unwrap(),
+        )
+        .unwrap();
+
+        let mut blank_prompt = serde_json::to_value(OnDisk {
+            schema_version: SCHEMA_VERSION,
+            entry: entry("blank-prompt"),
+        })
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone();
+        blank_prompt.insert(
+            "prompt".to_string(),
+            serde_json::Value::String("  ".to_string()),
+        );
+        std::fs::write(
+            store.dir().join("blank-prompt.json"),
+            serde_json::to_string_pretty(&blank_prompt).unwrap(),
+        )
+        .unwrap();
+
+        let mut missing_schema = serde_json::to_value(OnDisk {
+            schema_version: SCHEMA_VERSION,
+            entry: entry("missing-schema"),
+        })
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .clone();
+        missing_schema.remove("schema_version");
+        std::fs::write(
+            store.dir().join("missing-schema.json"),
+            serde_json::to_string_pretty(&missing_schema).unwrap(),
+        )
+        .unwrap();
+
+        let error = store
+            .load_all()
+            .expect_err("obsolete durable state must fail closed");
+        assert!(error.to_string().contains(".json"), "{error:#}");
+        std::fs::remove_dir_all(store.dir()).ok();
+    }
+
+    #[test]
+    fn parse_on_disk_schedule_rejects_unsupported_schema_version() {
+        let body = serde_json::to_string(&OnDisk {
+            schema_version: SCHEMA_VERSION + 1,
+            entry: entry("future"),
+        })
+        .unwrap();
+
+        let error = parse_on_disk_schedule(&body).expect_err("future schema must fail closed");
+        assert!(
+            error.to_string().contains("schema_version"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

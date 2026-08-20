@@ -7,7 +7,62 @@
 
 use serde_json::Value;
 
-use crate::core::ability::spec::AbilityManifest;
+use crate::daemon::ability::manifest::{AbilityManifest, AccessPolicy, ManifestAccessScope};
+
+pub(crate) fn canonical_registration_contract(
+    ability_key: &str,
+) -> anyhow::Result<super::SystemAbilityContract> {
+    let path = super::system_ability_descriptor_path(ability_key);
+    let body = std::fs::read_to_string(&path).map_err(|error| {
+        anyhow::anyhow!(
+            "read canonical descriptor contract for {ability_key:?} from {}: {error}",
+            path.display()
+        )
+    })?;
+    let contract = super::ability_toml::parse_ability_contract_toml(&body)?;
+    if contract.name != ability_key {
+        anyhow::bail!(
+            "canonical descriptor {} names {:?}, expected {ability_key:?}",
+            path.display(),
+            contract.name
+        );
+    }
+    Ok(contract)
+}
+
+/// Import the daemon's pure system metadata for a schema-less static
+/// registration.
+///
+/// This is a registration-boundary adapter, not a discovery overlay. The
+/// resulting manifest is immediately normalized into the control-plane
+/// `AbilityDescriptor` and is never retained as a parallel read model.
+pub(crate) fn registration_manifest(ability_key: &str) -> anyhow::Result<AbilityManifest> {
+    let contract = canonical_registration_contract(ability_key)?;
+    let manifest_name = ability_key.rsplit('.').next().unwrap_or(ability_key);
+    let mut manifest = AbilityManifest::new(
+        manifest_name,
+        contract.description.clone(),
+        contract.input_schema.clone(),
+    )?;
+    if !contract.output_receipt_schema.is_null() {
+        manifest = manifest.with_output_schema(contract.output_receipt_schema.clone())?;
+    }
+    if ability_key.starts_with("observe.") {
+        manifest = manifest.with_access(AccessPolicy {
+            visibility: ManifestAccessScope::Public,
+            ..Default::default()
+        })?;
+    }
+    manifest
+        .with_descriptor_version(contract.descriptor_version)?
+        .with_admission_action(contract.admission_action.as_str())?
+        .with_frontend_contract(
+            contract.exposure,
+            contract.dedicated_surface,
+            contract.subject_contract_kind,
+            contract.subject_contract_ura,
+        )
+}
 
 /// Build the manifest metadata attached to a daemon-owned ability registration.
 ///
@@ -23,7 +78,31 @@ pub(crate) fn registry_manifest(
     description: &'static str,
     input_schema: Value,
 ) -> AbilityManifest {
+    let contract = canonical_registration_contract(ability_key).unwrap_or_else(|error| {
+        panic!("{ability_key} canonical descriptor contract must be valid: {error}")
+    });
     let manifest_name = ability_key.rsplit('.').next().unwrap_or(ability_key);
-    AbilityManifest::new(manifest_name, description, input_schema)
-        .unwrap_or_else(|error| panic!("{ability_key} system manifest must be valid: {error}"))
+    let mut manifest = AbilityManifest::new(manifest_name, description, input_schema)
+        .unwrap_or_else(|error| panic!("{ability_key} system manifest must be valid: {error}"));
+    if !contract.output_receipt_schema.is_null() {
+        manifest = manifest
+            .with_output_schema(contract.output_receipt_schema.clone())
+            .unwrap_or_else(|error| {
+                panic!("{ability_key} output receipt schema must be valid: {error}")
+            });
+    }
+    manifest
+        .with_descriptor_version(contract.descriptor_version)
+        .and_then(|manifest| manifest.with_admission_action(contract.admission_action.as_str()))
+        .and_then(|manifest| {
+            manifest.with_frontend_contract(
+                contract.exposure,
+                contract.dedicated_surface,
+                contract.subject_contract_kind,
+                contract.subject_contract_ura,
+            )
+        })
+        .unwrap_or_else(|error| {
+            panic!("{ability_key} governed manifest fields are invalid: {error}")
+        })
 }

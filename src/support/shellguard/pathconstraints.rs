@@ -85,6 +85,12 @@ pub enum PathVerdict {
         target: PathBuf,
         op: String,
     },
+    InvalidTarget {
+        argv_index: usize,
+        target: String,
+        op: String,
+        reason: String,
+    },
 }
 
 /// Run path constraints. Reads `cmd.redirects` for each
@@ -96,7 +102,17 @@ pub fn evaluate(commands: &[SimpleCommand], c: &Constraints) -> PathVerdict {
             if !is_write_op(&r.op) {
                 continue;
             }
-            let target_abs = normalise_target(&r.target, &c.cwd);
+            let target_abs = match normalise_target(&r.target, &c.cwd) {
+                Ok(target) => target,
+                Err(reason) => {
+                    return PathVerdict::InvalidTarget {
+                        argv_index: idx,
+                        target: r.target.clone(),
+                        op: r.op.clone(),
+                        reason,
+                    };
+                }
+            };
             if !is_under_any_root(&target_abs, &c.write_allowed_roots) {
                 return PathVerdict::Rejected {
                     argv_index: idx,
@@ -131,7 +147,7 @@ fn is_write_op(op: &str) -> bool {
 /// `..` folding stops at root: an absolute path like `/a/../..`
 /// normalises to `/`; a relative path joined to cwd is
 /// canonicalised the same way.
-fn normalise_target(target: &str, cwd: &Path) -> PathBuf {
+fn normalise_target(target: &str, cwd: &Path) -> Result<PathBuf, String> {
     let raw = Path::new(target);
     let absolute = if raw.is_absolute() {
         raw.to_path_buf()
@@ -145,7 +161,7 @@ fn normalise_target(target: &str, cwd: &Path) -> PathBuf {
 /// `canonicalize` would touch the filesystem (and fail for
 /// non-existent paths, which is the usual case for write
 /// targets). This is a string-only equivalent.
-fn fold_dot_dots(p: &Path) -> PathBuf {
+fn fold_dot_dots(p: &Path) -> Result<PathBuf, String> {
     let mut out: Vec<Component> = Vec::new();
     for c in p.components() {
         match c {
@@ -174,13 +190,9 @@ fn fold_dot_dots(p: &Path) -> PathBuf {
         buf.push(c);
     }
     if buf.as_os_str().is_empty() {
-        // Pure `.` / empty input → cwd would lose absoluteness.
-        // Caller's responsibility to give us an absolute input;
-        // we return `/` as a safe fallback if somehow we got
-        // here.
-        buf.push("/");
+        return Err("normalized redirect target is empty".to_string());
     }
-    buf
+    Ok(buf)
 }
 
 /// Is `target` under at least one of the `roots`? Uses
@@ -341,6 +353,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn empty_cwd_and_empty_target_fail_closed_instead_of_root_fallback() {
+        let c = constraints(&["/"], "");
+        let cmds = [cmd_with_redirect(&["echo"], ">", "")];
+        match evaluate(&cmds, &c) {
+            PathVerdict::InvalidTarget {
+                argv_index,
+                target,
+                op,
+                reason,
+            } => {
+                assert_eq!(argv_index, 0);
+                assert_eq!(target, "");
+                assert_eq!(op, ">");
+                assert!(reason.contains("empty"));
+            }
+            other => panic!("expected InvalidTarget, got {other:?}"),
+        }
+    }
+
     // ---- multiple roots / multiple commands ------------------------------
 
     #[test]
@@ -388,9 +420,24 @@ mod tests {
 
     #[test]
     fn fold_dot_dots_handles_root_anchored() {
-        assert_eq!(fold_dot_dots(Path::new("/a/b/../c")), PathBuf::from("/a/c"));
-        assert_eq!(fold_dot_dots(Path::new("/a/./b")), PathBuf::from("/a/b"));
-        assert_eq!(fold_dot_dots(Path::new("/a/../..")), PathBuf::from("/"));
+        assert_eq!(
+            fold_dot_dots(Path::new("/a/b/../c")).unwrap(),
+            PathBuf::from("/a/c")
+        );
+        assert_eq!(
+            fold_dot_dots(Path::new("/a/./b")).unwrap(),
+            PathBuf::from("/a/b")
+        );
+        assert_eq!(
+            fold_dot_dots(Path::new("/a/../..")).unwrap(),
+            PathBuf::from("/")
+        );
+    }
+
+    #[test]
+    fn fold_dot_dots_rejects_empty_projection() {
+        let err = fold_dot_dots(Path::new("")).unwrap_err();
+        assert!(err.contains("empty"));
     }
 
     #[test]

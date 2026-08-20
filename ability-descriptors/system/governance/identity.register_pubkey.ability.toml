@@ -1,0 +1,40 @@
+schema_version = "3"
+name = "identity.register_pubkey"
+descriptor_version = "1.0.0"
+description = "Register a trusted public key row in the daemon runtime trust anchor."
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "route-target"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["principal_ura", "public_key_b64", "role"]
+additionalProperties = false
+
+[input_schema.properties.principal_owner_ura]
+type = "string"
+description = "Optional canonical owner User URA."
+
+[input_schema.properties.principal_ura]
+type = "string"
+description = "Agent, Device, User, or Authority URA to trust."
+
+[input_schema.properties.public_key_b64]
+type = "string"
+description = "Base64-encoded Ed25519 verifying key."
+
+[input_schema.properties.role]
+type = "string"
+description = "Trust role for this key row."

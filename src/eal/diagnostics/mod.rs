@@ -138,8 +138,7 @@ impl EalError {
     ///   exceeded its budget. Retry with a longer backoff; a tighter
     ///   retry can compound peer overload.
     /// - [`AxonError::Bridge`] / [`AxonError::NativeBridge`] /
-    ///   [`AxonError::Stream`] / [`AxonError::Invocation`] /
-    ///   [`AxonError::Mcp`] →
+    ///   [`AxonError::Stream`] / [`AxonError::Invocation`] →
     ///   [`EalError::Unavailable`]: transport / peer-side failures
     ///   that may succeed on retry after recovery. `Invocation` is a
     ///   *remote* execution failure (the SDK already split local
@@ -157,8 +156,8 @@ impl EalError {
     ///   violation (steps are scalar — partial is not a valid outcome
     ///   here).
     #[must_use]
-    pub fn from_axon_error(err: easynet_axon::AxonError) -> Self {
-        use easynet_axon::AxonError as A;
+    pub fn from_axon_error(err: axon_sdk::AxonError) -> Self {
+        use axon_sdk::AxonError as A;
         // Render once; the typed match below owns the categorisation,
         // but each variant still needs its prose for the operator-
         // facing message. `to_string()` uses `thiserror`'s `#[error]`
@@ -168,18 +167,15 @@ impl EalError {
             A::Validation(_) | A::PolicyDenied(_) => EalError::Validation(msg),
             A::NotInstalled(_) | A::NotActivated(_) => EalError::NotFound(msg),
             A::DeadlineExceeded(_) => EalError::DeadlineExceeded(msg),
-            A::Bridge(_)
-            | A::NativeBridge { .. }
-            | A::Stream(_)
-            | A::Invocation(_)
-            | A::Mcp(_)
-            | A::Io(_) => EalError::Unavailable(msg),
+            A::Bridge(_) | A::NativeBridge { .. } | A::Stream(_) | A::Invocation(_) | A::Io(_) => {
+                EalError::Unavailable(msg)
+            }
             A::SymbolNotFound(_) | A::Json(_) | A::PartialSuccess { .. } => EalError::Internal(msg),
         }
     }
 }
 
-impl From<easynet_axon::AxonError> for EalError {
+impl From<axon_sdk::AxonError> for EalError {
     /// Typed conversion from the bridge SDK's error — see
     /// [`EalError::from_axon_error`] for the mapping rationale.
     ///
@@ -188,7 +184,7 @@ impl From<easynet_axon::AxonError> for EalError {
     /// conversion is non-lossy: each [`AxonError`] variant has a
     /// specific, reviewed target category. A bare `?` against a
     /// `Result<_, AxonError>` therefore classifies correctly.
-    fn from(err: easynet_axon::AxonError) -> Self {
+    fn from(err: axon_sdk::AxonError) -> Self {
         EalError::from_axon_error(err)
     }
 }
@@ -272,7 +268,7 @@ mod tests {
     // If the SDK grows a new variant, the `match` in
     // `from_axon_error` won't compile — that is the tripwire.
 
-    use easynet_axon::AxonError as Axon;
+    use axon_sdk::AxonError as Axon;
 
     #[test]
     fn axon_validation_and_policy_map_to_ealerror_validation() {
@@ -317,7 +313,6 @@ mod tests {
             Axon::Bridge("connect refused".into()),
             Axon::Stream("peer closed".into()),
             Axon::Invocation("remote panic".into()),
-            Axon::Mcp("protocol drift".into()),
             Axon::Io(std::io::Error::from(std::io::ErrorKind::ConnectionReset)),
         ] {
             let code = EalError::from_axon_error(axon).error_code();
@@ -344,7 +339,7 @@ mod tests {
 
         // Forge a JSON error by failing to parse an invalid document;
         // `AxonError` implements `From<serde_json::Error>`.
-        let json_err: easynet_axon::AxonError = serde_json::from_str::<serde_json::Value>("{")
+        let json_err: axon_sdk::AxonError = serde_json::from_str::<serde_json::Value>("{")
             .unwrap_err()
             .into();
         assert_eq!(

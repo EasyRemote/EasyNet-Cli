@@ -1,12 +1,12 @@
 // EasyNet CLI
 // ===========
 //
-// File: src/cli/mcp_install.rs
-// Description: `easynet mcp-install` — install/update MCP server entries for Claude Code / Codex.
+// File: src/cli/mcp/install.rs
+// Description: `easynet mcp install` — install/update MCP server entries for Claude Code / Codex.
 //
 // Goals:
 // - One command to add an `mcpServers.<name>` entry pointing at `easynet mcp serve`.
-// - Support multiple installs (one per agent/device) by changing `--name` and `--bound-node`.
+// - Support multiple installs by changing `--name` and, when useful, `--agent`.
 // - Safe by default: refuses to overwrite existing entries unless `--force`.
 //
 // Notes:
@@ -44,35 +44,11 @@ pub struct McpInstallArgs {
     #[arg(long, default_value = "easynet")]
     pub name: String,
 
-    /// Tenant ID passed to 'easynet mcp serve'
+    /// Tenant ID passed to 'easynet mcp serve'.
     ///
-    /// If omitted, we try reading from '~/.easynet/runtime.json', else default to "default".
+    /// If omitted, the current runtime session projection must carry a tenant.
     #[arg(long)]
     pub tenant: Option<String>,
-
-    /// Runtime endpoint passed to 'easynet mcp serve'
-    ///
-    /// If omitted, 'easynet mcp serve' auto-detects from '~/.easynet/runtime.json'.
-    #[arg(long)]
-    pub endpoint: Option<String>,
-
-    /// Pin node-scoped tools to this node_id. The MCP server will
-    /// substitute 'node_id' into every invocation that omits it, so the
-    /// hosting agent (Claude Code / Codex) talks to exactly one device
-    /// for the lifetime of the session.
-    ///
-    /// By default the binding is a *hard lock*: an explicit 'node_id'
-    /// that disagrees with '--bound-node' is rejected. Pass
-    /// '--allow-node-override' to demote the binding to a *default*
-    /// that callers may override on a per-call basis.
-    #[arg(long, value_name = "NODE_ID")]
-    pub bound_node: Option<String>,
-
-    /// Demote '--bound-node' from a hard lock to a per-call default:
-    /// calls that carry an explicit 'node_id' are routed to that node
-    /// instead of being rejected. Has no effect without '--bound-node'.
-    #[arg(long)]
-    pub allow_node_override: bool,
 
     /// Label the MCP server with an agent id (purely informational; passed to 'easynet mcp serve --agent').
     #[arg(long)]
@@ -104,10 +80,9 @@ pub struct McpInstallArgs {
 
 pub fn run(args: McpInstallArgs) -> anyhow::Result<()> {
     let config_path = resolve_config_path(args.client, args.config_path.as_deref())?;
-    let (tenant, endpoint) =
-        resolve_runtime_defaults(args.tenant.as_deref(), args.endpoint.as_deref());
+    let tenant = resolve_runtime_tenant(args.tenant.as_deref())?;
 
-    let spec = build_install_spec(&tenant, endpoint.as_deref(), &args)?;
+    let spec = build_install_spec(&tenant, &args)?;
 
     match args.client {
         McpInstallClient::Claude => install_for_claude(&config_path, &spec, &args)?,
@@ -131,23 +106,13 @@ pub fn run(args: McpInstallArgs) -> anyhow::Result<()> {
         },
     );
     output::detail("tenant", &tenant);
-    if let Some(ep) = endpoint.as_deref() {
-        output::detail("endpoint", ep);
-    } else {
-        output::detail("endpoint", "(auto-detect via ~/.easynet/runtime.json)");
-    }
+    output::detail("endpoint", "(auto-detect via ~/.easynet/runtime.json)");
     if spec.env.contains_key("EASYNET_DENDRITE_BRIDGE_LIB") {
         output::detail("bridge_lib", "configured");
     } else {
         output::warn("EASYNET_DENDRITE_BRIDGE_LIB not configured for this MCP server.");
         output::step("If MCP tools fail to connect, re-run with:");
-        output::step("  easynet mcp-install ... --bridge-lib /abs/path/to/libaxon_dendrite_bridge.(dylib|so|dll)");
-    }
-    if let Some(node) = args.bound_node.as_deref() {
-        output::detail("bound_node", node);
-        if !args.allow_node_override {
-            output::detail("node_override", "disabled");
-        }
+        output::step("  easynet mcp install ... --bridge-lib /abs/path/to/libaxon_dendrite_bridge.(dylib|so|dll)");
     }
     if let Some(agent) = args.agent.as_deref() {
         output::detail("agent", agent);
@@ -155,30 +120,31 @@ pub fn run(args: McpInstallArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn resolve_runtime_defaults(
-    tenant: Option<&str>,
-    endpoint: Option<&str>,
-) -> (String, Option<String>) {
-    let mut resolved_tenant = tenant.map(|s| s.to_string());
-    let mut resolved_endpoint = endpoint.map(|s| s.to_string());
-
-    if let (Some(t), Some(_)) = (&resolved_tenant, &resolved_endpoint) {
-        return (t.clone(), resolved_endpoint);
+fn resolve_runtime_tenant(tenant: Option<&str>) -> anyhow::Result<String> {
+    if let Some(value) = tenant {
+        let value = value.trim();
+        if value.is_empty() {
+            anyhow::bail!("--tenant must not be empty");
+        }
+        return Ok(value.to_string());
     }
 
-    if let Ok(state) = config::load() {
-        if resolved_endpoint.is_none() && !state.endpoint.trim().is_empty() {
-            resolved_endpoint = Some(state.endpoint);
-        }
-        if resolved_tenant.is_none() {
-            resolved_tenant = state.tenant.clone().or_else(|| Some("default".to_string()));
-        }
-    }
-
-    (
-        resolved_tenant.unwrap_or_else(|| "default".to_string()),
-        resolved_endpoint,
-    )
+    let state = config::load_optional_runtime_state()?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "mcp install requires --tenant when no runtime session is available; run `easynet start` or pass --tenant"
+        )
+    })?;
+    state
+        .tenant
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "runtime session projection is missing tenant; restart the runtime or pass --tenant"
+            )
+        })
 }
 
 fn resolve_config_path(
@@ -202,11 +168,7 @@ struct InstallSpec {
     env: BTreeMap<String, String>,
 }
 
-fn build_install_spec(
-    tenant: &str,
-    endpoint: Option<&str>,
-    args: &McpInstallArgs,
-) -> anyhow::Result<InstallSpec> {
+fn build_install_spec(tenant: &str, args: &McpInstallArgs) -> anyhow::Result<InstallSpec> {
     // `easynet mcp serve` is a two-token CLI path; pre-fix this
     // wrote `mcp-server` (hyphenated, single token) which the
     // CLI dispatcher doesn't recognise. See workspace.rs slice-27
@@ -214,24 +176,16 @@ fn build_install_spec(
     // path; this one is the operator-facing
     // `easynet mcp install` path that writes the same shape into
     // ~/.claude/settings.json or ~/.codex/config.toml.
-    // `easynet mcp serve` accepts only --tenant and --agent
-    // (see cli/mcp_server.rs::McpServerArgs). The flags
-    // we used to write — --endpoint, --bound-node,
-    // --allow-node-override — were dropped in the P4.9
-    // quarantine. Keep accepting them as `easynet mcp install`
-    // CLI inputs for backwards compatibility (the operator's
-    // muscle memory still uses them) but DON'T write them into
-    // the spawn args; doing so causes claude/codex to spawn the
-    // MCP subprocess with "unexpected argument" failures.
+    // `easynet mcp serve` accepts only --tenant and --agent. Install
+    // writes exactly that server contract; retired endpoint/node-binding
+    // inputs are not accepted here because accepting and dropping them
+    // creates a false installation success.
     let mut cmd_args: Vec<String> = vec![
         "mcp".to_string(),
         "serve".to_string(),
         "--tenant".to_string(),
         tenant.to_string(),
     ];
-    let _ = endpoint; // accepted for back-compat, not written
-    let _ = &args.bound_node;
-    let _ = args.allow_node_override;
     if let Some(agent) = args.agent.as_deref() {
         cmd_args.push("--agent".to_string());
         cmd_args.push(agent.to_string());
@@ -419,4 +373,135 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     fs::write(&tmp, bytes)?;
     fs::rename(&tmp, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
+    use clap::Parser;
+
+    #[derive(Debug, Parser)]
+    struct InstallCli {
+        #[command(flatten)]
+        args: McpInstallArgs,
+    }
+
+    fn args() -> McpInstallArgs {
+        McpInstallArgs {
+            client: McpInstallClient::Codex,
+            name: "easynet".to_string(),
+            tenant: Some("localhost".to_string()),
+            agent: Some("dev".to_string()),
+            config_path: None,
+            bridge_lib: None,
+            dry_run: false,
+            force: false,
+        }
+    }
+
+    #[test]
+    fn install_spec_writes_only_mcp_serve_contract() {
+        let spec = build_install_spec("localhost", &args()).expect("install spec");
+
+        assert_eq!(
+            spec.args,
+            ["mcp", "serve", "--tenant", "localhost", "--agent", "dev"]
+        );
+        assert!(!spec.args.iter().any(|arg| {
+            matches!(
+                arg.as_str(),
+                "--endpoint" | "--bound-node" | "--allow-node-override"
+            )
+        }));
+    }
+
+    #[test]
+    fn resolve_runtime_tenant_uses_explicit_tenant_without_runtime_projection() {
+        let _home = HomeGuard::new();
+
+        let tenant = resolve_runtime_tenant(Some("localhost")).expect("explicit tenant");
+
+        assert_eq!(tenant, "localhost");
+    }
+
+    #[test]
+    fn resolve_runtime_tenant_rejects_blank_explicit_tenant() {
+        let err = resolve_runtime_tenant(Some("  "))
+            .expect_err("blank explicit tenant must fail before install");
+
+        assert!(err.to_string().contains("--tenant must not be empty"));
+    }
+
+    #[test]
+    fn resolve_runtime_tenant_uses_runtime_projection_tenant() {
+        let _home = HomeGuard::new();
+        config::save(&runtime_state_with_tenant(Some("acme"))).expect("save runtime state");
+
+        let tenant = resolve_runtime_tenant(None).expect("runtime tenant");
+
+        assert_eq!(tenant, "acme");
+    }
+
+    #[test]
+    fn resolve_runtime_tenant_rejects_missing_runtime_projection_instead_of_defaulting() {
+        let _home = HomeGuard::new();
+
+        let err = resolve_runtime_tenant(None)
+            .expect_err("missing runtime projection must fail before writing MCP config");
+
+        assert!(
+            err.to_string()
+                .contains("requires --tenant when no runtime session is available"),
+            "missing runtime projection must not synthesize a default tenant: {err:#}"
+        );
+    }
+
+    #[test]
+    fn resolve_runtime_tenant_rejects_runtime_projection_without_tenant() {
+        let _home = HomeGuard::new();
+        config::save(&runtime_state_with_tenant(None)).expect("save runtime state");
+
+        let err = resolve_runtime_tenant(None)
+            .expect_err("runtime projection without tenant must fail before install");
+
+        assert!(
+            err.to_string()
+                .contains("runtime session projection is missing tenant"),
+            "missing tenant must be an explicit unbound state: {err:#}"
+        );
+    }
+
+    #[test]
+    fn retired_noop_install_flags_are_rejected_by_parser() {
+        for flag in ["--endpoint", "--bound-node", "--allow-node-override"] {
+            let mut argv = vec!["install", "codex"];
+            match flag {
+                "--allow-node-override" => argv.push(flag),
+                _ => {
+                    argv.push(flag);
+                    argv.push("value");
+                }
+            }
+            let err = InstallCli::try_parse_from(argv)
+                .expect_err("retired no-op MCP install flag must be rejected");
+            assert!(
+                err.to_string().contains("unexpected argument"),
+                "unexpected parser error for {flag}: {err}"
+            );
+        }
+    }
+
+    fn runtime_state_with_tenant(tenant: Option<&str>) -> config::RuntimeState {
+        config::RuntimeState {
+            endpoint: "/tmp/easynet-daemon.sock".to_string(),
+            runtime_kind: config::RuntimeKind::DaemonOnly,
+            pid: Some(123),
+            hub: Some("axon://hub.example:50051".to_string()),
+            tenant: tenant.map(str::to_string),
+            label: Some("test-runtime".to_string()),
+            started_at: Some("2026-07-26T00:00:00Z".to_string()),
+            credential_verified: Some(true),
+        }
+    }
 }

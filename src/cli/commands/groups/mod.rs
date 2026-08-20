@@ -1,12 +1,11 @@
 // EasyNet CLI — Layered Subcommand Groups
 // =======================================
 //
-// File: src/cli/groups/mod.rs
+// File: src/cli/commands/groups/mod.rs
 // Description: Aggregated, "noun-first" subcommand groups that replace the
-//              old flat top-level commands. Each module here defines a parent
-//              `<Group>Args` (clap derive) plus a nested action enum, and
-//              dispatches either to the existing legacy handlers in
-//              `super::*` or to brand-new logic added under this directory.
+//              retired flat top-level command surface. Each module defines a
+//              parent `<Group>Args` (clap derive), a nested action enum, and a
+//              typed product entrypoint for one noun-owned command family.
 //
 // Why a layered CLI?
 // - 20+ flat top-level verbs forced users to memorise an unstructured list.
@@ -17,8 +16,8 @@
 //   a place to slot those gaps in cleanly.
 //
 // Layout: one file per top-level noun. Each file owns its own `Args` /
-//         `Action` enum and a `run()` entry point invoked from
-//         `cli::Command` in `../mod.rs`.
+//         `Action` enum and a `run()` entry point invoked from `cli::Command`
+//         in `../mod.rs`.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -33,6 +32,9 @@ pub mod invocation;
 pub mod mcp;
 pub mod mission;
 pub mod plugin;
+mod plugin_template;
+pub mod principal;
+mod principal_routes_gen;
 pub mod runtime;
 pub mod selfcmd;
 pub mod trust;

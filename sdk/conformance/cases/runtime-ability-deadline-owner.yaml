@@ -1,0 +1,18 @@
+id: runtime/ability_deadline_owner
+profile: runtime_core
+required_for:
+  - go
+  - python
+description: Runtime ability facades delegate invocation deadlines to the Runtime Core provider and expose typed timeout outcomes without making the provider unreusable.
+steps:
+  - action: dispatch_ability_with_provider_deadline
+    fixture: invocation.complete.v4.json
+  - action: observe_ability_typed_timeout
+  - action: retry_ability_after_deadline_cleanup
+expect:
+  result: timeout_observed
+  error_code: TIMEOUT
+  retry: safe
+  terminal_success_fabricated: false
+  cleanup_before_reuse: true
+  bounded_wait: true

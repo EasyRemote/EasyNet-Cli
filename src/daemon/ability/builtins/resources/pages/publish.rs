@@ -23,19 +23,21 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::Context;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::resources::projection::PagesPublishResponse;
 
 use super::sandbox::open_directory;
 use super::state::{
-    persist_registry_for_user, ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
+    persist_registry_for_user, PageVisibility, ProjectHandle, DEFAULT_FILE_SIZE_CAP,
+    PUBLISHED_PROJECTS,
 };
 
 /// Handler invoked when a user calls `pages.publish`. The
 /// handler is registered once at daemon boot under the user-prefixed
 /// ability name; the dispatcher routes per-user calls to the same
-/// closure (`legacy self alias` is the calling daemon's user identity).
+/// closure with the calling daemon's explicit user identity.
 ///
 /// args:
 /// ```json
@@ -60,6 +62,7 @@ use super::state::{
 /// is dev-only and is only surfaced by `pages.get` for
 /// debugging.
 pub fn handle_publish(
+    owner_user_id: &str,
     user: &str,
     // The publish surface no longer depends on the daemon's
     // in-process listener — `url_root` is built from `realm` via
@@ -85,7 +88,7 @@ pub fn handle_publish(
         .unwrap_or("public");
 
     validate_project_id(project_id)?;
-    let visibility = Visibility::parse(visibility_str)?;
+    let visibility = PageVisibility::parse(visibility_str)?;
 
     let folder = PathBuf::from(folder_str);
     if !folder.is_absolute() {
@@ -129,26 +132,26 @@ pub fn handle_publish(
     // Register per-project fetch/API abilities into the live
     // daemon-hosted Axon runtime so Hub remote/session dispatch
     // can find them without any legacy resolver path.
-    super::register_project_abilities(registry.as_ref(), user, project_id)
+    super::register_project_abilities(registry.as_ref(), owner_user_id, user, project_id)
         .context("register pages project abilities")?;
 
     let project_ura =
         crate::core::ura::resource_dot_ura(realm, &format!("{user}.{project_id}"), "/");
     let url_root = super::pages_public_url_root(realm, user, project_id);
 
-    Ok(json!({
-        "project_ura": project_ura,
-        "url_root":    url_root,
-        "user":        user,
-        "project_id":  project_id,
-        "visibility":  visibility.as_str(),
-    }))
+    Ok(serde_json::to_value(PagesPublishResponse::success(
+        project_ura,
+        url_root,
+        user,
+        project_id,
+        visibility.as_str(),
+    ))?)
 }
 
 /// project_id grammar: URA-safe segment per RFC-006-B v0.6 §2.1.
 /// `[a-zA-Z0-9_-]+`, max 64 chars. Forbid '.' so `<user>.<project>`
 /// always has exactly two dot-separated components.
-fn validate_project_id(project_id: &str) -> anyhow::Result<()> {
+pub(super) fn validate_project_id(project_id: &str) -> anyhow::Result<()> {
     if project_id.is_empty() {
         anyhow::bail!("project_id is empty");
     }
@@ -164,4 +167,79 @@ fn validate_project_id(project_id: &str) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
+    use serde_json::json;
+
+    fn pages_registry(realm: &str, _user: &str) -> Arc<AxonAbilityCatalog> {
+        let device_ura = crate::core::ura::device_ura(realm, "pages-publish-test-device");
+        let authority_context = AbilityAuthorityContext::for_device_authority_root(device_ura)
+            .expect("Pages publish test Device authority");
+        Arc::new(AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            authority_context,
+        ))
+    }
+
+    fn clear_registry_for_user(user: &str) {
+        let keys: Vec<_> = PUBLISHED_PROJECTS
+            .iter()
+            .filter_map(|entry| {
+                let key = entry.key();
+                (key.0 == user).then(|| key.clone())
+            })
+            .collect();
+        for key in keys {
+            PUBLISHED_PROJECTS.remove(&key);
+        }
+    }
+
+    #[test]
+    fn handle_publish_returns_typed_payload_projection_shape() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let realm = "easynet.run";
+        let user = "pages-publish-projection-user";
+        let owner_user_id = "pages-publish-owner";
+        let project_id = "docs-publish";
+        clear_registry_for_user(user);
+        let folder = tempfile::tempdir().expect("temp pages publish root");
+        std::fs::write(folder.path().join("index.html"), "<h1>Hello</h1>")
+            .expect("write test page");
+
+        let published = handle_publish(
+            owner_user_id,
+            user,
+            8787,
+            realm,
+            pages_registry(realm, user),
+            json!({
+                "folder": folder.path().display().to_string(),
+                "project_id": project_id,
+                "visibility": "public",
+            }),
+        )
+        .expect("publish test project");
+        clear_registry_for_user(user);
+
+        assert_eq!(
+            published["project_ura"],
+            "easynet:///r/easynet.run/resource/pages-publish-projection-user.docs-publish"
+        );
+        assert_eq!(
+            published["url_root"],
+            "https://easynet.run/web/pages-publish-projection-user/docs-publish/"
+        );
+        assert_eq!(published["user"], user);
+        assert_eq!(published["project_id"], project_id);
+        assert_eq!(published["visibility"], "public");
+        assert!(published.get("folder").is_none());
+        assert!(published.get("canonical_root").is_none());
+    }
 }

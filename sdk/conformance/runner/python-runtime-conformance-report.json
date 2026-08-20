@@ -1,0 +1,568 @@
+{
+  "report_kind": "language_facade_conformance_tests",
+  "language": "python",
+  "records": [
+    {
+      "case_id": "ability/descriptor_projection",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_ability_descriptor.py",
+          "sha256": "5ae973e3fc34896361700800c2ef74e2c9541e0a8a434e6273bc54d0d80c642e"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "authority/metadata",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_authority.py",
+          "sha256": "ce7e255e3ff515060b4bdf848f2aeff2d8123c6ec430c1f3e37f2ac77adbe161"
+        }
+      ],
+      "profile": "authority"
+    },
+    {
+      "case_id": "environment/process_root",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_environment.py",
+          "sha256": "5608d10d2102575fcc4e0821d60b2f304ba07c0c6133f77430344fab99233174"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/terminal_receipt_facts",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_runtime.py",
+          "sha256": "9a01c8b17273486e7d110bbb7b0df41d32dcadde0caa0ed61c3afa181936f4b5"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "sdk/product_neutrality",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_conformance_gates.py",
+          "sha256": "8ebadd384a28088991dc2f3c410b09514d7cebcc84e85406aac2737a659d5d11"
+        }
+      ],
+      "profile": "conformance"
+    },
+    {
+      "case_id": "runtime_core/canonical_addressing_provider",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_axon_addressing.py",
+          "sha256": "9894bc6e3498345531d12f88c2b28b819eb19160c8530684708258457827dab4"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "runtime/ability_lowering",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_runtime_ability.py",
+          "sha256": "c80825a22b98f0dd40201c9e5ee2c22e0add7e10e98f4f81a2503b6d1a19d9e5"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "access_control/provider",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_access_control.py",
+          "sha256": "3da5105324f42652f02928821c2dd9c66db121598f4faa4bb7fb3e03beac863c"
+        }
+      ],
+      "profile": "access_control"
+    },
+    {
+      "case_id": "authority/mutual_exclusion",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_authority.py",
+          "sha256": "ce7e255e3ff515060b4bdf848f2aeff2d8123c6ec430c1f3e37f2ac77adbe161"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "bidi/close_send_not_cancel",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_cabi.py",
+          "sha256": "a009d742634ee4f2a9db1786b4b9155a1d062d02032b88743597b705411b098b"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "runtime/control_only",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_control_ipc.py",
+          "sha256": "d68956b4242342d5fc49d44d6248ff1c2cfa7d58370b8d9a3d93d4a884d752fe"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "runtime_host/permission_denied",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_errors.py",
+          "sha256": "af91be32dea5fe1efab80548af31d357544c53f969d7e7e96be24aee804e7d20"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "error/profile_source_refs",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_errors.py",
+          "sha256": "af91be32dea5fe1efab80548af31d357544c53f969d7e7e96be24aee804e7d20"
+        }
+      ],
+      "profile": "errors"
+    },
+    {
+      "case_id": "error/retry_hint",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_errors.py",
+          "sha256": "af91be32dea5fe1efab80548af31d357544c53f969d7e7e96be24aee804e7d20"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "error/typed_json",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_errors.py",
+          "sha256": "af91be32dea5fe1efab80548af31d357544c53f969d7e7e96be24aee804e7d20"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "health/api_vs_runtime",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_health.py",
+          "sha256": "8e64873cef01415327617eda00d24b82b4ce137e0239f2db5a924bfc7e4b91de"
+        }
+      ],
+      "profile": "health"
+    },
+    {
+      "case_id": "invocation/builder_handle_state",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_invocation.py",
+          "sha256": "80c31d2cd5ca270f9c2d9b422ab44fc0ecfd4463647e325bac48b9b47c7c1cc5"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/canonical_material",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_signing.py",
+          "sha256": "18ee815ed17ea292a36205624ed2602208162b3c4d3ae3b22c3b8efb7d1ae4fd"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/complete_tuple",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_invocation.py",
+          "sha256": "80c31d2cd5ca270f9c2d9b422ab44fc0ecfd4463647e325bac48b9b47c7c1cc5"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/provider_managed_signing_boundary",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_signing.py",
+          "sha256": "18ee815ed17ea292a36205624ed2602208162b3c4d3ae3b22c3b8efb7d1ae4fd"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "managed_signing/provider_lifecycle",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_managed_signing.py",
+          "sha256": "8123a20aa136dc6568f3344833704dbd5225c452dc255df60d91319bb5525e78"
+        }
+      ],
+      "profile": "managed_signing"
+    },
+    {
+      "case_id": "directory/resolution_provider",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_directory.py",
+          "sha256": "00b98b081ceb9500b1c803dd68eec6709d520ee4b83d0655784e86d588e1691c"
+        }
+      ],
+      "profile": "directory"
+    },
+    {
+      "case_id": "principal/lifecycle_seam",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_principal.py",
+          "sha256": "6dc1761c081bec5fe0b37bcf7abc4d1e1c0cf8620f9082bc7b40cc31252f17ce"
+        }
+      ],
+      "profile": "principal"
+    },
+    {
+      "case_id": "principal/lifecycle_provider",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_principal.py",
+          "sha256": "6dc1761c081bec5fe0b37bcf7abc4d1e1c0cf8620f9082bc7b40cc31252f17ce"
+        }
+      ],
+      "profile": "principal"
+    },
+    {
+      "case_id": "receipt/history_provider",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_receipt.py",
+          "sha256": "158e9c6c4a2342f4a57df66114756cd955714023d692f51b8596459aa3736480"
+        }
+      ],
+      "profile": "receipts"
+    },
+    {
+      "case_id": "runtime/administration_seam",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_runtime_admin.py",
+          "sha256": "5c35e86291e143dee5d82a41be63b44ebd03de14c7c229ccba7fa92109fef0aa"
+        }
+      ],
+      "profile": "runtime_administration"
+    },
+    {
+      "case_id": "runtime/events_seam",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_runtime_events.py",
+          "sha256": "0d95a735aed6ecc6b105d718830c7f3173fd899146bfac30fcae1b2a3fa80afb"
+        }
+      ],
+      "profile": "runtime_events"
+    },
+    {
+      "case_id": "invocation/prepared_not_submittable",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_signing.py",
+          "sha256": "18ee815ed17ea292a36205624ed2602208162b3c4d3ae3b22c3b8efb7d1ae4fd"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/presigned_submit",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_runtime.py",
+          "sha256": "9a01c8b17273486e7d110bbb7b0df41d32dcadde0caa0ed61c3afa181936f4b5"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/terminal_monotonicity",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_runtime.py",
+          "sha256": "9a01c8b17273486e7d110bbb7b0df41d32dcadde0caa0ed61c3afa181936f4b5"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "runtime_core/feature_discovery",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_runtime.py",
+          "sha256": "9a01c8b17273486e7d110bbb7b0df41d32dcadde0caa0ed61c3afa181936f4b5"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "sdk/seven_language_capability_matrix",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_conformance_gates.py",
+          "sha256": "8ebadd384a28088991dc2f3c410b09514d7cebcc84e85406aac2737a659d5d11"
+        }
+      ],
+      "profile": "sdk_parity"
+    },
+    {
+      "case_id": "stream/backpressure_bound",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_cabi.py",
+          "sha256": "a009d742634ee4f2a9db1786b4b9155a1d062d02032b88743597b705411b098b"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "stream/order_terminal",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_cabi.py",
+          "sha256": "a009d742634ee4f2a9db1786b4b9155a1d062d02032b88743597b705411b098b"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "version/abi_compatible",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_client.py",
+          "sha256": "8fd3fb97e3146473f2a8eb269c1960a9407cc8db1b75666159180095306637bd"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "version/abi_incompatible",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_client.py",
+          "sha256": "8fd3fb97e3146473f2a8eb269c1960a9407cc8db1b75666159180095306637bd"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "bidi/cancel_request",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_cabi.py",
+          "sha256": "a009d742634ee4f2a9db1786b4b9155a1d062d02032b88743597b705411b098b"
+        }
+      ]
+    },
+    {
+      "case_id": "bidi/deadline_owner",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_cabi.py",
+          "sha256": "a009d742634ee4f2a9db1786b4b9155a1d062d02032b88743597b705411b098b"
+        }
+      ]
+    },
+    {
+      "case_id": "bidi/dispatch_provider",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_cabi.py",
+          "sha256": "a009d742634ee4f2a9db1786b4b9155a1d062d02032b88743597b705411b098b"
+        }
+      ]
+    },
+    {
+      "case_id": "bidi/frame0_required",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_cabi.py",
+          "sha256": "a009d742634ee4f2a9db1786b4b9155a1d062d02032b88743597b705411b098b"
+        }
+      ]
+    },
+    {
+      "case_id": "invocation/receipt_proof_required",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_runtime.py",
+          "sha256": "9a01c8b17273486e7d110bbb7b0df41d32dcadde0caa0ed61c3afa181936f4b5"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/ability_child_dispatch",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_ability_invocation.py",
+          "sha256": "672a78f2ea5d54b461fcfeade869b1471d670720bd39464b2c490a648be21e8e"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/ability_deadline_owner",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_direct_runtime.py",
+          "sha256": "7e1e9734b92ba9d0cf2ab27c95ff1e6a58559dfdd41e0bca60ad41035188da5d"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/ability_provider_lifecycle",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_ability_invocation.py",
+          "sha256": "672a78f2ea5d54b461fcfeade869b1471d670720bd39464b2c490a648be21e8e"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/ability_restart_recover",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_runtime_ability.py",
+          "sha256": "c80825a22b98f0dd40201c9e5ee2c22e0add7e10e98f4f81a2503b6d1a19d9e5"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/ability_start_provider",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_environment.py",
+          "sha256": "5608d10d2102575fcc4e0821d60b2f304ba07c0c6133f77430344fab99233174"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/deadline_owner",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_transport.py",
+          "sha256": "fe2d25de231b12590782b14431edec4b8499cedc401ff2572c9b8ce1290ebc00"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/restart_recovery",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_runtime.py",
+          "sha256": "9a01c8b17273486e7d110bbb7b0df41d32dcadde0caa0ed61c3afa181936f4b5"
+        }
+      ]
+    },
+    {
+      "case_id": "stream/cancel_request",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_cabi.py",
+          "sha256": "a009d742634ee4f2a9db1786b4b9155a1d062d02032b88743597b705411b098b"
+        }
+      ]
+    },
+    {
+      "case_id": "stream/deadline_owner",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_cabi.py",
+          "sha256": "a009d742634ee4f2a9db1786b4b9155a1d062d02032b88743597b705411b098b"
+        }
+      ]
+    },
+    {
+      "case_id": "stream/dispatch_provider",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "python_test",
+          "ref_path": "sdk/python/tests/test_cabi.py",
+          "sha256": "a009d742634ee4f2a9db1786b4b9155a1d062d02032b88743597b705411b098b"
+        }
+      ]
+    }
+  ],
+  "schema_version": 2
+}

@@ -8,46 +8,34 @@
 // target. Cross-device aggregate fan-out belongs in a named daemon ability, not
 // in a facade loop.
 
-#[cfg(feature = "axon-pb")]
-use anyhow::Context;
 use serde_json::Value;
 
-use crate::support::platform::local_invoke::invoke_local_ability;
+use crate::cli::daemon_client::remote_system_ability::invoke_remote_device_catalogue_read;
+use crate::daemon::ability::{AbilityCatalogQuery, AbilityCatalogRow};
+use crate::support::platform::local_invoke::LocalRuntimeCatalogueReadIssuer;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AbilityCatalogueQuery {
-    agent_ura: Option<String>,
-    subject_ura: Option<String>,
+    inner: AbilityCatalogQuery,
 }
 
 impl AbilityCatalogueQuery {
-    pub(crate) fn new(agent_ura: Option<String>, subject_ura: Option<String>) -> Self {
+    pub(crate) fn new(owner_ura: Option<String>, ability_ura: Option<String>) -> Self {
         Self {
-            agent_ura,
-            subject_ura,
+            inner: AbilityCatalogQuery::new(owner_ura, ability_ura),
         }
     }
 
-    pub(crate) fn agent_ura(&self) -> Option<&str> {
-        self.agent_ura.as_deref()
+    pub(crate) fn owner_ura(&self) -> Option<&str> {
+        self.inner.owner_ura()
     }
 
-    pub(crate) fn subject_ura(&self) -> Option<&str> {
-        self.subject_ura.as_deref()
+    pub(crate) fn ability_ura(&self) -> Option<&str> {
+        self.inner.ability_ura()
     }
 
     pub(crate) fn to_request(&self) -> Value {
-        let mut body = serde_json::Map::new();
-        if let Some(agent_ura) = self.agent_ura.as_ref() {
-            body.insert("agent_ura".to_string(), Value::String(agent_ura.clone()));
-        }
-        if let Some(subject_ura) = self.subject_ura.as_ref() {
-            body.insert(
-                "subject_ura".to_string(),
-                Value::String(subject_ura.clone()),
-            );
-        }
-        Value::Object(body)
+        self.inner.to_request_json()
     }
 }
 
@@ -62,12 +50,12 @@ impl AbilityCatalogueClient {
     }
 
     pub(crate) fn fetch_local_value(&self) -> anyhow::Result<Value> {
-        invoke_local_ability("meta.list_abilities", self.query.to_request())
+        LocalRuntimeCatalogueReadIssuer::list_abilities(self.query.to_request())
     }
 
     pub(crate) fn fetch_local_abilities(&self) -> anyhow::Result<Vec<Value>> {
         let value = self.fetch_local_value()?;
-        Ok(Self::abilities_from_value(&value))
+        Self::abilities_from_value(&value)
     }
 
     pub(crate) fn fetch_remote_value(
@@ -84,43 +72,134 @@ impl AbilityCatalogueClient {
         action_label: &str,
     ) -> anyhow::Result<Vec<Value>> {
         let value = self.fetch_remote_value(node, action_label)?;
-        Ok(Self::abilities_from_value(&value))
+        Self::abilities_from_value(&value)
     }
 
-    pub(crate) fn abilities_from_value(value: &Value) -> Vec<Value> {
-        value
+    pub(crate) fn abilities_from_value(value: &Value) -> anyhow::Result<Vec<Value>> {
+        let entries = value
             .get("abilities")
             .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
+            .ok_or_else(|| {
+                anyhow::anyhow!("meta.list_abilities response missing abilities array")
+            })?;
+        entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                AbilityCatalogRow::parse(entry, index, "CLI meta.list_abilities")
+                    .map(AbilityCatalogRow::into_value)
+                    .map_err(anyhow::Error::msg)
+            })
+            .collect()
     }
 }
 
-#[cfg(feature = "axon-pb")]
 fn invoke_remote_catalogue(
     node: &str,
     request: Value,
-    _action_label: &str,
-) -> anyhow::Result<Value> {
-    let target_ura = crate::support::platform::remote_device::resolve_target_device_ura(node)?;
-    let caller_ura = crate::support::platform::remote_device::caller_device_ura_from_credentials();
-    let target_call = crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
-        &target_ura,
-        "meta.list_abilities",
-    )?;
-    crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target(
-        &target_call,
-        request,
-        caller_ura.as_deref(),
-    )
-    .with_context(|| format!("forward meta.list_abilities to target={target_ura}"))
-}
-
-#[cfg(not(feature = "axon-pb"))]
-fn invoke_remote_catalogue(
-    _node: &str,
-    _request: Value,
     action_label: &str,
 ) -> anyhow::Result<Value> {
-    Err(crate::support::platform::local_invoke::federation_not_wired_error(action_label))
+    invoke_remote_device_catalogue_read(node, request, action_label)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn catalog_row(name: &str, owner_ura: &str) -> Value {
+        AbilityCatalogRow::from_descriptor(
+            crate::daemon::ability::AbilityDescriptor::new(
+                name,
+                owner_ura,
+                crate::daemon::ability::descriptors::Visibility::Public,
+                crate::daemon::ability::descriptors::AdmissionAction::Stream,
+            )
+            .expect("test descriptor"),
+        )
+        .expect("test catalog row")
+        .into_value()
+    }
+
+    #[test]
+    fn abilities_from_value_requires_descriptor_bound_ref() {
+        let mut row = catalog_row(
+            "er.add",
+            "easynet:///r/acme/agent/device.dev.runtime-introspection",
+        );
+        row.as_object_mut()
+            .expect("catalog row object")
+            .remove("descriptor_ref");
+        let value = serde_json::json!({ "abilities": [row] });
+
+        let err = AbilityCatalogueClient::abilities_from_value(&value)
+            .expect_err("CLI catalogue must not synthesize descriptor_ref")
+            .to_string();
+
+        assert!(
+            err.contains("missing required field \"descriptor_ref\""),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn abilities_from_value_preserves_daemon_descriptor_ref() {
+        let row = catalog_row(
+            "er.add",
+            "easynet:///r/acme/agent/device.dev.runtime-introspection",
+        );
+        let descriptor_ref = row["descriptor_ref"].as_str().unwrap().to_string();
+        let value = serde_json::json!({ "abilities": [row] });
+
+        let abilities = AbilityCatalogueClient::abilities_from_value(&value)
+            .expect("descriptor-bound catalogue row");
+
+        assert_eq!(abilities[0]["descriptor_ref"], descriptor_ref);
+    }
+
+    #[test]
+    fn abilities_from_value_rejects_name_derived_owner_repair() {
+        let mut row = catalog_row(
+            "er.add",
+            "easynet:///r/acme/agent/device.dev.runtime-introspection",
+        );
+        row["owner_ura"] =
+            Value::String("easynet:///r/acme/agent/device.other.runtime-introspection".to_string());
+        let value = serde_json::json!({ "abilities": [row] });
+
+        let err = AbilityCatalogueClient::abilities_from_value(&value)
+            .expect_err("owner must be catalogue-bound, not derived by renderer")
+            .to_string();
+
+        assert!(
+            err.contains("wire ability_ura")
+                && err.contains("does not match canonical ability_ura"),
+            "got {err}"
+        );
+    }
+
+    #[test]
+    fn abilities_from_value_accepts_device_sponsored_agent_owner() {
+        let row = catalog_row("search", "easynet:///r/acme/agent/device.dev-1.mcp-default");
+        let value = serde_json::json!({ "abilities": [row] });
+
+        let abilities = AbilityCatalogueClient::abilities_from_value(&value)
+            .expect("device-sponsored Agent catalogue row must stay canonical");
+
+        assert_eq!(
+            abilities[0]["owner_ura"],
+            value["abilities"][0]["owner_ura"]
+        );
+        assert_eq!(
+            abilities[0]["ability_ura"],
+            value["abilities"][0]["ability_ura"]
+        );
+    }
+
+    #[test]
+    fn abilities_from_value_rejects_missing_abilities_array() {
+        let err = AbilityCatalogueClient::abilities_from_value(&serde_json::json!({}))
+            .expect_err("missing array must fail closed")
+            .to_string();
+        assert!(err.contains("missing abilities array"), "got {err}");
+    }
 }

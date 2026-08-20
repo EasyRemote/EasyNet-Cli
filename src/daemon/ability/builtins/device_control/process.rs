@@ -77,7 +77,11 @@ pub const PROFILE_VERSION: &str =
 
 /// Register the handler. Stateless; no per-call setup.
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner("process.exec", OwnerKind::Device, Arc::new(handler));
+    reg.register_rpc_with_owner(
+        "process.exec",
+        OwnerKind::locomotion_system(),
+        Arc::new(handler),
+    );
 }
 
 fn handler(args: Value) -> Result<Value> {

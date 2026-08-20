@@ -9,7 +9,7 @@
 //!     deleted in Phase 5a — `LedgerSink` is now the canonical
 //!     persistence surface for runtime outcomes).
 //!
-//! Axon's `easynet_axon::invocation` module already defines the
+//! Axon's `axon_sdk::invocation` module already defines the
 //! canonical implementations of every one of those concerns —
 //! `LocalRuntime`, `invoke_externally_signed_*`, `LedgerSink`,
 //! `KeyResolver`. The bridge layer here is the gradual handoff:
@@ -27,19 +27,22 @@
 //!     + `LedgerSink` at daemon boot.
 //!   * Phase 3 — registration sites write directly to the shared
 //!     `LocalRuntime`; there is no legacy registry mirror.
-//!   * Phase 4 — `dispatch_shim`: `runtime.invoke_remote` /
-//!     `federation.forward_invoke` dispatch arms route through the
+//!   * Phase 4 — `descriptor_bound_dispatch`: every daemon ingress route uses the
 //!     `local_runtime_request` factory and Axon's public
 //!     descriptor-bound request APIs instead of CLI's bespoke
-//!     dispatch. The wire shim itself depends on tonic-generated Axon
+//!     dispatch. The wire adapter itself depends on tonic-generated Axon
 //!     proto types and is therefore feature-gated with `axon-pb`.
-//!   * Phase 5 — the CLI-side parallel implementations get deleted.
+//!   * Phase 5 — the CLI-side parallel implementations are deleted.
 
-pub(crate) mod descriptor_ref;
 #[cfg(feature = "axon-pb")]
-pub mod dispatch_shim;
+pub mod descriptor_bound_dispatch;
+pub(crate) mod descriptor_ref;
 pub mod hot_agent_registrar;
 pub(crate) mod local_runtime_request;
+pub(crate) mod proof_owner;
+pub(crate) mod runtime_admin;
+#[cfg(feature = "axon-pb")]
+pub(crate) mod runtime_descriptor_provider;
 pub mod runtime_factory;
 #[cfg(feature = "axon-pb")]
 pub(crate) mod wire_descriptor;

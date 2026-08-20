@@ -9,21 +9,21 @@
 //   mission     = "mission" STRING "{" statement* "}"
 //   statement   = "let" IDENT "=" rhs | emit_stmt | rhs
 //   rhs         = call_expr | member_call
-//   call_expr   = "call" STRING ("on" STRING)? ("with" "{" field_list "}")? option*
-//   member_call = IDENT "." IDENT "(" named_arg_list? ")" option*
+//   call_expr   = "call" STRING "on" STRING ("with" "{" field_list "}")? option*
+//   member_call = (IDENT | STRING) "." IDENT "(" named_arg_list? ")" option*
 //   emit_stmt   = "emit" STRING "kind" (STRING | IDENT) "value" arg_value
 //   named_arg_list = named_arg ("," named_arg)*
 //   named_arg   = IDENT ":" arg_value
 //   arg_value   = STRING | INT | FLOAT | BOOL | var_ref
 //   var_ref     = IDENT "." "output"
 //   option      = "timeout" INT | "retries" INT | "on_failure" POLICY | "optional"
-//   field       = IDENT "=" (STRING | INT | FLOAT | BOOL | IDENT "." "output")
+//   field       = IDENT "=" arg_value
 //
 // EAL surface invariant (LOAD-BEARING — see docs/AGENT_IDENTITY.md):
 //
 //   member-call form (agent.ability) is the ONLY way to invoke an agent.
 //   traditional call form (call ... on ...) is STRICTLY device-only.
-//   No implicit agent fallback is allowed.
+//   Traditional agent-name collisions are rejected.
 //
 // The two surface productions intentionally lower to DIFFERENT IR
 // target variants:
@@ -38,9 +38,9 @@
 //
 // If a user writes `call "chat" on "claude"` (traditional form, name
 // collides with a registered agent), the system rejects it at
-// run_mission_inproc time with an error pointing at the correct
-// member-call form. See `cli/mission_runs.rs::find_implicit_agent_fallback`
-// and the `no_implicit_agent_fallback_*` test trio in the same file.
+// MissionRunner execution with an error pointing at the correct
+// member-call form. See `cli/mission_runs.rs::find_traditional_agent_target_conflict`
+// and the `traditional_agent_target_conflict_*` test trio in the same file.
 //
 // Grammar ambiguity guard:
 //   `arg_value` only allows `IDENT.output` for var-refs, not the general
@@ -320,11 +320,13 @@ impl Parser {
     /// "..."` form or the member-call `agent.ability(args)` form. The
     /// branch is chosen by looking at the current token plus one
     /// lookahead — `Call` keyword takes the traditional path, an
-    /// identifier followed by `.` takes the member-call path.
+    /// identifier or quoted agent id followed by `.` takes the member-call
+    /// path.
     fn parse_rhs(&mut self) -> anyhow::Result<CallExpr> {
         match self.peek() {
             Token::Call => self.parse_call_expr(),
             Token::Ident(_) if *self.peek_at(1) == Token::Dot => self.parse_member_call(),
+            Token::StringLit(_) if *self.peek_at(1) == Token::Dot => self.parse_member_call(),
             t => anyhow::bail!("expected `call ...` or `<agent>.<ability>(...)`, got {t:?}"),
         }
     }
@@ -332,12 +334,8 @@ impl Parser {
     fn parse_call_expr(&mut self) -> anyhow::Result<CallExpr> {
         self.expect(&Token::Call)?;
         let function_name = self.expect_string()?;
-        let target_node = if *self.peek() == Token::On {
-            self.advance();
-            Some(self.expect_string()?)
-        } else {
-            None
-        };
+        self.expect(&Token::On)?;
+        let target_node = Some(self.expect_string()?);
         let arguments = if *self.peek() == Token::With {
             self.advance();
             self.expect(&Token::LBrace)?;
@@ -360,13 +358,19 @@ impl Parser {
     }
 
     /// Parse a member-call form: `<agent>.<ability>(name: value, ...)`.
+    /// Agent ids that are valid EasyNet `AgentId`s but not EAL bare
+    /// identifiers, such as `er-agent`, use the quoted form
+    /// `"er-agent".chat(...)`.
     /// Lowers to a `CallExpr` with `target_kind = TargetKind::Agent`.
     /// The planner uses `target_kind` to choose the IR target variant
     /// (`IrTarget::Agent` here vs `IrTarget::Device` for the
     /// traditional form). The runtime dispatcher matches the resolved
     /// `IrTarget` and never re-classifies based on names.
     fn parse_member_call(&mut self) -> anyhow::Result<CallExpr> {
-        let agent = self.expect_ident()?;
+        let agent = match self.advance() {
+            Token::Ident(s) | Token::StringLit(s) => s,
+            t => anyhow::bail!("expected member-call agent id, got {t:?}"),
+        };
         self.expect(&Token::Dot)?;
         let ability = self.expect_ident()?;
         self.expect(&Token::LParen)?;
@@ -499,11 +503,11 @@ impl Parser {
 
     /// Parse one value inside a `with { ... }` field block.
     ///
-    /// Unlike `parse_arg_value` (member-call named args), this form
-    /// silently coerces a bare identifier to a string literal for
-    /// legacy ergonomics with the traditional `call "..." on "..." with
-    /// { key = value }` production. Everything else — var-refs, scalars
-    /// — behaves identically.
+    /// Traditional and member-call surfaces intentionally share the same
+    /// value grammar: scalar literals or explicit `<binding>.output` /
+    /// `<loop>.result` references. Bare identifiers are rejected instead of
+    /// silently coerced to strings so authoring cannot depend on a
+    /// legacy string fallback that the member-call surface already rejects.
     ///
     /// See `parse_arg_value` for the destructure-in-one-step rationale.
     fn parse_value(&mut self) -> anyhow::Result<FieldValue> {
@@ -522,7 +526,10 @@ impl Parser {
                     ),
                 };
             }
-            return Ok(FieldValue::String(ident));
+            anyhow::bail!(
+                "bare identifier '{ident}' is not a valid field value; \
+                 use a string literal, number, bool, '<var>.output', or '<loop>.result'"
+            );
         }
         match self.advance() {
             Token::StringLit(s) => Ok(FieldValue::String(s)),
@@ -701,6 +708,15 @@ mod tests {
     }
 
     #[test]
+    fn member_call_accepts_quoted_agent_id_for_non_eal_identifier() {
+        let p = parse(r#"mission "t" { let r = "er_agent_20260719-071307".chat(prompt: "hi") }"#)
+            .unwrap();
+        let c = extract_call(&p, 0);
+        assert_eq!(c.function_name, "chat");
+        assert_eq!(c.target_node.as_deref(), Some("er_agent_20260719-071307"));
+    }
+
+    #[test]
     fn member_call_no_args() {
         let p = parse(r#"mission "t" { let r = claude.ping() }"#).unwrap();
         let c = extract_call(&p, 0);
@@ -766,12 +782,34 @@ mod tests {
     }
 
     #[test]
+    fn traditional_call_requires_explicit_device_target() {
+        let err = parse(r#"mission "t" { let r = call "chat" with { prompt = "hi" } }"#)
+            .expect_err("traditional call must not default the device target");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("expected On"),
+            "missing `on` must fail at parse time, got: {msg}"
+        );
+    }
+
+    #[test]
     fn member_call_rejects_bare_ident_as_value() {
         // Bare identifiers in named-arg position are rejected to keep the
         // grammar zero-lookahead — we don't want a future feature creep
         // to accidentally make `(prompt: foo)` resolve as a string.
         let r = parse(r#"mission "t" { let r = claude.chat(prompt: foo) }"#);
         assert!(r.is_err(), "bare identifier should be rejected");
+    }
+
+    #[test]
+    fn traditional_call_rejects_bare_ident_as_value() {
+        let err = parse(r#"mission "t" { let r = call "chat" on "node-1" with { prompt = foo } }"#)
+            .expect_err("traditional call must not coerce bare identifiers to strings");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bare identifier 'foo' is not a valid field value"),
+            "unexpected bare identifier error: {msg}"
+        );
     }
 
     // ── PR-10 control-flow blocks (RFC §3) ─────────────────────────────────

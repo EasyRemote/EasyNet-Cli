@@ -73,9 +73,21 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
+
+pub(crate) mod stdio;
+
+const MAX_CHILD_STDIO_LINE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_CHILD_STDIO_FRAME_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ChildStdioLineRead {
+    Eof,
+    Line,
+    TooLong,
+}
 
 /// Config row for one upstream MCP server. Mirrors the shape of
 /// `~/.claude/mcp_servers.json` so an operator who already runs
@@ -658,16 +670,18 @@ impl McpClientService {
     /// Canonical operator config path for outbound MCP clients.
     /// Shared by daemon boot, the MCP executor, and CLI authoring
     /// commands so every surface reads the same server catalogue.
-    pub fn default_config_path() -> PathBuf {
-        std::env::var("EASYNET_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                std::env::var("HOME")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|_| PathBuf::from("."))
-                    .join(".easynet")
-            })
-            .join("mcp_clients.json")
+    pub fn default_config_path() -> anyhow::Result<PathBuf> {
+        if let Some(home) = std::env::var_os("EASYNET_HOME").filter(|value| !value.is_empty()) {
+            return Ok(PathBuf::from(home).join("mcp_clients.json"));
+        }
+        if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
+            return Ok(PathBuf::from(home)
+                .join(".easynet")
+                .join("mcp_clients.json"));
+        }
+        anyhow::bail!(
+            "MCP client config path requires EASYNET_HOME or HOME; refusing current-directory fallback"
+        );
     }
 
     /// Drop every cached upstream connection (stdio child handles,
@@ -1163,27 +1177,85 @@ async fn write_stdio_message(
     Ok(())
 }
 
-async fn read_stdio_message(
-    stdout: &mut BufReader<ChildStdout>,
-    framing: &str,
-    method: &str,
-) -> anyhow::Result<Value> {
+async fn read_stdio_message<R>(stdout: &mut R, framing: &str, method: &str) -> anyhow::Result<Value>
+where
+    R: AsyncBufRead + AsyncRead + Unpin,
+{
     if framing == "line" {
         return read_stdio_line(stdout, method).await;
     }
     read_mcp_frame(stdout, method).await
 }
 
-async fn read_stdio_line(
-    stdout: &mut BufReader<ChildStdout>,
-    method: &str,
-) -> anyhow::Result<Value> {
+async fn read_bounded_child_stdio_line<R>(
+    stdout: &mut R,
+    line: &mut Vec<u8>,
+    max_bytes: usize,
+) -> std::io::Result<ChildStdioLineRead>
+where
+    R: AsyncBufRead + Unpin,
+{
+    line.clear();
+    let mut saw_input = false;
+    let mut too_long = false;
+
     loop {
-        let mut buf = String::new();
-        let n = stdout.read_line(&mut buf).await?;
-        if n == 0 {
-            anyhow::bail!("MCP server closed stdout before responding to `{method}`");
+        let (consumed, found_newline) = {
+            let available = stdout.fill_buf().await?;
+            if available.is_empty() {
+                return Ok(if !saw_input {
+                    ChildStdioLineRead::Eof
+                } else if too_long {
+                    ChildStdioLineRead::TooLong
+                } else {
+                    ChildStdioLineRead::Line
+                });
+            }
+
+            saw_input = true;
+            let consumed = available
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(available.len(), |index| index + 1);
+            if !too_long {
+                let remaining = max_bytes.saturating_sub(line.len());
+                let copied = consumed.min(remaining);
+                line.extend_from_slice(&available[..copied]);
+                too_long = copied < consumed;
+            }
+            (consumed, available[..consumed].contains(&b'\n'))
+        };
+        stdout.consume(consumed);
+
+        if found_newline {
+            return Ok(if too_long {
+                ChildStdioLineRead::TooLong
+            } else {
+                ChildStdioLineRead::Line
+            });
         }
+    }
+}
+
+async fn read_stdio_line<R>(stdout: &mut R, method: &str) -> anyhow::Result<Value>
+where
+    R: AsyncBufRead + Unpin,
+{
+    let mut buf = Vec::with_capacity(8 * 1024);
+    loop {
+        match read_bounded_child_stdio_line(stdout, &mut buf, MAX_CHILD_STDIO_LINE_BYTES).await? {
+            ChildStdioLineRead::Eof => {
+                anyhow::bail!("MCP server closed stdout before responding to `{method}`");
+            }
+            ChildStdioLineRead::TooLong => {
+                anyhow::bail!(
+                    "MCP server stdout line exceeds maximum length ({MAX_CHILD_STDIO_LINE_BYTES} bytes)"
+                );
+            }
+            ChildStdioLineRead::Line => {}
+        }
+        let buf = std::str::from_utf8(&buf)
+            .map_err(|e| anyhow::anyhow!("MCP server stdout was not valid UTF-8: {e}"))?;
         let trimmed = buf.trim();
         if trimmed.is_empty() {
             continue;
@@ -1196,23 +1268,40 @@ async fn read_stdio_line(
     }
 }
 
-async fn read_mcp_frame(
-    stdout: &mut BufReader<ChildStdout>,
-    method: &str,
-) -> anyhow::Result<Value> {
+async fn read_mcp_frame<R>(stdout: &mut R, method: &str) -> anyhow::Result<Value>
+where
+    R: AsyncBufRead + AsyncRead + Unpin,
+{
+    let mut line = Vec::with_capacity(8 * 1024);
     loop {
         let mut content_length = None;
 
         loop {
-            let mut line = String::new();
-            let n = stdout.read_line(&mut line).await?;
-            if n == 0 {
-                anyhow::bail!("MCP server closed stdout before responding to `{method}`");
+            match read_bounded_child_stdio_line(stdout, &mut line, MAX_CHILD_STDIO_LINE_BYTES)
+                .await?
+            {
+                ChildStdioLineRead::Eof => {
+                    anyhow::bail!("MCP server closed stdout before responding to `{method}`");
+                }
+                ChildStdioLineRead::TooLong => {
+                    anyhow::bail!(
+                        "MCP server stdout header exceeds maximum length ({MAX_CHILD_STDIO_LINE_BYTES} bytes)"
+                    );
+                }
+                ChildStdioLineRead::Line => {}
             }
 
+            let line = std::str::from_utf8(&line).map_err(|e| {
+                anyhow::anyhow!("MCP server stdout header was not valid UTF-8: {e}")
+            })?;
             let trimmed = line.trim_end_matches(['\r', '\n']);
             if trimmed.is_empty() {
                 if let Some(len) = content_length {
+                    if len > MAX_CHILD_STDIO_FRAME_BYTES {
+                        anyhow::bail!(
+                            "MCP Content-Length {len} exceeds maximum frame length ({MAX_CHILD_STDIO_FRAME_BYTES} bytes)"
+                        );
+                    }
                     let mut body = vec![0_u8; len];
                     stdout.read_exact(&mut body).await?;
                     return serde_json::from_slice(&body)
@@ -1240,6 +1329,50 @@ async fn read_mcp_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn mcp_child_stdio_bounded_reader_drains_oversized_line() {
+        let input = format!("{}\n{{\"jsonrpc\":\"2.0\",\"id\":2}}\n", "x".repeat(4096));
+        let mut reader = BufReader::with_capacity(64, input.as_bytes());
+        let mut line = Vec::new();
+
+        assert_eq!(
+            read_bounded_child_stdio_line(&mut reader, &mut line, 128)
+                .await
+                .unwrap(),
+            ChildStdioLineRead::TooLong
+        );
+        assert_eq!(line.len(), 128);
+
+        assert_eq!(
+            read_bounded_child_stdio_line(&mut reader, &mut line, 128)
+                .await
+                .unwrap(),
+            ChildStdioLineRead::Line
+        );
+        assert_eq!(
+            line,
+            br#"{"jsonrpc":"2.0","id":2}
+"#
+        );
+    }
+
+    #[tokio::test]
+    async fn read_mcp_frame_rejects_oversized_content_length_before_body_allocation() {
+        let input = format!(
+            "Content-Length: {}\r\n\r\n",
+            MAX_CHILD_STDIO_FRAME_BYTES + 1
+        );
+        let mut reader = BufReader::new(input.as_bytes());
+        let err = read_mcp_frame(&mut reader, "tools/list")
+            .await
+            .expect_err("oversized content-length must fail before body allocation");
+
+        assert!(
+            format!("{err}").contains("exceeds maximum frame length"),
+            "unexpected error: {err}"
+        );
+    }
 
     #[test]
     fn empty_service_has_no_servers() {
@@ -1285,6 +1418,90 @@ mod tests {
         std::fs::write(&p, b"not json at all").unwrap();
         let err = McpClientService::from_path(&p).unwrap_err();
         assert!(format!("{err}").contains("parse"));
+    }
+
+    #[test]
+    fn default_config_path_prefers_explicit_easynet_home() {
+        let _env = TestMcpConfigEnv::locked();
+        let directory = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("EASYNET_HOME", directory.path());
+        std::env::set_var("HOME", "/must/not/be/used");
+
+        let path = McpClientService::default_config_path().expect("explicit EASYNET_HOME");
+
+        assert_eq!(path, directory.path().join("mcp_clients.json"));
+    }
+
+    #[test]
+    fn default_config_path_uses_home_state_dir_without_current_directory_fallback() {
+        let _env = TestMcpConfigEnv::locked();
+        let directory = tempfile::tempdir().expect("tempdir");
+        std::env::remove_var("EASYNET_HOME");
+        std::env::set_var("HOME", directory.path());
+
+        let path = McpClientService::default_config_path().expect("HOME path");
+
+        assert_eq!(
+            path,
+            directory.path().join(".easynet").join("mcp_clients.json")
+        );
+        assert!(path.ends_with(".easynet/mcp_clients.json"), "{path:?}");
+        assert!(
+            path.is_absolute(),
+            "default MCP client config path must stay anchored to HOME"
+        );
+    }
+
+    #[test]
+    fn default_config_path_rejects_missing_home_instead_of_current_directory_fallback() {
+        let _env = TestMcpConfigEnv::locked();
+        std::env::remove_var("EASYNET_HOME");
+        std::env::remove_var("HOME");
+
+        let error =
+            McpClientService::default_config_path().expect_err("missing home must fail closed");
+
+        assert!(
+            error
+                .to_string()
+                .contains("refusing current-directory fallback"),
+            "{error:#}"
+        );
+    }
+
+    struct TestMcpConfigEnv {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        easynet_home: Option<std::ffi::OsString>,
+        home: Option<std::ffi::OsString>,
+    }
+
+    impl TestMcpConfigEnv {
+        fn locked() -> Self {
+            static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+            let lock = ENV_LOCK
+                .get_or_init(|| std::sync::Mutex::new(()))
+                .lock()
+                .expect("mcp config env lock");
+            Self {
+                _lock: lock,
+                easynet_home: std::env::var_os("EASYNET_HOME"),
+                home: std::env::var_os("HOME"),
+            }
+        }
+    }
+
+    impl Drop for TestMcpConfigEnv {
+        fn drop(&mut self) {
+            restore_env_var("EASYNET_HOME", self.easynet_home.take());
+            restore_env_var("HOME", self.home.take());
+        }
+    }
+
+    fn restore_env_var(name: &str, value: Option<std::ffi::OsString>) {
+        match value {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
     }
 
     #[test]

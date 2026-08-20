@@ -5,7 +5,7 @@
 # says the byte-for-byte contract between this repo and the EasyNet
 # backend is the fixture file — this repo's copy lives at
 # `tests/fixtures/a2a-v2/golden.json`; the backend carries an identical
-# copy at `backend/internal/axon/testdata/a2a-v2-golden.json`. A diff
+# copy at `backend/internal/runtimecontract/testdata/a2a-v2-golden.json`. A diff
 # between the two is a three-way merge mistake and must fail CI.
 #
 # Run from the EasyNet-Cli repo root; points at the sibling EasyNet
@@ -17,7 +17,7 @@ set -euo pipefail
 
 CLI_FIXTURE="tests/fixtures/a2a-v2/golden.json"
 BACKEND_REPO="${EASYNET_REPO_ROOT:-../EasyNet}"
-BACKEND_FIXTURE="${BACKEND_REPO}/backend/internal/axon/testdata/a2a-v2-golden.json"
+BACKEND_FIXTURE="${BACKEND_REPO}/backend/internal/runtimecontract/testdata/a2a-v2-golden.json"
 
 if [[ ! -f "$CLI_FIXTURE" ]]; then
   echo "check-a2a-v2-fixture-parity: MISSING $CLI_FIXTURE" >&2

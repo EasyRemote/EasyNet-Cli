@@ -52,14 +52,14 @@ pub struct HomeGuard {
     prev_home: Option<String>,
     prev_axon_log_dir: Option<String>,
     /// Snapshot of `EASYNET_PAGES_USER` at guard construction.
-    /// HomeGuard pins this var to `"self"` for the test duration so
-    /// every HOME-touching test sees the same `<user>.api_key.*` /
-    /// `<user>.pages.*` / `<user>.files.*` registration set —
-    /// regardless of what an earlier test on the same thread (or
-    /// a parallel test that didn't take the home_lock) set it to.
     /// Restored on drop. The home_lock above guarantees one
     /// HomeGuard at a time, so the swap window is exclusive.
     prev_pages_user: Option<String>,
+    /// Snapshot of `EASYNET_PAGES_REALM` at guard construction.
+    /// Cleared with `EASYNET_PAGES_USER` so tests observe the same
+    /// unpaired Pages identity projection that production uses when
+    /// no credentials are present.
+    prev_pages_realm: Option<String>,
 }
 
 impl HomeGuard {
@@ -107,11 +107,13 @@ impl HomeGuard {
         // Why clear (not pin to a value): pinning would still
         // register `<that-value>.api_key.*` etc., which (a) leaks
         // into every published-ability test's expected catalogue
-        // and (b) reintroduces the `legacy self alias` placeholder M5 banned.
+        // and (b) reintroduces a placeholder owner instead of an explicit URA.
         // An empty / absent var is the production "unpaired"
         // shape and the registry agrees by skipping registration.
         let prev_pages_user = std::env::var("EASYNET_PAGES_USER").ok();
         std::env::remove_var("EASYNET_PAGES_USER");
+        let prev_pages_realm = std::env::var("EASYNET_PAGES_REALM").ok();
+        std::env::remove_var("EASYNET_PAGES_REALM");
 
         Self {
             _lock: lock,
@@ -119,6 +121,7 @@ impl HomeGuard {
             prev_home,
             prev_axon_log_dir,
             prev_pages_user,
+            prev_pages_realm,
         }
     }
 }
@@ -142,6 +145,10 @@ impl Drop for HomeGuard {
         match self.prev_pages_user.take() {
             Some(u) => std::env::set_var("EASYNET_PAGES_USER", u),
             None => std::env::remove_var("EASYNET_PAGES_USER"),
+        }
+        match self.prev_pages_realm.take() {
+            Some(r) => std::env::set_var("EASYNET_PAGES_REALM", r),
+            None => std::env::remove_var("EASYNET_PAGES_REALM"),
         }
         let _ = std::fs::remove_dir_all(&self.temp_dir);
     }

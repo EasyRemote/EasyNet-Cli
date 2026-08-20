@@ -212,7 +212,7 @@ URA 拉取的全过程。附录 B（\texttt{easynet.web\_app} 压力测试）以
 \S3 RC-INV-2 乐观并发      & \S\ref{sec:algo-concurrency}：\texttt{ETag} = 规范哈希前 16 字节。 \\
 \S4 Transition Ability     & \S\ref{sec:wire-schemas}：每个 page transition 的 \texttt{transition\_id}。 \\
 \S5 权限 + 委托            & Phase 1：owner\_agent 本地签名；pages 不需要委托执行。 \\
-\S5 principal/ caller      & \S\ref{sec:hub}：Hub 按请求铸造 \texttt{human-anon} URI。 \\
+\S5 principal/ caller      & \S\ref{sec:hub}：Hub 按请求铸造 \texttt{human-anon} URA。 \\
 \S6 视图投影               & \S\ref{sec:algo-views}：human\_view 与 agent\_view 算法。 \\
 \S7 回执索引               & \S\ref{sec:storage}：除 receipt\_id 之外的 state\_key 索引。 \\
 \bottomrule
@@ -235,11 +235,11 @@ URA 拉取的全过程。附录 B（\texttt{easynet.web\_app} 压力测试）以
 state_type:  easynet.page
 
 state_key:
-    (realm: string, owner_agent_uri: string, slug: string)
+    (realm: string, owner_agent_ura: string, slug: string)
 
   realm           逻辑命名空间。Phase 1：每个守护进程一个 realm，
                   在配置中命名（默认 "default"）。
-  owner_agent_uri 规范权限。即为本 page 每个 CanonicalReceipt
+  owner_agent_ura 规范权限。即为本 page 每个 CanonicalReceipt
                   签名的 agent。按主文 §1.3 嵌在 key 内（不是字段）。
   slug            owner 命名空间内的 kebab-case 标识符
                   (^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$)。
@@ -632,7 +632,7 @@ returns:
 \end{lstlisting}
 
 \texttt{pages.get@v1} 产生一个 \texttt{OperationalReceipt}，记录此次读、
-caller URI 以及（来自 Hub 时）\texttt{caller\_context}（主文 \S3.6）。
+caller URA 以及（来自 Hub 时）\texttt{caller\_context}（主文 \S3.6）。
 
 \subsection{pages.list@v1（查询）}
 
@@ -884,7 +884,7 @@ src/bin/easynet-hub.rs               ← 新增（P-A4）
 src/runtime/hub/                     ← 新增（P-A4）
   mod.rs
   router.rs                          path 解析、view 选择
-  caller.rs                          principal/human-anon URI 铸造
+  caller.rs                          principal/human-anon URA 铸造
                                      + caller_context 抽取
 
 src/runtime/eal_hint.rs              ← 新增（P-A5）
@@ -931,12 +931,12 @@ GET  /healthz                          -> 200 "ok"
 
 Hub 是守护进程的客户端：它不直接访问 state store。每次视图拉取
 都是一个对守护进程的 \texttt{pages.get@v1} 调用，envelope 按主文
-\S5.4 填（caller URI 为 \texttt{principal/human-anon/...}，
+\S5.4 填（caller URA 为 \texttt{principal/human-anon/...}，
 caller\_context 按主文 \S3.6 填）。
 
 \textbf{信任边界。} Hub 被允许铸造 \texttt{principal/human-anon}
 caller，但不能铸造任意 \texttt{agent/} caller。守护进程在准入时
-校验 caller URI；如果一个 \texttt{agent/} URI 来自 Hub 但不匹配
+校验 caller URA；如果一个 \texttt{agent/} URA 来自 Hub 但不匹配
 Hub 的授权令牌（Phase 1 是带外共享 secret；RFC-008 会替换为正规签名），
 则拒绝。
 
@@ -1069,7 +1069,7 @@ CSP 头恒定。
 \begin{enumerate}[leftmargin=2.2em,itemsep=0.1em]
     \item 解析 path $\to$ \texttt{(realm, owner, slug)} $\to$
     \texttt{state\_key}。
-    \item 构 envelope：caller URI 为
+    \item 构 envelope：caller URA 为
     \texttt{principal/human-anon/<ip-hash>/<session-id>}
     （\S\ref{sec:hub}）；\texttt{caller\_context} 从 HTTP 头填。
     \item 调用守护进程的 \texttt{pages.get@v1}。
@@ -1315,7 +1315,7 @@ TA-INV-1（必须带 transition\_id）        & 每个 \texttt{pages.<verb>@v1} 
 VP-INV-1（ability\_surface 来自 state）  & \texttt{derive\_ability\_surface} match 块               & \S\ref{sec:algo-views} \\
 TR-INV-7（multi-view 一等公民）          & \texttt{human\_view} + \texttt{agent\_view} 均已实现     & \S\ref{sec:algo-views} \\
 TR-INV-11（URA-receipt 可追踪）          & \texttt{/.receipts} endpoint + idx\_owner 索引           & \S\ref{sec:storage}, \S\ref{sec:e2e} \\
-TR-INV-12（principal/human-anon）        & \texttt{build\_envelope} 铸造该 URI                      & \S\ref{sec:hub} \\
+TR-INV-12（principal/human-anon）        & \texttt{build\_envelope} 铸造该 URA                      & \S\ref{sec:hub} \\
 TR-INV-13（caller\_context）             & 由 \texttt{build\_envelope} 填充；进入 operational receipt & \S\ref{sec:hub}, \S\ref{sec:e2e} \\
 \bottomrule
 \end{tabularx}

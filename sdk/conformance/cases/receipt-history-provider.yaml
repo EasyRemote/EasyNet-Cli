@@ -1,0 +1,20 @@
+id: receipt/history_provider
+profile: receipts
+required_for:
+  - go
+  - python
+description: Receipt, causal, history and trace reads use one bounded generic runtime contract with daemon-owned opaque cursors while canonical receipt parsing and verification remain Axon-owned.
+steps:
+  - action: project_axon_receipt_reference
+  - action: delegate_axon_receipt_verification
+  - action: require_bounded_history_query
+  - action: accept_opaque_history_cursor
+  - action: reject_repeated_history_cursor
+  - action: require_exact_history_lookup
+  - action: require_typed_trace_graph
+expect:
+  result: receipt_history_provider
+  provider_required: true
+  maximum_page_size: 500
+  stable_cursor_available: true
+  product_projection: false

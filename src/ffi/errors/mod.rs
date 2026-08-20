@@ -4,7 +4,7 @@
 // File: src/ffi/errors.rs
 // Description: Integer error codes returned across the C ABI,
 //              plus a thread-local "last error message" buffer the
-//              caller queries via `easynet_last_error()` when an
+//              caller queries via `runtime_last_error_json()` when an
 //              exported function returns a non-zero code.
 //
 // Why an i32 + TLS, not exceptions / Result
@@ -17,24 +17,24 @@
 //
 // Thread-local rather than handle-local: the last-error read must
 // succeed even when the error happened *before* a handle was
-// obtained (e.g. `easynet_init` failed), so a per-thread slot is
+// obtained (e.g. `runtime_init` failed), so a per-thread slot is
 // the right granularity. Every exported function that can fail
 // writes its error message here before returning a non-zero code.
 //
 // Stability
 // ---------
 // Error codes are part of the ABI. Renaming or renumbering any
-// `pub const ERR_*` requires a `EASYNET_ABI_VERSION` bump.
+// `pub const ERR_*` requires a `RUNTIME_ABI_VERSION` bump.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::cell::RefCell;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
 /// Success. Exported function completed without error.
-pub const EASYNET_OK: i32 = 0;
+pub const RUNTIME_OK: i32 = 0;
 
 /// Generic / unclassified error. Prefer a more specific code when
 /// possible; this is the catch-all for programmer error paths.
@@ -52,7 +52,7 @@ pub const ERR_INVALID_UTF8: i32 = 3;
 pub const ERR_INVALID_HANDLE: i32 = 4;
 
 /// The library has not been initialised (or was shut down). Call
-/// `easynet_init()` first.
+/// `runtime_init()` first.
 pub const ERR_NOT_INITIALIZED: i32 = 5;
 
 /// The library was initialised twice from the same process. Use
@@ -101,23 +101,58 @@ pub const ERR_TIMEOUT: i32 = 16;
 
 thread_local! {
     /// Per-thread last-error message. Rust storage owns the
-    /// `CString`; the pointer returned by `easynet_last_error()` is
-    /// borrowed from this storage and is only valid until the next
-    /// call on the same thread that writes a new error.
-    static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
+    /// `CString`; typed JSON projection copies this message for the caller.
+    static LAST_ERROR: RefCell<Option<LastErrorRecord>> = const { RefCell::new(None) };
 }
 
-/// Record an error message for later retrieval by
-/// `easynet_last_error`. Called internally from exported functions
-/// immediately before returning a non-zero code.
-pub(crate) fn set_last_error(msg: impl Into<String>) {
+struct LastErrorRecord {
+    message: CString,
+    code: i32,
+    projection: Option<ErrorProjection>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ErrorProjection {
+    pub(crate) code: &'static str,
+    pub(crate) stage: &'static str,
+    pub(crate) retry: &'static str,
+}
+
+/// Record an error code plus message for typed error projection.
+/// Existing C ABI callers still branch on the returned integer; this
+/// helper lets newer bindings also retrieve a schema-backed JSON DTO
+/// without parsing the human-readable last-error string.
+pub(crate) fn set_last_error_code(code: i32, msg: impl Into<String>) {
+    set_last_error_record(code, None, msg);
+}
+
+/// Record an ABI code with a more precise canonical runtime error
+/// projection.
+///
+/// The returned integer code remains ABI-stable for existing C callers.
+/// Newer bindings consume `runtime_last_error_json` and should receive the
+/// canonical runtime failure domain for the specific operation instead of a
+/// coarse ABI bucket.
+pub(crate) fn set_last_error_projection(
+    code: i32,
+    projection: ErrorProjection,
+    msg: impl Into<String>,
+) {
+    set_last_error_record(code, Some(projection), msg);
+}
+
+fn set_last_error_record(code: i32, projection: Option<ErrorProjection>, msg: impl Into<String>) {
     let s = msg.into();
     // Strip any interior NULs so the CString construction cannot
     // fail on well-formed Rust strings that happen to contain a \0.
     let sanitized: String = s.chars().filter(|c| *c != '\0').collect();
     let c = CString::new(sanitized).unwrap_or_else(|_| CString::new("(unrepresentable)").unwrap());
     LAST_ERROR.with(|slot| {
-        *slot.borrow_mut() = Some(c);
+        *slot.borrow_mut() = Some(LastErrorRecord {
+            message: c,
+            code,
+            projection,
+        });
     });
 }
 
@@ -130,59 +165,412 @@ pub(crate) fn clear_last_error() {
     });
 }
 
-/// Return a borrowed pointer to the thread-local last-error
-/// message. The pointer is valid until the next error-recording
-/// call on the same thread. Returns NULL when no error is recorded.
+/// Return the current thread's typed last-error JSON.
+///
+/// The returned string is caller-owned and must be released with
+/// `runtime_string_free`. When no error is recorded, this returns the
+/// JSON literal `null`.
 ///
 /// # Safety
-/// The caller must not free the returned pointer nor use it across
-/// a subsequent call that records a new error on the same thread.
+/// `out_error_json` must be a non-null caller-owned pointer.
 #[no_mangle]
-pub extern "C" fn easynet_last_error() -> *const c_char {
-    LAST_ERROR.with(|slot| match &*slot.borrow() {
-        Some(c) => c.as_ptr(),
-        None => std::ptr::null(),
+pub unsafe extern "C" fn runtime_last_error_json(out_error_json: *mut *mut c_char) -> i32 {
+    if out_error_json.is_null() {
+        set_last_error_code(
+            ERR_NULL_POINTER,
+            "runtime_last_error_json: out_error_json pointer is null",
+        );
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_error_json = std::ptr::null_mut() };
+
+    let json = LAST_ERROR.with(|slot| match &*slot.borrow() {
+        Some(record) => typed_error_json_with_projection(
+            record.code,
+            record.projection,
+            record.message.to_string_lossy().as_ref(),
+        ),
+        None => serde_json::Value::Null,
+    });
+    write_json_output("runtime_last_error_json", out_error_json, json)
+}
+
+/// Project a stable C ABI error code and optional message into the
+/// shared `RuntimeError` JSON DTO.
+///
+/// Bindings that already have a non-zero return code can call this
+/// directly and branch on `code` in the returned JSON.
+///
+/// # Safety
+/// `message` may be null; null means the caller has no message for this
+/// explicit code projection. It does not read the TLS last-error slot; callers
+/// that need the recorded last error must use `runtime_last_error_json`.
+/// If non-null it must be a valid UTF-8 C string.
+/// `out_error_json` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn runtime_error_json(
+    code: i32,
+    message: *const c_char,
+    out_error_json: *mut *mut c_char,
+) -> i32 {
+    if out_error_json.is_null() {
+        set_last_error_code(
+            ERR_NULL_POINTER,
+            "runtime_error_json: out_error_json pointer is null",
+        );
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_error_json = std::ptr::null_mut() };
+
+    let message = if message.is_null() {
+        String::new()
+    } else {
+        match unsafe { CStr::from_ptr(message) }.to_str() {
+            Ok(value) => value.to_string(),
+            Err(_) => {
+                set_last_error_code(
+                    ERR_INVALID_UTF8,
+                    "runtime_error_json: message is not valid UTF-8",
+                );
+                return ERR_INVALID_UTF8;
+            }
+        }
+    };
+
+    let json = if code == RUNTIME_OK {
+        serde_json::Value::Null
+    } else {
+        typed_error_json(code, &message)
+    };
+    write_json_output("runtime_error_json", out_error_json, json)
+}
+
+#[cfg(test)]
+fn last_error_message() -> Option<String> {
+    LAST_ERROR.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .map(|record| record.message.to_string_lossy().into_owned())
     })
+}
+
+fn write_json_output(
+    function: &'static str,
+    out_error_json: *mut *mut c_char,
+    json: serde_json::Value,
+) -> i32 {
+    let ptr = alloc_output_cstring(json.to_string());
+    if ptr.is_null() {
+        set_last_error_code(
+            ERR_GENERIC,
+            format!("{function}: out-of-memory allocating error JSON"),
+        );
+        return ERR_GENERIC;
+    }
+    unsafe { *out_error_json = ptr };
+    RUNTIME_OK
+}
+
+fn alloc_output_cstring(s: impl Into<String>) -> *mut c_char {
+    let sanitized: String = s.into().chars().filter(|c| *c != '\0').collect();
+    match CString::new(sanitized) {
+        Ok(c) => c.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+fn typed_error_json(code: i32, message: &str) -> serde_json::Value {
+    typed_error_json_with_projection(code, None, message)
+}
+
+fn typed_error_json_with_projection(
+    code: i32,
+    projection: Option<ErrorProjection>,
+    message: &str,
+) -> serde_json::Value {
+    let metadata = error_metadata(code);
+    let canonical_code = projection.map(|value| value.code).unwrap_or(metadata.code);
+    let stage = projection
+        .map(|value| value.stage)
+        .unwrap_or(metadata.stage);
+    let retry = projection
+        .map(|value| value.retry)
+        .unwrap_or(metadata.retry);
+    serde_json::json!({
+        "code": canonical_code,
+        "stage": stage,
+        "message": message,
+        "retry": retry,
+        "source": "c_abi",
+        "invocation_id": null,
+        "receipt_ura": null,
+        "details": {
+            "abi_code": code,
+            "abi_symbol": metadata.abi_symbol,
+        },
+    })
+}
+
+struct ErrorMetadata {
+    code: &'static str,
+    abi_symbol: &'static str,
+    stage: &'static str,
+    retry: &'static str,
+}
+
+fn error_metadata(code: i32) -> ErrorMetadata {
+    match code {
+        RUNTIME_OK => ErrorMetadata {
+            code: "OK",
+            abi_symbol: "RUNTIME_OK",
+            stage: "sdk",
+            retry: "never",
+        },
+        ERR_NULL_POINTER => ErrorMetadata {
+            code: "NULL_POINTER",
+            abi_symbol: "ERR_NULL_POINTER",
+            stage: "sdk",
+            retry: "never",
+        },
+        ERR_INVALID_UTF8 => ErrorMetadata {
+            code: "INVALID_UTF8",
+            abi_symbol: "ERR_INVALID_UTF8",
+            stage: "sdk",
+            retry: "never",
+        },
+        ERR_INVALID_HANDLE => ErrorMetadata {
+            code: "INVALID_HANDLE",
+            abi_symbol: "ERR_INVALID_HANDLE",
+            stage: "sdk",
+            retry: "never",
+        },
+        ERR_NOT_INITIALIZED => ErrorMetadata {
+            code: "NOT_INITIALIZED",
+            abi_symbol: "ERR_NOT_INITIALIZED",
+            stage: "sdk",
+            retry: "never",
+        },
+        ERR_ALREADY_INIT => ErrorMetadata {
+            code: "ALREADY_INIT",
+            abi_symbol: "ERR_ALREADY_INIT",
+            stage: "sdk",
+            retry: "never",
+        },
+        ERR_DAEMON_DOWN => ErrorMetadata {
+            code: "RUNTIME_OFFLINE",
+            abi_symbol: "ERR_DAEMON_DOWN",
+            stage: "transport",
+            retry: "after_backoff",
+        },
+        ERR_VERSION_INCOMPATIBLE => ErrorMetadata {
+            code: "VERSION_MISMATCH",
+            abi_symbol: "ERR_VERSION_INCOMPATIBLE",
+            stage: "sdk",
+            retry: "never",
+        },
+        ERR_ABILITY_FAILED => ErrorMetadata {
+            code: "ADMISSION_DENIED",
+            abi_symbol: "ERR_ABILITY_FAILED",
+            stage: "runtime",
+            retry: "unknown",
+        },
+        ERR_NOT_IMPLEMENTED => ErrorMetadata {
+            code: "NOT_IMPLEMENTED",
+            abi_symbol: "ERR_NOT_IMPLEMENTED",
+            stage: "sdk",
+            retry: "never",
+        },
+        ERR_INVALID_ARG => ErrorMetadata {
+            code: "INVALID_ARGUMENT",
+            abi_symbol: "ERR_INVALID_ARG",
+            stage: "sdk",
+            retry: "never",
+        },
+        ERR_PERMISSION_DENIED => ErrorMetadata {
+            code: "PERMISSION_DENIED",
+            abi_symbol: "ERR_PERMISSION_DENIED",
+            stage: "runtime",
+            retry: "never",
+        },
+        ERR_NOT_FOUND => ErrorMetadata {
+            code: "ABILITY_NOT_FOUND",
+            abi_symbol: "ERR_NOT_FOUND",
+            stage: "runtime",
+            retry: "never",
+        },
+        ERR_CANCELLED => ErrorMetadata {
+            code: "CANCELLED",
+            abi_symbol: "ERR_CANCELLED",
+            stage: "client",
+            retry: "never",
+        },
+        ERR_PROTOCOL => ErrorMetadata {
+            code: "PROTOCOL_MISMATCH",
+            abi_symbol: "ERR_PROTOCOL",
+            stage: "protocol",
+            retry: "never",
+        },
+        ERR_TIMEOUT => ErrorMetadata {
+            code: "TIMEOUT",
+            abi_symbol: "ERR_TIMEOUT",
+            stage: "transport",
+            retry: "safe",
+        },
+        _ => ErrorMetadata {
+            code: "GENERIC",
+            abi_symbol: "ERR_GENERIC",
+            stage: "sdk",
+            retry: "unknown",
+        },
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::CStr;
 
     #[test]
-    fn last_error_null_before_any_error() {
-        // A thread that has not produced an error must see NULL.
-        // Run in a fresh thread so prior test ordering cannot stain
-        // the TLS slot.
+    fn last_error_json_returns_null_when_clean() {
         std::thread::spawn(|| {
-            let p = easynet_last_error();
-            assert!(p.is_null());
-        })
-        .join()
-        .unwrap();
-    }
-
-    #[test]
-    fn set_then_read_last_error_round_trips_message() {
-        std::thread::spawn(|| {
-            set_last_error("boom");
-            let p = easynet_last_error();
-            assert!(!p.is_null());
-            let s = unsafe { CStr::from_ptr(p) }.to_str().unwrap();
-            assert_eq!(s, "boom");
-        })
-        .join()
-        .unwrap();
-    }
-
-    #[test]
-    fn clear_last_error_makes_pointer_null_again() {
-        std::thread::spawn(|| {
-            set_last_error("oops");
             clear_last_error();
-            let p = easynet_last_error();
-            assert!(p.is_null());
+            let mut out: *mut c_char = std::ptr::null_mut();
+            let code = unsafe { runtime_last_error_json(&mut out) };
+            assert_eq!(code, RUNTIME_OK);
+            assert!(!out.is_null());
+            let value: serde_json::Value =
+                unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
+            unsafe { crate::ffi::strings::runtime_string_free(out) };
+            assert_eq!(value, serde_json::Value::Null);
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn last_error_json_projects_coded_tls_error() {
+        std::thread::spawn(|| {
+            set_last_error_code(ERR_INVALID_HANDLE, "bad handle");
+            let mut out: *mut c_char = std::ptr::null_mut();
+            let code = unsafe { runtime_last_error_json(&mut out) };
+            assert_eq!(code, RUNTIME_OK);
+            let value: serde_json::Value =
+                unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
+            unsafe { crate::ffi::strings::runtime_string_free(out) };
+            assert_eq!(value["code"], "INVALID_HANDLE");
+            assert_eq!(value["stage"], "sdk");
+            assert_eq!(value["retry"], "never");
+            assert_eq!(value["message"], "bad handle");
+            assert_eq!(value["details"]["abi_code"], ERR_INVALID_HANDLE);
+            assert_eq!(value["details"]["abi_symbol"], "ERR_INVALID_HANDLE");
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn last_error_json_preserves_abi_code_with_canonical_projection() {
+        std::thread::spawn(|| {
+            set_last_error_projection(
+                ERR_NOT_FOUND,
+                ErrorProjection {
+                    code: "DESCRIPTOR_NOT_FOUND",
+                    stage: "routing",
+                    retry: "never",
+                },
+                "descriptor missing",
+            );
+            let mut out: *mut c_char = std::ptr::null_mut();
+            let code = unsafe { runtime_last_error_json(&mut out) };
+            assert_eq!(code, RUNTIME_OK);
+            let value: serde_json::Value =
+                unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
+            unsafe { crate::ffi::strings::runtime_string_free(out) };
+            assert_eq!(value["code"], "DESCRIPTOR_NOT_FOUND");
+            assert_eq!(value["stage"], "routing");
+            assert_eq!(value["retry"], "never");
+            assert_eq!(value["message"], "descriptor missing");
+            assert_eq!(value["details"]["abi_code"], ERR_NOT_FOUND);
+            assert_eq!(value["details"]["abi_symbol"], "ERR_NOT_FOUND");
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn error_json_maps_explicit_code_without_parsing_message() {
+        let message = CString::new("deadline elapsed").unwrap();
+        let mut out: *mut c_char = std::ptr::null_mut();
+        let code = unsafe { runtime_error_json(ERR_TIMEOUT, message.as_ptr(), &mut out) };
+        assert_eq!(code, RUNTIME_OK);
+        let value: serde_json::Value =
+            unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
+        unsafe { crate::ffi::strings::runtime_string_free(out) };
+        assert_eq!(value["code"], "TIMEOUT");
+        assert_eq!(value["stage"], "transport");
+        assert_eq!(value["retry"], "safe");
+        assert_eq!(value["message"], "deadline elapsed");
+        assert_eq!(value["details"]["abi_symbol"], "ERR_TIMEOUT");
+    }
+
+    #[test]
+    fn error_json_null_message_does_not_read_tls_last_error() {
+        std::thread::spawn(|| {
+            set_last_error_code(ERR_NOT_FOUND, "stale descriptor error");
+            let mut out: *mut c_char = std::ptr::null_mut();
+            let code = unsafe { runtime_error_json(ERR_TIMEOUT, std::ptr::null(), &mut out) };
+            assert_eq!(code, RUNTIME_OK);
+            let value: serde_json::Value =
+                unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
+            unsafe { crate::ffi::strings::runtime_string_free(out) };
+            assert_eq!(value["code"], "TIMEOUT");
+            assert_eq!(value["message"], "");
+            assert_eq!(value["details"]["abi_code"], ERR_TIMEOUT);
+            assert_eq!(value["details"]["abi_symbol"], "ERR_TIMEOUT");
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn error_json_projects_abi_codes_to_canonical_runtime_codes() {
+        for (abi_code, expected_code, expected_symbol) in [
+            (ERR_DAEMON_DOWN, "RUNTIME_OFFLINE", "ERR_DAEMON_DOWN"),
+            (
+                ERR_VERSION_INCOMPATIBLE,
+                "VERSION_MISMATCH",
+                "ERR_VERSION_INCOMPATIBLE",
+            ),
+            (ERR_ABILITY_FAILED, "ADMISSION_DENIED", "ERR_ABILITY_FAILED"),
+            (ERR_NOT_FOUND, "ABILITY_NOT_FOUND", "ERR_NOT_FOUND"),
+            (ERR_PROTOCOL, "PROTOCOL_MISMATCH", "ERR_PROTOCOL"),
+        ] {
+            let message = CString::new("typed projection").unwrap();
+            let mut out: *mut c_char = std::ptr::null_mut();
+            let code = unsafe { runtime_error_json(abi_code, message.as_ptr(), &mut out) };
+            assert_eq!(code, RUNTIME_OK);
+            let value: serde_json::Value =
+                unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
+            unsafe { crate::ffi::strings::runtime_string_free(out) };
+            assert_eq!(value["code"], expected_code);
+            assert_eq!(value["details"]["abi_code"], abi_code);
+            assert_eq!(value["details"]["abi_symbol"], expected_symbol);
+        }
+    }
+
+    #[test]
+    fn last_error_json_null_output_records_typed_null_pointer() {
+        std::thread::spawn(|| {
+            let code = unsafe { runtime_last_error_json(std::ptr::null_mut()) };
+            assert_eq!(code, ERR_NULL_POINTER);
+
+            let mut out: *mut c_char = std::ptr::null_mut();
+            let code = unsafe { runtime_last_error_json(&mut out) };
+            assert_eq!(code, RUNTIME_OK);
+            let value: serde_json::Value =
+                unsafe { serde_json::from_str(CStr::from_ptr(out).to_str().unwrap()).unwrap() };
+            unsafe { crate::ffi::strings::runtime_string_free(out) };
+            assert_eq!(value["code"], "NULL_POINTER");
+            assert_eq!(value["details"]["abi_code"], ERR_NULL_POINTER);
         })
         .join()
         .unwrap();
@@ -196,10 +584,8 @@ mod tests {
         // because losing an error message is worse than losing
         // a \0 inside it.
         std::thread::spawn(|| {
-            set_last_error("a\0b\0c");
-            let p = easynet_last_error();
-            let s = unsafe { CStr::from_ptr(p) }.to_str().unwrap();
-            assert_eq!(s, "abc");
+            set_last_error_code(ERR_GENERIC, "a\0b\0c");
+            assert_eq!(last_error_message().as_deref(), Some("abc"));
         })
         .join()
         .unwrap();
@@ -212,7 +598,7 @@ mod tests {
         // switch on these; duplicates would route an error to the
         // wrong branch.
         let codes = [
-            EASYNET_OK,
+            RUNTIME_OK,
             ERR_GENERIC,
             ERR_NULL_POINTER,
             ERR_INVALID_UTF8,

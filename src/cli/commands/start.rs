@@ -155,8 +155,8 @@ enum CredentialCheck {
 
 /// Device-mode preflight budget for the Hub session socket.
 ///
-/// This is intentionally a plain TCP reachability probe, not an Axon
-/// `DendriteBridge` connect. `runtime start` is about to spawn
+/// This is intentionally a plain TCP reachability probe, not a federation
+/// session connect. `runtime start` is about to spawn
 /// `easynet-daemon`, and the daemon owns the real Axon Invocation /
 /// session handshake. The CLI only needs to reject a clearly absent
 /// listener before forking a background process; requiring the
@@ -200,6 +200,39 @@ fn save_runtime_projection_after_ready(
         .context("persist runtime projection after daemon Ready")
 }
 
+fn ensure_desktop_companions_after_ready() {
+    let Ok(state) = crate::daemon::plugins::default_state() else {
+        return;
+    };
+    let manager = match crate::daemon::plugins::DesktopCompanionManager::current() {
+        Ok(manager) => manager,
+        Err(error) => {
+            let reason = error.to_string();
+            crate::op_event!(
+                component = desktop_companion,
+                kind = post_ready_reconcile_failed,
+                code = "manager_unavailable",
+                reason = reason,
+            );
+            output::warn(&format!("desktop companion reconcile warning: {error}"));
+            return;
+        }
+    };
+    let failures = manager.ensure_running_after_daemon_ready(state.index().packages());
+    for failure in failures {
+        crate::op_event!(
+            component = desktop_companion,
+            kind = post_ready_reconcile_failed,
+            package_id = failure.package_id,
+            package_version = failure.package_version,
+            action = failure.action,
+            code = failure.code,
+            reason = failure.reason,
+        );
+        output::warn(&format!("desktop companion reconcile warning: {failure}"));
+    }
+}
+
 // ── Device mode ─────────────────────────────────────────────────────────────
 
 fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
@@ -232,28 +265,33 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     // Credentials take precedence over CLI args for hub/tenant.
     let hub = creds.hub_endpoint.clone();
     let tenant = creds.realm.clone();
+    let runtime_user_binding = creds.runtime_user_binding()?;
     if args.hub != config::DEFAULT_HUB && args.hub != hub {
         output::warn(&format!(
-            "--hub {} ignored; using {} from credentials. Run 'easynet reset' to un-pair first.",
+            "--hub {} ignored; using {} from credentials. Run 'easynet device reset' to un-pair first.",
             args.hub, hub
         ));
     }
     let label = args.label.clone().unwrap_or_else(|| creds.node_id.clone());
     let _ = (args.token.as_deref(), args.insecure);
-    preflight_runtime_start(&RuntimeStartRequest::device(&tenant, &creds.node_id))?;
-    // EASYNET_PAGES_PORT is parsed by the daemon — it is the only
-    // process that needs to validate the value and decide a default.
-    // CLI just peeks at it for the progress UI's "fell back from N"
-    // hint, treating any parse failure as "no hint available".
-    let pages_start_hint = std::env::var("EASYNET_PAGES_PORT")
-        .ok()
-        .and_then(|raw| raw.parse::<u16>().ok())
-        .filter(|p| *p > 0);
-
+    let start_request = RuntimeStartRequest::device(&tenant, &creds.node_id)
+        .with_paired_user_runtime_signer_required(matches!(
+            runtime_user_binding,
+            config::RuntimeUserBinding::Bound { .. }
+        ));
+    preflight_runtime_start(&start_request)?;
     crate::daemon::persistence::daemon_config::ensure_minimal_device_config(&creds)
         .context("ensure daemon-config.toml for device mode")?;
-    let _ = super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds);
-    bootstrap_local_agent_projection(&creds).context("sync local agent owner projection")?;
+    let bootstrap_key_service =
+        crate::daemon::keyring::lifecycle::KeyServiceBootstrapLease::acquire()
+            .context("acquire bootstrap key-service custody for runtime preflight")?;
+    super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds)
+        .context("wire local realm trust for device mode")?;
+    bootstrap_local_agent_projection(&creds, &runtime_user_binding)
+        .context("sync local agent owner projection")?;
+    bootstrap_key_service
+        .release()
+        .context("release bootstrap key-service custody before daemon start")?;
 
     record_snapshot(JoinConnectionSnapshot::from_credentials(
         JoinConnectionState::RuntimeStarting,
@@ -263,7 +301,6 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     ));
     let mut daemon_handle = match crate::daemon::DaemonStartConfig::device(&creds.node_id)
         .map(|cfg| cfg.with_realm(creds.realm_str()))
-        .map(with_keyring_passphrase_env)
         .map(with_bridge_lib_env)
         .and_then(|cfg| cfg.start())
     {
@@ -287,13 +324,21 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         &creds,
         "cli.start",
     ));
+    // From here the daemon process owns the asynchronous `session.open`
+    // lifecycle. Publish the pending state before waiting for Ready so a fast
+    // session contract cannot be overwritten later by the CLI's older view.
+    // Boot failures still record a failed snapshot below; successful contracts
+    // promote this to J800 from the frame loop.
+    record_snapshot(JoinConnectionSnapshot::from_credentials(
+        JoinConnectionState::SelfSessionAdmissionPending,
+        Some(JoinTransition::OpenSelfSession),
+        &creds,
+        "cli.start",
+    ));
     let control_socket = daemon_handle.control_endpoint().to_path_buf();
     let boot = match super::start_boot_watcher::wait_for_daemon_boot(
         &control_socket,
         daemon_handle.child_mut(),
-        super::start_boot_watcher::BootContext {
-            pages_start_port: pages_start_hint,
-        },
     ) {
         Ok(boot) => boot,
         Err(err) => {
@@ -319,6 +364,16 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     // here, so this branch is defence-in-depth only).
     let pages_listener_port = super::start_boot_watcher::final_pages_port(boot.pages_port)
         .ok_or_else(|| anyhow::anyhow!("daemon reported Ready without binding a pages port"))?;
+    if let Err(err) = validate_device_runtime_readiness(&boot, &creds) {
+        if !attached_existing_daemon {
+            if let Err(stop_err) = daemon_handle.stop() {
+                output::warn(&format!(
+                    "failed to stop daemon after failed readiness validation: {stop_err}"
+                ));
+            }
+        }
+        return Err(err);
+    }
     let pid = daemon_handle.pid();
     let endpoint = daemon_handle.invocation_endpoint().display().to_string();
 
@@ -333,21 +388,7 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         credential_verified: Some(credential_verified),
     };
     save_runtime_projection_after_ready(&mut daemon_handle, &state)?;
-    // The daemon process is up and the local runtime is ready, but the hub
-    // `session.open` bidi has NOT been admitted yet — that handshake runs
-    // asynchronously in the session initiator. Reporting ConnectedOnline here
-    // was a lie: `doctor` showed FRONTEND_CONNECTED even while session.open was
-    // failing in an endless reconnect backoff, because nothing downgraded the
-    // optimistic snapshot. Record the honest "self-session opening, presence
-    // not yet admitted" state (J500); the frame loop promotes to ConnectedOnline
-    // only when the hub returns the session contract, and downgrades to
-    // ConnectedSuspect when the session errors out.
-    record_snapshot(JoinConnectionSnapshot::from_credentials(
-        JoinConnectionState::SelfSessionAdmissionPending,
-        Some(JoinTransition::OpenSelfSession),
-        &creds,
-        "cli.start",
-    ));
+    ensure_desktop_companions_after_ready();
 
     if attached_existing_daemon {
         output::success("EasyNet daemon attached");
@@ -356,10 +397,13 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
     }
     let control_socket = daemon_handle.control_endpoint().display().to_string();
     let hub_api = creds.api_base();
-    let pages_url_root = format!(
-        "http://<project>.{user}.pages.localhost:{pages_listener_port}/",
-        user = creds.username_slug()?
-    );
+    let pages_url_root = match runtime_user_binding {
+        config::RuntimeUserBinding::Bound { .. } => Some(format!(
+            "http://<project>.{user}.pages.localhost:{pages_listener_port}/",
+            user = creds.username_slug()?
+        )),
+        config::RuntimeUserBinding::Unbound { .. } => None,
+    };
     let pid_display = pid.map(|pid| pid.to_string());
     let mut rows = vec![
         ("daemon_socket", endpoint.as_str()),
@@ -367,56 +411,22 @@ fn run_device_mode(args: &StartArgs) -> anyhow::Result<()> {
         ("hub_session", hub.as_str()),
         ("hub_api", hub_api.as_str()),
         ("realm", tenant.as_str()),
-        ("pages_url_root", pages_url_root.as_str()),
     ];
+    if let Some(ref pages_url_root) = pages_url_root {
+        rows.push(("pages_url_root", pages_url_root.as_str()));
+    }
     if let Some(ref pid) = pid_display {
         rows.push(("pid", pid.as_str()));
     }
     output::kv_section(&rows);
 
-    // Welcome line — surface the human-readable paired account while the
-    // canonical user URA below stays anchored on credentials.user_id.
-    let username = creds.username_slug()?;
-    let user_ura = creds.user_ura()?;
-    eprintln!();
-    eprintln!(
-        "{} {}",
-        console::style("Welcome,").cyan().bold(),
-        console::style(username).cyan().bold(),
-    );
-    eprintln!("  {}", console::style(user_ura).dim());
+    render_runtime_principal_summary(&creds, &runtime_user_binding)?;
 
     if args.foreground {
         run_foreground_with_daemon(&creds, args.no_mcp)
     } else {
         output::info("Daemon running in background. Use 'easynet runtime stop' to stop.");
         Ok(())
-    }
-}
-
-/// Inject `EASYNET_KEYRING_PASSPHRASE` into the daemon's environment
-/// when a passphrase is available (operator env or the file `easynet
-/// join` provisioned). This is what lets the booting daemon decrypt
-/// the keyring vault — `boot.rs::load_daemon_identity` reads the
-/// passphrase from its own environment via `MasterKeySource::from_env`.
-///
-/// No passphrase available → return the config untouched; the daemon
-/// falls through to the deterministic-derive path exactly as before.
-/// We never *mint* a passphrase here — only `join` provisions one, so
-/// that a bare `runtime start` on an unkeyed host stays unkeyed.
-fn with_keyring_passphrase_env(
-    cfg: crate::daemon::DaemonStartConfig,
-) -> crate::daemon::DaemonStartConfig {
-    if std::env::var("EASYNET_KEYRING_PASSPHRASE").is_ok_and(|v| !v.is_empty()) {
-        // Already in this process's environment; the daemon inherits
-        // it through the normal env propagation, so do not duplicate.
-        return cfg;
-    }
-    match std::fs::read_to_string(crate::daemon::keyring::default_passphrase_path()) {
-        Ok(pass) if !pass.trim().is_empty() => {
-            cfg.with_env("EASYNET_KEYRING_PASSPHRASE", pass.trim())
-        }
-        _ => cfg,
     }
 }
 
@@ -445,16 +455,16 @@ fn with_bridge_lib_env(cfg: crate::daemon::DaemonStartConfig) -> crate::daemon::
     }
 }
 
-fn start_stdio_mcp_server(creds: &config::Credentials) {
+fn start_stdio_mcp_server(creds: &config::Credentials) -> anyhow::Result<()> {
     let config = crate::daemon::ability::catalog::profiles::mcp::StdioServerConfig {
         server_name: "easynet-device".into(),
         tenant_id: creds.realm.clone(),
         agent_name: None,
     };
-    let configured = crate::daemon::ability::catalog::profiles::mcp::build_stdio_server(&config);
+    let configured = crate::daemon::ability::catalog::profiles::mcp::build_stdio_server(&config)?;
     let descriptor_count = configured.descriptor_count();
     std::thread::spawn(move || {
-        let server = easynet_axon::mcp::StdioMcpServer::new(configured.provider)
+        let server = crate::daemon::execution::mcp::stdio::StdioMcpServer::new(configured.provider)
             .with_server_name(configured.server_name)
             .with_server_version(env!("CARGO_PKG_VERSION"));
         if let Err(e) = server.run(std::io::stdin().lock(), &mut std::io::stdout()) {
@@ -464,11 +474,12 @@ fn start_stdio_mcp_server(creds: &config::Credentials) {
     output::success(&format!(
         "MCP server started on stdio ({descriptor_count} tools advertised)"
     ));
+    Ok(())
 }
 
 fn run_foreground_with_daemon(creds: &config::Credentials, no_mcp: bool) -> anyhow::Result<()> {
     if !no_mcp {
-        start_stdio_mcp_server(creds);
+        start_stdio_mcp_server(creds)?;
     }
 
     let shutdown = ShutdownSignal::new();
@@ -478,138 +489,6 @@ fn run_foreground_with_daemon(creds: &config::Credentials, no_mcp: bool) -> anyh
     super::stop::run(super::stop::StopArgs {})
 }
 
-/// Best-effort by contract — daemon startup completes regardless
-/// of advertise failures so heartbeat, federation join, and other
-/// surfaces stay reachable. The directory just degrades until a
-/// later boot or operator-initiated re-advertise catches up.
-pub(crate) fn republish_via_federation_best_effort(
-    bridge: &easynet_axon::dendrite_bridge::DendriteBridge,
-    creds: &config::Credentials,
-) {
-    let plan = match build_bootstrap_plan(creds) {
-        Ok(p) => p,
-        Err(e) => {
-            output::warn(&format!("bootstrap plan: {e}"));
-            return;
-        }
-    };
-    // Pin the caller URA for hub-shaped federation calls so the
-    // bridge stamps `envelope.caller.uri` to a canonical URA —
-    // `plan.host_device_ura` already carries that shape (see
-    // `build_bootstrap_plan_from`).
-    let invoker = crate::daemon::federation::advertise::BridgeAbilityInvoker::with_caller_ura(
-        bridge,
-        plan.host_device_ura.clone(),
-    );
-
-    // Bootstrap self-identity FIRST. Every subsequent signed Invoke
-    // (federation.advertise_*, runtime.register_local_tool, anything)
-    // carries an `easynet.public_key` derived from the daemon's
-    // identity; the runtime rejects them with
-    // AXON_EASYNET_SUBJECT_KEY_UNREGISTERED until that key is
-    // recorded in `state.identity.node_keys` for this node. Calling
-    // bootstrap_self_identity here populates that table once per
-    // runtime lifetime; it is a no-op on subsequent calls (the
-    // first-writer-wins guard returns replaced_prior=true).
-    if !plan.realm.is_empty() {
-        let identity_outcome =
-            crate::daemon::federation::publish::bootstrap_self_identity_via_runtime(
-                &invoker,
-                &creds.realm,
-                &plan.realm,
-                &creds.node_id,
-            );
-        match &identity_outcome.result {
-            Ok(_) => output::detail(
-                "runtime-identity",
-                &format!("bootstrapped trusted-key material for {}", creds.node_id),
-            ),
-            Err(msg) => output::warn(&format!(
-                "runtime.bootstrap_self_identity failed: {msg}; signed Invokes will fail until \
-                 the runtime accepts this node's key (federation.advertise_* + every \
-                 frontend Invoke depend on this)"
-            )),
-        }
-    }
-
-    let outcomes = crate::daemon::federation::publish::republish_abilities_via_advertise(
-        &invoker,
-        &creds.realm,
-        &plan,
-    );
-
-    let mut ok = 0usize;
-    let mut total = 0usize;
-    let mut skipped = false;
-    for o in &outcomes {
-        if o.label == "skipped" {
-            skipped = true;
-            continue;
-        }
-        total += 1;
-        match &o.result {
-            Ok(_) => ok += 1,
-            Err(msg) => {
-                output::warn(&format!("advertise {} failed: {msg}", o.label));
-            }
-        }
-    }
-    if skipped {
-        output::detail(
-            "directory",
-            "advertise deferred — daemon has no realm yet (run easynet device join)",
-        );
-    } else if total > 0 {
-        output::detail(
-            "directory",
-            &format!(
-                "{ok}/{total} federation.advertise_* calls succeeded — entries visible to peers"
-            ),
-        );
-    }
-
-    // Step-3 register: tell axon-runtime that *this daemon* is the
-    // implementation behind every daemon-owned ability. Without this
-    // an InvokeAbility from the EasyNet frontend reaches the runtime,
-    // resolves no SessionRegistry binding, and falls through to
-    // NoBinding — even though the daemon is right there listening on
-    // its dispatch UDS. Best-effort: a register failure leaves the
-    // dispatch path degraded but keeps boot moving.
-    if !plan.realm.is_empty() && !plan.host_device_ura.is_empty() {
-        let dispatch_endpoint = crate::daemon::control::runtime_dispatch::dispatch_endpoint_uri();
-        let reg_outcomes = crate::daemon::federation::publish::register_local_tools_via_runtime(
-            &invoker,
-            &creds.realm,
-            &plan.realm,
-            &creds.node_id,
-            &dispatch_endpoint,
-        );
-        let mut reg_ok = 0usize;
-        let mut reg_total = 0usize;
-        for o in &reg_outcomes {
-            reg_total += 1;
-            match &o.result {
-                Ok(_) => reg_ok += 1,
-                Err(msg) => {
-                    output::warn(&format!(
-                        "runtime.register_local_tool {} failed: {msg}",
-                        o.label
-                    ));
-                }
-            }
-        }
-        if reg_total > 0 {
-            output::detail(
-                "runtime-dispatch",
-                &format!(
-                    "{reg_ok}/{reg_total} runtime.register_local_tool calls succeeded — \
-                     daemon-owned abilities are reachable via runtime"
-                ),
-            );
-        }
-    }
-}
-
 /// Build a `BootstrapPlan` from credentials + the loaded agent
 /// registry. Pure function so the test below can exercise it
 /// without a real bridge.
@@ -617,39 +496,57 @@ fn build_bootstrap_plan(
     creds: &config::Credentials,
 ) -> anyhow::Result<crate::daemon::ability::catalog::profiles::bootstrap::BootstrapPlan> {
     let user_id = creds.user_id()?;
-    let username = creds.username_slug()?;
-    build_bootstrap_plan_from(&creds.realm, &creds.node_id, user_id, username)
+    build_bootstrap_plan_from(&creds.realm, &creds.node_id, user_id)
 }
 
 /// Variant that takes the inputs directly. Public so `agent.rs`'s
-/// publish path can construct the plan from a `(realm, node_id,
-/// user_id, username)` tuple already in scope without re-loading
-/// credentials. `user_id` (UUID) is the immutable subject anchor for
-/// `user/` trust URAs; `username` (slug) is the owner-prefix for
-/// `agent/<username>.<id>` URAs (§15.1-3 dual grammar).
+/// publish path can construct the plan from a `(realm, node_id, user_id)`
+/// tuple already in scope without re-loading credentials. `user_id` is the
+/// immutable authority owner for both user trust URAs and hosted Agent URAs.
 pub(crate) fn build_bootstrap_plan_from(
     realm: &str,
     node_id: &str,
     user_id: &str,
-    username: &str,
 ) -> anyhow::Result<crate::daemon::ability::catalog::profiles::bootstrap::BootstrapPlan> {
     crate::daemon::ability::catalog::profiles::bootstrap::build_plan_from_registry(
-        realm, node_id, user_id, username,
+        realm, node_id, user_id,
     )
 }
 
 fn bootstrap_local_agent_projection(
     creds: &config::Credentials,
+    runtime_user_binding: &config::RuntimeUserBinding,
 ) -> anyhow::Result<Vec<crate::daemon::ability::catalog::profiles::bootstrap::BootstrapOutcome>> {
+    if let config::RuntimeUserBinding::Unbound { .. } = runtime_user_binding {
+        return Ok(Vec::new());
+    }
     let plan = build_bootstrap_plan(creds)?;
-    let mut file = crate::daemon::persistence::local_agents::load()?;
-    let outcomes = crate::daemon::ability::catalog::profiles::bootstrap::bootstrap_local_agents(
-        &plan,
-        &mut file,
-        &crate::daemon::ability::catalog::profiles::bootstrap::UuidMinter,
-    );
-    crate::daemon::persistence::local_agents::save(&file)?;
-    Ok(outcomes)
+    crate::daemon::ability::builtins::agents::lifecycle::bootstrap_local_agent_projection(&plan)
+}
+
+fn render_runtime_principal_summary(
+    creds: &config::Credentials,
+    runtime_user_binding: &config::RuntimeUserBinding,
+) -> anyhow::Result<()> {
+    eprintln!();
+    match runtime_user_binding {
+        config::RuntimeUserBinding::Bound { user_ura } => {
+            let username = creds.username_slug()?;
+            eprintln!(
+                "{} {}",
+                console::style("Welcome,").cyan().bold(),
+                console::style(username).cyan().bold(),
+            );
+            eprintln!("  {}", console::style(user_ura).dim());
+        }
+        config::RuntimeUserBinding::Unbound { reason } => {
+            let device_ura = crate::core::ura::device_ura(creds.realm_str(), &creds.node_id);
+            eprintln!("{}", console::style("Runtime principal").cyan().bold());
+            eprintln!("  {}", console::style(device_ura).dim());
+            eprintln!("  {}", console::style(reason).dim());
+        }
+    }
+    Ok(())
 }
 
 /// Load credentials and verify against Hub. Returns error on revoked/missing credentials.
@@ -661,16 +558,32 @@ fn load_and_verify_credentials_with<F>(verify: F) -> anyhow::Result<(config::Cre
 where
     F: Fn(&config::Credentials) -> CredentialCheck,
 {
-    let Ok(creds) = config::load_credentials() else {
-        output::info("No credentials found.");
-        output::info("Visit https://easynet.run or your Hub to create a pairing token,");
-        output::info("then run 'easynet device join <token>' to pair this device.");
-        output::info("If you're running a Hub, use 'easynet runtime start --as-hub' instead.");
-        anyhow::bail!("no credentials — cannot start device agent");
+    let creds = match StartCredentialReadiness::load() {
+        StartCredentialReadiness::Ready(creds) => creds,
+        StartCredentialReadiness::Missing => {
+            output::info("No credentials found.");
+            output::info("Visit https://easynet.run or your Hub to create a pairing token,");
+            output::info("then run 'easynet device join <token>' to pair this device.");
+            output::info("If you're running a Hub, use 'easynet runtime start --as-hub' instead.");
+            anyhow::bail!("no credentials — cannot start device agent");
+        }
+        StartCredentialReadiness::Invalid { reason } => {
+            output::info("Credentials invalid.");
+            output::info("Run 'easynet device join <token>' to re-pair this device.");
+            output::info("If you're running a Hub, use 'easynet runtime start --as-hub' instead.");
+            anyhow::bail!("invalid credentials — cannot start device agent: {reason}");
+        }
     };
 
+    if has_daemon_native_join_lineage(&creds) {
+        output::info(
+            "Hub URA join lineage detected; skipping backend HTTP credential verification.",
+        );
+        return Ok((*creds, true));
+    }
+
     match verify(&creds) {
-        CredentialCheck::Valid => Ok((creds, true)),
+        CredentialCheck::Valid => Ok((*creds, true)),
         CredentialCheck::NetworkUnavailable => {
             record_snapshot(JoinConnectionSnapshot::failed_from_credentials(
                 JoinFailureCode::StartFailedCredentialVerify,
@@ -720,6 +633,99 @@ where
             anyhow::bail!("credential revoked");
         }
     }
+}
+
+#[derive(Debug)]
+enum StartCredentialReadiness {
+    Ready(Box<config::Credentials>),
+    Missing,
+    Invalid { reason: String },
+}
+
+impl StartCredentialReadiness {
+    fn load() -> Self {
+        Self::from_credentials_result(config::load_credentials_optional())
+    }
+
+    fn from_credentials_result(result: anyhow::Result<Option<config::Credentials>>) -> Self {
+        match result {
+            Ok(Some(credentials)) => Self::Ready(Box::new(credentials)),
+            Ok(None) => Self::Missing,
+            Err(error) => Self::Invalid {
+                reason: format!("{error:#}"),
+            },
+        }
+    }
+
+    #[cfg(test)]
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Ready(_) => "ready",
+            Self::Missing => "missing",
+            Self::Invalid { .. } => "invalid",
+        }
+    }
+}
+
+fn validate_device_runtime_readiness(
+    boot: &super::start_boot_watcher::BootProgressOutcome,
+    creds: &config::Credentials,
+) -> anyhow::Result<()> {
+    validate_device_runtime_readiness_with(
+        boot,
+        creds,
+        &KeyServiceRuntimeCallerSignerReadinessProbe,
+    )
+}
+
+trait RuntimeCallerSignerReadinessProbe {
+    fn prove(&self, user_ura: &str) -> anyhow::Result<()>;
+}
+
+struct KeyServiceRuntimeCallerSignerReadinessProbe;
+
+impl RuntimeCallerSignerReadinessProbe for KeyServiceRuntimeCallerSignerReadinessProbe {
+    fn prove(&self, user_ura: &str) -> anyhow::Result<()> {
+        crate::daemon::identity::self_identity::prove_runtime_caller_signer_custody(user_ura)
+            .map_err(|error| anyhow::anyhow!("{error}"))
+    }
+}
+
+fn validate_device_runtime_readiness_with(
+    boot: &super::start_boot_watcher::BootProgressOutcome,
+    creds: &config::Credentials,
+    signer_probe: &dyn RuntimeCallerSignerReadinessProbe,
+) -> anyhow::Result<()> {
+    let config::RuntimeUserBinding::Bound { user_ura } = creds.runtime_user_binding()? else {
+        return Ok(());
+    };
+    let required = crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER;
+    if !boot.has_ready_capability_flag(required) {
+        anyhow::bail!(
+            "daemon Ready did not advertise runtime capability `{required}`; refusing to publish \
+             runtime projection because paired User caller signer custody was not proven"
+        );
+    }
+    signer_probe
+        .prove(&user_ura)
+        .with_context(|| {
+            format!(
+                "prove paired User runtime caller signer custody for `{user_ura}` before publishing runtime projection"
+            )
+        })?;
+    Ok(())
+}
+
+fn has_daemon_native_join_lineage(creds: &config::Credentials) -> bool {
+    creds.credential_token.trim().is_empty()
+        && creds
+            .join_receipt_hash
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        && creds
+            .hub_pubkey_b64
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn verify_hub_session_endpoint(creds: &config::Credentials) -> anyhow::Result<()> {
@@ -900,13 +906,7 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
     let mut daemon_handle = start_cfg.start().context("start hub easynet-daemon")?;
     let attached_existing_daemon = daemon_handle.child_mut().is_none();
     let control_socket = daemon_handle.control_endpoint().to_path_buf();
-    super::start_boot_watcher::wait_for_daemon_boot(
-        &control_socket,
-        daemon_handle.child_mut(),
-        super::start_boot_watcher::BootContext {
-            pages_start_port: None,
-        },
-    )?;
+    super::start_boot_watcher::wait_for_daemon_boot(&control_socket, daemon_handle.child_mut())?;
     let pid = daemon_handle.pid();
     let endpoint = daemon_handle.invocation_endpoint().display().to_string();
 
@@ -921,6 +921,7 @@ fn run_as_hub(args: &StartArgs) -> anyhow::Result<()> {
         credential_verified: None, // Not applicable in hub mode.
     };
     save_runtime_projection_after_ready(&mut daemon_handle, &state)?;
+    ensure_desktop_companions_after_ready();
 
     if attached_existing_daemon {
         output::success("EasyNet hub attached");
@@ -1045,6 +1046,41 @@ mod tests {
         }
     }
 
+    fn federation_device_only_creds() -> config::Credentials {
+        let mut creds = test_creds();
+        creds.credential_token.clear();
+        creds.username = None;
+        creds.user_id = None;
+        creds.hub_pubkey_b64 = Some("hub-pubkey".into());
+        creds.join_receipt_hash = Some("sha256:test-join-receipt".into());
+        creds
+    }
+
+    struct TestRuntimeCallerSignerReadinessProbe {
+        result: anyhow::Result<()>,
+    }
+
+    impl TestRuntimeCallerSignerReadinessProbe {
+        fn ready() -> Self {
+            Self { result: Ok(()) }
+        }
+
+        fn failed(message: &'static str) -> Self {
+            Self {
+                result: Err(anyhow::anyhow!(message)),
+            }
+        }
+    }
+
+    impl RuntimeCallerSignerReadinessProbe for TestRuntimeCallerSignerReadinessProbe {
+        fn prove(&self, _user_ura: &str) -> anyhow::Result<()> {
+            match &self.result {
+                Ok(()) => Ok(()),
+                Err(error) => Err(anyhow::anyhow!("{error}")),
+            }
+        }
+    }
+
     fn hub_args(cert: Option<&str>, key: Option<&str>) -> StartArgs {
         StartArgs {
             hub: config::DEFAULT_HUB.into(),
@@ -1138,6 +1174,156 @@ mod tests {
     }
 
     #[test]
+    fn start_credential_readiness_reports_ready_credentials() {
+        let state = StartCredentialReadiness::from_credentials_result(Ok(Some(test_creds())));
+
+        assert_eq!(state.label(), "ready");
+    }
+
+    #[test]
+    fn start_credential_readiness_reports_missing_only_for_absent_credentials() {
+        let state = StartCredentialReadiness::from_credentials_result(Ok(None));
+
+        assert_eq!(state.label(), "missing");
+    }
+
+    #[test]
+    fn start_credential_readiness_reports_invalid_existing_credentials() {
+        let state = StartCredentialReadiness::from_credentials_result(Err(anyhow::anyhow!(
+            "parse credentials from /tmp/credentials.json: expected value"
+        )));
+
+        assert_eq!(state.label(), "invalid");
+        match state {
+            StartCredentialReadiness::Invalid { reason } => {
+                assert!(
+                    reason.contains("parse credentials"),
+                    "invalid state must preserve reason: {reason}"
+                );
+            }
+            other => panic!("expected invalid state, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn start_runtime_readiness_accepts_paired_user_signer_custody() {
+        let boot = super::super::start_boot_watcher::BootProgressOutcome {
+            pages_port: Some(8787),
+            ready_capability_flags: vec![
+                crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string(),
+            ],
+        };
+
+        validate_device_runtime_readiness_with(
+            &boot,
+            &test_creds(),
+            &TestRuntimeCallerSignerReadinessProbe::ready(),
+        )
+        .expect("paired User signer proof must admit device start success");
+    }
+
+    #[test]
+    fn start_runtime_readiness_rejects_missing_paired_user_signer_flag() {
+        let boot = super::super::start_boot_watcher::BootProgressOutcome {
+            pages_port: Some(8787),
+            ready_capability_flags: Vec::new(),
+        };
+
+        let err = validate_device_runtime_readiness_with(
+            &boot,
+            &test_creds(),
+            &TestRuntimeCallerSignerReadinessProbe::ready(),
+        )
+        .expect_err("device start must reject Ready without signer proof");
+        assert!(
+            err.to_string().contains("paired_user_runtime_signer"),
+            "error must name missing signer readiness capability: {err:#}"
+        );
+    }
+
+    #[test]
+    fn start_runtime_readiness_accepts_device_only_unbound_credentials() {
+        let boot = super::super::start_boot_watcher::BootProgressOutcome {
+            pages_port: Some(8787),
+            ready_capability_flags: Vec::new(),
+        };
+
+        validate_device_runtime_readiness_with(
+            &boot,
+            &federation_device_only_creds(),
+            &TestRuntimeCallerSignerReadinessProbe::failed("must not prove unbound user signer"),
+        )
+        .expect("device-only federation credentials must not require paired User signer readiness");
+    }
+
+    #[test]
+    fn start_runtime_readiness_rejects_missing_credential_user_ura() {
+        let boot = super::super::start_boot_watcher::BootProgressOutcome {
+            pages_port: Some(8787),
+            ready_capability_flags: vec![
+                crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string(),
+            ],
+        };
+        let mut creds = test_creds();
+        creds.user_id = None;
+
+        let err = validate_device_runtime_readiness_with(
+            &boot,
+            &creds,
+            &TestRuntimeCallerSignerReadinessProbe::ready(),
+        )
+        .expect_err("device runtime readiness requires a concrete paired User URA");
+
+        assert!(
+            err.to_string().contains("missing user_id"),
+            "error must name missing active user binding: {err:#}"
+        );
+    }
+
+    #[test]
+    fn bootstrap_local_agent_projection_skips_device_only_unbound_credentials() {
+        let outcomes = bootstrap_local_agent_projection(
+            &federation_device_only_creds(),
+            &config::RuntimeUserBinding::Unbound {
+                reason: "not bound (federation-native device credential)",
+            },
+        )
+        .expect("device-only credentials must not enter user-owned agent bootstrap");
+
+        assert!(
+            outcomes.is_empty(),
+            "device-only start must not synthesize user-owned local agent projections"
+        );
+    }
+
+    #[test]
+    fn start_runtime_readiness_rejects_failed_signer_custody_proof() {
+        let boot = super::super::start_boot_watcher::BootProgressOutcome {
+            pages_port: Some(8787),
+            ready_capability_flags: vec![
+                crate::daemon::control::discovery::flags::PAIRED_USER_RUNTIME_SIGNER.to_string(),
+            ],
+        };
+
+        let err = validate_device_runtime_readiness_with(
+            &boot,
+            &test_creds(),
+            &TestRuntimeCallerSignerReadinessProbe::failed("managed user signing key not found"),
+        )
+        .expect_err("device runtime readiness requires live signer custody");
+
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("prove paired User runtime caller signer custody"),
+            "error must name signer custody proof boundary: {message}"
+        );
+        assert!(
+            message.contains("managed user signing key not found"),
+            "error must preserve key-service failure: {message}"
+        );
+    }
+
+    #[test]
     fn load_and_verify_credentials_fails_but_keeps_credentials_when_hub_unavailable() {
         let _g = HomeGuard::new();
         let creds = test_creds();
@@ -1154,6 +1340,24 @@ mod tests {
             config::load_credentials().is_ok(),
             "credentials should remain on transient outage; only revocation deletes them"
         );
+    }
+
+    #[test]
+    fn load_and_verify_credentials_skips_backend_for_hub_ura_join_lineage() {
+        let _g = HomeGuard::new();
+        let mut creds = test_creds();
+        creds.credential_token.clear();
+        creds.join_receipt_hash = Some("sha256:test-join-receipt".into());
+        creds.hub_pubkey_b64 = Some("hub-pubkey".into());
+        config::save_credentials(&creds).expect("save daemon-native credentials");
+
+        let (loaded, verified) = load_and_verify_credentials_with(|_| {
+            panic!("backend verify must not be called for Hub URA join credentials")
+        })
+        .expect("daemon-native credentials should pass without backend HTTP");
+
+        assert!(verified);
+        assert_eq!(loaded.node_id, "node-test");
     }
 
     #[test]
@@ -1237,11 +1441,74 @@ mod tests {
     }
 
     #[test]
+    fn start_after_local_state_purge_fails_without_runtime_projection_side_effect() {
+        let _g = HomeGuard::new();
+        let creds = test_creds();
+        config::save_credentials(&creds).expect("save test credentials");
+        let state_dir = config::state_dir();
+        std::fs::write(state_dir.join("keyring.enc"), "stale-keyring")
+            .expect("write stale keyring");
+        std::fs::create_dir_all(state_dir.join("agents/agent-a/descriptors"))
+            .expect("create descriptor dir");
+        std::fs::write(
+            state_dir.join("agents/agent-a/descriptors/meta.list_abilities.json"),
+            "{}",
+        )
+        .expect("write stale descriptor");
+
+        crate::cli::commands::reset::run(crate::cli::commands::reset::ResetArgs {
+            force: true,
+            yes: true,
+            purge_local_state: true,
+        })
+        .expect("purge local runtime state");
+
+        let err = load_and_verify_credentials_with(|_| {
+            panic!("start credential verifier must not run after local state purge")
+        })
+        .expect_err("purged device start must fail as unpaired");
+
+        assert!(
+            err.to_string().contains("no credentials"),
+            "purged start must surface missing credentials, got: {err:#}"
+        );
+        assert!(
+            config::load().is_err(),
+            "start preflight after purge must not recreate runtime projection"
+        );
+        assert!(
+            !config::runtime_state_path().exists(),
+            "start preflight after purge must not leave runtime.json"
+        );
+    }
+
+    #[test]
+    fn load_and_verify_credentials_rejects_invalid_credentials_before_verify() {
+        let _g = HomeGuard::new();
+        std::fs::create_dir_all(config::state_dir()).expect("create state dir");
+        std::fs::write(config::state_dir().join("credentials.json"), b"{not-json")
+            .expect("write malformed credentials");
+
+        let err = load_and_verify_credentials_with(|_| {
+            panic!("Hub verifier must not run for invalid existing credentials")
+        })
+        .expect_err("invalid credentials must fail before verification");
+        let message = err.to_string();
+        assert!(
+            message.contains("invalid credentials"),
+            "invalid existing credentials must not render as missing: {message}"
+        );
+        assert!(
+            message.contains("parse credentials"),
+            "invalid readiness must preserve parser reason: {message}"
+        );
+    }
+
+    #[test]
     fn build_bootstrap_plan_threads_credentials_into_plan() {
         let _g = HomeGuard::new();
         // Empty registry: load_agents returns Default. The plan
-        // should still build with consent=true (default-on per
-        // plan §1) and an empty llm list.
+        // should still build with an empty hosted-Agent list.
         let creds = test_creds();
         let plan = build_bootstrap_plan(&creds).expect("plan must build");
         assert_eq!(plan.realm, "tenant-test");
@@ -1249,7 +1516,6 @@ mod tests {
             plan.host_device_ura,
             "easynet:///r/tenant-test/device/node-test"
         );
-        assert!(plan.consent, "consent default-on per plan §1");
         assert!(!plan.mcp);
         assert!(plan.llm_sub_agents.is_empty());
     }
@@ -1276,11 +1542,10 @@ mod tests {
         // for downstream Hub-tier signing — that wrapping is exactly
         // what the federation Invoke surface consumes, so the test
         // pins the wrapped form rather than the raw bare id.
-        let plan = build_bootstrap_plan_from("tenant-test", "node-test", "user-test", "alice")
+        let plan = build_bootstrap_plan_from("tenant-test", "node-test", "user-test")
             .expect("plan must build");
         assert_eq!(plan.realm, "tenant-test");
         assert_eq!(plan.user_id, "user-test");
-        assert_eq!(plan.username, "alice");
         assert_eq!(
             plan.host_device_ura,
             "easynet:///r/tenant-test/device/node-test"

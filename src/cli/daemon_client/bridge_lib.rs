@@ -23,7 +23,7 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use toml_edit::DocumentMut;
@@ -66,10 +66,10 @@ pub(crate) fn resolve_bridge_lib(explicit: Option<&str>) -> anyhow::Result<Optio
     if let Some(v) = bridge_lib_from_easynet_home() {
         return Ok(Some(v));
     }
-    if let Some(v) = bridge_lib_from_claude_settings() {
+    if let Some(v) = bridge_lib_from_claude_settings()? {
         return Ok(Some(v));
     }
-    if let Some(v) = bridge_lib_from_codex_config() {
+    if let Some(v) = bridge_lib_from_codex_config()? {
         return Ok(Some(v));
     }
     if let Some(v) = bridge_lib_from_local_repos() {
@@ -101,11 +101,17 @@ fn bridge_lib_from_easynet_home() -> Option<String> {
     None
 }
 
-fn bridge_lib_from_claude_settings() -> Option<String> {
+fn bridge_lib_from_claude_settings() -> anyhow::Result<Option<String>> {
     let path = config::home_dir().join(".claude").join("settings.json");
-    let data = fs::read_to_string(path).ok()?;
-    let v: Value = serde_json::from_str(&data).ok()?;
-    let servers = v.get("mcpServers")?.as_object()?;
+    let Some(data) = read_optional_text(&path, "Claude MCP settings")? else {
+        return Ok(None);
+    };
+    let v: Value = serde_json::from_str(&data).map_err(|error| {
+        anyhow::anyhow!("parse Claude MCP settings {}: {error}", path.display())
+    })?;
+    let Some(servers) = v.get("mcpServers").and_then(|value| value.as_object()) else {
+        return Ok(None);
+    };
     for (_, server) in servers {
         let env = server.get("env").and_then(|v| v.as_object());
         let Some(env) = env else { continue };
@@ -113,33 +119,53 @@ fn bridge_lib_from_claude_settings() -> Option<String> {
             .get("EASYNET_DENDRITE_BRIDGE_LIB")
             .and_then(|v| v.as_str())
             .map(str::trim)
-            .filter(|s| !s.is_empty())?;
+            .filter(|s| !s.is_empty());
+        let Some(lib) = lib else { continue };
         if PathBuf::from(lib).exists() {
-            return Some(lib.to_string());
+            return Ok(Some(lib.to_string()));
         }
     }
-    None
+    Ok(None)
 }
 
-fn bridge_lib_from_codex_config() -> Option<String> {
+fn bridge_lib_from_codex_config() -> anyhow::Result<Option<String>> {
     let path = config::home_dir().join(".codex").join("config.toml");
-    let data = fs::read_to_string(path).ok()?;
-    let doc = data.parse::<DocumentMut>().ok()?;
-    let servers = doc.get("mcp_servers")?.as_table()?;
+    let Some(data) = read_optional_text(&path, "Codex MCP config")? else {
+        return Ok(None);
+    };
+    let doc = data
+        .parse::<DocumentMut>()
+        .map_err(|error| anyhow::anyhow!("parse Codex MCP config {}: {error}", path.display()))?;
+    let Some(servers) = doc.get("mcp_servers").and_then(|item| item.as_table()) else {
+        return Ok(None);
+    };
     for (_, item) in servers.iter() {
-        let server = item.as_table()?;
-        let env = server.get("env")?.as_table()?;
+        let Some(server) = item.as_table() else {
+            continue;
+        };
+        let Some(env) = server.get("env").and_then(|item| item.as_table()) else {
+            continue;
+        };
         let lib = env
             .get("EASYNET_DENDRITE_BRIDGE_LIB")
             .and_then(|i| i.as_value())
             .and_then(|v| v.as_str())
             .map(str::trim)
-            .filter(|s| !s.is_empty())?;
+            .filter(|s| !s.is_empty());
+        let Some(lib) = lib else { continue };
         if PathBuf::from(lib).exists() {
-            return Some(lib.to_string());
+            return Ok(Some(lib.to_string()));
         }
     }
-    None
+    Ok(None)
+}
+
+fn read_optional_text(path: &Path, label: &str) -> anyhow::Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(data) => Ok(Some(data)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(anyhow::anyhow!("read {label} {}: {error}", path.display())),
+    }
 }
 
 fn bridge_lib_from_local_repos() -> Option<String> {
@@ -196,4 +222,67 @@ fn bridge_lib_from_local_repos() -> Option<String> {
         cur = cur.parent()?.to_path_buf();
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_home_file(relative: &[&str], contents: &str) -> PathBuf {
+        let path = relative
+            .iter()
+            .fold(config::home_dir(), |base, segment| base.join(segment));
+        std::fs::create_dir_all(path.parent().expect("home fixture parent"))
+            .expect("create home fixture parent");
+        std::fs::write(&path, contents).expect("write home fixture");
+        path
+    }
+
+    #[test]
+    fn missing_bridge_configs_remain_absent() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+
+        assert!(bridge_lib_from_claude_settings()
+            .expect("missing Claude settings is absence")
+            .is_none());
+        assert!(bridge_lib_from_codex_config()
+            .expect("missing Codex config is absence")
+            .is_none());
+    }
+
+    #[test]
+    fn claude_bridge_config_rejects_malformed_existing_json() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let path = write_home_file(&[".claude", "settings.json"], "{");
+
+        let error = bridge_lib_from_claude_settings()
+            .expect_err("malformed existing Claude settings must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("parse Claude MCP settings"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains(&path.display().to_string()),
+            "error must identify source path: {message}"
+        );
+    }
+
+    #[test]
+    fn codex_bridge_config_rejects_malformed_existing_toml() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let path = write_home_file(&[".codex", "config.toml"], "[mcp_servers");
+
+        let error = bridge_lib_from_codex_config()
+            .expect_err("malformed existing Codex config must fail closed");
+        let message = error.to_string();
+        assert!(
+            message.contains("parse Codex MCP config"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains(&path.display().to_string()),
+            "error must identify source path: {message}"
+        );
+    }
 }

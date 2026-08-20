@@ -103,8 +103,13 @@ fn descriptor_import_e2e_owner_initiative_and_independent_ownership() {
         "local daemon IPC calls use the process-local system caller"
     );
     assert_eq!(
-        meta["callee_ura"], home.loopback_caller,
-        "meta.acquire is a device-owned mutation surface"
+        meta["callee_ura"],
+        easynet_cli::core::ura::device_agent_ura(
+            "cli",
+            "local",
+            easynet_cli::daemon::ability::names::governance::DESCRIPTOR_TRANSFER_SYSTEM_AGENT_ID,
+        ),
+        "meta.acquire is owned by the descriptor-transfer SystemAgent"
     );
     assert_eq!(
         meta["delegation"]["kind"], "hosted_agent",

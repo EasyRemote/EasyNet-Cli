@@ -1,0 +1,18 @@
+package run.runtime.sdk;
+
+public enum ErrorClass {
+  VALIDATION,
+  HANDLE,
+  LIFECYCLE,
+  AVAILABILITY,
+  PERMISSION,
+  ADMISSION,
+  ROUTING,
+  TIMEOUT,
+  CANCELLATION,
+  PROTOCOL,
+  VERSION,
+  CONTROL,
+  UNSUPPORTED,
+  GENERIC
+}

@@ -1,0 +1,216 @@
+{
+  "report_kind": "node_facade_conformance_tests",
+  "language": "node",
+  "records": [
+    {
+      "case_id": "authority/mutual_exclusion",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "bidi/close_send_not_cancel",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "bidi/frame0_required",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "error/profile_source_refs",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "errors"
+    },
+    {
+      "case_id": "error/retry_hint",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "error/typed_json",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "health/api_vs_runtime",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "health"
+    },
+    {
+      "case_id": "invocation/builder_handle_state",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/canonical_material",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/complete_tuple",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/prepared_not_submittable",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/presigned_submit",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/terminal_monotonicity",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/terminal_receipt_facts",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "runtime_core/feature_discovery",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "stream/backpressure_bound",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "stream/order_terminal",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "version/abi_compatible",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "version/abi_incompatible",
+      "evidence": [
+        {
+          "kind": "node_test",
+          "ref_path": "sdk/node/test/conformance-cases.test.mjs",
+          "sha256": "11cd3d6708ba797abd972d060db2371bbea92df3c92c31c88dd49e36b6e7f27d"
+        }
+      ],
+      "profile": "runtime_core"
+    }
+  ],
+  "schema_version": 2
+}

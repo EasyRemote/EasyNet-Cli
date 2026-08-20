@@ -6,9 +6,9 @@
 //
 // The scaffold emits a layout that is *simultaneously* a valid EasyNet
 // ability, a valid MCP tool, and a valid Claude Code / Agent Skills skill.
-// That is not coincidence — the ability.json schema documented in
-// `sdk/rust/src/ability.rs` is deliberately a superset of the common
-// skill/tool manifests, so one directory is three things at once:
+// The CLI-owned scaffold schema is deliberately a superset of the common
+// skill/tool manifests, so one directory is three things at once. Packaging
+// policy remains in the product CLI rather than Axon's protocol SDK:
 //
 //   my-ability/
 //   ├── ability.json        // manifest (required)

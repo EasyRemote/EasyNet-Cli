@@ -65,7 +65,10 @@ use std::process::Stdio;
 use std::sync::{OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::core::ability::spec::{AbilityManifest, BootSpec, CostKind, HealthSpec};
+use crate::daemon::ability::manifest::{AbilityManifest, BootSpec, CostKind, HealthSpec};
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, AgentAggregateSnapshotLoadError,
+};
 
 /// Scan cadence. The tick only *checks due-ness*; per-record cadence
 /// is owned by `next_probe_unix_ms`, so a shorter tick sharpens
@@ -145,7 +148,7 @@ pub struct AbilityHealthRecord {
 /// Read one record by canonical ability URA. Used by
 /// `meta.list_abilities` to stamp health metadata on descriptors.
 pub fn snapshot(ability_ura: &str) -> Option<AbilityHealthRecord> {
-    store().read().ok()?.get(ability_ura).cloned()
+    snapshot_from_store(store(), ability_ura)
 }
 
 /// Test-only seeding hook for other modules' tests (the
@@ -164,9 +167,48 @@ fn store() -> &'static RwLock<BTreeMap<String, AbilityHealthRecord>> {
     STORE.get_or_init(|| RwLock::new(BTreeMap::new()))
 }
 
+fn snapshot_from_store(
+    store: &RwLock<BTreeMap<String, AbilityHealthRecord>>,
+    ability_ura: &str,
+) -> Option<AbilityHealthRecord> {
+    match store.read() {
+        Ok(map) => map.get(ability_ura).cloned(),
+        Err(poisoned) => {
+            crate::op_event!(
+                component = ability_health,
+                kind = store_poison_recovered,
+                operation = "snapshot",
+                message = "recovering ability-health store after poisoned read lock",
+            );
+            poisoned.into_inner().get(ability_ura).cloned()
+        }
+    }
+}
+
 fn upsert(ability_ura: &str, record: AbilityHealthRecord) {
-    if let Ok(mut map) = store().write() {
-        map.insert(ability_ura.to_string(), record);
+    upsert_into_store(store(), ability_ura, record);
+}
+
+fn upsert_into_store(
+    store: &RwLock<BTreeMap<String, AbilityHealthRecord>>,
+    ability_ura: &str,
+    record: AbilityHealthRecord,
+) {
+    match store.write() {
+        Ok(mut map) => {
+            map.insert(ability_ura.to_string(), record);
+        }
+        Err(poisoned) => {
+            crate::op_event!(
+                component = ability_health,
+                kind = store_poison_recovered,
+                operation = "upsert",
+                message = "recovering ability-health store after poisoned write lock",
+            );
+            poisoned
+                .into_inner()
+                .insert(ability_ura.to_string(), record);
+        }
     }
 }
 
@@ -174,8 +216,25 @@ fn upsert(ability_ura: &str, record: AbilityHealthRecord) {
 /// deleted, agent removed) so the catalog never shows health for an
 /// ability that no longer exists.
 fn retain_live(live: &BTreeSet<String>) {
-    if let Ok(mut map) = store().write() {
-        retain_in(&mut map, live);
+    retain_live_in_store(store(), live);
+}
+
+fn retain_live_in_store(
+    store: &RwLock<BTreeMap<String, AbilityHealthRecord>>,
+    live: &BTreeSet<String>,
+) {
+    match store.write() {
+        Ok(mut map) => retain_in(&mut map, live),
+        Err(poisoned) => {
+            crate::op_event!(
+                component = ability_health,
+                kind = store_poison_recovered,
+                operation = "retain_live",
+                message = "recovering ability-health store after poisoned retention lock",
+            );
+            let mut map = poisoned.into_inner();
+            retain_in(&mut map, live);
+        }
     }
 }
 
@@ -230,20 +289,16 @@ struct ScanPlan {
 /// manifest. Canonical ability URAs are built with the same
 /// `owner_ability_ura` builder the descriptor path uses, so store
 /// keys and catalog keys can never drift apart.
-fn scan() -> ScanPlan {
+fn scan() -> anyhow::Result<ScanPlan> {
     let mut plan = ScanPlan {
         monitored: Vec::new(),
         unmonitored: Vec::new(),
         live: BTreeSet::new(),
     };
-    let Ok(registry) = crate::daemon::persistence::agent_registry::load_agents() else {
-        return plan;
-    };
-    let local = crate::daemon::persistence::local_agents::load().unwrap_or_default();
-    for (agent_name, entry) in &registry.agents {
-        let Some(owner_ura) =
-            crate::daemon::persistence::local_agents::lookup_hosted_ura(&local, "llm", agent_name)
-        else {
+    let agent_snapshot =
+        AgentAggregateRepository::try_load_snapshot().map_err(health_scan_snapshot_error)?;
+    for (agent_name, entry) in agent_snapshot.registered_agents() {
+        let Some(owner_ura) = agent_snapshot.hosted_llm_agent_ura(agent_name) else {
             continue;
         };
         for manifest in
@@ -254,8 +309,8 @@ fn scan() -> ScanPlan {
                 continue;
             }
             let qualified = manifest.qualified_name(agent_name);
-            let public_name = crate::core::ura::owner_local_ability_name(&owner_ura, &qualified);
-            let Some(ability_ura) = crate::core::ura::owner_ability_ura(&owner_ura, &public_name)
+            let public_name = crate::core::ura::owner_local_ability_name(owner_ura, &qualified);
+            let Some(ability_ura) = crate::core::ura::owner_ability_ura(owner_ura, &public_name)
             else {
                 continue;
             };
@@ -276,7 +331,18 @@ fn scan() -> ScanPlan {
             }
         }
     }
-    plan
+    Ok(plan)
+}
+
+fn health_scan_snapshot_error(error: AgentAggregateSnapshotLoadError) -> anyhow::Error {
+    match error {
+        AgentAggregateSnapshotLoadError::RegistryUnreadable { source } => {
+            anyhow::anyhow!("load durable agent registry for health scan: {source:#}")
+        }
+        AgentAggregateSnapshotLoadError::IdentityUnreadable { source } => {
+            anyhow::anyhow!("load hosted-agent URA index for health scan: {source:#}")
+        }
+    }
 }
 
 // ── Scheduling rules (pure) ─────────────────────────────────────────
@@ -413,7 +479,19 @@ fn run_loop() {
 }
 
 fn tick(now_ms: i64) {
-    let plan = scan();
+    let plan = match scan() {
+        Ok(plan) => plan,
+        Err(error) => {
+            let error = error.to_string();
+            crate::op_event!(
+                component = ability_health,
+                kind = scan_failed,
+                error = error.as_str(),
+                message = "preserving the last known health snapshot; corrupt durable state is not an empty catalog",
+            );
+            return;
+        }
+    };
     for ability_ura in &plan.unmonitored {
         mark_unmonitored(ability_ura, now_ms);
     }
@@ -624,6 +702,13 @@ mod tests {
         }
     }
 
+    fn poison_store(store: &RwLock<BTreeMap<String, AbilityHealthRecord>>) {
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = store.write().expect("store write before poison");
+            panic!("poison ability-health store for recovery test");
+        });
+    }
+
     #[test]
     fn probe_due_is_immediate_for_unseen_abilities() {
         assert!(probe_due(None, 1_000));
@@ -642,6 +727,68 @@ mod tests {
         assert!(!probe_due(Some(&r), i64::MAX));
     }
 
+    #[test]
+    fn snapshot_recovers_poisoned_store_read_without_dropping_record() {
+        let store = RwLock::new(BTreeMap::new());
+        upsert_into_store(
+            &store,
+            "easynet:///r/test/ability/agent.a.health",
+            record(HealthStatus::Healthy, 10),
+        );
+        poison_store(&store);
+
+        let recovered = snapshot_from_store(&store, "easynet:///r/test/ability/agent.a.health")
+            .expect("poisoned read must recover existing record");
+
+        assert_eq!(recovered.status, HealthStatus::Healthy);
+    }
+
+    #[test]
+    fn upsert_recovers_poisoned_store_write_without_losing_record() {
+        let store = RwLock::new(BTreeMap::new());
+        poison_store(&store);
+
+        upsert_into_store(
+            &store,
+            "easynet:///r/test/ability/agent.a.health",
+            record(HealthStatus::Unhealthy, 20),
+        );
+
+        let recovered = snapshot_from_store(&store, "easynet:///r/test/ability/agent.a.health")
+            .expect("poisoned write recovery must persist record");
+        assert_eq!(recovered.status, HealthStatus::Unhealthy);
+    }
+
+    #[test]
+    fn retain_live_recovers_poisoned_store_write_without_preserving_dead_records() {
+        let store = RwLock::new(BTreeMap::new());
+        upsert_into_store(
+            &store,
+            "easynet:///r/test/ability/agent.a.live",
+            record(HealthStatus::Healthy, 30),
+        );
+        upsert_into_store(
+            &store,
+            "easynet:///r/test/ability/agent.a.dead",
+            record(HealthStatus::Healthy, 30),
+        );
+        poison_store(&store);
+
+        retain_live_in_store(
+            &store,
+            &BTreeSet::from(["easynet:///r/test/ability/agent.a.live".to_string()]),
+        );
+
+        assert!(
+            snapshot_from_store(&store, "easynet:///r/test/ability/agent.a.dead").is_none(),
+            "poison recovery must still enforce retention"
+        );
+        assert!(
+            snapshot_from_store(&store, "easynet:///r/test/ability/agent.a.live").is_some(),
+            "poison recovery must keep live record"
+        );
+    }
+
     // ── boot_due ────────────────────────────────────────────────────
 
     #[test]
@@ -657,6 +804,7 @@ mod tests {
     #[test]
     fn classify_health_manifest_as_monitored() {
         let toml = r#"
+schema_version = "1"
 name = "x"
 description = ""
 [input_schema]
@@ -671,6 +819,7 @@ argv = ["svc-probe"]
     #[test]
     fn classify_external_metered_without_health_as_unmonitored() {
         let toml = r#"
+schema_version = "1"
 name = "x"
 description = ""
 [input_schema]
@@ -688,6 +837,7 @@ kind = "external_metered"
     #[test]
     fn classify_plain_manifest_as_unmanaged() {
         let toml = r#"
+schema_version = "1"
 name = "x"
 description = ""
 [input_schema]

@@ -3,20 +3,17 @@
 
 use console::style;
 
-use crate::cli::daemon_client::agent_view as daemon_agent_view;
 use crate::cli::daemon_client::agent_view::{AgentRuntimeKind, DaemonAgentRow};
-use crate::daemon::persistence::config;
-use crate::support::platform::local_daemon_grpc::LocalDaemonAbilityClient;
 use crate::support::platform::output;
 
 use super::*;
 
 pub(super) fn run_add(args: AddArgs) -> anyhow::Result<()> {
     let agent_type: AgentRuntimeKind = args.r#type.parse()?;
-    let daemon_client = required_local_daemon_agent_client()?;
+    let gateway = agent_command_gateway();
     let name = args.name.clone();
     let daemon_response = invoke_daemon_agent_start_required(
-        &daemon_client,
+        gateway.as_ref(),
         serde_json::json!({
             "name": name,
             "agent_type": agent_type.to_string(),
@@ -68,44 +65,6 @@ pub(super) fn run_add(args: AddArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Resolve the canonical caller URA the CLI should sign its
-/// loopback gRPC calls under when invoking daemon-hosted management
-/// abilities. Built from device credentials via the same bootstrap
-/// helper used at daemon start, so admission on the daemon's gRPC
-/// service sees a consistent shape across all CLI → daemon hops.
-///
-/// Returns `None` when the device hasn't been paired yet
-/// (credentials not on disk). The caller silently skips the notify
-/// in that case — there's no daemon state to mutate either.
-#[cfg(feature = "axon-pb")]
-fn resolve_local_daemon_caller_ura() -> Option<String> {
-    let creds = crate::daemon::persistence::config::load_credentials().ok()?;
-    let user_id = creds.user_id().ok()?;
-    let username = creds.username_slug().ok()?;
-    let plan = crate::cli::commands::start::build_bootstrap_plan_from(
-        &creds.realm,
-        &creds.node_id,
-        user_id,
-        username,
-    )
-    .ok()?;
-    Some(plan.host_device_ura)
-}
-
-fn required_local_daemon_agent_client() -> anyhow::Result<LocalDaemonAbilityClient> {
-    #[cfg(feature = "axon-pb")]
-    let caller_ura = resolve_local_daemon_caller_ura();
-    #[cfg(not(feature = "axon-pb"))]
-    let caller_ura = None;
-
-    LocalDaemonAbilityClient::for_agent_management(caller_ura).map_err(|msg| {
-        anyhow::anyhow!(
-            "agent registry is daemon-owned, but the local daemon Axon ability surface is \
-             unavailable: {msg}"
-        )
-    })
-}
-
 /// Shared CLI→daemon ability invocation with stable error
 /// prefixing. The named wrappers below stay as 1-line readers so a
 /// `git grep invoke_daemon_agent_start` still surfaces the call
@@ -115,34 +74,39 @@ fn required_local_daemon_agent_client() -> anyhow::Result<LocalDaemonAbilityClie
 /// `docs/rfc/industrial-textbook-followups-2026-05-29.md` lands
 /// here without touching the wrappers.
 fn invoke_daemon_ability_required(
-    client: &LocalDaemonAbilityClient,
+    gateway: &dyn AgentCommandGateway,
     ability: &str,
     payload: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    client
-        .invoke(ability, payload)
-        .map_err(|err| anyhow::anyhow!("{ability} failed: {err}"))
+    gateway.invoke(ability, payload)
 }
 
 fn invoke_daemon_agent_start_required(
-    client: &LocalDaemonAbilityClient,
+    gateway: &dyn AgentCommandGateway,
     payload: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    invoke_daemon_ability_required(client, "agent.start", payload)
+    invoke_daemon_ability_required(gateway, "agent.start", payload)
 }
 
 fn invoke_daemon_agent_stop_required(
-    client: &LocalDaemonAbilityClient,
+    gateway: &dyn AgentCommandGateway,
     name: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    invoke_daemon_ability_required(client, "agent.stop", serde_json::json!({ "name": name }))
+    invoke_daemon_ability_required(gateway, "agent.stop", serde_json::json!({ "name": name }))
+}
+
+fn invoke_daemon_agent_purge_required(
+    gateway: &dyn AgentCommandGateway,
+    name: &str,
+) -> anyhow::Result<serde_json::Value> {
+    invoke_daemon_ability_required(gateway, "agent.purge", serde_json::json!({ "name": name }))
 }
 
 fn invoke_daemon_agent_refresh_required(
-    client: &LocalDaemonAbilityClient,
+    gateway: &dyn AgentCommandGateway,
     payload: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    invoke_daemon_ability_required(client, "agent.refresh", payload)
+    invoke_daemon_ability_required(gateway, "agent.refresh", payload)
 }
 
 fn render_agent_start_runtime_outcome(name: &str, resp: &serde_json::Value) {
@@ -185,8 +149,8 @@ fn render_agent_stop_runtime_outcome(name: &str, resp: &serde_json::Value) {
 }
 
 pub(super) fn run_list() -> anyhow::Result<()> {
-    let daemon_client = required_local_daemon_agent_client()?;
-    let rows = invoke_daemon_agent_list_required(&daemon_client)?;
+    let gateway = agent_read_gateway();
+    let rows = invoke_daemon_agent_list_required(gateway.as_ref())?;
 
     if rows.is_empty() {
         eprintln!("  No agents registered.");
@@ -240,12 +204,6 @@ pub(super) fn run_list() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn invoke_daemon_agent_list_required(
-    client: &LocalDaemonAbilityClient,
-) -> anyhow::Result<Vec<DaemonAgentRow>> {
-    daemon_agent_view::list_agents_with_client(client)
-}
-
 fn render_daemon_agent_row_status(row: &DaemonAgentRow) -> console::StyledObject<&'static str> {
     match row.root_exists {
         Some(true) => style("ok").green(),
@@ -254,34 +212,13 @@ fn render_daemon_agent_row_status(row: &DaemonAgentRow) -> console::StyledObject
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct RemovedAgentPayload {
-    #[serde(default)]
-    root_path: Option<std::path::PathBuf>,
-}
-
-fn daemon_agent_row(
-    client: &LocalDaemonAbilityClient,
-    name: &str,
-) -> anyhow::Result<DaemonAgentRow> {
-    invoke_daemon_agent_list_required(client)?
-        .into_iter()
-        .find(|row| row.name == name)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "agent '{name}' is not registered; run 'easynet agent list' to see registered \
-                 names, or `easynet agent add {name} --type …` to register it"
-            )
-        })
-}
-
-fn daemon_row_root(row: &DaemonAgentRow) -> std::path::PathBuf {
-    daemon_agent_view::agent_root(row)
-}
-
 pub(super) fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
-    let daemon_client = required_local_daemon_agent_client()?;
-    let daemon_response = invoke_daemon_agent_stop_required(&daemon_client, &args.name)?;
+    let gateway = agent_command_gateway();
+    let daemon_response = if args.purge {
+        invoke_daemon_agent_purge_required(gateway.as_ref(), &args.name)?
+    } else {
+        invoke_daemon_agent_stop_required(gateway.as_ref(), &args.name)?
+    };
     let ack = daemon_response
         .get("ack")
         .and_then(serde_json::Value::as_bool)
@@ -289,44 +226,31 @@ pub(super) fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
     if !ack {
         anyhow::bail!("agent '{}' not found", args.name);
     }
-    let removed: RemovedAgentPayload = serde_json::from_value(
-        daemon_response
-            .get("removed_entry")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null),
-    )
-    .map_err(|err| anyhow::anyhow!("agent.stop returned invalid removed_entry: {err}"))?;
     output::success(&format!("Removed agent '{}'", args.name));
     render_agent_stop_runtime_outcome(&args.name, &daemon_response);
 
-    // Root deletion is opt-in. This is the purge branch: we
-    // only reach it when the operator explicitly asked for it.
-    // `removed.root_path` is the authoritative location on v2
-    // rows; a v1 row that somehow survived migration would
-    // fall back to the legacy computation.
     if args.purge {
-        let root = removed
-            .root_path
-            .clone()
-            .unwrap_or_else(|| config::agents_root().join(&args.name));
-        if root.exists() {
-            std::fs::remove_dir_all(&root)
-                .map_err(|e| anyhow::anyhow!("remove {}: {e}", root.display()))?;
-            output::detail("purged", &root.display().to_string());
-        } else {
-            output::detail("purge", &format!("{} already absent", root.display()));
+        let state = daemon_response
+            .get("purge_state")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("agent.purge omitted purge_state"))?;
+        let root = daemon_response
+            .get("purged_path")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("agent.purge omitted purged_path for state={state}"))?;
+        match state {
+            "purged" => output::detail("purged", root),
+            "already_absent" => output::detail("purge", &format!("{root} already absent")),
+            other => anyhow::bail!("agent.purge returned unexpected purge_state `{other}`"),
         }
-    } else if let Some(root) = removed.root_path.as_ref() {
-        // Not a warning, just a hint for operators who wanted
-        // the directory gone too. The directory still holds
-        // per-agent credentials (`.env`) and run history, so
-        // defaulting to "keep" is the safe choice.
+    } else if let Some(root) = daemon_response
+        .get("removed_entry")
+        .and_then(|entry| entry.get("root_path"))
+        .and_then(serde_json::Value::as_str)
+    {
         output::detail(
             "kept",
-            &format!(
-                "{} (pass --purge to delete credentials + runs)",
-                root.display()
-            ),
+            &format!("{root} (pass --purge to delete credentials + runs)"),
         );
     }
 
@@ -354,15 +278,13 @@ pub(super) fn run_remove(args: RemoveArgs) -> anyhow::Result<()> {
 /// operator can restore from `~/.easynet/agents.json.v1.bak` if
 /// they never completed a v2 save.
 pub(super) fn run_prune(args: PruneArgs) -> anyhow::Result<()> {
-    let daemon_client = required_local_daemon_agent_client()?;
+    let action_gateway = agent_command_gateway();
+    let state_gateway = agent_read_gateway();
 
-    // Identify rows whose root is missing. We check the
-    // explicit `root_path` first, falling back to the
-    // consumer-side default so a v2 row whose `root_path` was
-    // never populated (still a real scenario today — `run_add`
-    // before this PR did not set it) is classified the same as
-    // any other.
-    let rows = invoke_daemon_agent_list_required(&daemon_client)?;
+    // Identify rows whose daemon-projected registered root is missing.
+    // A row without root_path is rejected by daemon_row_root below; the CLI
+    // does not derive a persistence path from the agent name.
+    let rows = invoke_daemon_agent_list_required(state_gateway.as_ref())?;
     let orphans: Vec<DaemonAgentRow> = rows
         .into_iter()
         .filter(|row| row.root_exists == Some(false))
@@ -384,7 +306,7 @@ pub(super) fn run_prune(args: PruneArgs) -> anyhow::Result<()> {
         orphans.len()
     );
     for name in &orphans {
-        let root = daemon_row_root(name);
+        let root = daemon_row_root(name)?;
         eprintln!("    • {}  (missing root: {})", name.name, root.display());
     }
     eprintln!();
@@ -394,7 +316,7 @@ pub(super) fn run_prune(args: PruneArgs) -> anyhow::Result<()> {
     }
 
     for row in &orphans {
-        let resp = invoke_daemon_agent_stop_required(&daemon_client, &row.name)?;
+        let resp = invoke_daemon_agent_stop_required(action_gateway.as_ref(), &row.name)?;
         if !resp
             .get("ack")
             .and_then(serde_json::Value::as_bool)
@@ -451,8 +373,9 @@ pub(super) fn run_prune(args: PruneArgs) -> anyhow::Result<()> {
 /// EasyNet to chase upstream releases. Validation belongs at
 /// invocation time. See `SetArgs::model` doc.
 pub(super) fn run_set(args: SetArgs) -> anyhow::Result<()> {
-    let daemon_client = required_local_daemon_agent_client()?;
-    let row = daemon_agent_row(&daemon_client, &args.name)?;
+    let state_gateway = agent_read_gateway();
+    let action_gateway = agent_command_gateway();
+    let row = daemon_agent_row(state_gateway.as_ref(), &args.name)?;
 
     // The clap surface lets us tell "flag absent" from "flag empty
     // string" via Option<String>. An empty string is the explicit
@@ -474,13 +397,10 @@ pub(super) fn run_set(args: SetArgs) -> anyhow::Result<()> {
 
     let name = args.name.clone();
     let runtime = row.runtime.clone();
-    let root_path = row
-        .root_path
-        .as_ref()
-        .map(|path| path.to_string_lossy().to_string());
+    let root_path = daemon_row_root(&row)?.to_string_lossy().to_string();
     let model_for_request = new_model.clone();
     let daemon_response = invoke_daemon_agent_start_required(
-        &daemon_client,
+        action_gateway.as_ref(),
         serde_json::json!({
             "name": name,
             "agent_type": runtime,
@@ -537,7 +457,7 @@ pub(super) fn run_set(args: SetArgs) -> anyhow::Result<()> {
 /// or hub transport here. Runtime sync is daemon-owned and exposed as
 /// `agent.refresh`.
 pub(super) fn run_refresh(args: RefreshArgs) -> anyhow::Result<()> {
-    let daemon_client = required_local_daemon_agent_client()?;
+    let gateway = agent_command_gateway();
     let payload = match args
         .agent
         .as_deref()
@@ -547,7 +467,7 @@ pub(super) fn run_refresh(args: RefreshArgs) -> anyhow::Result<()> {
         Some(name) => serde_json::json!({ "name": name }),
         None => serde_json::json!({}),
     };
-    let response = invoke_daemon_agent_refresh_required(&daemon_client, payload)?;
+    let response = invoke_daemon_agent_refresh_required(gateway.as_ref(), payload)?;
     let scanned = response
         .get("agents_scanned")
         .and_then(serde_json::Value::as_u64)

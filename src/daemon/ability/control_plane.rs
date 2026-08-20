@@ -7,17 +7,19 @@
 
 use std::fmt;
 
+use super::descriptors::AdmissionAction;
 use super::{
-    AbilityControlPlaneError, AbilityControlPlaneKey, AbilityDescriptorRecord,
-    AbilityDescriptorRegistry, AbilityImplBinding, AbilityImplRegistry, AbilityImplSource,
-    AuthorityBindingRecord, AuthorityBindingRegistry, AuthorityScope, CallMode, RuntimeEnv,
+    AbilityControlPlaneError, AbilityControlPlaneKey, AbilityDescriptor, AbilityDescriptorRegistry,
+    AbilityHints, AbilityImplBinding, AbilityImplRegistry, AbilityImplSource, AuthorityBinding,
+    AuthorityBindingRegistry, AuthorityScope, CallMode, ReceiptSemantics, RuntimeEnv,
     DEFAULT_ABILITY_DESCRIPTOR_VERSION,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AbilityControlPlaneRecord {
-    descriptor: AbilityDescriptorRecord,
-    authority: AuthorityBindingRecord,
+    key: AbilityControlPlaneKey,
+    descriptor: AbilityDescriptor,
+    authority: AuthorityBinding,
     implementation: AbilityImplBinding,
 }
 
@@ -70,11 +72,19 @@ impl fmt::Display for AbilityControlPlaneAuthorityModeLookupError {
 impl std::error::Error for AbilityControlPlaneAuthorityModeLookupError {}
 
 impl AbilityControlPlaneRecord {
-    pub fn descriptor(&self) -> &AbilityDescriptorRecord {
+    pub fn key(&self) -> &AbilityControlPlaneKey {
+        &self.key
+    }
+
+    pub fn ability(&self) -> &str {
+        self.key.ability()
+    }
+
+    pub fn descriptor(&self) -> &AbilityDescriptor {
         &self.descriptor
     }
 
-    pub fn authority(&self) -> &AuthorityBindingRecord {
+    pub fn authority(&self) -> &AuthorityBinding {
         &self.authority
     }
 
@@ -95,7 +105,10 @@ pub struct AbilityControlPlaneRegistration<'a> {
     ability: String,
     descriptor_version: String,
     call_mode: CallMode,
-    manifest: Option<&'a crate::core::ability::spec::AbilityManifest>,
+    receipt_semantics: ReceiptSemantics,
+    admission_action: AdmissionAction,
+    descriptor_hints: Option<AbilityHints>,
+    manifest: Option<&'a crate::daemon::ability::manifest::AbilityManifest>,
     authority_scope: AuthorityScope,
     runtime_env: RuntimeEnv,
     impl_source: AbilityImplSource,
@@ -106,7 +119,8 @@ impl<'a> AbilityControlPlaneRegistration<'a> {
     pub fn new(
         ability: impl Into<String>,
         call_mode: CallMode,
-        manifest: Option<&'a crate::core::ability::spec::AbilityManifest>,
+        admission_action: AdmissionAction,
+        manifest: Option<&'a crate::daemon::ability::manifest::AbilityManifest>,
         authority_scope: AuthorityScope,
         runtime_env: RuntimeEnv,
         impl_source: AbilityImplSource,
@@ -115,6 +129,9 @@ impl<'a> AbilityControlPlaneRegistration<'a> {
             ability: ability.into(),
             descriptor_version: manifest_descriptor_version(manifest).to_string(),
             call_mode,
+            receipt_semantics: ReceiptSemantics::Operational,
+            admission_action,
+            descriptor_hints: None,
             manifest,
             authority_scope,
             runtime_env,
@@ -134,6 +151,18 @@ impl<'a> AbilityControlPlaneRegistration<'a> {
         self.impl_content_hash = Some(impl_content_hash.into());
         self
     }
+
+    #[must_use]
+    pub fn with_receipt_semantics(mut self, receipt_semantics: ReceiptSemantics) -> Self {
+        self.receipt_semantics = receipt_semantics;
+        self
+    }
+
+    #[must_use]
+    pub fn with_descriptor_hints(mut self, hints: AbilityHints) -> Self {
+        self.descriptor_hints = Some(hints);
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,7 +179,6 @@ struct AbilityControlPlaneRegistrationPlan<'a> {
 
 struct MaterializedAbilityControlPlaneRegistration {
     stage: AbilityControlPlaneRegistrationStage,
-    key: AbilityControlPlaneKey,
     record: AbilityControlPlaneRecord,
 }
 
@@ -170,6 +198,9 @@ impl<'a> AbilityControlPlaneRegistrationPlan<'a> {
             ability,
             descriptor_version,
             call_mode,
+            receipt_semantics,
+            admission_action,
+            descriptor_hints,
             manifest,
             authority_scope,
             runtime_env,
@@ -177,41 +208,62 @@ impl<'a> AbilityControlPlaneRegistrationPlan<'a> {
             impl_content_hash,
         } = self.registration;
         let authority_root = authority_scope.authority_root().to_string();
-        let ability_ura = crate::core::ura::owner_ability_ura(&authority_root, &ability)
-            .ok_or_else(
-                || AbilityControlPlaneError::DescriptorAbilityUraDerivationFailed {
-                    authority_root: authority_root.clone(),
-                    ability: ability.clone(),
-                },
-            )?;
-        let descriptor = AbilityDescriptorRecord::for_ability_ura(
-            ability_ura,
-            &ability,
-            descriptor_version,
-            call_mode,
-            manifest,
+        // Registry keys are implementation-qualified (`device.fs.read`,
+        // `alice.chat`); Ability URAs are owner-local protocol identities.
+        // Persist the canonical public projection in the descriptor record
+        // while keeping the registry key unchanged for execution lookup.
+        let public_ability_name =
+            crate::core::ura::descriptor_public_ability_name(&authority_root, &ability);
+        crate::core::ura::owner_ability_ura(&authority_root, &public_ability_name).ok_or_else(
+            || AbilityControlPlaneError::DescriptorAbilityUraDerivationFailed {
+                authority_root: authority_root.clone(),
+                ability: public_ability_name.clone(),
+            },
         )?;
-        let authority = AuthorityBindingRecord::local_self_with_manifest_policy(
-            ability.clone(),
-            descriptor.version().to_string(),
+        let manifest = manifest.ok_or_else(|| AbilityControlPlaneError::MissingManifest {
+            ability: ability.clone(),
+        })?;
+        ensure_manifest_descriptor_version_matches(&descriptor_version, manifest)?;
+        let mut descriptor = AbilityDescriptor::from_registry_manifest(
+            &ability,
+            &authority_root,
             call_mode,
-            authority_scope,
+            admission_action,
             manifest,
+        )
+        .map_err(|error| AbilityControlPlaneError::DescriptorConstruction {
+            reason: error.to_string(),
+        })?;
+        if let Some(hints) = descriptor_hints {
+            descriptor = descriptor.with_hints(hints).with_call_mode(call_mode);
+        }
+        descriptor = descriptor
+            .with_receipt_semantics(receipt_semantics)
+            .with_source("daemon:control-plane");
+        let authority = AuthorityBinding::local_self_for_descriptor(
+            ability.clone(),
+            authority_scope,
+            &descriptor,
         )?;
         let implementation = AbilityImplBinding::new_with_content_hash(
-            ability,
-            descriptor.version().to_string(),
+            ability.clone(),
+            descriptor.version.clone(),
             call_mode,
             runtime_env,
             impl_source,
             impl_content_hash,
         )?;
-        let key = AbilityControlPlaneKey::for_descriptor(&authority_root, &descriptor);
+        let key = AbilityControlPlaneKey::new(
+            &authority_root,
+            ability,
+            descriptor.version.clone(),
+            descriptor.call_mode(),
+        )?;
         assert_record_keys_match(&key, &descriptor, &authority, &implementation)?;
         Ok(MaterializedAbilityControlPlaneRegistration {
             stage: AbilityControlPlaneRegistrationStage::Materialized,
-            key,
             record: AbilityControlPlaneRecord {
+                key,
                 descriptor,
                 authority,
                 implementation,
@@ -226,38 +278,29 @@ impl MaterializedAbilityControlPlaneRegistration {
             self.stage,
             AbilityControlPlaneRegistrationStage::Materialized
         );
+        // The live control plane owns the currently active executable binding,
+        // not descriptor history. Re-registering one authority/ability/mode
+        // atomically replaces its prior version across all three facets. The
+        // outer registration transaction snapshots this slice before commit,
+        // so a failed runtime sync restores the exact previous active record.
+        registry.remove_for_authority_mode(
+            self.record.key.authority_root(),
+            self.record.key.ability(),
+            self.record.key.call_mode(),
+        );
         registry
             .descriptors
-            .register(self.key.clone(), self.record.descriptor.clone());
+            .register(self.record.key.clone(), self.record.descriptor.clone());
         registry.authorities.bind(self.record.authority.clone());
         registry
             .implementations
-            .bind(self.key.clone(), self.record.implementation.clone());
+            .bind(self.record.key.clone(), self.record.implementation.clone());
         self.stage = AbilityControlPlaneRegistrationStage::Committed;
         self.record
     }
 }
 
 impl AbilityControlPlaneRegistry {
-    pub fn register(
-        &mut self,
-        ability: impl Into<String>,
-        call_mode: CallMode,
-        manifest: Option<&crate::core::ability::spec::AbilityManifest>,
-        authority_scope: AuthorityScope,
-        runtime_env: RuntimeEnv,
-        impl_source: AbilityImplSource,
-    ) -> Result<AbilityControlPlaneRecord, AbilityControlPlaneError> {
-        self.register_registration(AbilityControlPlaneRegistration::new(
-            ability,
-            call_mode,
-            manifest,
-            authority_scope,
-            runtime_env,
-            impl_source,
-        ))
-    }
-
     pub fn register_registration(
         &mut self,
         registration: AbilityControlPlaneRegistration<'_>,
@@ -336,13 +379,13 @@ impl AbilityControlPlaneRegistry {
         descriptors_removed || authorities_removed || implementations_removed
     }
 
-    /// Snapshot every descriptor-version row for one authority-owned call mode.
+    /// Snapshot the active descriptor row for one authority-owned call mode.
     ///
-    /// What this is NOT: a lookup helper for dispatch. Dispatch needs a unique
-    /// descriptor version and should call [`Self::get_for_authority_mode`].
-    /// Registration transactions use this method before an overwrite so rollback
-    /// can restore the exact prior control-plane facts instead of merely deleting
-    /// the failed write.
+    /// Registration transactions use this method before an active-version
+    /// replacement so rollback can restore the exact prior control-plane facts
+    /// instead of merely deleting the failed write. The vector shape is retained
+    /// for corruption-safe restoration but a valid live registry contains at
+    /// most one row for this slice.
     pub fn records_for_authority_mode(
         &self,
         authority_root: &str,
@@ -364,7 +407,7 @@ impl AbilityControlPlaneRegistry {
     ///
     /// Invariant 2: records are reinserted through their canonical key derived
     /// from the record body, keeping key construction centralized in
-    /// [`AbilityControlPlaneKey::for_descriptor`].
+    /// the aggregate's stored [`AbilityControlPlaneKey`].
     pub fn restore_authority_mode_records(
         &mut self,
         authority_root: &str,
@@ -458,69 +501,6 @@ impl AbilityControlPlaneRegistry {
         self.record_for_key(&key)
     }
 
-    pub fn descriptor(
-        &self,
-        ability: &str,
-    ) -> Result<Option<&AbilityDescriptorRecord>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane_default(self.descriptors.keys(), ability, None)?;
-        Ok(key.as_ref().and_then(|key| self.descriptors.get(key)))
-    }
-
-    pub fn descriptor_for_mode(
-        &self,
-        ability: &str,
-        call_mode: CallMode,
-    ) -> Result<Option<&AbilityDescriptorRecord>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane_default(
-            self.descriptors.keys(),
-            ability,
-            Some(call_mode),
-        )?;
-        Ok(key.as_ref().and_then(|key| self.descriptors.get(key)))
-    }
-
-    pub fn authority(
-        &self,
-        ability: &str,
-    ) -> Result<Option<&AuthorityBindingRecord>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane_default(self.descriptors.keys(), ability, None)?;
-        Ok(key.as_ref().and_then(|key| self.authorities.get(key)))
-    }
-
-    pub fn authority_for_mode(
-        &self,
-        ability: &str,
-        call_mode: CallMode,
-    ) -> Result<Option<&AuthorityBindingRecord>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane_default(
-            self.descriptors.keys(),
-            ability,
-            Some(call_mode),
-        )?;
-        Ok(key.as_ref().and_then(|key| self.authorities.get(key)))
-    }
-
-    pub fn implementation(
-        &self,
-        ability: &str,
-    ) -> Result<Option<&AbilityImplBinding>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane_default(self.descriptors.keys(), ability, None)?;
-        Ok(key.as_ref().and_then(|key| self.implementations.get(key)))
-    }
-
-    pub fn implementation_for_mode(
-        &self,
-        ability: &str,
-        call_mode: CallMode,
-    ) -> Result<Option<&AbilityImplBinding>, AbilityControlPlaneLookupError> {
-        let key = unique_key_for_control_plane_default(
-            self.descriptors.keys(),
-            ability,
-            Some(call_mode),
-        )?;
-        Ok(key.as_ref().and_then(|key| self.implementations.get(key)))
-    }
-
     pub fn contains(&self, ability: &str) -> bool {
         self.descriptors
             .contains_matching(|key| key.ability() == ability)
@@ -536,34 +516,6 @@ impl AbilityControlPlaneRegistry {
         self.descriptors.names()
     }
 
-    /// Distinct authority roots that own `ability` across all registered modes.
-    ///
-    /// Runtime dispatch keys are descriptor-owner URAs, not bare ability names.
-    /// Callers that need to register or invoke through `LocalRuntime` use this
-    /// to prove that a name maps to one owner before deriving a protocol key.
-    pub fn authority_roots_for_ability(&self, ability: &str) -> Vec<String> {
-        let mut roots = self
-            .descriptors
-            .keys()
-            .filter(|key| key.ability() == ability)
-            .map(|key| key.authority_root().to_string())
-            .collect::<Vec<_>>();
-        roots.sort();
-        roots.dedup();
-        roots
-    }
-
-    /// Every registered control-plane key, in the descriptor registry's
-    /// canonical order. This is the row enumerator the catalog/discovery
-    /// read paths need to consume control-plane truth instead of unioning
-    /// the legacy handler maps and side tables (SPEC §9.1.A target item 6).
-    ///
-    /// Keys are returned owned so callers iterate without holding a read
-    /// borrow on the registry, matching the [`names`](Self::names) idiom.
-    pub fn keys(&self) -> Vec<AbilityControlPlaneKey> {
-        self.descriptors.keys().cloned().collect()
-    }
-
     /// Every registered control-plane record, joined from the descriptor,
     /// authority, and implementation facets through the shared
     /// `AbilityControlPlaneKey`. This is the single read API that
@@ -572,22 +524,25 @@ impl AbilityControlPlaneRegistry {
     /// come from one row rather than parallel side tables (SPEC §9.1.A
     /// target items 2 and 6).
     ///
-    /// A key whose facets are not all present is skipped rather than
-    /// silently faked — a partially-materialized row never surfaces as a
-    /// catalog entry.
-    pub fn records(&self) -> Vec<(AbilityControlPlaneKey, AbilityControlPlaneRecord)> {
+    /// A key whose facets are not all present is registry corruption. Reads
+    /// fail closed instead of silently dropping the governed ability.
+    pub fn records(&self) -> Vec<AbilityControlPlaneRecord> {
         self.descriptors
             .keys()
-            .cloned()
-            .filter_map(|key| {
-                let record = self.record_for_key(&key)?;
-                Some((key, record))
+            .map(|key| {
+                self.record_for_key(key).unwrap_or_else(|| {
+                    panic!(
+                        "control-plane aggregate is missing a facet for {}",
+                        format_control_plane_key(key)
+                    )
+                })
             })
             .collect()
     }
 
     fn record_for_key(&self, key: &AbilityControlPlaneKey) -> Option<AbilityControlPlaneRecord> {
         Some(AbilityControlPlaneRecord {
+            key: key.clone(),
             descriptor: self.descriptors.get(key)?.clone(),
             authority: self.authorities.get(key)?.clone(),
             implementation: self.implementations.get(key)?.clone(),
@@ -598,7 +553,7 @@ impl AbilityControlPlaneRegistry {
         &mut self,
         record: AbilityControlPlaneRecord,
     ) -> Result<(), AbilityControlPlaneError> {
-        let key = key_for_record(&record);
+        let key = record.key.clone();
         assert_record_keys_match(
             &key,
             record.descriptor(),
@@ -691,21 +646,18 @@ fn unique_key_for_authority_mode<'a>(
     }
 }
 
-fn key_for_record(record: &AbilityControlPlaneRecord) -> AbilityControlPlaneKey {
-    AbilityControlPlaneKey::for_descriptor(
-        record.authority().scope().authority_root(),
-        record.descriptor(),
-    )
-}
-
 fn assert_record_keys_match(
     expected: &AbilityControlPlaneKey,
-    descriptor: &AbilityDescriptorRecord,
-    authority: &AuthorityBindingRecord,
+    descriptor: &AbilityDescriptor,
+    authority: &AuthorityBinding,
     implementation: &AbilityImplBinding,
 ) -> Result<(), AbilityControlPlaneError> {
-    let descriptor_key =
-        AbilityControlPlaneKey::for_descriptor(expected.authority_root(), descriptor);
+    let descriptor_key = AbilityControlPlaneKey::new(
+        descriptor.owner_ura.clone(),
+        expected.ability(),
+        descriptor.version.clone(),
+        descriptor.call_mode(),
+    )?;
     assert_table_key_matches("descriptor", expected, &descriptor_key)?;
     let authority_key = authority.key();
     assert_table_key_matches("authority", expected, &authority_key)?;
@@ -748,11 +700,25 @@ fn format_control_plane_key(key: &AbilityControlPlaneKey) -> String {
 }
 
 fn manifest_descriptor_version(
-    manifest: Option<&crate::core::ability::spec::AbilityManifest>,
+    manifest: Option<&crate::daemon::ability::manifest::AbilityManifest>,
 ) -> &str {
     manifest
-        .map(crate::core::ability::spec::AbilityManifest::descriptor_version)
+        .map(crate::daemon::ability::manifest::AbilityManifest::descriptor_version)
         .unwrap_or(DEFAULT_ABILITY_DESCRIPTOR_VERSION)
+}
+
+fn ensure_manifest_descriptor_version_matches(
+    registration_version: &str,
+    manifest: &crate::daemon::ability::manifest::AbilityManifest,
+) -> Result<(), AbilityControlPlaneError> {
+    let manifest_version = manifest.descriptor_version();
+    if manifest_version == registration_version {
+        return Ok(());
+    }
+    Err(AbilityControlPlaneError::DescriptorVersionMismatch {
+        manifest_version: manifest_version.to_string(),
+        registration_version: registration_version.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -761,22 +727,61 @@ mod tests {
     use serde_json::json;
 
     const LOCAL_DEVICE_URA: &str = "easynet:///r/default/device/local";
+    const LOCAL_SYSTEM_AGENT_URA: &str = "easynet:///r/default/agent/device.local.locomotion";
     const LOCAL_AGENT_URA: &str = "easynet:///r/default/agent/user.assistant";
+
+    fn native_registration<'a>(
+        ability: impl Into<String>,
+        call_mode: CallMode,
+        admission_action: AdmissionAction,
+        manifest_override: Option<&'a crate::daemon::ability::manifest::AbilityManifest>,
+        authority_scope: AuthorityScope,
+        runtime_env: RuntimeEnv,
+    ) -> AbilityControlPlaneRegistration<'a> {
+        let ability = ability.into();
+        let manifest = match manifest_override {
+            Some(manifest) => Some(manifest),
+            None => Some(test_manifest_for(&ability)),
+        };
+        AbilityControlPlaneRegistration::new(
+            ability,
+            call_mode,
+            admission_action,
+            manifest,
+            authority_scope,
+            runtime_env,
+            AbilityImplSource::NativeDaemon,
+        )
+    }
+
+    fn test_manifest_for(
+        ability: &str,
+    ) -> &'static crate::daemon::ability::manifest::AbilityManifest {
+        let public_name = ability.rsplit('.').next().unwrap_or(ability);
+        Box::leak(Box::new(
+            crate::daemon::ability::manifest::AbilityManifest::new(
+                public_name,
+                format!("test manifest for {ability}"),
+                json!({"type": "object"}),
+            )
+            .unwrap(),
+        ))
+    }
 
     #[test]
     fn register_writes_descriptor_authority_and_impl() {
         let mut registry = AbilityControlPlaneRegistry::default();
         let record = registry
-            .register(
+            .register_registration(native_registration(
                 "fs.read",
                 CallMode::Rpc,
+                AdmissionAction::Read,
                 None,
-                AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                AuthorityScope::new("system-agent:locomotion", LOCAL_SYSTEM_AGENT_URA).unwrap(),
                 RuntimeEnv::daemon_native(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
-        assert_eq!(record.descriptor().version().as_str(), "1.0.0");
+        assert_eq!(record.descriptor().version.as_str(), "1.0.0");
         assert!(record.authority().predicate().governs_advertise());
         assert!(record.authority().predicate().governs_invoke());
         assert_eq!(
@@ -790,8 +795,31 @@ mod tests {
     }
 
     #[test]
+    fn register_rejects_missing_manifest_before_descriptor_materialization() {
+        let mut registry = AbilityControlPlaneRegistry::default();
+        let error = registry
+            .register_registration(AbilityControlPlaneRegistration::new(
+                "fs.read",
+                CallMode::Rpc,
+                AdmissionAction::Read,
+                None,
+                AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                RuntimeEnv::daemon_native(),
+                AbilityImplSource::NativeDaemon,
+            ))
+            .expect_err("control-plane materialization must be provider-backed");
+
+        assert_eq!(
+            error,
+            AbilityControlPlaneError::MissingManifest {
+                ability: "fs.read".to_string()
+            }
+        );
+    }
+
+    #[test]
     fn register_uses_manifest_descriptor_version_as_control_plane_fact() {
-        let manifest = crate::core::ability::spec::AbilityManifest::new(
+        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             "search",
             "search local docs",
             json!({"type": "object"}),
@@ -801,17 +829,17 @@ mod tests {
         .unwrap();
         let mut registry = AbilityControlPlaneRegistry::default();
         let record = registry
-            .register(
+            .register_registration(native_registration(
                 "agent.search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 Some(&manifest),
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:manifest").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
 
-        assert_eq!(record.descriptor().version().as_str(), "2.3.4");
+        assert_eq!(record.descriptor().version.as_str(), "2.3.4");
         assert_eq!(record.authority().descriptor_version(), "2.3.4");
         assert_eq!(record.implementation().descriptor_version(), "2.3.4");
         assert!(registry
@@ -822,14 +850,84 @@ mod tests {
             .get_for_mode("agent.search", CallMode::Rpc)
             .expect("single non-default descriptor version is selected");
         assert_eq!(
-            default_lookup.unwrap().descriptor().version().as_str(),
+            default_lookup.unwrap().descriptor().version.as_str(),
             "2.3.4"
         );
     }
 
     #[test]
+    fn registration_commits_one_governed_descriptor_and_authority_policy() {
+        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+            "publish",
+            "publish a canonical page revision",
+            json!({"type": "object"}),
+        )
+        .unwrap()
+        .with_access(crate::daemon::ability::manifest::AccessPolicy {
+            visibility: crate::daemon::ability::manifest::ManifestAccessScope::Device,
+            allow_callers: Some(vec!["editor".to_string()]),
+            deny_callers: Some(vec!["blocked".to_string()]),
+        })
+        .unwrap();
+        let semantics = ReceiptSemantics::state_transition(
+            "pages.publish@v1",
+            crate::daemon::ability::descriptors::TransitionClass::Canonical,
+        )
+        .unwrap();
+        let mut registry = AbilityControlPlaneRegistry::default();
+        let record = registry
+            .register_registration(
+                AbilityControlPlaneRegistration::new(
+                    "pages.publish",
+                    CallMode::Rpc,
+                    AdmissionAction::Invoke,
+                    Some(&manifest),
+                    AuthorityScope::new("agent:pages", LOCAL_AGENT_URA).unwrap(),
+                    RuntimeEnv::daemon_native(),
+                    AbilityImplSource::NativeDaemon,
+                )
+                .with_receipt_semantics(semantics.clone()),
+            )
+            .unwrap();
+
+        assert_eq!(record.descriptor().receipt_semantics(), &semantics);
+        assert_eq!(record.descriptor().denied_agents(), &["blocked"]);
+        assert_eq!(
+            record.authority().invoke_policy_hash(),
+            record.descriptor().access_policy_hash_bytes(),
+            "authority must bind the policy already normalized into the descriptor"
+        );
+    }
+
+    #[test]
+    fn register_persists_owner_local_ability_ura_without_execution_prefix() {
+        let mut registry = AbilityControlPlaneRegistry::default();
+        let record = registry
+            .register_registration(native_registration(
+                "assistant.chat",
+                CallMode::Rpc,
+                AdmissionAction::Invoke,
+                None,
+                AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
+                RuntimeEnv::daemon_native(),
+            ))
+            .unwrap();
+
+        assert_eq!(record.ability(), "assistant.chat");
+        assert_eq!(record.descriptor().name, "chat");
+        assert_eq!(
+            record.descriptor().canonical_ability_ura().as_deref(),
+            Some("easynet:///r/default/ability/user.assistant.chat")
+        );
+        assert!(registry
+            .get("assistant.chat")
+            .expect("single record lookup is unambiguous")
+            .is_some());
+    }
+
+    #[test]
     fn register_version_rejects_manifest_descriptor_version_mismatch() {
-        let manifest = crate::core::ability::spec::AbilityManifest::new(
+        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             "search",
             "search local docs",
             json!({"type": "object"}),
@@ -843,6 +941,7 @@ mod tests {
                 AbilityControlPlaneRegistration::new(
                     "agent.search",
                     CallMode::Rpc,
+                    AdmissionAction::Invoke,
                     Some(&manifest),
                     AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                     RuntimeEnv::new("env:manifest").unwrap(),
@@ -862,15 +961,32 @@ mod tests {
     }
 
     #[test]
-    fn register_version_keeps_same_ability_versions_distinct() {
+    fn register_version_atomically_replaces_active_ability_version() {
+        let manifest_v1 = crate::daemon::ability::manifest::AbilityManifest::new(
+            "read",
+            "read local file",
+            json!({"type": "object"}),
+        )
+        .unwrap()
+        .with_descriptor_version("1.0.0")
+        .unwrap();
+        let manifest_v2 = crate::daemon::ability::manifest::AbilityManifest::new(
+            "read",
+            "read local file",
+            json!({"type": "object"}),
+        )
+        .unwrap()
+        .with_descriptor_version("2.0.0")
+        .unwrap();
         let mut registry = AbilityControlPlaneRegistry::default();
         registry
             .register_registration(
                 AbilityControlPlaneRegistration::new(
                     "fs.read",
                     CallMode::Rpc,
-                    None,
-                    AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                    AdmissionAction::Read,
+                    Some(&manifest_v1),
+                    AuthorityScope::new("system-agent:locomotion", LOCAL_SYSTEM_AGENT_URA).unwrap(),
                     RuntimeEnv::new("env:v1").unwrap(),
                     AbilityImplSource::NativeDaemon,
                 )
@@ -882,8 +998,9 @@ mod tests {
                 AbilityControlPlaneRegistration::new(
                     "fs.read",
                     CallMode::Rpc,
-                    None,
-                    AuthorityScope::new("device", LOCAL_DEVICE_URA).unwrap(),
+                    AdmissionAction::Read,
+                    Some(&manifest_v2),
+                    AuthorityScope::new("system-agent:locomotion", LOCAL_SYSTEM_AGENT_URA).unwrap(),
                     RuntimeEnv::new("env:v2").unwrap(),
                     AbilityImplSource::NativeDaemon,
                 )
@@ -891,56 +1008,44 @@ mod tests {
             )
             .unwrap();
 
-        let v1 = registry
+        assert!(registry
             .get_version("fs.read", "1.0.0")
-            .expect("v1 lookup is unambiguous")
-            .expect("v1 record");
+            .expect("retired v1 lookup is unambiguous")
+            .is_none());
         let v2 = registry
             .get_version("fs.read", "2.0.0")
             .expect("v2 lookup is unambiguous")
             .expect("v2 record");
-        assert_eq!(v1.implementation().runtime_env().label(), "env:v1");
         assert_eq!(v2.implementation().runtime_env().label(), "env:v2");
-        assert_ne!(
-            v1.implementation().impl_hash(),
-            v2.implementation().impl_hash()
-        );
-        let err = registry
+        let active = registry
             .get_for_mode("fs.read", CallMode::Rpc)
-            .expect_err("mode lookup must not choose between descriptor versions");
-        assert_eq!(err.descriptor_version, "<unique>");
-        assert_eq!(err.matches.len(), 2);
-        assert_eq!(
-            err.matches
-                .iter()
-                .map(|m| m.descriptor_version.as_str())
-                .collect::<Vec<_>>(),
-            vec!["1.0.0", "2.0.0"]
-        );
+            .expect("active mode lookup is unambiguous")
+            .expect("active record");
+        assert_eq!(active.descriptor().version, "2.0.0");
     }
 
     #[test]
     fn register_keeps_same_ability_version_modes_distinct() {
         let mut registry = AbilityControlPlaneRegistry::default();
         registry
-            .register(
+            .register_registration(native_registration(
                 "agent.chat",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:rpc").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
         registry
-            .register(
+            .register_registration(native_registration(
                 "agent.chat",
                 CallMode::Stream,
+                AdmissionAction::Stream,
                 None,
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:stream").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
 
         let rpc = registry
@@ -970,45 +1075,45 @@ mod tests {
     fn keys_and_records_enumerate_every_authority_mode_row() {
         let mut registry = AbilityControlPlaneRegistry::default();
         registry
-            .register(
+            .register_registration(native_registration(
                 "agent.chat",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:rpc").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
         registry
-            .register(
+            .register_registration(native_registration(
                 "agent.chat",
                 CallMode::Stream,
+                AdmissionAction::Stream,
                 None,
                 AuthorityScope::new("agent:assistant", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:stream").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
 
-        let keys = registry.keys();
-        assert_eq!(keys.len(), 2, "both call-mode rows must enumerate");
-
         let records = registry.records();
-        assert_eq!(records.len(), keys.len(), "records and keys must agree");
+        assert_eq!(records.len(), 2, "both call-mode rows must enumerate");
 
         // Each enumerated record's key must match its joined facets — proving
         // the rows are the same row the typed-key lookups return, not a union
         // artifact.
-        for (key, record) in &records {
-            assert_eq!(key.ability(), "agent.chat");
-            assert_eq!(key.call_mode(), record.descriptor().call_mode());
+        for record in &records {
+            assert_eq!(record.key().ability(), "agent.chat");
+            assert_eq!(record.key().call_mode(), record.descriptor().call_mode());
             assert_eq!(
-                key.authority_root(),
+                record.key().authority_root(),
                 record.authority().scope().authority_root()
             );
         }
 
-        let mut modes: Vec<CallMode> = records.iter().map(|(k, _)| k.call_mode()).collect();
+        let mut modes: Vec<CallMode> = records
+            .iter()
+            .map(|record| record.key().call_mode())
+            .collect();
         modes.sort();
         assert_eq!(modes, vec![CallMode::Rpc, CallMode::Stream]);
     }
@@ -1017,24 +1122,24 @@ mod tests {
     fn register_keeps_same_public_name_distinct_across_authority_roots() {
         let mut registry = AbilityControlPlaneRegistry::default();
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:a", "easynet:///r/default/agent/user.a").unwrap(),
                 RuntimeEnv::new("env:a").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:b", "easynet:///r/default/agent/user.b").unwrap(),
                 RuntimeEnv::new("env:b").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
 
         let err = registry
@@ -1054,24 +1159,24 @@ mod tests {
         let owner_a = "easynet:///r/default/agent/user.a";
         let owner_b = "easynet:///r/default/agent/user.b";
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:a", owner_a).unwrap(),
                 RuntimeEnv::new("env:a").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:b", owner_b).unwrap(),
                 RuntimeEnv::new("env:b").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
 
         assert_eq!(
@@ -1111,34 +1216,34 @@ mod tests {
         let owner_a = "easynet:///r/default/agent/user.a";
         let owner_b = "easynet:///r/default/agent/user.b";
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:a", owner_a).unwrap(),
                 RuntimeEnv::new("env:a-rpc").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Stream,
+                AdmissionAction::Stream,
                 None,
                 AuthorityScope::new("agent:a", owner_a).unwrap(),
                 RuntimeEnv::new("env:a-stream").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 None,
                 AuthorityScope::new("agent:b", owner_b).unwrap(),
                 RuntimeEnv::new("env:b-rpc").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
 
         assert!(registry.remove_for_authority(owner_a, "search"));
@@ -1162,7 +1267,7 @@ mod tests {
 
     #[test]
     fn authority_mode_lookup_and_remove_are_not_default_version_bound() {
-        let manifest = crate::core::ability::spec::AbilityManifest::new(
+        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             "search",
             "search local docs",
             json!({"type": "object"}),
@@ -1172,14 +1277,14 @@ mod tests {
         .unwrap();
         let mut registry = AbilityControlPlaneRegistry::default();
         registry
-            .register(
+            .register_registration(native_registration(
                 "search",
                 CallMode::Rpc,
+                AdmissionAction::Invoke,
                 Some(&manifest),
                 AuthorityScope::new("agent:a", LOCAL_AGENT_URA).unwrap(),
                 RuntimeEnv::new("env:v2").unwrap(),
-                AbilityImplSource::NativeDaemon,
-            )
+            ))
             .unwrap();
 
         assert_eq!(
@@ -1188,7 +1293,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .descriptor()
-                .version()
+                .version
                 .as_str(),
             "2.0.0"
         );

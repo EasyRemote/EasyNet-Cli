@@ -5,7 +5,7 @@
 // Description: CLI façade for Axon-owned URA builders and parser.
 //
 // URA is protocol state owned by Axon. This file deliberately contains
-// no grammar implementation; it re-exports `easynet_axon::ura` and
+// no grammar implementation; it re-exports `axon_sdk::ura` and
 // centralizes the few CLI-local projections that sit immediately on top
 // of Axon's canonical builders. Existing CLI modules can keep using
 // `crate::core::ura::*` while the source of truth remains in Axon SDK.
@@ -14,18 +14,19 @@
 //
 //   user      easynet:///r/<realm>/user/<user-id>
 //   device    easynet:///r/<realm>/device/<device-id>
+//   service   easynet:///r/<realm>/service/<principal-id>.<service-id>
 //   agent     easynet:///r/<realm>/agent/<user-id>.<agent-id>
 //   ability   easynet:///r/<realm>/ability/<owner>.<namespace>.<ability-id>
-//   hub       easynet:///r/<realm>/hub
+//   hub       easynet:///r/<realm>/authority
 //   resource  easynet:///r/<realm>/resource/<owner-id>/<path>
 //
 // Examples:
 //
 //   easynet:///r/localhost/device/8315ea5c-7cfd-473e-8fef-95340af6d971
 //   easynet:///r/localhost/agent/u-9f4.frontend-engineer
-//   easynet:///r/localhost/hub
+//   easynet:///r/localhost/authority
 //   easynet:///r/localhost/ability/u-9f4.frontend-engineer.chat
-//   easynet:///r/localhost/ability/hub.federation.resolve
+//   easynet:///r/localhost/ability/authority.federation.resolve
 //   easynet:///r/localhost/resource/agent.u-9f4.frontend-engineer/skill/alive-video
 //
 // CLI-specific rule:
@@ -36,9 +37,106 @@
 //   The guard at `tests/scripts/test_no_raw_ura_construction.sh` exists
 //   to keep that invariant enforceable.
 
-pub use easynet_axon::ura::*;
+pub use axon_sdk::ura::*;
 
-pub mod provisional;
+/// EasyNet product default realm.
+///
+/// This policy default is intentionally owned by the CLI facade rather than
+/// Axon's product-neutral URA grammar.
+pub const REALM_EASYNET: &str = "easynet.run";
+
+/// Extract the realm component from any canonical URA accepted by Axon.
+///
+/// This is a CLI-local projection over Axon's canonical parser, not a grammar
+/// implementation. Callers that only need the realm fact should use this helper
+/// instead of copying `parse_ura(...).map(|parsed| parsed.realm)` in daemon
+/// subsystems.
+pub fn realm_from_ura(ura: &str) -> Option<String> {
+    parse_ura(ura).ok().map(|parsed| parsed.realm)
+}
+
+/// Extract the realm component only from canonical User URAs.
+///
+/// Directory and key-custody policies frequently need to distinguish malformed
+/// input from a non-user role. Centralizing the role check here prevents
+/// keyring, federation, and admission modules from maintaining parallel user
+/// URA parser fragments.
+pub fn user_realm_from_ura(ura: &str) -> Option<String> {
+    let parsed = parse_ura(ura).ok()?;
+    (parsed.kind == URAKind::User).then_some(parsed.realm)
+}
+
+/// Canonical labels accepted by descriptor subject kind scopes.
+///
+/// These labels are policy vocabulary layered on top of Axon's typed URA
+/// parser. They deliberately exclude `unknown`: an unknown URA kind can be
+/// parsed/diagnosed, but it is never an admissible governed scope label.
+pub const URA_KIND_SCOPE_LABELS: &[&str] = &[
+    "authority",
+    "device",
+    "user",
+    "service",
+    "agent",
+    "ability",
+    "resource",
+];
+
+/// Project a parsed URA kind into the canonical descriptor-scope label.
+///
+/// This is the single label boundary for `ScopeRule::OnlyUraKinds`,
+/// `ManifestSubjectScope::OnlyUraKinds`, and ability TOML round-tripping.
+pub fn ura_kind_scope_label(kind: URAKind) -> &'static str {
+    match kind {
+        URAKind::Authority => "authority",
+        URAKind::Device => "device",
+        URAKind::User => "user",
+        URAKind::Service => "service",
+        URAKind::Agent => "agent",
+        URAKind::Ability => "ability",
+        URAKind::Resource => "resource",
+        URAKind::Unknown => "unknown",
+    }
+}
+
+/// Return whether `value` is a canonical admissible URA-kind scope label.
+pub fn is_ura_kind_scope_label(value: &str) -> bool {
+    URA_KIND_SCOPE_LABELS.contains(&value)
+}
+
+/// Validate and canonicalize a sorted/deduplicated list of URA-kind labels.
+///
+/// The returned list is sorted and deduplicated. `None` means the caller passed
+/// an empty list, whitespace-mutated values, duplicate values, non-sorted
+/// values, or a label outside `URA_KIND_SCOPE_LABELS`.
+pub fn canonical_ura_kind_scope_labels(values: &[String]) -> Option<Vec<String>> {
+    let mut normalized = Vec::with_capacity(values.len());
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() || trimmed != value || !is_ura_kind_scope_label(trimmed) {
+            return None;
+        }
+        normalized.push(trimmed.to_string());
+    }
+    normalized.sort();
+    normalized.dedup();
+    if normalized.is_empty() || normalized.len() != values.len() || normalized != values {
+        return None;
+    }
+    Some(normalized)
+}
+
+/// Product-facing Hub identity projected onto Axon's generic authority URA.
+///
+/// Hub policy and lifecycle remain CLI-owned; Axon sees only the canonical
+/// system-authority owner kind.
+pub fn hub_ura(realm: &str) -> String {
+    authority_ura(realm)
+}
+
+/// Product-facing Hub ability projected onto Axon's generic authority owner.
+pub fn hub_ability_ura(realm: &str, ability_name: &str) -> String {
+    authority_ability_ura(realm, ability_name)
+}
 
 /// Synthetic system Agent URA for daemon-internal LocalRuntime calls.
 ///
@@ -52,12 +150,12 @@ pub(crate) const LOCAL_SYSTEM_AGENT_URA: &str = "easynet:///r/_system/agent/_sys
 ///
 /// Directory queries use prefix matching instead of a concrete role URA.
 /// Axon exposes canonical role builders, so the CLI derives the prefix
-/// from the canonical Hub URA here instead of letting callers assemble
+/// from the product Hub facade here instead of letting callers assemble
 /// scheme fragments.
 pub fn realm_prefix_ura(realm: &str) -> anyhow::Result<String> {
     let hub = hub_ura(realm);
-    let prefix = hub.strip_suffix("/hub").ok_or_else(|| {
-        anyhow::anyhow!("Axon hub_ura returned unexpected hub identity shape: {hub:?}")
+    let prefix = hub.strip_suffix("/authority").ok_or_else(|| {
+        anyhow::anyhow!("Axon authority_ura returned unexpected identity shape: {hub:?}")
     })?;
     Ok(format!("{prefix}/"))
 }
@@ -69,7 +167,7 @@ pub fn realm_prefix_ura(realm: &str) -> anyhow::Result<String> {
 /// public ability name, and local registry dispatch key.
 ///
 /// What this is not: it is not a URA parser or grammar copy. Parsing
-/// still belongs to Axon (`easynet_axon::ura::parse_ura`); this type
+/// still belongs to Axon (`axon_sdk::ura::parse_ura`); this type
 /// only packages the CLI daemon projection that otherwise tends to be
 /// hand-written at each call site.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,13 +203,29 @@ impl AbilitySelector {
                 "agent",
                 agent_id.clone(),
             ),
+            AbilityOwner::Service {
+                principal_id,
+                service_id,
+            } => (
+                service_ura(&parsed.realm, &principal_id, &service_id),
+                "service",
+                service_id.clone(),
+            ),
+            AbilityOwner::SystemAgent {
+                device_id,
+                agent_id,
+            } => (
+                device_agent_ura(&parsed.realm, &device_id, &agent_id),
+                "system-agent",
+                agent_id.clone(),
+            ),
             AbilityOwner::Device { device_id } => {
                 let owner_ura = device_ura(&parsed.realm, &device_id);
                 (owner_ura.clone(), "device", owner_ura)
             }
-            AbilityOwner::Hub => {
-                let owner_ura = hub_ura(&parsed.realm);
-                (owner_ura.clone(), "hub", owner_ura)
+            AbilityOwner::Authority => {
+                let owner_ura = authority_ura(&parsed.realm);
+                (owner_ura.clone(), "authority", owner_ura)
             }
         };
         let public_name = ability_name_from_parts(&parsed).ok_or_else(|| {
@@ -139,9 +253,9 @@ impl AbilitySelector {
         &self.owner_ura
     }
 
-    /// Owner kind encoded by the Ability URA: `"agent"`, `"device"`,
-    /// or `"hub"`. Derived from the typed `AbilityOwner` arm at parse
-    /// time — consumers never re-sniff URA strings (F-047).
+    /// Owner kind encoded by the Ability URA: `"agent"`, `"service"`,
+    /// `"system-agent"`, `"device"`, or `"authority"`. Derived from the typed `AbilityOwner`
+    /// arm at parse time — consumers never re-sniff URA strings (F-047).
     pub fn owner_kind(&self) -> &'static str {
         self.owner_kind
     }
@@ -221,10 +335,10 @@ impl OwnerLocalAbilityName {
 /// Project an internal registry ability name into the public name a
 /// given owner publishes under RFC-005.
 ///
-/// Agent, device, and hub owners publish owner-local public ability names.
-/// The local daemon registry may store implementation-qualified keys such as
-/// `claude.chat` or `fs.read`; those prefixes identify the local
-/// dispatch table, not the public Ability URA tail.
+/// Agent, Service, SystemAgent, Device, and Authority owners publish owner-local public
+/// ability names. The local daemon registry may store
+/// implementation-qualified keys such as `claude.chat` or `fs.read`; those
+/// prefixes identify the local dispatch table, not the public Ability URA tail.
 pub fn owner_local_ability_name(owner_ura: &str, ability_name: &str) -> String {
     let name = ability_name.trim();
     if name.is_empty() {
@@ -253,9 +367,50 @@ pub fn owner_local_ability_name(owner_ura: &str, ability_name: &str) -> String {
                 .to_string()
         }
         URAKind::Device => name.strip_prefix("device.").unwrap_or(name).to_string(),
-        URAKind::Hub => name.strip_prefix("hub.").unwrap_or(name).to_string(),
+        URAKind::Authority => name.to_string(),
         _ => name.to_string(),
     }
+}
+
+/// Project a registry name into the public descriptor name for an authority.
+///
+/// User-owned Agents carry their Agent id in the Ability owner token, so their
+/// descriptor name is owner-local. A device-sponsored Agent may expose a bare
+/// verb such as `screenshot`; in that case its Agent id supplies the required
+/// namespace (`terminal.screenshot`). Already-namespaced abilities such as
+/// `consent.decide` remain unchanged—the Agent identity is already encoded in
+/// the Ability owner token and must not be duplicated into the public name.
+pub fn descriptor_public_ability_name(owner_ura: &str, ability_name: &str) -> String {
+    let owner_local_name = owner_local_ability_name(owner_ura, ability_name);
+    let Ok(owner) = parse_ura(owner_ura) else {
+        return owner_local_name;
+    };
+    let Some((_device_id, agent_id)) = owner.device_agent_ids() else {
+        return owner_local_name;
+    };
+    let prefix = format!("{agent_id}.");
+    if owner_local_name.contains('.') || owner_local_name.starts_with(&prefix) {
+        owner_local_name
+    } else {
+        format!("{prefix}{owner_local_name}")
+    }
+}
+
+/// Return whether an Ability URA is canonically published under `owner_ura`.
+///
+/// For User-Agent, Service, SystemAgent, Device, and Authority owners, this is a direct
+/// inverse check against Axon's Ability owner token. There is no fallback from
+/// a device-sponsored SystemAgent ability to the sponsoring Device owner:
+/// Device is substrate/custodian, not the logical ability callee.
+pub fn ability_ura_matches_owner_ura(owner_ura: &str, ability_ura: &str) -> bool {
+    let Ok(ability) = parse_ura(ability_ura) else {
+        return false;
+    };
+    if ability.kind != URAKind::Ability {
+        return false;
+    }
+
+    ability_owner_identity_ura(ability_ura).as_deref() == Some(owner_ura)
 }
 
 /// Convert an owner-local ability name back to the daemon registry key
@@ -277,12 +432,14 @@ pub fn local_dispatch_ability_key(target_ura: &str, ability: &str) -> String {
 
     match target.kind {
         URAKind::Agent => {
-            // Dual-grammar agent_id, same as owner_local_ability_name.
-            let Some(agent_id) = target
-                .agent_ids()
-                .map(|(_, id)| id)
-                .or_else(|| target.device_agent_ids().map(|(_, id)| id))
-            else {
+            if let Some((_device_id, agent_id)) = target.device_agent_ids() {
+                let public_name = owner_local_ability_name(target_ura, name);
+                if public_name.contains('.') {
+                    return public_name;
+                }
+                return format!("{agent_id}.{public_name}");
+            }
+            let Some((_user_id, agent_id)) = target.agent_ids() else {
                 return name.to_string();
             };
             let public_name = owner_local_ability_name(target_ura, name);
@@ -293,7 +450,9 @@ pub fn local_dispatch_ability_key(target_ura: &str, ability: &str) -> String {
                 format!("{agent_id}.{public_name}")
             }
         }
-        URAKind::Device | URAKind::Hub => owner_local_ability_name(target_ura, name),
+        URAKind::Device | URAKind::Service | URAKind::Authority => {
+            owner_local_ability_name(target_ura, name)
+        }
         _ => name.to_string(),
     }
 }
@@ -305,8 +464,8 @@ mod tests {
     #[test]
     fn cli_uses_axon_sdk_ura_builder() {
         assert_eq!(
-            ability_ura("localhost", "hub", "federation", "resolve"),
-            "easynet:///r/localhost/ability/hub.federation.resolve"
+            hub_ability_ura("localhost", "federation.resolve"),
+            "easynet:///r/localhost/ability/authority.federation.resolve"
         );
         assert_eq!(
             resource_dot_ura(
@@ -327,6 +486,69 @@ mod tests {
     }
 
     #[test]
+    fn realm_from_ura_accepts_every_canonical_principal_role() {
+        assert_eq!(
+            realm_from_ura("easynet:///r/acme/user/user-1").as_deref(),
+            Some("acme")
+        );
+        assert_eq!(
+            realm_from_ura("easynet:///r/acme/device/dev-1").as_deref(),
+            Some("acme")
+        );
+        assert_eq!(
+            realm_from_ura("easynet:///r/acme/authority").as_deref(),
+            Some("acme")
+        );
+    }
+
+    #[test]
+    fn realm_from_ura_rejects_noncanonical_transport_shapes() {
+        assert_eq!(realm_from_ura("https://example.com/device/dev-1"), None);
+        assert_eq!(realm_from_ura("easynet://r/acme/device/dev-1"), None);
+        assert_eq!(realm_from_ura("easynet:///r//device/dev-1"), None);
+    }
+
+    #[test]
+    fn user_realm_from_ura_accepts_only_user_role() {
+        assert_eq!(
+            user_realm_from_ura("easynet:///r/acme/user/user-1").as_deref(),
+            Some("acme")
+        );
+        assert_eq!(user_realm_from_ura("easynet:///r/acme/device/dev-1"), None);
+        assert_eq!(user_realm_from_ura("not-a-ura"), None);
+    }
+
+    #[test]
+    fn canonical_ura_kind_scope_labels_rejects_drift() {
+        assert_eq!(
+            canonical_ura_kind_scope_labels(&[
+                "agent".to_string(),
+                "resource".to_string(),
+                "user".to_string()
+            ]),
+            Some(vec![
+                "agent".to_string(),
+                "resource".to_string(),
+                "user".to_string()
+            ])
+        );
+        assert_eq!(
+            ura_kind_scope_label(URAKind::Authority),
+            URA_KIND_SCOPE_LABELS[0]
+        );
+        assert!(canonical_ura_kind_scope_labels(&["unknown".to_string()]).is_none());
+        assert!(
+            canonical_ura_kind_scope_labels(&["resource".to_string(), "agent".to_string()])
+                .is_none()
+        );
+        assert!(
+            canonical_ura_kind_scope_labels(&["resource".to_string(), "resource".to_string()])
+                .is_none()
+        );
+        assert!(canonical_ura_kind_scope_labels(&[" resource".to_string()]).is_none());
+    }
+
+    #[test]
     fn owner_local_ability_name_projects_registry_key_to_public_name() {
         assert_eq!(
             owner_local_ability_name("easynet:///r/localhost/device/dev-1", "fs.read"),
@@ -337,8 +559,15 @@ mod tests {
             "fs.read"
         );
         assert_eq!(
-            owner_local_ability_name("easynet:///r/localhost/hub", "hub.openai.chat"),
-            "openai.chat"
+            owner_local_ability_name("easynet:///r/localhost/authority", "hub.openai.chat"),
+            "hub.openai.chat"
+        );
+        assert_eq!(
+            owner_local_ability_name(
+                "easynet:///r/localhost/authority",
+                "authority.binding.grant"
+            ),
+            "authority.binding.grant"
         );
         assert_eq!(
             owner_local_ability_name("easynet:///r/localhost/agent/alice.claude", "claude.chat",),
@@ -368,6 +597,64 @@ mod tests {
             ),
             "terminal.screenshot"
         );
+        assert_eq!(
+            local_dispatch_ability_key(
+                "easynet:///r/localhost/agent/device.dev-1.agent-management",
+                "agent.list"
+            ),
+            "agent.list"
+        );
+    }
+
+    #[test]
+    fn descriptor_public_name_qualifies_only_bare_device_agent_verbs() {
+        let owner = "easynet:///r/localhost/agent/device.dev-1.terminal";
+        assert_eq!(
+            descriptor_public_ability_name(owner, "terminal.screenshot"),
+            "terminal.screenshot"
+        );
+        assert_eq!(
+            descriptor_public_ability_name(owner, "screenshot"),
+            "terminal.screenshot"
+        );
+        assert_eq!(
+            descriptor_public_ability_name(owner, "consent.decide"),
+            "consent.decide",
+            "an authored namespace must not gain a second Agent prefix"
+        );
+        assert_eq!(
+            owner_ability_ura(
+                owner,
+                &descriptor_public_ability_name(owner, "terminal.screenshot")
+            )
+            .as_deref(),
+            Some("easynet:///r/localhost/ability/system-agent.dev-1.terminal.terminal.screenshot")
+        );
+    }
+
+    #[test]
+    fn ability_ura_owner_match_accepts_device_sponsored_agent_owner() {
+        let owner = "easynet:///r/localhost/agent/device.dev-1.terminal";
+        let ability =
+            "easynet:///r/localhost/ability/system-agent.dev-1.terminal.terminal.screenshot";
+
+        assert!(ability_ura_matches_owner_ura(owner, ability));
+        assert!(!ability_ura_matches_owner_ura(
+            "easynet:///r/localhost/device/dev-1",
+            ability
+        ));
+        assert!(ability_ura_matches_owner_ura(
+            "easynet:///r/localhost/device/dev-1",
+            "easynet:///r/localhost/ability/device.dev-1.fs.read"
+        ));
+        assert!(!ability_ura_matches_owner_ura(
+            "easynet:///r/localhost/agent/alice.terminal",
+            ability
+        ));
+        assert!(!ability_ura_matches_owner_ura(
+            owner,
+            "easynet:///r/localhost/ability/system-agent.dev-2.terminal.terminal.screenshot"
+        ));
     }
 
     #[test]
@@ -420,9 +707,39 @@ mod tests {
         let selector = AbilitySelector::parse("easynet:///r/acme/ability/device.dev-1.fs.read")
             .expect("device ability selector");
         assert_eq!(selector.owner_ura(), "easynet:///r/acme/device/dev-1");
+        assert_eq!(selector.owner_kind(), "device");
         assert_eq!(selector.dispatch_target(), "easynet:///r/acme/device/dev-1");
         assert_eq!(selector.public_name(), "fs.read");
         assert_eq!(selector.local_registry_ability(), "fs.read");
+    }
+
+    #[test]
+    fn ability_selector_projects_system_agent_owned_ability_ura() {
+        let selector = AbilitySelector::parse(
+            "easynet:///r/acme/ability/system-agent.dev-1.agent-management.agent.list",
+        )
+        .expect("system agent ability selector");
+        assert_eq!(
+            selector.owner_ura(),
+            "easynet:///r/acme/agent/device.dev-1.agent-management"
+        );
+        assert_eq!(selector.owner_kind(), "system-agent");
+        assert_eq!(selector.dispatch_target(), "agent-management");
+        assert_eq!(selector.public_name(), "agent.list");
+        assert_eq!(selector.local_registry_ability(), "agent.list");
+    }
+
+    #[test]
+    fn ability_selector_projects_authority_owned_ability_ura() {
+        let selector =
+            AbilitySelector::parse("easynet:///r/acme/ability/authority.federation.status")
+                .expect("authority ability selector");
+
+        assert_eq!(selector.owner_ura(), "easynet:///r/acme/authority");
+        assert_eq!(selector.owner_kind(), "authority");
+        assert_eq!(selector.dispatch_target(), "easynet:///r/acme/authority");
+        assert_eq!(selector.public_name(), "federation.status");
+        assert_eq!(selector.local_registry_ability(), "federation.status");
     }
 
     #[test]

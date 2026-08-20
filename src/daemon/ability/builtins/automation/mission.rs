@@ -22,14 +22,15 @@
 // mission runtime; there is no second path." For that promise to
 // hold from the LLM's seat, the mission runtime must be reachable
 // AS A TOOL — i.e. an ability the MCP catalog exposes. Without
-// this handler, the LLM had to either fall back to direct
-// `mcp.bridge.call_tool` (which loses EAL composition) or hop to
+// this handler, the LLM had to choose a separate direct
+// `mcp.bridge.call_tool` path (which loses EAL composition) or hop to
 // `easynet mission run` via shell (depends on the agent having
 // shell access AND breaks isolation).
 //
 // Implementation note
 // -------------------
-// The handler is a thin shim over `cli::mission_runs::run_mission_inproc`.
+// The handler is a thin adapter over the daemon-owned mission application
+// service.
 // All error mapping, persistence, and dispatch invariants live in
 // that single entry point — this file just adapts the JSON-shaped
 // args to MissionRunOpts and the MissionRunResult back to JSON.
@@ -39,6 +40,8 @@
 
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+use serde_json::Map;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
@@ -71,19 +74,20 @@ pub const ABILITY_CANCEL: &str = crate::daemon::ability::names::automation::MISS
 /// know which to pick, the receipts diverged, and the duplicate
 /// names doubled the meta-discovery surface for no win.
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner(
+    let owner = OwnerKind::automation_system();
+    reg.register_rpc_with_envelope_and_owner(
         "mission.run",
-        OwnerKind::Device,
-        Arc::new(move |args: Value| run_handler(args)),
+        owner.clone(),
+        Arc::new(move |env, args: Value| run_handler(env, args)),
     );
     reg.register_rpc_with_owner(
         "mission.track",
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(move |args: Value| track_handler(args)),
     );
     reg.register_rpc_with_owner(
         "mission.cancel",
-        OwnerKind::Device,
+        owner,
         Arc::new(move |args: Value| cancel_handler(args)),
     );
 }
@@ -95,7 +99,7 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 ///                  `let r = claude.weather(location: "Beijing")`
 ///                  `print(r)`
 ///   `label`   — optional human-readable label baked into the
-///                run-dir name. Falls back to `"mission.run"` so
+///                run-dir name. Defaults to `"mission.run"` so
 ///                two LLM-driven invocations land in distinct dirs
 ///                without the LLM having to mint an id.
 ///
@@ -104,56 +108,62 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 ///   `run_dir` — absolute path on disk
 ///   `outputs` — map<binding-name, value>; one entry per `let` in the
 ///                EAL source. Bindings the source did not assign are
-///                absent. Non-JSON values are kept as their raw
-///                string form (mirrors `MissionRunResult.outputs`).
+///                absent. Non-JSON child output is represented as a JSON
+///                string at the interpreter byte boundary.
 ///   `meta`    — the `MissionRunMeta` blob (status, started_at_unix_ms,
 ///                ended_at_unix_ms, source_file, etc.).
 ///
 /// Error semantics:
 ///   * Compile failure (EAL parse / planner reject)        → Err
-///   * Implicit-agent-fallback collision                    → Err
+///   * Traditional target ambiguity                         → Err
 ///   * Step dispatch failure inside the mission             → Err
-///     (mission_runs::run_mission_inproc bubbles the typed step
+///     (MissionRunner bubbles the typed step
 ///     error verbatim)
 ///   * Empty / missing `source`                              → Err with
 ///     a precise "source must be a non-empty string"
-fn run_handler(args: Value) -> anyhow::Result<Value> {
-    let source = args
-        .get("source")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("mission.run: `source` must be a non-empty string"))?;
-    if source.trim().is_empty() {
-        anyhow::bail!("mission.run: `source` must be a non-empty string");
-    }
-    let label = args
-        .get("label")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| "mission.run".to_string());
-
-    let opts = crate::cli::commands::mission_runs::MissionRunOpts {
-        source_label: Some(label),
-        trace_path: None,
-        invocation_context: None,
-    };
-
-    let result = crate::cli::commands::mission_runs::run_mission_inproc(&source, opts)?;
-    let outputs_json: serde_json::Map<String, Value> = result.bound_vars.into_iter().collect();
-    let meta_json = serde_json::to_value(&result.meta).unwrap_or(Value::Null);
-    Ok(json!({
-        "ok": result.ok,
-        "run_id": result.run_id,
-        "run_dir": result.run_dir.to_string_lossy(),
-        "outputs": Value::Object(outputs_json),
-        "meta": meta_json,
-    }))
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct MissionRunResponse {
+    pub(crate) ok: bool,
+    pub(crate) run_id: String,
+    pub(crate) run_dir: String,
+    pub(crate) outputs: serde_json::Map<String, Value>,
+    pub(crate) meta: crate::daemon::execution::mission::orchestration::MissionRunMeta,
 }
 
-/// `easynet.track` handler.
+fn run_handler(
+    env: crate::daemon::ability::dispatch::EnvelopeContext,
+    args: Value,
+) -> anyhow::Result<Value> {
+    let args = mission_args_object("mission.run", &args, &["source", "label"])?;
+    let source = mission_required_string_arg("mission.run", args, "source")?;
+    let label = mission_optional_string_arg("mission.run", args, "label")?
+        .unwrap_or_else(|| "mission.run".to_string());
+
+    let opts = crate::daemon::execution::mission::orchestration::MissionRunOpts {
+        source_label: Some(label),
+        run_timeout: None,
+    };
+
+    let gateway = Arc::new(
+        crate::daemon::execution::mission::invocation_gateway::DaemonMissionInvocationGateway::from_admitted_envelope(&env)?,
+    );
+    let result = crate::daemon::execution::mission::orchestration::MissionRunner::new(gateway)
+        .run(&source, opts)?;
+    let outputs_json: serde_json::Map<String, Value> = result.bound_vars.into_iter().collect();
+    serde_json::to_value(MissionRunResponse {
+        ok: result.ok,
+        run_id: result.run_id,
+        run_dir: result.run_dir.to_string_lossy().into_owned(),
+        outputs: outputs_json,
+        meta: result.meta,
+    })
+    .map_err(Into::into)
+}
+
+/// `mission.track` handler.
 ///
 /// Args (JSON object):
-///   `run_id` — REQUIRED. The id returned by a prior `easynet.run`
+///   `run_id` — REQUIRED. The id returned by a prior `mission.run`
 ///                (the trailing component of `run_dir`).
 ///
 /// Returns (JSON object):
@@ -169,15 +179,9 @@ fn run_handler(args: Value) -> anyhow::Result<Value> {
 /// includes a short list of the closest matches (find_run already
 /// surfaces those) so the LLM can self-correct.
 fn track_handler(args: Value) -> anyhow::Result<Value> {
-    let run_id = args
-        .get("run_id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("easynet.track: `run_id` must be a non-empty string"))?;
-    if run_id.trim().is_empty() {
-        anyhow::bail!("easynet.track: `run_id` must be a non-empty string");
-    }
-    let summary = crate::cli::commands::mission_runs::find_run(&run_id)?;
+    let args = mission_args_object("mission.track", &args, &["run_id"])?;
+    let run_id = mission_required_string_arg("mission.track", args, "run_id")?;
+    let summary = crate::daemon::execution::mission::orchestration::find_run(&run_id)?;
     let meta_json = serde_json::to_value(&summary.meta).unwrap_or(Value::Null);
     Ok(json!({
         "run_id":  summary.id,
@@ -187,7 +191,7 @@ fn track_handler(args: Value) -> anyhow::Result<Value> {
     }))
 }
 
-/// `easynet.cancel` handler.
+/// `mission.cancel` handler.
 ///
 /// Args (JSON object):
 ///   `run_id` — REQUIRED. The id of the in-flight mission to cancel.
@@ -205,18 +209,14 @@ fn track_handler(args: Value) -> anyhow::Result<Value> {
 /// finish on their own and their results are discarded by the
 /// "cancelled" status.
 fn cancel_handler(args: Value) -> anyhow::Result<Value> {
-    let run_id = args
-        .get("run_id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("easynet.cancel: `run_id` must be a non-empty string"))?;
-    if run_id.trim().is_empty() {
-        anyhow::bail!("easynet.cancel: `run_id` must be a non-empty string");
-    }
-    let outcome = crate::cli::commands::mission_runs::cancel_run(&run_id)?;
+    let args = mission_args_object("mission.cancel", &args, &["run_id"])?;
+    let run_id = mission_required_string_arg("mission.cancel", args, "run_id")?;
+    let outcome = crate::daemon::execution::mission::orchestration::cancel_run(&run_id)?;
     let (cancelled, summary) = match outcome {
-        crate::cli::commands::mission_runs::CancelOutcome::Cancelled(s) => (true, s),
-        crate::cli::commands::mission_runs::CancelOutcome::AlreadyTerminal(s) => (false, s),
+        crate::daemon::execution::mission::orchestration::CancelOutcome::Cancelled(s) => (true, s),
+        crate::daemon::execution::mission::orchestration::CancelOutcome::AlreadyTerminal(s) => {
+            (false, s)
+        }
     };
     let meta_json = serde_json::to_value(&summary.meta).unwrap_or(Value::Null);
     Ok(json!({
@@ -224,6 +224,51 @@ fn cancel_handler(args: Value) -> anyhow::Result<Value> {
         "cancelled": cancelled,
         "meta":      meta_json,
     }))
+}
+
+fn mission_args_object<'a>(
+    ability: &str,
+    args: &'a Value,
+    allowed_fields: &[&str],
+) -> anyhow::Result<&'a Map<String, Value>> {
+    let object = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{ability}: args must be a JSON object"))?;
+    for key in object.keys() {
+        if !allowed_fields.contains(&key.as_str()) {
+            anyhow::bail!("{ability}: unknown argument `{key}`");
+        }
+    }
+    Ok(object)
+}
+
+fn mission_required_string_arg(
+    ability: &str,
+    args: &Map<String, Value>,
+    field: &str,
+) -> anyhow::Result<String> {
+    let value = args
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("{ability}: `{field}` must be a non-empty string"))?;
+    if value.trim().is_empty() {
+        anyhow::bail!("{ability}: `{field}` must be a non-empty string");
+    }
+    Ok(value.to_string())
+}
+
+fn mission_optional_string_arg(
+    ability: &str,
+    args: &Map<String, Value>,
+    field: &str,
+) -> anyhow::Result<Option<String>> {
+    let Some(value) = args.get(field) else {
+        return Ok(None);
+    };
+    let value = value
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("{ability}: `{field}` must be a string"))?;
+    Ok(Some(value.to_string()))
 }
 
 // ── Discovery surfaces ──────────────────────────────────────────
@@ -238,8 +283,8 @@ pub fn run_description() -> &'static str {
      under `~/.easynet/missions/runs/<run_id>` and returns the run id, \
      run dir path, every `let`-bound output, and the run metadata. \
      Use this to drive multi-step or cross-agent orchestration; \
-     `easynet.track` polls a long run, `easynet.cancel` aborts one. \
-     For a single ability call, prefer `easynet.invoke` — it skips \
+     `mission.track` polls a long run, `mission.cancel` aborts one. \
+     For a single ability call, prefer direct invocation — it skips \
      the run-dir bookkeeping."
 }
 
@@ -268,8 +313,8 @@ pub fn run_input_schema() -> Value {
 }
 
 pub fn track_description() -> &'static str {
-    "Read the persisted state of a prior `easynet.run` invocation by \
-     run id. Returns the same shape `easynet.run` surfaces (run_id, \
+    "Read the persisted state of a prior `mission.run` invocation by \
+     run id. Returns the same shape `mission.run` surfaces (run_id, \
      run_dir, outputs, meta, ok) reconstructed from the on-disk run \
      dir. Use it to poll a long-running mission without holding the \
      original RPC open."
@@ -284,7 +329,7 @@ pub fn track_input_schema() -> Value {
             "run_id": {
                 "type": "string",
                 "description": "The run id returned by an earlier \
-                                `easynet.run` call (the trailing component \
+                                `mission.run` call (the trailing component \
                                 of run_dir)."
             }
         }
@@ -317,19 +362,45 @@ pub fn cancel_input_schema() -> Value {
 mod tests {
     use super::*;
 
+    fn test_envelope() -> crate::daemon::ability::dispatch::EnvelopeContext {
+        crate::daemon::ability::dispatch::EnvelopeContext::for_test(
+            "easynet:///r/test/agent/caller",
+            "easynet:///r/test/resource/mission",
+        )
+    }
+
     /// Empty `source` is a caller bug, not a transient. Surface it
     /// loud so the LLM sees a precise error and reframes its tool
     /// call rather than retrying with the same input.
     #[test]
     fn rejects_missing_source() {
-        let err = run_handler(json!({})).unwrap_err();
+        let err = run_handler(test_envelope(), json!({})).unwrap_err();
         assert!(err.to_string().contains("`source`"));
+    }
+
+    #[test]
+    fn run_rejects_non_object_args() {
+        let err = run_handler(test_envelope(), json!("source text")).unwrap_err();
+        assert!(err.to_string().contains("JSON object"));
+    }
+
+    #[test]
+    fn run_rejects_unknown_argument() {
+        let err = run_handler(
+            test_envelope(),
+            json!({
+                "source": "let r = agent.echo()",
+                "action": "retired-field"
+            }),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown argument `action`"));
     }
 
     /// Whitespace-only source must fail the same way as missing.
     #[test]
     fn rejects_blank_source() {
-        let err = run_handler(json!({"source": "   "})).unwrap_err();
+        let err = run_handler(test_envelope(), json!({"source": "   "})).unwrap_err();
         assert!(err.to_string().contains("`source`"));
     }
 
@@ -337,8 +408,18 @@ mod tests {
     /// by accident) hits the type guard, not the EAL parser.
     #[test]
     fn rejects_non_string_source() {
-        let err = run_handler(json!({"source": 42})).unwrap_err();
+        let err = run_handler(test_envelope(), json!({"source": 42})).unwrap_err();
         assert!(err.to_string().contains("non-empty string"));
+    }
+
+    #[test]
+    fn run_rejects_non_string_label_instead_of_defaulting() {
+        let err = run_handler(
+            test_envelope(),
+            json!({"source": "let r = agent.echo()", "label": 42}),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("`label` must be a string"));
     }
 
     /// Live happy path is covered by the e2e cross-agent test —
@@ -353,13 +434,35 @@ mod tests {
         // error message on a deliberately-broken source: the
         // run dir name will include the default label string.
         // Smoke-only — full coverage is in the e2e flow.
-        let _ = run_handler(json!({"source": "this is not eal"}));
+        let _ = run_handler(test_envelope(), json!({"source": "this is not eal"}));
     }
 
     /// Track requires `run_id`. Same arg-shape rules as run.
     #[test]
     fn track_rejects_missing_run_id() {
         let err = track_handler(json!({})).unwrap_err();
+        assert!(err.to_string().contains("`run_id`"));
+    }
+
+    #[test]
+    fn track_rejects_non_object_args() {
+        let err = track_handler(json!("run-id")).unwrap_err();
+        assert!(err.to_string().contains("JSON object"));
+    }
+
+    #[test]
+    fn track_rejects_unknown_argument() {
+        let err = track_handler(json!({
+            "run_id": "run-1",
+            "action": "retired-field"
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown argument `action`"));
+    }
+
+    #[test]
+    fn track_rejects_non_string_run_id() {
+        let err = track_handler(json!({"run_id": 42})).unwrap_err();
         assert!(err.to_string().contains("`run_id`"));
     }
 
@@ -382,6 +485,28 @@ mod tests {
     #[test]
     fn cancel_rejects_missing_run_id() {
         let err = cancel_handler(json!({})).unwrap_err();
+        assert!(err.to_string().contains("`run_id`"));
+    }
+
+    #[test]
+    fn cancel_rejects_non_object_args() {
+        let err = cancel_handler(json!("run-id")).unwrap_err();
+        assert!(err.to_string().contains("JSON object"));
+    }
+
+    #[test]
+    fn cancel_rejects_unknown_argument() {
+        let err = cancel_handler(json!({
+            "run_id": "run-1",
+            "action": "retired-field"
+        }))
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown argument `action`"));
+    }
+
+    #[test]
+    fn cancel_rejects_non_string_run_id() {
+        let err = cancel_handler(json!({"run_id": false})).unwrap_err();
         assert!(err.to_string().contains("`run_id`"));
     }
 

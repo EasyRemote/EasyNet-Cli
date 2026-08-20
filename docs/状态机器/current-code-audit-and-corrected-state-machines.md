@@ -519,7 +519,9 @@ stateDiagram-v2
 {
   "target_ura": "easynet:///r/localhost/device/c130295e-9682-499e-bc09-72d4678a5887",
   "tool_name": "terminal.list",
-  "ability_ura": "easynet:///r/localhost/ability/device.c130295e-9682-499e-bc09-72d4678a5887.terminal.list",
+  "callee_ura": "easynet:///r/localhost/agent/device.c130295e-9682-499e-bc09-72d4678a5887.terminal",
+  "ability_ura": "easynet:///r/localhost/ability/system-agent.c130295e-9682-499e-bc09-72d4678a5887.terminal.terminal.list",
+  "execution_host_ura": "easynet:///r/localhost/device/c130295e-9682-499e-bc09-72d4678a5887",
   "route_ura": "easynet:///r/localhost/route/...",
   "dispatch_name": "terminal.list",
   "host_node_id": "c130295e-9682-499e-bc09-72d4678a5887"

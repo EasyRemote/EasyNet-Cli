@@ -51,16 +51,18 @@ const SOCKET_WAIT_BUDGET: Duration = Duration::from_secs(30);
 #[derive(Debug, Clone, Default)]
 pub struct BootProgressOutcome {
     pub pages_port: Option<u16>,
+    pub ready_capability_flags: Vec<String>,
 }
 
-/// Inputs the watcher needs to make sense of port events. The CLI
-/// knows what start port it suggested via `EASYNET_PAGES_PORT`; the
-/// daemon may have walked past it to land on a free one, and the
-/// renderer surfaces that diff so the user sees "fell back from
-/// 8787 → 8788" instead of a silent jump.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct BootContext {
-    pub pages_start_port: Option<u16>,
+impl BootProgressOutcome {
+    pub fn has_ready_capability_flag(&self, flag: &str) -> bool {
+        let flag = flag.trim();
+        !flag.is_empty()
+            && self
+                .ready_capability_flags
+                .iter()
+                .any(|candidate| candidate == flag)
+    }
 }
 
 /// Wait until the daemon's control socket accepts, then subscribe
@@ -74,7 +76,6 @@ pub struct BootContext {
 pub fn wait_for_daemon_boot(
     control_socket: &Path,
     daemon: Option<&mut std::process::Child>,
-    ctx: BootContext,
 ) -> anyhow::Result<BootProgressOutcome> {
     let mut renderer =
         StageRenderer::with_initial_message("waiting for easynet-daemon control socket");
@@ -114,16 +115,14 @@ pub fn wait_for_daemon_boot(
         .build()
         .context("build boot progress runtime")?;
 
-    let result = runtime.block_on(subscribe_boot_events(&renderer, ctx));
+    let result = runtime.block_on(subscribe_boot_events(&renderer));
     renderer.finish();
     result
 }
 
-async fn subscribe_boot_events(
-    renderer: &StageRenderer,
-    ctx: BootContext,
-) -> anyhow::Result<BootProgressOutcome> {
-    let control_json = discovery::default_path();
+async fn subscribe_boot_events(renderer: &StageRenderer) -> anyhow::Result<BootProgressOutcome> {
+    let control_json =
+        discovery::try_default_path().context("resolve boot control discovery path")?;
     let disc = loop {
         match discovery::read(&control_json)? {
             Some(disc) => break disc,
@@ -193,7 +192,7 @@ async fn subscribe_boot_events(
                 }
                 let event: BootEvent =
                     serde_json::from_value(frame).context("decode BootEvent frame")?;
-                if apply_event(renderer, &event, &mut outcome, ctx)? {
+                if apply_event(renderer, &event, &mut outcome)? {
                     return Ok(outcome);
                 }
             }
@@ -217,7 +216,6 @@ fn apply_event(
     renderer: &StageRenderer,
     event: &BootEvent,
     outcome: &mut BootProgressOutcome,
-    ctx: BootContext,
 ) -> anyhow::Result<bool> {
     match event {
         BootEvent::Stage { name, status } => match status {
@@ -242,12 +240,8 @@ fn apply_event(
             if service == "pages" {
                 outcome.pages_port = Some(*port);
             }
-            // The daemon is authoritative for which port it actually
-            // tried first; the CLI-side hint in `ctx` is only the
-            // fallback for daemons too old to send `start`.
-            let effective_start = start.or(ctx.pages_start_port);
-            let line = match effective_start {
-                Some(s) if s != *port => {
+            let line = match start {
+                Some(s) if *s != *port => {
                     format!("{service} port {port} (fell back from {s})")
                 }
                 _ => format!("{service} port {port}"),
@@ -255,6 +249,12 @@ fn apply_event(
             renderer.stage_ok(&line);
         }
         BootEvent::Ready => {
+            let path = discovery::try_default_path()
+                .context("resolve daemon ready discovery path after Ready")?;
+            let disc = discovery::read(&path)
+                .context("read daemon ready discovery after Ready")?
+                .ok_or_else(|| anyhow::anyhow!("daemon Ready without control discovery"))?;
+            outcome.ready_capability_flags = disc.capability_flags.clone();
             renderer.stage_ok("daemon ready");
             return Ok(true);
         }
@@ -269,7 +269,10 @@ fn apply_event(
 /// Read the final pages port from control.json, falling back to the
 /// value observed in the event stream.
 pub fn final_pages_port(event_port: Option<u16>) -> Option<u16> {
-    let path: PathBuf = discovery::default_path();
+    let path: PathBuf = match discovery::try_default_path() {
+        Ok(path) => path,
+        Err(_) => return event_port,
+    };
     discovery::read(&path)
         .ok()
         .flatten()

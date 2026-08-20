@@ -1,0 +1,417 @@
+import hashlib
+import json
+from pathlib import Path
+
+from easynet_sdk import (
+    AddressingClient,
+    AxonAddressingTransport,
+    ErrorCode,
+    RuntimeHandle,
+    RuntimeLifecycle,
+    RuntimeLifecycleState,
+    RuntimeAbilityClient,
+    RuntimeAdminClient,
+    RuntimeAdminAbilityClient,
+    RuntimeCallContext,
+    RuntimeClient,
+    RuntimeSessionListRequest,
+    RuntimeStatus,
+    SDKError,
+)
+from easynet_sdk.providers.runtime.lifecycle import (
+    RuntimeHostMode,
+    RuntimeHostStartConfig,
+)
+from easynet_sdk._runtime_admin_routes import (
+    _PROFILE as _RUNTIME_ADMIN_PROFILE,
+    _RUNTIME_ADMIN_ROUTE_MANIFEST_SHA256,
+    _RUNTIME_ADMIN_SESSION_LIST_ABILITY,
+)
+from easynet_sdk.health import HealthClient
+from test_runtime import canonical_runtime_receipt_pair
+
+
+def test_runtime_admin_routes_are_generated_from_manifest() -> None:
+    manifest = (
+        Path(__file__).resolve().parents[2].parent
+        / "provider_routes"
+        / "runtime-admin-routes.v1.json"
+    )
+    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    assert _RUNTIME_ADMIN_ROUTE_MANIFEST_SHA256 == digest
+
+
+def test_runtime_status_rejects_retired_product_mode() -> None:
+    try:
+        RuntimeStatus.from_json(
+            b'{"handle_id":"daemon-1","state":"Running","mode":"hub",'
+            b'"endpoints":{"invocation_endpoint":"unix:///tmp/daemon.sock"}}'
+        )
+    except SDKError as exc:
+        assert exc.code == ErrorCode.INVALID_ARGUMENT
+        assert "invalid runtime host mode" in exc.message
+    else:
+        raise AssertionError("RuntimeStatus accepted retired product mode")
+
+
+def test_runtime_status_keeps_unknown_as_parseable_observation() -> None:
+    status = RuntimeStatus.from_json(
+        b'{"handle_id":"daemon-1","state":"Unknown","mode":"authority"}'
+    )
+
+    assert status.state == RuntimeLifecycleState.UNKNOWN
+
+
+class MemoryDaemonTransport:
+    def __init__(self) -> None:
+        self.status_json = (
+            b'{"handle_id":"daemon-1","state":"Running","mode":"authority",'
+            b'"endpoints":{"control_endpoint":"unix:///tmp/control.sock",'
+            b'"invocation_endpoint":"unix:///tmp/daemon.sock"},'
+            b'"diagnostics":["status-ok"]}'
+        )
+        self.stop_json = b'{"handle_id":"daemon-1","state":"Stopped","diagnostics":[]}'
+        self.discover_options: dict[str, object] | None = None
+        self.attach_options: dict[str, object] | None = None
+        self.open_runtime_options: dict[str, object] | None = None
+        self.stop_options: dict[str, object] | None = None
+
+    def discover(self, options_json: bytes) -> bytes:
+        self.discover_options = json.loads(options_json.decode("utf-8"))
+        return (
+            b'{"control_endpoint":"unix:///tmp/control.sock",'
+            b'"invocation_endpoint":"unix:///tmp/daemon.sock"}'
+        )
+
+    def start(self, config_json: bytes) -> bytes:
+        return self.status_json
+
+    def attach(self, options_json: bytes) -> bytes:
+        self.attach_options = json.loads(options_json.decode("utf-8"))
+        return self.status_json
+
+    def status(self, handle_id: str) -> bytes:
+        return self.status_json
+
+    def invocation_endpoint(self, handle_id: str) -> str:
+        return "unix:///tmp/daemon.sock"
+
+    def open_runtime(self, handle_id: str, options_json: bytes):
+        from test_runtime import MemoryRuntimeTransport
+
+        self.open_runtime_options = json.loads(options_json.decode("utf-8"))
+        return MemoryRuntimeTransport(), b'{"ready":true}'
+
+    def stop(self, handle_id: str, options_json: bytes) -> bytes:
+        self.stop_options = json.loads(options_json.decode("utf-8"))
+        return self.stop_json
+
+    def detach(self, handle_id: str) -> None:
+        return None
+
+
+class MemoryHealthTransport:
+    def runtime_health(self) -> bytes:
+        return (
+            b'{"api_ready":true,"invocation_ready":true,"directory_ready":true,'
+            b'"trust_ready":true,"runtime_ready":true,'
+            b'"diagnostics":["health-ok"]}'
+        )
+
+    def runtime_diagnostics(self) -> bytes:
+        return (
+            b'{"profile":"health","kind":"diagnostics_report","state":"Running",'
+            b'"ready":true,"version":"0.91.30","abi_version":5,'
+            b'"control_endpoint":"unix:///tmp/control.sock",'
+            b'"invocation_endpoint":"unix:///tmp/daemon.sock",'
+            b'"checks":[{"name":"runtime","ready":true,"message":null}],'
+            b'"diagnostics":[]}'
+        )
+
+
+class RuntimeAdminTransportFake:
+    def __init__(self) -> None:
+        self.seen: dict[str, object] = {}
+        self.output_json: dict[str, object] = {"state": "ok"}
+
+    def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+        import json
+
+        request = json.loads(request_json)
+        return json.dumps(
+            {
+                "descriptor_ref": (
+                    f"easynet:///r/example/ability/authority.{request['ability']}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+                )
+            }
+        ).encode()
+
+    def invoke(self, draft_json: bytes) -> bytes:
+        import json
+
+        self.seen = json.loads(draft_json)
+        admission, terminal = canonical_runtime_receipt_pair("inv-admin-test")
+        return json.dumps(
+            {
+                "ok": True,
+                "tuple": self.seen,
+                "invocation_id": "inv-admin-test",
+                "terminal_state": "Completed",
+                "output_content_type": "application/json",
+                "output_json": self.output_json,
+                "elapsed_ms": 1,
+                "admission_receipt": admission,
+                "terminal_receipt": terminal,
+                "error": None,
+            }
+        ).encode()
+
+
+def test_runtime_admin_readiness_composes_lifecycle_and_health() -> None:
+    admin = RuntimeAdminClient(
+        RuntimeLifecycle(MemoryDaemonTransport()),
+        HealthClient(MemoryHealthTransport()),
+    )
+
+    handle = admin.start(RuntimeHostStartConfig(mode=RuntimeHostMode.AUTHORITY))
+    readiness = admin.readiness(handle)
+
+    assert isinstance(handle, RuntimeHandle)
+    assert readiness.ready is True
+    assert readiness.lifecycle_state == RuntimeLifecycleState.RUNNING
+    assert readiness.messages == ("status-ok", "health-ok")
+    assert readiness.diagnostics is not None
+
+
+def test_runtime_lifecycle_omitted_options_materialize_empty_provider_payloads() -> None:
+    transport = MemoryDaemonTransport()
+    lifecycle = RuntimeLifecycle(transport)
+    admin = RuntimeAdminClient(lifecycle)
+
+    lifecycle.discover()
+    handle = admin.attach()
+    admin.open_runtime(handle)
+    admin.stop(handle)
+
+    assert transport.discover_options == {}
+    assert transport.attach_options == {}
+    assert transport.open_runtime_options == {}
+    assert transport.stop_options == {}
+    assert RuntimeLifecycle.discover.__defaults__ == (None,)
+    assert RuntimeLifecycle.attach.__defaults__ == (None,)
+    assert RuntimeHandle.open_runtime.__defaults__ == (None,)
+    assert RuntimeHandle.stop.__defaults__ == (None,)
+
+
+def test_runtime_handle_status_rejects_backward_lifecycle_transition() -> None:
+    transport = MemoryDaemonTransport()
+    handle = RuntimeLifecycle(transport).start(
+        RuntimeHostStartConfig(mode=RuntimeHostMode.AUTHORITY)
+    )
+    transport.status_json = (
+        b'{"handle_id":"daemon-1","state":"Starting","mode":"authority",'
+        b'"endpoints":{"invocation_endpoint":"unix:///tmp/daemon.sock"}}'
+    )
+
+    try:
+        handle.status()
+    except SDKError as exc:
+        assert exc.code == ErrorCode.INVALID_ARGUMENT
+        assert "runtime lifecycle cannot transition from Running to Starting" in (
+            exc.message
+        )
+    else:
+        raise AssertionError("status accepted a backward lifecycle transition")
+
+    assert handle.state == RuntimeLifecycleState.RUNNING
+
+
+def test_runtime_handle_stop_rejects_backward_lifecycle_transition() -> None:
+    transport = MemoryDaemonTransport()
+    handle = RuntimeLifecycle(transport).start(
+        RuntimeHostStartConfig(mode=RuntimeHostMode.AUTHORITY)
+    )
+    transport.stop_json = (
+        b'{"handle_id":"daemon-1","state":"Starting","mode":"authority",'
+        b'"endpoints":{"invocation_endpoint":"unix:///tmp/daemon.sock"}}'
+    )
+
+    try:
+        handle.stop()
+    except SDKError as exc:
+        assert exc.code == ErrorCode.INVALID_ARGUMENT
+        assert "runtime lifecycle cannot transition from Running to Starting" in (
+            exc.message
+        )
+    else:
+        raise AssertionError("stop accepted a backward lifecycle transition")
+
+    assert handle.state == RuntimeLifecycleState.RUNNING
+
+
+def test_runtime_handle_rejects_unknown_wildcard_lifecycle_transition() -> None:
+    transport = MemoryDaemonTransport()
+    handle = RuntimeHandle(
+        transport,
+        RuntimeStatus(
+            handle_id="daemon-1",
+            state=RuntimeLifecycleState.UNKNOWN,
+            mode="authority",
+        ),
+    )
+
+    try:
+        handle.status()
+    except SDKError as exc:
+        assert exc.code == ErrorCode.INVALID_ARGUMENT
+        assert (
+            "runtime lifecycle cannot transition from Unknown to Running"
+            in exc.message
+        )
+    else:
+        raise AssertionError("status accepted Unknown wildcard lifecycle transition")
+
+    assert handle.state == RuntimeLifecycleState.UNKNOWN
+
+
+def test_runtime_admin_rejects_missing_handle_and_control() -> None:
+    admin = RuntimeAdminClient(RuntimeLifecycle(MemoryDaemonTransport()))
+
+    try:
+        admin.status(None)  # type: ignore[arg-type]
+    except SDKError as exc:
+        assert "runtime handle is required" in exc.message
+    else:
+        raise AssertionError("status accepted missing handle")
+
+    try:
+        RuntimeAdminClient(None)  # type: ignore[arg-type]
+    except SDKError as exc:
+        assert "runtime lifecycle is required" in exc.message
+    else:
+        raise AssertionError("constructor accepted missing control")
+
+
+def test_runtime_admin_ability_client_lists_sessions() -> None:
+    client, transport = _ability_client()
+    transport.output_json = {
+        "state": "ok",
+        "sessions": [
+            {
+                "kind": "terminal",
+                "session_id": "session-a",
+                "runtime_host_ura": "easynet:///r/example/device/laptop",
+                "control_authority_ura": "easynet:///r/example/authority",
+                "state": "active",
+                "session_kind": "pty",
+                "created_unix_ms": 1714492800000,
+                "expires_unix_ms": 1714496400000,
+                "metadata": {"source": "daemon"},
+            }
+        ],
+    }
+
+    page = client.list_sessions(
+        RuntimeSessionListRequest(call=_call(), include_terminated=False)
+    )
+
+    assert len(page.sessions) == 1
+    assert page.sessions[0].session_id == "session-a"
+    assert page.sessions[0].runtime_host_ura == "easynet:///r/example/device/laptop"
+    assert page.sessions[0].control_authority_ura == "easynet:///r/example/authority"
+    assert transport.seen["descriptor_ref"] == (
+        "easynet:///r/example/ability/authority.session.list@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+    )
+    assert transport.seen["args"]["include_terminated"] is False
+    assert transport.seen["metadata"]["sdk_profile"] == _RUNTIME_ADMIN_PROFILE
+    assert (
+        transport.seen["metadata"]["system_ability"]
+        == _RUNTIME_ADMIN_SESSION_LIST_ABILITY
+    )
+
+
+def test_runtime_admin_ability_client_accepts_empty_sessions() -> None:
+    client, transport = _ability_client()
+    transport.output_json = {"state": "ok", "sessions": []}
+
+    page = client.list_sessions(RuntimeSessionListRequest(call=_call()))
+
+    assert page.sessions == ()
+
+
+def test_runtime_admin_ability_client_rejects_non_canonical_session_wire_fields() -> None:
+    client, transport = _ability_client()
+    transport.output_json = {
+        "state": "ok",
+        "sessions": [
+            {
+                "session_id": "session-a",
+                "device_ura": "easynet:///r/example/device/laptop",
+                "authority_ura": "easynet:///r/example/authority",
+                "state": "active",
+            }
+        ],
+    }
+
+    try:
+        client.list_sessions(RuntimeSessionListRequest(call=_call()))
+    except SDKError as exc:
+        assert exc.code == ErrorCode.INVALID_ARGUMENT
+        assert "not canonical" in exc.message
+        assert "device_ura" in exc.message
+    else:
+        raise AssertionError("ListSessions accepted non-canonical session wire fields")
+
+
+def test_runtime_admin_ability_client_rejects_legacy_session_items() -> None:
+    client, transport = _ability_client()
+    transport.output_json = {"state": "ok", "items": []}
+
+    try:
+        client.list_sessions(RuntimeSessionListRequest(call=_call()))
+    except SDKError as exc:
+        assert "sessions must be an array" in exc.message
+    else:
+        raise AssertionError("list_sessions accepted legacy items fallback")
+
+
+def test_runtime_admin_ability_client_rejects_malformed_session_rows() -> None:
+    client, transport = _ability_client()
+    transport.output_json = {"state": "ok", "sessions": ["bad-row"]}
+
+    try:
+        client.list_sessions(RuntimeSessionListRequest(call=_call()))
+    except SDKError as exc:
+        assert "sessions entries must be objects" in exc.message
+    else:
+        raise AssertionError("list_sessions ignored malformed session row")
+
+
+def test_runtime_admin_ability_client_does_not_expose_device_revoke_surface() -> None:
+    import easynet_sdk
+
+    client, _transport = _ability_client()
+    assert not hasattr(client, "revoke_device")
+    for retired in ("RuntimeDeviceRevokeRequest", "RuntimeDeviceRevokeResult"):
+        assert not hasattr(easynet_sdk, retired), retired
+
+
+def _ability_client() -> tuple[RuntimeAdminAbilityClient, RuntimeAdminTransportFake]:
+    transport = RuntimeAdminTransportFake()
+    ability = RuntimeAbilityClient(
+        RuntimeClient(transport),  # type: ignore[arg-type]
+        AddressingClient(AxonAddressingTransport()),
+    )
+    return RuntimeAdminAbilityClient(ability), transport
+
+
+def _call() -> RuntimeCallContext:
+    return RuntimeCallContext(
+        caller_ura="easynet:///r/example/agent/backend",
+        callee_ura="easynet:///r/example/authority",
+        subject_ura="easynet:///r/example/resource/device.laptop/invoke/backend.admin",
+        descriptor_version="1.0.0",
+        nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+        causal_context={"form": "none"},
+        metadata={"request_id": "admin-test"},
+    )

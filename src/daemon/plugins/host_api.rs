@@ -10,19 +10,18 @@ use std::sync::{Arc, RwLock};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::core::ability::spec::{EalExec, McpExec};
 use crate::daemon::ability::dispatch::{
     EnvelopeContext, LocalBidiHandlerWithEnvelope, LocalRpcHandlerWithEnvelope,
     LocalStreamHandlerWithEnvelope,
 };
-use crate::daemon::ability::{AbilityImplSource, RuntimeEnv};
-use crate::daemon::execution::mission::context::ParentInvocationContext;
+use crate::daemon::ability::manifest::{EalExec, McpExec};
+use crate::daemon::ability::{AbilityImplSource, CallMode, RuntimeEnv};
 use crate::daemon::plugins::contribution::{
     PluginContributionBuilder, PluginContributionSet, PluginRequirementSet,
 };
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::load_plan::PluginLoadPlan;
-use crate::daemon::plugins::manifest::{PluginCallMode, PluginDeclarativeBinding, PluginKind};
+use crate::daemon::plugins::manifest::{PluginDeclarativeBinding, PluginKind};
 use crate::daemon::plugins::realtime::PluginRealtimeActivationPlan;
 use crate::daemon::plugins::sidecar::{
     sidecar_invocation_from_context, SidecarCommand, SidecarRuntimeHost,
@@ -198,7 +197,7 @@ fn collect_package_contribution(
             let binding = package.builtin_binding().ok_or_else(|| {
                 PluginHostError::MissingBuiltinBinding(package.id().as_str().to_string())
             })?;
-            (binding.contribute)(&mut builder, manifest.limits())?;
+            binding.contribute(&mut builder, manifest.limits())?;
         }
         PluginKind::Sidecar => {
             let command = SidecarCommand::from_package(package);
@@ -210,6 +209,14 @@ fn collect_package_contribution(
             let impl_source = declarative_impl_source(manifest.declarative_binding());
             let mut sink = ContributionRegistrationSink::new(&mut builder, impl_source);
             contribute_declarative_package(package, &mut sink)?;
+        }
+        PluginKind::DesktopCompanion => {
+            return Err(PluginHostError::InvalidContribution {
+                package: format!("{}@{}", package.id().as_str(), package.version().as_str()),
+                ability: "<package>".to_string(),
+                reason: "desktop companion packages do not contribute ability implementations"
+                    .to_string(),
+            });
         }
     }
 
@@ -235,7 +242,7 @@ impl<'a> ContributionRegistrationSink<'a> {
     fn contribute_rpc(
         &mut self,
         ability: String,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         handler: LocalRpcHandlerWithEnvelope,
     ) -> Result<()> {
         self.builder.rpc(
@@ -250,7 +257,7 @@ impl<'a> ContributionRegistrationSink<'a> {
     fn contribute_stream(
         &mut self,
         ability: String,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         handler: LocalStreamHandlerWithEnvelope,
     ) -> Result<()> {
         self.builder.stream(
@@ -265,7 +272,7 @@ impl<'a> ContributionRegistrationSink<'a> {
     fn contribute_bidi(
         &mut self,
         ability: String,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         handler: LocalBidiHandlerWithEnvelope,
     ) -> Result<()> {
         self.builder.bidi(
@@ -366,7 +373,7 @@ fn ensure_declarative_rpc_only(
     label: &'static str,
 ) -> Result<()> {
     for ability in package.manifest().abilities() {
-        if ability.call_mode() != PluginCallMode::Rpc {
+        if ability.call_mode() != CallMode::Rpc {
             return Err(PluginHostError::InvalidDeclarativeBinding {
                 id: package.id().as_str().to_string(),
                 reason: format!(
@@ -390,21 +397,21 @@ fn contribute_json_frame_process_package(
         let ability_name = ability.name().to_string();
         let manifest = package.ability_registry_manifest(&ability_name)?;
         match ability.call_mode() {
-            PluginCallMode::Rpc => {
+            CallMode::Rpc => {
                 sink.contribute_rpc(
                     ability_name.clone(),
                     manifest,
                     rpc_process_handler(command.clone(), ability_name),
                 )?;
             }
-            PluginCallMode::Stream => {
+            CallMode::Stream => {
                 sink.contribute_stream(
                     ability_name.clone(),
                     manifest,
                     stream_process_handler(command.clone(), ability_name),
                 )?;
             }
-            PluginCallMode::Bidi => {
+            CallMode::Bidi => {
                 sink.contribute_bidi(
                     ability_name.clone(),
                     manifest,
@@ -428,19 +435,44 @@ fn rpc_process_handler(command: SidecarCommand, ability: String) -> LocalRpcHand
 
 fn eal_rpc_handler(spec: EalExec) -> LocalRpcHandlerWithEnvelope {
     Arc::new(move |env, args: Value| {
-        let invocation_context = invocation_context_from_envelope(&env).to_json_value();
-        crate::daemon::execution::mission::executors::eal::run_eal_exec_with_invocation_context(
-            &spec,
-            &args,
-            Some(invocation_context),
-            None,
+        let gateway = Arc::new(PluginEalInvocationGateway::new(env));
+        crate::daemon::execution::mission::executors::eal::run_eal_exec_with_gateway(
+            &spec, &args, gateway, None,
         )
     })
 }
 
+#[derive(Clone)]
+struct PluginEalInvocationGateway {
+    admitted_parent: EnvelopeContext,
+}
+
+impl PluginEalInvocationGateway {
+    fn new(admitted_parent: EnvelopeContext) -> Self {
+        Self { admitted_parent }
+    }
+}
+
+impl crate::daemon::execution::mission::invocation_gateway::MissionInvocationGateway
+    for PluginEalInvocationGateway
+{
+    fn invoke(
+        &self,
+        request: crate::daemon::execution::mission::invocation_gateway::MissionInvocationRequest,
+    ) -> anyhow::Result<crate::daemon::execution::child_invocation::ChildInvocationOutcome> {
+        let gateway =
+            crate::daemon::execution::mission::invocation_gateway::DaemonMissionInvocationGateway::from_admitted_envelope(
+                &self.admitted_parent,
+            )?;
+        crate::daemon::execution::mission::invocation_gateway::MissionInvocationGateway::invoke(
+            &gateway, request,
+        )
+    }
+}
+
 fn mcp_rpc_handler(spec: McpExec) -> LocalRpcHandlerWithEnvelope {
     Arc::new(move |env, args: Value| {
-        let invocation_context = invocation_context_from_envelope(&env).to_json_value();
+        let invocation_context = invocation_observation_from_envelope(&env);
         crate::daemon::ability::builtins::integrations::mcp::executor::run_mcp_exec_with_invocation_context(
             &spec,
             &args,
@@ -449,15 +481,15 @@ fn mcp_rpc_handler(spec: McpExec) -> LocalRpcHandlerWithEnvelope {
     })
 }
 
-fn invocation_context_from_envelope(env: &EnvelopeContext) -> ParentInvocationContext {
-    ParentInvocationContext {
-        caller: Some(env.caller().to_string()),
-        callee: Some(env.callee().to_string()),
-        ability: Some(env.ability().to_string()),
-        subject: Some(env.subject().to_string()),
-        invocation_nonce: Some(env.invocation_nonce().to_vec()),
-        causal_context: Some(env.causal_context().clone()),
-    }
+fn invocation_observation_from_envelope(env: &EnvelopeContext) -> Value {
+    serde_json::json!({
+        "caller_ura": env.caller(),
+        "callee_ura": env.callee(),
+        "ability_ura": env.ability(),
+        "subject_ura": env.subject(),
+        "invocation_nonce": env.invocation_nonce(),
+        "causal_context": env.causal_context(),
+    })
 }
 
 fn stream_process_handler(
@@ -494,11 +526,23 @@ mod tests {
     use super::*;
     use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
     use crate::daemon::ability::CallMode as DescriptorCallMode;
-    use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+    use crate::daemon::invocation::routing::target::CallMode;
     use crate::daemon::plugins::package::PluginPackage;
     use crate::daemon::plugins::{
         PluginLoadPlanner, PluginPackageIndex, PluginRuntimeManager, PluginRuntimeState,
     };
+
+    const TEST_PLUGIN_HOST_DEVICE_URA: &str = "easynet:///r/acme/device/test-plugin-host";
+
+    fn executable_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_runtime_for_device_authority(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            TEST_PLUGIN_HOST_DEVICE_URA,
+        )
+    }
 
     #[test]
     fn plugin_runtime_host_registers_exec_declarative_rpc() {
@@ -506,25 +550,22 @@ mod tests {
         write_exec_declarative_package(root.path());
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let mut catalog = AxonAbilityCatalog::new();
+        let mut catalog = executable_test_catalog();
 
         manager_from_index(index)
             .register_current_plugins(&mut catalog)
             .expect("register declarative exec");
 
         assert!(catalog.has_rpc("test.declarative_echo"));
-        let manifest = catalog
-            .control_plane_manifest("test.declarative_echo")
-            .expect("registered plugin ability manifest");
-        assert_eq!(
-            manifest.description(),
-            "test descriptor for test.declarative_echo"
-        );
-        assert_eq!(manifest.input_schema()["type"], "object");
         let record = catalog
             .control_plane_record_for_mode("test.declarative_echo", DescriptorCallMode::Rpc)
             .expect("plugin control-plane lookup is unambiguous")
             .expect("plugin control-plane record");
+        assert_eq!(
+            record.descriptor().description,
+            "test descriptor for test.declarative_echo"
+        );
+        assert_eq!(record.descriptor().input_schema()["type"], "object");
         assert_eq!(
             *record.implementation().source(),
             AbilityImplSource::DeclarativePlugin
@@ -534,16 +575,17 @@ mod tests {
             .runtime_env()
             .label()
             .contains("plugin:"));
-        assert_eq!(record.authority().scope().owner_projection(), "device");
+        assert_eq!(
+            record.authority().scope().owner_projection(),
+            "system-agent:plugin-management"
+        );
         let result = catalog
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: "test.declarative_echo".to_string(),
-                normalized_args: json!({"message": "hello"}),
-                call_mode: CallMode::Rpc,
-                subject: Some("easynet:///r/acme/resource/test".to_string()),
-                causal_context: None,
-            })
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+                "test.declarative_echo",
+                json!({"message": "hello"}),
+                CallMode::Rpc,
+                "easynet:///r/acme/resource/test",
+            ))
             .expect("declarative exec rpc");
         assert_eq!(result, json!({"ok": true, "message": "hello"}));
     }
@@ -554,30 +596,29 @@ mod tests {
         write_exec_declarative_package(root.path());
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let mut catalog = AxonAbilityCatalog::new();
+        let mut catalog = executable_test_catalog();
 
         manager_from_index(index)
             .register_current_plugins(&mut catalog)
             .expect("hot register declarative exec");
 
         assert!(catalog.has_dynamic("test.declarative_echo"));
-        let manifest = catalog
-            .control_plane_manifest("test.declarative_echo")
-            .expect("hot registered plugin ability manifest");
+        let record = catalog
+            .control_plane_record_for_mode("test.declarative_echo", DescriptorCallMode::Rpc)
+            .expect("plugin control-plane lookup is unambiguous")
+            .expect("hot registered plugin canonical descriptor");
         assert_eq!(
-            manifest.description(),
+            record.descriptor().description,
             "test descriptor for test.declarative_echo"
         );
-        assert_eq!(manifest.input_schema()["type"], "object");
+        assert_eq!(record.descriptor().input_schema()["type"], "object");
         let result = catalog
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: "test.declarative_echo".to_string(),
-                normalized_args: json!({"message": "hot"}),
-                call_mode: CallMode::Rpc,
-                subject: Some("easynet:///r/acme/resource/test".to_string()),
-                causal_context: None,
-            })
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+                "test.declarative_echo",
+                json!({"message": "hot"}),
+                CallMode::Rpc,
+                "easynet:///r/acme/resource/test",
+            ))
             .expect("hot declarative exec rpc");
         assert_eq!(result, json!({"ok": true, "message": "hot"}));
 
@@ -587,14 +628,12 @@ mod tests {
         assert!(!catalog.has_dynamic("test.declarative_echo"));
         assert!(!catalog.has_rpc("test.declarative_echo"));
         catalog
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: "test.declarative_echo".to_string(),
-                normalized_args: json!({"message": "after"}),
-                call_mode: CallMode::Rpc,
-                subject: Some("easynet:///r/acme/resource/test".to_string()),
-                causal_context: None,
-            })
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+                "test.declarative_echo",
+                json!({"message": "after"}),
+                CallMode::Rpc,
+                "easynet:///r/acme/resource/test",
+            ))
             .expect_err("hot-unregistered plugin ability must not remain invokable");
     }
 
@@ -604,10 +643,10 @@ mod tests {
         write_sidecar_package(root.path(), "fs.read");
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let mut catalog = AxonAbilityCatalog::new();
+        let mut catalog = executable_test_catalog();
         catalog.register_rpc_with_owner(
             "fs.read",
-            OwnerKind::Device,
+            OwnerKind::locomotion_system(),
             Arc::new(|_args| Ok(json!({"from": "static-system"}))),
         );
 
@@ -631,22 +670,57 @@ mod tests {
             "rejected plugin must not leave a dynamic handler behind"
         );
         let out = catalog
-            .invoke_rpc_json("fs.read", json!({}))
+            .invoke_rpc_target_json(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                "fs.read",
+                json!({}),
+                CallMode::Rpc,
+            ))
             .expect("static system handler remains invokable after rejected reload");
         assert_eq!(out, json!({"from": "static-system"}));
     }
 
     #[test]
-    fn plugin_runtime_host_registers_eal_declarative_rpc() {
-        let root = tempfile::tempdir().expect("root");
-        write_eal_declarative_package(root.path());
-        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
-        let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let mut catalog = AxonAbilityCatalog::new();
+    fn plugin_eal_gateway_rejects_child_dispatch_without_daemon_runtime_admission() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let mut catalog = executable_test_catalog();
+        catalog.register_rpc_with_envelope_and_owner(
+            "observe.health",
+            OwnerKind::runtime_health_system(),
+            Arc::new(|env, _args| {
+                let gateway = PluginEalInvocationGateway::new(env);
+                let request =
+                    crate::daemon::execution::mission::invocation_gateway::MissionInvocationRequest::system(
+                        "observe.health",
+                        json!({}),
+                    );
+                crate::daemon::execution::mission::invocation_gateway::MissionInvocationGateway::invoke(
+                    &gateway, request,
+                )
+                .map(|_| json!({"unexpected": "child dispatch admitted"}))
+            }),
+        );
 
-        manager_from_index(index)
-            .register_current_plugins(&mut catalog)
-            .expect("register declarative eal");
+        let err = catalog
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+                "observe.health",
+                json!({}),
+                CallMode::Rpc,
+                "easynet:///r/acme/resource/test",
+            ))
+            .expect_err("canonical-only runtime must not synthesize daemon runtime admission");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains(
+                "Mission child dispatch requires the admitting daemon runtime-admission capability"
+            ),
+            "wrong error: {msg}"
+        );
+    }
+
+    #[test]
+    fn plugin_runtime_host_registers_eal_declarative_rpc() {
+        let mut catalog = executable_test_catalog();
+        register_eal_declarative_plugin(&mut catalog);
 
         assert!(catalog.has_rpc("test.declarative_eal"));
         let record = catalog
@@ -655,18 +729,26 @@ mod tests {
             .expect("EAL plugin control-plane record");
         assert_eq!(*record.implementation().source(), AbilityImplSource::Eal);
         let err = catalog
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: "test.declarative_eal".to_string(),
-                normalized_args: json!({}),
-                call_mode: CallMode::Rpc,
-                subject: Some("easynet:///r/acme/resource/test".to_string()),
-                causal_context: None,
-            })
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+                "test.declarative_eal",
+                json!({}),
+                CallMode::Rpc,
+                "easynet:///r/acme/resource/test",
+            ))
             .expect_err("missing EAL template argument should surface through handler");
         let msg = format!("{err}");
         assert!(msg.contains("eal executor"), "wrong error: {msg}");
         assert!(msg.contains("name"), "wrong error: {msg}");
+    }
+
+    fn register_eal_declarative_plugin(catalog: &mut AxonAbilityCatalog) {
+        let root = tempfile::tempdir().expect("root");
+        write_eal_declarative_package(root.path());
+        let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
+        let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
+        manager_from_index(index)
+            .register_current_plugins(catalog)
+            .expect("register declarative eal");
     }
 
     #[test]
@@ -675,7 +757,7 @@ mod tests {
         write_mcp_declarative_package(root.path());
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let mut catalog = AxonAbilityCatalog::new();
+        let mut catalog = executable_test_catalog();
 
         manager_from_index(index)
             .register_current_plugins(&mut catalog)
@@ -687,23 +769,18 @@ mod tests {
             .expect("MCP plugin control-plane lookup is unambiguous")
             .expect("MCP plugin control-plane record");
         assert_eq!(*record.implementation().source(), AbilityImplSource::Mcp);
-        let manifest = catalog
-            .control_plane_manifest("test.declarative_mcp")
-            .expect("hot registered MCP plugin ability manifest");
         assert_eq!(
-            manifest.description(),
+            record.descriptor().description,
             "test descriptor for test.declarative_mcp"
         );
-        assert_eq!(manifest.input_schema()["type"], "object");
+        assert_eq!(record.descriptor().input_schema()["type"], "object");
         let err = catalog
-            .execute_rpc(InvocationTarget {
-                scope: TargetScope::Local,
-                ability: "test.declarative_mcp".to_string(),
-                normalized_args: json!([1, 2]),
-                call_mode: CallMode::Rpc,
-                subject: Some("easynet:///r/acme/resource/test".to_string()),
-                causal_context: None,
-            })
+            .execute_rpc(crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+                "test.declarative_mcp",
+                json!([1, 2]),
+                CallMode::Rpc,
+                "easynet:///r/acme/resource/test",
+            ))
             .expect_err("non-object MCP args should be rejected by mcp executor");
         let msg = format!("{err}");
         assert!(
@@ -718,7 +795,8 @@ mod tests {
         write_sidecar_package(root.path(), "device.test.hot_reload_remove");
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let mut catalog = AxonAbilityCatalog::new();
+        let mut catalog =
+            AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_PLUGIN_HOST_DEVICE_URA);
         let manager = manager_from_index(index);
 
         manager
@@ -747,7 +825,8 @@ mod tests {
         write_realtime_sidecar_package(root.path());
         let package = Arc::new(PluginPackage::from_installed(root.path(), None).expect("package"));
         let index = PluginPackageIndex::from_packages(vec![package]).expect("index");
-        let catalog = AxonAbilityCatalog::new();
+        let catalog =
+            AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_PLUGIN_HOST_DEVICE_URA);
 
         let report = PluginRuntimeManager::from_state(empty_state())
             .reload_plugins_from_state(planned_state(index), &catalog)
@@ -809,6 +888,7 @@ argv = ["bin/exec-plugin"]
 [[ability_metadata]]
 name = "test.declarative_echo"
 layer = "control"
+call_mode = "rpc"
 "#,
         )
         .expect("manifest");
@@ -859,6 +939,7 @@ program = "mission \"{{ name }}\" {}"
 [[ability_metadata]]
 name = "test.declarative_eal"
 layer = "control"
+call_mode = "rpc"
 "#,
         )
         .expect("manifest");
@@ -896,6 +977,7 @@ tool = "test-tool"
 [[ability_metadata]]
 name = "test.declarative_mcp"
 layer = "control"
+call_mode = "rpc"
 "#,
         )
         .expect("manifest");
@@ -930,6 +1012,7 @@ max_frame_queue = 1
 [[ability_metadata]]
 name = "{ability}"
 layer = "control"
+call_mode = "rpc"
 "#
             ),
         )
@@ -978,7 +1061,6 @@ bidi_wire_kind = "json_frames"
 kind = "camera"
 modes = ["snapshot", "subscribe", "record"]
 transport = "invoke_bidi"
-fallback_transport = "invoke_stream"
 activation_abilities = ["test.camera"]
 permissions = ["camera"]
 resources = ["camera"]
@@ -1002,12 +1084,17 @@ quick_add = true
 
     fn test_descriptor(ability: &str) -> String {
         format!(
-            r#"schema_version = "1"
-name = "{ability}"
-description = "test descriptor for {ability}"
+            r#"schema_version = "3"
+		name = "{ability}"
+		descriptor_version = "1.2.3"
+		description = "test descriptor for {ability}"
+		exposure = "internal"
+		dedicated_surface = "none"
+		subject_contract_kind = "explicit-ura"
+		admission_action = "invoke"
 
-[input_schema]
-type = "object"
+	[input_schema]
+	type = "object"
 additionalProperties = false
 "#
         )

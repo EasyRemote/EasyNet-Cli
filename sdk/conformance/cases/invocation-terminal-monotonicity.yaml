@@ -1,0 +1,23 @@
+id: invocation/terminal_monotonicity
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+  - node
+description: Submitted invocation handles expose terminal results and cannot rewrite terminal state after cancel or transport completion.
+steps:
+  - action: prepare_complete_tuple
+    fixture: invocation.complete.v4.json
+  - action: sign_prepared
+  - action: submit_signed_handle
+  - action: await_handle_terminal
+  - action: cancel_handle
+  - action: read_handle_events
+expect:
+  result: terminal_observed
+  submit_consumes_signed: true
+  await_returns_result_json: true
+  cancel_after_terminal_rewrites_state: false
+  terminal_event_count: 1

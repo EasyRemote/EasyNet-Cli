@@ -6,15 +6,14 @@
 // =============================
 //
 // File: src/eal/interpreter.rs
-// Description: Client-side execution engine for Mission IR v2 (temporary — target: MissionControl v2).
+// Description: Daemon-owned execution engine for Mission IR v2.
 //
 // Execution Model:
 //   Phases execute sequentially (data-flow barriers between them).
-//   Steps within a phase execute in parallel via rayon work-stealing threadpool.
-//   When a dispatcher cannot be cloned across worker threads, falls back to sequential.
+//   Steps within a phase execute under the dispatcher's declared concurrency policy.
 //
 // Core Capabilities:
-//   1. True parallel dispatch — rayon::scope + clone_for_thread() per step.
+//   1. Declared parallel dispatch — rayon::scope + clone_for_thread() per step.
 //   2. Structured ExecutionTrace — per-step audit log with timestamps, result hashes, retry history.
 //   3. Retry with exponential backoff — delay = min(base * 2^attempt, max) + deterministic jitter.
 //   4. Cross-phase data flow — results captured in HashMap, substituted into downstream input_refs.
@@ -36,9 +35,9 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::trace::{CapturedResult, RetryRecord, StepOutcome, StepTrace};
-use super::{millis_u64, IrStep, RunContext, StepDispatchOutcome, StepDispatcher, StepExecResult};
+use super::{millis_u64, RunContext, StepDispatchOutcome, StepDispatcher, StepExecResult};
 use crate::eal::diagnostics::EalError;
-use crate::eal::runtime::ir::IrFailurePolicy;
+use crate::eal::runtime::ir::{IrCall, IrFailurePolicy};
 use crate::support::platform::output;
 
 pub(super) const RETRY_BASE_MS: u64 = 1000;
@@ -98,11 +97,13 @@ pub(super) fn verify_output_done(bytes: &[u8]) -> VerifyDone {
 pub(super) fn execute_step_with_retry(
     dispatcher: &dyn StepDispatcher,
     run: RunContext<'_>,
-    step: &IrStep,
+    step: &IrCall,
     arguments: &Value,
-    causal_parents: &[Value],
+    dependency_receipts: &[
+        crate::daemon::execution::child_invocation::ChildInvocationReceiptAnchor
+    ],
 ) -> StepExecResult {
-    // MissionControl semantics: `max_retries` is the number of retries AFTER the
+    // Mission runtime semantics: `max_retries` is the number of retries AFTER the
     // first attempt, so total attempts = 1 + max_retries.
     #[allow(clippy::cast_sign_loss)] // max_retries is checked > 0 above
     let max_attempts = if matches!(step.on_failure, IrFailurePolicy::Retry) && step.max_retries > 0
@@ -132,13 +133,28 @@ pub(super) fn execute_step_with_retry(
         } else {
             None
         };
+        let dispatch_timeout_ms = match effective_dispatch_timeout_ms(step_timeout_ms, run.deadline)
+        {
+            Ok(timeout) => timeout,
+            Err(error) => {
+                let rendered = error.to_string();
+                let elapsed_ms = millis_u64(t0.elapsed());
+                return StepExecResult::Error {
+                    message: rendered,
+                    elapsed_ms,
+                    started_at,
+                    retry_count: attempt,
+                    retry_history,
+                };
+            }
+        };
         let res = dispatcher.dispatch(
             run,
             &step.target,
             &step.ability,
             arguments,
-            step_timeout_ms,
-            causal_parents,
+            dispatch_timeout_ms,
+            dependency_receipts,
         );
 
         match res {
@@ -184,7 +200,7 @@ pub(super) fn execute_step_with_retry(
                     completed_at,
                     retry_count: attempt,
                     retry_history,
-                    invocation,
+                    invocation: Box::new(invocation),
                 };
             }
             Err(e) => {
@@ -234,6 +250,26 @@ pub(super) fn execute_step_with_retry(
     }
 }
 
+fn effective_dispatch_timeout_ms(
+    step_timeout_ms: Option<u64>,
+    run_deadline: Option<Instant>,
+) -> Result<Option<u64>, EalError> {
+    let Some(deadline) = run_deadline else {
+        return Ok(step_timeout_ms);
+    };
+    let now = Instant::now();
+    if now >= deadline {
+        return Err(EalError::DeadlineExceeded(
+            "mission run timeout expired before dispatch".to_string(),
+        ));
+    }
+    let remaining_ms = millis_u64(deadline.duration_since(now)).max(1);
+    Ok(match step_timeout_ms {
+        Some(step_timeout) => Some(step_timeout.min(remaining_ms)),
+        None => Some(remaining_ms),
+    })
+}
+
 /// Typed outcome of argument resolution. Splits the "upstream was
 /// skipped" case out from the generic error bucket so the caller can
 /// surface it as `StepOutcome::Skipped` rather than `Failed`.
@@ -270,7 +306,7 @@ impl std::fmt::Display for ResolveError {
 }
 
 pub(super) fn resolve_arguments(
-    step: &IrStep,
+    step: &IrCall,
     results: &HashMap<String, CapturedResult>,
     skipped_bindings: &std::collections::HashSet<String>,
 ) -> Result<Value, ResolveError> {
@@ -327,12 +363,17 @@ pub(super) fn resolve_arguments(
 /// `result_bytes` is Some only on success — used for data flow capture.
 #[allow(clippy::cast_precision_loss)] // elapsed_ms display — sub-ms precision not needed
 pub(super) fn process_step_result(
-    step: &IrStep,
+    step: &IrCall,
     result: StepExecResult,
     global_step: usize,
     total: usize,
     phase_idx: usize,
-) -> (StepOutcome, StepTrace, Option<Vec<u8>>) {
+) -> (
+    StepOutcome,
+    StepTrace,
+    Option<Vec<u8>>,
+    Option<crate::daemon::execution::child_invocation::ChildInvocationRecord>,
+) {
     match result {
         StepExecResult::Ok {
             result_bytes,
@@ -370,6 +411,7 @@ pub(super) fn process_step_result(
             ));
 
             let size = result_bytes.len();
+            let projection = invocation.projection();
             let trace = StepTrace {
                 step_id: step.step_id.clone(),
                 ability: step.ability.clone(),
@@ -384,12 +426,17 @@ pub(super) fn process_step_result(
                 result_size_bytes: Some(size),
                 result_sha256: Some(result_sha256),
                 error: None,
-                invocation,
+                invocation: Some(projection),
                 input_refs: step.input_refs.clone(),
                 output_binding: step.output_binding.clone(),
             };
 
-            (StepOutcome::Completed, trace, Some(result_bytes))
+            (
+                StepOutcome::Completed,
+                trace,
+                Some(result_bytes),
+                Some(*invocation),
+            )
         }
         StepExecResult::Error {
             message,
@@ -438,7 +485,7 @@ pub(super) fn process_step_result(
                 output_binding: step.output_binding.clone(),
             };
 
-            (outcome, trace, None)
+            (outcome, trace, None, None)
         }
         StepExecResult::SkippedByDependency {
             message,
@@ -474,7 +521,7 @@ pub(super) fn process_step_result(
                 input_refs: step.input_refs.clone(),
                 output_binding: step.output_binding.clone(),
             };
-            (StepOutcome::Skipped, trace, None)
+            (StepOutcome::Skipped, trace, None, None)
         }
     }
 }

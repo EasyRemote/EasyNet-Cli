@@ -25,6 +25,38 @@ pub struct ResourceSubjectSpec<'a> {
     pub allowed_label: &'a str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResourceSubjectProjection<'a> {
+    Missing,
+    MalformedUra,
+    NonResourceUra,
+    ResourceUra(&'a str),
+}
+
+impl<'a> ResourceSubjectProjection<'a> {
+    fn classify(subject: Option<&'a str>) -> Self {
+        let Some(subject) = subject.map(str::trim).filter(|subject| !subject.is_empty()) else {
+            return Self::Missing;
+        };
+        match crate::core::ura::parse_ura(subject) {
+            Ok(parsed) if parsed.kind == URAKind::Resource => Self::ResourceUra(subject),
+            Ok(_) => Self::NonResourceUra,
+            Err(_) => Self::MalformedUra,
+        }
+    }
+
+    fn as_resource_ura(self) -> Option<&'a str> {
+        match self {
+            Self::ResourceUra(subject) => Some(subject),
+            Self::Missing | Self::MalformedUra | Self::NonResourceUra => None,
+        }
+    }
+
+    fn is_resource(self) -> bool {
+        self.as_resource_ura().is_some()
+    }
+}
+
 /// Reject callers that try to pass AXIOM `subject` through JSON args.
 pub fn reject_subject_in_args(ability: &str, args: &Value) -> anyhow::Result<()> {
     if let Value::Object(map) = args {
@@ -90,22 +122,15 @@ pub fn require_resource_ura_subject<'a>(
     subject: Option<&'a str>,
     required_subject: &str,
 ) -> anyhow::Result<&'a str> {
-    let subject = subject
-        .map(str::trim)
-        .filter(|subject| !subject.is_empty())
-        .ok_or_else(|| subject_required_error(ability, required_subject))?;
-    if !is_resource_ura_subject(subject) {
-        return Err(subject_required_error(ability, required_subject));
-    }
-    Ok(subject)
+    ResourceSubjectProjection::classify(subject)
+        .as_resource_ura()
+        .ok_or_else(|| subject_required_error(ability, required_subject))
 }
 
 /// True only for canonical resource URAs. Invalid URAs and non-resource URAs
 /// are both false because neither can identify a media resource.
 pub fn is_resource_ura_subject(subject: &str) -> bool {
-    crate::core::ura::parse_ura(subject.trim())
-        .map(|parsed| parsed.kind == URAKind::Resource)
-        .unwrap_or(false)
+    ResourceSubjectProjection::classify(Some(subject)).is_resource()
 }
 
 fn subject_required_error(ability: &str, required_subject: &str) -> anyhow::Error {
@@ -173,6 +198,65 @@ mod tests {
         assert!(
             !message.contains(REASON_RESOURCE_NOT_FOUND),
             "non-resource subjects must not hit the resources table: {message}"
+        );
+    }
+
+    #[test]
+    fn malformed_subject_is_subject_required_before_resource_table_lookup() {
+        let _home = HomeGuard::new();
+        let path = resources::path();
+        std::fs::create_dir_all(path.parent().expect("resources path has parent"))
+            .expect("create state dir");
+        std::fs::write(&path, b"{not-json")
+            .expect("write corrupt resources table that must not be loaded");
+
+        let err = resolve_resource_ura_subject(
+            "not a ura",
+            ResourceSubjectSpec {
+                ability: "device.test.media",
+                required_subject: "display",
+                allowed_kinds: &[ResourceType::Display],
+                allowed_label: "display",
+            },
+        )
+        .expect_err("malformed subject must fail before resource table lookup");
+
+        let message = err.to_string();
+        assert!(
+            message.contains(REASON_SUBJECT_REQUIRED),
+            "expected reason={REASON_SUBJECT_REQUIRED}; got: {message}"
+        );
+        assert!(
+            !message.contains(REASON_RESOURCE_TABLE_UNAVAILABLE),
+            "malformed subjects must not load the resources table: {message}"
+        );
+        assert!(
+            !message.contains(REASON_RESOURCE_NOT_FOUND),
+            "malformed subjects must not be projected as missing resources: {message}"
+        );
+    }
+
+    #[test]
+    fn resource_subject_classifier_keeps_projection_states_explicit() {
+        assert_eq!(
+            ResourceSubjectProjection::classify(None),
+            ResourceSubjectProjection::Missing
+        );
+        assert_eq!(
+            ResourceSubjectProjection::classify(Some("not a ura")),
+            ResourceSubjectProjection::MalformedUra
+        );
+        assert_eq!(
+            ResourceSubjectProjection::classify(Some("easynet:///r/default/device/local")),
+            ResourceSubjectProjection::NonResourceUra
+        );
+        assert_eq!(
+            ResourceSubjectProjection::classify(Some(
+                "easynet:///r/acme/resource/device.01DEV/streams/display.01"
+            )),
+            ResourceSubjectProjection::ResourceUra(
+                "easynet:///r/acme/resource/device.01DEV/streams/display.01"
+            )
         );
     }
 }

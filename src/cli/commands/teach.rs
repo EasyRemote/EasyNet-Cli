@@ -8,7 +8,7 @@
 //              daemon invocation, so every descriptor grant/import is
 //              admitted, ledgered, and receipted.
 //
-//              `learn` rides `invoke_local_ability_with_invocation_meta`
+//              `learn` rides `invoke_local_target_with_invocation_meta`
 //              with subject = the granted descriptor URA: the
 //              seven-tuple names the thing being transferred
 //              (spec 0.1-7).
@@ -22,7 +22,13 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::builtins::governance::teach::{ACQUIRE, FORGET, TEACH};
-use crate::support::platform::local_invoke::invoke_local_ability_with_hosted_agent_delegation;
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, HostedAgentNameLookupError,
+};
+use crate::support::platform::local_invoke::{
+    invoke_local_target_with_hosted_agent_delegation, LocalAbilityTarget,
+    LocalSystemInvocationIssuer,
+};
 use crate::support::platform::output;
 
 /// Typed projection of the `meta.teach` daemon response. Parsing the
@@ -31,6 +37,7 @@ use crate::support::platform::output;
 /// loudly instead of rendering a placeholder success — the CLI never
 /// reports a transfer it cannot describe.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DescriptorGrantResponse {
     granted_descriptor: String,
     execution_mode: String,
@@ -40,6 +47,7 @@ struct DescriptorGrantResponse {
 
 /// Typed projection of the `meta.acquire` daemon response.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DescriptorImportResponse {
     new_descriptor_ura: String,
     execution_mode: String,
@@ -50,6 +58,7 @@ struct DescriptorImportResponse {
 
 /// Typed projection of the `meta.forget` daemon response.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DescriptorRemovalResponse {
     removed_descriptor: String,
     source_descriptor_ura: String,
@@ -216,13 +225,10 @@ fn require_committed_forget_status(status: &str) -> anyhow::Result<()> {
 /// Compute half of `teach` (e2e surface).
 pub fn execute_teach(args: &TeachArgs) -> anyhow::Result<Value> {
     let subject = resolve_owner_ability_subject(&args.ability)?;
-    invoke_local_ability_with_hosted_agent_delegation(
+    invoke_descriptor_mutation(
         TEACH,
         json!({ "ability": args.ability, "learner_ura": args.to }),
-        Some(subject.ability_ura.clone()),
-        &[],
-        None,
-        None,
+        &subject.ability_ura,
         &subject.owner_ura,
     )
     .map(|(resp, _meta)| resp)
@@ -234,13 +240,10 @@ pub fn execute_forget(args: &ForgetArgs) -> anyhow::Result<Value> {
     let agent_ura = resolve_learner_ura(&args.agent)?;
     let subject_ura = crate::core::ura::owner_ability_ura(&agent_ura, &args.ability)
         .ok_or_else(|| anyhow::anyhow!("could not mint descriptor URA for forgotten ability"))?;
-    invoke_local_ability_with_hosted_agent_delegation(
+    invoke_descriptor_mutation(
         FORGET,
         json!({ "ability": args.ability, "agent": args.agent }),
-        Some(subject_ura),
-        &[],
-        None,
-        None,
+        &subject_ura,
         &agent_ura,
     )
     .map(|(resp, _meta)| resp)
@@ -269,30 +272,64 @@ pub fn run_teach(args: TeachArgs) -> anyhow::Result<()> {
 /// plus the invocation envelope echo.
 pub fn execute_learn(args: &LearnArgs) -> anyhow::Result<(Value, Value)> {
     let learner_ura = resolve_learner_ura(&args.learner)?;
-    invoke_local_ability_with_hosted_agent_delegation(
+    invoke_descriptor_mutation(
         ACQUIRE,
         json!({ "ability_ura": args.ability_ura, "learner": args.learner }),
-        Some(args.ability_ura.clone()),
-        &[],
-        None,
-        None,
+        &args.ability_ura,
         &learner_ura,
     )
     .context("import the granted descriptor")
 }
 
+fn invoke_descriptor_mutation(
+    ability: &str,
+    args: Value,
+    subject_ura: &str,
+    hosted_agent_ura: &str,
+) -> anyhow::Result<(Value, Value)> {
+    let local_daemon_ura = crate::daemon::identity::local_invocation::local_daemon_ura()?;
+    let target =
+        LocalAbilityTarget::for_device_sponsored_system_ability(ability, &local_daemon_ura)?;
+    let context = LocalSystemInvocationIssuer::root_context(
+        subject_ura,
+        &[],
+        std::time::Duration::from_secs(30),
+        None,
+    )?;
+    invoke_local_target_with_hosted_agent_delegation(&target, args, context, hosted_agent_ura)
+}
+
 fn resolve_learner_ura(learner: &str) -> anyhow::Result<String> {
-    let local = crate::daemon::persistence::local_agents::load()
-        .with_context(|| format!("resolve learner {learner:?} from local-agents.json"))?;
-    let entry =
-        crate::daemon::persistence::local_agents::lookup_hosted_agent_by_name(&local, learner)?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "learner {learner:?} has no persisted local Agent URA; run agent publish/join \
+    let snapshot = AgentAggregateRepository::try_load_snapshot()
+        .with_context(|| format!("resolve learner {learner:?} from Agent aggregate"))?;
+    let learner_ura = snapshot
+        .hosted_agent_ura_by_name(learner)
+        .map_err(|error| resolve_learner_lookup_error(learner, error))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "learner {learner:?} has no persisted local Agent URA; run agent publish/join \
                  before importing granted descriptors"
-                )
-            })?;
-    Ok(entry.agent_ura.clone())
+            )
+        })?;
+    Ok(learner_ura.to_string())
+}
+
+fn resolve_learner_lookup_error(learner: &str, error: HostedAgentNameLookupError) -> anyhow::Error {
+    match error {
+        HostedAgentNameLookupError::Ambiguous {
+            first_profile,
+            second_profile,
+            ..
+        } => anyhow::anyhow!(
+            "learner {learner:?} is ambiguous across profiles {first_profile:?} and {second_profile:?}"
+        ),
+        HostedAgentNameLookupError::InvalidUra {
+            agent_ura, reason, ..
+        } => anyhow::anyhow!("learner {learner:?} has invalid Agent URA {agent_ura:?}: {reason}"),
+        HostedAgentNameLookupError::NonAgentUra { agent_ura, .. } => {
+            anyhow::anyhow!("learner {learner:?} resolved to non-Agent URA {agent_ura:?}")
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -397,6 +434,48 @@ mod tests {
         assert!(
             serde_json::from_value::<DescriptorImportResponse>(missing_status).is_err(),
             "learn must not silently ignore missing descriptor transaction status"
+        );
+    }
+
+    #[test]
+    fn descriptor_transfer_responses_reject_unknown_fields() {
+        let grant = serde_json::from_value::<DescriptorGrantResponse>(serde_json::json!({
+            "granted_descriptor": "easynet:///r/default/agent/user.mentor/ability/quote",
+            "execution_mode": "sandbox_first",
+            "transfer_kind": "discovery_only_manifest",
+            "invokable_after_acquire": false,
+            "state_code": "J200"
+        }))
+        .expect_err("teach response must reject read-model drift");
+        assert!(
+            grant.to_string().contains("state_code"),
+            "schema error should name the noncanonical field: {grant}"
+        );
+
+        let import = serde_json::from_value::<DescriptorImportResponse>(serde_json::json!({
+            "new_descriptor_ura": "easynet:///r/default/agent/user.student/ability/quote",
+            "execution_mode": "sandbox_first",
+            "transfer_kind": "discovery_only_manifest",
+            "invokable": false,
+            "descriptor_transaction_status": "committed",
+            "descriptor_ref": "legacy"
+        }))
+        .expect_err("acquire response must reject descriptor projection drift");
+        assert!(
+            import.to_string().contains("descriptor_ref"),
+            "schema error should name the noncanonical field: {import}"
+        );
+
+        let removal = serde_json::from_value::<DescriptorRemovalResponse>(serde_json::json!({
+            "removed_descriptor": "easynet:///r/default/agent/user.student/ability/quote",
+            "source_descriptor_ura": "easynet:///r/default/agent/user.mentor/ability/quote",
+            "descriptor_transaction_status": "committed",
+            "legacy_subject": "quote"
+        }))
+        .expect_err("forget response must reject retired aliases");
+        assert!(
+            removal.to_string().contains("legacy_subject"),
+            "schema error should name the noncanonical field: {removal}"
         );
     }
 

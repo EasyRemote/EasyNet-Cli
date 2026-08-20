@@ -1,0 +1,50 @@
+schema_version = "1"
+id = "easynet.browser"
+version = "1.0.0"
+kind = "builtin"
+entrypoint = "easynet_plugin_browser::provider"
+
+abilities = ["abilities/*.ability.toml"]
+permissions = []
+resources = []
+platforms = ["macos", "linux", "windows"]
+
+[limits]
+max_sessions = 8
+max_frame_queue = 2
+
+[[ability_metadata]]
+name = "browser.open_session"
+layer = "control"
+call_mode = "rpc"
+
+[[ability_metadata]]
+name = "browser.show_session"
+layer = "observation"
+call_mode = "rpc"
+
+[[ability_metadata]]
+name = "browser.send_input"
+layer = "control"
+call_mode = "rpc"
+
+[[ability_metadata]]
+name = "browser.capture_viewport"
+layer = "observation"
+call_mode = "stream"
+
+[[ability_metadata]]
+name = "browser.capture_page"
+layer = "observation"
+call_mode = "rpc"
+
+[[ability_metadata]]
+name = "browser.attach_session"
+layer = "operational"
+call_mode = "bidi"
+bidi_wire_kind = "json_frames"
+
+[[ability_metadata]]
+name = "browser.close_session"
+layer = "control"
+call_mode = "rpc"

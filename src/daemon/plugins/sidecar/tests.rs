@@ -5,29 +5,44 @@
 // Description: Contract tests for sidecar frames, process RPC, stream, and bidi.
 
 use std::fs;
+use std::io::{self, Read};
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
 
+use super::io::{capture_stderr_diagnostics, collect_stderr};
 use super::{
-    SidecarCommand, SidecarExecutionModel, SidecarInvocationEnvelope, SidecarRequestFrame,
-    SidecarRuntimeHost, SidecarRuntimeLimits,
+    sidecar_invocation_from_context, SidecarCommand, SidecarExecutionModel,
+    SidecarInvocationEnvelope, SidecarRequestFrame, SidecarResponseFrame, SidecarRuntimeHost,
+    SidecarRuntimeLimits,
 };
+use crate::daemon::ability::dispatch::EnvelopeContext;
 use crate::daemon::ability::dispatch::StreamSource;
 use crate::daemon::plugins::errors::PluginHostError;
 
+fn sidecar_system_agent_ura(agent_id: &str) -> String {
+    crate::core::ura::device_agent_ura("acme", "mac", agent_id)
+}
+
+fn sidecar_system_ability_ura(agent_id: &str, public_name: &str) -> String {
+    crate::core::ura::owner_ability_ura(&sidecar_system_agent_ura(agent_id), public_name)
+        .expect("sidecar SystemAgent ability URA")
+}
+
 #[test]
 fn sidecar_open_frame_carries_daemon_invocation_envelope() {
+    let callee_ura = sidecar_system_agent_ura("test");
+    let ability_ura = sidecar_system_ability_ura("test", "test.echo");
     let frame = SidecarRequestFrame::Invoke {
         call_id: "call-1".to_string(),
         invocation: SidecarInvocationEnvelope {
-            caller: "easynet:///r/acme/user/alice".to_string(),
-            callee: "easynet:///r/acme/device/mac".to_string(),
-            ability: "device.test.echo".to_string(),
-            subject: "easynet:///r/acme/resource/display.primary".to_string(),
+            caller_ura: "easynet:///r/acme/user/alice".to_string(),
+            callee_ura: callee_ura.clone(),
+            ability_ura,
+            subject_ura: "easynet:///r/acme/resource/display.primary".to_string(),
             invocation_nonce: vec![7; 16],
-            causal_context: json!({"trace_id": "trace-1"}),
+            causal_context: json!({"form": "none"}),
             args: json!({"message": "hello"}),
         },
     };
@@ -36,15 +51,12 @@ fn sidecar_open_frame_carries_daemon_invocation_envelope() {
     assert_eq!(encoded["type"], json!("invoke"));
     assert_eq!(encoded["call_id"], json!("call-1"));
     assert_eq!(
-        encoded["invocation"]["caller"],
+        encoded["invocation"]["caller_ura"],
         json!("easynet:///r/acme/user/alice")
     );
+    assert_eq!(encoded["invocation"]["callee_ura"], json!(callee_ura));
     assert_eq!(
-        encoded["invocation"]["callee"],
-        json!("easynet:///r/acme/device/mac")
-    );
-    assert_eq!(
-        encoded["invocation"]["subject"],
+        encoded["invocation"]["subject_ura"],
         json!("easynet:///r/acme/resource/display.primary")
     );
     assert_eq!(
@@ -53,10 +65,158 @@ fn sidecar_open_frame_carries_daemon_invocation_envelope() {
     );
     assert_eq!(
         encoded["invocation"]["causal_context"],
-        json!({"trace_id": "trace-1"})
+        json!({"form": "none"})
     );
-    assert!(encoded.get("ability").is_none());
+    assert!(encoded.get("ability_ura").is_none());
     assert!(encoded.get("args").is_none());
+}
+
+#[test]
+fn sidecar_request_frame_rejects_unknown_variant_fields() {
+    let raw = json!({
+        "type": "invoke",
+        "call_id": "call-1",
+        "invocation": canonical_sidecar_envelope_json(),
+        "retired_route": "rpc"
+    });
+
+    let err = serde_json::from_value::<SidecarRequestFrame>(raw)
+        .expect_err("sidecar request frames must reject unknown variant fields");
+    assert!(
+        err.to_string().contains("unknown field `retired_route`"),
+        "strict sidecar request decode should name the rejected field: {err}"
+    );
+}
+
+#[test]
+fn sidecar_invocation_envelope_rejects_unknown_identity_fields() {
+    let mut raw = canonical_sidecar_envelope_json();
+    raw.as_object_mut()
+        .expect("sidecar envelope object")
+        .insert(
+            "retired_subject".to_string(),
+            json!("easynet:///r/acme/device/mac"),
+        );
+
+    let err = serde_json::from_value::<SidecarInvocationEnvelope>(raw)
+        .expect_err("sidecar envelope must reject hidden identity aliases");
+    assert!(
+        err.to_string().contains("unknown field `retired_subject`"),
+        "strict sidecar envelope decode should name the rejected field: {err}"
+    );
+}
+
+#[test]
+fn sidecar_invocation_envelope_rejects_missing_canonical_tuple_objects() {
+    for field in ["causal_context", "args"] {
+        let mut raw = canonical_sidecar_envelope_json();
+        raw.as_object_mut()
+            .expect("sidecar envelope object")
+            .remove(field);
+
+        let err = serde_json::from_value::<SidecarInvocationEnvelope>(raw)
+            .expect_err("sidecar envelope must reject incomplete canonical tuple fields");
+        assert!(
+            err.to_string()
+                .contains(&format!("missing field `{field}`")),
+            "strict sidecar envelope decode should name the missing field: {err}"
+        );
+
+        let mut raw = canonical_sidecar_envelope_json();
+        raw.as_object_mut()
+            .expect("sidecar envelope object")
+            .insert(field.to_string(), serde_json::Value::Null);
+
+        let err = serde_json::from_value::<SidecarInvocationEnvelope>(raw)
+            .expect_err("sidecar envelope must reject null canonical tuple objects");
+        assert!(
+            err.to_string().contains("must be an object"),
+            "strict sidecar envelope decode should reject null {field}: {err}"
+        );
+    }
+}
+
+#[test]
+fn sidecar_invocation_envelope_rejects_non_canonical_nonce_length() {
+    let mut raw = canonical_sidecar_envelope_json();
+    raw.as_object_mut()
+        .expect("sidecar envelope object")
+        .insert("invocation_nonce".to_string(), json!([1, 2, 3, 4]));
+
+    let err = serde_json::from_value::<SidecarInvocationEnvelope>(raw)
+        .expect_err("sidecar envelope must reject non-canonical invocation nonce length");
+    assert!(
+        err.to_string().contains("exactly 16 bytes"),
+        "strict sidecar envelope decode should reject short nonce: {err}"
+    );
+}
+
+#[test]
+fn sidecar_invocation_projects_dispatch_name_to_canonical_ability_ura() {
+    let env = EnvelopeContext::for_test_targeted_ability(
+        "easynet:///r/acme/user/alice",
+        sidecar_system_agent_ura("media"),
+        "media.synthetic_stream",
+        "easynet:///r/acme/resource/display.primary",
+    );
+
+    let invocation =
+        sidecar_invocation_from_context(env, "media.synthetic_stream", json!({"watch": true}))
+            .expect("sidecar invocation projection");
+
+    assert_eq!(
+        invocation.ability_ura,
+        sidecar_system_ability_ura("media", "media.synthetic_stream")
+    );
+    assert_eq!(
+        invocation.callee_ura,
+        sidecar_system_agent_ura("media"),
+        "sidecar envelope must preserve admitted callee"
+    );
+    assert_eq!(
+        invocation.subject_ura, "easynet:///r/acme/resource/display.primary",
+        "sidecar envelope must preserve admitted subject"
+    );
+}
+
+#[test]
+fn sidecar_invocation_preserves_descriptor_bound_ability_ura() {
+    let descriptor_ref = format!(
+        "{}@1.0.0#0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef!stream",
+        sidecar_system_ability_ura("media", "media.synthetic_stream")
+    );
+    let env = EnvelopeContext::for_test_targeted_ability(
+        "easynet:///r/acme/user/alice",
+        sidecar_system_agent_ura("media"),
+        descriptor_ref.clone(),
+        "easynet:///r/acme/resource/display.primary",
+    );
+
+    let invocation =
+        sidecar_invocation_from_context(env, "media.synthetic_stream", json!({"watch": true}))
+            .expect("sidecar invocation projection");
+
+    assert_eq!(
+        invocation.ability_ura,
+        sidecar_system_ability_ura("media", "media.synthetic_stream")
+    );
+}
+
+#[test]
+fn sidecar_response_frame_rejects_unknown_variant_fields() {
+    let raw = json!({
+        "type": "result",
+        "call_id": "call-1",
+        "value": {"ok": true},
+        "receipt": {"retired": true}
+    });
+
+    let err = serde_json::from_value::<SidecarResponseFrame>(raw)
+        .expect_err("sidecar response frames must reject hidden receipt projections");
+    assert!(
+        err.to_string().contains("unknown field `receipt`"),
+        "strict sidecar response decode should name the rejected field: {err}"
+    );
 }
 
 #[test]
@@ -94,12 +254,12 @@ printf '%s\n' '{{"type":"result","call_id":"call-1","value":{{"ok":true}}}}'
         .invoke_rpc(
             "call-1",
             SidecarInvocationEnvelope {
-                caller: "easynet:///r/acme/user/alice".to_string(),
-                callee: "easynet:///r/acme/device/mac".to_string(),
-                ability: "device.test.echo".to_string(),
-                subject: "easynet:///r/acme/resource/display.primary".to_string(),
+                caller_ura: "easynet:///r/acme/user/alice".to_string(),
+                callee_ura: sidecar_system_agent_ura("test"),
+                ability_ura: sidecar_system_ability_ura("test", "test.echo"),
+                subject_ura: "easynet:///r/acme/resource/display.primary".to_string(),
                 invocation_nonce: vec![9; 16],
-                causal_context: json!({"trace_id": "trace-2"}),
+                causal_context: json!({"form": "none"}),
                 args: json!({"message": "hello"}),
             },
         )
@@ -110,15 +270,15 @@ printf '%s\n' '{{"type":"result","call_id":"call-1","value":{{"ok":true}}}}'
         serde_json::from_str(&fs::read_to_string(captured).expect("captured request"))
             .expect("captured request json");
     assert_eq!(
-        captured["invocation"]["caller"],
+        captured["invocation"]["caller_ura"],
         json!("easynet:///r/acme/user/alice")
     );
     assert_eq!(
-        captured["invocation"]["callee"],
-        json!("easynet:///r/acme/device/mac")
+        captured["invocation"]["callee_ura"],
+        json!(sidecar_system_agent_ura("test"))
     );
     assert_eq!(
-        captured["invocation"]["subject"],
+        captured["invocation"]["subject_ura"],
         json!("easynet:///r/acme/resource/display.primary")
     );
     assert_eq!(
@@ -127,7 +287,7 @@ printf '%s\n' '{{"type":"result","call_id":"call-1","value":{{"ok":true}}}}'
     );
     assert_eq!(
         captured["invocation"]["causal_context"],
-        json!({"trace_id": "trace-2"})
+        json!({"form": "none"})
     );
     assert_eq!(captured["invocation"]["args"], json!({"message": "hello"}));
 }
@@ -154,6 +314,52 @@ exit 42
         .expect_err("sidecar non-zero exit must be typed host error");
 
     assert!(format!("{err}").contains("operator-visible failure"));
+}
+
+#[test]
+fn sidecar_stderr_capture_preserves_binary_diagnostics() {
+    let stderr = capture_stderr_diagnostics(io::Cursor::new([b'o', 0xff, b'k']));
+
+    assert!(
+        stderr.contains("o") && stderr.contains('\u{fffd}') && stderr.contains("k"),
+        "binary stderr must be preserved lossily, got {stderr:?}"
+    );
+}
+
+#[test]
+fn sidecar_stderr_capture_reports_reader_failure() {
+    struct FailingReader {
+        emitted: bool,
+    }
+
+    impl Read for FailingReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.emitted {
+                return Err(io::Error::other("synthetic stderr failure"));
+            }
+            self.emitted = true;
+            let bytes = b"partial diagnostic";
+            buf[..bytes.len()].copy_from_slice(bytes);
+            Ok(bytes.len())
+        }
+    }
+
+    let stderr = capture_stderr_diagnostics(FailingReader { emitted: false });
+
+    assert!(stderr.contains("partial diagnostic"));
+    assert!(stderr.contains("sidecar stderr capture failed"));
+    assert!(stderr.contains("synthetic stderr failure"));
+}
+
+#[test]
+fn sidecar_stderr_collection_reports_reader_panic() {
+    let handle = std::thread::spawn(|| -> String {
+        panic!("synthetic stderr reader panic");
+    });
+
+    let stderr = collect_stderr(Some(handle));
+
+    assert_eq!(stderr, "sidecar stderr reader panicked");
 }
 
 #[test]
@@ -406,12 +612,24 @@ printf '%s\n' '{"type":"terminal","call_id":"call-1","reason":"second"}'
 
 fn test_invocation() -> SidecarInvocationEnvelope {
     SidecarInvocationEnvelope {
-        caller: "easynet:///r/acme/user/alice".to_string(),
-        callee: "easynet:///r/acme/device/mac".to_string(),
-        ability: "device.test.stream".to_string(),
-        subject: "easynet:///r/acme/resource/display.primary".to_string(),
+        caller_ura: "easynet:///r/acme/user/alice".to_string(),
+        callee_ura: sidecar_system_agent_ura("test"),
+        ability_ura: sidecar_system_ability_ura("test", "test.stream"),
+        subject_ura: "easynet:///r/acme/resource/display.primary".to_string(),
         invocation_nonce: vec![1; 16],
-        causal_context: json!({"trace_id": "trace-stream"}),
+        causal_context: json!({"form": "none"}),
         args: json!({"watch": true}),
     }
+}
+
+fn canonical_sidecar_envelope_json() -> serde_json::Value {
+    json!({
+        "caller_ura": "easynet:///r/acme/user/alice",
+        "callee_ura": sidecar_system_agent_ura("test"),
+        "ability_ura": sidecar_system_ability_ura("test", "test.echo"),
+        "subject_ura": "easynet:///r/acme/resource/display.primary",
+        "invocation_nonce": vec![7; 16],
+        "causal_context": {"form": "none"},
+        "args": {}
+    })
 }

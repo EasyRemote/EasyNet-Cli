@@ -388,6 +388,7 @@ pub fn save_snapshot(snapshot: &JoinConnectionSnapshot) -> anyhow::Result<()> {
     std::fs::create_dir_all(&dir)?;
     let json = serde_json::to_vec_pretty(snapshot)?;
     config::atomic_write_with_permissions(&snapshot_path(), &json, WritePermissions::OwnerReadWrite)
+        .map_err(Into::into)
 }
 
 pub fn load_snapshot() -> anyhow::Result<JoinConnectionSnapshot> {
@@ -437,8 +438,8 @@ pub fn classify_boot_failure(message: &str) -> (JoinFailureCode, JoinTransition,
     }
 }
 
-fn failure_detail_code(message: &str, fallback: JoinFailureCode) -> String {
-    FailureCodeClassifier::classify_or(message, fallback.as_wire())
+fn failure_detail_code(message: &str, default_code: JoinFailureCode) -> String {
+    FailureCodeClassifier::classify_or_default(message, default_code.as_wire())
 }
 
 #[cfg(test)]

@@ -1,0 +1,36 @@
+schema_version = "3"
+name = "authority.binding.revoke"
+descriptor_version = "1.0.0"
+description = "Revoke an RFC-014 PermissionGrant monotonically."
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "route-target"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "grant"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":true,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["grant_id", "owner_ura", "actor_ura"]
+additionalProperties = false
+
+[input_schema.properties.actor_ura]
+type = "string"
+
+[input_schema.properties.grant_id]
+type = "string"
+
+[input_schema.properties.owner_ura]
+type = "string"
+
+[input_schema.properties.reason]
+type = "string"

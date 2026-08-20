@@ -25,7 +25,7 @@ pub struct McpServerArgs {
     /// honours whatever tenant the loaded credentials carry.
     #[arg(long, default_value = "default")]
     pub tenant: String,
-    /// Agent label (informational; included in server name).
+    /// Agent workspace label used in the server name and chat-recursion filter.
     #[arg(long)]
     pub agent: Option<String>,
 }
@@ -35,14 +35,11 @@ pub fn run(args: McpServerArgs) -> anyhow::Result<()> {
     let config = crate::daemon::ability::catalog::profiles::mcp::StdioServerConfig {
         server_name: server_name.clone(),
         tenant_id: args.tenant.clone(),
-        // Thread --agent through so the workspace MCP server
-        // also exposes the agent's per-workspace abilities.
-        // Without this, an agent's own ability TOMLs (declared
-        // at <workspace>/abilities/) would be invisible to the
-        // LLM running inside that workspace.
+        // The daemon catalog remains authoritative. The workspace label only
+        // enables the chat-recursion filter in the MCP projection.
         agent_name: args.agent.clone(),
     };
-    let configured = crate::daemon::ability::catalog::profiles::mcp::build_stdio_server(&config);
+    let configured = crate::daemon::ability::catalog::profiles::mcp::build_stdio_server(&config)?;
 
     eprintln!(
         "[easynet mcp] tenant={} agent={} advertising {} tools (RFC-001 §A3 edge adapter)",
@@ -51,7 +48,7 @@ pub fn run(args: McpServerArgs) -> anyhow::Result<()> {
         configured.descriptor_count(),
     );
 
-    let server = easynet_axon::mcp::StdioMcpServer::new(configured.provider)
+    let server = crate::daemon::execution::mcp::stdio::StdioMcpServer::new(configured.provider)
         .with_server_name(configured.server_name)
         .with_server_version(env!("CARGO_PKG_VERSION"));
     server

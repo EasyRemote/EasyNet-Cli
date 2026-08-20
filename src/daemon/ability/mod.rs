@@ -14,9 +14,11 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+pub(crate) mod access_control_routes_gen;
 pub mod authority;
 pub mod builtins;
 pub mod catalog;
+pub(crate) mod catalog_row;
 pub mod conformance;
 mod control_plane;
 mod control_plane_error;
@@ -24,16 +26,27 @@ pub mod descriptors;
 pub mod dispatch;
 pub mod health;
 pub mod impl_bindings;
+/// Daemon-owned executable Ability package manifest. This is an import and
+/// persistence DTO, not the governed interface exposed to callers.
+pub mod manifest;
 pub mod names;
+pub(crate) mod owner_projection;
+pub(crate) mod principal_routes_gen;
+pub(crate) mod receipt_routes_gen;
+pub(crate) mod runtime_admin_routes_gen;
+pub(crate) mod runtime_governance_routes_gen;
 pub mod wire;
 
 pub(crate) use authority::public_route_ability_from_descriptor_ref;
 pub use authority::{
-    AuthorityBindingKind, AuthorityBindingRecord, AuthorityBindingRegistry, AuthorityPredicate,
-    AuthorityScope, HostedAgentAuthority, HostedAgentDelegationClaims,
+    AuthorityBinding, AuthorityBindingKind, AuthorityBindingRegistry, AuthorityPredicate,
+    AuthorityScope, DelegationAuthorityClaims, HostedAgentAuthority, HostedAgentDelegationClaims,
     HostedAgentDelegationContext, HostedAgentDelegationEnvelopeBinding,
     HostedAgentDelegationRequest, HOSTED_AGENT_DELEGATION_METADATA_KEY,
-    HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
+    HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY, RUNTIME_DELEGATION_METADATA_KEY,
+};
+pub(crate) use catalog_row::{
+    insert_catalog_descriptor, AbilityCatalogQuery, AbilityCatalogRow, CatalogDescriptorKey,
 };
 pub use control_plane::{
     AbilityControlPlaneAuthorityModeLookupError, AbilityControlPlaneLookupError,
@@ -42,8 +55,8 @@ pub use control_plane::{
 };
 pub use control_plane_error::AbilityControlPlaneError;
 pub use descriptors::{
-    canonical_json_bytes, AbilityControlPlaneKey, AbilityDescriptorKey, AbilityDescriptorRecord,
-    AbilityDescriptorRegistry, AbilityDescriptorVersion, CallMode, DescriptorHash, SchemaHash,
-    DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+    canonical_json_bytes, AbilityControlPlaneKey, AbilityDescriptor, AbilityDescriptorKey,
+    AbilityDescriptorRegistry, AbilityDescriptorVersion, AbilityHints, CallMode, DescriptorHash,
+    ReceiptSemantics, SchemaHash, DEFAULT_ABILITY_DESCRIPTOR_VERSION,
 };
 pub use impl_bindings::{AbilityImplBinding, AbilityImplRegistry, AbilityImplSource, RuntimeEnv};

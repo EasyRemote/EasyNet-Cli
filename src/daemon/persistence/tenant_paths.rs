@@ -23,9 +23,9 @@
 // ----------------
 // All paths under `~/.easynet/tenants/<tenant>/<kind>/`:
 //
-//   runs/          — agent session runs (existing
-//                    `~/.easynet/workspaces/<agent>/runs/` migrates
-//                    here in v2; v1 leaves the legacy path alone)
+//   runs/          — tenant-level orchestration runs. Per-agent runtime runs
+//                    remain under the canonical
+//                    `~/.easynet/agents/<agent>/runs/` aggregate root.
 //   schedules/     — cron entries (PR-SCHED)
 //   discuss-rooms/ — room membership + transcripts (PR-DISCUSS)
 //   loops/         — loop instance status (PR-LOOP)

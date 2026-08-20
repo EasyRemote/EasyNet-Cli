@@ -1,0 +1,144 @@
+package run.runtime.sdk;
+
+final class RuntimeAbilityProjection {
+  private static final String REALM_PREFIX = "easynet:///r/";
+  private final String abilityURA;
+  private final String publicName;
+  private final String intrinsicName;
+  private final String action;
+
+  private RuntimeAbilityProjection(
+      String abilityURA, String publicName, String intrinsicName, String action) {
+    this.abilityURA = abilityURA;
+    this.publicName = publicName;
+    this.intrinsicName = intrinsicName;
+    this.action = action;
+  }
+
+  static RuntimeAbilityProjection fromTuple(InvocationTuple tuple) {
+    return fromDescriptorRef(tuple.callee(), tuple.descriptor());
+  }
+
+  String abilityURA() {
+    return abilityURA;
+  }
+
+  String publicName() {
+    return publicName;
+  }
+
+  String intrinsicName() {
+    return intrinsicName;
+  }
+
+  String action() {
+    return action;
+  }
+
+  static String runtimeGovernanceReadAbility(String calleeURA, String descriptorRef) {
+    RuntimeAbilityProjection ability = fromDescriptorRef(calleeURA, descriptorRef);
+    String matched = runtimeGovernanceReadAbility(ability.publicName());
+    if (!matched.isBlank()) {
+      return matched;
+    }
+    return runtimeGovernanceReadAbility(ability.intrinsicName());
+  }
+
+  static RuntimeAbilityProjection fromResolvedDescriptorRef(String calleeURA, String descriptorRef) {
+    return fromDescriptorRef(calleeURA, descriptorRef);
+  }
+
+  static String abilityURAForDescriptorRef(String calleeURA, String descriptorRef) {
+    return fromDescriptorRef(calleeURA, descriptorRef).abilityURA();
+  }
+
+  private static RuntimeAbilityProjection fromDescriptorRef(String calleeURA, String descriptorRef) {
+    DescriptorAbilityProjection projection = descriptorAbilityProjection(descriptorRef);
+    String publicName = publicAbilityName(calleeURA, projection.intrinsicName());
+    return new RuntimeAbilityProjection(
+        projection.abilityURA(), publicName, projection.intrinsicName(), projection.action());
+  }
+
+  static String runtimeGovernanceDescriptorProviderForAbility(String ability) {
+    return RuntimeGovernanceRoutesGen.descriptorProvider(ability);
+  }
+
+  private static DescriptorAbilityProjection descriptorAbilityProjection(String descriptorRef) {
+    String clean = descriptorRef == null ? "" : descriptorRef.trim();
+    int hash = clean.indexOf('#');
+    int bang = clean.indexOf('!');
+    int limit = clean.length();
+    if (hash >= 0) {
+      limit = Math.min(limit, hash);
+    }
+    if (bang >= 0) {
+      limit = Math.min(limit, bang);
+    }
+    String withoutMode = clean.substring(0, limit);
+    int version = withoutMode.lastIndexOf('@');
+    String ability = (version >= 0 ? withoutMode.substring(0, version) : withoutMode).trim();
+    String path = canonicalTopLevelPath(ability);
+    String abilityPrefix = "ability/";
+    if (!path.startsWith(abilityPrefix)) {
+      throw SDKError.validation("authority", "descriptor_ref must contain a canonical Ability URA");
+    }
+    String intrinsicName = path.substring(abilityPrefix.length()).trim();
+    if (intrinsicName.isBlank() || intrinsicName.contains("/")) {
+      throw SDKError.validation("authority", "descriptor_ref must contain a canonical Ability URA");
+    }
+    String action = bang >= 0 ? clean.substring(bang + 1).trim() : "invoke";
+    return new DescriptorAbilityProjection(ability, intrinsicName, action.isBlank() ? "invoke" : action);
+  }
+
+  private static String runtimeGovernanceReadAbility(String value) {
+    return RuntimeGovernanceRoutesGen.canonicalAbility(value);
+  }
+
+  private static String publicAbilityName(String calleeURA, String intrinsicName) {
+    String clean = intrinsicName == null ? "" : intrinsicName.trim();
+    String owner = abilityOwnerPrefix(calleeURA);
+    if (!owner.isBlank() && clean.startsWith(owner + ".")) {
+      return clean.substring(owner.length() + 1);
+    }
+    return "";
+  }
+
+  private static String abilityOwnerPrefix(String calleeURA) {
+    String path = canonicalTopLevelPath(calleeURA);
+    if (path.startsWith("device/")) {
+      String deviceID = path.substring("device/".length()).trim();
+      if (!deviceID.isBlank() && !deviceID.contains("/")) {
+        return "device." + deviceID;
+      }
+    }
+    if (path.startsWith("agent/device.")) {
+      String scopedAgentID = path.substring("agent/device.".length()).trim();
+      int separator = scopedAgentID.indexOf('.');
+      if (separator > 0 && separator < scopedAgentID.length() - 1) {
+        return "system-agent."
+            + scopedAgentID.substring(0, separator)
+            + "."
+            + scopedAgentID.substring(separator + 1);
+      }
+    }
+    if ("authority".equals(path)) {
+      return "authority";
+    }
+    return "";
+  }
+
+  private static String canonicalTopLevelPath(String ura) {
+    String clean = ura == null ? "" : ura.trim();
+    if (!clean.startsWith(REALM_PREFIX)) {
+      return "";
+    }
+    String rest = clean.substring(REALM_PREFIX.length());
+    int slash = rest.indexOf('/');
+    if (slash <= 0 || slash == rest.length() - 1) {
+      return "";
+    }
+    return rest.substring(slash + 1).trim();
+  }
+
+  private record DescriptorAbilityProjection(String abilityURA, String intrinsicName, String action) {}
+}

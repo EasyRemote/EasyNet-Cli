@@ -1,0 +1,20 @@
+id: version/abi_incompatible
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+  - node
+  - java
+  - swift
+description: SDK returns a typed version mismatch before opening invocation traffic.
+steps:
+  - action: load_fixture
+    fixture: feature-discovery.v7.json
+  - action: feature_discovery
+    override:
+      abi_version: 0
+expect:
+  result: error
+  error_code: VersionMismatch

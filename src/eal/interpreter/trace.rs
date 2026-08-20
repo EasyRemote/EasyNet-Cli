@@ -5,15 +5,14 @@
 // =============================
 //
 // File: src/eal/interpreter.rs
-// Description: Client-side execution engine for Mission IR v2 (temporary — target: MissionControl v2).
+// Description: Daemon-owned execution engine for Mission IR v2.
 //
 // Execution Model:
 //   Phases execute sequentially (data-flow barriers between them).
-//   Steps within a phase execute in parallel via rayon work-stealing threadpool.
-//   When a dispatcher cannot be cloned across worker threads, falls back to sequential.
+//   Steps within a phase execute under the dispatcher's declared concurrency policy.
 //
 // Core Capabilities:
-//   1. True parallel dispatch — rayon::scope + clone_for_thread() per step.
+//   1. Declared parallel dispatch — rayon::scope + clone_for_thread() per step.
 //   2. Structured ExecutionTrace — per-step audit log with timestamps, result hashes, retry history.
 //   3. Retry with exponential backoff — delay = min(base * 2^attempt, max) + deterministic jitter.
 //   4. Cross-phase data flow — results captured in HashMap, substituted into downstream input_refs.
@@ -32,19 +31,15 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-fn current_trace_schema_version() -> u32 {
-    EXECUTION_TRACE_SCHEMA_VERSION
-}
-
 /// On-disk schema version for `ExecutionTrace` JSON. Bump on any wire
 /// change that older readers cannot interpret (renamed fields, removed
-/// variants, changed numeric ranges). Adding *optional* fields with
-/// `#[serde(default)]` does NOT warrant a bump — old readers will
-/// transparently ignore them, which is the entire point of `default`.
+/// variants, changed numeric ranges, added audit facts). Trace readers
+/// must not infer unstamped payloads into the current schema; migrations
+/// need an explicit version boundary.
 ///
 /// The version is stamped on every fresh trace so trace consumers can
-/// branch on layout. Absent-version on a parsed trace means "pre-stamp";
-/// tolerant readers should treat it as `1`. The golden test
+/// branch on layout. Absent-version parsed traces are rejected instead
+/// of being inferred as current schema. The golden test
 /// `trace_schema_v1_is_stable` pins the exact serialized shape so a
 /// regression here cannot land silently.
 pub const EXECUTION_TRACE_SCHEMA_VERSION: u32 = 1;
@@ -148,10 +143,6 @@ impl CappedTraceBuffer {
 pub struct ExecutionTrace {
     /// Schema version of this trace document. See
     /// `EXECUTION_TRACE_SCHEMA_VERSION` for the contract on bumping.
-    /// `#[serde(default)]` lets old on-disk traces (which lacked this
-    /// field) deserialize as version 1 — matching the tolerant-read
-    /// promise documented above.
-    #[serde(default = "current_trace_schema_version")]
     pub schema_version: u32,
     pub mission_id: String,
     pub mission_name: String,
@@ -168,8 +159,8 @@ pub struct ExecutionTrace {
     /// ledger receipt anchors) for steps lowered onto the daemon
     /// Invocation surface, in execution order. The receipt-level
     /// ability graph: nodes are the records' `ability` names, edges
-    /// come from each record's `causal_context.parents`. Empty when
-    /// no step produced an invocation record (offline run).
+    /// come from each record's canonical causal context. Empty when
+    /// no step completed successfully.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ability_graph: Vec<Value>,
     /// Ordered archival records produced by EAL `emit` statements.
@@ -181,9 +172,10 @@ pub struct ExecutionTrace {
     /// in-memory cap (see `TRACE_CAP_TOTAL`). Zero means every step
     /// is present in `step_traces`. Nonzero means there are exactly
     /// this many consecutive steps *between the head and tail slices*
-    /// whose trace entries are absent from `step_traces`. This field
-    /// is `#[serde(default)]` so older on-disk traces (before the cap
-    /// existed) parse as `0` — preserving the tolerant-read promise.
+    /// whose trace entries are absent from `step_traces`. Fresh trace
+    /// writers always materialize this field; the default only pairs
+    /// with the current serializer's empty-value elision semantics and
+    /// is not a schema-version fallback.
     #[serde(default)]
     pub traces_truncated: usize,
 }
@@ -212,9 +204,8 @@ pub struct StepTrace {
     /// Seven-tuple Axon invocation record for this step when it was
     /// lowered onto the daemon Invocation surface: envelope echo
     /// (caller/callee/ability/subject/nonce/causal_context) plus the
-    /// ledger-assigned invocation_ura, trace_id, and receipt anchors.
-    /// None for receipt-less dispatch paths (in-process fallback,
-    /// agent CLI) — absence is recorded, never fabricated.
+    /// ledger-assigned invocation_ura and receipt anchors. None only
+    /// when the step was never successfully dispatched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invocation: Option<Value>,
     /// Mirrors `IrStep::input_refs` — kept as a `BTreeMap` for the same
@@ -269,17 +260,20 @@ pub struct ExecutionReport {
     pub steps_failed: usize,
     pub trace: ExecutionTrace,
     /// Captured outputs from steps with `output_binding`.
-    /// Key = binding name, Value = JSON string of the step's result.
-    pub outputs: HashMap<String, String>,
+    ///
+    /// Values cross the interpreter boundary as structured JSON. A child
+    /// result that is not JSON is represented once, at the byte boundary,
+    /// as `Value::String`; downstream Mission consumers must not re-parse
+    /// serialized JSON strings.
+    pub outputs: HashMap<String, Value>,
 }
 
 // ── Internal captured result ──
 
 pub(super) struct CapturedResult {
     pub(super) value: Vec<u8>,
-    /// Seven-tuple invocation record for the step that produced this
-    /// binding, when the step was lowered onto the daemon's Axon
-    /// Invocation surface (None for in-process fallback dispatch).
-    /// Downstream steps read this to name their causal parents.
-    pub(super) invocation: Option<Value>,
+    /// Mandatory child Invocation record for the step that produced
+    /// this binding. Downstream joins retain its verified terminal
+    /// receipt as typed dependency evidence.
+    pub(super) invocation: crate::daemon::execution::child_invocation::ChildInvocationRecord,
 }

@@ -25,9 +25,9 @@
 // `supported_ipc_versions` is a *range* `{ min, max }`, not a single
 // value. The lib also knows a range; it picks `min(max_both)` if
 // the ranges overlap and fails early with `VERSION_INCOMPATIBLE` if
-// they don't. This lets the daemon deprecate an old protocol
-// version without a flag-day (ship `{ min: 2, max: 3 }` to drop v1;
-// old libs fail at init with a clear message).
+// they don't. This lets the daemon retire an unsupported protocol
+// version with an explicit cutover plan (ship `{ min: 2, max: 3 }`
+// to drop v1; older clients fail at init with a clear message).
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -38,7 +38,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use crate::daemon::persistence::config::state_dir;
+use crate::daemon::persistence::config::try_state_dir;
 
 /// Filename inside `~/.easynet/`.
 pub const CONTROL_JSON_FILENAME: &str = "control.json";
@@ -47,15 +47,15 @@ static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// v1 IPC protocol version — the one the daemon actually speaks
 /// today. The range emitted into `control.json` is `{ min: 1, max:
-/// 1 }`. Bumping this requires either (a) maintaining backward
-/// compat over the frames the prior version understood or (b)
-/// widening the range with a flag-day plan.
+/// 1 }`. Bumping this requires a declared migration plan and an
+/// explicit range contract for every supported frame version.
 pub const IPC_VERSION_V1: u16 = 1;
 
-/// Contents of `~/.easynet/control.json`. The layout is frozen as
-/// of PR-DAEMON; adding a field later must use `#[serde(default)]`
-/// so old libs ignore it.
+/// Contents of `~/.easynet/control.json`. The layout is an explicit local
+/// attach contract; once the file exists, unknown fields are malformed rather
+/// than ignored extension data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ControlDiscovery {
     /// Absolute path to the Unix Domain Socket (Linux/macOS) or
     /// pipe name (Windows). Exactly one is populated per platform.
@@ -102,9 +102,8 @@ pub struct ControlDiscovery {
 
     /// Actual local Pages listener port chosen by the daemon.
     ///
-    /// Older daemons did not write this field. Readers must treat
-    /// `None` as "unknown" and fall back to their historical default
-    /// or omit Pages URLs until Ready.
+    /// Readers must treat `None` as "unknown" and omit Pages URLs until
+    /// Ready proves the listener's bound port.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pages_port: Option<u16>,
 }
@@ -117,6 +116,7 @@ pub struct ControlDiscovery {
 /// hub daemon or a different device process just because the sockets
 /// are reachable.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DaemonIdentity {
     /// Deployment mode string: `device`, `hub`, or `both`.
     pub mode: String,
@@ -127,7 +127,39 @@ pub struct DaemonIdentity {
     pub node_id: Option<String>,
 }
 
+impl DaemonIdentity {
+    /// Canonical owner used by one local daemon attachment for system catalog
+    /// and caller-authority operations. `both` is explicitly device-primary:
+    /// realm Authority rows remain addressable through realm-scoped catalog
+    /// queries, while local system Invocations bind to the device substrate.
+    pub(crate) fn runtime_owner_ura(&self) -> Result<String, String> {
+        let realm = self.realm.trim();
+        if realm.is_empty() {
+            return Err("control discovery daemon_identity.realm is empty".to_string());
+        }
+        match self.mode.trim() {
+            "hub" => Ok(crate::core::ura::hub_ura(realm)),
+            "device" | "both" => {
+                let node_id = self
+                    .node_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|node_id| !node_id.is_empty())
+                    .ok_or_else(|| {
+                        "control discovery device-primary daemon_identity.node_id is empty"
+                            .to_string()
+                    })?;
+                Ok(crate::core::ura::device_ura(realm, node_id))
+            }
+            other => Err(format!(
+                "control discovery daemon_identity.mode {other:?} cannot resolve a runtime owner URA"
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct IpcVersionRange {
     pub min: u16,
     pub max: u16,
@@ -157,12 +189,71 @@ pub mod flags {
     pub const BOOT_STATUS: &str = "boot_status";
     /// The daemon exposes local non-product diagnostics over control.sock.
     pub const CONTROL_DIAGNOSTICS: &str = "control_diagnostics";
+    /// Bound-user Device/Both daemon Ready proves the paired User caller
+    /// signer was provisioned and registered in the runtime trust anchor
+    /// before the local Invocation listener became attachable. Federation-
+    /// native device-only credentials intentionally omit this flag.
+    pub const PAIRED_USER_RUNTIME_SIGNER: &str = "paired_user_runtime_signer";
 }
 
 /// Default discovery path. Callers should prefer this over rolling
 /// their own join of `state_dir()`.
 pub fn default_path() -> PathBuf {
-    state_dir().join(CONTROL_JSON_FILENAME)
+    try_default_path().unwrap_or_else(|error| panic!("{error}"))
+}
+
+pub fn try_default_path() -> anyhow::Result<PathBuf> {
+    Ok(try_state_dir()?.join(CONTROL_JSON_FILENAME))
+}
+
+/// Resolve a local attach endpoint or explicit discovery path to `control.json`.
+///
+/// Runtime owner and descriptor-catalog readers use this helper instead of
+/// reconstructing `control.json` ad hoc. The input must be absolute: accepting
+/// relative paths would make daemon identity depend on the caller's current
+/// working directory.
+pub fn resolve_control_json_path(path: &Path) -> anyhow::Result<PathBuf> {
+    require_absolute_control_path(path, "control discovery attach path")?;
+    if path.file_name().and_then(|name| name.to_str()) == Some(CONTROL_JSON_FILENAME) {
+        return Ok(path.to_path_buf());
+    }
+    Ok(control_path_parent(path)?.join(CONTROL_JSON_FILENAME))
+}
+
+fn require_absolute_control_path(path: &Path, label: &str) -> anyhow::Result<()> {
+    if path.as_os_str().is_empty() {
+        anyhow::bail!("{label} must not be empty");
+    }
+    if !path.is_absolute() {
+        anyhow::bail!(
+            "{label} must be absolute; relative paths would inherit process cwd: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn control_path_parent(path: &Path) -> anyhow::Result<&Path> {
+    require_absolute_control_path(path, "control discovery path")?;
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "control discovery path {} has no parent directory",
+                path.display()
+            )
+        })
+}
+
+fn control_path_file_name(path: &Path) -> anyhow::Result<&std::ffi::OsStr> {
+    path.file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "control discovery path {} has no file name component",
+                path.display()
+            )
+        })
 }
 
 /// Read and parse `~/.easynet/control.json`. Returns `Ok(None)` if
@@ -186,9 +277,8 @@ pub fn read(path: &Path) -> anyhow::Result<Option<ControlDiscovery>> {
 /// permission contract independent of umask and avoids readers
 /// observing partial JSON during daemon Ready updates.
 pub fn write(path: &Path, disc: &ControlDiscovery) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let parent = control_path_parent(path)?;
+    std::fs::create_dir_all(parent)?;
     let bytes = serde_json::to_vec_pretty(disc)?;
     write_atomic(path, &bytes)?;
     Ok(())
@@ -198,11 +288,8 @@ pub fn write(path: &Path, disc: &ControlDiscovery) -> anyhow::Result<()> {
 fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(CONTROL_JSON_FILENAME);
+    let parent = control_path_parent(path)?;
+    let file_name = control_path_file_name(path)?.to_string_lossy();
     let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp = parent.join(format!(".{file_name}.{}.{counter}.tmp", std::process::id()));
     let mut file = std::fs::OpenOptions::new()
@@ -222,11 +309,8 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 
 #[cfg(not(unix))]
 fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(CONTROL_JSON_FILENAME);
+    let parent = control_path_parent(path)?;
+    let file_name = control_path_file_name(path)?.to_string_lossy();
     let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let tmp = parent.join(format!(".{file_name}.{}.{counter}.tmp", std::process::id()));
     std::fs::write(&tmp, bytes)?;
@@ -251,6 +335,34 @@ pub fn remove(path: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_owner_identity_is_explicit_for_each_daemon_mode() {
+        let identity = |mode: &str, node_id: Option<&str>| DaemonIdentity {
+            mode: mode.to_string(),
+            realm: "acme".to_string(),
+            node_id: node_id.map(str::to_string),
+        };
+
+        assert_eq!(
+            identity("hub", None).runtime_owner_ura().unwrap(),
+            "easynet:///r/acme/authority"
+        );
+        assert_eq!(
+            identity("device", Some("dev-a"))
+                .runtime_owner_ura()
+                .unwrap(),
+            "easynet:///r/acme/device/dev-a"
+        );
+        assert_eq!(
+            identity("both", Some("dev-a")).runtime_owner_ura().unwrap(),
+            "easynet:///r/acme/device/dev-a"
+        );
+        assert!(identity("both", None)
+            .runtime_owner_ura()
+            .unwrap_err()
+            .contains("device-primary"));
+    }
 
     /// Produce a unique sandbox directory under the OS temp dir. We
     /// avoid `tempfile` as a dependency — the rest of this crate
@@ -301,6 +413,76 @@ mod tests {
         let p = dir.join(CONTROL_JSON_FILENAME);
         let got = read(&p).unwrap();
         assert!(got.is_none());
+    }
+
+    #[test]
+    fn resolve_control_json_path_accepts_explicit_absolute_discovery_file() {
+        let dir = unique_tmp();
+        let path = dir.join(CONTROL_JSON_FILENAME);
+
+        let resolved = resolve_control_json_path(&path).expect("absolute control.json path");
+
+        assert_eq!(resolved, path);
+    }
+
+    #[test]
+    fn resolve_control_json_path_maps_absolute_endpoint_to_sibling_discovery_file() {
+        let dir = unique_tmp();
+        let endpoint = dir.join("daemon.sock");
+
+        let resolved = resolve_control_json_path(&endpoint).expect("absolute endpoint path");
+
+        assert_eq!(resolved, dir.join(CONTROL_JSON_FILENAME));
+    }
+
+    #[test]
+    fn resolve_control_json_path_rejects_relative_endpoint_before_cwd_lookup() {
+        let error = resolve_control_json_path(Path::new("daemon.sock"))
+            .expect_err("relative endpoint must not resolve through cwd");
+
+        assert!(
+            error.to_string().contains("must be absolute"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn try_default_path_rejects_relative_home_before_os_home_fallback() {
+        let _lock = crate::cli::commands::test_support::env_lock();
+        let previous_home = std::env::var("HOME").ok();
+        let previous_userprofile = std::env::var("USERPROFILE").ok();
+        std::env::set_var("HOME", "relative-home");
+        std::env::remove_var("USERPROFILE");
+
+        let error = try_default_path()
+            .expect_err("relative HOME must not derive control.json through fallback");
+
+        match previous_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        match previous_userprofile {
+            Some(value) => std::env::set_var("USERPROFILE", value),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+
+        assert!(
+            error
+                .to_string()
+                .contains("HOME must resolve to an absolute path"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn write_rejects_relative_control_json_before_cwd_tmp_file() {
+        let error = write(Path::new(CONTROL_JSON_FILENAME), &sample())
+            .expect_err("relative control.json must not write through cwd");
+
+        assert!(
+            error.to_string().contains("must be absolute"),
+            "unexpected error: {error:#}"
+        );
     }
 
     #[test]
@@ -377,5 +559,58 @@ mod tests {
         std::fs::write(&p, b"not json").unwrap();
         let err = read(&p).unwrap_err();
         assert!(format!("{err}").contains("malformed"));
+    }
+
+    #[test]
+    fn control_discovery_rejects_unknown_fields() {
+        let dir = unique_tmp();
+        let p = dir.join(CONTROL_JSON_FILENAME);
+        let mut value = serde_json::to_value(sample()).expect("sample discovery JSON");
+        value
+            .as_object_mut()
+            .expect("sample discovery object")
+            .insert("retired_attach_hint".to_string(), serde_json::json!(true));
+        std::fs::write(&p, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+
+        let err = read(&p).expect_err("unknown control.json fields must fail closed");
+        assert!(
+            err.to_string()
+                .contains("unknown field `retired_attach_hint`"),
+            "unknown field should be reported explicitly: {err}"
+        );
+    }
+
+    #[test]
+    fn control_discovery_rejects_unknown_nested_identity_and_version_fields() {
+        let dir = unique_tmp();
+        let p = dir.join(CONTROL_JSON_FILENAME);
+        let mut value = serde_json::to_value(sample()).expect("sample discovery JSON");
+        value["daemon_identity"]
+            .as_object_mut()
+            .expect("daemon identity object")
+            .insert("retired_role".to_string(), serde_json::json!("agent"));
+        std::fs::write(&p, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+        let identity_err = read(&p).expect_err("unknown daemon_identity fields must fail closed");
+        assert!(
+            identity_err
+                .to_string()
+                .contains("unknown field `retired_role`"),
+            "unknown identity field should be reported explicitly: {identity_err}"
+        );
+
+        let mut value = serde_json::to_value(sample()).expect("sample discovery JSON");
+        value["supported_ipc_versions"]
+            .as_object_mut()
+            .expect("ipc version object")
+            .insert("retired_version".to_string(), serde_json::json!(0));
+        std::fs::write(&p, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+        let version_err =
+            read(&p).expect_err("unknown supported_ipc_versions fields must fail closed");
+        assert!(
+            version_err
+                .to_string()
+                .contains("unknown field `retired_version`"),
+            "unknown version field should be reported explicitly: {version_err}"
+        );
     }
 }

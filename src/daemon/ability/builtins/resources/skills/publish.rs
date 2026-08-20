@@ -2,11 +2,11 @@
 // =====================================================================================
 //
 // File: src/daemon/ability/builtins/resources/skills/publish.rs
-// Description: Root meta-abilities that let a curator session
-//              (spawned by `mission.think`) materialise a new skill
-//              into a registered agent's skills/ directory, delete
-//              an existing one, list the agent's skills, or inspect
-//              the skill package's files. Sibling of
+// Description: Root meta-abilities that let a runtime publisher
+//              materialise a new skill
+//              into a registered agent runtime's managed skills
+//              directory, delete an existing one, list the agent's
+//              skills, or inspect the skill package's files. Sibling of
 //              `ability_publish_ability`; the two surfaces are the
 //              two sinks the judge picks between when its
 //              `value_kind` field is `"ability"` vs `"skill"`.
@@ -21,17 +21,17 @@
 // Skill on-disk layout (mirrors `easynet skill install`)
 // ------------------------------------------------------
 //
-//   <agent-root>/skills/<skill-name>/
+//   <agent-managed-skills-dir>/<skill-name>/
 //       SKILL.md               # the curator-authored description
 //       .easynet/
-//           install.json       # provenance: source = curator:mission.think,
-//                              # content_hash, installed_at, size_bytes
+//           install.json       # provenance source, skill_tree_hash,
+//                              # installed_at, size_bytes
 //
-// The provenance source is `curator:mission.think:<run_id>` (the
-// mission run that spawned the curator). This is what
-// distinguishes a curator-published skill from a github-installed
-// one when an operator audits the skill source later. Backend
-// reads `source.kind` already.
+// The provenance source is explicit state: curator publishes carry
+// the supplied run id, while direct runtime publishes carry generic
+// `direct_publish:skill.publish` provenance. The runtime must not
+// synthesize product lifecycle provenance that the caller did not
+// provide.
 //
 // What `skill.publish` writes
 // ---------------------------
@@ -45,10 +45,10 @@
 // ------------------------
 // Same as `ability.publish`/`ability.unpublish`:
 //   * publish refuses to overwrite an existing skill of the same name
-//   * unpublish hard-deletes the entire `skills/<name>/` subtree
+//   * unpublish hard-deletes the entire managed skill subtree
 //   * daemon log captures `[skill.unpublish] owner=… name=…
-//     content_hash=…` so the body can be reconstructed from any
-//     external backup
+//     content_hash=…` so the canonical skill tree can be identified
+//     against any external backup
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -59,8 +59,16 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
-use crate::daemon::persistence::agent_registry as agents;
+use crate::daemon::persistence::agent_aggregate::{AgentAggregateRepository, AgentSkillLayout};
+use crate::daemon::resources::skills::projection::{
+    SkillPublishReceipt, SkillReadFileResponse, SkillTreeEntry, SkillTreeResponse,
+    SkillUnpublishReceipt, SkillWriteFileReceipt,
+};
+use crate::daemon::resources::skills::store::{
+    managed_skill_dir_for, write_install_record, InstallRecord, SkillSource,
+};
 
+use super::list;
 use crate::daemon::ability::dispatch::OwnerKind;
 /// Wire name: `skill.publish`. Matched by curator-issued calls.
 pub const ABILITY_PUBLISH: &str = crate::daemon::ability::names::resources::SKILL_PUBLISH;
@@ -77,29 +85,54 @@ pub const ABILITY_WRITE_FILE: &str = crate::daemon::ability::names::resources::S
 
 const MAX_SKILL_FILE_BYTES: u64 = 1024 * 1024;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SkillPublishProvenance {
+    CuratorRun(String),
+    DirectPublish,
+}
+
+impl SkillPublishProvenance {
+    fn from_mission_run_id(mission_run_id: Option<String>) -> Self {
+        match mission_run_id {
+            Some(run_id) => Self::CuratorRun(run_id),
+            None => Self::DirectPublish,
+        }
+    }
+
+    fn source(&self) -> SkillSource {
+        match self {
+            Self::CuratorRun(run_id) => SkillSource {
+                kind: "curator".to_string(),
+                identifier: run_id.clone(),
+                ref_: None,
+                subpath: None,
+            },
+            Self::DirectPublish => SkillSource {
+                kind: "direct_publish".to_string(),
+                identifier: ABILITY_PUBLISH.to_string(),
+                ref_: None,
+                subpath: None,
+            },
+        }
+    }
+}
+
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner(
-        "skill.publish",
-        OwnerKind::Device,
-        Arc::new(publish_handler),
-    );
+    let owner = OwnerKind::skill_management_system();
+    reg.register_rpc_with_owner("skill.publish", owner.clone(), Arc::new(publish_handler));
     reg.register_rpc_with_owner(
         "skill.unpublish",
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(unpublish_handler),
     );
-    reg.register_rpc_with_owner("skill.list", OwnerKind::Device, Arc::new(list_handler));
-    reg.register_rpc_with_owner("skill.tree", OwnerKind::Device, Arc::new(tree_handler));
+    reg.register_rpc_with_owner("skill.list", owner.clone(), Arc::new(list::handle));
+    reg.register_rpc_with_owner("skill.tree", owner.clone(), Arc::new(tree_handler));
     reg.register_rpc_with_owner(
         "skill.read_file",
-        OwnerKind::Device,
+        owner.clone(),
         Arc::new(read_file_handler),
     );
-    reg.register_rpc_with_owner(
-        "skill.write_file",
-        OwnerKind::Device,
-        Arc::new(write_file_handler),
-    );
+    reg.register_rpc_with_owner("skill.write_file", owner, Arc::new(write_file_handler));
 }
 
 /// `skill.publish` — materialise a curator-authored skill.
@@ -127,9 +160,9 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 fn publish_handler(args: Value) -> anyhow::Result<Value> {
     let (owner_id, skill_name, body, run_id) = parse_publish_args(&args)?;
     validate_skill_name(&skill_name)?;
-    let (owner_root, agent_type) = resolve_owner_root_and_type(&owner_id)?;
+    let (owner_root, layout) = resolve_owner_root_and_layout(&owner_id)?;
 
-    let skills_dir = skills_dir_for(&owner_root, agent_type);
+    let skills_dir = managed_skill_dir_for(&owner_root, layout);
     let skill_dir = skills_dir.join(&skill_name);
     if skill_dir.exists() {
         anyhow::bail!(
@@ -146,55 +179,29 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
         )
     })?;
     let skill_md_path = skill_dir.join("SKILL.md");
-    let hash = content_hash(&body);
-    let size_bytes = body.len() as u64;
     crate::daemon::persistence::config::atomic_write(&skill_md_path, body.as_bytes())
         .map_err(|e| anyhow::anyhow!("skill.publish: write {}: {e}", skill_md_path.display()))?;
+    let hash = hash_skill_tree(&skill_dir)?;
+    let size_bytes = skill_tree_size_bytes(&skill_dir)?;
 
-    // Provenance: source.kind = "curator", identifier carries the
-    // mission run id that produced this skill so an operator
-    // auditing the skill knows which mission.think session
-    // authored it.
-    let identifier = run_id
-        .clone()
-        .unwrap_or_else(|| "mission.think".to_string());
-    let source = crate::daemon::resources::skills::store::SkillSource {
-        kind: "curator".to_string(),
-        identifier: identifier.clone(),
-        ref_: None,
-        subpath: None,
-    };
+    let provenance = SkillPublishProvenance::from_mission_run_id(run_id.clone());
+    let source = provenance.source();
     let installed_at = chrono::Utc::now().to_rfc3339();
-    // Strip the `sha256:` prefix for the on-disk install.json.
-    // The wire envelope below keeps the prefix because callers
-    // benefit from algorithm tagging.
-    let bare_hash = hash.strip_prefix("sha256:").unwrap_or(&hash).to_string();
-    let record = crate::daemon::resources::skills::store::InstallRecord {
+    let record = InstallRecord {
         name: skill_name.clone(),
         description: crate::daemon::resources::skills::store::skill_description_from_dir(
             &skill_dir,
         ),
         agent_id: owner_id.clone(),
         source,
-        skill_tree_hash: bare_hash,
+        skill_tree_hash: hash.clone(),
         size_bytes,
         installed_at,
         last_checked_at: None,
         upgrade_available: false,
     };
-
-    let meta_dir = skill_dir.join(".easynet");
-    std::fs::create_dir_all(&meta_dir).map_err(|e| {
-        anyhow::anyhow!(
-            "skill.publish: failed to create {}: {e}",
-            meta_dir.display()
-        )
-    })?;
-    let install_path = meta_dir.join("install.json");
-    let install_json = serde_json::to_string_pretty(&record)
-        .map_err(|e| anyhow::anyhow!("skill.publish: failed to serialise install.json: {e}"))?;
-    crate::daemon::persistence::config::atomic_write(&install_path, install_json.as_bytes())
-        .map_err(|e| anyhow::anyhow!("skill.publish: write {}: {e}", install_path.display()))?;
+    write_install_record(&skill_dir, &record)
+        .map_err(|e| anyhow::anyhow!("skill.publish: write canonical install record: {e}"))?;
 
     let dir_display = format!("{}", skill_dir.display());
     crate::op_event!(
@@ -206,14 +213,13 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
         content_hash = hash,
     );
 
-    Ok(json!({
-        "ok": true,
-        "owner_agent_id": owner_id,
-        "skill_name": skill_name,
-        "skill_dir": skill_dir.display().to_string(),
-        "content_hash": hash,
-        "mission_run_id": run_id,
-    }))
+    Ok(serde_json::to_value(SkillPublishReceipt::success(
+        owner_id,
+        skill_name,
+        skill_dir.display().to_string(),
+        hash,
+        run_id,
+    ))?)
 }
 
 /// `skill.unpublish` — hard-delete a curator-published skill.
@@ -228,8 +234,8 @@ fn publish_handler(args: Value) -> anyhow::Result<Value> {
 fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
     let (owner_id, skill_name) = parse_unpublish_args(&args)?;
     validate_skill_name(&skill_name)?;
-    let (owner_root, agent_type) = resolve_owner_root_and_type(&owner_id)?;
-    let skill_dir = skills_dir_for(&owner_root, agent_type).join(&skill_name);
+    let (owner_root, layout) = resolve_owner_root_and_layout(&owner_id)?;
+    let skill_dir = managed_skill_dir_for(&owner_root, layout).join(&skill_name);
 
     if !skill_dir.exists() {
         anyhow::bail!(
@@ -240,25 +246,12 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
     }
 
     // Capture content hash from the install record before delete so
-    // the log line gives operators a recovery handle. If the
-    // install.json is missing or unreadable (a hand-edited skill
-    // dir), fall back to "unknown" rather than refusing to delete —
-    // the operator is asking to remove a directory that exists, the
-    // hash is a nice-to-have for the log, not a precondition.
+    // the log line gives operators a recovery handle. If the record
+    // is absent we log "unknown"; if it is present but malformed, log
+    // an explicit marker rather than silently treating non-canonical
+    // provenance as a valid install record.
     let install_path = skill_dir.join(".easynet").join("install.json");
-    let logged_hash = std::fs::read_to_string(&install_path)
-        .ok()
-        .and_then(|t| {
-            serde_json::from_str::<crate::daemon::resources::skills::store::InstallRecord>(&t).ok()
-        })
-        .map(|r| {
-            if r.skill_tree_hash.starts_with("sha256:") {
-                r.skill_tree_hash
-            } else {
-                format!("sha256:{}", r.skill_tree_hash)
-            }
-        })
-        .unwrap_or_else(|| "unknown".to_string());
+    let logged_hash = unpublish_audit_hash(&install_path);
 
     std::fs::remove_dir_all(&skill_dir).map_err(|e| {
         anyhow::anyhow!(
@@ -277,26 +270,37 @@ fn unpublish_handler(args: Value) -> anyhow::Result<Value> {
         content_hash = logged_hash,
     );
 
-    Ok(json!({
-        "ok": true,
-        "owner_agent_id": owner_id,
-        "skill_name": skill_name,
-        "removed_dir": skill_dir.display().to_string(),
-        "content_hash": logged_hash,
-    }))
+    Ok(serde_json::to_value(SkillUnpublishReceipt::success(
+        owner_id,
+        skill_name,
+        skill_dir.display().to_string(),
+        logged_hash,
+    ))?)
 }
 
-/// `skill.list` — installed skill inventory.
-///
-/// Args:
-/// ```json
-/// { "owner_agent_id": "<agent name>"? }
-/// ```
-/// (When absent, all agents' skills are listed.)
-///
-/// Returns: `{ "items": [InstalledSkill, ...] }`.
-fn list_handler(args: Value) -> anyhow::Result<Value> {
-    crate::daemon::ability::builtins::resources::skills::list::list_handler_for_args(args)
+fn unpublish_audit_hash(install_path: &Path) -> String {
+    let Ok(body) = std::fs::read_to_string(install_path) else {
+        return "unknown".to_string();
+    };
+    match serde_json::from_str::<InstallRecord>(&body) {
+        Ok(record) => match record.validate_canonical_persistence() {
+            Ok(()) => record.skill_tree_hash,
+            Err(_) => "invalid-install-record:data".to_string(),
+        },
+        Err(error) => format!(
+            "invalid-install-record:{}",
+            install_record_error_category(error.classify())
+        ),
+    }
+}
+
+fn install_record_error_category(category: serde_json::error::Category) -> &'static str {
+    match category {
+        serde_json::error::Category::Io => "io",
+        serde_json::error::Category::Syntax => "syntax",
+        serde_json::error::Category::Data => "data",
+        serde_json::error::Category::Eof => "eof",
+    }
 }
 
 /// `skill.tree` — list files inside one installed skill package.
@@ -315,22 +319,15 @@ fn tree_handler(args: Value) -> anyhow::Result<Value> {
     let resource_ura = package_resource_ura_from_args(&args, "skill.tree", &skill_name)?;
     let skill_dir = resolve_readable_skill_dir(&owner_id, &skill_name, "skill.tree")?;
     let mut entries = Vec::new();
-    collect_skill_tree_entries(&skill_dir, &skill_dir, &mut entries)?;
-    annotate_skill_file_resource_uras(&resource_ura, &mut entries);
-    entries.sort_by(|a, b| {
-        let ap = a["path"].as_str().unwrap_or("");
-        let bp = b["path"].as_str().unwrap_or("");
-        ap.cmp(bp)
-    });
-    let mut receipt = json!({
-        "ok": true,
-        "owner_agent_id": owner_id,
-        "skill_name": skill_name,
-        "root": skill_dir.display().to_string(),
-        "files": entries,
-    });
-    receipt["resource_ura"] = json!(resource_ura);
-    Ok(receipt)
+    collect_skill_tree_entries(&skill_dir, &skill_dir, &resource_ura, &mut entries)?;
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(serde_json::to_value(SkillTreeResponse::success(
+        owner_id,
+        skill_name,
+        skill_dir.display().to_string(),
+        entries,
+        resource_ura,
+    ))?)
 }
 
 /// `skill.read_file` — read a UTF-8 file inside one installed skill package.
@@ -364,17 +361,14 @@ fn read_file_handler(args: Value) -> anyhow::Result<Value> {
         )
     })?;
     let rel_wire = rel.to_string_lossy().to_string();
-    let mut receipt = json!({
-        "ok": true,
-        "owner_agent_id": owner_id,
-        "skill_name": skill_name,
-        "path": rel_wire,
-        "content": content,
-        "encoding": "utf-8",
-        "size_bytes": meta.len(),
-    });
-    receipt["resource_ura"] = json!(skill_file_resource_ura(&package_ura, &rel_wire));
-    Ok(receipt)
+    Ok(serde_json::to_value(SkillReadFileResponse::success(
+        owner_id,
+        skill_name,
+        rel_wire.clone(),
+        content,
+        meta.len(),
+        skill_file_resource_ura(&package_ura, &rel_wire),
+    ))?)
 }
 
 /// `skill.write_file` — write a UTF-8 file inside one installed skill package.
@@ -410,16 +404,14 @@ fn write_file_handler(args: Value) -> anyhow::Result<Value> {
         .map_err(|e| anyhow::anyhow!("skill.write_file: write {}: {e}", full.display()))?;
     let hash = refresh_install_record_hash(&skill_dir)?;
     let rel_wire = rel.to_string_lossy().to_string();
-    let mut receipt = json!({
-        "ok": true,
-        "owner_agent_id": owner_id,
-        "skill_name": skill_name,
-        "path": rel_wire,
-        "size_bytes": content.len() as u64,
-        "content_hash": hash,
-    });
-    receipt["resource_ura"] = json!(skill_file_resource_ura(&package_ura, &rel_wire));
-    Ok(receipt)
+    Ok(serde_json::to_value(SkillWriteFileReceipt::success(
+        owner_id,
+        skill_name,
+        rel_wire.clone(),
+        content.len() as u64,
+        hash,
+        skill_file_resource_ura(&package_ura, &rel_wire),
+    ))?)
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────
@@ -524,24 +516,6 @@ fn skill_file_resource_ura(package_ura: &str, rel_path: &str) -> String {
     crate::core::ura::resource_dot_ura(&parsed.realm, owner_id, &child_path)
 }
 
-fn annotate_skill_file_resource_uras(package_ura: &str, entries: &mut [Value]) {
-    for entry in entries {
-        let Some(path) = entry
-            .get("path")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-        else {
-            continue;
-        };
-        if let Some(obj) = entry.as_object_mut() {
-            obj.insert(
-                "resource_ura".to_string(),
-                json!(skill_file_resource_ura(package_ura, &path)),
-            );
-        }
-    }
-}
-
 fn parse_unpublish_args(args: &Value) -> anyhow::Result<(String, String)> {
     let obj = args
         .as_object()
@@ -606,94 +580,41 @@ fn parse_skill_file_args(
     Ok((owner, name, path))
 }
 
-/// Resolve the owner agent's root path AND its runtime type. Needed
-/// by the publish path so we can pick the right SKILL.md install
-/// location: Claude Code looks for project-local skills under
-/// `<cwd>/.claude/skills/<name>/`, not `<cwd>/skills/<name>/`.
-/// Codex has no native skill concept; for codex agents we still
-/// use `<cwd>/skills/` so EasyNet's own listing surfaces the
-/// artifact, but we know the LLM won't auto-load it.
-fn resolve_owner_root_and_type(owner_id: &str) -> anyhow::Result<(PathBuf, agents::AgentType)> {
-    let registry = agents::load_agents()?;
-    let entry = registry.agents.get(owner_id).ok_or_else(|| {
-        anyhow::anyhow!(
-            "owner_agent_id {owner_id:?} is not registered (registered agents: {:?})",
-            registry.agents.keys().collect::<Vec<_>>()
-        )
-    })?;
-    let root = entry
-        .root_path
-        .clone()
-        .unwrap_or_else(|| crate::daemon::persistence::config::agents_root().join(owner_id));
+/// Resolve the owner agent's root path and skill layout. Directory
+/// projection is delegated to the daemon skill store so publish, list,
+/// install, upgrade, and remove cannot drift by runtime.
+fn resolve_owner_root_and_layout(owner_id: &str) -> anyhow::Result<(PathBuf, AgentSkillLayout)> {
+    let owner =
+        AgentAggregateRepository::load_registered_agent_workspace(owner_id, "skill.publish")?;
+    let root = owner.root_path().to_path_buf();
     if !root.is_dir() {
         anyhow::bail!(
             "owner agent {owner_id:?} has no on-disk workspace at {}",
             root.display()
         );
     }
-    Ok((root, entry.agent_type))
-}
-
-/// Pick the on-disk skills directory for a given agent type. This
-/// is the LOAD-BEARING piece of skill discovery: Claude Code's
-/// skill loader scans `<cwd>/.claude/skills/<name>/SKILL.md`. If
-/// EasyNet writes to `<cwd>/skills/<name>/SKILL.md` instead, the
-/// skill is published but invisible to the running LLM.
-///
-/// History (2026-04-29): an earlier version of skill.publish wrote
-/// every skill to `<root>/skills/`. The skill artifact existed,
-/// `easynet skill list` saw it, `manifests_for` could enumerate
-/// the directory — but Claude Code never picked it up because the
-/// running `claude` subprocess was looking at
-/// `<cwd>/.claude/skills/` per Anthropic's project-local
-/// convention. Real e2e (mission.think → curator → skill.publish
-/// → restart daemon → agent send) showed `skills_loaded` listing
-/// only the EasyNet ability shims, never the freshly-published
-/// skill. The fix: route claude-code agents to `.claude/skills/`.
-///
-/// Codex has no equivalent project-local skill convention; we
-/// keep its skills under `<root>/skills/` for EasyNet's audit
-/// path, knowing the codex CLI won't auto-load them. A future
-/// codex-skill convention (if one ships upstream) would plug in
-/// here without changing call sites.
-fn skills_dir_for(root: &std::path::Path, agent_type: agents::AgentType) -> PathBuf {
-    match agent_type {
-        agents::AgentType::ClaudeCode => root.join(".claude").join("skills"),
-        agents::AgentType::Codex
-        | agents::AgentType::CodexAppServer
-        | agents::AgentType::External => root.join("skills"),
-    }
+    Ok((root, owner.skill_layout()))
 }
 
 fn skill_dir_candidates_for(
     root: &Path,
-    agent_type: agents::AgentType,
+    layout: AgentSkillLayout,
     skill_name: &str,
-) -> Vec<PathBuf> {
-    let mut candidates = match agent_type {
-        agents::AgentType::ClaudeCode => vec![
-            root.join(".claude").join("skills").join(skill_name),
-            root.join("skills").join(skill_name),
-        ],
-        agents::AgentType::Codex
-        | agents::AgentType::CodexAppServer
-        | agents::AgentType::External => {
-            vec![root.join("skills").join(skill_name)]
-        }
-    };
+) -> anyhow::Result<Vec<PathBuf>> {
+    let mut candidates = vec![managed_skill_dir_for(root, layout).join(skill_name)];
     if let Some(global_dir) =
-        crate::daemon::resources::skills::store::global_skill_dir_for(agent_type, skill_name)
+        crate::daemon::resources::skills::store::global_skill_dir_for(layout, skill_name)?
     {
         if !candidates.iter().any(|candidate| candidate == &global_dir) {
             candidates.push(global_dir);
         }
     }
-    candidates
+    Ok(candidates)
 }
 
 fn resolve_skill_dir(owner_id: &str, skill_name: &str, verb: &str) -> anyhow::Result<PathBuf> {
-    let (owner_root, agent_type) = resolve_owner_root_and_type(owner_id)?;
-    for candidate in skill_dir_candidates_for(&owner_root, agent_type, skill_name) {
+    let (owner_root, layout) = resolve_owner_root_and_layout(owner_id)?;
+    for candidate in skill_dir_candidates_for(&owner_root, layout, skill_name)? {
         if candidate.is_dir() {
             return Ok(candidate);
         }
@@ -712,7 +633,7 @@ fn resolve_readable_skill_dir(
     if let Some(global_pool) =
         crate::daemon::resources::skills::store::GlobalSkillPoolRef::parse_owner_id(owner_id, verb)?
     {
-        if let Some(path) = global_pool.skill_dir(skill_name) {
+        if let Some(path) = global_pool.skill_dir(skill_name)? {
             return Ok(path);
         }
         anyhow::bail!(
@@ -810,7 +731,12 @@ fn ensure_resolved_inside(root: &Path, path: &Path, verb: &str) -> anyhow::Resul
     Ok(())
 }
 
-fn collect_skill_tree_entries(root: &Path, dir: &Path, out: &mut Vec<Value>) -> anyhow::Result<()> {
+fn collect_skill_tree_entries(
+    root: &Path,
+    dir: &Path,
+    package_ura: &str,
+    out: &mut Vec<SkillTreeEntry>,
+) -> anyhow::Result<()> {
     let mut children: Vec<_> = std::fs::read_dir(dir)
         .map_err(|e| anyhow::anyhow!("skill.tree: read_dir {}: {e}", dir.display()))?
         .flatten()
@@ -843,18 +769,17 @@ fn collect_skill_tree_entries(root: &Path, dir: &Path, out: &mut Vec<Value>) -> 
             }
         };
         if meta.is_dir() {
-            out.push(json!({
-                "path": rel_str,
-                "type": "dir",
-                "size_bytes": 0,
-            }));
-            collect_skill_tree_entries(root, &path, out)?;
+            out.push(SkillTreeEntry::directory(
+                rel_str.to_string(),
+                skill_file_resource_ura(package_ura, &rel_str),
+            ));
+            collect_skill_tree_entries(root, &path, package_ura, out)?;
         } else if meta.is_file() {
-            out.push(json!({
-                "path": rel_str,
-                "type": "file",
-                "size_bytes": meta.len(),
-            }));
+            out.push(SkillTreeEntry::file(
+                rel_str.to_string(),
+                meta.len(),
+                skill_file_resource_ura(package_ura, &rel_str),
+            ));
         }
     }
     Ok(())
@@ -868,11 +793,9 @@ fn refresh_install_record_hash(skill_dir: &Path) -> anyhow::Result<String> {
             crate::daemon::resources::skills::store::read_install_record(&record_path)?;
         record.skill_tree_hash = hash.clone();
         record.size_bytes = skill_tree_size_bytes(skill_dir)?;
-        let body = serde_json::to_string_pretty(&record)
-            .map_err(|e| anyhow::anyhow!("skill.write_file: serialise install.json: {e}"))?;
-        crate::daemon::persistence::config::atomic_write(&record_path, body.as_bytes()).map_err(
-            |e| anyhow::anyhow!("skill.write_file: write {}: {e}", record_path.display()),
-        )?;
+        write_install_record(skill_dir, &record).map_err(|e| {
+            anyhow::anyhow!("skill.write_file: write canonical install record: {e}")
+        })?;
     }
     Ok(hash)
 }
@@ -926,13 +849,6 @@ fn skill_tree_size_bytes(root: &Path) -> anyhow::Result<u64> {
     Ok(total)
 }
 
-fn content_hash(body: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(body.as_bytes());
-    format!("sha256:{:x}", h.finalize())
-}
-
 pub fn publish_input_schema() -> Value {
     json!({
         "type": "object",
@@ -949,7 +865,7 @@ pub fn publish_input_schema() -> Value {
             },
             "mission_run_id": {
                 "type": "string",
-                "description": "Optional. The curator's mission run id, recorded as install provenance."
+                "description": "Optional. Curator run provenance. When omitted, install provenance is recorded as direct runtime publication."
             }
         }
     })
@@ -1048,13 +964,14 @@ pub fn write_file_input_schema() -> Value {
 }
 
 pub fn publish_description() -> &'static str {
-    "Publish a curator-authored skill into a registered agent's skills/<name>/ directory. \
+    "Publish a curator-authored skill into a registered Agent runtime's managed skills directory. \
      The skill body becomes SKILL.md; provenance is recorded in .easynet/install.json. \
      Refuses to overwrite an existing skill — call skill.unpublish first to replace."
 }
 
 pub fn unpublish_description() -> &'static str {
-    "Remove a skill from an agent's skills/ directory. Hard delete of the skill subtree; \
+    "Remove a skill from a registered Agent runtime's managed skills directory. \
+     Hard delete of the skill subtree; \
      daemon log records the deleted skill's content hash for recovery from backup."
 }
 
@@ -1084,9 +1001,18 @@ mod tests {
     use crate::cli::commands::test_support::HomeGuard;
     use crate::core::agent::spec::{AgentSpec, RuntimeKind};
     use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+    use crate::daemon::persistence::agent_registry as agents;
+    use crate::daemon::persistence::agent_registry::AgentEntry;
 
     fn materialise_agent(tag: &str, _guard: &HomeGuard) -> String {
+        materialise_agent_with_runtime(tag, RuntimeKind::ClaudeCode, RuntimeKind::ClaudeCode)
+    }
+
+    fn materialise_agent_with_runtime(
+        tag: &str,
+        runtime: RuntimeKind,
+        agent_type: RuntimeKind,
+    ) -> String {
         let pid = std::process::id();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1094,7 +1020,7 @@ mod tests {
             .unwrap_or(0);
         let name = format!("test-agent-{tag}-{pid}-{nanos}");
         let agent_root = crate::daemon::persistence::config::agents_root().join(&name);
-        let spec = AgentSpec::new(&name, RuntimeKind::ClaudeCode);
+        let spec = AgentSpec::new(&name, runtime);
         let _ = AgentDirectory::create(
             &Location::Local {
                 root: agent_root.clone(),
@@ -1102,10 +1028,11 @@ mod tests {
             spec,
         )
         .unwrap();
-        let mut registry = agents::load_agents().unwrap_or_else(|_| AgentRegistry::default());
-        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let mut registry = agents::load_agents()
+            .expect("skill publish test fixture must not hide malformed agent registry state");
+        let mut entry = AgentEntry::new(agent_type, None);
         entry.root_path = Some(agent_root.clone());
-        registry.agents.insert(name.clone(), entry);
+        registry.agents.insert(format!("default/{name}"), entry);
         agents::save_agents(&registry).unwrap();
         name
     }
@@ -1115,7 +1042,7 @@ mod tests {
         let mut local = crate::daemon::persistence::local_agents::load().unwrap_or_else(|_| {
             crate::daemon::persistence::local_agents::LocalAgentsFile::default()
         });
-        local.host_device_agent_ura = "easynet:///r/localhost/device/dev-1".to_string();
+        local.host_device_ura = "easynet:///r/localhost/device/dev-1".to_string();
         crate::daemon::persistence::local_agents::upsert_hosted_agent(
             &mut local, "llm", name, &agent_ura,
         );
@@ -1140,8 +1067,96 @@ mod tests {
         assert!(p.join("SKILL.md").exists());
         assert!(p.join(".easynet").join("install.json").exists());
         let body = std::fs::read_to_string(p.join(".easynet").join("install.json")).unwrap();
-        assert!(body.contains("\"kind\": \"curator\""));
-        assert!(body.contains("mission-think-001"));
+        let install: Value = serde_json::from_str(&body).expect("install record json");
+        assert_eq!(install["source"]["kind"], "curator");
+        assert_eq!(install["source"]["identifier"], "mission-think-001");
+    }
+
+    #[test]
+    fn publish_writes_canonical_skill_tree_hash_install_record() {
+        let g = HomeGuard::new();
+        let name = materialise_agent("canonical-install-hash", &g);
+        let res = publish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "summarise-niche",
+            "skill_md": "# Summarise\nA skill the curator wrote.",
+            "mission_run_id": "mission-think-001",
+        }))
+        .expect("publish ok");
+
+        let dir = PathBuf::from(res["skill_dir"].as_str().unwrap());
+        let install_path = dir.join(".easynet").join("install.json");
+        let body = std::fs::read_to_string(&install_path).expect("install record body");
+        let install: Value = serde_json::from_str(&body).expect("install record json");
+        let skill_tree_hash = install["skill_tree_hash"]
+            .as_str()
+            .expect("canonical skill_tree_hash");
+
+        assert!(
+            skill_tree_hash.starts_with("sha256:"),
+            "install record must persist algorithm-tagged tree hash: {skill_tree_hash}"
+        );
+        assert!(
+            install.get("content_hash").is_none(),
+            "install record must not persist public projection field: {body}"
+        );
+        assert_eq!(
+            res["content_hash"].as_str().unwrap(),
+            skill_tree_hash,
+            "public content_hash projection must reflect canonical skill_tree_hash"
+        );
+    }
+
+    #[test]
+    fn publish_writes_codex_skill_to_runtime_project_dir() {
+        let _g = HomeGuard::new();
+        let name =
+            materialise_agent_with_runtime("codex-writes", RuntimeKind::Codex, RuntimeKind::Codex);
+        let res = publish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "codex-visible",
+            "skill_md": "# Codex Visible",
+        }))
+        .expect("publish ok");
+        let skill_dir = PathBuf::from(res["skill_dir"].as_str().unwrap());
+        assert!(
+            skill_dir.ends_with(".agents/skills/codex-visible"),
+            "codex skills must land in the runtime project skill root: {}",
+            skill_dir.display()
+        );
+        assert!(skill_dir.join("SKILL.md").exists());
+        assert!(
+            !crate::daemon::persistence::config::agents_root()
+                .join(&name)
+                .join("skills")
+                .join("codex-visible")
+                .exists(),
+            "codex publish must not leave a retired root-level managed skill"
+        );
+    }
+
+    #[test]
+    fn publish_without_run_id_records_direct_publish_provenance() {
+        let g = HomeGuard::new();
+        let name = materialise_agent("direct-provenance", &g);
+        let res = publish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "direct-audit",
+            "skill_md": "# Direct Audit\nPublished without a curator run.",
+        }))
+        .expect("publish ok");
+        assert!(res.get("mission_run_id").is_none());
+
+        let skill_dir = PathBuf::from(res["skill_dir"].as_str().unwrap());
+        let body = std::fs::read_to_string(skill_dir.join(".easynet").join("install.json"))
+            .expect("install record");
+        let install: Value = serde_json::from_str(&body).expect("install record json");
+        assert_eq!(install["source"]["kind"], "direct_publish");
+        assert_eq!(install["source"]["identifier"], ABILITY_PUBLISH);
+        assert!(
+            !body.contains("mission.think"),
+            "direct publish provenance must not synthesize Mission authorship: {body}"
+        );
     }
 
     #[test]
@@ -1161,6 +1176,32 @@ mod tests {
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("already exists"));
+    }
+
+    #[test]
+    fn publish_rejects_malformed_agent_registry_before_defaulting_empty() {
+        let _g = HomeGuard::new();
+        let agents_path = crate::daemon::persistence::config::state_dir().join("agents.json");
+        std::fs::create_dir_all(
+            agents_path
+                .parent()
+                .expect("canonical agents registry path has parent"),
+        )
+        .expect("create state dir");
+        std::fs::write(&agents_path, b"{not-json")
+            .expect("write malformed agents registry sentinel");
+
+        let err = publish_handler(json!({
+            "owner_agent_id": "publish-corrupt-registry",
+            "skill_name": "summarise-niche",
+            "skill_md": "# Skill\n\nDo the thing.\n",
+        }))
+        .expect_err("malformed agent registry must fail closed before empty-registry fallback");
+        let message = err.to_string();
+        assert!(
+            message.contains("parse") && message.contains("agents.json"),
+            "expected malformed registry parse error, got: {message}"
+        );
     }
 
     #[test]
@@ -1200,6 +1241,83 @@ mod tests {
     }
 
     #[test]
+    fn unpublish_marks_malformed_install_record_without_accepting_legacy_fields() {
+        let g = HomeGuard::new();
+        let name = materialise_agent("unpub-malformed-install", &g);
+        let pub_res = publish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "bad-provenance",
+            "skill_md": "body",
+        }))
+        .unwrap();
+        let dir = PathBuf::from(pub_res["skill_dir"].as_str().unwrap());
+        std::fs::write(
+            dir.join(".easynet").join("install.json"),
+            r#"{
+                "name": "bad-provenance",
+                "agent_id": "agent",
+                "source": {"kind": "curator", "identifier": "mission"},
+                "content_hash": "sha256:deadbeef",
+                "size_bytes": 1,
+                "installed_at": "2026-04-23T00:00:00Z",
+                "upgrade_available": false,
+                "legacy_content_hash": "sha256:legacy"
+            }"#,
+        )
+        .unwrap();
+
+        let unpub_res = unpublish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "bad-provenance",
+        }))
+        .expect("unpublish still removes an existing directory");
+        let hash = unpub_res["content_hash"].as_str().unwrap();
+        assert!(
+            hash.starts_with("invalid-install-record:"),
+            "malformed provenance must be explicit in audit output: {hash}"
+        );
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn unpublish_rejects_unprefixed_legacy_skill_tree_hash_without_prefix_fallback() {
+        let g = HomeGuard::new();
+        let name = materialise_agent("unpub-unprefixed-install", &g);
+        let pub_res = publish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "bare-provenance",
+            "skill_md": "body",
+        }))
+        .unwrap();
+        let dir = PathBuf::from(pub_res["skill_dir"].as_str().unwrap());
+        std::fs::write(
+            dir.join(".easynet").join("install.json"),
+            r#"{
+                "name": "bare-provenance",
+                "agent_id": "agent",
+                "source": {"kind": "curator", "identifier": "mission"},
+                "skill_tree_hash": "deadbeef",
+                "size_bytes": 1,
+                "installed_at": "2026-04-23T00:00:00Z",
+                "upgrade_available": false
+            }"#,
+        )
+        .unwrap();
+
+        let unpub_res = unpublish_handler(json!({
+            "owner_agent_id": name,
+            "skill_name": "bare-provenance",
+        }))
+        .expect("unpublish still removes an existing directory");
+        let hash = unpub_res["content_hash"].as_str().unwrap();
+        assert_eq!(
+            hash, "invalid-install-record:data",
+            "unpublish must not turn legacy bare hashes into canonical provenance"
+        );
+        assert!(!dir.exists());
+    }
+
+    #[test]
     fn unpublish_errors_when_target_does_not_exist() {
         let g = HomeGuard::new();
         let name = materialise_agent("unpub-missing", &g);
@@ -1221,7 +1339,7 @@ mod tests {
             "skill_md": "content",
         }))
         .unwrap();
-        let res = list_handler(json!({"owner_agent_id": name})).expect("list ok");
+        let res = list::handle(json!({"owner_agent_id": name})).expect("list ok");
         let items = res["items"].as_array().expect("items array");
         let found = items.iter().any(|item| item["name"] == "found-me");
         assert!(
@@ -1255,7 +1373,7 @@ mod tests {
         }))
         .unwrap();
 
-        let by_agent = list_handler(json!({ "agent_ura": first_ura })).expect("list by agent_ura");
+        let by_agent = list::handle(json!({ "agent_ura": first_ura })).expect("list by agent_ura");
         let items = by_agent["items"].as_array().unwrap();
         assert_eq!(
             items.len(),
@@ -1279,7 +1397,7 @@ mod tests {
             "skill/first-skill",
         );
         let by_subject =
-            list_handler(json!({ "subject_ura": skill_subject })).expect("list by subject_ura");
+            list::handle(json!({ "subject_ura": skill_subject })).expect("list by subject_ura");
         let items = by_subject["items"].as_array().unwrap();
         assert_eq!(
             items.len(),
@@ -1288,7 +1406,7 @@ mod tests {
         );
         assert_eq!(items[0]["name"], "first-skill");
 
-        let err = list_handler(json!({
+        let err = list::handle(json!({
             "agent_ura": second_ura,
             "subject_ura": crate::core::ura::resource_dot_ura(
                 "localhost",
@@ -1373,7 +1491,7 @@ mod tests {
         )
         .unwrap();
 
-        let listed = list_handler(json!({"owner_agent_id": name})).expect("list ok");
+        let listed = list::handle(json!({"owner_agent_id": name})).expect("list ok");
         assert!(
             listed["items"]
                 .as_array()

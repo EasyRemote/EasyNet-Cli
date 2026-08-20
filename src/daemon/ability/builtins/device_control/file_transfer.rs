@@ -42,8 +42,8 @@
 // the Receipt's `sha256` and `state` fields. Runtime layer maps
 // {"type":"complete"} → BidiKindReceipt{state:"completed"} and
 // {"type":"error"} → BidiKindReceipt{state:"failed"}; that
-// mapping happens in the invocation/runtime-dispatch transport layer
-// (or equivalent for the federation-routed path) — NOT here.
+// mapping happens at the canonical Invocation terminal boundary
+// (including the federation-routed path) — NOT here.
 //
 // Safety
 // ------
@@ -71,7 +71,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
@@ -96,7 +96,7 @@ pub const FILE_TRANSFER_BYTE_CAP: u64 = 1024 * 1024 * 1024;
 /// convention sets us up for it).
 const DOWNLOAD_CHUNK_BYTES: usize = 64 * 1024;
 
-/// Channel bound for the bidi pipes. Same as pty_attach_ability's
+/// Channel bound for the bidi pipes. Same as terminal.attach's
 /// BIDI_CHANNEL_BOUND so the IPC layer's sizing assumptions hold.
 const BIDI_CHANNEL_BOUND: usize = 64;
 
@@ -107,14 +107,19 @@ const BIDI_CHANNEL_BOUND: usize = 64;
 const UPLOAD_RECV_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Register the bidi handler on the dispatcher. Mirrors
-/// pty_attach_ability::register's signature so the daemon-boot
+/// terminal_attach_ability::register's signature so the daemon-boot
 /// path stays uniform.
-pub fn register(reg: &mut AxonAbilityCatalog) {
+pub fn register(
+    reg: &mut AxonAbilityCatalog,
+    filesystem: filesystem::FilesystemResourceProvider,
+) -> anyhow::Result<()> {
+    super::files::require_catalog_filesystem_owner(reg, &filesystem)?;
     reg.register_bidi_with_owner(
         "fs.transfer",
-        OwnerKind::Device,
-        Arc::new(move |args: Value| open_handler(args)),
+        OwnerKind::locomotion_system(),
+        Arc::new(move |args: Value| open_handler_with_provider(args, &filesystem)),
     );
+    Ok(())
 }
 
 /// Bidi-open entry. Validates the args envelope, opens the local
@@ -122,8 +127,11 @@ pub fn register(reg: &mut AxonAbilityCatalog) {
 /// pump task, and returns the BidiSource so the IPC layer can
 /// wire its forwarders. Errors here surface as `OpenBidi` failures
 /// — the caller never sees a session id.
-fn open_handler(args: Value) -> anyhow::Result<BidiSource> {
-    let parsed = ParsedArgs::parse(&args)?;
+fn open_handler_with_provider(
+    args: Value,
+    filesystem: &filesystem::FilesystemResourceProvider,
+) -> anyhow::Result<BidiSource> {
+    let parsed = ParsedArgs::parse_with_provider(&args, filesystem)?;
 
     // Channel halves are transport-axis (see ability_dispatch::
     // BidiSource):
@@ -177,7 +185,10 @@ impl TransferTarget {
 }
 
 impl ParsedArgs {
-    fn parse(args: &Value) -> anyhow::Result<Self> {
+    fn parse_with_provider(
+        args: &Value,
+        filesystem: &filesystem::FilesystemResourceProvider,
+    ) -> anyhow::Result<Self> {
         let mode_str = args
             .get("mode")
             .and_then(Value::as_str)
@@ -191,10 +202,31 @@ impl ParsedArgs {
             Mode::Upload => FilesystemResourceCapability::Write,
             Mode::Download => FilesystemResourceCapability::Read,
         };
-        let target = filesystem::resolve_filesystem_path_without_existing_target(args, capability)
+        let target = filesystem
+            .resolve_filesystem_path_without_existing_target(args, capability)
             .map(TransferTarget::from_resolved)?;
         Ok(Self { mode, target })
     }
+}
+
+#[cfg(test)]
+const TEST_FILE_TRANSFER_DEVICE_URA: &str = "easynet:///r/test/device/file-transfer";
+
+#[cfg(test)]
+impl ParsedArgs {
+    fn parse(args: &Value) -> anyhow::Result<Self> {
+        Self::parse_with_provider(args, &test_filesystem())
+    }
+}
+
+#[cfg(test)]
+fn open_handler(args: Value) -> anyhow::Result<BidiSource> {
+    open_handler_with_provider(args, &test_filesystem())
+}
+
+#[cfg(test)]
+fn test_filesystem() -> filesystem::FilesystemResourceProvider {
+    filesystem::FilesystemResourceProvider::for_device(TEST_FILE_TRANSFER_DEVICE_URA).unwrap()
 }
 
 /// Upload pump: read chunks from the wire, append to the staging
@@ -273,27 +305,8 @@ fn spawn_upload(
                         return;
                     }
                 };
-            let frame_type = frame.get("type").and_then(Value::as_str).unwrap_or("");
-            match frame_type {
-                "chunk" => {
-                    let Some(data_b64) = frame.get("data").and_then(Value::as_str) else {
-                        emit_error(&to_client, "bad_frame", "chunk frame missing `data`").await;
-                        let _ = std::fs::remove_file(&staging);
-                        return;
-                    };
-                    let bytes = match base64::engine::general_purpose::STANDARD.decode(data_b64) {
-                        Ok(b) => b,
-                        Err(e) => {
-                            emit_error(
-                                &to_client,
-                                "bad_frame",
-                                &format!("chunk base64 decode: {e}"),
-                            )
-                            .await;
-                            let _ = std::fs::remove_file(&staging);
-                            return;
-                        }
-                    };
+            match UploadClientFrame::parse(frame) {
+                Ok(UploadClientFrame::Chunk(bytes)) => {
                     total = total.saturating_add(bytes.len() as u64);
                     if total > FILE_TRANSFER_BYTE_CAP {
                         emit_error(
@@ -312,19 +325,16 @@ fn spawn_upload(
                     }
                     hasher.update(&bytes);
                 }
-                "eof" => break,
-                other => {
-                    // Unknown frame type — diagnostic, not fatal,
-                    // mirrors PTY's `warn` channel pattern. We
-                    // ignore unknown types so a forward-compat
-                    // client adding a hint-frame doesn't blow up
-                    // the transfer.
-                    let _ = to_client
-                        .send(BidiOutputFrame::json(json!({
-                            "type": "warn",
-                            "message": format!("unknown frame type {other:?}; ignored"),
-                        })))
-                        .await;
+                Ok(UploadClientFrame::Eof) => break,
+                Err(error) => {
+                    emit_error(
+                        &to_client,
+                        "bad_frame",
+                        &format!("upload frame rejected: {error}"),
+                    )
+                    .await;
+                    let _ = std::fs::remove_file(&staging);
+                    return;
                 }
             }
         }
@@ -347,7 +357,7 @@ fn spawn_upload(
 
         let sha = hex_lower(&hasher.finalize());
         let _ = to_client
-            .send(BidiOutputFrame::json(json!({
+            .send(BidiOutputFrame::terminal_json(json!({
                 "type": "complete",
                 "sha256": sha,
                 "bytes": total,
@@ -356,6 +366,67 @@ fn spawn_upload(
             })))
             .await;
     });
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UploadClientFrame {
+    Chunk(Vec<u8>),
+    Eof,
+}
+
+impl UploadClientFrame {
+    fn parse(frame: Value) -> anyhow::Result<Self> {
+        let object = upload_frame_object(&frame)?;
+        let frame_type = upload_required_frame_string(object, "type")?;
+        match frame_type {
+            "chunk" => {
+                reject_unknown_upload_frame_fields(object, &["type", "data"])?;
+                let data_b64 = upload_required_frame_string(object, "data")?;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data_b64)
+                    .map_err(|error| anyhow::anyhow!("chunk `data` base64 decode: {error}"))?;
+                Ok(Self::Chunk(bytes))
+            }
+            "eof" => {
+                reject_unknown_upload_frame_fields(object, &["type"])?;
+                Ok(Self::Eof)
+            }
+            other => anyhow::bail!("unsupported frame type `{other}`"),
+        }
+    }
+}
+
+fn upload_frame_object(frame: &Value) -> anyhow::Result<&Map<String, Value>> {
+    frame
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("frame must be a JSON object"))
+}
+
+fn upload_required_frame_string<'a>(
+    frame: &'a Map<String, Value>,
+    key: &str,
+) -> anyhow::Result<&'a str> {
+    frame
+        .get(key)
+        .ok_or_else(|| anyhow::anyhow!("`{key}` required"))?
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("`{key}` must be a string"))
+}
+
+fn reject_unknown_upload_frame_fields(
+    frame: &Map<String, Value>,
+    allowed_keys: &[&str],
+) -> anyhow::Result<()> {
+    let mut unknown = frame
+        .keys()
+        .filter(|key| !allowed_keys.contains(&key.as_str()))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        unknown.sort_unstable();
+        anyhow::bail!("unsupported frame field(s): {}", unknown.join(", "));
+    }
+    Ok(())
 }
 
 /// Download pump: open the file, stream chunks, hash on the fly.
@@ -453,7 +524,7 @@ fn spawn_download(target: TransferTarget, to_client: mpsc::Sender<BidiOutputFram
             Ok(Ok((total, digest))) if !digest.is_empty() => {
                 let sha = hex_lower_bytes(&digest);
                 let _ = to_client
-                    .send(BidiOutputFrame::json(json!({
+                    .send(BidiOutputFrame::terminal_json(json!({
                         "type": "complete",
                         "sha256": sha,
                         "bytes": total,
@@ -581,9 +652,15 @@ pub fn description() -> &'static str {
 mod tests {
     use super::*;
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/file-transfer";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
     /// Drain frames from the handler-emit channel up to `max`
     /// frames or `timeout`, whichever comes first. Mirrors the
-    /// helper in pty_attach_ability tests.
+    /// helper in terminal.attach tests.
     async fn drain_handler_emit(
         rx: &mut mpsc::Receiver<BidiOutputFrame>,
         max: usize,
@@ -635,8 +712,8 @@ mod tests {
 
     #[test]
     fn registration_mounts_bidi_handler() {
-        let mut reg = AxonAbilityCatalog::new();
-        register(&mut reg);
+        let mut reg = metadata_test_catalog();
+        register(&mut reg, test_filesystem()).unwrap();
         assert!(reg.get_bidi(ABILITY_FILE_TRANSFER).is_some());
     }
 
@@ -652,8 +729,9 @@ mod tests {
     }
 
     fn transfer_ref(path: &Path, capability: FilesystemResourceCapability) -> Value {
-        crate::daemon::resources::files::resource_ref_for_local_path(path, capability)
-            .expect("local transfer ResourceRef")
+        test_filesystem()
+            .resource_ref_for_local_path(path, capability)
+            .expect("file transfer fixture must be owned by this test daemon's local Device")
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -889,11 +967,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn upload_unknown_frame_type_does_not_kill_session() {
-        // Forward-compat: a future client emitting a hint frame
-        // we don't recognise gets a `warn` back, not an error,
-        // and the transfer still succeeds.
-        let path = temp_path("forward_compat.bin");
+    async fn upload_unknown_frame_type_emits_error_and_aborts_transfer() {
+        let path = temp_path("unknown-frame.bin");
         let source = open_handler(json!({
             "mode": "upload",
             "resource_ref": transfer_ref(&path, FilesystemResourceCapability::Write),
@@ -906,19 +981,73 @@ mod tests {
             .send(json!({"type": "future_hint", "x": 42}))
             .await
             .unwrap();
-        // Then a real chunk + eof.
+
+        let frames = drain_handler_emit(&mut from_handler, 4, Duration::from_secs(2)).await;
+        let error = frames
+            .iter()
+            .find(|frame| frame["type"] == "error")
+            .expect("unknown upload frame must emit an error");
+        assert_eq!(error["code"], "bad_frame");
+        assert!(
+            error["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("unsupported frame type")),
+            "unexpected error frame: {error:?}"
+        );
+
         let chunk_b64 = base64::engine::general_purpose::STANDARD.encode(b"abc");
-        to_handler
+        if to_handler
             .send(json!({"type": "chunk", "data": chunk_b64}))
             .await
-            .unwrap();
-        to_handler.send(json!({"type": "eof"})).await.unwrap();
-        let frames = drain_handler_emit(&mut from_handler, 4, Duration::from_secs(2)).await;
-        // We expect at least one warn and one complete.
-        assert!(frames.iter().any(|f| f["type"] == "warn"));
-        assert!(frames.iter().any(|f| f["type"] == "complete"));
-        // File written.
-        assert_eq!(std::fs::read(&path).unwrap(), b"abc");
+            .is_ok()
+        {
+            let _ = to_handler.send(json!({"type": "eof"})).await;
+            let frames = drain_handler_emit(&mut from_handler, 4, Duration::from_millis(500)).await;
+            assert!(
+                !frames.iter().any(|frame| frame["type"] == "complete"),
+                "upload must not complete after protocol rejection: {frames:?}"
+            );
+        }
+        assert!(
+            !path.exists(),
+            "unknown upload frame must not promote a target file"
+        );
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn upload_frame_parser_rejects_non_object_frames() {
+        let err = UploadClientFrame::parse(Value::Null).unwrap_err();
+        assert!(
+            format!("{err}").contains("frame must be a JSON object"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn upload_frame_parser_rejects_unknown_chunk_fields() {
+        let err = UploadClientFrame::parse(json!({
+            "type": "chunk",
+            "data": "YWJj",
+            "legacy_mode": true
+        }))
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("unsupported frame field(s): legacy_mode"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn upload_frame_parser_rejects_eof_payload_fields() {
+        let err = UploadClientFrame::parse(json!({
+            "type": "eof",
+            "data": ""
+        }))
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("unsupported frame field(s): data"),
+            "unexpected error: {err}"
+        );
     }
 }

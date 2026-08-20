@@ -27,7 +27,7 @@ The bidi handler model is the natural extension: a long-lived session where both
 
 - Backend wshandler (C-M5).
 - PTY (C-M3b/c) — built **on top** of this infra.
-- Remote bidi forwarding through `GatewayApi` — local-only in C-M3a, mirrors how stream remote-forwarding was deferred in PR-SYS.
+- Remote bidi forwarding through the canonical Invocation/session route — local-only in C-M3a, mirrors how stream remote-forwarding was deferred in PR-SYS.
 - Rewriting `Subscribe` over bidi. Stream stays as-is.
 
 ---

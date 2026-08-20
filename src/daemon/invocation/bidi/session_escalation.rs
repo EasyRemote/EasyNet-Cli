@@ -1,12 +1,11 @@
-// EasyNet CLI — invocation_transport — device-mode `forward_invoke` escalation
-// =====================================================================
+// EasyNet CLI — invocation_transport — reverse-session invocation relay
+// ======================================================================
 //
 // File: src/daemon/invocation/session_escalation.rs
-// Description: Lets a device-mode daemon's `dispatch_federation_
-//              forward_invoke` send a `SessionDispatch::Request`
-//              frame up the long-lived `session.open` bidi to its
-//              hub, then `await` the matching `RequestResult` on a
-//              `tokio::sync::oneshot` channel.
+// Description: Relays complete signed InvokeRequests from a device daemon to
+//              its hub as typed `ReverseDispatchCall` frames. Daemon-owned
+//              bootstrap control calls retain a separate bounded Request /
+//              RequestResult codec.
 //
 // Why this module exists
 // ----------------------
@@ -14,8 +13,8 @@
 // accept inbound bidi; their local `PresenceRegistry` is empty by
 // construction (no peer ever calls `presence.insert` on a
 // device-mode daemon's registry). The hub holds the authoritative
-// PresenceRegistry; PR-N6 spec routes device-mode forward_invoke
-// up the already-open session bidi to the hub for resolution.
+// PresenceRegistry, so canonical remote calls travel up the already-open
+// session to the hub for routing.
 //
 // Wire ↔ correlation seam
 // -----------------------
@@ -50,16 +49,20 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
-use crate::daemon::invocation::bidi::invoke_remote_initiator::{
+use crate::daemon::invocation::bidi::session_initiator::{SessionUpSender, SESSION_STREAM_ID};
+use crate::daemon::invocation::bidi::session_wire::{
     call_id_hex, RequestOutcome, SessionRequestError,
 };
-use crate::daemon::invocation::bidi::session_initiator::{SessionUpSender, SESSION_STREAM_ID};
+use crate::daemon::invocation::bidi::state::pending_dispatch::{
+    DispatchResult, DispatchStreamEvent,
+};
+use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
 
 /// Default deadline for awaiting a `RequestResult` after the
 /// device queues a Request. PR-N6 spec §"Deadline propagation"
 /// says CLI-supplied `--deadline-ms` overrides this; the daemon
 /// applies this default when the CLI didn't supply one. 30s
-/// matches PR-N1's `forward_invoke_timeout`.
+/// matches the canonical remote invocation deadline.
 pub const DEFAULT_ESCALATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Capacity of the dispatch-side mpsc the dispatch handler pushes
@@ -73,9 +76,204 @@ pub const ESCALATION_QUEUE_CAPACITY: usize = 256;
 /// minted a `call_id` and is awaiting the hub's `RequestResult`.
 pub struct EscalationRequest {
     pub call_id: [u8; 16],
-    pub ability_ura: String,
-    pub args: Vec<u8>,
-    pub reply: oneshot::Sender<RequestOutcome>,
+    pub invocation: EscalationInvocation,
+    pub reply: EscalationReplySink,
+}
+
+pub enum EscalationCommand {
+    Request(EscalationRequest),
+    BidiInput(EscalationBidiInput),
+    StreamCancel(EscalationStreamCancel),
+}
+
+pub struct EscalationStreamCancel {
+    pub call_id: [u8; 16],
+    pub reason: String,
+}
+
+pub struct EscalationBidiInput {
+    pub call_id: [u8; 16],
+    pub input: EscalatedBidiInput,
+}
+
+pub enum EscalatedBidiInput {
+    Binary(axon_sdk::pb::axon::v1::BinaryChunk),
+    Control(axon_sdk::pb::axon::v1::BidiControl),
+}
+
+/// Payload carried by a reverse session request.
+///
+/// Product invocations use `Canonical` exclusively. `DaemonControl` is a
+/// separate control-plane protocol used only for bootstrap, publication, and
+/// trust synchronization; it is not an Invocation compatibility path.
+pub enum EscalationInvocation {
+    Canonical(Box<axon_sdk::pb::axon::v1::InvokeRequest>),
+    CanonicalStream(Box<axon_sdk::pb::axon::v1::InvokeServerStreamRequest>),
+    CanonicalBidi(Box<axon_sdk::pb::axon::v1::InvokeRequest>),
+    DaemonControl { ability_ura: String, args: Vec<u8> },
+}
+
+/// Reply channel registered for one session-escalated request. Unary product
+/// calls and daemon-control calls complete with one result; server-stream calls
+/// register a bounded event channel and receive many reverse-dispatch result
+/// frames until the terminal checkpoint.
+pub enum EscalationReplySink {
+    Unary(oneshot::Sender<EscalationReply>),
+    Stream {
+        events: mpsc::Sender<DispatchStreamEvent>,
+        accepted: oneshot::Sender<Result<(), SessionRequestError>>,
+    },
+}
+
+/// Internal correlation result. Canonical product invocations retain the
+/// complete InvokeResponse (including both signed finalization checkpoints),
+/// while daemon-owned control requests keep their separate JSON outcome.
+#[derive(Debug, Clone)]
+pub enum EscalationReply {
+    Canonical(Box<axon_sdk::pb::axon::v1::InvokeResponse>),
+    Control(RequestOutcome),
+    Error(SessionRequestError),
+}
+
+/// Stream handle returned to the device-mode `InvokeStream` dispatcher after
+/// the request has been written to the live `session.open` bidi. Dropping the
+/// handle removes the correlation entry, so a cancelled client cannot leak a
+/// reverse-dispatch stream in the device daemon.
+pub struct EscalatedStreamHandle {
+    call_id: [u8; 16],
+    submit: mpsc::Sender<EscalationCommand>,
+    correlation: Arc<EscalationCorrelation>,
+    rx: mpsc::Receiver<DispatchStreamEvent>,
+}
+
+impl EscalatedStreamHandle {
+    #[must_use]
+    pub fn call_id(&self) -> [u8; 16] {
+        self.call_id
+    }
+
+    pub async fn recv(&mut self) -> Option<DispatchStreamEvent> {
+        self.rx.recv().await
+    }
+
+    /// Request canonical cancellation through the same reverse carrier that
+    /// opened this stream. Correlation remains installed until the target's
+    /// terminal checkpoint arrives, so cancellation never fabricates a local
+    /// terminal state.
+    pub async fn request_cancel(&mut self, reason: &str) -> Result<(), SessionRequestError> {
+        submit_escalation_stream_cancel(
+            &self.submit,
+            EscalationStreamCancel {
+                call_id: self.call_id,
+                reason: reason.to_string(),
+            },
+            DEFAULT_ESCALATION_TIMEOUT,
+        )
+        .await
+    }
+}
+
+impl Drop for EscalatedStreamHandle {
+    fn drop(&mut self) {
+        self.correlation.cancel(self.call_id);
+    }
+}
+
+/// Bidi handle returned to a device-mode dispatcher after the reverse-bidi
+/// open frame is queued on the live session. Output is correlated by the same
+/// 16-byte reverse call nonce as unary/stream escalation; input frames are
+/// serialized through the escalation consumer so open/input ordering is
+/// preserved on reconnect-bound session outboxes.
+pub struct EscalatedBidiHandle {
+    call_id: [u8; 16],
+    submit: mpsc::Sender<EscalationCommand>,
+    correlation: Arc<EscalationCorrelation>,
+    rx: mpsc::Receiver<DispatchStreamEvent>,
+}
+
+impl EscalatedBidiHandle {
+    #[must_use]
+    pub fn call_id(&self) -> [u8; 16] {
+        self.call_id
+    }
+
+    pub async fn recv(&mut self) -> Option<DispatchStreamEvent> {
+        self.rx.recv().await
+    }
+
+    #[must_use]
+    pub fn input_sender(&self) -> EscalatedBidiInputSender {
+        EscalatedBidiInputSender {
+            call_id: self.call_id,
+            submit: self.submit.clone(),
+        }
+    }
+
+    pub async fn send_binary(
+        &self,
+        chunk: axon_sdk::pb::axon::v1::BinaryChunk,
+    ) -> Result<(), SessionRequestError> {
+        self.send_input(EscalatedBidiInput::Binary(chunk)).await
+    }
+
+    pub async fn send_control(
+        &self,
+        control: axon_sdk::pb::axon::v1::BidiControl,
+    ) -> Result<(), SessionRequestError> {
+        self.send_input(EscalatedBidiInput::Control(control)).await
+    }
+
+    async fn send_input(&self, input: EscalatedBidiInput) -> Result<(), SessionRequestError> {
+        submit_escalation_bidi_input(
+            &self.submit,
+            EscalationBidiInput {
+                call_id: self.call_id,
+                input,
+            },
+            DEFAULT_ESCALATION_TIMEOUT,
+        )
+        .await
+    }
+}
+
+impl Drop for EscalatedBidiHandle {
+    fn drop(&mut self) {
+        self.correlation.cancel(self.call_id);
+    }
+}
+
+#[derive(Clone)]
+pub struct EscalatedBidiInputSender {
+    call_id: [u8; 16],
+    submit: mpsc::Sender<EscalationCommand>,
+}
+
+impl EscalatedBidiInputSender {
+    pub async fn send_binary(
+        &self,
+        chunk: axon_sdk::pb::axon::v1::BinaryChunk,
+    ) -> Result<(), SessionRequestError> {
+        self.send_input(EscalatedBidiInput::Binary(chunk)).await
+    }
+
+    pub async fn send_control(
+        &self,
+        control: axon_sdk::pb::axon::v1::BidiControl,
+    ) -> Result<(), SessionRequestError> {
+        self.send_input(EscalatedBidiInput::Control(control)).await
+    }
+
+    async fn send_input(&self, input: EscalatedBidiInput) -> Result<(), SessionRequestError> {
+        submit_escalation_bidi_input(
+            &self.submit,
+            EscalationBidiInput {
+                call_id: self.call_id,
+                input,
+            },
+            DEFAULT_ESCALATION_TIMEOUT,
+        )
+        .await
+    }
 }
 
 /// Stable handle the dispatch handler clones to submit Requests.
@@ -83,12 +281,128 @@ pub struct EscalationRequest {
 /// taking ownership.
 #[derive(Clone, Debug)]
 pub struct SessionEscalationHandle {
-    submit: mpsc::Sender<EscalationRequest>,
+    submit: mpsc::Sender<EscalationCommand>,
     correlation: Arc<EscalationCorrelation>,
     session_realm: String,
 }
 
 impl SessionEscalationHandle {
+    /// Relay one already-signed canonical invocation through the device's
+    /// daemon-owned session without projecting or rebuilding any tuple field.
+    pub async fn escalate_invoke(
+        &self,
+        request: axon_sdk::pb::axon::v1::InvokeRequest,
+    ) -> Result<axon_sdk::pb::axon::v1::InvokeResponse, SessionRequestError> {
+        match self
+            .escalate_invocation(
+                EscalationInvocation::Canonical(Box::new(request)),
+                DEFAULT_ESCALATION_TIMEOUT,
+            )
+            .await
+        {
+            EscalationReply::Canonical(response) => Ok(*response),
+            EscalationReply::Error(error) => Err(error),
+            EscalationReply::Control(_) => Err(SessionRequestError::UpstreamFailure {
+                reason: "canonical escalation received a daemon-control reply".to_string(),
+            }),
+        }
+    }
+
+    /// Relay one already-signed canonical server-stream invocation through the
+    /// device-owned session. The hub remains the route/admission authority; the
+    /// device only correlates the reverse-dispatch result stream by call nonce.
+    pub async fn escalate_stream(
+        &self,
+        request: axon_sdk::pb::axon::v1::InvokeServerStreamRequest,
+    ) -> Result<EscalatedStreamHandle, SessionRequestError> {
+        use rand::RngCore as _;
+        let mut call_id = [0u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut call_id);
+        let id_hex = call_id_hex(&call_id);
+
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = canonical_invoke_stream_escalated_up_session_bidi,
+            call_id = id_hex,
+        );
+
+        let (events_tx, events_rx) = mpsc::channel(32);
+        let (accepted_tx, accepted_rx) = oneshot::channel();
+        let request = EscalationRequest {
+            call_id,
+            invocation: EscalationInvocation::CanonicalStream(Box::new(request)),
+            reply: EscalationReplySink::Stream {
+                events: events_tx,
+                accepted: accepted_tx,
+            },
+        };
+        submit_escalation_request(&self.submit, request, DEFAULT_ESCALATION_TIMEOUT).await?;
+        match tokio::time::timeout(DEFAULT_ESCALATION_TIMEOUT, accepted_rx).await {
+            Ok(Ok(Ok(()))) => Ok(EscalatedStreamHandle {
+                call_id,
+                submit: self.submit.clone(),
+                correlation: Arc::clone(&self.correlation),
+                rx: events_rx,
+            }),
+            Ok(Ok(Err(error))) => Err(error),
+            Ok(Err(_)) => Err(SessionRequestError::UpstreamFailure {
+                reason: "session stream escalation acknowledgement channel dropped".to_string(),
+            }),
+            Err(_) => {
+                self.correlation.cancel(call_id);
+                Err(SessionRequestError::UpstreamTimeout)
+            }
+        }
+    }
+
+    /// Relay one already-signed canonical bidi invocation through the
+    /// device-owned session. This is the reverse-channel equivalent of
+    /// `InvokeBidi`: open is a `ReverseDispatchCall(call_mode=BIDI)`, input is
+    /// `ReverseBidiInput`, and output returns as `ReverseDispatchResult`.
+    pub async fn escalate_bidi(
+        &self,
+        request: axon_sdk::pb::axon::v1::InvokeRequest,
+    ) -> Result<EscalatedBidiHandle, SessionRequestError> {
+        use rand::RngCore as _;
+        let mut call_id = [0u8; 16];
+        rand::rngs::OsRng.fill_bytes(&mut call_id);
+        let id_hex = call_id_hex(&call_id);
+
+        crate::op_event!(
+            component = daemon_invocation,
+            kind = canonical_invoke_bidi_escalated_up_session_bidi,
+            call_id = id_hex,
+        );
+
+        let (events_tx, events_rx) = mpsc::channel(32);
+        let (accepted_tx, accepted_rx) = oneshot::channel();
+        let request = EscalationRequest {
+            call_id,
+            invocation: EscalationInvocation::CanonicalBidi(Box::new(request)),
+            reply: EscalationReplySink::Stream {
+                events: events_tx,
+                accepted: accepted_tx,
+            },
+        };
+        submit_escalation_request(&self.submit, request, DEFAULT_ESCALATION_TIMEOUT).await?;
+        match tokio::time::timeout(DEFAULT_ESCALATION_TIMEOUT, accepted_rx).await {
+            Ok(Ok(Ok(()))) => Ok(EscalatedBidiHandle {
+                call_id,
+                submit: self.submit.clone(),
+                correlation: Arc::clone(&self.correlation),
+                rx: events_rx,
+            }),
+            Ok(Ok(Err(error))) => Err(error),
+            Ok(Err(_)) => Err(SessionRequestError::UpstreamFailure {
+                reason: "session bidi escalation acknowledgement channel dropped".to_string(),
+            }),
+            Err(_) => {
+                self.correlation.cancel(call_id);
+                Err(SessionRequestError::UpstreamTimeout)
+            }
+        }
+    }
+
     /// Submit a Request for a hub-owned public wrapper ability and
     /// await the matching `RequestResult`. The wire frame carries
     /// the derived `ability_ura`, not this internal public-name
@@ -111,15 +425,38 @@ impl SessionEscalationHandle {
         args: Vec<u8>,
         timeout: Duration,
     ) -> RequestOutcome {
+        let ability_ura = crate::core::ura::hub_ability_ura(&self.session_realm, ability.trim());
+        match self
+            .escalate_invocation(
+                EscalationInvocation::DaemonControl { ability_ura, args },
+                timeout,
+            )
+            .await
+        {
+            EscalationReply::Control(outcome) => outcome,
+            EscalationReply::Error(error) => RequestOutcome::Err { error },
+            EscalationReply::Canonical(_) => RequestOutcome::Err {
+                error: SessionRequestError::UpstreamFailure {
+                    reason: "daemon-control escalation received a canonical Invocation reply"
+                        .to_string(),
+                },
+            },
+        }
+    }
+
+    async fn escalate_invocation(
+        &self,
+        invocation: EscalationInvocation,
+        timeout: Duration,
+    ) -> EscalationReply {
         use rand::RngCore as _;
         let mut call_id = [0u8; 16];
         rand::rngs::OsRng.fill_bytes(&mut call_id);
         let id_hex = call_id_hex(&call_id);
-        let ability_ura = crate::core::ura::hub_ability_ura(&self.session_realm, ability.trim());
 
-        // Operator log marker for the device-mode forward_invoke
+        // Operator log marker for the device-mode canonical_invoke
         // escalation up the `session.open` bidi. SRE pipelines
-        // grep `kind=forward_invoke_escalated_up_session_bidi` to
+        // grep `kind=canonical_invoke_escalated_up_session_bidi` to
         // confirm the device-mode daemon actually escalated to the
         // hub rather than answering from local presence. The
         // PR-N6 "locked marker" comment that referenced a demo
@@ -128,45 +465,82 @@ impl SessionEscalationHandle {
         // on the previous byte-exact form.
         crate::op_event!(
             component = daemon_invocation,
-            kind = forward_invoke_escalated_up_session_bidi,
+            kind = canonical_invoke_escalated_up_session_bidi,
             call_id = id_hex,
         );
 
         let (reply_tx, reply_rx) = oneshot::channel();
         let request = EscalationRequest {
             call_id,
-            ability_ura,
-            args,
-            reply: reply_tx,
+            invocation,
+            reply: EscalationReplySink::Unary(reply_tx),
         };
 
-        if self.submit.send(request).await.is_err() {
+        if let Err(error) = submit_escalation_request(&self.submit, request, timeout).await {
             // The consumer task dropped its receiver — most likely
             // the daemon is shutting down. Surface a typed
             // upstream-failure outcome so the dispatch handler
             // doesn't pretend the call succeeded.
-            return RequestOutcome::Err {
-                error: SessionRequestError::UpstreamFailure {
-                    reason: "session escalation consumer task is gone (daemon shutdown?)"
-                        .to_string(),
-                },
-            };
+            return EscalationReply::Error(error);
         }
 
         match tokio::time::timeout(timeout, reply_rx).await {
             Ok(Ok(outcome)) => outcome,
-            Ok(Err(_)) => RequestOutcome::Err {
-                error: SessionRequestError::UpstreamFailure {
-                    reason: "session escalation reply channel dropped without answer".to_string(),
-                },
-            },
+            Ok(Err(_)) => EscalationReply::Error(SessionRequestError::UpstreamFailure {
+                reason: "session escalation reply channel dropped without answer".to_string(),
+            }),
             Err(_elapsed) => {
                 self.correlation.cancel(call_id);
-                RequestOutcome::Err {
-                    error: SessionRequestError::UpstreamTimeout,
-                }
+                EscalationReply::Error(SessionRequestError::UpstreamTimeout)
             }
         }
+    }
+}
+
+async fn submit_escalation_request(
+    submit: &mpsc::Sender<EscalationCommand>,
+    request: EscalationRequest,
+    timeout: Duration,
+) -> Result<(), SessionRequestError> {
+    match tokio::time::timeout(timeout, submit.send(EscalationCommand::Request(request))).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(SessionRequestError::UpstreamFailure {
+            reason: "session escalation consumer task is gone (daemon shutdown?)".to_string(),
+        }),
+        Err(_) => Err(SessionRequestError::UpstreamTimeout),
+    }
+}
+
+async fn submit_escalation_bidi_input(
+    submit: &mpsc::Sender<EscalationCommand>,
+    input: EscalationBidiInput,
+    timeout: Duration,
+) -> Result<(), SessionRequestError> {
+    match tokio::time::timeout(timeout, submit.send(EscalationCommand::BidiInput(input))).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(SessionRequestError::UpstreamFailure {
+            reason: "session escalation consumer task is gone (daemon shutdown?)".to_string(),
+        }),
+        Err(_) => Err(SessionRequestError::UpstreamTimeout),
+    }
+}
+
+async fn submit_escalation_stream_cancel(
+    submit: &mpsc::Sender<EscalationCommand>,
+    cancel: EscalationStreamCancel,
+    timeout: Duration,
+) -> Result<(), SessionRequestError> {
+    match tokio::time::timeout(
+        timeout,
+        submit.send(EscalationCommand::StreamCancel(cancel)),
+    )
+    .await
+    {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(SessionRequestError::UpstreamFailure {
+            reason: "session escalation consumer task is gone (daemon shutdown?)".to_string(),
+        }),
+        Err(_) => Err(SessionRequestError::UpstreamTimeout),
     }
 }
 
@@ -178,7 +552,13 @@ impl SessionEscalationHandle {
 /// (exactly one register, exactly one complete).
 #[derive(Debug, Default)]
 pub struct EscalationCorrelation {
-    inner: Mutex<HashMap<[u8; 16], oneshot::Sender<RequestOutcome>>>,
+    inner: Mutex<HashMap<[u8; 16], PendingEscalation>>,
+}
+
+#[derive(Debug)]
+enum PendingEscalation {
+    Unary(oneshot::Sender<EscalationReply>),
+    Stream(mpsc::Sender<DispatchStreamEvent>),
 }
 
 impl EscalationCorrelation {
@@ -195,25 +575,108 @@ impl EscalationCorrelation {
     /// surfaces on the original `reply_rx` as a closed-without-
     /// answer condition the `escalate_with_timeout` arm reports
     /// as `UpstreamFailure`.
-    pub fn register(&self, call_id: [u8; 16], reply: oneshot::Sender<RequestOutcome>) {
+    pub fn register_unary(&self, call_id: [u8; 16], reply: oneshot::Sender<EscalationReply>) {
         let mut guard = match self.inner.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
-        guard.insert(call_id, reply);
+        guard.insert(call_id, PendingEscalation::Unary(reply));
+    }
+
+    pub fn register_stream(&self, call_id: [u8; 16], sender: mpsc::Sender<DispatchStreamEvent>) {
+        let mut guard = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.insert(call_id, PendingEscalation::Stream(sender));
     }
 
     /// Complete a pending entry by `call_id`. Returns `true` if a
     /// matching entry was present; `false` is the silent no-op
     /// the spec calls for when a `RequestResult` arrives after
     /// the dispatch handler timed out and dropped its receiver.
-    pub fn complete(&self, call_id: [u8; 16], outcome: RequestOutcome) -> bool {
+    pub fn complete(&self, call_id: [u8; 16], outcome: EscalationReply) -> bool {
         let mut guard = match self.inner.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
         match guard.remove(&call_id) {
-            Some(sender) => sender.send(outcome).is_ok(),
+            Some(PendingEscalation::Unary(sender)) => sender.send(outcome).is_ok(),
+            Some(PendingEscalation::Stream(sender)) => {
+                let _ = sender.try_send(DispatchStreamEvent::Terminal(Box::new(
+                    dispatch_result_from_escalation_reply(outcome),
+                )));
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Deliver one protobuf reverse-dispatch result frame. Unary reverse
+    /// dispatch must be terminal and complete a one-shot waiter. Stream reverse
+    /// dispatch follows the same checkpoint geometry as normal canonical carrier
+    /// streams: admission-only, zero or more data chunks, then terminal.
+    pub fn deliver_reverse_dispatch_result(
+        &self,
+        call_id: [u8; 16],
+        result: axon_sdk::pb::axon::v1::ReverseDispatchResult,
+    ) -> bool {
+        let pending = {
+            let guard = match self.inner.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            guard.get(&call_id).map(|entry| match entry {
+                PendingEscalation::Unary(_) => PendingEscalationKind::Unary,
+                PendingEscalation::Stream(sender) => PendingEscalationKind::Stream(sender.clone()),
+            })
+        };
+        match pending {
+            Some(PendingEscalationKind::Unary) => {
+                if !result.terminal {
+                    let mut guard = match self.inner.lock() {
+                        Ok(g) => g,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    let Some(PendingEscalation::Unary(sender)) = guard.remove(&call_id) else {
+                        return false;
+                    };
+                    return sender
+                        .send(EscalationReply::Error(
+                            SessionRequestError::UpstreamFailure {
+                                reason:
+                                    "unary reverse dispatch received a non-terminal stream frame"
+                                        .to_string(),
+                            },
+                        ))
+                        .is_ok();
+                }
+                let outcome = reverse_unary_reply(result);
+                let mut guard = match self.inner.lock() {
+                    Ok(g) => g,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                match guard.remove(&call_id) {
+                    Some(PendingEscalation::Unary(sender)) => sender.send(outcome).is_ok(),
+                    _ => false,
+                }
+            }
+            Some(PendingEscalationKind::Stream(sender)) => {
+                let (event, terminal) = reverse_stream_event(result);
+                let delivered = match sender.try_send(event) {
+                    Ok(()) => true,
+                    Err(mpsc::error::TrySendError::Full(_))
+                    | Err(mpsc::error::TrySendError::Closed(_)) => false,
+                };
+                if terminal || !delivered {
+                    let mut guard = match self.inner.lock() {
+                        Ok(g) => g,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    guard.remove(&call_id);
+                }
+                delivered
+            }
             None => false,
         }
     }
@@ -237,6 +700,210 @@ impl EscalationCorrelation {
     }
 }
 
+enum PendingEscalationKind {
+    Unary,
+    Stream(mpsc::Sender<DispatchStreamEvent>),
+}
+
+fn reverse_unary_reply(result: axon_sdk::pb::axon::v1::ReverseDispatchResult) -> EscalationReply {
+    match result.failure {
+        None => {
+            let state = match reverse_unary_terminal_state(&result) {
+                Ok(state) => state,
+                Err(error) => return EscalationReply::Error(error),
+            };
+            let result_content_type = result.result_content_type.trim().to_string();
+            EscalationReply::Canonical(Box::new(axon_sdk::pb::axon::v1::InvokeResponse {
+                state,
+                result: result.payload,
+                result_content_type,
+                admission_receipt: result.admission_receipt,
+                terminal_receipt: result.terminal_receipt,
+                ..axon_sdk::pb::axon::v1::InvokeResponse::default()
+            }))
+        }
+        Some(failure) => EscalationReply::Error(session_request_error_from_wire_failure(failure)),
+    }
+}
+
+fn reverse_unary_terminal_state(
+    result: &axon_sdk::pb::axon::v1::ReverseDispatchResult,
+) -> Result<i32, SessionRequestError> {
+    let (Some(admission), Some(receipt)) = (
+        result.admission_receipt.as_ref(),
+        result.terminal_receipt.as_ref(),
+    ) else {
+        return Err(reverse_unary_protocol_failure(
+            "CANONICAL_FINALIZATION_REQUIRED: successful unary reverse dispatch omitted canonical checkpoints",
+        ));
+    };
+    if admission.state != axon_sdk::invocation::InvocationState::Admitted.to_wire_i32() {
+        return Err(reverse_unary_protocol_failure(
+            "CANONICAL_ADMISSION_INVALID: unary reverse dispatch carried non-admitted admission checkpoint",
+        ));
+    }
+    let state = axon_sdk::invocation::InvocationState::try_from(receipt.state).map_err(|_| {
+        reverse_unary_protocol_failure(
+            "CANONICAL_TERMINAL_RECEIPT_INVALID: unary reverse dispatch carried unknown terminal receipt state",
+        )
+    })?;
+    if !state.is_terminal() {
+        return Err(reverse_unary_protocol_failure(
+            "CANONICAL_TERMINAL_RECEIPT_INVALID: unary reverse dispatch terminal receipt carried non-terminal state",
+        ));
+    }
+    Ok(receipt.state)
+}
+
+fn reverse_unary_protocol_failure(reason: &str) -> SessionRequestError {
+    SessionRequestError::UpstreamFailure {
+        reason: reason.to_string(),
+    }
+}
+
+fn reverse_stream_event(
+    result: axon_sdk::pb::axon::v1::ReverseDispatchResult,
+) -> (DispatchStreamEvent, bool) {
+    if result.terminal {
+        return (
+            DispatchStreamEvent::Terminal(Box::new(dispatch_result_from_reverse_result(result))),
+            true,
+        );
+    }
+    if let Some(receipt) = result.admission_receipt {
+        if result.terminal_receipt.is_some()
+            || result.failure.is_some()
+            || !result.payload.is_empty()
+        {
+            return (
+                DispatchStreamEvent::Terminal(Box::new(DispatchResult {
+                    payload: Vec::new(),
+                    result_content_type: String::new(),
+                    error: Some("malformed stream admission reverse dispatch result".to_string()),
+                    failure: Some(SessionFailure::from_reason(
+                        "malformed stream admission reverse dispatch result",
+                        "CARRIER_STREAM_PHASE_INVALID",
+                        false,
+                    )),
+                    request_id: None,
+                    admission_receipt: None,
+                    terminal_receipt: None,
+                })),
+                true,
+            );
+        }
+        return (DispatchStreamEvent::Admission(Box::new(receipt)), false);
+    }
+    if result.terminal_receipt.is_some() || result.failure.is_some() {
+        return (
+            DispatchStreamEvent::Terminal(Box::new(dispatch_result_from_reverse_result(result))),
+            true,
+        );
+    }
+    (DispatchStreamEvent::Chunk(result.payload), false)
+}
+
+fn dispatch_result_from_reverse_result(
+    result: axon_sdk::pb::axon::v1::ReverseDispatchResult,
+) -> DispatchResult {
+    DispatchResult {
+        payload: result.payload,
+        result_content_type: result.result_content_type,
+        error: result
+            .failure
+            .as_ref()
+            .map(|failure| failure.message.clone()),
+        failure: result.failure.as_ref().map(session_failure_from_wire_error),
+        request_id: None,
+        admission_receipt: result.admission_receipt,
+        terminal_receipt: result.terminal_receipt,
+    }
+}
+
+fn dispatch_result_from_escalation_reply(reply: EscalationReply) -> DispatchResult {
+    match reply {
+        EscalationReply::Canonical(response) => DispatchResult {
+            payload: response.result,
+            result_content_type: response.result_content_type,
+            error: None,
+            failure: None,
+            request_id: None,
+            admission_receipt: response.admission_receipt,
+            terminal_receipt: response.terminal_receipt,
+        },
+        EscalationReply::Control(RequestOutcome::Ok { result_bytes }) => DispatchResult {
+            payload: result_bytes,
+            result_content_type: String::new(),
+            error: None,
+            failure: None,
+            request_id: None,
+            admission_receipt: None,
+            terminal_receipt: None,
+        },
+        EscalationReply::Control(RequestOutcome::Err { error }) | EscalationReply::Error(error) => {
+            let message = session_request_error_message(&error);
+            DispatchResult {
+                payload: Vec::new(),
+                result_content_type: String::new(),
+                error: Some(message.clone()),
+                failure: Some(SessionFailure::from_reason(
+                    &message,
+                    session_request_error_code(&error),
+                    true,
+                )),
+                request_id: None,
+                admission_receipt: None,
+                terminal_receipt: None,
+            }
+        }
+    }
+}
+
+fn session_request_error_from_wire_failure(
+    failure: axon_sdk::pb::axon::v1::Error,
+) -> SessionRequestError {
+    match failure.code.as_str() {
+        "TARGET_OFFLINE" => SessionRequestError::TargetOffline,
+        "PERMISSION_DENIED" => SessionRequestError::PermissionDenied {
+            reason: failure.message,
+        },
+        "UPSTREAM_TIMEOUT" => SessionRequestError::UpstreamTimeout,
+        _ => SessionRequestError::UpstreamFailure {
+            reason: failure.message,
+        },
+    }
+}
+
+fn session_failure_from_wire_error(error: &axon_sdk::pb::axon::v1::Error) -> SessionFailure {
+    SessionFailure::from_reason(
+        &error.message,
+        if error.code.is_empty() {
+            "INVOCATION_FAILED"
+        } else {
+            error.code.as_str()
+        },
+        error.retryable,
+    )
+}
+
+fn session_request_error_code(error: &SessionRequestError) -> &'static str {
+    match error {
+        SessionRequestError::TargetOffline => "TARGET_OFFLINE",
+        SessionRequestError::PermissionDenied { .. } => "PERMISSION_DENIED",
+        SessionRequestError::UpstreamFailure { .. } => "UPSTREAM_FAILURE",
+        SessionRequestError::UpstreamTimeout => "UPSTREAM_TIMEOUT",
+    }
+}
+
+fn session_request_error_message(error: &SessionRequestError) -> String {
+    match error {
+        SessionRequestError::TargetOffline => "target offline".to_string(),
+        SessionRequestError::PermissionDenied { reason }
+        | SessionRequestError::UpstreamFailure { reason } => reason.clone(),
+        SessionRequestError::UpstreamTimeout => "upstream timeout".to_string(),
+    }
+}
+
 /// Reload-friendly handle on the device's *current*
 /// `session.open` bidi up sender. The session supervisor
 /// publishes a fresh sender via [`set`] on every successful
@@ -253,9 +920,22 @@ impl EscalationCorrelation {
 /// each instead of three handles. The two have independent
 /// lifetimes (consumer drains forever; outbox publishes per
 /// reconnect; correlation accumulates and drains per Request).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct SharedSessionOutbox {
     inner: Arc<Mutex<Option<SessionUpSender>>>,
+    ready_hooks: SessionReadyHooks,
+}
+
+pub type SessionReadyHook = Arc<dyn Fn() + Send + Sync>;
+type SessionReadyHooks = Arc<Mutex<Vec<SessionReadyHook>>>;
+
+impl std::fmt::Debug for SharedSessionOutbox {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SharedSessionOutbox")
+            .field("ready", &self.snapshot().is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl SharedSessionOutbox {
@@ -275,11 +955,37 @@ impl SharedSessionOutbox {
     /// the previous sender; in-flight escalations holding the
     /// old sender clone keep working until that channel closes.
     pub fn set(&self, sender: SessionUpSender) {
-        let mut guard = match self.inner.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
+        {
+            let mut guard = match self.inner.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *guard = Some(sender);
+        }
+        let hooks = match self.ready_hooks.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
         };
-        *guard = Some(sender);
+        for hook in hooks {
+            hook();
+        }
+    }
+
+    /// Register work that must be re-driven whenever a new live session
+    /// sender is published. The hook runs after the sender is visible and
+    /// outside all outbox locks. Registering against an already-ready outbox
+    /// invokes the hook immediately.
+    pub fn register_ready_hook(&self, hook: SessionReadyHook) {
+        {
+            let mut hooks = match self.ready_hooks.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            hooks.push(Arc::clone(&hook));
+        }
+        if self.snapshot().is_some() {
+            hook();
+        }
     }
 
     /// Drop the current sender. Called by `dial_and_run_session`
@@ -321,7 +1027,7 @@ pub fn spawn_escalation_consumer_with_outbox(
     outbox: SharedSessionOutbox,
     session_realm: impl Into<String>,
 ) -> SessionEscalationHandle {
-    let (submit_tx, mut submit_rx) = mpsc::channel::<EscalationRequest>(ESCALATION_QUEUE_CAPACITY);
+    let (submit_tx, mut submit_rx) = mpsc::channel::<EscalationCommand>(ESCALATION_QUEUE_CAPACITY);
     let handle = SessionEscalationHandle {
         submit: submit_tx,
         correlation: Arc::clone(&correlation),
@@ -329,11 +1035,31 @@ pub fn spawn_escalation_consumer_with_outbox(
     };
 
     tokio::spawn(async move {
-        while let Some(request) = submit_rx.recv().await {
+        while let Some(command) = submit_rx.recv().await {
+            let request = match command {
+                EscalationCommand::Request(request) => request,
+                EscalationCommand::BidiInput(input) => {
+                    let Some(up_tx) = outbox.snapshot() else {
+                        continue;
+                    };
+                    if send_escalation_bidi_input(&up_tx, input).await.is_err() {
+                        outbox.clear();
+                    }
+                    continue;
+                }
+                EscalationCommand::StreamCancel(cancel) => {
+                    let Some(up_tx) = outbox.snapshot() else {
+                        continue;
+                    };
+                    if send_escalation_stream_cancel(&up_tx, cancel).await.is_err() {
+                        outbox.clear();
+                    }
+                    continue;
+                }
+            };
             let EscalationRequest {
                 call_id,
-                ability_ura,
-                args,
+                invocation,
                 reply,
             } = request;
 
@@ -341,33 +1067,33 @@ pub fn spawn_escalation_consumer_with_outbox(
                 // No live session — surface a typed upstream-failure
                 // outcome so the CLI sees a fast structured error
                 // instead of waiting for a hub reconnect.
-                let _ = reply.send(RequestOutcome::Err {
-                    error: SessionRequestError::UpstreamFailure {
-                        reason: "no live session.open bidi to escalate forward_invoke up; \
+                let error = SessionRequestError::UpstreamFailure {
+                    reason: "no live session.open bidi to escalate canonical_invoke up; \
                                  device-mode daemon's session supervisor has not (yet) \
                                  reconnected"
-                            .to_string(),
-                    },
-                });
+                        .to_string(),
+                };
+                fail_reply(reply, error);
                 continue;
             };
 
-            correlation.register(call_id, reply);
+            register_reply(&correlation, call_id, reply);
 
-            let frame = build_session_request_up_chunk(call_id, &ability_ura, &args);
-            if let Err(err) = up_tx.send_binary_chunk(frame).await {
+            if let Err(err) = send_escalation_request(&up_tx, call_id, invocation).await {
+                outbox.clear();
                 let mut guard = match correlation.inner.lock() {
                     Ok(g) => g,
                     Err(poisoned) => poisoned.into_inner(),
                 };
-                if let Some(sender) = guard.remove(&call_id) {
-                    let _ = sender.send(RequestOutcome::Err {
-                        error: SessionRequestError::UpstreamFailure {
+                if let Some(pending) = guard.remove(&call_id) {
+                    fail_pending(
+                        pending,
+                        SessionRequestError::UpstreamFailure {
                             reason: format!(
-                                "session up-channel closed mid-push (mid-reconnect?): {err}"
+                                "session up-channel unavailable mid-push (mid-reconnect?): {err}"
                             ),
                         },
-                    });
+                    );
                 }
             }
         }
@@ -391,7 +1117,7 @@ pub fn spawn_escalation_consumer(
     up_tx: SessionUpSender,
     session_realm: impl Into<String>,
 ) -> SessionEscalationHandle {
-    let (submit_tx, mut submit_rx) = mpsc::channel::<EscalationRequest>(ESCALATION_QUEUE_CAPACITY);
+    let (submit_tx, mut submit_rx) = mpsc::channel::<EscalationCommand>(ESCALATION_QUEUE_CAPACITY);
     let handle = SessionEscalationHandle {
         submit: submit_tx,
         correlation: Arc::clone(&correlation),
@@ -399,17 +1125,26 @@ pub fn spawn_escalation_consumer(
     };
 
     tokio::spawn(async move {
-        while let Some(request) = submit_rx.recv().await {
+        while let Some(command) = submit_rx.recv().await {
+            let request = match command {
+                EscalationCommand::Request(request) => request,
+                EscalationCommand::BidiInput(input) => {
+                    let _ = send_escalation_bidi_input(&up_tx, input).await;
+                    continue;
+                }
+                EscalationCommand::StreamCancel(cancel) => {
+                    let _ = send_escalation_stream_cancel(&up_tx, cancel).await;
+                    continue;
+                }
+            };
             let EscalationRequest {
                 call_id,
-                ability_ura,
-                args,
+                invocation,
                 reply,
             } = request;
-            correlation.register(call_id, reply);
+            register_reply(&correlation, call_id, reply);
 
-            let frame = build_session_request_up_chunk(call_id, &ability_ura, &args);
-            if let Err(err) = up_tx.send_binary_chunk(frame).await {
+            if let Err(err) = send_escalation_request(&up_tx, call_id, invocation).await {
                 // Up-channel closed — the bidi went away mid-flight.
                 // Pull the entry back out and surface upstream
                 // failure to the dispatch caller. The consumer
@@ -419,18 +1154,198 @@ pub fn spawn_escalation_consumer(
                     Ok(g) => g,
                     Err(poisoned) => poisoned.into_inner(),
                 };
-                if let Some(sender) = guard.remove(&call_id) {
-                    let _ = sender.send(RequestOutcome::Err {
-                        error: SessionRequestError::UpstreamFailure {
+                if let Some(pending) = guard.remove(&call_id) {
+                    fail_pending(
+                        pending,
+                        SessionRequestError::UpstreamFailure {
                             reason: format!("session up-channel closed: {err}"),
                         },
-                    });
+                    );
                 }
             }
         }
     });
 
     handle
+}
+
+async fn send_escalation_request(
+    up_tx: &SessionUpSender,
+    call_id: [u8; 16],
+    invocation: EscalationInvocation,
+) -> Result<(), String> {
+    send_escalation_request_inner(up_tx, call_id, invocation).await
+}
+
+async fn send_escalation_request_inner(
+    up_tx: &SessionUpSender,
+    call_id: [u8; 16],
+    invocation: EscalationInvocation,
+) -> Result<(), String> {
+    match invocation {
+        EscalationInvocation::Canonical(request) => {
+            use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+            use axon_sdk::pb::axon::v1::ReverseDispatchCall;
+            let call_mode =
+                super::session_wire::canonical_call_mode_wire(axon_sdk::invocation::CallMode::Rpc);
+            up_tx
+                .send_payload(UpPayload::ReverseDispatchCall(ReverseDispatchCall {
+                    call_id: call_id.to_vec(),
+                    request: Some(*request),
+                    call_mode,
+                }))
+                .await
+                .map_err(|err| err.to_string())
+        }
+        EscalationInvocation::CanonicalStream(request) => {
+            use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+            use axon_sdk::pb::axon::v1::{InvokeRequest, ReverseDispatchCall};
+            let call_mode = super::session_wire::canonical_call_mode_wire(
+                axon_sdk::invocation::CallMode::Stream,
+            );
+            let request = InvokeRequest {
+                envelope: request.envelope,
+                target: request.target,
+                arguments: request.arguments,
+                content_type: request.content_type,
+                timeout_seconds: request.timeout_seconds,
+                metadata: request.metadata,
+                payload_ref: request.payload_ref,
+                content_envelope: request.content_envelope,
+            };
+            up_tx
+                .send_payload(UpPayload::ReverseDispatchCall(ReverseDispatchCall {
+                    call_id: call_id.to_vec(),
+                    request: Some(request),
+                    call_mode,
+                }))
+                .await
+                .map_err(|err| err.to_string())
+        }
+        EscalationInvocation::CanonicalBidi(request) => {
+            use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+            use axon_sdk::pb::axon::v1::ReverseDispatchCall;
+            let call_mode =
+                super::session_wire::canonical_call_mode_wire(axon_sdk::invocation::CallMode::Bidi);
+            up_tx
+                .send_payload(UpPayload::ReverseDispatchCall(ReverseDispatchCall {
+                    call_id: call_id.to_vec(),
+                    request: Some(*request),
+                    call_mode,
+                }))
+                .await
+                .map_err(|err| err.to_string())
+        }
+        EscalationInvocation::DaemonControl { ability_ura, args } => {
+            let frame = build_session_request_up_chunk(call_id, &ability_ura, &args);
+            up_tx
+                .send_binary_chunk(frame)
+                .await
+                .map_err(|err| err.to_string())
+        }
+    }
+}
+
+async fn send_escalation_bidi_input(
+    up_tx: &SessionUpSender,
+    input: EscalationBidiInput,
+) -> Result<(), String> {
+    send_escalation_bidi_input_inner(up_tx, input).await
+}
+
+async fn send_escalation_bidi_input_inner(
+    up_tx: &SessionUpSender,
+    input: EscalationBidiInput,
+) -> Result<(), String> {
+    use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+    use axon_sdk::pb::axon::v1::reverse_bidi_input::Input;
+    use axon_sdk::pb::axon::v1::ReverseBidiInput;
+
+    let call_id = input.call_id;
+    let input = match input.input {
+        EscalatedBidiInput::Binary(chunk) => Some(Input::BinaryChunk(chunk)),
+        EscalatedBidiInput::Control(control) => Some(Input::Control(control)),
+    };
+    up_tx
+        .send_payload(UpPayload::ReverseBidiInput(ReverseBidiInput {
+            call_id: call_id.to_vec(),
+            input,
+        }))
+        .await
+        .map_err(|err| err.to_string())
+}
+
+async fn send_escalation_stream_cancel(
+    up_tx: &SessionUpSender,
+    cancel: EscalationStreamCancel,
+) -> Result<(), String> {
+    use crate::daemon::invocation::bidi::session_wire::SessionDispatch;
+    use axon_sdk::pb::axon::v1::BinaryChunk;
+
+    let frame = SessionDispatch::ReverseStreamCancel {
+        call_id: cancel.call_id,
+        reason: cancel.reason,
+    };
+    let data = frame.encode_frame().map_err(|error| error.to_string())?;
+    up_tx
+        .send_binary_chunk(BinaryChunk {
+            stream_id: SESSION_STREAM_ID,
+            data,
+            ..BinaryChunk::default()
+        })
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn register_reply(
+    correlation: &Arc<EscalationCorrelation>,
+    call_id: [u8; 16],
+    reply: EscalationReplySink,
+) {
+    match reply {
+        EscalationReplySink::Unary(sender) => {
+            correlation.register_unary(call_id, sender);
+        }
+        EscalationReplySink::Stream { events, accepted } => {
+            correlation.register_stream(call_id, events);
+            let _ = accepted.send(Ok(()));
+        }
+    }
+}
+
+fn fail_reply(reply: EscalationReplySink, error: SessionRequestError) {
+    match reply {
+        EscalationReplySink::Unary(sender) => {
+            let _ = sender.send(EscalationReply::Error(error));
+        }
+        EscalationReplySink::Stream { accepted, .. } => {
+            let _ = accepted.send(Err(error));
+        }
+    }
+}
+
+fn fail_pending(pending: PendingEscalation, error: SessionRequestError) {
+    match pending {
+        PendingEscalation::Unary(sender) => {
+            let _ = sender.send(EscalationReply::Error(error));
+        }
+        PendingEscalation::Stream(sender) => {
+            let message = session_request_error_message(&error);
+            let _ = sender.try_send(DispatchStreamEvent::Terminal(Box::new(DispatchResult {
+                payload: Vec::new(),
+                result_content_type: String::new(),
+                error: Some(message.clone()),
+                failure: Some(SessionFailure::from_reason(
+                    &message,
+                    session_request_error_code(&error),
+                    true,
+                )),
+                request_id: None,
+                admission_receipt: None,
+                terminal_receipt: None,
+            })));
+        }
+    }
 }
 
 /// Build the `InvokeBidiUp` frame that wraps a
@@ -441,11 +1356,9 @@ fn build_session_request_up_chunk(
     call_id: [u8; 16],
     ability_ura: &str,
     args: &[u8],
-) -> easynet_axon::pb::axon::v1::BinaryChunk {
-    use crate::daemon::invocation::bidi::invoke_remote_initiator::{
-        SessionContentEnvelope, SessionDispatch,
-    };
-    use easynet_axon::pb::axon::v1::BinaryChunk;
+) -> axon_sdk::pb::axon::v1::BinaryChunk {
+    use crate::daemon::invocation::bidi::session_wire::{SessionContentEnvelope, SessionDispatch};
+    use axon_sdk::pb::axon::v1::BinaryChunk;
 
     let dispatch = SessionDispatch::Request {
         call_id,
@@ -469,7 +1382,111 @@ fn build_session_request_up_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use easynet_axon::pb::axon::v1::InvokeBidiUp;
+    use crate::daemon::invocation::bidi::session_wire::SessionDispatch;
+    use axon_sdk::pb::axon::v1::{InvocationReceipt, InvocationState, InvokeBidiUp};
+
+    #[test]
+    fn reverse_unary_reply_preserves_terminal_state_and_json_content_type() {
+        let reply = reverse_unary_reply(axon_sdk::pb::axon::v1::ReverseDispatchResult {
+            payload: br#"{"abilities":[]}"#.to_vec(),
+            result_content_type: "application/json".to_string(),
+            terminal: true,
+            admission_receipt: Some(InvocationReceipt {
+                state: InvocationState::Admitted as i32,
+                ..InvocationReceipt::default()
+            }),
+            terminal_receipt: Some(InvocationReceipt {
+                state: InvocationState::Completed as i32,
+                ..InvocationReceipt::default()
+            }),
+            ..axon_sdk::pb::axon::v1::ReverseDispatchResult::default()
+        });
+
+        match reply {
+            EscalationReply::Canonical(response) => {
+                assert_eq!(response.state, InvocationState::Completed as i32);
+                assert_eq!(response.result_content_type, "application/json");
+                assert_eq!(response.result, br#"{"abilities":[]}"#);
+            }
+            other => panic!("expected canonical reverse unary reply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reverse_unary_reply_rejects_missing_canonical_checkpoints() {
+        let reply = reverse_unary_reply(axon_sdk::pb::axon::v1::ReverseDispatchResult {
+            payload: br#"{"abilities":[]}"#.to_vec(),
+            result_content_type: "application/json".to_string(),
+            terminal: true,
+            ..axon_sdk::pb::axon::v1::ReverseDispatchResult::default()
+        });
+
+        match reply {
+            EscalationReply::Error(SessionRequestError::UpstreamFailure { reason }) => {
+                assert!(
+                    reason.contains("CANONICAL_FINALIZATION_REQUIRED"),
+                    "missing checkpoints must fail closed as canonical finalization failure: {reason}"
+                );
+            }
+            other => panic!("expected canonical finalization error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reverse_unary_reply_rejects_non_admitted_admission_checkpoint() {
+        let reply = reverse_unary_reply(axon_sdk::pb::axon::v1::ReverseDispatchResult {
+            payload: br#"{"abilities":[]}"#.to_vec(),
+            result_content_type: "application/json".to_string(),
+            terminal: true,
+            admission_receipt: Some(InvocationReceipt {
+                state: InvocationState::Running as i32,
+                ..InvocationReceipt::default()
+            }),
+            terminal_receipt: Some(InvocationReceipt {
+                state: InvocationState::Completed as i32,
+                ..InvocationReceipt::default()
+            }),
+            ..axon_sdk::pb::axon::v1::ReverseDispatchResult::default()
+        });
+
+        match reply {
+            EscalationReply::Error(SessionRequestError::UpstreamFailure { reason }) => {
+                assert!(
+                    reason.contains("CANONICAL_ADMISSION_INVALID"),
+                    "non-admitted checkpoint state must fail closed: {reason}"
+                );
+            }
+            other => panic!("expected canonical admission checkpoint error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reverse_unary_reply_rejects_non_terminal_receipt_state() {
+        let reply = reverse_unary_reply(axon_sdk::pb::axon::v1::ReverseDispatchResult {
+            payload: br#"{"abilities":[]}"#.to_vec(),
+            result_content_type: "application/json".to_string(),
+            terminal: true,
+            admission_receipt: Some(InvocationReceipt {
+                state: InvocationState::Admitted as i32,
+                ..InvocationReceipt::default()
+            }),
+            terminal_receipt: Some(InvocationReceipt {
+                state: InvocationState::Running as i32,
+                ..InvocationReceipt::default()
+            }),
+            ..axon_sdk::pb::axon::v1::ReverseDispatchResult::default()
+        });
+
+        match reply {
+            EscalationReply::Error(SessionRequestError::UpstreamFailure { reason }) => {
+                assert!(
+                    reason.contains("CANONICAL_TERMINAL_RECEIPT_INVALID"),
+                    "non-terminal checkpoint state must fail closed: {reason}"
+                );
+            }
+            other => panic!("expected canonical terminal receipt error, got {other:?}"),
+        }
+    }
 
     #[tokio::test]
     async fn escalate_resolves_when_correlation_completes() {
@@ -477,7 +1494,7 @@ mod tests {
         // up_rx, decodes the Request frame, and feeds the
         // matching RequestResult back into the correlation table.
         let correlation = EscalationCorrelation::new();
-        let (up_tx, mut up_rx) = mpsc::channel::<easynet_axon::pb::axon::v1::InvokeBidiUp>(8);
+        let (up_tx, mut up_rx) = mpsc::channel::<axon_sdk::pb::axon::v1::InvokeBidiUp>(8);
         let handle = spawn_escalation_consumer(
             Arc::clone(&correlation),
             SessionUpSender::new(up_tx),
@@ -487,29 +1504,30 @@ mod tests {
         let correlation_for_hub = Arc::clone(&correlation);
         tokio::spawn(async move {
             while let Some(frame) = up_rx.recv().await {
-                use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+                use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
                 let chunk = match frame.payload {
                     Some(UpPayload::BinaryChunk(c)) => c,
                     _ => continue,
                 };
-                let dispatch: crate::daemon::invocation::bidi::invoke_remote_initiator::SessionDispatch =
+                let dispatch: crate::daemon::invocation::bidi::session_wire::SessionDispatch =
                     serde_json::from_slice(&chunk.data).expect("decode");
-                if let crate::daemon::invocation::bidi::invoke_remote_initiator::SessionDispatch::Request {
-                    call_id, ..
+                if let crate::daemon::invocation::bidi::session_wire::SessionDispatch::Request {
+                    call_id,
+                    ..
                 } = dispatch
                 {
                     correlation_for_hub.complete(
                         call_id,
-                        RequestOutcome::Ok {
+                        EscalationReply::Control(RequestOutcome::Ok {
                             result_bytes: b"hub-resolved".to_vec(),
-                        },
+                        }),
                     );
                 }
             }
         });
 
         let outcome = handle
-            .escalate("federation.forward_invoke".into(), b"{}".to_vec())
+            .escalate("federation.resolve_key".into(), b"{}".to_vec())
             .await;
         match outcome {
             RequestOutcome::Ok { result_bytes } => {
@@ -525,7 +1543,7 @@ mod tests {
         // never decode/complete. The dispatch handler must surface
         // `UpstreamTimeout` rather than hanging forever.
         let correlation = EscalationCorrelation::new();
-        let (up_tx, _up_rx_held) = mpsc::channel::<easynet_axon::pb::axon::v1::InvokeBidiUp>(8);
+        let (up_tx, _up_rx_held) = mpsc::channel::<axon_sdk::pb::axon::v1::InvokeBidiUp>(8);
         let handle = spawn_escalation_consumer(
             Arc::clone(&correlation),
             SessionUpSender::new(up_tx),
@@ -534,7 +1552,7 @@ mod tests {
 
         let outcome = handle
             .escalate_with_timeout(
-                "federation.forward_invoke".into(),
+                "federation.resolve_key".into(),
                 b"{}".to_vec(),
                 Duration::from_millis(50),
             )
@@ -551,7 +1569,7 @@ mod tests {
     #[tokio::test]
     async fn escalate_surfaces_upstream_failure_when_up_channel_closes() {
         let correlation = EscalationCorrelation::new();
-        let (up_tx, up_rx) = mpsc::channel::<easynet_axon::pb::axon::v1::InvokeBidiUp>(8);
+        let (up_tx, up_rx) = mpsc::channel::<axon_sdk::pb::axon::v1::InvokeBidiUp>(8);
         // Drop the receiver immediately so the consumer's send
         // fails on the very first item.
         drop(up_rx);
@@ -563,7 +1581,7 @@ mod tests {
 
         let outcome = handle
             .escalate_with_timeout(
-                "federation.forward_invoke".into(),
+                "federation.resolve_key".into(),
                 b"{}".to_vec(),
                 Duration::from_secs(2),
             )
@@ -587,9 +1605,9 @@ mod tests {
         let stale_id = [0xff; 16];
         let completed = correlation.complete(
             stale_id,
-            RequestOutcome::Ok {
+            EscalationReply::Control(RequestOutcome::Ok {
                 result_bytes: vec![],
-            },
+            }),
         );
         assert!(
             !completed,
@@ -631,7 +1649,7 @@ mod tests {
 
         let outcome = handle
             .escalate_with_timeout(
-                "federation.forward_invoke".into(),
+                "federation.resolve_key".into(),
                 b"{}".to_vec(),
                 Duration::from_secs(2),
             )
@@ -647,6 +1665,100 @@ mod tests {
             }
             other => panic!("expected UpstreamFailure, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn submit_escalation_request_times_out_when_queue_is_full() {
+        let (submit, _rx_held) = mpsc::channel::<EscalationCommand>(1);
+        submit
+            .send(EscalationCommand::BidiInput(EscalationBidiInput {
+                call_id: [0x11; 16],
+                input: EscalatedBidiInput::Control(axon_sdk::pb::axon::v1::BidiControl::default()),
+            }))
+            .await
+            .expect("prefill submit queue");
+
+        let (reply, _reply_rx) = oneshot::channel();
+        let result = submit_escalation_request(
+            &submit,
+            EscalationRequest {
+                call_id: [0x22; 16],
+                invocation: EscalationInvocation::DaemonControl {
+                    ability_ura: "easynet:///r/test/ability/authority.federation.resolve_key"
+                        .to_string(),
+                    args: b"{}".to_vec(),
+                },
+                reply: EscalationReplySink::Unary(reply),
+            },
+            Duration::from_millis(20),
+        )
+        .await;
+
+        assert!(matches!(result, Err(SessionRequestError::UpstreamTimeout)));
+    }
+
+    #[tokio::test]
+    async fn send_escalation_request_faults_when_up_channel_stalls() {
+        let (up_tx, _up_rx_held) = mpsc::channel::<InvokeBidiUp>(1);
+        up_tx
+            .send(InvokeBidiUp::default())
+            .await
+            .expect("prefill session up-channel");
+        let sender = SessionUpSender::new(up_tx);
+
+        let result = send_escalation_request(
+            &sender,
+            [0x33; 16],
+            EscalationInvocation::DaemonControl {
+                ability_ura: "easynet:///r/test/ability/authority.federation.resolve_key"
+                    .to_string(),
+                args: b"{}".to_vec(),
+            },
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(ref reason) if reason.contains("made no progress")),
+            "full up-channel must be bounded, got {result:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn outbox_consumer_retires_stalled_session_sender() {
+        let correlation = EscalationCorrelation::new();
+        let outbox = SharedSessionOutbox::new();
+        let handle = spawn_escalation_consumer_with_outbox(
+            Arc::clone(&correlation),
+            outbox.clone(),
+            "test-realm",
+        );
+        let (up_tx, _up_rx_held) = mpsc::channel::<InvokeBidiUp>(1);
+        up_tx
+            .send(InvokeBidiUp::default())
+            .await
+            .expect("prefill session up-channel");
+        outbox.set(SessionUpSender::new(up_tx));
+
+        let outcome = handle
+            .escalate_with_timeout(
+                "federation.resolve_key".into(),
+                b"{}".to_vec(),
+                Duration::from_secs(2),
+            )
+            .await;
+        match outcome {
+            RequestOutcome::Err {
+                error: SessionRequestError::UpstreamFailure { reason },
+            } => assert!(
+                reason.contains("made no progress"),
+                "stalled carrier reason must remain typed: {reason}"
+            ),
+            other => panic!("expected stalled-session failure, got {other:?}"),
+        }
+        assert!(
+            outbox.snapshot().is_none(),
+            "a stalled session sender must be retired before the next request"
+        );
     }
 
     #[tokio::test]
@@ -673,29 +1785,30 @@ mod tests {
         let correlation_for_hub = Arc::clone(&correlation);
         tokio::spawn(async move {
             while let Some(frame) = up_rx.recv().await {
-                use easynet_axon::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+                use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
                 let chunk = match frame.payload {
                     Some(UpPayload::BinaryChunk(c)) => c,
                     _ => continue,
                 };
-                let dispatch: crate::daemon::invocation::bidi::invoke_remote_initiator::SessionDispatch =
+                let dispatch: crate::daemon::invocation::bidi::session_wire::SessionDispatch =
                     serde_json::from_slice(&chunk.data).expect("decode");
-                if let crate::daemon::invocation::bidi::invoke_remote_initiator::SessionDispatch::Request {
-                    call_id, ..
+                if let crate::daemon::invocation::bidi::session_wire::SessionDispatch::Request {
+                    call_id,
+                    ..
                 } = dispatch
                 {
                     correlation_for_hub.complete(
                         call_id,
-                        RequestOutcome::Ok {
+                        EscalationReply::Control(RequestOutcome::Ok {
                             result_bytes: b"hub-via-outbox".to_vec(),
-                        },
+                        }),
                     );
                 }
             }
         });
 
         let outcome = handle
-            .escalate("federation.forward_invoke".into(), b"{}".to_vec())
+            .escalate("federation.resolve_key".into(), b"{}".to_vec())
             .await;
         match outcome {
             RequestOutcome::Ok { result_bytes } => {
@@ -703,6 +1816,119 @@ mod tests {
             }
             other => panic!("expected Ok via outbox, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn bidi_escalation_sends_open_then_input_on_same_reverse_call_id() {
+        let correlation = EscalationCorrelation::new();
+        let (up_tx, mut up_rx) = mpsc::channel::<InvokeBidiUp>(8);
+        let handle = spawn_escalation_consumer(
+            Arc::clone(&correlation),
+            SessionUpSender::new(up_tx),
+            "test-realm",
+        );
+
+        let bidi = handle
+            .escalate_bidi(axon_sdk::pb::axon::v1::InvokeRequest::default())
+            .await
+            .expect("bidi escalation opens");
+        let input = bidi.input_sender();
+
+        let open = tokio::time::timeout(Duration::from_secs(2), up_rx.recv())
+            .await
+            .expect("open frame arrives")
+            .expect("open frame present");
+        let call_id = match open.payload {
+            Some(axon_sdk::pb::axon::v1::invoke_bidi_up::Payload::ReverseDispatchCall(call)) => {
+                assert_eq!(
+                    crate::daemon::invocation::bidi::session_wire::canonical_dispatch_call_mode(
+                        call.call_mode,
+                    ),
+                    Ok(axon_sdk::invocation::CallMode::Bidi),
+                    "reverse bidi open must carry bidi call_mode"
+                );
+                assert_eq!(call.call_id.len(), 16);
+                call.call_id
+            }
+            other => panic!("expected ReverseDispatchCall open, got {other:?}"),
+        };
+
+        input
+            .send_binary(axon_sdk::pb::axon::v1::BinaryChunk {
+                stream_id: 1,
+                data: b"frame".to_vec(),
+                ..Default::default()
+            })
+            .await
+            .expect("input queues");
+
+        let input_frame = tokio::time::timeout(Duration::from_secs(2), up_rx.recv())
+            .await
+            .expect("input frame arrives")
+            .expect("input frame present");
+        match input_frame.payload {
+            Some(axon_sdk::pb::axon::v1::invoke_bidi_up::Payload::ReverseBidiInput(input)) => {
+                assert_eq!(input.call_id, call_id);
+                match input.input {
+                    Some(axon_sdk::pb::axon::v1::reverse_bidi_input::Input::BinaryChunk(chunk)) => {
+                        assert_eq!(chunk.stream_id, 1);
+                        assert_eq!(chunk.data, b"frame");
+                    }
+                    other => panic!("expected reverse bidi binary input, got {other:?}"),
+                }
+            }
+            other => panic!("expected ReverseBidiInput, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_escalation_sends_cancel_on_same_reverse_call_id() {
+        use axon_sdk::pb::axon::v1::invoke_bidi_up::Payload as UpPayload;
+
+        let correlation = EscalationCorrelation::new();
+        let (up_tx, mut up_rx) = mpsc::channel::<InvokeBidiUp>(8);
+        let handle = spawn_escalation_consumer(
+            Arc::clone(&correlation),
+            SessionUpSender::new(up_tx),
+            "test-realm",
+        );
+
+        let mut stream = handle
+            .escalate_stream(axon_sdk::pb::axon::v1::InvokeServerStreamRequest::default())
+            .await
+            .expect("stream escalation opens");
+        let open = tokio::time::timeout(Duration::from_secs(2), up_rx.recv())
+            .await
+            .expect("open frame arrives")
+            .expect("open frame present");
+        let call_id = match open.payload {
+            Some(UpPayload::ReverseDispatchCall(call)) => {
+                assert_eq!(call.call_id, stream.call_id());
+                stream.call_id()
+            }
+            other => panic!("expected ReverseDispatchCall open, got {other:?}"),
+        };
+
+        stream
+            .request_cancel("stream consumer disconnected")
+            .await
+            .expect("cancel queues on reverse carrier");
+        let cancel = tokio::time::timeout(Duration::from_secs(2), up_rx.recv())
+            .await
+            .expect("cancel frame arrives")
+            .expect("cancel frame present");
+        let chunk = match cancel.payload {
+            Some(UpPayload::BinaryChunk(chunk)) => chunk,
+            other => panic!("expected BinaryChunk cancel, got {other:?}"),
+        };
+        let dispatch = SessionDispatch::decode_frame(&chunk.data).expect("cancel frame decodes");
+        assert_eq!(
+            dispatch,
+            SessionDispatch::ReverseStreamCancel {
+                call_id,
+                reason: "stream consumer disconnected".to_string(),
+            }
+        );
     }
 
     #[tokio::test]
@@ -725,7 +1951,7 @@ mod tests {
 
         let outcome = handle
             .escalate_with_timeout(
-                "federation.forward_invoke".into(),
+                "federation.resolve_key".into(),
                 b"{}".to_vec(),
                 Duration::from_secs(2),
             )

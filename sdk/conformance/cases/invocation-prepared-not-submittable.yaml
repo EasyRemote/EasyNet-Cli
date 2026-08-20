@@ -1,0 +1,18 @@
+id: invocation/prepared_not_submittable
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+  - node
+  - java
+  - swift
+description: Submit rejects PreparedInvocation; only SignedInvocation is submit-ready.
+steps:
+  - action: prepare
+    fixture: invocation.complete.v4.json
+  - action: submit_prepared
+expect:
+  result: error
+  error_code: INVALID_ARGUMENT

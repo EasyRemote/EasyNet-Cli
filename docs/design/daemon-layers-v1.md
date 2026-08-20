@@ -52,13 +52,9 @@ Inside `easynet-daemon`:
     ├── mcp/             daemon MCP execution bridge
     ├── schedule/        cron store + tick runner          (PR-SCHED)
     └── loop_instance/   EAL loop wrapper store            (PR-LOOP)
-    ↓  (only via GatewayApi trait)
-[GatewayApi]             src/daemon/federation/gateway_api.rs       ← NETWORK BOUNDARY
-    ↓
-[Gateway]                src/daemon/federation/gateway.rs           (holds DendriteBridge)
 ```
 
-### Two hard trait boundaries
+### Execution boundary
 
 The layering is enforced at CI time:
 
@@ -68,13 +64,12 @@ The layering is enforced at CI time:
   return. Daemon control/invocation production code must not depend on
   CLI/FFI edge modules. The retired `src/daemon/kernel` root must not
   return; the supported kernel home is `src/daemon/boot/kernel`.
-- `tools/scripts/check-kernel-boundary.sh` (rule 3) — Execution may
-  only touch the network via `crate::daemon::federation::gateway_api`, not
-  the concrete `daemon::federation::gateway`.
+- `tools/scripts/check-kernel-boundary.sh` (rule 4) — Execution does not
+  import federation transports. Network publication and remote calls belong
+  to daemon Invocation/session ownership.
 - `tools/scripts/check-subservice-isolation.sh` — Execution
   sub-services cannot import each other.
-- `tools/scripts/check-invocation-unity.sh` — GatewayApi method
-  signatures must not speak raw invocation payload fragments; the old
+- `tools/scripts/check-invocation-unity.sh` — the old
   `crate::daemon::kernel` namespace must not return; execution
   sub-services cannot bypass daemon invocation dispatch through legacy
   mission/session paths.
@@ -86,8 +81,7 @@ The layering is enforced at CI time:
 The plan rejected scheme Y (daemon + separate "network gateway"
 process) for three reasons documented in the plan itself:
 
-1. `DendriteBridge` is hard to share across processes; single
-   owner avoids a whole category of bug.
+1. Invocation transport and session membership have one daemon owner.
 2. Session / schedule / permission pending state is easier to
    reason about in one address space.
 3. A Client dying must not take down the daemon; the existing
@@ -117,7 +111,6 @@ pub struct Kernel {
     discuss: DiscussService,
     schedule: ScheduleService,
     loop_svc: LoopService,
-    gateway: Arc<dyn GatewayApi>,
 }
 ```
 

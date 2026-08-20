@@ -31,35 +31,161 @@
 // Email: silan.hu@u.nus.edu
 // Copyright (c) 2026-2027 easynet. All rights reserved.
 
+use axon_sdk::invocation::axiom::authority_proof_expected_hash;
+use axon_sdk::invocation::{
+    sha256, AgentIdentity, AuthorityBinding, AuthorityEvidence, AuthorityOrBootstrap,
+    AuthorityRelation, AxonError, CalleeSignature, CanonicalReceiptProvider,
+    DescriptorBoundEnvelope, InvocationAuthorityProof, KeyResolver, LocalRuntime,
+    ReceiptSigningAuthority, StreamingInvocationHandle, UraProfile, VerifiedAdmissionPolicy,
+};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
-use easynet_axon::invocation::{LocalRuntime, StreamingInvocationHandle};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use easynet_cli::daemon::ability::builtins::agents::chat::ContextLoader;
 use easynet_cli::daemon::ability::catalog::{
-    build_registry_for_daemon, build_registry_with_runtime, RegistryBuildServices,
-    RegistryDaemonBuildConfig,
+    build_registry_for_daemon_result, build_registry_with_services_result, RegistryBuildConfig,
+    RegistryBuildServices, RegistryDaemonBuildConfig,
 };
 use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
 use easynet_cli::daemon::invocation::dispatch::local_runtime_invoker::{
     invoke_local_rpc_sync, open_local_stream,
 };
-use easynet_cli::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
-use easynet_cli::daemon::resources::files::{
-    resource_ref_for_local_path, FilesystemResourceCapability,
+use easynet_cli::daemon::invocation::routing::target::{
+    CallMode, InvocationTarget, SystemInvocationTargetIssuer,
 };
-use easynet_cli::support::async_bridge::{run_blocking, NoRuntimeFallback};
+use easynet_cli::daemon::resources::files::{
+    FilesystemResourceCapability, FilesystemResourceProvider,
+};
+use easynet_cli::support::async_bridge::{run_blocking, SyncBridgeRuntimePolicy};
 
 fn target(ability: &str, args: Value) -> InvocationTarget {
-    InvocationTarget {
-        scope: TargetScope::Local,
-        ability: ability.to_string(),
-        normalized_args: args,
-        call_mode: CallMode::Rpc,
-        subject: None,
-        causal_context: None,
+    SystemInvocationTargetIssuer::local_root(ability, args, CallMode::Rpc)
+}
+
+fn smoke_local_runtime() -> Arc<LocalRuntime> {
+    easynet_cli::daemon::axon_bridge::runtime_factory::build_local_runtime_with_receipt_provider(
+        Arc::new(SmokeRejectingKeyResolver),
+        Arc::new(SmokeCanonicalReceiptProvider::default()),
+    )
+}
+
+struct SmokeRejectingKeyResolver;
+
+impl KeyResolver for SmokeRejectingKeyResolver {
+    fn resolve(&self, agent_ura: &str) -> Result<VerifyingKey, AxonError> {
+        Err(AxonError::permission_denied(format!(
+            "smoke_key_not_configured:{agent_ura}"
+        )))
+    }
+}
+
+#[derive(Default)]
+struct SmokeCanonicalReceiptProvider {
+    seen_signers: Mutex<HashMap<String, VerifyingKey>>,
+}
+
+#[async_trait::async_trait]
+impl CanonicalReceiptProvider for SmokeCanonicalReceiptProvider {
+    fn verify_admission_policy(
+        &self,
+        envelope: &DescriptorBoundEnvelope,
+    ) -> Result<VerifiedAdmissionPolicy, AxonError> {
+        let binding = AuthorityOrBootstrap::Binding(AuthorityBinding {
+            authority: AgentIdentity::new(
+                envelope.envelope().caller.ura.clone(),
+                UraProfile::StrictV2,
+            ),
+            relation: AuthorityRelation::Self_,
+            evidence: AuthorityEvidence::Identity,
+        });
+        let mut proof = InvocationAuthorityProof::new(
+            "smoke-verified-admission",
+            Some(binding.clone()),
+            Vec::new(),
+            [0u8; 32],
+            Some(envelope.envelope().callee.clone()),
+            None,
+            "easynet-cli.smoke.canonical_receipt_provider.admission.v1",
+        );
+        proof.proof_hash = authority_proof_expected_hash(&proof);
+        VerifiedAdmissionPolicy::new(envelope, binding, proof)
+    }
+
+    async fn resolve_signing_authority(
+        &self,
+        callee: &AgentIdentity,
+    ) -> Result<Arc<dyn ReceiptSigningAuthority>, AxonError> {
+        let authority = SmokeReceiptSigningAuthority::self_signed(callee.clone());
+        self.seen_signers
+            .lock()
+            .map_err(|_| AxonError::internal("smoke_receipt_authority_lock_poisoned"))?
+            .insert(callee.ura.clone(), authority.verifying_key());
+        Ok(Arc::new(authority))
+    }
+
+    fn resolve_signer_key(&self, signer_ura: &str) -> Result<Option<VerifyingKey>, AxonError> {
+        Ok(self
+            .seen_signers
+            .lock()
+            .map_err(|_| AxonError::internal("smoke_receipt_authority_lock_poisoned"))?
+            .get(signer_ura)
+            .copied())
+    }
+}
+
+struct SmokeReceiptSigningAuthority {
+    callee_identity: AgentIdentity,
+    signing_key: SigningKey,
+}
+
+impl SmokeReceiptSigningAuthority {
+    fn self_signed(callee_identity: AgentIdentity) -> Self {
+        Self {
+            signing_key: SigningKey::from_bytes(&sha256(callee_identity.ura.as_bytes())),
+            callee_identity,
+        }
+    }
+
+    fn verifying_key(&self) -> VerifyingKey {
+        self.signing_key.verifying_key()
+    }
+}
+
+#[async_trait::async_trait]
+impl ReceiptSigningAuthority for SmokeReceiptSigningAuthority {
+    fn callee_identity(&self) -> &AgentIdentity {
+        &self.callee_identity
+    }
+
+    fn signer_identity(&self) -> &AgentIdentity {
+        &self.callee_identity
+    }
+
+    fn host_attestation(&self) -> &[u8] {
+        &[]
+    }
+
+    fn verifying_key(&self) -> VerifyingKey {
+        self.verifying_key()
+    }
+
+    async fn sign_and_verify(
+        &self,
+        canonical_receipt: &[u8],
+    ) -> Result<CalleeSignature, AxonError> {
+        let signature: Signature = self.signing_key.sign(canonical_receipt);
+        self.verifying_key()
+            .verify(canonical_receipt, &signature)
+            .map_err(|_| AxonError::internal("smoke_receipt_signature_self_verify_failed"))?;
+        Ok(CalleeSignature {
+            algorithm: "ed25519".to_string(),
+            signature: signature.to_bytes().to_vec(),
+            key_id_hint: "real-user-smoke-receipt-key".to_string(),
+        })
     }
 }
 
@@ -70,19 +196,27 @@ struct RuntimeSmoke {
 
 impl RuntimeSmoke {
     fn system() -> Self {
-        let runtime = LocalRuntime::new();
-        let catalog = build_registry_with_runtime(Arc::clone(&runtime));
+        let runtime = smoke_local_runtime();
+        let agents = easynet_cli::daemon::persistence::agent_registry::AgentRegistry::default();
+        let mut config = RegistryBuildConfig::new(RegistryBuildServices::fresh(), &agents);
+        config.local_runtime = Some(Arc::clone(&runtime));
+        let catalog = build_registry_with_services_result(config)
+            .expect("build system registry for smoke")
+            .catalog;
         Self { runtime, catalog }
     }
 
     fn daemon(loaders: Option<Arc<Vec<Arc<dyn ContextLoader>>>>) -> Self {
-        let runtime = LocalRuntime::new();
+        let runtime = smoke_local_runtime();
         let mut config = RegistryDaemonBuildConfig::new(RegistryBuildServices::fresh());
         config.loaders = loaders;
         config.pages_identity =
-            easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::from_env();
+            easynet_cli::daemon::ability::builtins::resources::pages::PagesIdentity::try_from_env()
+                .expect("resolve Pages identity for real-user smoke registry");
         config.local_runtime = Some(Arc::clone(&runtime));
-        let catalog = build_registry_for_daemon(config);
+        let catalog = build_registry_for_daemon_result(config)
+            .expect("build daemon registry for smoke")
+            .catalog;
         Self { runtime, catalog }
     }
 
@@ -101,13 +235,13 @@ impl RuntimeSmoke {
     fn execute_stream(
         &self,
         target: InvocationTarget,
-    ) -> anyhow::Result<easynet_axon::invocation::StreamingInvocationHandle> {
+    ) -> anyhow::Result<axon_sdk::invocation::StreamingInvocationHandle> {
         if target.call_mode != CallMode::Stream {
             anyhow::bail!("execute_stream called with non-stream target");
         }
         run_blocking(
             open_local_stream(Arc::clone(&self.runtime), target),
-            NoRuntimeFallback::BuildCurrentThreadTokio,
+            SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
         )
         .map_err(|err| anyhow::anyhow!("{err}"))
     }
@@ -184,11 +318,16 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&scratch)?;
     let out = scratch.join("greeting.txt");
     let _ = std::fs::remove_file(&out);
+    let credentials = easynet_cli::daemon::persistence::config::load_credentials()?;
+    let filesystem = FilesystemResourceProvider::for_device(easynet_cli::core::ura::device_ura(
+        &credentials.realm,
+        &credentials.node_id,
+    ))?;
 
     let resp = d().execute_rpc(target(
         "fs.write",
         json!({
-            "resource_ref": resource_ref_for_local_path(
+            "resource_ref": filesystem.resource_ref_for_local_path(
                 &out,
                 FilesystemResourceCapability::Write,
             )?,
@@ -207,7 +346,7 @@ fn main() -> anyhow::Result<()> {
     let read_resp = d().execute_rpc(target(
         "fs.read",
         json!({
-            "resource_ref": resource_ref_for_local_path(
+            "resource_ref": filesystem.resource_ref_for_local_path(
                 &out,
                 FilesystemResourceCapability::Read,
             )?,
@@ -429,18 +568,15 @@ fn main() -> anyhow::Result<()> {
                     ctx_mission_id,
                     ctx_mission_dir,
                 );
-                ctx_runtime.execute_rpc(InvocationTarget {
-                    scope: TargetScope::Local,
-                    ability: chat_for_ctx,
-                    normalized_args: json!({
+                ctx_runtime.execute_rpc(SystemInvocationTargetIssuer::local_root(
+                    chat_for_ctx,
+                    json!({
                         "prompt": "What single all-caps token from the previous discussion contains the substring `CANARY-`? Reply with that token only, no other text.",
                         "context": format!("In this session the agreed-upon canary token is `{canary_for_thread}`. Remember it for any future verification."),
                         "stream": false,
                     }),
-                    call_mode: CallMode::Rpc,
-                    subject: None,
-                    causal_context: None,
-                })
+                    CallMode::Rpc,
+                ))
             })
             .await
             .unwrap()
@@ -475,14 +611,11 @@ fn main() -> anyhow::Result<()> {
         let ability_runtime = RuntimeSmoke::daemon(Some(Arc::new(Vec::new())));
         let direct_result = rt.block_on(async {
             tokio::task::spawn_blocking(move || {
-                ability_runtime.execute_rpc(InvocationTarget {
-                    scope: TargetScope::Local,
-                    ability: "claude.audit-test-ability".to_string(),
-                    normalized_args: json!({}),
-                    call_mode: CallMode::Rpc,
-                    subject: None,
-                    causal_context: None,
-                })
+                ability_runtime.execute_rpc(SystemInvocationTargetIssuer::local_root(
+                    "claude.audit-test-ability",
+                    json!({}),
+                    CallMode::Rpc,
+                ))
             })
             .await
             .unwrap()
@@ -507,17 +640,14 @@ fn main() -> anyhow::Result<()> {
         if advertised.iter().any(|n| n == "codex.chat") {
             println!("\n=== codex.chat STREAM mode (frame-by-frame) ===");
             let dispatcher_for_codex = RuntimeSmoke::daemon(Some(Arc::new(Vec::new())));
-            let codex_target = InvocationTarget {
-                scope: TargetScope::Local,
-                ability: "codex.chat".to_string(),
-                normalized_args: json!({
+            let codex_target = SystemInvocationTargetIssuer::local_root(
+                "codex.chat",
+                json!({
                     "prompt": "Count from 1 to 5, one number per line.",
                     "stream": true,
                 }),
-                call_mode: CallMode::Stream,
-                subject: None,
-                causal_context: None,
-            };
+                CallMode::Stream,
+            );
             match dispatcher_for_codex.execute_stream(codex_target) {
                 Ok(stream) => print_stream_frames(&rt, "Codex", stream),
                 Err(e) => {
@@ -531,17 +661,14 @@ fn main() -> anyhow::Result<()> {
         // ── streaming reality check (claude) ──────────────────
         println!("\n=== claude.chat STREAM mode (frame-by-frame) ===");
         let dispatcher_for_stream = RuntimeSmoke::daemon(Some(Arc::new(Vec::new())));
-        let stream_target = InvocationTarget {
-            scope: TargetScope::Local,
-            ability: chat_ability.clone(),
-            normalized_args: json!({
+        let stream_target = SystemInvocationTargetIssuer::local_root(
+            chat_ability.clone(),
+            json!({
                 "prompt": "Count from 1 to 5, one number per line.",
                 "stream": true,
             }),
-            call_mode: CallMode::Stream,
-            subject: None,
-            causal_context: None,
-        };
+            CallMode::Stream,
+        );
         {
             let _mission_ctx =
                 easynet_cli::daemon::execution::mission::enter_mission_context_for_current_thread(

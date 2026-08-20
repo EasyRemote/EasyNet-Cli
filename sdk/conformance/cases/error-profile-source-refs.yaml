@@ -1,0 +1,30 @@
+id: error/profile_source_refs
+profile: errors
+required_for:
+  - go
+  - python
+  - node
+description: Profile-originated SDK errors expose stable profile and source_ref details without changing typed error schema fields.
+steps:
+  - action: trigger_profile_validation_error
+    profile: directory
+    method: project_canonical_directory_ref
+  - action: inspect_error_details
+    required_detail: profile
+  - action: inspect_error_details
+    required_detail: source_ref
+  - action: inspect_error_class
+  - action: inspect_package_source_ref
+expect:
+  result: profile_error_source_ref_observed
+  error_code: INVALID_ARGUMENT
+  error_class: validation
+  profile: directory
+  python_source_ref: python_sdk.profile.directory
+  go_source_ref: go_sdk.profile.directory
+  node_source_ref: node_sdk.profile.directory
+  python_package_source_ref: python_sdk.profile.directory
+  go_package_source_ref: go_sdk.profile.directory
+  node_package_source_ref: node_sdk.profile.directory
+  top_level_schema_change: false
+  existing_details_preserved: true

@@ -31,17 +31,17 @@ use serde::{Deserialize, Serialize};
 
 use super::sandbox::PublishedFolderHandle;
 
-/// Visibility marker. v0 supports PUBLIC only; PRIVATE/SCOPED
+/// PageVisibility marker. v0 supports PUBLIC only; PRIVATE/SCOPED
 /// reject at the publish boundary with a clear error and are
 /// reserved for a later phase (RFC-006-B §post-MVP).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Visibility {
+pub enum PageVisibility {
     Public,
     // Private,    // post-MVP
     // Scoped,     // post-MVP
 }
 
-impl Visibility {
+impl PageVisibility {
     pub fn parse(s: &str) -> anyhow::Result<Self> {
         match s.to_ascii_lowercase().as_str() {
             "public" | "" => Ok(Self::Public),
@@ -74,7 +74,7 @@ pub struct ProjectHandle {
     pub project_id: String,
     pub folder_handle: PublishedFolderHandle,
     pub canonical_root: PathBuf,
-    pub visibility: Visibility,
+    pub visibility: PageVisibility,
     pub file_size_cap: u64,
     pub started_at: SystemTime,
 }
@@ -201,7 +201,7 @@ pub(crate) fn restore_published_projects(user: &str) -> anyhow::Result<RestoreSu
         if PUBLISHED_PROJECTS.contains_key(&key) {
             continue;
         }
-        let visibility = match Visibility::parse(&record.visibility) {
+        let visibility = match PageVisibility::parse(&record.visibility) {
             Ok(v) => v,
             Err(_) => {
                 cleaned_snapshot_needed = true;
@@ -247,8 +247,21 @@ pub(crate) fn restore_published_projects(user: &str) -> anyhow::Result<RestoreSu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+    use crate::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
     use serde_json::json;
+
+    fn pages_registry(realm: &str, _user: &str) -> Arc<AxonAbilityCatalog> {
+        let device_ura = crate::core::ura::device_ura(realm, "pages-test-device");
+        let authority_context = AbilityAuthorityContext::for_device_authority_root(device_ura)
+            .expect("Pages test Device authority");
+        Arc::new(AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            authority_context,
+        ))
+    }
 
     fn clear_registry_for_user(user: &str) {
         let keys: Vec<_> = PUBLISHED_PROJECTS
@@ -275,9 +288,10 @@ mod tests {
 
         crate::daemon::ability::builtins::resources::pages::publish::handle_publish(
             user,
+            user,
             8787,
             "easynet.run",
-            Arc::new(AxonAbilityCatalog::new()),
+            pages_registry("easynet.run", user),
             json!({
                 "folder": folder.path().display().to_string(),
                 "project_id": project_id,
@@ -320,9 +334,10 @@ mod tests {
 
         crate::daemon::ability::builtins::resources::pages::publish::handle_publish(
             user,
+            user,
             8787,
             "easynet.run",
-            Arc::new(AxonAbilityCatalog::new()),
+            pages_registry("easynet.run", user),
             json!({
                 "folder": folder.path().display().to_string(),
                 "project_id": project_id,

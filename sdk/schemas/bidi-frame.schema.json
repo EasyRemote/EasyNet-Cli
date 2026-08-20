@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://easynet.run/sdk/schemas/bidi-frame.schema.json",
+  "title": "BidiFrame",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "frame_type", "seq"],
+  "properties": {
+    "session_id": {"type": "string", "minLength": 1},
+    "frame_type": {"type": "string", "enum": ["frame0", "data", "close_send", "terminal", "error", "cancelled"]},
+    "seq": {"type": "integer", "minimum": 0},
+    "payload": true,
+    "error": {"$ref": "error.schema.json"},
+    "receipt": {"$ref": "receipt.schema.json"}
+  }
+}

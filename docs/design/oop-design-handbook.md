@@ -1,8 +1,8 @@
 # EasyNet 平台 OOP 设计技术手册
 
-**版本**：v1（反映磁盘真实代码，截至 2026-06-25）
+**版本**：v1（2026-06-25 历史快照）
 **面向读者**：CTO 凉冰 / Silan、EasyNet 工程团队（莫浩、海峰、晓雯及新入职工程师）
-**性质**：权威参考手册。本手册描述的是 **磁盘上真实存在的代码**，不是理想化架构。每处类型断言都标注 `文件:行号`，可直接 `grep` 验证。
+**性质**：非规范性历史手册。当前边界只以 [`../ARCHITECTURE_STATE.md`](../ARCHITECTURE_STATE.md) 为准；本文件中的类型名、行号和设计评价不得作为当前实现依据。
 **仓库**：`EasyNet-Cli`（下游消费方）、`EasyNet-Axon`（本体 / 协议宿主，相对路径 `../EasyNet-Axon`）
 
 ---
@@ -33,7 +33,7 @@ Identity  →  Admission  →  Policy  →  Receipt  →  Discovery
 
 - **Identity**：`Ura` / `ParsedURA` / `URAKind`（`ura-rs/src/lib.rs`）—— 类型化身份分解
 - **Admission**：`run_admission` + `NonceReplayStore`（`admission.rs`）—— 语法 + 重放 + 签名校验
-- **Policy**：`NamespacePolicyGate` / `ProcessLiveness` / `AuthorityBindingRecord` —— 准入资格评估
+- **Policy**：`NamespacePolicyGate` / `ProcessLiveness` / `AuthorityBinding` —— 准入资格评估
 - **Receipt**：`InvocationReceipt` + `AxiomBinding`（`audit.rs`）—— 哈希链审计
 - **Discovery**：`NamespaceResolver` 四件套 + `DiscoverFederationResolver` —— 命名空间解析
 
@@ -137,12 +137,12 @@ URA（EasyNet 资源地址）是身份主干。语法规范**只定义一次**�
 | `CallerSignature` | struct | caller 侧对规范字节的签名（RFC-001 §4.1）：algorithm / signature / key_id_hint | `axiom.rs:383` |
 | `CalleeSignature` | struct | callee 侧对回执规范字节的签名（§4.3）；**不被 self_hash 覆盖**（签名不能覆盖自己） | `axiom.rs:391` |
 | `CausalContext` | enum | 因果谱系（§3.3）：None（root）/ Scalar（单父）/ List（fan-in）/ Merkle（大 fan-in，hash） | `axiom.rs:245` |
-| `AgentIdentity` | struct | agent 复合身份：URA + profile（EasynetStrictV2 / WebSafeV2） | `axiom.rs:60` |
+| `AgentIdentity` | struct | agent 复合身份：URA + profile（StrictV2 / WebSafeV2） | `axiom.rs:60` |
 | `SubjectIdentity` | struct | subject 复合身份；与 `AgentIdentity` **刻意区分类型**以强制 INV-7（subject 可与 callee 不同域） | `axiom.rs:78` |
 | `EntityRef` | struct | 从 `SubjectIdentity` 派生的规范化证明形，带 `EntityRefKind` 标签 | `axiom.rs:135` |
 | `AuthorityBinding` | enum | "谁有权"：Self_ / Delegated / Capability / Policy / Session / Bootstrap；哈希进受签区（不可伪造） | `axiom.rs:272` |
 | `ReceiptProofFacts` | struct | descriptor/version/schema/impl/runtime 证明事实；零哈希是受签的"not bound"事实 | `axiom.rs:343` |
-| `UraProfile` | enum | Axis B：EasynetStrictV2（RFC-001 默认）/ WebSafeV2（HTTP 工具用） | `axiom.rs:31` |
+| `UraProfile` | enum | Axis B：StrictV2（RFC-001 默认）/ WebSafeV2（HTTP 工具用） | `axiom.rs:31` |
 
 **关键设计：零哈希是事实，不是缺失。** `schema_hash` / `impl_hash` 为零时，是**受签的"未绑定"事实**，不是被剥离的缺失字段。验证方必须用 `.schema_bound()` / `.impl_bound()` 谓词判断，**不能直接零值检查**。这条贯穿整个 receipt 验证逻辑。
 
@@ -265,7 +265,7 @@ URA（EasyNet 资源地址）是身份主干。语法规范**只定义一次**�
 | `TimeProvider` | `now_unix_ms()`；`SystemTimeProvider` 实现，可注入测试 | `src/runtime/mod.rs:107-117` |
 | `SessionProvider` | kernel/backend split | `session_provider.rs:137-203` |
 | `ShardResolver` | 抽象 shard 成员 + 路由 | `src/services/invocation/shard_resolver.rs` |
-| `HubForwardDispatcher` | 抽象跨 shard 转发 | `src/services/invocation/hub_forward.rs` |
+| `InvocationRelay` | 只转发完整 `InvokeRequest` 的跨 shard 接缝 | `src/services/invocation/invocation_relay.rs` |
 | `NamespaceRouteResolver` | RFC-005 §6 解析算法 | `src/services/namespace/resolver.rs` |
 | `NamespaceDirectory` | fact-store 边界 + v1 适配 | `src/services/namespace/directory.rs` |
 | `NamespaceDiscoveryResolver` | RFC-005 discovery 解析 | `src/services/namespace/discovery.rs` |
@@ -282,15 +282,15 @@ CLI 持有比 Axon 更丰富的控制面元数据，按三个关注点切成三�
 
 | 类型 | 种类 | 角色 | 文件:行 |
 |---|---|---|---|
-| `AbilityDescriptorRecord` | struct | 第一表：版本化受治理接口契约（name / version / call_mode / schema_hash / descriptor_hash） | `src/daemon/ability/descriptor.rs:278-402` |
-| `AbilityDescriptorRegistry` | struct | 第一表存储；`BTreeMap` 确定性迭代 | `descriptor.rs:436-501` |
-| `AuthorityBindingRecord` | struct | 第二表：治理谓词（governs_advertise / governs_invoke）+ policy binding + scope | `src/daemon/ability/authority.rs:484-582` |
+| `AbilityDescriptor` | aggregate | 第一表：完整受治理接口、权限、schema、transport 与 receipt semantics 的唯一聚合 | `src/daemon/ability/descriptors/surface.rs` |
+| `AbilityDescriptorRegistry` | struct | 第一表存储；`BTreeMap` 确定性迭代 | `src/daemon/ability/descriptors/mod.rs` |
+| `AuthorityBinding` | struct | 第二表：治理谓词（governs_advertise / governs_invoke）+ policy binding + scope | `src/daemon/ability/authority/mod.rs` |
 | `AuthorityBindingRegistry` | struct | 第二表存储 | `authority.rs:597-619` |
 | `AbilityImplBinding` | struct | 第三表：可执行事实（runtime_env / impl_source / impl_hash / content_hash） | `src/daemon/ability/impl_binding.rs:98-219` |
 | `AbilityImplRegistry` | struct | 第三表存储 | `impl_binding.rs:221-243` |
 | `AbilityControlPlaneKey` | struct（**复合 newtype**） | (authority_root, ability, descriptor_version, call_mode) —— **统一三表的唯一规范键** | `descriptor.rs:130-217` |
-| `AbilityControlPlaneRecord` | struct | (descriptor, authority, impl) 三元原子，dispatch 层作为整体读 | `src/daemon/ability/registry.rs:17-83` |
-| `AbilityControlPlaneRegistry` | struct | 聚合 facade，持三表；注册经物化状态机写入，查询统一三行 | `registry.rs:85-629` |
+| `AbilityControlPlaneRecord` | struct | (key, descriptor, authority, impl) 原子聚合，dispatch 层作为整体读 | `src/daemon/ability/control_plane.rs` |
+| `AbilityControlPlaneRegistry` | struct | 聚合 facade，持三表；注册经物化状态机写入，查询统一聚合 | `src/daemon/ability/control_plane.rs` |
 
 **不变量（已验证磁盘）：** 每个键要么在三表全在，要么全不在（`assert_record_keys_match` 强制）。这是三注册表模型的灵魂。
 
@@ -315,7 +315,7 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 
 `Planned --materialize()--> Materialized --commit()--> Committed`。物化阶段构造三行 + 校验键一致性；commit 原子写三表。**回滚机制：** mutate 前抓 `records_for_authority_mode()` 快照，失败时 `restore_authority_mode_records()` 恢复。`debug_assert_eq!` 守护状态合法性，测试期捕获误用。
 
-**哈希始终是 Axon 权威（facade 的核心）：** `AbilityDescriptorRecord::to_axon_descriptor()`（`descriptor.rs:355`，已验证磁盘）构造 `easynet_axon::invocation::axiom::CanonicalAbilityDescriptor` 并经 Axon **自己的** `axiom::ability_descriptor_hash()` 重算 descriptor_hash——CLI **从不自造哈希**。
+**哈希始终是 Axon 权威：** `AbilityDescriptor` 的 schema/descriptor hash 方法调用 Axon `axiom::ability_schema_hash()` / `ability_descriptor_hash()`；CLI 不维护第二个 hash record。
 
 ---
 
@@ -374,8 +374,8 @@ enum AbilityControlPlaneRegistrationStage { Planned, Materialized, Committed }
 
 | 类型 | 角色 | 文件:行 |
 |---|---|---|
-| `RegistryBuildConfig` | 传给 `build_registry_with_services()` 的不可变配置 | `src/daemon/ability/catalog/build.rs:243` |
-| `BuiltAbilityRegistry` | 构建输出：(catalog Arc, plugin_runtime_manager Arc, device_registrar_cell OnceLock) | `src/daemon/ability/catalog/build.rs:155` |
+| `RegistryBuildConfig` | 传给 fallible `build_registry_with_services_result()` 的不可变配置 | `src/daemon/ability/catalog/build.rs` |
+| `BuiltAbilityRegistry` | 构建输出：(catalog Arc, plugin_runtime_manager Arc, ability_deployment_registrar_cell OnceLock) | `src/daemon/ability/catalog/build.rs:155` |
 | `HotAgentRegistrar` | post-boot 把 hosted-agent handler 集物化进 LocalRuntime + catalog | `src/daemon/axon_bridge/hot_agent_registrar.rs:160` |
 
 **late-binding 解决 bootstrap 鸡生蛋：** `local_registry_handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>`——handler 闭合在 `OnceLock` 而非 `Arc` 本身，使 handler 注册可以先于 catalog 被 `Arc::new` 包裹。`HotAgentRegistrar` 是 phase-5c"内存里注册 agent"与 phase-6"持久化 descriptor 元数据"之间的桥；把它放在 `axon_bridge/` 强调 **LocalRuntime 才是可用性的真理源，AxonAbilityCatalog 是元数据 + 派发**。
@@ -533,10 +533,10 @@ A::SymbolNotFound | A::Json | A::PartialSuccess → Internal
 
 | 类型 | 角色 | 文件:行 |
 |---|---|---|
-| `MissionRunStore` | mission-run 持久化 facade，锚定 `~/.easynet/missions/runs/` | `src/cli/mission_runs.rs:51` |
-| `MissionRunDir` | 打开的运行目录句柄；持 `PathBuf` + 可选 `HeartbeatPump`；`Drop` 停心跳 | `mission_runs.rs:142` |
+| `MissionRunStore` | daemon-owned mission-run 持久化对象，锚定 `~/.easynet/missions/runs/` | `src/daemon/execution/mission/orchestration.rs` |
+| `MissionRunDir` | 打开的运行目录句柄；持 `PathBuf` + 可选 `HeartbeatPump`；`Drop` 停心跳 | `src/daemon/execution/mission/orchestration.rs` |
 
-**F-022 liveness：** 用 heartbeat 文件 mtime 新鲜度替代 pid-file 存在性（< 15s = 存活）。`MissionRunStatus`：Running → {Completed | Failed | Aborted}。
+**F-022 liveness：** 用 heartbeat 文件 mtime 新鲜度替代 pid-file 存在性（< 15s = 存活）。`MissionRunStatus`：Running → {Ok | Partial | Error | Cancelled}。
 
 ### 6.7 CLI facade（薄）
 
@@ -544,7 +544,9 @@ A::SymbolNotFound | A::Json | A::PartialSuccess → Internal
 |---|---|---|
 | `App` | 顶层 clap Parser；noun-first 命令组：agent / ability / device / mission / runtime / mcp + 横切 doctor / completion | `src/cli/mod.rs:198` |
 
-facade 极薄：`mission` 子命令 → `mission_runs.rs::run_mission_inproc()` → `eal::planner::compile` + `eal::interpreter::execute_*`。
+facade 极薄：`mission` 子命令 → daemon-owned
+`mission::orchestration::run_mission_inproc()` → `eal::planner::compile` +
+`eal::interpreter::execute_*`。
 
 ---
 
@@ -568,7 +570,7 @@ facade 极薄：`mission` 子命令 → `mission_runs.rs::run_mission_inproc()` 
 |---|---|---|---|
 | 1 | Identity/Canonicalization | std trait on newtype + 单一 parse 函数（**非 trait**） | Axon ura-rs |
 | 2 | Admission/Key Resolution | `KeyResolver`（server 经 `run_admission_gate` 复用同一原语） | Axon + server |
-| 3 | Dispatch/Execution（真骨架） | `AbilityRegistry` / `SessionProvider` / `ShardResolver` / `HubForwardDispatcher` / `LocalRuntimeAuthority` / `SessionFrameDispatcher` / `StepDispatcher` | 两仓 |
+| 3 | Dispatch/Execution（真骨架） | `AbilityRegistry` / `SessionProvider` / `ShardResolver` / `InvocationRelay` / `LocalRuntimeAuthority` / `SessionFrameDispatcher` / `StepDispatcher` | 两仓 |
 | 4 | Namespace/Discovery（RFC-005） | `NamespaceRouteResolver` / `NamespaceDirectory` / `NamespaceDiscoveryResolver` / `NamespacePolicyGate` / `AliasStore` / `DiscoverFederationResolver` | server + CLI |
 | 5 | Extension/Test seam | `ContextLoader` / `TimeProvider` / `TeachClock` / `DeviceOpsClock` / `AcquiringArtifactTxn` / `BuiltinPluginBinding`（函数指针，无 vtable） | 两仓 |
 
@@ -594,7 +596,7 @@ facade 极薄：`mission` 子命令 → `mission_runs.rs::run_mission_inproc()` 
 
 **TYPESTATE（编译期 gated，两仓）：**
 - Axon：`UnaryInvokeAdmissionState`（Unsigned→Verified→Admitted）；`TerminalProofState`（NotRequired|Emitted|ConstructionFailed）；`DescriptorBoundEnvelope`（构造时 validate()）；`IdempotencyOwnerState`（Replayable|Expired|InflightPendingPublication|Orphaned）
-- CLI：`AbilityControlPlaneRegistrationStage`（Planned→Materialized→Committed，快照-恢复回滚，`registry.rs:138`）；`TargetKind`/`IrTarget`（Agent|Device，parse 时定，编码"无隐式 agent 回退"不变量）；EAL `MissionOutcome`（Completed|Partial|Aborted）/ `StepOutcome`（Completed|Failed|Skipped|Internal）/ `VerifyDone`（True|False|Malformed）；`DescriptorImportState`（Acquiring→{Active|rollback}，Active→Forgetting→{removed|restored}，持久 tombstone，`teach_grants.rs:251`）；`MissionRunStatus`（Running→{Completed|Failed|Aborted}，heartbeat-mtime liveness，F-022）
+- CLI / daemon product runtime：`AbilityControlPlaneRegistrationStage`（Planned→Materialized→Committed，快照-恢复回滚，`registry.rs:138`）；`TargetKind`/`IrTarget`（Agent|Device，parse 时定，编码"无隐式 agent 回退"不变量）；EAL `MissionOutcome`（Completed|Partial|Aborted）/ `StepOutcome`（Completed|Failed|Skipped|Internal）/ `VerifyDone`（True|False|Malformed）；`DescriptorImportState`（Acquiring→{Active|rollback}，Active→Forgetting→{removed|restored}，持久 tombstone，`teach_grants.rs:251`）；daemon-owned `MissionRunStatus`（Running→{Ok|Partial|Error|Cancelled}，heartbeat-mtime liveness，F-022）
 
 **LIVENESS/RECLAIM（Axon client-sdk，最防御）：** Node-ID Lock Lifecycle（Unacquired→Locked→{Reclaimed→Removed|Restored}，两阶段 pre/post 策略）；`ProcessLiveness`（Alive|Dead|Unknown，保守默认 Unknown ⇒ 不回收除非 force+host 匹配）。
 
@@ -643,7 +645,7 @@ tokio 基础，围绕**一个 gRPC service trait** + receipt-投影事件流 + �
 
 **BACKPRESSURE：** `BackpressurePolicy`（Unbounded 从 receipts 重放 | Block(capacity,max_wait) 有界 mpsc）构造时钉死。server `invoke_slots` Semaphore 界定并发，带 queue-timeout admission。
 
-**SYNC/ASYNC 桥（CLI，load-bearing）：** EAL 在 `tokio::task::spawn_blocking` 内跑同步 handler；mission PHASE 经 `rayon::scope` work-stealing + crossbeam SegQueue 收集，每 worker 拿 `dispatcher.clone_for_thread()`。`run_blocking`/`try_run_blocking_in_tokio`（`src/support/async_bridge.rs`）配 `NoRuntimeFallback` enum（UseFuturesExecutor | BuildCurrentThreadTokio）是**唯一获认可的 sync←async 配方**——future+output 必须 Send，无 lifetime 跨界。
+**SYNC/ASYNC 桥（CLI，load-bearing）：** EAL 在 `tokio::task::spawn_blocking` 内跑同步 handler；mission PHASE 经 `rayon::scope` work-stealing + crossbeam SegQueue 收集，每 worker 拿 `dispatcher.clone_for_thread()`。`run_blocking`/`try_run_blocking_in_tokio`（`src/support/async_bridge.rs`）配 `SyncBridgeRuntimePolicy` enum（UseFuturesExecutor | BuildCurrentThreadTokio）是**唯一获认可的 sync←async 配方**——future+output 必须 Send，无 lifetime 跨界。
 
 **并发安全不变量：** handler 闭包**按值捕获**（String/Arc clone），永不 `Rc<RefCell>`——安全并发由构造保证；唯一共享可变性走类型化内部可变层。
 
@@ -665,7 +667,7 @@ CLI 从 `easynet_axon::invocation::{LocalRuntime, CausalContext, ReceiptRef, Cal
 
 ### 8.3 投影方法（CLI 类型 → Axon 类型，重算规范哈希）
 
-facade 的心脏：CLI 定义自己的治理记录，然后投影。`AbilityDescriptorRecord::to_axon_descriptor()`（`descriptor.rs:355`，已验证磁盘）构造 `easynet_axon::invocation::axiom::CanonicalAbilityDescriptor` 并经 Axon **自己的** `axiom::ability_descriptor_hash()` 重算 descriptor_hash——**哈希永远 Axon 权威，绝非 CLI 自造**。`CallMode::axon_call_mode()` 把 CLI enum 映到 Axon 的。
+facade 的心脏：CLI 的唯一 `AbilityDescriptor` 聚合调用 Axon canonical hash 原语；`CallMode::axon_call_mode()` 只在 Axon 边界完成 enum 投影，不存在第二个 descriptor record。
 
 CLI 持更丰富的三注册表控制面元数据（descriptor/authority/impl，Axon 没有），但**每个被签或被路由的字节都经 Axon 函数规范化**。
 
@@ -707,7 +709,7 @@ CLI **从不内部复用** Axon wire 错误类型；它在边界经 `EalError::f
 6. **错误 context map 无类型无版本。** `BTreeMap<String,String>` 按字符串键插半结构化数据；重命名键会静默破坏消费者。
 7. **OnceLock 双 set 警告。** `registry_builder` 在 boot→op_event 调 `set()` 两次；生产不可能但 ops 见警告。
 8. **teach grants 泛型复杂度。** `AcquireStagedGrant<T>` 的 T 重复了 `AcquiringArtifactTxn` 已指定的东西；`DescriptorImportState` 的 `mark_active`/`mark_forgetting` 是 Vec 内结构的私有可变方法（field-mutation anti-pattern）。
-9. **Go backend fork 协议层（跨仓最大风险）。** 不在本手册主体（Rust）范围，但记录在案：`backend/internal/axon` 8/15 文件在 Go 里 fork envelope/admission/URA，导致 agent_uri/agent_ura 漂移、device 被移除。Rust 接缝干净，Go 接缝是欠债。
+9. **Go backend fork 协议层（跨仓最大风险）。** 不在本手册主体（Rust）范围，但记录在案：`backend/internal/axon` 曾在 Go 里 fork envelope/admission/URA，造成 Agent URA 字段漂移并丢失 device 语义。当前边界只允许 canonical URA；不得再引入第二套定位命名。
 
 ### 9.3 终局方向
 

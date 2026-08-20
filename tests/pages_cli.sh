@@ -50,16 +50,16 @@ teardown() {
   rm -rf "$FIXTURE"
 }
 
-# C1 — create exits 0 + stdout has project_uri + url_root
+# C1 — create exits 0 + stdout has project_ura + url_root
 c1_create() {
   local out
   out=$("$EASYNET" pages create "$PROJECT" --folder "$FIXTURE" 2>&1)
   local rc=$?
   if [[ $rc -ne 0 ]]; then ko C1 "exit=$rc out=$out"; return; fi
-  if [[ "$out" == *"project_uri"* && "$out" == *"url_root"* ]]; then
+  if [[ "$out" == *"project_ura"* && "$out" == *"url_root"* ]]; then
     ok "C1 create"
   else
-    ko C1 "missing project_uri or url_root in stdout: $out"
+    ko C1 "missing project_ura or url_root in stdout: $out"
   fi
 }
 
@@ -70,7 +70,7 @@ c2_create_json() {
   local out
   out=$("$EASYNET" pages create "$PROJECT" --folder "$FIXTURE" --json 2>&1)
   if [[ $? -ne 0 ]]; then ko C2 "exit nonzero: $out"; return; fi
-  if echo "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "project_uri" in d and "url_root" in d' 2>/dev/null; then
+  if echo "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert "project_ura" in d and "url_root" in d' 2>/dev/null; then
     ok "C2 create --json"
   else
     ko C2 "stdout is not valid JSON with required keys: $out"
@@ -103,7 +103,7 @@ c4_list_json() {
 c5_show() {
   local out
   out=$("$EASYNET" pages show "$PROJECT" 2>&1)
-  if [[ "$out" == *"project_uri"* && "$out" == *"$PROJECT"* ]]; then
+  if [[ "$out" == *"project_ura"* && "$out" == *"$PROJECT"* ]]; then
     ok "C5 show"
   else
     ko C5 "show stdout missing detail: $out"

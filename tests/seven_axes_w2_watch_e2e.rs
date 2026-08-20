@@ -34,11 +34,9 @@
 mod seven_axes_fixture;
 
 use easynet_cli::cli::invocation_watch::{self, WatchArgs, WatchEvent};
-use easynet_cli::cli::mission_runs::{
-    self, MissionRunDir, MissionRunMeta, MissionRunOpts, MissionRunStatus,
-};
+use easynet_cli::cli::mission_runs::MissionRunDir;
 use easynet_cli::cli::receipt_verification::CliReceiptChainVerification;
-use seven_axes_fixture::{SevenAxesHome, TESTBOT_ECHO_DESCRIPTOR_VERSION};
+use seven_axes_fixture::SevenAxesHome;
 
 #[test]
 fn watch_e2e_projects_a_ledgered_invocation_to_terminal() {
@@ -47,12 +45,7 @@ fn watch_e2e_projects_a_ledgered_invocation_to_terminal() {
 
     // Drive one real, ledgered invocation through the wire.
     let meta = home.invoke_testbot_echo_with_meta("watch me");
-    let expected_echo_ability_ref = format!(
-        "{}@{}",
-        easynet_cli::core::ura::owner_ability_ura(&home.testbot_ura, "echo")
-            .expect("mint testbot echo ability URA"),
-        TESTBOT_ECHO_DESCRIPTOR_VERSION
-    );
+    let expected_echo_ability_ref = home.testbot_echo_descriptor_ref();
     let invocation_ura = meta["invocation_ura"]
         .as_str()
         .expect("envelope echo carries invocation_ura")
@@ -115,29 +108,31 @@ mission "watch-stream" {
   let third = testbot.echo(message: second.output)
 }
 "#;
-    let run = mission_runs::run_mission_inproc(
-        mission,
-        MissionRunOpts {
-            source_label: Some("seven-axes-watch-stream.eal".into()),
-            trace_path: None,
-            invocation_context: None,
-        },
-    )
-    .expect("three-step mission runs through the daemon");
+    let run = home.invoke_device_hosted_system_ability(
+        "mission.run",
+        serde_json::json!({
+            "source": mission,
+            "label": "seven-axes-watch-stream.eal",
+        }),
+    );
+    let run_id = run["run_id"].as_str().expect("mission.run returns run_id");
+    let trace_id = run["meta"]["trace_id"]
+        .as_str()
+        .expect("mission.run returns trace_id");
     assert_eq!(
-        run.meta.trace_id, run.run_id,
+        trace_id, run_id,
         "T2.0 contract: mission run id is the child invocation trace id"
     );
 
     let watch = invocation_watch::execute_once(&WatchArgs {
         invocation: None,
-        trace: Some(run.meta.trace_id.clone()),
+        trace: Some(trace_id.to_string()),
         follow: false,
         max_wait_seconds: 60,
         format: invocation_watch::OutputFormat::Json,
     })
     .expect("watch the mission trace");
-    assert_eq!(watch.trace_id, run.meta.trace_id);
+    assert_eq!(watch.trace_id, trace_id);
     assert_eq!(
         watch.rows.len(),
         3,
@@ -166,7 +161,7 @@ mission "watch-stream" {
             cli_receipt_chain_verification,
             ref usage,
         }) => {
-            assert_eq!(trace, &run.meta.trace_id);
+            assert_eq!(trace, trace_id);
             assert_eq!(status, "ok");
             assert!(ledger_reported_receipt_chain_verified);
             assert_eq!(
@@ -194,15 +189,6 @@ mission "watch-stream" {
         .expect("run dir has a final component")
         .to_string_lossy()
         .to_string();
-    stale_run
-        .write_meta(&MissionRunMeta {
-            name: "watch-stale-heartbeat".into(),
-            trace_id: stale_trace.clone(),
-            started_at: "2026-06-13T00:00:00+00:00".into(),
-            status: MissionRunStatus::Running,
-            ..Default::default()
-        })
-        .expect("write running meta");
     stale_run.finish();
 
     let liveness_events = invocation_watch::execute_follow_until_terminal(&WatchArgs {

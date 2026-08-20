@@ -97,13 +97,14 @@ pub mod commands;
 pub(crate) mod daemon_client;
 pub(crate) mod mcp;
 pub mod presentation;
+pub(crate) mod source_highlighting;
 pub use commands::{discover, invocation_watch, mission_runs, receipt_verification, teach};
 
 use clap::builder::styling::{AnsiColor, Effects, Style, Styles};
 use clap::{Parser, Subcommand};
 use commands::{
-    api_key_cli, completion, context, docker, doctor, groups, join, llm_api, pages, quota_cmd,
-    skill, start, stop,
+    api_key_cli, completion, context, docker, doctor, groups, hub, join, llm_api, login, pages,
+    profile, quota_cmd, realm, reset, skill, start, status, stop,
 };
 
 // ── Help styling ─────────────────────────────────────────────────────
@@ -220,16 +221,24 @@ const HELP_TEMPLATE: &str = "\
 
 \x1b[1;36mCommands:\x1b[0m
   \x1b[1;36m[Quickstart]\x1b[0m
-    \x1b[1mjoin\x1b[0m                 Pair THIS host with a Hub via a one-time token
+    \x1b[1mlogin\x1b[0m                Log in to a Realm and create/select a profile
+    \x1b[1mjoin\x1b[0m                 Join THIS device to the current Realm/profile
+    \x1b[1mstatus\x1b[0m               Show profile, device, and runtime status
     \x1b[1mstart\x1b[0m                Start the local Axon runtime as a background daemon
     \x1b[1mstop\x1b[0m                 Stop the local Axon runtime
 
   \x1b[1;36m[Identity]\x1b[0m
-    \x1b[1mauth\x1b[0m                 Log in / out, mint device-pairing tokens
+    \x1b[1mlogout\x1b[0m               Clear account session; keep device membership
+    \x1b[1mleave\x1b[0m                Remove this device's local Realm membership
+    \x1b[1mprofile\x1b[0m              Manage local Realm/account profiles
+    \x1b[1mrealm\x1b[0m                Resolve and inspect Realm identity
+    \x1b[1mhub\x1b[0m                  Inspect explicit Hub endpoints
+    \x1b[1mauth\x1b[0m                 Operator auth API: mint pairing tokens and inspect account devices
     \x1b[1mtrust\x1b[0m                Inspect the realm trust anchor — whose keys admission accepts
+    \x1b[1mprincipal\x1b[0m            Manage runtime principals and enrollment capabilities
 
   \x1b[1;36m[Network]\x1b[0m
-    \x1b[1mdevice\x1b[0m               Manage remote devices — pair, list, exec, terminal
+    \x1b[1mdevice\x1b[0m               Manage remote devices — pair, list, abilities, exec, terminal
     \x1b[1magent\x1b[0m                Manage agents — network actors that expose abilities
     \x1b[1mability\x1b[0m              Manage abilities — deploy, invoke, list public endpoints
     \x1b[1mcall\x1b[0m                 Voice/video calls — create, join, leave conferences
@@ -272,6 +281,26 @@ const HELP_TEMPLATE: &str = "\
 #[derive(Debug, Subcommand)]
 pub enum Command {
     // ── Identity (10-19) ─────────────────────────────────────────────────
+    /// Clear account session while keeping device membership.
+    #[command(display_order = 13)]
+    Logout(login::LogoutArgs),
+
+    /// Remove this device's local Realm membership.
+    #[command(display_order = 14)]
+    Leave(reset::ResetArgs),
+
+    /// Manage local Realm/account profiles.
+    #[command(display_order = 15)]
+    Profile(profile::ProfileArgs),
+
+    /// Resolve and inspect Realm identity.
+    #[command(display_order = 16)]
+    Realm(realm::RealmArgs),
+
+    /// Inspect explicit Hub endpoints.
+    #[command(display_order = 17)]
+    Hub(hub::HubArgs),
+
     /// Log in / out, mint device-pairing tokens.
     #[command(display_order = 10)]
     Auth(groups::auth::AuthArgs),
@@ -280,7 +309,11 @@ pub enum Command {
     #[command(display_order = 11)]
     Trust(groups::trust::TrustArgs),
 
-    // ── Quickstart (1-3) ─────────────────────────────────────────────────
+    /// Manage runtime principals and enrollment capabilities.
+    #[command(display_order = 12)]
+    Principal(groups::principal::PrincipalArgs),
+
+    // ── Quickstart (1-5) ─────────────────────────────────────────────────
     // The device-lifecycle verbs (join / start / stop) are the product's
     // highest-frequency actions, so they are first-class top-level commands
     // grouped together at the top of `--help` under [Quickstart], NOT nested
@@ -290,20 +323,28 @@ pub enum Command {
     // spellings are behaviourally identical. Display orders 1-3 keep them
     // ahead of every layered group; the hand-rendered HELP_TEMPLATE places
     // them in their own [Quickstart] section.
-    /// Pair THIS host with a Hub via a one-time token.
+    /// Log in to a Realm and create/select a profile.
     #[command(display_order = 1)]
+    Login(login::LoginArgs),
+
+    /// Join THIS device to the current Realm/profile.
+    #[command(display_order = 2)]
     Join(join::JoinArgs),
 
+    /// Show profile, device, and runtime status.
+    #[command(display_order = 3)]
+    Status(status::StatusArgs),
+
     /// Start the local Axon runtime as a background daemon.
-    #[command(display_order = 2)]
+    #[command(display_order = 4)]
     Start(start::StartArgs),
 
     /// Stop the local Axon runtime.
-    #[command(display_order = 3)]
+    #[command(display_order = 5)]
     Stop(stop::StopArgs),
 
     // ── Network (20-29) ──────────────────────────────────────────────────
-    /// Manage remote devices — pair, list, exec, terminal.
+    /// Manage remote devices — pair, list, abilities, exec, terminal.
     #[command(display_order = 21)]
     Device(groups::device::DeviceArgs),
 
@@ -405,13 +446,21 @@ pub fn run(cmd: Command) -> anyhow::Result<()> {
         // layered forms (`device join`, `runtime start`, `runtime stop`)
         // call. `start` mirrors the runtime group's banner render so the
         // two spellings produce identical output.
+        Command::Login(args) => login::run_login(args),
         Command::Join(args) => join::run(args),
+        Command::Status(args) => status::run(args),
         Command::Start(args) => start::run(args),
         Command::Stop(args) => stop::run(args),
 
         // Layered groups
+        Command::Logout(args) => login::run_logout(args),
+        Command::Leave(args) => reset::run(args),
+        Command::Profile(args) => profile::run(args),
+        Command::Realm(args) => realm::run(args),
+        Command::Hub(args) => hub::run(args),
         Command::Auth(args) => groups::auth::dispatch(args),
         Command::Trust(args) => groups::trust::run(args),
+        Command::Principal(args) => groups::principal::run(args),
         Command::Agent(args) => groups::agent::run(args),
         Command::Ability(args) => groups::ability::run(args),
         Command::Discover(args) => discover::run(args),

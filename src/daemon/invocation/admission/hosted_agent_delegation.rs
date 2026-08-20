@@ -2,7 +2,7 @@
 // =================================================
 //
 // File: src/daemon/invocation/hosted_agent_delegation.rs
-// Description: Converts trusted loopback delegation requests into signed
+// Description: Converts trusted daemon-local delegation requests into signed
 //              handler metadata bound to one Axon invocation envelope.
 //
 // Protocol Responsibility
@@ -14,20 +14,19 @@
 //
 // Implementation Approach
 // -----------------------
-// The transport dispatcher calls this after trusted loopback admission and
+// The transport dispatcher calls this after trusted daemon-local admission and
 // before building the Axon LocalRuntime wire dispatch. The unsigned request key
 // is removed; handlers receive only the signed delegation key.
 //
 // Usage Contract
 // --------------
 // Public ingress must reject both hosted-agent metadata keys before this module
-// can run. This module also rejects non-loopback callers defensively so a
+// can run. This module also rejects non-local-system callers defensively so a
 // future dispatcher cannot mint authority by accident.
 
 use std::collections::HashMap;
 
-use easynet_axon::pb::axon::v1::Envelope;
-use ed25519_dalek::Signer as _;
+use axon_sdk::pb::axon::v1::Envelope;
 use tonic::Status;
 
 use crate::daemon::ability::{
@@ -35,13 +34,32 @@ use crate::daemon::ability::{
     HOSTED_AGENT_DELEGATION_METADATA_KEY, HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY,
 };
 
+/// Dispatch ingress class for hosted-agent delegation materialization.
+///
+/// This is intentionally narrower than route ingress: it models only the
+/// authority state relevant to converting unsigned hosted-agent delegation
+/// request metadata into a signed daemon-local delegation token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostedAgentDelegationIngress {
+    TrustedLocalSystem,
+    ExternalSigned,
+    BootstrapCandidate,
+}
+
+impl HostedAgentDelegationIngress {
+    fn permits_unsigned_delegation_request(self) -> bool {
+        matches!(self, Self::TrustedLocalSystem)
+    }
+}
+
 /// Daemon-local issuer for hosted-agent delegation metadata.
 ///
 /// What this is: the one transport object allowed to turn unsigned local
 /// request metadata into signed hosted-agent delegation claims.
 ///
-/// What this is not: an admission bypass. Callers must pass `loopback_admitted`
-/// from `AdmissionFacade`; public requests are rejected before signing.
+/// What this is not: an admission bypass. Callers must pass an explicit
+/// [`HostedAgentDelegationIngress`] selected by the dispatcher; public requests
+/// are rejected before signing.
 ///
 /// Invariant 1: unsigned request metadata is never forwarded to handlers.
 /// Invariant 2: a signed token is minted only when the envelope caller is the
@@ -52,7 +70,8 @@ impl HostedAgentDelegationIssuer {
     pub(crate) fn materialize_request_metadata(
         metadata: &HashMap<String, String>,
         envelope: &Envelope,
-        loopback_admitted: bool,
+        ingress: HostedAgentDelegationIngress,
+        host_device_ura: &str,
         route_ability: &str,
     ) -> Result<HashMap<String, String>, Status> {
         let Some(raw_request) = metadata
@@ -63,10 +82,10 @@ impl HostedAgentDelegationIssuer {
             return Ok(metadata.clone());
         };
 
-        if !loopback_admitted {
+        if !ingress.permits_unsigned_delegation_request() {
             return Err(Status::permission_denied(
                 "HOSTED_AGENT_DELEGATION_LOCAL_ONLY: unsigned hosted-agent delegation requests \
-                 are accepted only on trusted loopback ingress",
+                 are accepted only on trusted daemon-local system ingress",
             ));
         }
         if metadata
@@ -120,6 +139,7 @@ impl HostedAgentDelegationIssuer {
         let binding = HostedAgentDelegationEnvelopeBinding::new(
             caller_ura,
             callee_ura,
+            host_device_ura,
             subject_ura,
             hex::encode(envelope.invocation_nonce.as_slice()),
             route_ability,
@@ -128,9 +148,14 @@ impl HostedAgentDelegationIssuer {
         let claims = request
             .into_claims("host_device", binding)
             .map_err(|err| Status::invalid_argument(format!("hosted_agent_delegation: {err}")))?;
-        let signature = crate::daemon::identity::local_invocation::process_local_system_identity()
-            .signing_key()
-            .sign(&claims.signing_payload_bytes(caller_ura));
+        let signature = crate::daemon::identity::local_invocation::sign_system_canonical(
+            &claims.signing_payload_bytes(caller_ura),
+        )
+        .map_err(|error| {
+            Status::internal(format!(
+                "hosted_agent_delegation: daemon-local signer unavailable: {error}"
+            ))
+        })?;
         let signed_metadata = claims
             .signed_metadata_value(caller_ura, &signature)
             .map_err(|err| Status::internal(format!("hosted_agent_delegation: {err}")))?;
@@ -149,18 +174,29 @@ impl HostedAgentDelegationIssuer {
 mod tests {
     use super::*;
     use crate::daemon::ability::HostedAgentDelegationContext;
-    use crate::daemon::invocation::ProtoEnvelope;
+    use crate::daemon::invocation::{InvocationDerivationPolicy, ProtoEnvelope};
 
-    fn loopback_envelope() -> Envelope {
-        let mut envelope = ProtoEnvelope::targeted(
+    fn local_system_envelope_for_target(callee_ura: &str) -> Envelope {
+        ProtoEnvelope::from_target(
             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+            callee_ura,
             "easynet:///r/default/device/local",
-            "easynet:///r/default/device/local",
+            InvocationDerivationPolicy::Explicit {
+                invocation_nonce: [0x44; 16],
+                causal_context: axon_sdk::invocation::CausalContext::None,
+            },
         )
         .unwrap()
-        .into_inner();
-        envelope.invocation_nonce = vec![0x44; 16];
-        envelope
+        .into_inner("meta.acquire", b"")
+        .unwrap()
+    }
+
+    fn local_system_envelope() -> Envelope {
+        local_system_envelope_for_target(&crate::core::ura::device_agent_ura(
+            "default",
+            "local",
+            "ability-management",
+        ))
     }
 
     #[test]
@@ -174,12 +210,13 @@ mod tests {
             HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY.to_string(),
             request.metadata_value().unwrap(),
         );
-        let envelope = loopback_envelope();
+        let envelope = local_system_envelope();
 
         let materialized = HostedAgentDelegationIssuer::materialize_request_metadata(
             &metadata,
             &envelope,
-            true,
+            HostedAgentDelegationIngress::TrustedLocalSystem,
+            "easynet:///r/default/device/local",
             "meta.acquire",
         )
         .unwrap();
@@ -190,6 +227,7 @@ mod tests {
             .expect("signed delegation metadata");
         let binding = HostedAgentDelegationEnvelopeBinding::new(
             crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+            crate::core::ura::device_agent_ura("default", "local", "ability-management"),
             "easynet:///r/default/device/local",
             "easynet:///r/default/device/local",
             hex::encode([0x44; 16]),
@@ -199,13 +237,71 @@ mod tests {
         HostedAgentDelegationContext::from_signed_metadata(
             raw,
             &binding,
-            crate::daemon::identity::local_invocation::system_verifying_key(),
+            crate::daemon::identity::local_invocation::system_verifying_key().expect(
+                "test daemon-local system identity must resolve through configured key service",
+            ),
         )
         .expect("daemon-issued token verifies with daemon local-system key");
     }
 
     #[test]
-    fn materialize_rejects_request_outside_loopback() {
+    fn materialize_request_metadata_binds_system_agent_callee_to_host_device() {
+        let request = HostedAgentDelegationRequest::new(crate::core::ura::agent_ura(
+            "default", "u", "learner",
+        ))
+        .unwrap();
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY.to_string(),
+            request.metadata_value().unwrap(),
+        );
+        let wire_callee =
+            crate::core::ura::device_agent_ura("default", "local", "ability-management");
+        let host_device_ura = crate::core::ura::device_ura("default", "local");
+        let envelope = local_system_envelope_for_target(&wire_callee);
+
+        let materialized = HostedAgentDelegationIssuer::materialize_request_metadata(
+            &metadata,
+            &envelope,
+            HostedAgentDelegationIngress::TrustedLocalSystem,
+            host_device_ura.as_str(),
+            "meta.acquire",
+        )
+        .unwrap();
+
+        let raw = materialized
+            .get(HOSTED_AGENT_DELEGATION_METADATA_KEY)
+            .expect("signed delegation metadata");
+        let binding = HostedAgentDelegationEnvelopeBinding::new(
+            crate::daemon::identity::local_invocation::LOCAL_SYSTEM_AGENT_URA,
+            wire_callee.as_str(),
+            host_device_ura.as_str(),
+            "easynet:///r/default/device/local",
+            hex::encode([0x44; 16]),
+            "meta.acquire",
+        )
+        .unwrap();
+        let context = HostedAgentDelegationContext::from_signed_metadata(
+            raw,
+            &binding,
+            crate::daemon::identity::local_invocation::system_verifying_key().expect(
+                "test daemon-local system identity must resolve through configured key service",
+            ),
+        )
+        .expect("daemon-issued token verifies with separate wire callee and host device");
+
+        let authority = context
+            .authorize(
+                request.agent_ura(),
+                "hosted_by:easynet:///r/default/device/local",
+                "meta.acquire",
+            )
+            .unwrap();
+        assert_eq!(authority.host_device_ura(), host_device_ura);
+    }
+
+    #[test]
+    fn materialize_rejects_request_outside_trusted_local_system() {
         let request = HostedAgentDelegationRequest::new(crate::core::ura::agent_ura(
             "default", "u", "learner",
         ))
@@ -214,12 +310,37 @@ mod tests {
             HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY.to_string(),
             request.metadata_value().unwrap(),
         )]);
-        let envelope = loopback_envelope();
+        let envelope = local_system_envelope();
 
         let err = HostedAgentDelegationIssuer::materialize_request_metadata(
             &metadata,
             &envelope,
-            false,
+            HostedAgentDelegationIngress::ExternalSigned,
+            "easynet:///r/default/device/local",
+            "meta.acquire",
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    }
+
+    #[test]
+    fn materialize_rejects_bootstrap_candidate_ingress() {
+        let request = HostedAgentDelegationRequest::new(crate::core::ura::agent_ura(
+            "default", "u", "learner",
+        ))
+        .unwrap();
+        let metadata = HashMap::from([(
+            HOSTED_AGENT_DELEGATION_REQUEST_METADATA_KEY.to_string(),
+            request.metadata_value().unwrap(),
+        )]);
+        let envelope = local_system_envelope();
+
+        let err = HostedAgentDelegationIssuer::materialize_request_metadata(
+            &metadata,
+            &envelope,
+            HostedAgentDelegationIngress::BootstrapCandidate,
+            "easynet:///r/default/device/local",
             "meta.acquire",
         )
         .unwrap_err();

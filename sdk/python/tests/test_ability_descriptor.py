@@ -1,0 +1,332 @@
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from easynet_sdk.ability_descriptor import (
+    AbilityDescriptorGetRequest,
+    AbilityDescriptorListRequest,
+    RuntimeAbilityDescriptorProvider,
+    project_ability_descriptor,
+)
+from easynet_sdk.axon_addressing import AddressingClient, AxonAddressingTransport
+from easynet_sdk.errors import ErrorCode, SDKError, is_code
+from easynet_sdk.runtime import RuntimeClient
+from easynet_sdk.runtime_ability import RuntimeAbilityClient, RuntimeCallContext
+
+from test_runtime import canonical_runtime_receipt_pair
+
+
+class RuntimeTransportFake:
+    def __init__(self) -> None:
+        self.seen: dict[str, object] = {}
+        self.descriptor_requests: list[dict[str, object]] = []
+        self.output_json: dict[str, object] = {"abilities": []}
+
+    def resolve_descriptor_ref(self, request_json: bytes) -> bytes:
+        request = json.loads(request_json)
+        self.descriptor_requests.append(request)
+        return json.dumps(
+            {
+                "descriptor_ref": (
+                    "easynet:///r/example/ability/authority."
+                    f"{request['ability']}@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+                )
+            }
+        ).encode()
+
+    def invoke(self, draft_json: bytes) -> bytes:
+        self.seen = json.loads(draft_json)
+        admission, terminal = canonical_runtime_receipt_pair("inv-1")
+        return json.dumps(
+            {
+                "ok": True,
+                "tuple": self.seen,
+                "invocation_id": "inv-1",
+                "terminal_state": "Completed",
+                "output_content_type": "application/json",
+                "output_json": self.output_json,
+                "elapsed_ms": 1,
+                "admission_receipt": admission,
+                "terminal_receipt": terminal,
+                "error": None,
+            }
+        ).encode()
+
+
+def _provider() -> tuple[RuntimeAbilityDescriptorProvider, RuntimeTransportFake]:
+    transport = RuntimeTransportFake()
+    ability = RuntimeAbilityClient(
+        RuntimeClient(transport),  # type: ignore[arg-type]
+        AddressingClient(AxonAddressingTransport()),
+    )
+    return RuntimeAbilityDescriptorProvider(ability), transport
+
+
+def _call() -> RuntimeCallContext:
+    return RuntimeCallContext(
+        caller_ura="easynet:///r/example/agent/alice.client",
+        callee_ura="easynet:///r/example/authority",
+        subject_ura="easynet:///r/example/user/alice",
+        nonce_base64="AQIDBAUGBwgJCgsMDQ4PEA==",
+        causal_context={"form": "none"},
+        metadata={"request_id": "call-1"},
+    )
+
+
+def test_project_ability_descriptor_ignores_nested_descriptor_compatibility_shape() -> None:
+    projection = project_ability_descriptor(
+        {
+            "descriptor": {
+                "name": "skill.list",
+                "owner_ura": "easynet:///r/localhost/device/node-a",
+                "ability_ura": "easynet:///r/localhost/ability/system-agent.node-a.skill-management.skill.list",
+                "metadata": {"tool_name": "skill.list"},
+            },
+            "name": "agent.list",
+        }
+    )
+
+    assert projection.name == "agent.list"
+    assert projection.owner_ura == ""
+    assert projection.ability_ura == ""
+    assert projection.metadata == {}
+
+
+def test_runtime_ability_descriptor_provider_lists_runtime_descriptors() -> None:
+    provider, transport = _provider()
+    transport.output_json = {
+        "abilities": [
+            {
+                "name": "namespace.resolve",
+                "ability_ura": "easynet:///r/example/ability/authority.namespace.resolve",
+                "descriptor_ref": "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke",
+                "owner_ura": "easynet:///r/example/authority",
+                "descriptor_version": "1.0.0",
+                "schema_hash": "sha256:abc",
+                "descriptor_hash": "sha256:def",
+                "call_mode": "rpc",
+                "class": "runtime",
+                "receipt_semantics": {"kind": "terminal"},
+                "visibility": "public",
+                "description": "Resolve names",
+                "source": "kernel:built-in",
+                "hints": {"read_only": True, "idempotent": True},
+                "schema_summary": {"input": {"type": "object"}},
+                "input_schema": {"type": "object"},
+                "metadata": {"stable": "true"},
+            }
+        ]
+    }
+
+    page = provider.list(
+        AbilityDescriptorListRequest(
+            call=_call(),
+            scope="realm",
+            owner_ura="easynet:///r/example/authority",
+        )
+    )
+
+    assert transport.seen["descriptor_ref"] == (
+        "easynet:///r/example/ability/authority.meta.list_abilities@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+    )
+    assert transport.descriptor_requests[-1]["provider"] == "ability_descriptor"
+    assert (
+        transport.seen["subject_ura"]
+        == "easynet:///r/example/resource/user.alice/runtime-state/read"
+    )
+    assert transport.seen["args"] == {
+        "scope": "realm",
+        "owner_ura": "easynet:///r/example/authority",
+    }
+    assert len(page.descriptors) == 1
+    descriptor = page.descriptors[0]
+    assert descriptor.ability_ura == "easynet:///r/example/ability/authority.namespace.resolve"
+    assert (
+        descriptor.descriptor_ref
+        == "easynet:///r/example/ability/authority.namespace.resolve@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+    )
+    assert descriptor.version == "1.0.0"
+    assert descriptor.class_ == "runtime"
+    assert descriptor.schema_hash == "sha256:abc"
+    assert descriptor.call_mode == "rpc"
+    assert descriptor.hints.read_only
+    assert descriptor.schema_summary["input"]
+    assert descriptor.input_schema["type"] == "object"
+    assert descriptor.metadata["stable"] == "true"
+
+
+def test_runtime_ability_descriptor_provider_uses_generic_catalog_error() -> None:
+    provider, transport = _provider()
+    transport.output_json = {"items": []}
+
+    with pytest.raises(SDKError) as caught:
+        provider.list(AbilityDescriptorListRequest(call=_call()))
+
+    assert "runtime descriptor catalog output must include descriptor rows" in str(
+        caught.value
+    )
+    assert "meta.list_abilities" not in str(caught.value)
+
+
+def test_runtime_ability_descriptor_provider_rejects_nested_descriptor_rows() -> None:
+    provider, transport = _provider()
+    transport.output_json = {
+        "abilities": [
+            {
+                "descriptor": {
+                    "name": "observe.health",
+                    "ability_ura": "easynet:///r/example/ability/authority.observe.health",
+                    "owner_ura": "easynet:///r/example/authority",
+                    "descriptor_version": "1.0.0",
+                }
+            }
+        ]
+    }
+
+    with pytest.raises(SDKError) as caught:
+        provider.list(AbilityDescriptorListRequest(call=_call()))
+
+    assert "ability descriptor row 0 is missing identity fields" in str(caught.value)
+
+
+def test_project_ability_descriptor_does_not_derive_retired_name_or_input_schema_aliases() -> None:
+    projection = project_ability_descriptor(
+        {
+            "ability_ura": "easynet:///r/example/ability/authority.observe.health",
+            "owner_ura": "easynet:///r/example/authority",
+            "namespace": "observe",
+            "local_name": "health",
+            "schema_summary": {"input": {"type": "object"}},
+        }
+    )
+
+    assert projection.name == ""
+    assert projection.input_schema == {}
+
+
+def test_runtime_ability_descriptor_provider_rejects_retired_name_and_input_schema_aliases() -> None:
+    provider, transport = _provider()
+    transport.output_json = {
+        "abilities": [
+            {
+                "namespace": "observe",
+                "local_name": "health",
+                "ability_ura": "easynet:///r/example/ability/authority.observe.health",
+                "descriptor_ref": (
+                    "easynet:///r/example/ability/authority.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+                ),
+                "owner_ura": "easynet:///r/example/authority",
+                "descriptor_version": "1.0.0",
+                "schema_summary": {"input": {"type": "object"}},
+                "call_mode": "rpc",
+            }
+        ]
+    }
+
+    with pytest.raises(SDKError) as caught:
+        provider.list(AbilityDescriptorListRequest(call=_call()))
+
+    assert "ability descriptor row 0 is missing identity fields" in str(caught.value)
+
+
+def test_runtime_ability_descriptor_provider_rejects_typed_descriptor_projection_fields() -> None:
+    provider, transport = _provider()
+    transport.output_json = {
+        "abilities": [
+            {
+                "name": "observe.health",
+                "ability_ura": "easynet:///r/example/ability/authority.observe.health",
+                "descriptor_ref": (
+                    "easynet:///r/example/ability/authority.observe.health@1.0.0#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!invoke"
+                ),
+                "owner_ura": "easynet:///r/example/authority",
+                "descriptor_version": "1.0.0",
+                "schema_hash": 42,
+                "call_mode": "rpc",
+            }
+        ]
+    }
+
+    with pytest.raises(SDKError) as caught:
+        provider.list(AbilityDescriptorListRequest(call=_call()))
+
+    assert "ability descriptor row 0 field schema_hash must be a string" in str(
+        caught.value
+    )
+
+
+def test_runtime_ability_descriptor_provider_rejects_legacy_version_alias() -> None:
+    provider, transport = _provider()
+    transport.output_json = {
+        "abilities": [
+            {
+                "name": "observe.health",
+                "ability_ura": "easynet:///r/example/ability/authority.observe.health",
+                "owner_ura": "easynet:///r/example/authority",
+                "version": "1.0.0",
+                "descriptor_version": "2.0.0",
+                "call_mode": "rpc",
+            }
+        ]
+    }
+
+    page = provider.list(AbilityDescriptorListRequest(call=_call()))
+
+    assert page.descriptors[0].version == "2.0.0"
+
+
+def test_runtime_ability_descriptor_provider_get_rejects_ambiguous_descriptors() -> None:
+    provider, transport = _provider()
+    transport.output_json = {
+        "abilities": [
+            {
+                "name": "observe.health",
+                "ability_ura": "easynet:///r/example/ability/authority.observe.health",
+                "owner_ura": "easynet:///r/example/authority",
+                "descriptor_version": "1.0.0",
+                "call_mode": "rpc",
+            },
+            {
+                "name": "observe.health",
+                "ability_ura": "easynet:///r/example/ability/authority.observe.health",
+                "owner_ura": "easynet:///r/example/authority",
+                "descriptor_version": "2.0.0",
+                "call_mode": "rpc",
+            },
+        ]
+    }
+
+    with pytest.raises(SDKError) as caught:
+        provider.get(
+            AbilityDescriptorGetRequest(
+                call=_call(),
+                ability_ura="easynet:///r/example/ability/authority.observe.health",
+            )
+        )
+    assert is_code(caught.value, ErrorCode.INVALID_ARGUMENT)
+
+    descriptor = provider.get(
+        AbilityDescriptorGetRequest(
+            call=_call(),
+            ability_ura="easynet:///r/example/ability/authority.observe.health",
+            descriptor_version="2.0.0",
+        )
+    )
+    assert descriptor.version == "2.0.0"
+
+
+def test_runtime_ability_descriptor_provider_get_reports_descriptor_not_found() -> None:
+    provider, transport = _provider()
+    transport.output_json = {"abilities": []}
+
+    with pytest.raises(SDKError) as caught:
+        provider.get(
+            AbilityDescriptorGetRequest(
+                call=_call(),
+                ability_ura="easynet:///r/example/ability/authority.observe.health",
+            )
+        )
+
+    assert is_code(caught.value, ErrorCode.DESCRIPTOR_NOT_FOUND)

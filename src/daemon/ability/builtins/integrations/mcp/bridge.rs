@@ -22,7 +22,6 @@
 // ---------------------------
 //   * mcp.bridge.call_tool — dispatches an in-process Invoke
 //                            against the advertised MCP tool name
-//                            (or legacy dotted ability name) and
 //                            wraps the response in MCP `tools/call`
 //                            shape. The §A5 visibility filter is
 //                            checked client-side BEFORE we hit the
@@ -53,12 +52,12 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::catalog::profiles::mcp::{
-    canonical_ability_name_for_mcp_tool, tool_specs_from_descriptors,
+    tool_specs_from_descriptors, McpToolRouteTable,
 };
-use crate::daemon::ability::catalog::profiles::DEFAULT_MCP_AGENT_ID;
 use crate::daemon::ability::descriptors::AbilityDescriptor;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
+use crate::daemon::invocation::routing::target::CallMode;
 
 pub const ABILITY_LIST_TOOLS: &str =
     crate::daemon::ability::names::integrations::MCP_BRIDGE_LIST_TOOLS;
@@ -91,12 +90,12 @@ pub fn register<F>(
     let provider_for_list = Arc::clone(&provider);
     reg.register_rpc_with_owner(
         "mcp.bridge.list_tools",
-        OwnerKind::Agent(DEFAULT_MCP_AGENT_ID.to_string()),
+        OwnerKind::mcp_integration_system(),
         Arc::new(move |_args: Value| list_tools_handler(&provider_for_list)),
     );
     reg.register_rpc_with_owner(
         "mcp.bridge.call_tool",
-        OwnerKind::Agent(DEFAULT_MCP_AGENT_ID.to_string()),
+        OwnerKind::mcp_integration_system(),
         Arc::new(move |args: Value| call_tool_handler(&provider, &registry_handle, args)),
     );
 }
@@ -160,11 +159,13 @@ fn call_tool_handler(
     // bypass the filter the bridge advertises. We compare against
     // the same descriptors source list_tools projects from.
     let descriptors = descriptors_provider();
-    let Some(ability_name) = canonical_ability_name_for_mcp_tool(&descriptors, &name) else {
+    let routes = McpToolRouteTable::from_descriptors(&descriptors);
+    let Some(target) = routes.target_for_tool(&name).cloned() else {
         return Ok(error_response(&format!(
             "tool `{name}` not found in the bridge's advertised catalogue"
         )));
     };
+    let ability_name = target.dispatch_name().to_string();
 
     // Reach into the registry through the post-build OnceLock seam.
     // If the lock is empty we surface as isError rather than panic
@@ -176,7 +177,7 @@ fn call_tool_handler(
             "registry handle not initialised (build-site forgot to set the OnceLock)",
         ));
     };
-    if !registry.has_rpc(ability_name) {
+    if !registry.has_rpc(&ability_name) {
         // The descriptor said it exists but the runtime/catalog doesn't
         // have an RPC handler — likely a streaming-only or bidi ability
         // advertised through the catalogue. MCP tools/call is unary;
@@ -186,7 +187,14 @@ fn call_tool_handler(
         )));
     }
 
-    match registry.invoke_rpc_json(ability_name, arguments) {
+    let invocation_target =
+        crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_target(
+            &target,
+            arguments,
+            CallMode::Rpc,
+        )?;
+
+    match registry.invoke_rpc_target_json(invocation_target) {
         Ok(value) => Ok(success_response(value)),
         Err(e) => Ok(error_response(&format!(
             "tool `{name}` maps to ability `{ability_name}`, which returned an error: {e}"
@@ -267,16 +275,57 @@ pub fn call_tool_description() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
+    use crate::daemon::ability::descriptors::{
+        AbilityDescriptor, AdmissionAction, CallMode, Visibility,
+    };
     use std::sync::OnceLock;
+
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/local";
 
     fn d(name: &str) -> AbilityDescriptor {
         AbilityDescriptor::new(
             name.to_string(),
-            "easynet:///r/test/device/01DEV",
+            crate::core::ura::device_agent_ura(
+                "test",
+                "local",
+                crate::daemon::ability::names::integrations::PLUGIN_MANAGEMENT_SYSTEM_AGENT_ID,
+            ),
             Visibility::Public,
+            AdmissionAction::Invoke,
         )
         .expect("test descriptor")
+    }
+
+    fn manifest_for(name: &str) -> crate::daemon::ability::manifest::AbilityManifest {
+        crate::daemon::ability::manifest::AbilityManifest::new(
+            name.rsplit('.').next().unwrap_or(name),
+            "test MCP bridge ability",
+            json!({"type": "object"}),
+        )
+        .and_then(|manifest| {
+            manifest.with_access(crate::daemon::ability::manifest::AccessPolicy {
+                visibility: crate::daemon::ability::manifest::ManifestAccessScope::Public,
+                allow_callers: None,
+                deny_callers: None,
+            })
+        })
+        .and_then(|manifest| manifest.with_admission_action(AdmissionAction::Invoke.as_str()))
+        .expect("test manifest")
+    }
+
+    fn executable_test_catalog() -> AxonAbilityCatalog {
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                TEST_DEVICE_URA,
+            )
+            .expect("MCP bridge fixture authority context");
+        AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            authority_context,
+        )
     }
 
     /// Test fixture: register list_tools + call_tool against a
@@ -286,18 +335,18 @@ mod tests {
     where
         F: Fn() -> Vec<AbilityDescriptor> + Send + Sync + 'static,
     {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_test_catalog();
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
-        // Pre-register one trivial ability the bridge can dispatch
-        // into, so call_tool tests have something real to invoke.
-        reg.register_rpc_with_owner(
-            "test.echo",
-            OwnerKind::Device,
-            Arc::new(|args: Value| Ok(json!({"echoed": args}))),
-        );
         register(&mut reg, provider, Arc::clone(&handle));
         let arc = Arc::new(reg);
         let _ = handle.set(arc.clone());
+        arc.hot_register_rpc_with_spec(
+            "test.echo",
+            OwnerKind::plugin_management_system(),
+            manifest_for("test.echo"),
+            Arc::new(|args: Value| Ok(json!({"echoed": args}))),
+        )
+        .expect("test echo ability registers dynamically");
         arc
     }
 
@@ -318,6 +367,31 @@ mod tests {
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"observe_health"));
         assert!(names.contains(&"agent_list"));
+    }
+
+    #[test]
+    fn bridge_tools_surface_excludes_non_rpc_descriptors() {
+        let arc = build_bridge_registry(|| {
+            vec![
+                d("observe.health"),
+                d("consent.subscribe").with_call_mode(CallMode::Stream),
+                d("voice.transcribe").with_call_mode(CallMode::Bidi),
+            ]
+        });
+        let list = arc.get_rpc(ABILITY_LIST_TOOLS).unwrap();
+        let resp = list(json!({})).unwrap();
+        let tools = resp["tools"].as_array().expect("tools array");
+        let names: Vec<&str> = tools
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["observe_health"]);
+
+        let call = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
+        let stream_resp = call(json!({"name": "consent_subscribe", "arguments": {}})).unwrap();
+        assert_eq!(stream_resp["isError"], true);
+        let bidi_resp = call(json!({"name": "voice_transcribe", "arguments": {}})).unwrap();
+        assert_eq!(bidi_resp["isError"], true);
     }
 
     #[test]
@@ -370,7 +444,10 @@ mod tests {
             "arguments": {"hello": "world"}
         }))
         .unwrap();
-        assert_eq!(resp["isError"], false);
+        assert_eq!(
+            resp["isError"], false,
+            "unexpected MCP error response: {resp}"
+        );
         let text = resp["content"][0]["text"].as_str().expect("text frame");
         // Echo handler wraps args in {"echoed": ...}; the bridge
         // serialises that JSON into the text part.
@@ -461,22 +538,27 @@ mod tests {
         // A handler that returns Err must NOT crash the bridge —
         // it surfaces the error message inside an isError frame so
         // the MCP client sees a structured response.
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_test_catalog();
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
-        reg.register_rpc_with_owner(
-            "always.fails",
-            OwnerKind::Device,
-            Arc::new(|_args: Value| anyhow::bail!("planned failure for the test")),
-        );
         register(&mut reg, || vec![d("always.fails")], Arc::clone(&handle));
         let arc = Arc::new(reg);
         let _ = handle.set(arc.clone());
+        arc.hot_register_rpc_with_spec(
+            "always.fails",
+            OwnerKind::plugin_management_system(),
+            manifest_for("always.fails"),
+            Arc::new(|_args: Value| anyhow::bail!("planned failure for the test")),
+        )
+        .expect("failing test ability registers dynamically");
 
         let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
         let resp = handler(json!({"name": "always_fails", "arguments": {}})).unwrap();
         assert_eq!(resp["isError"], true);
         let text = resp["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("planned failure"));
+        assert!(
+            text.contains("planned failure"),
+            "expected handler failure text, got {text:?} from {resp}"
+        );
     }
 
     #[test]
@@ -486,7 +568,10 @@ mod tests {
         let arc = build_bridge_registry(|| vec![d("test.echo")]);
         let handler = arc.get_rpc(ABILITY_CALL_TOOL).unwrap();
         let resp = handler(json!({"name": "test_echo"})).unwrap();
-        assert_eq!(resp["isError"], false);
+        assert_eq!(
+            resp["isError"], false,
+            "unexpected MCP error response: {resp}"
+        );
     }
 
     #[test]
@@ -518,7 +603,7 @@ mod tests {
         // OnceLock, surface as isError instead of panicking. This
         // pins the "test bug not crash" contract from the comment
         // in call_tool_handler.
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = executable_test_catalog();
         let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
         register(&mut reg, || vec![d("test.echo")], Arc::clone(&handle));
         let arc = Arc::new(reg);

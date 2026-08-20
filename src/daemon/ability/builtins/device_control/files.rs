@@ -71,7 +71,7 @@ use sha2::{Digest, Sha256};
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
 pub use crate::daemon::resources::files::{
-    resource_ref_for_local_path, FilesystemResourceCapability, ResolvedFilesystemPath,
+    FilesystemResourceCapability, FilesystemResourceProvider, ResolvedFilesystemPath,
 };
 
 use crate::daemon::resources::files as filesystem;
@@ -144,23 +144,62 @@ const DEFAULT_LIST_MAX_ENTRIES: usize = 4096;
 
 // ── Registration ───────────────────────────────────────────────────
 
-/// Wire all three filesystem abilities into the registry. Called
+/// Wire the filesystem abilities into the registry. Called
 /// from `daemon::ability::catalog::build_registry_with_services` once at
 /// daemon startup. The abilities are stateless so registration is
 /// just three handler closures with no per-call setup.
-pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner("fs.read", OwnerKind::Device, Arc::new(handler_read));
-    reg.register_rpc_with_owner("fs.write", OwnerKind::Device, Arc::new(handler_write));
-    reg.register_rpc_with_owner("fs.stat", OwnerKind::Device, Arc::new(handler_stat));
-    reg.register_rpc_with_owner("fs.list", OwnerKind::Device, Arc::new(handler_list));
+pub fn register(
+    reg: &mut AxonAbilityCatalog,
+    filesystem: FilesystemResourceProvider,
+) -> Result<()> {
+    require_catalog_filesystem_owner(reg, &filesystem)?;
+    let owner = OwnerKind::locomotion_system();
+    let read_filesystem = filesystem.clone();
+    reg.register_rpc_with_owner(
+        "fs.read",
+        owner.clone(),
+        Arc::new(move |args| handler_read(args, &read_filesystem)),
+    );
+    let write_filesystem = filesystem.clone();
+    reg.register_rpc_with_owner(
+        "fs.write",
+        owner.clone(),
+        Arc::new(move |args| handler_write(args, &write_filesystem)),
+    );
+    let stat_filesystem = filesystem.clone();
+    reg.register_rpc_with_owner(
+        "fs.stat",
+        owner.clone(),
+        Arc::new(move |args| handler_stat(args, &stat_filesystem)),
+    );
+    reg.register_rpc_with_owner(
+        "fs.list",
+        owner,
+        Arc::new(move |args| handler_list(args, &filesystem)),
+    );
+    Ok(())
+}
+
+pub(super) fn require_catalog_filesystem_owner(
+    reg: &AxonAbilityCatalog,
+    filesystem: &FilesystemResourceProvider,
+) -> Result<()> {
+    let catalog_owner = reg
+        .hosted_device_authority_root()
+        .ok_or_else(|| anyhow!("filesystem ability registration requires a Device authority"))?;
+    if catalog_owner != filesystem.owner_ura() {
+        return Err(anyhow!(
+            "filesystem provider owner {} does not match catalog Device authority {}",
+            filesystem.owner_ura(),
+            catalog_owner
+        ));
+    }
+    Ok(())
 }
 
 // ── fs.read ──────────────────────────────────────────────────────
 
-fn handler_read(args: Value) -> Result<Value> {
-    let resolved = filesystem::resolve_filesystem_path(&args, FilesystemResourceCapability::Read)?;
-    let path = resolved.local_path.as_path();
-    let path_label = resolved.display_path.as_str();
+fn handler_read(args: Value, filesystem: &FilesystemResourceProvider) -> Result<Value> {
     let max_bytes = args
         .get("max_bytes")
         .and_then(Value::as_u64)
@@ -174,6 +213,11 @@ fn handler_read(args: Value) -> Result<Value> {
         .get("encoding")
         .and_then(Value::as_str)
         .unwrap_or("binary");
+    if !matches!(encoding, "binary" | "utf8") {
+        return Err(anyhow!(
+            "fs.read: unknown encoding {encoding:?}; expected \"binary\" or \"utf8\""
+        ));
+    }
 
     // Optional line-mode parameters. Both default to "no
     // line-mode" (use byte cap only). When either is set we
@@ -188,6 +232,10 @@ fn handler_read(args: Value) -> Result<Value> {
             "fs.read: offset_lines/limit_lines require encoding=\"utf8\""
         ));
     }
+
+    let resolved = filesystem.resolve_filesystem_path(&args, FilesystemResourceCapability::Read)?;
+    let path = resolved.local_path.as_path();
+    let path_label = resolved.display_path.as_str();
 
     if is_blocked_read_path(path) {
         return Err(anyhow!(
@@ -236,11 +284,7 @@ fn handler_read(args: Value) -> Result<Value> {
             }
         }
         "binary" => json!(BASE64_STANDARD.encode(&content)),
-        other => {
-            return Err(anyhow!(
-                "fs.read: unknown encoding {other:?}; expected \"binary\" or \"utf8\""
-            ));
-        }
+        _ => unreachable!("fs.read encoding was validated before filesystem resolution"),
     };
 
     Ok(json!({
@@ -327,8 +371,9 @@ fn slice_lines(text: &str, offset_lines: u64, limit_lines: Option<u64>) -> Strin
 
 // ── fs.write ─────────────────────────────────────────────────────
 
-fn handler_write(args: Value) -> Result<Value> {
-    let resolved = filesystem::resolve_filesystem_path(&args, FilesystemResourceCapability::Write)?;
+fn handler_write(args: Value, filesystem: &FilesystemResourceProvider) -> Result<Value> {
+    let resolved =
+        filesystem.resolve_filesystem_path(&args, FilesystemResourceCapability::Write)?;
     let path = resolved.local_path;
     let path_label = resolved.display_path;
     let create_parents = args
@@ -567,8 +612,8 @@ fn decode_content(args: &Value) -> Result<Vec<u8>> {
 
 // ── fs.list ──────────────────────────────────────────────────────
 
-fn handler_stat(args: Value) -> Result<Value> {
-    let resolved = filesystem::resolve_filesystem_path(&args, FilesystemResourceCapability::Stat)?;
+fn handler_stat(args: Value, filesystem: &FilesystemResourceProvider) -> Result<Value> {
+    let resolved = filesystem.resolve_filesystem_path(&args, FilesystemResourceCapability::Stat)?;
     let mut obj = describe_entry(&resolved.local_path, &resolved.display_path)?;
     obj["ability_profile_version"] = json!(PROFILE_VERSION);
     obj["resource_ref_revalidated"] = json!(true);
@@ -576,8 +621,8 @@ fn handler_stat(args: Value) -> Result<Value> {
     Ok(obj)
 }
 
-fn handler_list(args: Value) -> Result<Value> {
-    let resolved = filesystem::resolve_filesystem_path(&args, FilesystemResourceCapability::List)?;
+fn handler_list(args: Value, filesystem: &FilesystemResourceProvider) -> Result<Value> {
+    let resolved = filesystem.resolve_filesystem_path(&args, FilesystemResourceCapability::List)?;
     let path = resolved.local_path;
     let max_entries = args
         .get("max_entries")
@@ -824,6 +869,9 @@ fn uuid_suffix() -> String {
 }
 
 #[cfg(test)]
+const TEST_FILESYSTEM_DEVICE_URA: &str = "easynet:///r/test/device/files";
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -834,7 +882,41 @@ mod tests {
     }
 
     fn local_ref(path: &Path, capability: FilesystemResourceCapability) -> Value {
-        filesystem::resource_ref_for_local_path(path, capability).unwrap()
+        test_filesystem()
+            .resource_ref_for_local_path(path, capability)
+            .unwrap()
+    }
+
+    fn test_filesystem() -> FilesystemResourceProvider {
+        FilesystemResourceProvider::for_device(TEST_FILESYSTEM_DEVICE_URA).unwrap()
+    }
+
+    fn handler_read(args: Value) -> Result<Value> {
+        super::handler_read(args, &test_filesystem())
+    }
+
+    fn handler_write(args: Value) -> Result<Value> {
+        super::handler_write(args, &test_filesystem())
+    }
+
+    fn handler_stat(args: Value) -> Result<Value> {
+        super::handler_stat(args, &test_filesystem())
+    }
+
+    fn handler_list(args: Value) -> Result<Value> {
+        super::handler_list(args, &test_filesystem())
+    }
+
+    #[test]
+    fn registration_rejects_filesystem_provider_for_another_device() {
+        let mut catalog =
+            AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_FILESYSTEM_DEVICE_URA);
+        let foreign =
+            FilesystemResourceProvider::for_device("easynet:///r/test/device/other-filesystem")
+                .unwrap();
+        let error = register(&mut catalog, foreign)
+            .expect_err("filesystem provider must match the catalog Device authority");
+        assert!(error.to_string().contains("does not match catalog Device"));
     }
 
     // ─── fs.read ─────────────────────────────────────────────
@@ -910,17 +992,11 @@ mod tests {
 
     #[test]
     fn read_rejects_unknown_encoding() {
-        let dir = temp_dir();
-        let path = dir.join("x.txt");
-        std::fs::write(&path, "x").unwrap();
-
         let err = handler_read(json!({
-            "resource_ref": local_ref(&path, FilesystemResourceCapability::Read),
             "encoding": "rot13",
         }))
         .unwrap_err();
         assert!(err.to_string().contains("unknown encoding"));
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     // ─── fs.read hardening (slice 10a) ───────────────────────

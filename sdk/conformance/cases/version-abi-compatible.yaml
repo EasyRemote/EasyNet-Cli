@@ -1,0 +1,18 @@
+id: version/abi_compatible
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+  - node
+  - java
+  - swift
+description: SDK detects a compatible daemon and ABI version before runtime traffic.
+steps:
+  - action: load_fixture
+    fixture: feature-discovery.v7.json
+  - action: feature_discovery
+expect:
+  result: ok
+  abi_version: 7

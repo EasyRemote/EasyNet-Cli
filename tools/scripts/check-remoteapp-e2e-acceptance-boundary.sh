@@ -1,0 +1,562 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="${CHECK_REMOTEAPP_E2E_ACCEPTANCE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+SCRIPT="$ROOT/tools/scripts/host-remoteapp-decoded-frame-e2e.sh"
+PROBE="$ROOT/tools/scripts/host-remoteapp-decoded-frame-probe.sh"
+FIXTURE="$ROOT/tools/scripts/host-remoteapp-sentinel-fixture.sh"
+TARGET_FRESHNESS="$ROOT/tools/scripts/host-remoteapp-target-picker-freshness-e2e.sh"
+CREATE_FAILCLOSED="$ROOT/tools/scripts/host-remoteapp-create-session-failclosed-e2e.sh"
+PERMISSION_SUBJECT="$ROOT/tools/scripts/host-remoteapp-permission-subject-e2e.sh"
+DISPLAY_FALLBACK_FORBIDDEN="$ROOT/tools/scripts/host-remoteapp-display-fallback-forbidden-e2e.sh"
+WEAK_IDENTITY_AMBIGUITY="$ROOT/tools/scripts/host-remoteapp-weak-identity-ambiguity-e2e.sh"
+VIEW_ONLY_INPUT_SAFETY="$ROOT/tools/scripts/host-remoteapp-view-only-input-safety-e2e.sh"
+RECEIVER="$ROOT/examples/easynet-remoteapp-frame-receiver.rs"
+SPEC="$ROOT/docs/design/remoteapp-targeted-session-spec.md"
+
+fail() {
+  printf 'check-remoteapp-e2e-acceptance-boundary: %s\n' "$1" >&2
+  exit 1
+}
+
+require() {
+  local pattern="$1"
+  local path="$2"
+  local message="$3"
+  rg -q -- "$pattern" "$path" || fail "$message"
+}
+
+line_of() {
+  local pattern="$1"
+  local path="$2"
+  local message="$3"
+  local line
+  line="$(rg -n -- "$pattern" "$path" | head -n 1 | cut -d: -f1 || true)"
+  [[ -n "$line" ]] || fail "$message"
+  printf '%s\n' "$line"
+}
+
+require_order() {
+  local before_pattern="$1"
+  local after_pattern="$2"
+  local path="$3"
+  local message="$4"
+  local before_line
+  local after_line
+  before_line="$(line_of "$before_pattern" "$path" "$message")"
+  after_line="$(line_of "$after_pattern" "$path" "$message")"
+  (( before_line < after_line )) || fail "$message"
+}
+
+[[ -f "$SCRIPT" ]] || fail "missing host decoded-frame E2E harness"
+[[ -f "$PROBE" ]] || fail "missing bundled host decoded-frame probe"
+[[ -f "$FIXTURE" ]] || fail "missing bundled host sentinel fixture"
+[[ -f "$TARGET_FRESHNESS" ]] || fail "missing host target picker freshness E2E harness"
+[[ -f "$CREATE_FAILCLOSED" ]] || fail "missing host create_session fail-closed E2E harness"
+[[ -f "$PERMISSION_SUBJECT" ]] || fail "missing host permission subject E2E harness"
+[[ -f "$DISPLAY_FALLBACK_FORBIDDEN" ]] || fail "missing host display fallback forbidden E2E harness"
+[[ -f "$WEAK_IDENTITY_AMBIGUITY" ]] || fail "missing host weak identity ambiguity E2E harness"
+[[ -f "$VIEW_ONLY_INPUT_SAFETY" ]] || fail "missing host view-only input safety E2E harness"
+[[ -f "$RECEIVER" ]] || fail "missing bundled host decoded-frame receiver"
+[[ -f "$SPEC" ]] || fail "missing remoteapp targeted session SPEC"
+
+require 'E2E-01 target picker freshness' "$SPEC" \
+  'SPEC must retain target picker freshness acceptance'
+require 'E2E-02 permission subject correctness' "$SPEC" \
+  'SPEC must retain permission subject correctness acceptance'
+require 'E2E-03 exact window session' "$SPEC" \
+  'SPEC must retain exact window decoded-frame acceptance'
+require 'E2E-04 exact application session' "$SPEC" \
+  'SPEC must retain exact application decoded-frame acceptance'
+require 'E2E-05 stale window fail-closed' "$SPEC" \
+  'SPEC must retain stale window fail-closed acceptance'
+require 'E2E-06 no media re-resolution' "$SPEC" \
+  'SPEC must retain no media re-resolution acceptance'
+require 'E2E-07 display fallback forbidden' "$SPEC" \
+  'SPEC must retain display fallback decoded-frame acceptance'
+require 'E2E-08 move/resize tracking' "$SPEC" \
+  'SPEC must retain live move/resize acceptance'
+require 'E2E-09 target loss vs transport failure' "$SPEC" \
+  'SPEC must retain live target-loss acceptance'
+require 'E2E-10 weak identity ambiguity' "$SPEC" \
+  'SPEC must retain weak identity ambiguity acceptance'
+require 'E2E-11 view-only input safety' "$SPEC" \
+  'SPEC must retain view-only input safety acceptance'
+
+require 'remote_desktop\.permission_status' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must invoke remote_desktop.permission_status'
+require 'remote_desktop\.request_permission' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must invoke remote_desktop.request_permission'
+require 'descriptor-bound user invoke Resource' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must require descriptor-bound permission probe subject evidence'
+require 'display window application|for kind in display window application' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must test display/window/application target subjects'
+require 'MUST NOT be scoped' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must require the target-resource rejection reason'
+require 'AUTHORITY_REQUIRED.*not|must not be misclassified as missing runtime authority' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must reject AUTHORITY_REQUIRED misclassification'
+require 'target_resource_subjects_allowed.*False|target_resource_subjects_allowed.*false' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must prove the permission contract forbids target resources'
+require 'subject_contract_ura' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must prove descriptor and response subject contract URA'
+require '--require-screen-capture-granted' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must expose a strict granted-permission mode for decoded-frame preflight'
+require 'screen_capture_permission_preflight' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must emit screen-capture granted preflight evidence'
+require 'request_permission_subject_ura' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must record the descriptor-bound request_permission subject'
+require 'screen capture permission must be granted before decoded-frame E2E starts' "$PERMISSION_SUBJECT" \
+  'host permission subject E2E must fail explicitly when OS screen-capture permission remains denied'
+
+require 'remote_desktop\.create_session' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must invoke remote_desktop.create_session'
+require 'remote_desktop\.show_session' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must prove absence through remote_desktop.show_session'
+require 'display_identity_missing|display_identity_mismatch|display_fallback_forbidden' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must require typed target-identity/fallback failure'
+require 'display_id.*monitor_id.*primary_display|primary_display.*display_id.*monitor_id' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must construct a malformed display without display identity'
+require 'active_session_row_inserted.*False|active_session_row_inserted.*false' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must prove no active session row was inserted'
+require 'first_display_capture_started.*False|first_display_capture_started.*false' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must prove no first-display capture started'
+require 'media_start_attempted.*False|media_start_attempted.*false' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must prove media startup was not attempted'
+require 'session_failed_before_media' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must bind decoded-frame absence to pre-media session failure'
+require 'restore_resources|resource_registry_restored' "$DISPLAY_FALLBACK_FORBIDDEN" \
+  'host display fallback E2E must restore the operator resource registry'
+
+require 'remote_desktop\.create_session' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must invoke remote_desktop.create_session'
+require 'remote_desktop\.show_session' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must prove absence through remote_desktop.show_session'
+require 'target_identity_ambiguous' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must require typed target_identity_ambiguous failure'
+require 'app_name/title are diagnostic hints, not production routing identity|app_name/title are diagnostic' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must prove app_name/title are not production routing identity'
+require 'pid.*primary_pid.*app_identity.*bundle_id|app_identity.*bundle_id' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must construct a window without stable owner identity'
+require 'active_session_row_inserted.*False|active_session_row_inserted.*false' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must prove no active session row was inserted'
+require 'stream_start_attempted.*False|stream_start_attempted.*false' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must prove no stream startup was attempted'
+require 'media_start_attempted.*False|media_start_attempted.*false' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must prove no media startup was attempted'
+require 'session_failed_before_stream' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must bind decoded-frame absence to pre-stream session failure'
+require 'restore_resources|resource_registry_restored' "$WEAK_IDENTITY_AMBIGUITY" \
+  'host weak identity E2E must restore the operator resource registry'
+
+require 'resource\.refresh_remote_targets' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must select a live app/window target through resource.refresh_remote_targets'
+require 'create-remote-desktop-session' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must invoke remote_desktop.create_session through the EasyNet CLI'
+require '--mode interactive' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must prove the request asked for interactive input'
+require 'show-remote-desktop-session' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must re-read the persisted public session view'
+require 'scope_audit\.input_mode.*view_only|input_mode.*view_only' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must require input_mode=view_only'
+require 'target_scoped_keyboard_pointer_dispatch_unsafe' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must require the target-scoped input unsafe downgrade reason'
+require 'keyboard_enabled.*false|keyboard_enabled.*False' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must require keyboard input disabled'
+require 'pointer_enabled.*false|pointer_enabled.*False' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must require pointer input disabled'
+require 'input_plane\.policy|input_plane.*policy' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must verify the WebRTC input plane policy'
+require 'input_scope_unsupported' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must prove key/pointer rejection uses input_scope_unsupported'
+require 'window\|application|window or application|window\\|application' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must cover the app/window target class'
+require 'create_session args must not carry subject identity' "$VIEW_ONLY_INPUT_SAFETY" \
+  'host view-only input E2E must keep selected target identity in Invocation.subject, not args'
+
+require 'resource\.refresh_remote_targets' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must refresh through resource.refresh_remote_targets'
+require 'runtime_started_at_ms <= fixture_launch_started_at_ms|known target window must be opened after daemon boot' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must prove the known window opens after daemon boot'
+require 'fixture_ready_at_ms <= refresh_started_at_ms|live inventory refresh must run after the known window fixture is ready' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must prove refresh runs after the known window exists'
+require 'selected_from_live_refresh' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must prove selection came from live refresh'
+require 'metadata\.freshness|selected resource metadata\.freshness' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must require selected row freshness metadata'
+require 'freshness\.source.*live_refresh|source.*live_refresh' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must require live_refresh freshness source'
+require 'availability.*available' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must require selected target availability=available'
+require 'resource_ura.*easynet:///' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must require selected Resource URA evidence'
+require 'metadata\.pid.*selected sentinel pid|selected resource metadata\.pid must match selected sentinel pid' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must bind the selected row to the known native sentinel window'
+require 'preflight_daemon_invocation_ready' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must preflight daemon invocation readiness before launching host fixtures'
+require 'daemon_invocation_preflight_failed' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E failure report must identify daemon invocation preflight failures'
+require 'write_failure_report' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must write a structured failure report when daemon invocation preflight fails'
+require 'daemon\.invocation_accepting is not true' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E preflight must require daemon invocation acceptance'
+require_order 'preflight_output=.*preflight_daemon_invocation_ready' 'bash -lc "\$SENTINEL_FIXTURE_CMD"' "$TARGET_FRESHNESS" \
+  'host target picker freshness E2E must run daemon invocation preflight before sentinel fixture startup'
+
+require 'resource\.refresh_remote_targets' "$SCRIPT" \
+  'host decoded-frame E2E must prove live refresh inventory was used'
+require 'resource\.watch_remote_targets' "$SCRIPT" \
+  'host decoded-frame E2E must allow streaming live inventory evidence'
+require 'remote_desktop\.create_session' "$SCRIPT" \
+  'host decoded-frame E2E must prove remote_desktop.create_session was invoked'
+require 'Invocation\.subject|invocation\.subject_ura' "$SCRIPT" \
+  'host decoded-frame E2E must validate selected resource URA as Invocation.subject'
+require 'invocation_args = get\("invocation\.args"\)' "$SCRIPT" \
+  'host decoded-frame E2E must inspect verified create_session invocation args'
+require 'verified Invocation\.args must be reported as an object' "$SCRIPT" \
+  'host decoded-frame E2E must reject evidence that omits verified Invocation.args'
+require 'def contains_create_session_subject_arg\(value\):' "$SCRIPT" \
+  'host decoded-frame E2E must recursively reject subject identity inside create_session args'
+require 'remote_desktop\.create_session args must not contain subject, subject_ura, or resource_ura' "$SCRIPT" \
+  'host decoded-frame E2E must prove create_session selected target is not passed through args'
+require 'WindowSurface' "$SCRIPT" \
+  'host decoded-frame E2E must distinguish exact window capture'
+require 'window target must include target_binding\.resolved_identity' "$SCRIPT" \
+  'host decoded-frame E2E must require window resolved identity evidence'
+require 'resolved_identity\.get\("window_id"\)|window_id = resolved_identity\.get\("window_id"\)' "$SCRIPT" \
+  'host decoded-frame E2E must require exact native window id evidence'
+require 'window evidence must bind selected sentinel pid to resolved_identity\.pid or owner_pid' "$SCRIPT" \
+  'host decoded-frame E2E must bind window sentinel pid to resolved owner identity when provided'
+require 'AppSurface' "$SCRIPT" \
+  'host decoded-frame E2E must distinguish exact application capture'
+require 'app_window_set = get\("target_binding\.app_window_set"\)' "$SCRIPT" \
+  'host decoded-frame E2E must require application window-set evidence'
+require 'resolved_window_ids' "$SCRIPT" \
+  'host decoded-frame E2E must require application resolved window ids'
+require 'window_set_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must require application window-set epoch'
+require 'resolved_identity' "$SCRIPT" \
+  'host decoded-frame E2E must require application resolved identity evidence'
+require 'identity_display_id = resolved_identity\.get\("display_id"\)' "$SCRIPT" \
+  'host decoded-frame E2E must read application resolved identity display id'
+require 'application resolved_identity\.display_id must match app_window_set\.display_id' "$SCRIPT" \
+  'host decoded-frame E2E must bind application identity to the display-scoped window set'
+require 'transport\.kind.*webrtc|transport_kind.*webrtc|"webrtc"' "$SCRIPT" \
+  'host decoded-frame E2E must validate WebRTC transport evidence'
+require 'production_media_ready' "$SCRIPT" \
+  'host decoded-frame E2E must validate post-negotiation production media readiness'
+require 'production_readiness\.production_codec_negotiated|production_codec_negotiated' "$SCRIPT" \
+  'host decoded-frame E2E must prove a production codec was negotiated'
+require 'production_readiness\.media_transport_ready|media_transport_ready' "$SCRIPT" \
+  'host decoded-frame E2E must prove the production media transport is active'
+require 'production_readiness\.client_media_ready|production_readiness\.get\("client_media_ready"\)|"client_media_ready"' "$SCRIPT" \
+  'host decoded-frame E2E must prove the receiver/browser reported client-presenting media'
+require 'decoded_frames\.count' "$SCRIPT" \
+  'host decoded-frame E2E must validate positive decoded frame count'
+require 'decoded_frames\.width|decoded_width' "$SCRIPT" \
+  'host decoded-frame E2E must validate decoded frame width'
+require 'decoded_frames\.height|decoded_height' "$SCRIPT" \
+  'host decoded-frame E2E must validate decoded frame height'
+require 'rtp_packet_count' "$SCRIPT" \
+  'host decoded-frame E2E must validate positive RTP packet count'
+require 'selected_content_present' "$SCRIPT" \
+  'host decoded-frame E2E must validate selected target content is present'
+require 'unrelated_sentinel_present' "$SCRIPT" \
+  'host decoded-frame E2E must validate unrelated sentinel exclusion'
+require '\bsentinel_fixture\b' "$SCRIPT" \
+  'host decoded-frame E2E must require a dual-target sentinel fixture'
+require 'dual_target_non_leak' "$SCRIPT" \
+  'host decoded-frame E2E must bind evidence to a dual-target non-leak proof'
+require 'sentinel_fixture\.selected\.resource_ura|selected_fixture\.get\("resource_ura"\)' "$SCRIPT" \
+  'host decoded-frame E2E must bind selected sentinel witness to the selected Resource URA'
+require 'EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID|selected_fixture\.get\("pid"\)' "$SCRIPT" \
+  'host decoded-frame E2E must validate selected sentinel pid when host fixture provides it'
+require 'EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID|unrelated_fixture\.get\("pid"\)' "$SCRIPT" \
+  'host decoded-frame E2E must validate unrelated sentinel pid when host fixture provides it'
+require 'resolved_identity\.get\("pid"\).*selected_pid|app_window_set\.get\("primary_pid"\).*selected_pid' "$SCRIPT" \
+  'host decoded-frame E2E must bind application sentinel pid to resolved identity or app window-set proof'
+require 'sentinel_fixture\.unrelated\.placement|unrelated_fixture\.get\("placement"\)' "$SCRIPT" \
+  'host decoded-frame E2E must require unrelated sentinel witness placement'
+require 'full_display_leak_detected' "$SCRIPT" \
+  'host decoded-frame E2E must validate no full-display leak'
+require 'display_fallback_used' "$SCRIPT" \
+  'host decoded-frame E2E must validate display fallback was not used'
+require 'scope_widened' "$SCRIPT" \
+  'host decoded-frame E2E must validate scope was not widened'
+require '--probe-cmd|EASYNET_REMOTEAPP_FRAME_PROBE_CMD' "$SCRIPT" \
+  'host decoded-frame E2E must allow explicit host probe injection'
+require 'host-remoteapp-decoded-frame-probe\.sh|BUNDLED_PROBE' "$SCRIPT" \
+  'host decoded-frame E2E must default to the bundled EasyNet host probe'
+require 'host-remoteapp-sentinel-fixture\.sh|BUNDLED_SENTINEL_FIXTURE' "$SCRIPT" \
+  'host decoded-frame E2E must expose the bundled host sentinel fixture'
+require '--sentinel-fixture|EASYNET_REMOTEAPP_SENTINEL_FIXTURE' "$SCRIPT" \
+  'host decoded-frame E2E must allow launching a real host sentinel fixture'
+require '--sentinel-fixture-cmd|EASYNET_REMOTEAPP_SENTINEL_FIXTURE_CMD' "$SCRIPT" \
+  'host decoded-frame E2E must allow explicit sentinel fixture injection'
+require '--lifecycle-scenario|EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO' "$SCRIPT" \
+  'host decoded-frame E2E must support explicit lifecycle acceptance scenarios'
+require 'move-resize' "$SCRIPT" \
+  'host lifecycle E2E must support move/resize evidence'
+require 'target-loss' "$SCRIPT" \
+  'host lifecycle E2E must support target-loss evidence'
+require 'move-resize lifecycle evidence must include TARGET_MOVED' "$SCRIPT" \
+  'host lifecycle E2E must validate TARGET_MOVED evidence'
+require 'move-resize lifecycle evidence must include TARGET_RESIZED' "$SCRIPT" \
+  'host lifecycle E2E must validate TARGET_RESIZED evidence'
+require 'move-resize lifecycle evidence must show input transform consuming the latest geometry revision' "$SCRIPT" \
+  'host lifecycle E2E must validate input transform geometry-revision coupling when pointer target is projected'
+require 'move-resize lifecycle evidence without pointer target must keep pointer input disabled' "$SCRIPT" \
+  'host lifecycle E2E must validate view-only move/resize keeps pointer input disabled'
+require 'target-loss lifecycle evidence must include TARGET_LOST' "$SCRIPT" \
+  'host lifecycle E2E must validate TARGET_LOST evidence'
+require 'target-loss lifecycle evidence must include MEDIA_SOURCE_LOST' "$SCRIPT" \
+  'host lifecycle E2E must validate MEDIA_SOURCE_LOST evidence'
+require 'target-loss lifecycle evidence must not collapse target loss into TRANSPORT_FAILED' "$SCRIPT" \
+  'host lifecycle E2E must validate target loss is not a transport failure'
+require 'target-loss lifecycle evidence must leave the session suspended' "$SCRIPT" \
+  'host lifecycle E2E must validate suspended state after target loss'
+require 'target-loss lifecycle evidence must disable input' "$SCRIPT" \
+  'host lifecycle E2E must validate input disablement after target loss'
+require '--pre-media-resource-refresh|EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH' "$SCRIPT" \
+  'host decoded-frame E2E must support pre-media resource refresh for no-re-resolution evidence'
+require 'pre-media resource refresh must run after create_session' "$SCRIPT" \
+  'host decoded-frame E2E must validate refresh happens after create_session'
+require 'pre-media resource refresh must run before media receiver start' "$SCRIPT" \
+  'host decoded-frame E2E must validate refresh happens before media starts'
+require 'pre-media resource refresh evidence must preserve the session target binding id' "$SCRIPT" \
+  'host decoded-frame E2E must bind pre-media refresh evidence to the stored target binding id'
+require 'pre-media resource refresh must observe the selected target still live before media starts' "$SCRIPT" \
+  'host decoded-frame E2E must verify refreshed inventory still contains the selected target before media starts'
+require 'EASYNET_REMOTEAPP_SENTINEL_FIXTURE_DIR' "$SCRIPT" \
+  'host decoded-frame E2E must pass a fixture state directory to sentinel fixture commands'
+require 'source "\$SENTINEL_FIXTURE_DIR/env\.sh"' "$SCRIPT" \
+  'host decoded-frame E2E must source sentinel fixture env before running the probe'
+require 'cleanup\.sh' "$SCRIPT" \
+  'host decoded-frame E2E must run fixture cleanup after host probes'
+require 'preflight_bundled_probe_runtime' "$SCRIPT" \
+  'host decoded-frame E2E must preflight bundled EasyNet probe runtime before launching host fixtures'
+require 'write_failure_report' "$SCRIPT" \
+  'host decoded-frame E2E must write a structured failure report when enabled preflight cannot run'
+require 'bundled_probe_preflight_failed' "$SCRIPT" \
+  'host decoded-frame E2E failure report must identify bundled probe preflight failures'
+require 'EASYNET_REMOTEAPP_CONTROL_DISCOVERY_JSON' "$SCRIPT" \
+  'host decoded-frame E2E must allow explicit control discovery path for bundled probe preflight'
+require 'daemon_identity' "$SCRIPT" \
+  'host decoded-frame E2E bundled probe preflight must require daemon control discovery identity'
+require 'host-remoteapp-permission-subject-e2e\.sh|BUNDLED_PERMISSION_PREFLIGHT' "$SCRIPT" \
+  'host decoded-frame E2E must reuse the permission subject E2E harness for bundled probe permission preflight'
+require 'preflight_bundled_probe_permissions' "$SCRIPT" \
+  'host decoded-frame E2E must preflight host-local screen capture permission before launching host fixtures'
+require '--require-screen-capture-granted' "$SCRIPT" \
+  'host decoded-frame E2E permission preflight must require final granted=true evidence'
+require 'bundled_permission_preflight_failed' "$SCRIPT" \
+  'host decoded-frame E2E failure report must identify bundled permission preflight failures'
+require 'permission preflight must run before sentinel fixture' "$SCRIPT" \
+  'host decoded-frame E2E must document the fail-before-fixture lifecycle gate'
+require_order 'permission_preflight_output=.*preflight_bundled_probe_permissions' 'if \[\[ "\$SENTINEL_FIXTURE" == "1" \]\]' "$SCRIPT" \
+  'host decoded-frame E2E must run bundled permission preflight before sentinel fixture startup'
+require '\$TIMESTAMP-\$TARGET_KIND-\$\$' "$SCRIPT" \
+  'host decoded-frame E2E default report directory must isolate concurrent target-kind runs'
+require 'os\.path\.isfile|decoded_frame_sample.*exist' "$SCRIPT" \
+  'host decoded-frame E2E must validate decoded frame artifact exists'
+require 'read_ppm_rgb|P6' "$SCRIPT" \
+  'host decoded-frame E2E must independently parse decoded PPM artifacts'
+require 'count_rgb_matches' "$SCRIPT" \
+  'host decoded-frame E2E must independently scan decoded artifact pixels'
+require 'selected_pixel_count' "$SCRIPT" \
+  'host decoded-frame E2E must validate selected sentinel pixel count'
+require 'unrelated_pixel_count' "$SCRIPT" \
+  'host decoded-frame E2E must validate unrelated sentinel pixel count'
+require 'artifacts\.binding_id|artifact binding_id' "$SCRIPT" \
+  'host decoded-frame E2E must bind decoded frame artifact to target binding'
+require 'artifacts\.target_identity_epoch|artifact target_identity_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must bind decoded frame artifact to target identity epoch'
+require 'artifacts\.target_geometry_revision|artifact target_geometry_revision' "$SCRIPT" \
+  'host decoded-frame E2E must bind decoded frame artifact to target geometry revision'
+require 'artifacts\.media_source_epoch|artifact media_source_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must bind decoded frame artifact to media source epoch'
+require 'target_binding\.binding_id' "$SCRIPT" \
+  'host decoded-frame E2E must require a non-empty target binding id'
+require 'target_binding\.binding_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must require a positive target binding epoch'
+require 'target_binding\.subject_ura' "$SCRIPT" \
+  'host decoded-frame E2E must require target binding subject URA evidence'
+require 'target_binding\.target_identity_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must require target identity epoch evidence'
+require 'target_binding\.target_geometry_revision' "$SCRIPT" \
+  'host decoded-frame E2E must require target geometry revision evidence'
+require 'target_binding\.media_source_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must require media source epoch evidence'
+require 'target_binding\.consent_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must require consent epoch evidence'
+require 'artifacts\.session_id|artifact session_id' "$SCRIPT" \
+  'host decoded-frame E2E must bind decoded frame artifact to session id'
+require 'artifacts\.subject_ura|artifact subject_ura' "$SCRIPT" \
+  'host decoded-frame E2E must bind decoded frame artifact to target subject'
+require 'artifacts\.consent_epoch|artifact consent_epoch' "$SCRIPT" \
+  'host decoded-frame E2E must bind decoded frame artifact to consent epoch'
+require '"target_identity_epoch": config\.session_artifact\.target_identity_epoch' "$RECEIVER" \
+  'bundled frame receiver must write target identity epoch into decoded artifacts'
+require '"target_geometry_revision": config\.session_artifact\.target_geometry_revision' "$RECEIVER" \
+  'bundled frame receiver must write target geometry revision into decoded artifacts'
+require '"media_source_epoch": config\.session_artifact\.media_source_epoch' "$RECEIVER" \
+  'bundled frame receiver must write media source epoch into decoded artifacts'
+require '"subject_ura": config\.session_artifact\.subject_ura' "$RECEIVER" \
+  'bundled frame receiver must write target subject into decoded artifacts'
+require '"consent_epoch": config\.session_artifact\.consent_epoch' "$RECEIVER" \
+  'bundled frame receiver must write consent epoch into decoded artifacts'
+require 'session target_binding missing subject_ura' "$RECEIVER" \
+  'bundled frame receiver must reject session artifacts without target subject'
+require 'session target_binding missing positive target_identity_epoch' "$RECEIVER" \
+  'bundled frame receiver must reject session artifacts without target identity epoch'
+require 'session target_binding missing positive target_geometry_revision' "$RECEIVER" \
+  'bundled frame receiver must reject session artifacts without target geometry revision'
+require 'session target_binding missing positive media_source_epoch' "$RECEIVER" \
+  'bundled frame receiver must reject session artifacts without media source epoch'
+require 'session target_binding missing positive consent_epoch' "$RECEIVER" \
+  'bundled frame receiver must reject session artifacts without consent epoch'
+
+require 'ability refresh-remote-targets' "$PROBE" \
+  'bundled host probe must invoke live target inventory through the EasyNet CLI'
+require 'ability create-remote-desktop-session' "$PROBE" \
+  'bundled host probe must invoke selected-resource remote_desktop.create_session through the EasyNet CLI'
+require 'easynet-remoteapp-frame-receiver' "$PROBE" \
+  'bundled host probe must default to the bundled WebRTC frame receiver'
+require 'EASYNET_REMOTEAPP_FRAME_RECEIVER_CMD' "$PROBE" \
+  'bundled host probe must allow a real WebRTC frame receiver override'
+require 'prepare_bundled_frame_receiver' "$PROBE" \
+  'bundled host probe must prepare the default frame receiver before creating a leased session'
+require 'cargo build --quiet --example easynet-remoteapp-frame-receiver --features remote-desktop' "$PROBE" \
+  'bundled host probe must build the default frame receiver outside the active session lease'
+require 'EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB' "$PROBE" \
+  'bundled host probe must require selected-target RGB sentinel configuration'
+require 'EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB' "$PROBE" \
+  'bundled host probe must require unrelated RGB sentinel configuration'
+require 'EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL' "$PROBE" \
+  'bundled host probe must require selected witness label configuration'
+require 'EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL' "$PROBE" \
+  'bundled host probe must require unrelated witness label configuration'
+require '\bsentinel_fixture\b' "$PROBE" \
+  'bundled host probe must publish canonical dual-target sentinel fixture evidence'
+require 'EASYNET_REMOTEAPP_FRAME_ANALYSIS_JSON' "$PROBE" \
+  'bundled host probe must consume decoded-frame analysis from the receiver'
+require 'production_readiness = frame\.get\("production_readiness"\)' "$PROBE" \
+  'bundled host probe must require post-negotiation production readiness from the frame receiver'
+require 'production_readiness\.get\("client_media_ready"\)|"client_media_ready"' "$PROBE" \
+  'bundled host probe must preserve client-presenting readiness evidence'
+require '"production_media_ready": frame\.get\("production_media_ready"\)' "$PROBE" \
+  'bundled host probe must carry post-negotiation production_media_ready into canonical evidence'
+require 'verified Invocation\.subject|invocation\.get\("subject_ura"\)' "$PROBE" \
+  'bundled host probe must validate verified Invocation.subject against the selected Resource URA'
+require '"args": invocation\.get\("args"\)' "$PROBE" \
+  'bundled host probe must preserve create_session invocation args for no-subject-in-args evidence'
+require 'verified remote_desktop\.create_session invocation metadata missing args object' "$PROBE" \
+  'bundled host probe must fail closed when verified invocation metadata omits args'
+require 'resolved_identity' "$PROBE" \
+  'bundled host probe must preserve target resolved identity evidence'
+require 'ambiguous target selection|TARGET_HINT|TARGET_RESOURCE_URA' "$PROBE" \
+  'bundled host probe must fail closed on ambiguous picker target selection'
+require 'EASYNET_REMOTEAPP_TARGET_PID' "$PROBE" \
+  'bundled host probe must support native-pid target selection for application/window host fixtures'
+require 'primary_pid' "$PROBE" \
+  'bundled host probe must match native-pid target selection against primary_pid metadata'
+require 'metadata\.get\("pid"\)' "$PROBE" \
+  'bundled host probe must match native-pid target selection against pid metadata'
+require 'EASYNET_REMOTEAPP_LIFECYCLE_SCENARIO' "$PROBE" \
+  'bundled host probe must consume lifecycle scenario selection'
+require 'EASYNET_REMOTEAPP_SELECTED_CONTROL_SH' "$PROBE" \
+  'bundled host probe must execute selected sentinel lifecycle controls'
+require 'show-remote-desktop-session' "$PROBE" \
+  'bundled host probe must record post-action daemon session projection for lifecycle evidence'
+require 'evidence\["lifecycle"\] = lifecycle' "$PROBE" \
+  'bundled host probe must publish canonical lifecycle evidence'
+require 'EASYNET_REMOTEAPP_PRE_MEDIA_RESOURCE_REFRESH' "$PROBE" \
+  'bundled host probe must consume pre-media refresh scenario selection'
+require 'PRE_MEDIA_REFRESH_JSON' "$PROBE" \
+  'bundled host probe must persist pre-media resource refresh evidence'
+require 'evidence\["pre_media_resource_refresh"\]' "$PROBE" \
+  'bundled host probe must publish pre-media refresh evidence'
+require 'after_create_session.*True' "$PROBE" \
+  'bundled host probe must mark pre-media refresh as after create_session'
+require 'before_media_start.*True' "$PROBE" \
+  'bundled host probe must mark pre-media refresh as before media start'
+
+require 'swiftc' "$FIXTURE" \
+  'bundled sentinel fixture must launch real native macOS windows through a compiled AppKit fixture'
+require 'AppKit' "$FIXTURE" \
+  'bundled sentinel fixture must use native AppKit windows instead of fake evidence'
+require 'EASYNET_REMOTEAPP_TARGET_HINT' "$FIXTURE" \
+  'bundled sentinel fixture must export a selected target hint for live inventory selection'
+require 'EASYNET_REMOTEAPP_TARGET_PID' "$FIXTURE" \
+  'bundled sentinel fixture must export a selected target pid for native identity selection'
+require 'EASYNET_REMOTEAPP_SELECTED_SENTINEL_PID' "$FIXTURE" \
+  'bundled sentinel fixture must export selected sentinel pid evidence'
+require 'EASYNET_REMOTEAPP_UNRELATED_SENTINEL_PID' "$FIXTURE" \
+  'bundled sentinel fixture must export unrelated sentinel pid evidence'
+require 'EASYNET_REMOTEAPP_SELECTED_SENTINEL_RGB' "$FIXTURE" \
+  'bundled sentinel fixture must export selected RGB sentinel configuration'
+require 'EASYNET_REMOTEAPP_UNRELATED_SENTINEL_RGB' "$FIXTURE" \
+  'bundled sentinel fixture must export unrelated RGB sentinel configuration'
+require 'EASYNET_REMOTEAPP_SELECTED_SENTINEL_LABEL' "$FIXTURE" \
+  'bundled sentinel fixture must export selected witness label'
+require 'EASYNET_REMOTEAPP_UNRELATED_SENTINEL_LABEL' "$FIXTURE" \
+  'bundled sentinel fixture must export unrelated witness label'
+require 'other_application' "$FIXTURE" \
+  'bundled sentinel fixture must distinguish application non-leak placement from another application'
+require 'manifest\.json' "$FIXTURE" \
+  'bundled sentinel fixture must write a fixture manifest'
+require 'cleanup\.sh' "$FIXTURE" \
+  'bundled sentinel fixture must write an idempotent cleanup script'
+require 'selected-control\.sh' "$FIXTURE" \
+  'bundled sentinel fixture must write a selected-window lifecycle control script'
+require 'action == "move"' "$FIXTURE" \
+  'bundled sentinel fixture must support a true move-only host lifecycle action'
+require 'move_resize' "$FIXTURE" \
+  'bundled sentinel fixture must support move/resize host lifecycle actions'
+require 'window\.setFrame' "$FIXTURE" \
+  'bundled sentinel fixture must move and resize through the native AppKit window'
+require 'window\.close\(\)' "$FIXTURE" \
+  'bundled sentinel fixture must support native selected-window close for target-loss E2E'
+require 'EASYNET_REMOTEAPP_SELECTED_CONTROL_SH' "$FIXTURE" \
+  'bundled sentinel fixture must export the selected lifecycle control helper'
+
+require 'stale-window' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must support stale-window scenario'
+require 'resource\.refresh_remote_targets' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must select from live target inventory before closing the window'
+require 'EASYNET_REMOTEAPP_SELECTED_CONTROL_SH' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must close the native selected window through the fixture control helper'
+require '--session-id' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must use a deterministic session id for absence probing'
+require 'remote_desktop\.create_session' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must invoke remote_desktop.create_session'
+require 'target_not_found.*target_stale|target_stale.*target_not_found' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must accept the SPEC stale-window failure reasons'
+require 'refresh_targets' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must require refresh_targets frontend action'
+require 'remote_desktop\.show_session' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must probe the deterministic session id after create failure'
+require 'session_not_found' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must prove no active session row was inserted'
+require 'session_token_mismatch' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must distinguish no-row absence from inserted-row token mismatch'
+require 'create_session args must not contain subject, subject_ura, or resource_ura' "$CREATE_FAILCLOSED" \
+  'host create_session fail-closed E2E must preserve selected Resource URA as Invocation.subject'
+
+require 'show-remote-desktop-session' "$RECEIVER" \
+  'bundled frame receiver must read the latest post-decoded-frame session projection'
+require 'report-remote-desktop-client-state' "$RECEIVER" \
+  'bundled frame receiver must report decoded-frame client presentation before readiness projection'
+require 'report_client_presenting\(config, signal\.transport_epoch\)' "$RECEIVER" \
+  'bundled frame receiver must bind client-presenting report to the negotiated transport epoch'
+require 'show_session_view\(config\)' "$RECEIVER" \
+  'bundled frame receiver must source readiness from remote_desktop.show_session after decoded frames'
+require '"production_media_ready": session_view' "$RECEIVER" \
+  'bundled frame receiver must write production_media_ready from the latest session projection'
+require '"production_readiness": session_view' "$RECEIVER" \
+  'bundled frame receiver must write production_readiness from the latest session projection'
+require '"client_media_ready": session_view' "$RECEIVER" \
+  'bundled frame receiver must write explicit client-presenting readiness from the latest session projection'
+
+bash "$SCRIPT" --self-test >/dev/null
+
+printf 'check-remoteapp-e2e-acceptance-boundary: ok\n'

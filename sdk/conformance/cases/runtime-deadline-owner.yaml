@@ -1,0 +1,19 @@
+id: runtime/deadline_owner
+profile: runtime_core
+required_for:
+  - go
+  - python
+description: Runtime Core unary providers own invocation deadlines as bounded lifecycle transitions that surface typed timeout outcomes without fabricating terminal success.
+steps:
+  - action: dispatch_with_deadline
+    fixture: invocation.complete.v4.json
+  - action: observe_typed_timeout
+  - action: release_timed_out_transport
+  - action: retry_after_deadline_cleanup
+expect:
+  result: timeout_observed
+  error_code: TIMEOUT
+  retry: safe_or_unknown_by_execution_start
+  terminal_success_fabricated: false
+  cleanup_before_reuse: true
+  bounded_wait: true

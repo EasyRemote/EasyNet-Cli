@@ -47,29 +47,35 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
+use crate::daemon::ability::builtins::agents::discover::{
+    DiscoverFederationResolver, SharedDiscoverFederationResolver,
+};
 use crate::daemon::ability::builtins::integrations::federation_probe;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 
 pub const ABILITY_NETWORK_HEALTH: &str =
     crate::daemon::ability::names::governance::OBSERVE_NETWORK_HEALTH;
 
-pub fn register(reg: &mut AxonAbilityCatalog) {
+pub fn register(reg: &mut AxonAbilityCatalog, resolver: SharedDiscoverFederationResolver) {
     reg.register_rpc_with_owner(
         ABILITY_NETWORK_HEALTH,
-        OwnerKind::Device,
-        Arc::new(|_args: Value| handler()),
+        OwnerKind::runtime_health_system(),
+        Arc::new(move |_args: Value| handler(resolver.as_ref())),
     );
 }
 
-fn handler() -> anyhow::Result<Value> {
-    let local = crate::daemon::persistence::local_agents::load().unwrap_or_default();
-    let view = federation_probe::collect_device_view();
+fn handler(resolver: &dyn DiscoverFederationResolver) -> anyhow::Result<Value> {
+    let hosted_identity =
+        AgentAggregateRepository::load_hosted_identity_status().map_err(|error| {
+            anyhow::anyhow!("observe.network_health: load hosted-Agent identity status: {error:#}")
+        })?;
+    let view = federation_probe::collect_device_view(resolver);
     let self_node = view.nodes.iter().find(|n| n.is_self);
-    let joined =
-        self_node.map(|n| n.paired).unwrap_or(false) || !local.host_device_agent_ura.is_empty();
-    let host_ura: Value = if !local.host_device_agent_ura.is_empty() {
-        Value::String(local.host_device_agent_ura.clone())
+    let joined = self_node.map(|n| n.paired).unwrap_or(false) || hosted_identity.is_joined();
+    let host_ura: Value = if let Some(ura) = hosted_identity.host_device_ura() {
+        Value::String(ura.to_string())
     } else if let Some(ura) = self_node.and_then(|n| n.agent_ura.clone()) {
         Value::String(ura)
     } else {
@@ -107,7 +113,20 @@ fn handler() -> anyhow::Result<Value> {
             "error": node.probe_error.clone(),
         }));
     }
+    for node in &view.unavailable_nodes {
+        links.push(json!({
+            "target": node.agent_ura.clone(),
+            "node_id": node.node_id.clone(),
+            "status": node.probe_status.clone(),
+            "state": node.state.clone(),
+            "online": false,
+            "route_visible": false,
+            "latency_ms": node.latency_ms,
+            "error": node.probe_error.clone(),
+        }));
+    }
     let peer_count = view.nodes.iter().filter(|n| !n.is_self).count();
+    let unavailable_peer_count = view.unavailable_nodes.len();
     let resolve_latency_ms = view.resolve_latency_ms;
     let federation_view = view.federation_view;
     let federation_view_reason = view.federation_view_reason;
@@ -115,8 +134,9 @@ fn handler() -> anyhow::Result<Value> {
     Ok(json!({
         "joined": joined,
         "host_device_ura": host_ura,
-        "hosted_agent_count": local.hosted_agents.len(),
+        "hosted_agent_count": hosted_identity.hosted_agent_count(),
         "peer_count": peer_count,
+        "unavailable_peer_count": unavailable_peer_count,
         "links": Value::Array(links),
         "latency_ms": resolve_latency_ms,
         "schema": "v2",
@@ -146,8 +166,15 @@ mod tests {
 
     #[test]
     fn registration_makes_ability_dispatchable() {
-        let mut reg = AxonAbilityCatalog::new();
-        register(&mut reg);
+        let mut reg = AxonAbilityCatalog::new_test_metadata_for_device_authority(
+            "easynet:///r/test/device/network-health",
+        );
+        register(
+            &mut reg,
+            Arc::new(
+                crate::daemon::ability::builtins::agents::discover::DetachedDiscoverFederationResolver,
+            ),
+        );
         assert!(reg.get_rpc(ABILITY_NETWORK_HEALTH).is_some());
     }
 
@@ -155,7 +182,10 @@ mod tests {
     fn handler_returns_structurally_complete_response() {
         // Whatever the local membership state happens to be, the
         // operator-facing response must stay structurally complete.
-        let resp = handler().unwrap();
+        let resp = handler(
+            &crate::daemon::ability::builtins::agents::discover::DetachedDiscoverFederationResolver,
+        )
+        .unwrap();
         for field in [
             "joined",
             "host_device_ura",

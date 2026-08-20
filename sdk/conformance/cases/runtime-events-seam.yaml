@@ -1,0 +1,19 @@
+id: runtime/events_seam
+profile: runtime_events
+required_for:
+  - go
+  - python
+description: Runtime event streams use bounded buffering, typed cursors and explicit terminal state.
+steps:
+  - action: require_typed_cursor
+  - action: require_stream_scoped_resume_cursor
+  - action: reject_cross_stream_resume_cursor
+  - action: require_bounded_buffer
+  - action: require_terminal_state
+  - action: require_provider_neutral_topic_model
+  - action: require_product_catalog_outside_canonical_model
+expect:
+  result: runtime_events_contract
+  provider_required: true
+  durable_resume_cursor: true
+  canonical_inventory_closed: true

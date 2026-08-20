@@ -1,0 +1,357 @@
+//! Runtime SDK provider-scoped declarative exec plugin helper.
+//!
+//! This crate owns the JSON frame details used between the runtime host and a
+//! process-backed declarative exec plugin. It is part of the canonical runtime
+//! SDK provider surface: plugin sidecar execution is a runtime provider
+//! boundary, not an EasyNet product boundary. Plugin authors implement handlers
+//! over [`SidecarInvocation`] instead of hand-writing stdin/stdout protocol
+//! frames.
+
+use std::fmt;
+use std::io::{self, BufRead, Write};
+
+use serde::Serialize;
+use serde_json::{Map, Value};
+
+const CANONICAL_INVOCATION_NONCE_BYTES: usize = 16;
+
+/// Handler-facing view of one runtime-admitted sidecar invocation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SidecarInvocation {
+    pub call_id: String,
+    pub caller_ura: String,
+    pub callee_ura: String,
+    pub ability_ura: String,
+    pub subject_ura: String,
+    pub invocation_nonce: Vec<u8>,
+    pub causal_context: Value,
+    pub args: Map<String, Value>,
+    pub frame_type: String,
+}
+
+impl SidecarInvocation {
+    /// Project a runtime sidecar frame into a typed invocation.
+    pub fn from_frame(frame: Value) -> Result<Self, SidecarProtocolError> {
+        let mut object = expect_object(frame, "sidecar request frame")?;
+        reject_unknown_request_fields(&object)?;
+        let frame_type = take_required_string(&mut object, "type")?;
+        if frame_type != "invoke" {
+            return Err(SidecarProtocolError::new(format!(
+                "exec sidecar expected invoke frame, got {frame_type:?}"
+            )));
+        }
+        let call_id = take_required_string(&mut object, "call_id")?;
+        let invocation = object.remove("invocation").ok_or_else(|| {
+            SidecarProtocolError::new("sidecar frame field \"invocation\" must be an object")
+        })?;
+        let mut invocation = expect_object(invocation, "invocation")?;
+        reject_unknown_invocation_fields(&invocation)?;
+        let nonce = take_required_nonce(&mut invocation, "invocation_nonce")?;
+        let causal_context =
+            Value::Object(take_required_object(&mut invocation, "causal_context")?);
+        let args = take_required_object(&mut invocation, "args")?;
+        let caller_ura = take_required_string(&mut invocation, "caller_ura")?;
+        let callee_ura = take_required_string(&mut invocation, "callee_ura")?;
+        validate_callable_callee_ura(&callee_ura)?;
+        let ability_ura = take_required_string(&mut invocation, "ability_ura")?;
+        let subject_ura = take_required_string(&mut invocation, "subject_ura")?;
+        Ok(Self {
+            call_id,
+            caller_ura,
+            callee_ura,
+            ability_ura,
+            subject_ura,
+            invocation_nonce: nonce,
+            causal_context,
+            args,
+            frame_type,
+        })
+    }
+}
+
+/// Malformed runtime/plugin sidecar frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidecarProtocolError {
+    message: String,
+}
+
+impl SidecarProtocolError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for SidecarProtocolError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SidecarProtocolError {}
+
+/// Run one declarative exec plugin invocation using process stdin/stdout.
+pub fn serve_exec_plugin<H, R, E>(handler: H) -> io::Result<()>
+where
+    H: FnOnce(SidecarInvocation) -> Result<R, E>,
+    R: Serialize,
+    E: fmt::Display,
+{
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+    serve_exec_plugin_io(&mut input, &mut output, handler)
+}
+
+/// Run one declarative exec plugin invocation over explicit streams.
+pub fn serve_exec_plugin_io<I, O, H, R, E>(
+    input: &mut I,
+    output: &mut O,
+    handler: H,
+) -> io::Result<()>
+where
+    I: BufRead,
+    O: Write,
+    H: FnOnce(SidecarInvocation) -> Result<R, E>,
+    R: Serialize,
+    E: fmt::Display,
+{
+    let frame = match SidecarRequestFrame::read(input) {
+        Ok(frame) => frame,
+        Err(error) => {
+            return write_response(
+                output,
+                &ResponseFrame {
+                    frame_type: "error",
+                    call_id: "",
+                    value: None,
+                    message: Some(error.to_string()),
+                },
+            );
+        }
+    };
+    let call_id = frame.call_id().to_string();
+    let invocation = match frame.project_invocation() {
+        Ok(invocation) => invocation,
+        Err(error) => {
+            return write_response(
+                output,
+                &ResponseFrame {
+                    frame_type: "error",
+                    call_id: &call_id,
+                    value: None,
+                    message: Some(error.to_string()),
+                },
+            );
+        }
+    };
+    match handler(invocation) {
+        Ok(value) => write_response(
+            output,
+            &ResponseFrame {
+                frame_type: "result",
+                call_id: &call_id,
+                value: Some(serde_json::to_value(value).map_err(io::Error::other)?),
+                message: None,
+            },
+        ),
+        Err(error) => write_response(
+            output,
+            &ResponseFrame {
+                frame_type: "error",
+                call_id: &call_id,
+                value: None,
+                message: Some(error.to_string()),
+            },
+        ),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SidecarRequestFrame {
+    raw: Value,
+    call_id: String,
+}
+
+impl SidecarRequestFrame {
+    fn read(input: &mut impl BufRead) -> Result<Self, SidecarProtocolError> {
+        let mut line = String::new();
+        let bytes = input.read_line(&mut line).map_err(|error| {
+            SidecarProtocolError::new(format!("read sidecar request frame: {error}"))
+        })?;
+        if bytes == 0 {
+            return Err(SidecarProtocolError::new("missing sidecar request frame"));
+        }
+        let raw = serde_json::from_str::<Value>(&line).map_err(|error| {
+            SidecarProtocolError::new(format!("invalid sidecar request JSON: {error}"))
+        })?;
+        let call_id = sidecar_frame_call_id(&raw);
+        Ok(Self { raw, call_id })
+    }
+
+    fn call_id(&self) -> &str {
+        &self.call_id
+    }
+
+    fn project_invocation(self) -> Result<SidecarInvocation, SidecarProtocolError> {
+        SidecarInvocation::from_frame(self.raw)
+    }
+}
+
+fn sidecar_frame_call_id(frame: &Value) -> String {
+    frame
+        .as_object()
+        .and_then(|object| object.get("call_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[derive(Serialize)]
+struct ResponseFrame<'a> {
+    #[serde(rename = "type")]
+    frame_type: &'a str,
+    call_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+fn write_response(output: &mut impl Write, frame: &ResponseFrame<'_>) -> io::Result<()> {
+    serde_json::to_writer(&mut *output, frame).map_err(io::Error::other)?;
+    output.write_all(b"\n")?;
+    output.flush()
+}
+
+fn expect_object(value: Value, field: &str) -> Result<Map<String, Value>, SidecarProtocolError> {
+    match value {
+        Value::Object(object) => Ok(object),
+        _ => Err(SidecarProtocolError::new(format!(
+            "sidecar frame field {field:?} must be an object"
+        ))),
+    }
+}
+
+fn reject_unknown_invocation_fields(
+    object: &Map<String, Value>,
+) -> Result<(), SidecarProtocolError> {
+    for field in object.keys() {
+        if !matches!(
+            field.as_str(),
+            "caller_ura"
+                | "callee_ura"
+                | "ability_ura"
+                | "subject_ura"
+                | "invocation_nonce"
+                | "causal_context"
+                | "args"
+        ) {
+            return Err(SidecarProtocolError::new(format!(
+                "sidecar frame field {field:?} is not part of the canonical invocation frame"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn reject_unknown_request_fields(object: &Map<String, Value>) -> Result<(), SidecarProtocolError> {
+    for field in object.keys() {
+        if !matches!(field.as_str(), "type" | "call_id" | "invocation") {
+            return Err(SidecarProtocolError::new(format!(
+                "sidecar request frame field {field:?} is not part of the canonical request frame"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn take_required_object(
+    object: &mut Map<String, Value>,
+    field: &str,
+) -> Result<Map<String, Value>, SidecarProtocolError> {
+    match object.remove(field) {
+        Some(value) => expect_object(value, field),
+        None => Err(SidecarProtocolError::new(format!(
+            "sidecar frame field {field:?} must be an object"
+        ))),
+    }
+}
+
+fn take_required_string(
+    object: &mut Map<String, Value>,
+    field: &str,
+) -> Result<String, SidecarProtocolError> {
+    match object.remove(field) {
+        Some(Value::String(value)) if !value.is_empty() => Ok(value),
+        _ => Err(SidecarProtocolError::new(format!(
+            "sidecar frame field {field:?} must be a string"
+        ))),
+    }
+}
+
+fn validate_callable_callee_ura(callee_ura: &str) -> Result<(), SidecarProtocolError> {
+    let parsed = axon_sdk::ura::parse_ura(callee_ura).map_err(|error| {
+        SidecarProtocolError::new(format!(
+            "sidecar frame field \"callee_ura\" must be a canonical URA: {error}"
+        ))
+    })?;
+    match parsed.kind {
+        axon_sdk::ura::URAKind::Agent
+        | axon_sdk::ura::URAKind::Service
+        | axon_sdk::ura::URAKind::Authority => Ok(()),
+        axon_sdk::ura::URAKind::Device => Err(SidecarProtocolError::new(
+            "sidecar frame field \"callee_ura\" must be a callable Agent, Service, or Authority URA; Device is an execution host, not a callee",
+        )),
+        axon_sdk::ura::URAKind::User => Err(SidecarProtocolError::new(
+            "sidecar frame field \"callee_ura\" must advertise AbilityDescriptors; User is a principal, not a callee",
+        )),
+        axon_sdk::ura::URAKind::Ability => Err(SidecarProtocolError::new(
+            "sidecar frame field \"callee_ura\" must be an owner identity, not an Ability URA",
+        )),
+        axon_sdk::ura::URAKind::Resource => Err(SidecarProtocolError::new(
+            "sidecar frame field \"callee_ura\" must be an owner identity, not a Resource URA",
+        )),
+        axon_sdk::ura::URAKind::Unknown => Err(SidecarProtocolError::new(
+            "sidecar frame field \"callee_ura\" has unknown URA role",
+        )),
+    }
+}
+
+fn take_required_nonce(
+    object: &mut Map<String, Value>,
+    field: &str,
+) -> Result<Vec<u8>, SidecarProtocolError> {
+    let Some(Value::Array(items)) = object.remove(field) else {
+        return Err(SidecarProtocolError::new(format!(
+            "sidecar frame field {field:?} must be a byte array"
+        )));
+    };
+    if items.is_empty() {
+        return Err(SidecarProtocolError::new(format!(
+            "sidecar frame field {field:?} must be a byte array"
+        )));
+    }
+    if items.len() != CANONICAL_INVOCATION_NONCE_BYTES {
+        return Err(SidecarProtocolError::new(format!(
+            "sidecar frame field {field:?} must contain exactly {CANONICAL_INVOCATION_NONCE_BYTES} bytes"
+        )));
+    }
+    let mut nonce = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(value) = item.as_u64() else {
+            return Err(SidecarProtocolError::new(format!(
+                "sidecar frame field {field:?} must contain bytes"
+            )));
+        };
+        if value > u8::MAX as u64 {
+            return Err(SidecarProtocolError::new(format!(
+                "sidecar frame field {field:?} must contain bytes"
+            )));
+        }
+        nonce.push(value as u8);
+    }
+    Ok(nonce)
+}

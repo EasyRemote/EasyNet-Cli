@@ -10,8 +10,8 @@
 //
 // Design constraints
 // ------------------
-// 1. Side-effect-free: only local file reads (`config::load*`) and a
-//    `kill -0` PID liveness check. No network I/O — `--help` must
+// 1. Side-effect-free: only local lifecycle/config file reads and process
+//    probes through `RuntimeLifecycleService`. No network I/O — `--help` must
 //    stay fast even on an offline laptop.
 // 2. Restrained palette. Three roles only — `accent` (cyan, used by
 //    clap too so the whole `--help` reads as one document), `dim`
@@ -30,9 +30,14 @@
 
 use std::io::IsTerminal;
 
+use crate::cli::presentation::identity::{
+    runtime_user_binding_display, RuntimeUserBindingDisplayState,
+};
 use crate::core::ura;
+use crate::daemon::lifecycle::{
+    RuntimeLifecycleError, RuntimeLifecycleService, RuntimeLifecycleStatus, RuntimeStatusReport,
+};
 use crate::daemon::persistence::config;
-use crate::support::platform::net;
 
 /// Width of the status-block label column ("Daemon:", "Hub:",
 /// "Current device:"). Picked so the longest label fits with one
@@ -198,42 +203,21 @@ fn write_tagline(buf: &mut String, style: ColourMode) {
 /// federation peers are configured. Two-column layout — labels are
 /// padded to `LABEL_WIDTH`, values follow. ≤ 3 lines.
 fn write_runtime_status(buf: &mut String, style: ColourMode) {
-    let runtime_state = config::load().ok();
-    let creds = config::load_credentials().ok();
-    let daemon_alive = runtime_state
-        .as_ref()
-        .and_then(|s| s.pid)
-        .is_some_and(net::is_pid_alive);
+    let lifecycle = RuntimeLifecycleService::new().status();
+    let creds = BannerCredentialsObservation::load();
 
     // Row 1 — daemon liveness.
-    let (dot_sgr, dot, daemon_text) = if daemon_alive {
-        (sgr::OK, "●", "running")
-    } else if runtime_state.is_some() {
-        (
-            sgr::WARN,
-            "●",
-            "metadata present but process not responding",
-        )
-    } else {
-        // No daemon, no metadata — render as plain dim text rather
-        // than a coloured warning. Not-paired is the default state
-        // for a fresh install, not an error.
-        (
-            sgr::DIM,
-            "○",
-            "not running  ·  start with 'easynet runtime start'",
-        )
-    };
+    let daemon_observation = BannerDaemonObservation::from_lifecycle_result(&lifecycle);
     write_row(
         buf,
         style,
         "Daemon:",
         &format!(
             "{} {}",
-            style.paint(dot_sgr, dot),
+            style.paint(daemon_observation.dot_sgr, daemon_observation.dot),
             style.paint(
-                if daemon_alive { sgr::ACCENT } else { sgr::DIM },
-                daemon_text
+                daemon_observation.text_sgr,
+                daemon_observation.message.as_str()
             ),
         ),
     );
@@ -245,13 +229,12 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
     //   Current user:   user URA          — owner of this device
     //   Current device: device URA        — this machine
     //
-    // All three are first-class agents in the ontology, so all
-    // three carry equal visual weight. The user URA is derived
-    // from credentials.json's `username` field (populated by the
-    // Phase 14 backend during validate-pairing); when missing
-    // we suppress the row rather than showing a placeholder —
-    // older paired devices simply don't expose user-level
-    // identity yet.
+    // All three are first-class URA identities, but they have distinct roles:
+    // Authority is the realm root, User is the accountable Principal, and
+    // Device is the execution/custody substrate. The user URA is derived
+    // from credentials.json's immutable user binding; when federation-native
+    // credentials are intentionally device-only we render that state explicitly
+    // instead of suppressing the row as a compatibility fallback.
     //
     // The transport URL (creds.hub_endpoint) is intentionally NOT
     // shown here — URA is the ontology-canonical identity for a
@@ -264,19 +247,24 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
     // labels and status dots first, URA values are there to be
     // copied / read when needed, not foregrounded.
     match &creds {
-        Some(c) => {
+        BannerCredentialsObservation::Paired(c) => {
             let realm = c.realm_str();
             let hub_ura = ura::hub_ura(realm);
             let device_ura = ura::device_ura(realm, &c.node_id);
             write_row(buf, style, "Hub:", &style.paint(sgr::DIM, &hub_ura));
-            if let Ok(user_ura) = c.user_ura() {
-                write_row(
-                    buf,
-                    style,
-                    "Current user:",
-                    &style.paint(sgr::DIM, &user_ura),
-                );
-            }
+            let user_binding = runtime_user_binding_display(c);
+            let user_sgr = match user_binding.state() {
+                RuntimeUserBindingDisplayState::Bound | RuntimeUserBindingDisplayState::Unbound => {
+                    sgr::DIM
+                }
+                RuntimeUserBindingDisplayState::Invalid => sgr::WARN,
+            };
+            write_row(
+                buf,
+                style,
+                "Current user:",
+                &style.paint(user_sgr, user_binding.value()),
+            );
             write_row(
                 buf,
                 style,
@@ -284,12 +272,20 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
                 &style.paint(sgr::DIM, &device_ura),
             );
         }
-        None => {
+        BannerCredentialsObservation::Unpaired => {
             write_row(
                 buf,
                 style,
                 "Hub:",
                 &style.paint(sgr::DIM, "not paired  ·  run 'easynet device join <token>'"),
+            );
+        }
+        BannerCredentialsObservation::Invalid(error) => {
+            write_row(
+                buf,
+                style,
+                "Hub:",
+                &style.paint(sgr::WARN, &format!("credentials invalid  ·  {error}")),
             );
         }
     }
@@ -307,6 +303,105 @@ fn write_runtime_status(buf: &mut String, style: ColourMode) {
             style.paint(sgr::DIM, "(see `easynet federation peers`)"),
         );
         write_row(buf, style, "Peers:", &body);
+    }
+}
+
+#[derive(Debug)]
+enum BannerCredentialsObservation {
+    Paired(Box<config::Credentials>),
+    Unpaired,
+    Invalid(String),
+}
+
+impl BannerCredentialsObservation {
+    fn load() -> Self {
+        match config::load_credentials_optional() {
+            Ok(Some(credentials)) => Self::Paired(Box::new(credentials)),
+            Ok(None) => Self::Unpaired,
+            Err(error) => Self::Invalid(error.to_string()),
+        }
+    }
+}
+
+struct BannerDaemonObservation {
+    dot_sgr: &'static str,
+    text_sgr: &'static str,
+    dot: &'static str,
+    message: String,
+}
+
+impl BannerDaemonObservation {
+    fn from_lifecycle_result(
+        lifecycle: &Result<RuntimeStatusReport, RuntimeLifecycleError>,
+    ) -> Self {
+        match lifecycle {
+            Ok(report) => Self::from_lifecycle_status(report.status()),
+            Err(error) => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: format!("metadata unavailable  ·  {error}"),
+            },
+        }
+    }
+
+    fn from_lifecycle_status(status: RuntimeLifecycleStatus) -> Self {
+        match status {
+            RuntimeLifecycleStatus::Running => Self {
+                dot_sgr: sgr::OK,
+                text_sgr: sgr::ACCENT,
+                dot: "●",
+                message: "running".to_string(),
+            },
+            RuntimeLifecycleStatus::Stopped => Self {
+                dot_sgr: sgr::DIM,
+                text_sgr: sgr::DIM,
+                dot: "○",
+                message: "not running  ·  start with 'easynet runtime start'".to_string(),
+            },
+            RuntimeLifecycleStatus::ProjectionPresentProcessMissing => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: "metadata present but process not responding".to_string(),
+            },
+            RuntimeLifecycleStatus::ProjectionMissingProcessRunning => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: "daemon facts present but runtime metadata missing".to_string(),
+            },
+            RuntimeLifecycleStatus::ControlOnlyInvocationDown => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: "control endpoint up but invocation down".to_string(),
+            },
+            RuntimeLifecycleStatus::IdentityMismatch => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: "daemon identity mismatch".to_string(),
+            },
+            RuntimeLifecycleStatus::StartProjectionCommitFailed => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: "runtime projection commit failed".to_string(),
+            },
+            RuntimeLifecycleStatus::StopTimedOut => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: "runtime stop timed out".to_string(),
+            },
+            RuntimeLifecycleStatus::DaemonDiscoveryInvalid => Self {
+                dot_sgr: sgr::WARN,
+                text_sgr: sgr::DIM,
+                dot: "●",
+                message: "daemon discovery invalid".to_string(),
+            },
+        }
     }
 }
 
@@ -388,10 +483,16 @@ fn daemon_config_path() -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
 
     /// Force colour off and render. Used by every test so the
     /// asserted output is plain ASCII-with-newlines.
     fn render_plain() -> String {
+        let _home = HomeGuard::new();
+        render_plain_with_current_home()
+    }
+
+    fn render_plain_with_current_home() -> String {
         unsafe {
             std::env::set_var("NO_COLOR", "1");
         }
@@ -456,5 +557,72 @@ mod tests {
     fn no_color_strips_ansi() {
         let out = render_plain();
         assert!(!out.contains('\x1b'), "ANSI escape leaked despite NO_COLOR");
+    }
+
+    #[test]
+    fn malformed_runtime_projection_renders_unavailable_not_stopped() {
+        let _home = HomeGuard::new();
+        std::fs::create_dir_all(config::state_dir()).expect("state dir");
+        std::fs::write(config::runtime_state_path(), "{ not json").expect("runtime projection");
+
+        let out = render_plain_with_current_home();
+
+        assert!(
+            out.contains("metadata unavailable"),
+            "banner must expose corrupt runtime projection: {out}"
+        );
+        assert!(
+            !out.contains("not running  ·  start with 'easynet runtime start'"),
+            "corrupt runtime projection must not render as stopped: {out}"
+        );
+    }
+
+    #[test]
+    fn malformed_credentials_render_invalid_not_unpaired() {
+        let _home = HomeGuard::new();
+        std::fs::create_dir_all(config::state_dir()).expect("state dir");
+        std::fs::write(config::state_dir().join("credentials.json"), "{ not json")
+            .expect("malformed credentials");
+
+        let out = render_plain_with_current_home();
+
+        assert!(
+            out.contains("credentials invalid"),
+            "banner must expose invalid credentials: {out}"
+        );
+        assert!(
+            !out.contains("not paired  ·  run 'easynet device join <token>'"),
+            "invalid credentials must not render as unpaired: {out}"
+        );
+    }
+
+    #[test]
+    fn federation_native_device_only_credentials_render_explicit_unbound_user() {
+        let _home = HomeGuard::new();
+        let credentials = config::Credentials {
+            node_id: "device-a".to_string(),
+            credential_token: String::new(),
+            hub_endpoint: "https://hub.example:50443".to_string(),
+            realm: "localhost".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: None,
+            user_id: None,
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: Some("a".repeat(64)),
+        };
+        config::save_credentials(&credentials).expect("save federation-native credentials");
+
+        let out = render_plain_with_current_home();
+
+        assert!(
+            out.contains("Current user:"),
+            "banner must keep the user binding row visible: {out}"
+        );
+        assert!(
+            out.contains("not bound (federation-native device credential)"),
+            "banner must render explicit unbound user state: {out}"
+        );
     }
 }

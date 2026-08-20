@@ -10,8 +10,8 @@ use super::*;
 pub(super) fn run_sessions(args: ChatHistoryArgs) -> anyhow::Result<()> {
     // Validate the agent exists. Lets us emit "no such agent"
     // rather than "no sessions" for a typo'd name.
-    let daemon_client = required_local_daemon_agent_client()?;
-    let _row = daemon_agent_row(&daemon_client, &args.name)?;
+    let gateway = agent_read_gateway();
+    let _row = daemon_agent_row(gateway.as_ref(), &args.name)?;
     match args.action {
         ChatHistoryAction::List(a) => run_sessions_list(&args.name, a),
         ChatHistoryAction::Show(a) => run_sessions_show(&args.name, a),
@@ -20,9 +20,10 @@ pub(super) fn run_sessions(args: ChatHistoryArgs) -> anyhow::Result<()> {
 
 pub(super) fn run_sessions_list(agent: &str, args: ChatHistoryListArgs) -> anyhow::Result<()> {
     use crate::daemon::persistence::chat_sessions;
-    let sessions = chat_sessions::list_sessions(agent);
+    let inventory = chat_sessions::load_session_inventory(agent)?;
+    let sessions = inventory.sessions();
     if args.json {
-        println!("{}", serde_json::to_string_pretty(&sessions)?);
+        println!("{}", serde_json::to_string_pretty(sessions)?);
         return Ok(());
     }
     if sessions.is_empty() {
@@ -32,12 +33,14 @@ pub(super) fn run_sessions_list(agent: &str, args: ChatHistoryListArgs) -> anyho
         );
         return Ok(());
     }
-    let latest = chat_sessions::latest_session(agent).unwrap_or_default();
+    let latest = inventory
+        .latest_session()
+        .expect("non-empty session inventory validates latest marker");
     println!(
         "{:<38} {:<22} {:>6}  PROMPT",
         "SESSION_ID", "LAST_TURN_AT", "TURNS"
     );
-    for s in &sessions {
+    for s in sessions {
         let marker = if s.session_id == latest { "*" } else { " " };
         println!(
             "{}{:<37} {:<22} {:>6}  {}",

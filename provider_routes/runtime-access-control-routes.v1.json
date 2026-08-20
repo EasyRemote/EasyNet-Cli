@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "provider": "runtime",
+  "capability": "access_control",
+  "profile": "access_control",
+  "routes": [
+    {
+      "id": "grant",
+      "go_const": "accessControlAbilityGrant",
+      "python_const": "_ABILITY_GRANT",
+      "daemon_const": "AUTHORITY_BINDING_GRANT",
+      "ability": "authority.binding.grant"
+    },
+    {
+      "id": "revoke",
+      "go_const": "accessControlAbilityRevoke",
+      "python_const": "_ABILITY_REVOKE",
+      "daemon_const": "AUTHORITY_BINDING_REVOKE",
+      "ability": "authority.binding.revoke"
+    },
+    {
+      "id": "list",
+      "go_const": "accessControlAbilityList",
+      "python_const": "_ABILITY_LIST",
+      "daemon_const": "AUTHORITY_BINDING_LIST",
+      "ability": "authority.binding.list"
+    },
+    {
+      "id": "check",
+      "go_const": "accessControlAbilityCheck",
+      "python_const": "_ABILITY_CHECK",
+      "daemon_const": "AUTHORITY_BINDING_CHECK",
+      "ability": "authority.binding.check"
+    },
+    {
+      "id": "policy_request_create",
+      "go_const": "accessControlAbilityPolicyRequestCreate",
+      "python_const": "_ABILITY_POLICY_REQUEST_CREATE",
+      "daemon_const": "POLICY_REQUEST_CREATE",
+      "ability": "policy.request.create"
+    },
+    {
+      "id": "policy_request_resolve",
+      "go_const": "accessControlAbilityPolicyRequestResolve",
+      "python_const": "_ABILITY_POLICY_REQUEST_RESOLVE",
+      "daemon_const": "POLICY_REQUEST_RESOLVE",
+      "ability": "policy.request.resolve"
+    },
+    {
+      "id": "policy_request_list",
+      "go_const": "accessControlAbilityPolicyRequestList",
+      "python_const": "_ABILITY_POLICY_REQUEST_LIST",
+      "daemon_const": "POLICY_REQUEST_LIST",
+      "ability": "policy.request.list"
+    },
+    {
+      "id": "admission_explain",
+      "go_const": "accessControlAbilityAdmissionExplain",
+      "python_const": "_ABILITY_ADMISSION_EXPLAIN",
+      "daemon_const": "ADMISSION_EXPLAIN",
+      "ability": "admission.explain"
+    }
+  ]
+}

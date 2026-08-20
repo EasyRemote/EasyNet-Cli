@@ -17,11 +17,33 @@
 
 use std::sync::Arc;
 
+#[path = "support/runtime_fixture.rs"]
+mod runtime_fixture;
+
 use easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::{
     refresh_server_dynamic, RegistryRefreshSink,
 };
-use easynet_cli::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
+use easynet_cli::daemon::ability::dispatch::{
+    AbilityAuthorityContext, AxonAbilityCatalog, OwnerKind,
+};
 use easynet_cli::daemon::execution::mcp::{McpClientService, McpClientsFile, McpServerSpec};
+
+const MCP_OWNER_URA: &str = "easynet:///r/local/agent/local.mcp";
+
+fn registry_for_mcp_owner() -> AxonAbilityCatalog {
+    let owner = easynet_cli::core::ura::parse_ura(MCP_OWNER_URA).expect("canonical MCP owner URA");
+    let device_ura = easynet_cli::core::ura::device_ura(&owner.realm, "mcp-hot-reload-device");
+    let authority_context =
+        AbilityAuthorityContext::for_combined_authority_roots_with_hosted_agents(
+            device_ura,
+            [MCP_OWNER_URA.to_string()],
+        )
+        .expect("MCP owner must be hosted by the test Device authority");
+    AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        runtime_fixture::rejecting_runtime(),
+        authority_context,
+    )
+}
 
 /// Build a Python stdio MCP server whose tools/list answer toggles
 /// between two single-tool catalogues and pushes a list_changed
@@ -107,21 +129,22 @@ async fn list_changed_push_triggers_dynamic_refresh() {
         }],
     };
     let svc = Arc::new(McpClientService::from_file(file));
-    let registry = Arc::new(AxonAbilityCatalog::new());
+    let registry = Arc::new(registry_for_mcp_owner());
 
     // Seed the dynamic side with `tool_a` so the refresh logic sees a
     // diff (removed=[tool_a], added=[tool_b]). In production this
-    // mirrors what happens after the boot-time reflect_all populates
-    // the dynamic table; here we short-circuit the boot reflection
+    // mirrors what happens after the initial lazy reflection populates
+    // the dynamic table; here we short-circuit that first reflection
     // and write tool_a directly so the test isolates the
     // list_changed → refresh path.
     {
-        let manifest = easynet_cli::core::ability_spec::AbilityManifest::new(
+        let manifest = easynet_cli::daemon::ability::manifest::AbilityManifest::new(
             "tool_a",
             "Initial tool",
             serde_json::json!({"type": "object"}),
         )
-        .unwrap();
+        .and_then(|manifest| manifest.with_admission_action("stream"))
+        .expect("preloaded MCP stream manifest must satisfy canonical admission");
         // Boot-reflected tools register as stream handlers (mirrors
         // `register_one_tool_dynamic`). For the diff to detect the
         // unchanged-vs-removed split we don't actually need the
@@ -129,7 +152,7 @@ async fn list_changed_push_triggers_dynamic_refresh() {
         registry
             .hot_register_stream_with_spec(
                 "tool_a",
-                OwnerKind::Device,
+                OwnerKind::Agent("mcp".to_string()),
                 manifest,
                 Arc::new(|_args| anyhow::bail!("tool_a handler not expected to run in this test")),
             )
@@ -149,7 +172,7 @@ async fn list_changed_push_triggers_dynamic_refresh() {
         Arc::downgrade(&registry),
         Arc::downgrade(&svc),
         "toggling".to_string(),
-        "easynet:///r/local/agent/local.mcp".to_string(),
+        MCP_OWNER_URA.to_string(),
         vec!["tool_a".to_string()],
     ));
     svc.register_notification_sink("toggling", sink)
@@ -211,18 +234,11 @@ async fn refresh_server_dynamic_direct_call_diffs_correctly() {
         }],
     };
     let svc = McpClientService::from_file(file);
-    let registry = AxonAbilityCatalog::new();
+    let registry = registry_for_mcp_owner();
 
     // First refresh — registry empty, prev=[], upstream replies
     // tool_a (script's first tools/list response).
-    let diff1 = refresh_server_dynamic(
-        &svc,
-        &registry,
-        "easynet:///r/local/agent/local.mcp",
-        "toggling",
-        &[],
-    )
-    .await;
+    let diff1 = refresh_server_dynamic(&svc, &registry, MCP_OWNER_URA, "toggling", &[]).await;
     assert_eq!(
         diff1.added.len(),
         1,
@@ -238,7 +254,7 @@ async fn refresh_server_dynamic_direct_call_diffs_correctly() {
     let diff2 = refresh_server_dynamic(
         &svc,
         &registry,
-        "easynet:///r/local/agent/local.mcp",
+        MCP_OWNER_URA,
         "toggling",
         &["tool_a".to_string()],
     )

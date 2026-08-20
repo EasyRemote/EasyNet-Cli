@@ -7,7 +7,7 @@
 // ----------------------
 // The daemon hosts several "set at boot, read on the hot path" handles
 // — the live `McpClientService` (for `[exec] kind = "mcp"`), Axon
-// runtime bridge state, the OpenAI-compat caller identity, etc. Each of
+// runtime bridge state, product adapter caller identity, etc. Each of
 // these was historically a free-floating `OnceLock<Arc<T>>` or
 // `RwLock<Option<Arc<T>>>` static at the top of its owning module.
 //
@@ -23,7 +23,7 @@
 //     shares the static across many in-process test cases that each
 //     want to install their own fixture. A `OnceLock` here would
 //     silently pin the handle for every later test, which is the
-//     exact stale-state bug the OpenAI-compat path paid for and now
+//     exact stale-state bug product adapter tests paid for and now
 //     needs `RwLock<Option<_>>` to avoid.
 //
 // Before this module existed, each call site picked one of the two
@@ -45,7 +45,7 @@
 //     already handle (returning a typed "not yet initialised" error).
 //
 //   * `ProcessSingleton::<T>::last_writer_wins()` — test-rebindable.
-//     `set` overwrites. Used in the OpenAI-compat path where the test
+//     `set` overwrites. Used by product adapter tests where the test
 //     binary rebinds the registry between cases.
 //
 // Both expose the same API surface (`set`, `get`, `is_set`) so a
@@ -205,7 +205,7 @@ mod tests {
     }
 
     /// LastWriterWins-mode: later `set` overwrites. This is the
-    /// guarantee the OpenAI-compat path needs because the in-process
+    /// guarantee product adapter paths need because the in-process
     /// test binary installs its own fixture per case.
     #[test]
     fn last_writer_wins_mode_overwrites() {

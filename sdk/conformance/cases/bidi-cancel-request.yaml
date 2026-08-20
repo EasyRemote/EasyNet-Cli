@@ -1,0 +1,18 @@
+id: bidi/cancel_request
+profile: runtime_core
+required_for:
+  - go
+  - python
+description: Runtime Core bidi cancellation is an explicit non-terminal request acknowledgement; terminal cancellation facts must arrive through runtime terminal frames.
+steps:
+  - action: open_bidi
+    fixture: invocation.complete.v4.json
+  - action: request_bidi_cancel
+  - action: reject_synthetic_terminal_cancel_ack
+  - action: release_bidi_after_cancel_request
+expect:
+  result: cancel_request_observed
+  cancel_ack_terminal: false
+  terminal_cancel_ack_rejected: true
+  close_send_after_cancel_rejected: true
+  cleanup_after_cancel_request: true

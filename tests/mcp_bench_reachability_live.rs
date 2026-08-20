@@ -34,7 +34,7 @@
 use std::path::PathBuf;
 
 use easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all;
-use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
+use easynet_cli::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
 use easynet_cli::daemon::execution::mcp::McpClientService;
 
 /// Minimum reachable-server count below which the verifier fails.
@@ -64,8 +64,13 @@ async fn live_reachability_holds_baseline() {
         names.len()
     );
 
-    let mut reg = AxonAbilityCatalog::new();
-    let owner = easynet_axon::ura::agent_ura("test-realm", "test-user", "mcp");
+    let mut reg = AxonAbilityCatalog::new_metadata_only_with_authority_context(
+        AbilityAuthorityContext::for_device_authority_root(
+            "easynet:///r/test-realm/device/mcp-bench",
+        )
+        .expect("test Device authority root must be canonical"),
+    );
+    let owner = axon_sdk::ura::agent_ura("test-realm", "test-user", "mcp");
     let result = reflect_all(&svc, &mut reg, &owner).await;
 
     // Group failures by server.

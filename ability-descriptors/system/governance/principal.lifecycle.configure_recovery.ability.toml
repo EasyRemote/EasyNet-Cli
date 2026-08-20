@@ -1,0 +1,28 @@
+schema_version = "3"
+name = "principal.lifecycle.configure_recovery"
+descriptor_version = "1.0.0"
+description = "Configure recovery policy for a daemon runtime principal."
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "route-target"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "invoke"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["request"]
+additionalProperties = true
+
+[input_schema.properties.request]
+type = "object"
+description = "Product-neutral principal lifecycle command envelope."

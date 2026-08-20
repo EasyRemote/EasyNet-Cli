@@ -44,8 +44,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::core::ability::spec::{default_chat_manifest, AbilityManifest};
 use crate::core::agent::spec::AgentSpec;
+use crate::daemon::ability::manifest::{default_chat_manifest, AbilityManifest};
 use crate::daemon::persistence::config;
 
 /// File-name suffix for ability manifests inside
@@ -74,10 +74,8 @@ fn is_empty_dir(path: &Path) -> anyhow::Result<bool> {
 /// * `Global { name }`  — resolved via `config::agents_root()`.
 ///   The single tree the registry defaults to; the natural choice
 ///   for "one user, many agents, same machine, no project
-///   affinity." Resolution folds into the same `agents_root()`
-///   helper that PR-0b added for reads-with-fallback, so a user
-///   who has only the legacy `workspaces/` tree keeps working
-///   until that deprecation window closes.
+///   affinity." Legacy parent layouts are migrated before this
+///   value is resolved.
 /// * `Local { root }`   — any absolute path. The typical shape is
 ///   `<repo>/my-agent/` — an agent that ships inside a code
 ///   project and lives or dies with it. Registry stores the
@@ -103,8 +101,7 @@ pub enum Location {
 impl Location {
     /// Resolve to the absolute path the directory lives at. For
     /// `Global`, this joins the agent name onto the
-    /// `agents_root()` — which itself honors the
-    /// new-or-legacy fallback introduced in PR-0b. For `Local`,
+    /// canonical `agents_root()`. For `Local`,
     /// we return the caller's already-absolute path verbatim.
     pub fn resolve(&self) -> PathBuf {
         match self {
@@ -906,17 +903,11 @@ mod tests {
 
     #[test]
     fn location_global_resolves_through_agents_root() {
-        // `Global { name }` must fold through `config::agents_root()`
-        // so the PR-0b fallback is honored. We verify by
-        // constructing a Location and checking the resolved
-        // path has the expected shape; the actual agents_root()
-        // behavior is unit-tested in persistence::config.
+        // `Global { name }` must fold through the one canonical root.
         let g = Location::Global {
             name: "probe".into(),
         };
         let resolved = g.resolve();
-        // Must end with `agents/probe` or `workspaces/probe`
-        // (depending on which one exists on the dev machine).
         let last_two: Vec<_> = resolved
             .iter()
             .rev()
@@ -924,11 +915,7 @@ mod tests {
             .map(|c| c.to_string_lossy().into_owned())
             .collect();
         assert_eq!(last_two[0], "probe");
-        assert!(
-            last_two[1] == "agents" || last_two[1] == "workspaces",
-            "expected agents/probe or workspaces/probe, got {}",
-            resolved.display()
-        );
+        assert_eq!(last_two[1], "agents", "expected canonical agents/probe");
     }
 
     #[test]

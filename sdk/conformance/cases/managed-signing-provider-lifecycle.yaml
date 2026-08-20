@@ -1,0 +1,36 @@
+id: managed_signing/provider_lifecycle
+profile: managed_signing
+required_for:
+  - go
+  - python
+description: Managed signing is a bounded provider domain with an owner-bound signer, strict public projections, and one lifecycle in both SDKs.
+steps:
+  - action: require_explicit_daemon_endpoint
+  - action: create_managed_signing_key
+  - action: acquire_key_bound_signer
+  - action: sign_canonical_bytes
+  - action: rotate_and_revoke
+  - action: list_bounded_pages
+  - action: verify_peer_projection
+expect:
+  result: ok
+  protocol_version: 2
+  private_material_exposed: false
+  signer_is_key_bound: true
+  signing_intent_binds_subject_and_policy: true
+  signing_intent_binds_expected_purpose: true
+  signer_policy_domain: canonical-runtime.managed-signing.policy
+  signer_policy_version: v2
+  legacy_policy_fallback: false
+  explicit_daemon_endpoint_required: true
+  signature_verified_against_projection: true
+  lifecycle: active_retired_revoked
+  immutable_subject: true
+  page_size_max: 16
+  auto_pages_max: 1024
+  auto_items_max: 16384
+  canonical_bytes_max: 67108864
+  wire_frame_max: 94371840
+  peer_fingerprint: sha256_public_key
+  peer_key_replacement_requires_explicit_retrust: true
+  strict_unknown_fields: true

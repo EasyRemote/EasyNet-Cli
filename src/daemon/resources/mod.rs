@@ -8,6 +8,5 @@ pub mod context;
 pub mod files;
 pub mod media;
 pub mod pages;
-#[cfg(feature = "remote-desktop")]
-pub mod remote_desktop;
+pub mod projection;
 pub mod skills;

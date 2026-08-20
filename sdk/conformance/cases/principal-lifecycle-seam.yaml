@@ -1,0 +1,15 @@
+id: principal/lifecycle_seam
+profile: principal
+required_for:
+  - go
+  - python
+description: Go and Python expose one product-neutral PrincipalLifecycle state machine without private-key or account fields.
+steps:
+  - action: require_principal_states
+  - action: require_key_binding_states
+  - action: require_lifecycle_operations
+  - action: reject_private_key_fields
+  - action: reject_product_account_fields
+expect:
+  result: principal_lifecycle_seam
+  provider_required: false

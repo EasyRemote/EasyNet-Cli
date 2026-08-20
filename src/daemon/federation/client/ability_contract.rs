@@ -17,10 +17,7 @@
 // -------------------
 // Pure data shapes + a small protocol-helper layer. It does not
 // itself open a connection to the hub. Callers hand the JSON args
-// produced here to whichever transport they already have wired
-// (today: `DendriteBridge::ability_call_raw`; tomorrow: a thin
-// `axon_runtime_local_invoke` shim once the daemon-internal IPC
-// path lands).
+// produced here to the daemon's canonical Invocation/session transport.
 //
 // Why this split exists
 // ---------------------
@@ -36,7 +33,7 @@
 //      shape without needing a live runtime.
 //   3. A natural seam for adding DelegationProof later. When P3+
 //      ships JWT-derived delegation, only this module changes; the
-//      bridge call site stays untouched.
+//      transport call site stays untouched.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -44,47 +41,26 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// RFC-005 federation.forward_invoke argument shape.
-#[derive(Debug, Clone, Serialize)]
-pub struct ForwardInvokeArgs {
-    pub target_ura: String,
-    pub ability_ura: String,
-    /// Standard base64 of the serialized argument payload (typically
-    /// JSON bytes for ability calls). Hub forwards verbatim.
-    pub arguments_b64: String,
-}
+use crate::daemon::federation::hosted_agent_publication::{
+    HostedAgentGenerationAssignment, HostedAgentIncarnationId,
+};
+
+pub use crate::daemon::federation::receipt_contract::{
+    AdvertiseContract, AuthorityAbilitiesDiff, AuthorityAbilityEntry, JoinReceipt,
+};
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct ForwardInvokeReceipt {
-    pub ok: bool,
-    pub state_code: i32,
-    #[serde(default)]
-    pub result_b64: String,
-    #[serde(default)]
-    pub result_content_type: String,
-    #[serde(default)]
-    pub error_code: String,
-    #[serde(default)]
-    pub error_message: String,
-}
-
-/// RFC-002 §5.1 federation.resolve_key argument shape.
-#[derive(Debug, Clone, Serialize)]
-pub struct ResolveKeyArgs {
-    pub agent_ura: String,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ResolveKeyReceipt {
-    #[serde(default)]
-    pub agent_ura: String,
+    pub public_key_b64: String,
     pub public_key_hex: String,
+    pub public_keys_b64: Vec<String>,
     #[serde(default)]
-    pub status: String,
+    pub principal_owner_ura: Option<String>,
+    /// Public wire scalar user-id segment paired with `principal_owner_ura`.
+    /// This is not a runtime User URA.
     #[serde(default)]
-    pub key_id: String,
-    #[serde(default)]
-    pub rotation_epoch: u64,
+    pub principal_owner_user_id: Option<String>,
 }
 
 /// Arguments for `federation.join`. Matches the hub-profile's
@@ -101,184 +77,90 @@ pub struct JoinArgs {
     /// just generated. The hub binds this key to the canonical URA
     /// in its receipt.
     pub public_key_hex: String,
-    /// Optional pairing-secret carrier; the P3 hub does not yet
-    /// validate but accepts the field for forward compatibility.
+    /// Optional product-neutral PrincipalLifecycle proof. When present, the
+    /// hub validates it against daemon-owned PrincipalLifecycle state before
+    /// binding the joined Device URA to the Principal URA in RuntimeTrust.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub pairing_secret: Option<String>,
+    pub principal_enrollment: Option<PrincipalEnrollmentProof>,
 }
 
-/// Receipt body returned by a successful `federation.join`. The
-/// `join_receipt_hash` is the device's §A8 [P3] membership-lineage
-/// root and MUST be persisted into `~/.easynet/credentials.json`.
-///
-/// AXON-RFC-001 v4.1.7 hub-broadcast contract adds three fields:
-/// `hub_published_abilities` (the snapshot of hub-owned abilities
-/// the hub advertises to every member), `hub_abilities_revision`
-/// (the monotonic counter the device passes back as
-/// `since_abilities_revision` on subsequent heartbeats), and
-/// `advertise_contract` (the prefix bounds the device must respect
-/// on outbound `federation.advertise_*` calls). All three default
-/// when absent so a v4.1.6 device reading a v4.1.7 hub (or vice
-/// versa) interops without breaking — empty snapshot, revision 0,
-/// default contract.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-pub struct JoinReceipt {
-    pub membership_ura: String,
-    pub realm: String,
-    pub join_receipt_hash: String,
-    #[serde(default)]
-    pub hub_published_abilities: Vec<HubAbilityEntry>,
-    #[serde(default)]
-    pub hub_abilities_revision: u64,
-    #[serde(default)]
-    pub advertise_contract: AdvertiseContract,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PrincipalEnrollmentProof {
+    pub principal_ura: String,
+    pub proof: PrincipalProofRef,
 }
 
-/// One hub-owned ability descriptor as broadcast by the hub. The
-/// `descriptor` field is opaque (`Value`) — the hub-side schema
-/// can evolve without forcing a Cli release.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-pub struct HubAbilityEntry {
-    pub name: String,
-    pub descriptor: Value,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PrincipalProofRef {
+    pub kind: String,
+    pub reference: String,
 }
 
-/// Bound on what a device may advertise at this hub. The hub
-/// pre-declares which name prefixes it accepts on
-/// `federation.advertise_*` calls; the device's session prelude
-/// filters its outbound advertise set against this list. v0
-/// default: `["device."]` + `allows_hosted_agents = true`. Old
-/// hubs that don't send the field land on this default — same
-/// behavior they had before the contract existed.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct AdvertiseContract {
-    #[serde(default)]
-    pub allowed_owner_prefixes: Vec<String>,
-    #[serde(default = "default_allows_hosted_agents")]
-    pub allows_hosted_agents: bool,
-}
+// JoinReceipt, AuthorityAbilityEntry, AdvertiseContract, and AuthorityAbilitiesDiff are
+// re-exported from `daemon::federation::receipt_contract` so hub producers and
+// device consumers bind to one required-facts receipt shape.
 
-impl Default for AdvertiseContract {
-    fn default() -> Self {
-        Self {
-            allowed_owner_prefixes: vec!["device.".to_string()],
-            allows_hosted_agents: true,
-        }
-    }
-}
-
-fn default_allows_hosted_agents() -> bool {
-    true
-}
-
-/// Heartbeat outbound args. v4.1.7 carries the device's last-seen
-/// hub-abilities revision so the hub can answer with an
-/// incremental diff. v4.1.6 hubs ignore the field; v4.1.7 hubs
-/// treat absent/zero as "fully out of date" and return the full
-/// snapshot in the diff's `added`.
-#[derive(Debug, Clone, Default, Serialize)]
+/// Heartbeat outbound args. The request is the same canonical shape the hub
+/// dispatch wrapper accepts: the caller revision plus the explicit owner
+/// projection leases to refresh. Caller identity comes from the signed
+/// invocation envelope, not from a request `agent_ura` alias.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct HeartbeatArgs {
-    #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub since_abilities_revision: u64,
-}
-
-fn is_zero_u64(v: &u64) -> bool {
-    *v == 0
-}
-
-/// Hub-broadcast contract diff returned in `HeartbeatReceipt`.
-/// Empty `added` + empty `removed` at `revision >= since` means
-/// the device is current.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub struct HubAbilitiesDiff {
-    #[serde(default)]
-    pub revision: u64,
-    #[serde(default)]
-    pub added: Vec<HubAbilityEntry>,
-    #[serde(default)]
-    pub removed: Vec<String>,
+    pub refresh_owner_uras: Vec<String>,
 }
 
 /// Arguments for `federation.advertise_agent`. The hosting
 /// device-profile uses this to register hosted Agents (consent,
 /// policy, mcp, llm-per-sub-agent) with the realm directory.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct AdvertiseAgentArgs {
     pub agent_ura: String,
-    /// Empty when the hosted Agent has no key of its own (the
-    /// common case for §1.3 Model B; receipts are signed by the
-    /// host's key, attested via host_attestation in the
-    /// DirectoryEntry).
-    #[serde(default)]
-    pub public_key_hex: String,
-    pub signing_authority: AdvertisedSigningAuthority,
-    /// RFC-002 §5.2 forward_invoke routing key. The advertising
-    /// daemon supplies its own runtime node_id so the hub knows
-    /// which UDS-bound local-tool registration to dispatch into
-    /// when an inbound forward arrives for this agent.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host_node_id: Option<String>,
-}
-
-/// Wire shape for the `signing_authority` field. Mirrors the
-/// hub-profile's `AdvertisedSigningAuthority` enum exactly.
-#[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum AdvertisedSigningAuthority {
-    /// Agent owns its own keypair (Model A — hubs, backends).
-    SelfSigned,
-    /// Agent is hosted by another Agent that signs its receipts
-    /// (Model B — every CLI-spawned hosted Agent).
-    HostedBy { host_ura: String },
+    /// Device-persisted idempotency key; the Hub owns generation assignment.
+    pub incarnation_id: HostedAgentIncarnationId,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AdvertiseAgentReceipt {
     pub ack: bool,
-    pub replaced_prior: bool,
+    pub assignment: HostedAgentGenerationAssignment,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct HeartbeatResponseHeader {
-    #[serde(default)]
     pub status: String,
-    #[serde(default)]
     pub permanent: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct HeartbeatRejectedNode {
-    #[serde(default)]
     pub node_id: String,
-    #[serde(default)]
     pub message: String,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct HeartbeatReceipt {
-    #[serde(default)]
     pub membership_status: String,
-    #[serde(default)]
     pub realm_directory_size: u64,
-    /// Axon proto-compatible response header. Older hub wrappers used
-    /// top-level `permanent` / `status`; keep those aliases below so
-    /// heartbeat callers can consume either bridge shape without
-    /// reintroducing JSON inspection in the CLI state machine.
+    /// Axon proto-compatible response header. This is the only status header
+    /// projection accepted by the federation client contract.
     #[serde(default)]
     pub header: Option<HeartbeatResponseHeader>,
     #[serde(default)]
-    pub permanent: bool,
-    #[serde(default)]
-    pub status: String,
-    #[serde(default)]
     pub rejected_nodes: Vec<HeartbeatRejectedNode>,
-    /// AXON-RFC-001 v4.1.7 hub-broadcast contract: incremental
-    /// update of hub-published abilities since the caller's
-    /// `since_abilities_revision`. Defaults to an empty diff at
-    /// revision 0 so v4.1.6 hubs that omit the field produce a
-    /// no-op on the client (no perceived churn).
-    #[serde(default)]
-    pub hub_abilities_diff: HubAbilitiesDiff,
+    /// AXON-RFC-001 v4.1.7 realm Authority broadcast contract: explicit incremental
+    /// update of realm Authority-published abilities since the caller's
+    /// `since_abilities_revision`. Empty `added` and `removed` arrays are
+    /// valid only when the realm Authority serializes this diff with a revision.
+    pub authority_abilities_diff: AuthorityAbilitiesDiff,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -310,6 +192,7 @@ pub struct ResolveFilter {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ResolvedAgent {
     pub ura: String,
     pub status: String,
@@ -326,6 +209,7 @@ pub struct ResolvedAgent {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ResolveReceipt {
     pub agents: Vec<ResolvedAgent>,
 }
@@ -370,7 +254,7 @@ mod tests {
             realm: "acme".into(),
             membership_ura: "easynet:///r/acme/device/dev-a".into(),
             public_key_hex: "deadbeef".into(),
-            pairing_secret: None,
+            principal_enrollment: None,
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
         assert_eq!(v["realm"], "acme");
@@ -378,64 +262,266 @@ mod tests {
         assert_eq!(v["public_key_hex"], "deadbeef");
         assert!(
             v.get("pairing_secret").is_none(),
-            "absent pairing_secret must NOT be emitted to keep the hub's parser strict",
+            "retired pairing_secret must NOT be emitted to keep the hub parser strict",
         );
     }
 
     #[test]
-    fn join_args_includes_pairing_secret_when_set() {
+    fn join_args_does_not_emit_retired_pairing_secret() {
         let args = JoinArgs {
             realm: "acme".into(),
             membership_ura: "easynet:///r/acme/device/dev-a".into(),
             public_key_hex: "00".into(),
-            pairing_secret: Some("token-xyz".into()),
+            principal_enrollment: None,
         };
         let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
-        assert_eq!(v["pairing_secret"], "token-xyz");
-    }
-
-    #[test]
-    fn advertise_args_serializes_self_signed_kind() {
-        let args = AdvertiseAgentArgs {
-            agent_ura: "easynet:///r/acme/device/01DEV".into(),
-            public_key_hex: "aa".into(),
-            signing_authority: AdvertisedSigningAuthority::SelfSigned,
-            host_node_id: None,
-        };
-        let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
-        assert_eq!(v["signing_authority"]["kind"], "self_signed");
-        assert_eq!(v["agent_ura"], "easynet:///r/acme/device/01DEV");
-    }
-
-    #[test]
-    fn advertise_args_serializes_hosted_kind_with_host_ura() {
-        let args = AdvertiseAgentArgs {
-            agent_ura: "easynet:///r/acme/agent/u1.01LLM".into(),
-            public_key_hex: "".into(),
-            signing_authority: AdvertisedSigningAuthority::HostedBy {
-                host_ura: "easynet:///r/acme/device/01DEV".into(),
-            },
-            host_node_id: None,
-        };
-        let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
-        assert_eq!(v["signing_authority"]["kind"], "hosted_by");
-        assert_eq!(
-            v["signing_authority"]["host_ura"],
-            "easynet:///r/acme/device/01DEV"
+        assert!(
+            v.get("pairing_secret").is_none(),
+            "pairing_secret is a retired product token carrier, not a runtime join fact",
         );
     }
 
     #[test]
-    fn join_receipt_round_trips_through_serde() {
+    fn join_args_can_carry_product_neutral_principal_enrollment_proof() {
+        let args = JoinArgs {
+            realm: "acme".into(),
+            membership_ura: "easynet:///r/acme/device/dev-a".into(),
+            public_key_hex: "00".into(),
+            principal_enrollment: Some(PrincipalEnrollmentProof {
+                principal_ura: "easynet:///r/acme/user/alice".into(),
+                proof: PrincipalProofRef {
+                    kind: "active_key".into(),
+                    reference: "binding-1".into(),
+                },
+            }),
+        };
+        let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
+        assert_eq!(
+            v["principal_enrollment"]["principal_ura"],
+            "easynet:///r/acme/user/alice"
+        );
+        assert_eq!(v["principal_enrollment"]["proof"]["kind"], "active_key");
+        assert_eq!(v["principal_enrollment"]["proof"]["reference"], "binding-1");
+        assert!(
+            v.get("username").is_none() && v.get("user_id").is_none(),
+            "federation.join must not grow product account fields"
+        );
+    }
+
+    #[test]
+    fn principal_enrollment_proof_rejects_product_account_aliases() {
+        for field in ["user_id", "username", "device_ura"] {
+            let mut body = serde_json::Map::new();
+            body.insert(
+                "principal_ura".to_string(),
+                json!("easynet:///r/acme/user/alice"),
+            );
+            body.insert(
+                "proof".to_string(),
+                json!({
+                    "kind": "active_key",
+                    "reference": "binding-1"
+                }),
+            );
+            body.insert(field.to_string(), json!("retired"));
+
+            let err = serde_json::from_value::<PrincipalEnrollmentProof>(Value::Object(body))
+                .expect_err("principal enrollment proof must reject product account aliases");
+
+            assert!(
+                err.to_string().contains(field),
+                "retired field {field:?} must be named in parse error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn principal_proof_ref_rejects_unknown_proof_handle_fields() {
+        let body = json!({
+            "kind": "active_key",
+            "reference": "binding-1",
+            "key_id": "retired"
+        });
+
+        let err = serde_json::from_value::<PrincipalProofRef>(body)
+            .expect_err("principal proof ref must reject retired key handles");
+
+        assert!(err.to_string().contains("key_id"));
+    }
+
+    #[test]
+    fn resolve_key_receipt_parses_canonical_key_facts() {
+        let body = json!({
+            "public_key_b64": "pub-b64",
+            "public_key_hex": "707562",
+            "public_keys_b64": ["pub-b64", "rotated-b64"],
+            "principal_owner_ura": "easynet:///r/acme/user/alice",
+            "principal_owner_user_id": "alice"
+        });
+
+        let parsed: ResolveKeyReceipt = parse_receipt_value(&body).unwrap();
+
+        assert_eq!(parsed.public_key_b64, "pub-b64");
+        assert_eq!(parsed.public_key_hex, "707562");
+        assert_eq!(parsed.public_keys_b64, vec!["pub-b64", "rotated-b64"]);
+        assert_eq!(
+            parsed.principal_owner_ura.as_deref(),
+            Some("easynet:///r/acme/user/alice")
+        );
+        assert_eq!(parsed.principal_owner_user_id.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn resolve_key_receipt_requires_schema_bound_key_set() {
+        let body = json!({
+            "public_key_b64": "pub-b64",
+            "public_key_hex": "707562"
+        });
+
+        let err = parse_receipt_value::<ResolveKeyReceipt>(&body)
+            .expect_err("resolve_key receipt must not repair legacy single-key facts");
+
+        assert!(
+            err.to_string().contains("public_keys_b64"),
+            "missing canonical key set must fail closed: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_key_receipt_rejects_retired_directory_status_fields() {
+        for field in ["agent_ura", "status", "key_id", "rotation_epoch"] {
+            let mut body = serde_json::Map::new();
+            body.insert("public_key_b64".to_string(), json!("pub-b64"));
+            body.insert("public_key_hex".to_string(), json!("707562"));
+            body.insert("public_keys_b64".to_string(), json!(["pub-b64"]));
+            body.insert(field.to_string(), json!("retired"));
+
+            let err = parse_receipt_value::<ResolveKeyReceipt>(&Value::Object(body))
+                .expect_err("retired resolve_key receipt fields must fail closed");
+
+            assert!(
+                err.to_string().contains(field),
+                "retired field {field:?} must be named in parse error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn advertise_args_are_the_closed_incarnation_request() {
+        let args = AdvertiseAgentArgs {
+            agent_ura: "easynet:///r/acme/agent/u1.01LLM".into(),
+            incarnation_id: HostedAgentIncarnationId::parse("a".repeat(32)).unwrap(),
+        };
+        let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
+        assert_eq!(v["agent_ura"], "easynet:///r/acme/agent/u1.01LLM");
+        assert_eq!(v["incarnation_id"], "a".repeat(32));
+        assert_eq!(v.as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn advertise_args_reject_retired_sender_assigned_facts() {
+        for retired in [
+            "generation",
+            "public_key_hex",
+            "signing_authority",
+            "host_node_id",
+        ] {
+            let mut body = serde_json::json!({
+                "agent_ura": "easynet:///r/acme/agent/u1.01LLM",
+                "incarnation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            });
+            body.as_object_mut()
+                .unwrap()
+                .insert(retired.to_string(), serde_json::json!(1));
+            let error = serde_json::from_value::<AdvertiseAgentArgs>(body)
+                .expect_err("retired sender-assigned facts must fail closed");
+            assert!(error.to_string().contains(retired));
+        }
+    }
+
+    #[test]
+    fn advertise_agent_receipt_rejects_retired_fields() {
+        for field in ["status", "agent_ura", "replaced_prior"] {
+            let mut body = serde_json::Map::new();
+            body.insert("ack".to_string(), json!(true));
+            body.insert(
+                "assignment".to_string(),
+                serde_json::json!({
+                    "agent_ura": "easynet:///r/acme/agent/u1.01LLM",
+                    "host_device_ura": "easynet:///r/acme/device/01DEV",
+                    "incarnation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "generation": 1
+                }),
+            );
+            body.insert(field.to_string(), json!("retired"));
+
+            let err = parse_receipt_value::<AdvertiseAgentReceipt>(&Value::Object(body))
+                .expect_err("advertise receipt must reject retired fields");
+
+            assert!(
+                err.to_string().contains(field),
+                "retired field {field:?} must be named in parse error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn heartbeat_args_are_closed_canonical_request_shape() {
+        let args = HeartbeatArgs {
+            since_abilities_revision: 7,
+            refresh_owner_uras: vec!["easynet:///r/acme/device/01DEV".into()],
+        };
+        let v: Value = serde_json::from_slice(&args_to_bytes(&args)).unwrap();
+        assert_eq!(v["since_abilities_revision"], 7);
+        assert_eq!(v["refresh_owner_uras"][0], "easynet:///r/acme/device/01DEV");
+        assert!(v.get("agent_ura").is_none());
+        let mut retired = v.as_object().expect("object").clone();
+        retired.insert(
+            "agent_ura".into(),
+            Value::String("easynet:///r/acme/device/01DEV".into()),
+        );
+        let error = serde_json::from_value::<HeartbeatArgs>(Value::Object(retired))
+            .expect_err("retired heartbeat agent_ura must fail closed");
+        assert!(error.to_string().contains("agent_ura"));
+    }
+
+    #[test]
+    fn join_receipt_round_trips_with_required_runtime_facts() {
         let body = json!({
             "membership_ura": "easynet:///r/acme/device/01DEV",
             "realm": "acme",
-            "join_receipt_hash": "abc123"
+            "join_receipt_hash": "abc123",
+            "authority_published_abilities": [],
+            "authority_abilities_revision": 0,
+            "advertise_contract": {
+                "allowed_owner_prefixes": ["device."],
+                "allows_hosted_agents": true
+            }
         });
         let parsed: JoinReceipt = parse_receipt_value(&body).unwrap();
         assert_eq!(parsed.membership_ura, "easynet:///r/acme/device/01DEV");
         assert_eq!(parsed.realm, "acme");
         assert_eq!(parsed.join_receipt_hash, "abc123");
+        assert_eq!(parsed.authority_abilities_revision, 0);
+        assert!(parsed.authority_published_abilities.is_empty());
+        assert_eq!(
+            parsed.advertise_contract.allowed_owner_prefixes,
+            vec!["device.".to_string()]
+        );
+    }
+
+    #[test]
+    fn join_receipt_rejects_missing_authority_runtime_facts() {
+        let body = json!({
+            "membership_ura": "easynet:///r/acme/device/01DEV",
+            "realm": "acme",
+            "join_receipt_hash": "abc123"
+        });
+        let err = parse_receipt_value::<JoinReceipt>(&body).unwrap_err();
+        assert!(
+            err.to_string().contains("authority_published_abilities"),
+            "missing Authority snapshot must fail closed: {err}"
+        );
     }
 
     #[test]
@@ -473,14 +559,147 @@ mod tests {
     }
 
     #[test]
-    fn heartbeat_receipt_parses_minimal_body() {
+    fn heartbeat_receipt_parses_explicit_empty_authority_diff() {
         let body = json!({
             "membership_status": "active",
-            "realm_directory_size": 3
+            "realm_directory_size": 3,
+            "authority_abilities_diff": {
+                "revision": 0,
+                "added": [],
+                "removed": []
+            }
         });
         let parsed: HeartbeatReceipt = parse_receipt_value(&body).unwrap();
         assert_eq!(parsed.membership_status, "active");
         assert_eq!(parsed.realm_directory_size, 3);
+        assert_eq!(parsed.authority_abilities_diff.revision, 0);
+        assert!(parsed.authority_abilities_diff.added.is_empty());
+    }
+
+    #[test]
+    fn heartbeat_receipt_rejects_missing_authority_diff() {
+        let body = json!({
+            "membership_status": "active",
+            "realm_directory_size": 3
+        });
+        let err = parse_receipt_value::<HeartbeatReceipt>(&body).unwrap_err();
+        assert!(
+            err.to_string().contains("authority_abilities_diff"),
+            "missing Authority ability diff must fail closed: {err}"
+        );
+    }
+
+    #[test]
+    fn heartbeat_receipt_rejects_missing_membership_facts() {
+        for (missing, body) in [
+            (
+                "membership_status",
+                json!({
+                    "realm_directory_size": 3,
+                    "authority_abilities_diff": {
+                        "revision": 0,
+                        "added": [],
+                        "removed": []
+                    }
+                }),
+            ),
+            (
+                "realm_directory_size",
+                json!({
+                    "membership_status": "active",
+                    "authority_abilities_diff": {
+                        "revision": 0,
+                        "added": [],
+                        "removed": []
+                    }
+                }),
+            ),
+        ] {
+            let err = parse_receipt_value::<HeartbeatReceipt>(&body)
+                .expect_err("heartbeat receipt must not synthesize required membership facts");
+            assert!(
+                err.to_string().contains(missing),
+                "missing field {missing:?} must fail closed: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn heartbeat_receipt_rejects_incomplete_status_header() {
+        for (missing, header) in [
+            ("status", json!({"permanent": false})),
+            ("permanent", json!({"status": "active"})),
+        ] {
+            let body = json!({
+                "membership_status": "active",
+                "realm_directory_size": 3,
+                "header": header,
+                "authority_abilities_diff": {
+                    "revision": 0,
+                    "added": [],
+                    "removed": []
+                }
+            });
+
+            let err = parse_receipt_value::<HeartbeatReceipt>(&body)
+                .expect_err("heartbeat status header must not synthesize missing facts");
+            assert!(
+                err.to_string().contains(missing),
+                "missing header field {missing:?} must fail closed: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn heartbeat_receipt_rejects_incomplete_rejected_node_rows() {
+        for (missing, row) in [
+            ("node_id", json!({"message": "revoked"})),
+            ("message", json!({"node_id": "dev-a"})),
+        ] {
+            let body = json!({
+                "membership_status": "active",
+                "realm_directory_size": 3,
+                "rejected_nodes": [row],
+                "authority_abilities_diff": {
+                    "revision": 0,
+                    "added": [],
+                    "removed": []
+                }
+            });
+
+            let err = parse_receipt_value::<HeartbeatReceipt>(&body)
+                .expect_err("heartbeat rejected-node rows must carry complete facts");
+            assert!(
+                err.to_string().contains(missing),
+                "missing rejected-node field {missing:?} must fail closed: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn heartbeat_receipt_rejects_retired_top_level_status_aliases() {
+        for field in ["status", "permanent"] {
+            let mut body = serde_json::Map::new();
+            body.insert("membership_status".to_string(), json!("active"));
+            body.insert("realm_directory_size".to_string(), json!(3));
+            body.insert(
+                "authority_abilities_diff".to_string(),
+                json!({
+                    "revision": 0,
+                    "added": [],
+                    "removed": []
+                }),
+            );
+            body.insert(field.to_string(), json!("retired"));
+
+            let err = parse_receipt_value::<HeartbeatReceipt>(&Value::Object(body))
+                .expect_err("retired heartbeat aliases must fail closed");
+
+            assert!(
+                err.to_string().contains(field),
+                "retired field {field:?} must be named in parse error: {err}"
+            );
+        }
     }
 
     #[test]
@@ -525,5 +744,44 @@ mod tests {
             parsed.agents[0].ability_summaries[0]["ability_ura"],
             "easynet:///r/acme/ability/alice.bot.chat"
         );
+    }
+
+    #[test]
+    fn resolve_receipt_rejects_top_level_compat_agent_lists() {
+        for field in ["items", "results", "directory"] {
+            let mut body = serde_json::Map::new();
+            body.insert("agents".to_string(), json!([]));
+            body.insert(field.to_string(), json!([]));
+
+            let err = parse_receipt_value::<ResolveReceipt>(&Value::Object(body))
+                .expect_err("resolve receipt must reject alternate agent list aliases");
+
+            assert!(
+                err.to_string().contains(field),
+                "retired field {field:?} must be named in parse error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolved_agent_rejects_retired_identity_and_directory_aliases() {
+        for field in ["agent_ura", "node_id", "tenant_id"] {
+            let mut agent = serde_json::Map::new();
+            agent.insert(
+                "ura".to_string(),
+                json!("easynet:///r/acme/agent/alice.bot"),
+            );
+            agent.insert("status".to_string(), json!("active"));
+            agent.insert(field.to_string(), json!("retired"));
+            let body = json!({ "agents": [Value::Object(agent)] });
+
+            let err = parse_receipt_value::<ResolveReceipt>(&body)
+                .expect_err("resolved agent row must reject retired aliases");
+
+            assert!(
+                err.to_string().contains(field),
+                "retired field {field:?} must be named in parse error: {err}"
+            );
+        }
     }
 }

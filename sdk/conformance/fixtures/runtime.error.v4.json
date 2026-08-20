@@ -1,0 +1,10 @@
+{
+  "code": "INVALID_ARGUMENT",
+  "stage": "prepare",
+  "message": "missing caller_ura",
+  "retry": "never",
+  "source": "sdk",
+  "invocation_id": null,
+  "receipt_ura": null,
+  "details": {}
+}

@@ -190,16 +190,22 @@ else {
 }
 
 $Header = Join-Path $Root "include\easynet_cli.h"
-$AbiSpec = Join-Path $Root "docs\spec\ffi-abi-v3.md"
+$AbiExports = Join-Path $Root "include\easynet_cli.exports.v7"
+$AbiSpec = Join-Path $Root "docs\spec\ffi-abi-v7.md"
 if (Test-Path $Header) {
     $HeaderOut = Join-Path $StageDir "include"
     New-Item -ItemType Directory -Path $HeaderOut -Force | Out-Null
     Copy-Item $Header (Join-Path $HeaderOut "easynet_cli.h") -Force
 }
+if (Test-Path $AbiExports) {
+    $HeaderOut = Join-Path $StageDir "include"
+    New-Item -ItemType Directory -Path $HeaderOut -Force | Out-Null
+    Copy-Item $AbiExports (Join-Path $HeaderOut "easynet_cli.exports.v7") -Force
+}
 if (Test-Path $AbiSpec) {
     $SpecOut = Join-Path $StageDir "docs\spec"
     New-Item -ItemType Directory -Path $SpecOut -Force | Out-Null
-    Copy-Item $AbiSpec (Join-Path $SpecOut "ffi-abi-v3.md") -Force
+    Copy-Item $AbiSpec (Join-Path $SpecOut "ffi-abi-v7.md") -Force
 }
 
 Write-Host "==> [3/3] Staged package"

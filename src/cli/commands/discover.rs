@@ -40,28 +40,23 @@
 // still print, exit code 0 (spec D9).
 //
 // The seven-tuple is auditable: each daemon discover call goes through
-// `invoke_local_ability_with_invocation_meta`, and the envelope echoes
+// `invoke_local_target_with_invocation_meta`, and the envelope echoes
 // (caller / callee / ability / subject / …) are included verbatim in
 // `--format json` output as `invocations` (spec 0.1-7, W1-E2E-1 ⑤).
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
-
 use anyhow::Context;
 use clap::{Args, ValueEnum};
 use console::style;
 use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::ura::AbilitySelector;
 use crate::support::platform::local_invoke::{
-    invoke_local_ability, invoke_local_ability_with_invocation_meta,
+    invoke_local_target_with_invocation_meta, LocalAbilityTarget, LocalRuntimeStateReadIssuer,
 };
-
-const REALM_ANCHOR_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const REALM_ANCHOR_MAX_POLLS: u64 = 10;
 
 /// Narrow re-export so integration tests (and other `pub` consumers
 /// of this module) can name the flag type without opening the whole
@@ -185,88 +180,142 @@ pub struct Candidate {
     pub owner_ura: String,
 }
 
-impl Candidate {
-    /// Project one runtime ladder row, scoring it against the intent
-    /// tokens. Returns `None` for zero-score rows and for rows whose
-    /// `qualified_name` does not round-trip the Axon URA parser —
-    /// the caller counts those separately so dropped rows are never
-    /// silent (spec §0.1-8).
-    fn from_ladder_row(row: &Value, tokens: &[String]) -> Result<Option<Self>, ()> {
-        let ura = row
-            .get("qualified_name")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let identity_state = row
-            .get("identity_state")
-            .and_then(Value::as_str)
-            .unwrap_or("minted");
-        let owner = row.get("owner").and_then(Value::as_str).unwrap_or_default();
+#[derive(Debug)]
+struct DiscoverCandidateRow {
+    ura: String,
+    identity_state: String,
+    owner: String,
+    selector: Option<AbilitySelector>,
+    ability: String,
+    description: String,
+    scope: String,
+    callable: bool,
+    diagnostic: Option<String>,
+}
+
+impl DiscoverCandidateRow {
+    fn parse(row: &Value) -> anyhow::Result<Self> {
+        let ura = optional_row_string(row, "qualified_name")?.unwrap_or_default();
+        let identity_state =
+            optional_row_string(row, "identity_state")?.unwrap_or_else(|| "minted".to_string());
+        let owner = optional_row_string(row, "owner")?.unwrap_or_default();
         let selector = if ura.is_empty() {
             None
         } else {
-            Some(AbilitySelector::parse(ura).map_err(|_| ())?)
+            Some(AbilitySelector::parse(&ura).map_err(|error| {
+                anyhow::anyhow!(
+                    "discover candidate row has non-canonical qualified_name {ura:?}: {error}"
+                )
+            })?)
         };
-        let ability = row
-            .get("ability")
-            .and_then(Value::as_str)
-            .or_else(|| selector.as_ref().map(AbilitySelector::public_name))
-            .unwrap_or_default();
-        let description = row
-            .get("description")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let scope = row
-            .get("scope_matched")
-            .and_then(Value::as_str)
-            .unwrap_or("device");
+        if selector.is_none() && identity_state == "minted" {
+            anyhow::bail!("discover minted candidate row missing canonical qualified_name");
+        }
 
-        let name = if owner.is_empty() {
-            ability.to_string()
+        let ability = optional_row_string(row, "ability")?
+            .or_else(|| {
+                selector
+                    .as_ref()
+                    .map(|selector| selector.public_name().to_string())
+            })
+            .ok_or_else(|| anyhow::anyhow!("discover candidate row missing non-empty ability"))?;
+        if selector.is_none() && owner.is_empty() {
+            anyhow::bail!("discover unminted candidate row missing owner");
+        }
+        let scope = required_row_string(row, "scope_matched")?;
+        Ok(Self {
+            ura,
+            identity_state,
+            owner,
+            selector,
+            ability,
+            description: optional_row_string(row, "description")?.unwrap_or_default(),
+            scope,
+            callable: required_row_bool(row, "callable")?,
+            diagnostic: optional_row_string(row, "diagnostic")?,
+        })
+    }
+
+    fn display_name(&self) -> String {
+        if self.owner.is_empty() {
+            self.ability.clone()
         } else {
-            format!("{owner}.{ability}")
-        };
-        let owner_signal = if ura.is_empty() { owner } else { ura };
-        let score = score_candidate(tokens, &name, description, Some(owner_signal));
+            format!("{}.{}", self.owner, self.ability)
+        }
+    }
+
+    fn owner_signal(&self) -> &str {
+        if self.ura.is_empty() {
+            self.owner.as_str()
+        } else {
+            self.ura.as_str()
+        }
+    }
+}
+
+impl Candidate {
+    /// Project one runtime ladder row, scoring it against the intent
+    /// tokens. Returns `None` only for zero-score rows. Schema and
+    /// canonical URA defects are corrupt discovery read-model
+    /// state and fail closed before ranking.
+    fn from_ladder_row(row: &Value, tokens: &[String]) -> anyhow::Result<Option<Self>> {
+        let row = DiscoverCandidateRow::parse(row)?;
+        let name = row.display_name();
+        let score = score_candidate(tokens, &name, &row.description, Some(row.owner_signal()));
         if score == 0 {
             return Ok(None);
         }
-        let mut diagnostic = row
-            .get("diagnostic")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let (owner_kind, owner_ura, callable) = match selector.as_ref() {
-            Some(selector) => {
-                let callable = row.get("callable").and_then(Value::as_bool);
-                if callable.is_none() {
-                    diagnostic.get_or_insert_with(|| {
-                        "callable status missing from discovery row; treating as non-callable"
-                            .to_string()
-                    });
-                }
-                (
-                    selector.owner_kind(),
-                    selector.owner_ura().to_string(),
-                    callable.unwrap_or(false),
-                )
+        let diagnostic = row.diagnostic;
+        let (owner_kind, owner_ura, callable) = match row.selector.as_ref() {
+            Some(selector) => (
+                selector.owner_kind(),
+                selector.owner_ura().to_string(),
+                row.callable,
+            ),
+            None if row.identity_state != "minted" => {
+                ("agent", format!("unminted-agent:{}", row.owner), false)
             }
-            None if identity_state != "minted" => {
-                ("agent", format!("unminted-agent:{owner}"), false)
-            }
-            None => return Err(()),
+            None => unreachable!("minted candidates without selector fail before scoring"),
         };
         Ok(Some(Candidate {
             score,
             name,
-            ura: ura.to_string(),
+            ura: row.ura,
             owner_kind,
-            scope: scope.to_string(),
-            description: description.to_string(),
+            scope: row.scope,
+            description: row.description,
             callable,
-            identity_state: identity_state.to_string(),
+            identity_state: row.identity_state,
             diagnostic,
             owner_ura,
         }))
     }
+}
+
+fn optional_row_string(row: &Value, field: &'static str) -> anyhow::Result<Option<String>> {
+    match row.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.trim().to_string()).filter(|s| !s.is_empty())),
+        Some(_) => anyhow::bail!("discover candidate row field {field} must be a string"),
+    }
+}
+
+fn required_row_string(row: &Value, field: &'static str) -> anyhow::Result<String> {
+    optional_row_string(row, field)?
+        .ok_or_else(|| anyhow::anyhow!("discover candidate row missing non-empty {field}"))
+}
+
+fn optional_row_bool(row: &Value, field: &'static str) -> anyhow::Result<Option<bool>> {
+    match row.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(value)) => Ok(Some(*value)),
+        Some(_) => anyhow::bail!("discover candidate row field {field} must be a boolean"),
+    }
+}
+
+fn required_row_bool(row: &Value, field: &'static str) -> anyhow::Result<bool> {
+    optional_row_bool(row, field)?
+        .ok_or_else(|| anyhow::anyhow!("discover candidate row missing boolean {field}"))
 }
 
 /// Typed projection of the ladder's federation error envelope.
@@ -327,13 +376,7 @@ pub struct DiscoverReport {
     pub invocations: Vec<Value>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<DiscoverDiagnostic>,
-    #[serde(skip_serializing_if = "is_zero")]
-    pub skipped_unparseable: usize,
     pub candidates: Vec<Candidate>,
-}
-
-fn is_zero(n: &usize) -> bool {
-    *n == 0
 }
 
 impl DiscoverReport {
@@ -349,16 +392,6 @@ impl DiscoverReport {
                 style(format!(
                     "note: federated tier skipped ({}): {}",
                     fed.status, fed.message
-                ))
-                .dim()
-            );
-        }
-        if self.skipped_unparseable > 0 {
-            eprintln!(
-                "{}",
-                style(format!(
-                    "note: {} candidate(s) dropped — non-canonical URA from a peer",
-                    self.skipped_unparseable
                 ))
                 .dim()
             );
@@ -528,40 +561,36 @@ impl DiscoverExecutionPlan {
 
 /// Wire-level target for one discover ladder invocation.
 ///
-/// Invariant 1: `ability` is the owner-local public ability name that
-/// belongs in the Axon descriptor ref. It is never the legacy dotted
-/// `<agent>.discover` registry key.
-/// Invariant 2: `callee_agent` is present only for hosted-agent ladders;
-/// the daemon route resolver is responsible for mapping
-/// `(callee_agent, ability=discover)` to the local registry key.
+/// The target already contains the canonical callee URA and descriptor subject;
+/// display names never cross into invocation construction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DiscoverLadderTarget {
-    ability: String,
-    callee_agent: Option<String>,
+    target: LocalAbilityTarget,
 }
 
 impl DiscoverLadderTarget {
-    fn device_aggregate() -> Self {
-        Self {
-            ability: crate::daemon::ability::builtins::agents::discover::DEVICE_DISCOVER_ABILITY
-                .to_string(),
-            callee_agent: None,
-        }
+    fn device_aggregate() -> anyhow::Result<Self> {
+        let execution_host = crate::daemon::identity::local_invocation::local_daemon_ura()?;
+        let ability = crate::daemon::ability::builtins::agents::discover::DEVICE_DISCOVER_ABILITY;
+        Ok(Self {
+            target: LocalAbilityTarget::for_device_sponsored_system_ability(
+                ability,
+                &execution_host,
+            )?,
+        })
     }
 
-    fn hosted_agent(agent: impl Into<String>) -> Self {
-        Self {
-            ability: crate::daemon::ability::builtins::agents::discover::ABILITY_VERB.to_string(),
-            callee_agent: Some(agent.into()),
-        }
+    fn hosted_agent(agent_ura: &str) -> anyhow::Result<Self> {
+        Ok(Self {
+            target: LocalAbilityTarget::new(
+                crate::daemon::ability::builtins::agents::discover::ABILITY_VERB,
+                agent_ura,
+            )?,
+        })
     }
 
-    fn ability(&self) -> &str {
-        &self.ability
-    }
-
-    fn callee_agent(&self) -> Option<&str> {
-        self.callee_agent.as_deref()
+    fn target(&self) -> &LocalAbilityTarget {
+        &self.target
     }
 }
 
@@ -596,7 +625,6 @@ impl SourceWindowMode {
 /// phase boundaries.
 #[derive(Debug, Default)]
 struct DiscoverExecutionState {
-    skipped: usize,
     invocations: Vec<Value>,
     diagnostics: Vec<DiscoverDiagnostic>,
     candidates: Vec<Candidate>,
@@ -607,12 +635,6 @@ struct DiscoverExecutionState {
 impl DiscoverExecutionState {
     fn record_invocation(&mut self, meta: Value) {
         self.invocations.push(meta);
-    }
-
-    fn replace_last_invocation(&mut self, meta: Value) {
-        if let Some(last) = self.invocations.last_mut() {
-            *last = meta;
-        }
     }
 
     fn record_completed_tier(&mut self, scope: &'static str) {
@@ -626,13 +648,10 @@ impl DiscoverExecutionState {
         value: &Value,
         tokens: &[String],
         self_projection: LocalSelfProjection,
-    ) {
-        self.candidates.extend(project_rows(
-            value,
-            tokens,
-            &mut self.skipped,
-            self_projection,
-        ));
+    ) -> anyhow::Result<()> {
+        self.candidates
+            .extend(project_rows(value, tokens, self_projection)?);
+        Ok(())
     }
 
     fn record_source_diagnostic(&mut self, value: &Value) {
@@ -683,7 +702,6 @@ impl DiscoverExecutionState {
             federation: self.federation,
             invocations: self.invocations,
             diagnostics: self.diagnostics,
-            skipped_unparseable: self.skipped,
             candidates: self.candidates,
         }
     }
@@ -717,7 +735,7 @@ impl DiscoverRuntimeService {
         self.state.record_invocation(invocation_meta);
         self.state.record_source_diagnostic(&local_value);
         self.state
-            .extend_candidates(&local_value, &self.plan.tokens, self.plan.self_projection);
+            .extend_candidates(&local_value, &self.plan.tokens, self.plan.self_projection)?;
         self.state.record_completed_tier("device");
         Ok(())
     }
@@ -730,8 +748,7 @@ impl DiscoverRuntimeService {
             .last()
             .cloned()
             .context("discover tier did not produce parent invocation metadata")?;
-        let mut anchor_resolver = RealmAnchorResolver::production();
-        let anchor = match anchor_resolver.resolve(&parent_invocation_meta)? {
+        let anchor = match resolve_realm_anchor(&parent_invocation_meta) {
             RealmAnchorResolution::Anchored(anchor) => anchor,
             RealmAnchorResolution::Unanchored { reason } => {
                 self.state.record_diagnostic(DiscoverDiagnostic {
@@ -742,9 +759,6 @@ impl DiscoverRuntimeService {
                 return Ok(());
             }
         };
-        if let Some(refreshed) = anchor.refreshed_invocation_meta {
-            self.state.replace_last_invocation(refreshed);
-        }
         let (realm_value, realm_invocation_meta) =
             self.walk_tier_with_trace(scope, &anchor.parents, anchor.trace_id.as_deref())?;
         self.state.record_invocation(realm_invocation_meta);
@@ -756,7 +770,7 @@ impl DiscoverRuntimeService {
                     &realm_value,
                     &self.plan.tokens,
                     LocalSelfProjection::Preserve,
-                );
+                )?;
                 self.state.record_completed_tier(scope);
             }
         }
@@ -777,27 +791,30 @@ impl DiscoverRuntimeService {
         causal_parents: &[Value],
         trace_id: Option<&str>,
     ) -> anyhow::Result<(Value, Value)> {
-        invoke_local_ability_with_invocation_meta(
-            self.plan.ladder.ability(),
+        let context = crate::support::platform::local_invoke::LocalSystemInvocationIssuer::root_context_for_target(
+            self.plan.ladder.target(),
+            causal_parents,
+            std::time::Duration::from_secs(30),
+            trace_id,
+        )?;
+        let (value, metadata) = invoke_local_target_with_invocation_meta(
+            self.plan.ladder.target(),
             self.plan
                 .source_window
                 .runtime_args(scope, self.plan.source_limit, &self.plan.query),
-            None,
-            causal_parents,
-            None,
-            trace_id,
-            self.plan.ladder.callee_agent(),
+            context,
         )
-        .with_context(|| format!("walk discover tier {scope:?}"))
+        .with_context(|| format!("walk discover tier {scope:?}"))?;
+        Ok((value, metadata.as_value().clone()))
     }
 }
 
 /// Causal-anchor state for the realm tier.
 ///
 /// Local discovery always runs first. Realm discovery may run only when the
-/// local invocation produced a complete receipt anchor. Missing anchors stay
-/// unanchored until the ledger exposes a real receipt; they are never converted
-/// to empty parents.
+/// local invocation produced a complete receipt anchor. The invocation response
+/// is the sole source of that terminal proof; missing anchors are never repaired
+/// by polling a secondary ledger projection or converted to empty parents.
 #[derive(Debug, Clone)]
 enum RealmCausalState {
     Anchored(Vec<Value>),
@@ -814,6 +831,7 @@ impl RealmCausalState {
         }
     }
 
+    #[cfg(test)]
     fn parents(&self) -> Option<&[Value]> {
         match self {
             Self::Anchored(parents) => Some(parents.as_slice()),
@@ -821,6 +839,7 @@ impl RealmCausalState {
         }
     }
 
+    #[cfg(test)]
     fn unanchored_reason(&self) -> Option<&str> {
         match self {
             Self::Anchored(_) => None,
@@ -833,7 +852,6 @@ impl RealmCausalState {
 struct RealmAnchor {
     parents: Vec<Value>,
     trace_id: Option<String>,
-    refreshed_invocation_meta: Option<Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -842,148 +860,14 @@ enum RealmAnchorResolution {
     Unanchored { reason: String },
 }
 
-struct RealmAnchorResolver<P>
-where
-    P: FnMut(&str) -> anyhow::Result<Option<Value>>,
-{
-    max_polls: u64,
-    poll_interval: Duration,
-    poll_record: P,
-}
-
-impl RealmAnchorResolver<fn(&str) -> anyhow::Result<Option<Value>>> {
-    fn production() -> Self {
-        Self {
-            max_polls: REALM_ANCHOR_MAX_POLLS,
-            poll_interval: REALM_ANCHOR_POLL_INTERVAL,
-            poll_record: fetch_invocation_record_by_request_id,
-        }
+fn resolve_realm_anchor(meta: &Value) -> RealmAnchorResolution {
+    match RealmCausalState::from_local_invocation(meta) {
+        RealmCausalState::Anchored(parents) => RealmAnchorResolution::Anchored(RealmAnchor {
+            parents,
+            trace_id: trace_id_from_invocation_meta(meta),
+        }),
+        RealmCausalState::Unanchored { reason } => RealmAnchorResolution::Unanchored { reason },
     }
-}
-
-impl<P> RealmAnchorResolver<P>
-where
-    P: FnMut(&str) -> anyhow::Result<Option<Value>>,
-{
-    #[cfg(test)]
-    fn new_for_test(max_polls: u64, poll_record: P) -> Self {
-        Self {
-            max_polls,
-            poll_interval: Duration::from_millis(0),
-            poll_record,
-        }
-    }
-
-    fn resolve(&mut self, local_meta: &Value) -> anyhow::Result<RealmAnchorResolution> {
-        if let Some(anchor) = anchor_from_invocation_meta(local_meta, None) {
-            return Ok(RealmAnchorResolution::Anchored(anchor));
-        }
-
-        let Some(request_id) = request_id_from_invocation_meta(local_meta) else {
-            let reason = RealmCausalState::from_local_invocation(local_meta)
-                .unanchored_reason()
-                .unwrap_or("local invocation metadata is missing request_id")
-                .to_string();
-            return Ok(RealmAnchorResolution::Unanchored { reason });
-        };
-
-        let mut last_reason = RealmCausalState::from_local_invocation(local_meta)
-            .unanchored_reason()
-            .unwrap_or("local receipt anchor is unavailable")
-            .to_string();
-        for poll_idx in 0..self.max_polls {
-            if poll_idx > 0 && !self.poll_interval.is_zero() {
-                std::thread::sleep(self.poll_interval);
-            }
-            let Some(record) = (self.poll_record)(&request_id)? else {
-                last_reason =
-                    format!("ledger did not expose invocation record for request_id {request_id}");
-                continue;
-            };
-            let refreshed = refreshed_invocation_meta_from_record(local_meta, &record);
-            if let Some(anchor) = anchor_from_invocation_meta(&refreshed, Some(refreshed.clone())) {
-                return Ok(RealmAnchorResolution::Anchored(anchor));
-            }
-            last_reason = RealmCausalState::from_local_invocation(&refreshed)
-                .unanchored_reason()
-                .unwrap_or("refreshed local invocation metadata still lacks a receipt anchor")
-                .to_string();
-        }
-
-        Ok(RealmAnchorResolution::Unanchored {
-            reason: format!(
-                "local receipt anchor unavailable after {} ledger polls: {last_reason}",
-                self.max_polls
-            ),
-        })
-    }
-}
-
-fn anchor_from_invocation_meta(
-    meta: &Value,
-    refreshed_invocation_meta: Option<Value>,
-) -> Option<RealmAnchor> {
-    let parents = RealmCausalState::from_local_invocation(meta)
-        .parents()
-        .map(<[Value]>::to_vec)?;
-    Some(RealmAnchor {
-        parents,
-        trace_id: trace_id_from_invocation_meta(meta),
-        refreshed_invocation_meta,
-    })
-}
-
-fn request_id_from_invocation_meta(meta: &Value) -> Option<String> {
-    meta.get("request_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-fn fetch_invocation_record_by_request_id(request_id: &str) -> anyhow::Result<Option<Value>> {
-    // Read the receipt projection through the daemon's side-effect-free
-    // `invocation.record.get` RPC, not by opening the redb ledger file: redb's
-    // exclusive cross-process lock makes a second-process open fail hard while
-    // the daemon holds it (the common topology). The daemon reads its own
-    // in-process ledger and writes no row, so realm-anchor resolution does not
-    // append a second invocation to the trail it is anchoring against.
-    let response = invoke_local_ability(
-        crate::daemon::ability::builtins::governance::invocation_history::ABILITY_INVOCATION_RECORD_GET,
-        serde_json::json!({ "request_id": request_id }),
-    )
-    .with_context(|| format!("poll invocation ledger for request_id {request_id}"))?;
-    Ok(response
-        .get("record")
-        .filter(|record| !record.is_null())
-        .cloned())
-}
-
-fn refreshed_invocation_meta_from_record(original: &Value, record: &Value) -> Value {
-    let mut meta = original.clone();
-    meta["trace_id"] = record_field(record, "trace_id");
-    meta["invocation_ura"] = record_field(record, "invocation_ura");
-    meta["caller_ura"] = record_field(record, "caller_ura");
-    meta["callee_ura"] = record_field(record, "callee_ura");
-    meta["subject_ura"] = record_field(record, "subject_ura");
-    meta["ledger_state"] = record_field(record, "state");
-    let receipt =
-        crate::support::platform::invocation_receipt_projection::terminal_receipt_from_ledger_record(record);
-    let receipt_backed = receipt
-        .as_ref()
-        .and_then(|receipt| receipt_parent_from_terminal_receipt(receipt).ok())
-        .is_some();
-    meta["receipt"] = receipt.unwrap_or(Value::Null);
-    meta["metadata_state"] = json!(if receipt_backed {
-        "receipt_backed"
-    } else {
-        "receipt_anchor_pending"
-    });
-    meta
-}
-
-fn record_field(record: &Value, key: &str) -> Value {
-    record.get(key).cloned().unwrap_or(Value::Null)
 }
 
 fn trace_id_from_invocation_meta(meta: &Value) -> Option<String> {
@@ -998,13 +882,6 @@ fn receipt_parent_from_invocation_meta(meta: &Value) -> anyhow::Result<Value> {
     let anchor = meta
         .get("receipt")
         .and_then(|receipt| receipt.get("anchor"))
-        .ok_or_else(|| anyhow::anyhow!("invocation metadata is missing receipt.anchor"))?;
-    receipt_parent_from_anchor(anchor)
-}
-
-fn receipt_parent_from_terminal_receipt(receipt: &Value) -> anyhow::Result<Value> {
-    let anchor = receipt
-        .get("anchor")
         .ok_or_else(|| anyhow::anyhow!("invocation metadata is missing receipt.anchor"))?;
     receipt_parent_from_anchor(anchor)
 }
@@ -1059,60 +936,58 @@ fn rank_and_deduplicate_candidates(mut candidates: Vec<Candidate>, limit: usize)
 /// Default top-level discovery uses the daemon-owned aggregate discover
 /// entry. `--as-agent` intentionally opts into one concrete hosted
 /// agent self tier, validates the owner against `agent.list`, and keeps
-/// the wire ability owner-local (`discover`) instead of reusing the
+/// the wire ability on the canonical aggregate (`agent.discover`) instead of reusing the
 /// daemon's historical `<agent>.discover` registry key.
 fn resolve_ladder_target(as_agent: Option<&str>) -> anyhow::Result<DiscoverLadderTarget> {
     let Some(requested_agent) = as_agent.map(str::trim).filter(|agent| !agent.is_empty()) else {
-        return Ok(DiscoverLadderTarget::device_aggregate());
+        return DiscoverLadderTarget::device_aggregate();
     };
-    let value = invoke_local_ability("agent.list", json!({}))
+    let value = LocalRuntimeStateReadIssuer::agent_list(json!({}))
         .context("resolve discover entry from the agent registry")?;
-    let mut names: Vec<String> = value
+    let agent_ura = value
         .get("agents")
         .and_then(Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|r| r.get("name").and_then(Value::as_str))
-                .map(str::to_owned)
-                .collect()
+        .and_then(|rows| {
+            rows.iter().find_map(|row| {
+                (row.get("name").and_then(Value::as_str) == Some(requested_agent))
+                    .then(|| row.get("ura").and_then(Value::as_str))
+                    .flatten()
+            })
         })
-        .unwrap_or_default();
-    names.sort();
-    if !names.iter().any(|name| name == requested_agent) {
-        anyhow::bail!(
-            "agent {requested_agent:?} is not registered on this daemon; choose one from \
-             `easynet agent list`"
-        );
-    }
-    Ok(DiscoverLadderTarget::hosted_agent(requested_agent))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "agent {requested_agent:?} is not registered with a canonical Agent URA on this \
+                 daemon; choose one from `easynet agent list`"
+            )
+        })?;
+    DiscoverLadderTarget::hosted_agent(agent_ura)
 }
 
-/// Project every ladder row into a scored candidate; count rows whose
-/// URA does not parse instead of dropping them silently.
+/// Project every ladder row into a scored candidate. A missing
+/// candidates array or malformed candidate row is corrupt discovery
+/// read-model state and fails closed; only zero-score rows are
+/// ranking misses.
 fn project_rows(
     value: &Value,
     tokens: &[String],
-    skipped: &mut usize,
     self_projection: LocalSelfProjection,
-) -> Vec<Candidate> {
-    value
+) -> anyhow::Result<Vec<Candidate>> {
+    let rows = value
         .get("candidates")
         .and_then(Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|row| {
-                    let row = normalize_self_projection(row, self_projection)?;
-                    match Candidate::from_ladder_row(&row, tokens) {
-                        Ok(candidate) => candidate,
-                        Err(()) => {
-                            *skipped += 1;
-                            None
-                        }
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+        .ok_or_else(|| anyhow::anyhow!("discover response missing candidates array"))?;
+    let mut candidates = Vec::new();
+    for (idx, row) in rows.iter().enumerate() {
+        let Some(row) = normalize_self_projection(row, self_projection) else {
+            continue;
+        };
+        if let Some(candidate) = Candidate::from_ladder_row(&row, tokens)
+            .with_context(|| format!("project discover candidates[{idx}]"))?
+        {
+            candidates.push(candidate);
+        }
+    }
+    Ok(candidates)
 }
 
 fn normalize_self_projection(row: &Value, projection: LocalSelfProjection) -> Option<Value> {
@@ -1275,7 +1150,7 @@ mod tests {
     }
 
     #[test]
-    fn ladder_row_with_non_canonical_ura_is_counted_not_silent() {
+    fn ladder_row_with_non_canonical_ura_fails_closed() {
         let toks = vec!["read".to_string()];
         let row = json!({
             "qualified_name": "not-a-ura",
@@ -1283,35 +1158,94 @@ mod tests {
         });
         assert!(Candidate::from_ladder_row(&row, &toks).is_err());
 
-        let mut skipped = 0;
-        let out = project_rows(
+        let err = project_rows(
             &json!({ "candidates": [row] }),
             &toks,
-            &mut skipped,
             LocalSelfProjection::Preserve,
+        )
+        .expect_err("malformed minted row must fail the discovery projection");
+        assert!(
+            err.to_string().contains("project discover candidates[0]"),
+            "row index should stay visible: {err:#}"
         );
-        assert!(out.is_empty());
-        assert_eq!(skipped, 1);
+        assert!(
+            format!("{err:#}").contains("non-canonical qualified_name"),
+            "canonical URA failure should stay visible: {err:#}"
+        );
     }
 
     #[test]
-    fn zero_score_ladder_rows_drop_without_counting_as_unparseable() {
+    fn zero_score_ladder_rows_drop_after_schema_projection() {
         let toks = vec!["weather".to_string()];
-        let mut skipped = 0;
         let out = project_rows(
             &json!({ "candidates": [device_row("acme")] }),
             &toks,
-            &mut skipped,
             LocalSelfProjection::Preserve,
-        );
+        )
+        .expect("valid row with zero score");
         assert!(out.is_empty());
-        assert_eq!(skipped, 0);
     }
 
     #[test]
-    fn unminted_identity_rows_are_not_counted_as_unparseable() {
+    fn discovery_response_missing_candidates_array_fails_closed() {
         let toks = vec!["weather".to_string()];
-        let mut skipped = 0;
+        let err = project_rows(
+            &json!({ "scope": "device" }),
+            &toks,
+            LocalSelfProjection::Preserve,
+        )
+        .expect_err("missing candidates array is corrupt discovery state");
+        assert!(
+            err.to_string().contains("missing candidates array"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn ladder_row_missing_scope_fails_closed_instead_of_defaulting_to_device() {
+        let toks = vec!["chat".to_string()];
+        let mut row = agent_row("acme");
+        row.as_object_mut()
+            .expect("row object")
+            .remove("scope_matched");
+
+        let err = project_rows(
+            &json!({ "candidates": [row] }),
+            &toks,
+            LocalSelfProjection::Preserve,
+        )
+        .expect_err("missing scope is corrupt discovery read-model state");
+
+        assert!(
+            format!("{err:#}").contains("missing non-empty scope_matched"),
+            "scope fallback must stay retired: {err:#}"
+        );
+    }
+
+    #[test]
+    fn ladder_row_malformed_callable_fails_closed_instead_of_downgrading() {
+        let toks = vec!["chat".to_string()];
+        let mut row = agent_row("acme");
+        row.as_object_mut()
+            .expect("row object")
+            .insert("callable".to_string(), json!("yes"));
+
+        let err = project_rows(
+            &json!({ "candidates": [row] }),
+            &toks,
+            LocalSelfProjection::Preserve,
+        )
+        .expect_err("malformed callable state must fail closed");
+
+        assert!(
+            format!("{err:#}").contains("field callable must be a boolean"),
+            "callable type fallback must stay retired: {err:#}"
+        );
+    }
+
+    #[test]
+    fn unminted_identity_rows_project_as_non_callable_candidates() {
+        let toks = vec!["weather".to_string()];
         let out = project_rows(
             &json!({
                 "candidates": [{
@@ -1326,10 +1260,9 @@ mod tests {
                 }]
             }),
             &toks,
-            &mut skipped,
             LocalSelfProjection::Preserve,
-        );
-        assert_eq!(skipped, 0);
+        )
+        .expect("unminted rows are explicit non-callable candidates");
         assert_eq!(out.len(), 1);
         assert!(!out[0].callable);
         assert_eq!(out[0].identity_state, "identity_not_minted");
@@ -1341,14 +1274,33 @@ mod tests {
         let mut row = agent_row("acme");
         row.as_object_mut().expect("row object").remove("callable");
 
-        let c = Candidate::from_ladder_row(&row, &toks)
-            .unwrap()
-            .expect("scores > 0");
+        let err = Candidate::from_ladder_row(&row, &toks)
+            .expect_err("missing callable fact must fail closed");
 
-        assert!(!c.callable, "missing callability must not fail open");
-        assert_eq!(
-            c.diagnostic.as_deref(),
-            Some("callable status missing from discovery row; treating as non-callable")
+        assert!(
+            err.to_string().contains("missing boolean callable"),
+            "missing callable fact must fail before ranking: {err:#}"
+        );
+    }
+
+    #[test]
+    fn unminted_identity_rows_require_explicit_callable_fact() {
+        let toks = vec!["chat".to_string()];
+        let mut row = json!({
+            "identity_state": "identity_not_minted",
+            "owner": "acme",
+            "ability": "chat",
+            "description": "Chat",
+            "scope_matched": "agent",
+        });
+        row.as_object_mut().expect("row object").remove("callable");
+
+        let err = Candidate::from_ladder_row(&row, &toks)
+            .expect_err("unminted rows must still carry explicit callable facts");
+
+        assert!(
+            err.to_string().contains("missing boolean callable"),
+            "missing unminted callable fact must fail before candidate projection: {err:#}"
         );
     }
 
@@ -1387,86 +1339,47 @@ mod tests {
             .contains("receipt.anchor"));
     }
 
-    fn receipt_backed_ledger_record(request_id: &str) -> Value {
-        let receipt_hash = "11".repeat(32);
-        json!({
-            "request_id": request_id,
-            "trace_id": "trace-1",
-            "invocation_ura": "easynet:///r/acme/invocation/01DISCOVER",
-            "caller_ura": "easynet:///r/acme/agent/user.caller",
-            "callee_ura": "easynet:///r/acme/device/local",
-            "subject_ura": "easynet:///r/acme/device/local",
-            "state": "COMPLETED",
-            "receipt_chain": {
-                "head_receipt_hash": receipt_hash,
-                "anchors": [{
-                    "receipt_ura": "easynet:///r/acme/receipt/01RECEIPT",
-                    "receipt_hash": receipt_hash,
-                }],
-            },
-        })
-    }
-
     #[test]
-    fn realm_anchor_resolver_polls_until_receipt_parent_exists() {
+    fn realm_anchor_uses_only_terminal_receipt_from_invocation_response() {
         let local_meta = json!({
             "request_id": "req-1",
-            "metadata_state": "receipt_anchor_pending",
+            "metadata_state": "receipt_backed",
             "trace_id": "trace-1",
-        });
-        let mut calls = 0u8;
-        let mut resolver = RealmAnchorResolver::new_for_test(3, |request_id| {
-            calls += 1;
-            if calls < 2 {
-                return Ok(None);
+            "receipt": {
+                "anchor": {
+                    "receipt_ura": "easynet:///r/acme/resource/agent.discover.local/invocation/01RECEIPT/receipt",
+                    "receipt_hash": "11".repeat(32),
+                }
             }
-            Ok(Some(receipt_backed_ledger_record(request_id)))
         });
-
-        let resolution = resolver.resolve(&local_meta).expect("resolve realm anchor");
+        let resolution = resolve_realm_anchor(&local_meta);
         let RealmAnchorResolution::Anchored(anchor) = resolution else {
             panic!("expected anchored resolution");
         };
-        assert_eq!(calls, 2);
         assert_eq!(anchor.trace_id.as_deref(), Some("trace-1"));
         assert_eq!(
             anchor.parents,
             vec![json!({
-                "receipt_ura": "easynet:///r/acme/receipt/01RECEIPT",
+                "receipt_ura": "easynet:///r/acme/resource/agent.discover.local/invocation/01RECEIPT/receipt",
                 "receipt_hash": "11".repeat(32),
             })]
-        );
-        let refreshed = anchor
-            .refreshed_invocation_meta
-            .expect("resolver should return refreshed local invocation metadata");
-        assert_eq!(refreshed["metadata_state"], json!("receipt_backed"));
-        assert_eq!(
-            refreshed["invocation_ura"],
-            json!("easynet:///r/acme/invocation/01DISCOVER")
         );
     }
 
     #[test]
-    fn realm_anchor_resolver_exhaustion_remains_unanchored() {
+    fn realm_anchor_does_not_poll_or_fabricate_missing_terminal_proof() {
         let local_meta = json!({
             "request_id": "req-2",
             "metadata_state": "receipt_anchor_pending",
             "trace_id": "trace-2",
         });
-        let mut calls = 0u8;
-        let mut resolver = RealmAnchorResolver::new_for_test(2, |_request_id| {
-            calls += 1;
-            Ok(None)
-        });
-
-        let resolution = resolver.resolve(&local_meta).expect("resolve realm anchor");
+        let resolution = resolve_realm_anchor(&local_meta);
         let RealmAnchorResolution::Unanchored { reason } = resolution else {
             panic!("expected unanchored resolution");
         };
-        assert_eq!(calls, 2);
         assert!(
-            reason.contains("after 2 ledger polls"),
-            "exhaustion should be explicit: {reason}"
+            reason.contains("receipt.anchor"),
+            "missing response proof should be explicit: {reason}"
         );
     }
 
@@ -1512,10 +1425,14 @@ mod tests {
 
     #[test]
     fn hosted_ladder_target_uses_owner_local_discover_ability() {
-        let target = DiscoverLadderTarget::hosted_agent("testbot");
+        let target = DiscoverLadderTarget::hosted_agent("easynet:///r/acme/agent/alice.testbot")
+            .expect("hosted target");
 
-        assert_eq!(target.ability(), "discover");
-        assert_eq!(target.callee_agent(), Some("testbot"));
+        assert_eq!(target.target().dispatch_name(), "discover");
+        assert_eq!(
+            target.target().callee_ura(),
+            "easynet:///r/acme/agent/alice.testbot"
+        );
     }
 
     #[test]
@@ -1572,17 +1489,15 @@ mod tests {
             "visibility": "self",
         });
 
-        let mut skipped = 0;
         let out = project_rows(
             &json!({ "candidates": [public_self, private_self] }),
             &toks,
-            &mut skipped,
             LocalSelfProjection::DeviceAggregate,
-        );
+        )
+        .expect("device aggregate projection");
 
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].scope, "device");
-        assert_eq!(skipped, 0);
     }
 
     // ── Federation degradation envelope ────────────────────────────────
@@ -1605,7 +1520,7 @@ mod tests {
         let backed = json!({
             "receipt": {
                 "anchor": {
-                    "receipt_ura": "easynet:///r/acme/resource/invocations/req-1",
+                    "receipt_ura": "easynet:///r/acme/resource/agent.discover.local/invocation/req-1/receipt",
                     "receipt_hash": "abc123",
                 }
             },
@@ -1614,7 +1529,7 @@ mod tests {
         assert_eq!(
             receipt_parent_from_invocation_meta(&backed).expect("receipt parent"),
             json!({
-                "receipt_ura": "easynet:///r/acme/resource/invocations/req-1",
+                "receipt_ura": "easynet:///r/acme/resource/agent.discover.local/invocation/req-1/receipt",
                 "receipt_hash": "abc123",
             })
         );
@@ -1634,13 +1549,12 @@ mod tests {
         use std::collections::BTreeSet;
 
         let toks = vec!["chat".to_string()];
-        let mut skipped = 0;
         let candidates = project_rows(
             &json!({ "candidates": [agent_row("acme")] }),
             &toks,
-            &mut skipped,
             LocalSelfProjection::Preserve,
-        );
+        )
+        .expect("valid candidate rows");
         let report = DiscoverReport {
             query: "chat".into(),
             tiers_searched: vec!["device"],
@@ -1650,7 +1564,6 @@ mod tests {
             }),
             invocations: Vec::new(),
             diagnostics: Vec::new(),
-            skipped_unparseable: 0,
             candidates,
         };
         let v = serde_json::to_value(&report).expect("serializes");
@@ -1689,20 +1602,18 @@ mod tests {
     #[test]
     fn tree_groups_by_owner_and_preserves_score_order_within_groups() {
         let toks = vec!["read".to_string(), "chat".to_string()];
-        let mut skipped = 0;
         let candidates = project_rows(
             &json!({ "candidates": [agent_row("acme"), device_row("acme")] }),
             &toks,
-            &mut skipped,
             LocalSelfProjection::Preserve,
-        );
+        )
+        .expect("valid candidate rows");
         let report = DiscoverReport {
             query: "read chat".into(),
             tiers_searched: vec!["device"],
             federation: None,
             invocations: Vec::new(),
             diagnostics: Vec::new(),
-            skipped_unparseable: 0,
             candidates,
         };
         let groups = report.group_by_owner();

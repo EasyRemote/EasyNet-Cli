@@ -80,11 +80,13 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::core::ability::spec::AbilityManifest;
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
+use crate::daemon::ability::manifest::AbilityManifest;
 use crate::daemon::execution::mission::directory::ABILITY_MANIFEST_SUFFIX;
-use crate::daemon::persistence::agent_registry as agents;
+use crate::daemon::persistence::agent_aggregate::{
+    AgentAggregateRepository, AgentRegisteredAgentLoadError, AgentRegisteredWorkspaceLookupError,
+};
 
 /// Wire name of the publish meta-ability. Pinned because the
 /// curator session in `mission.think` calls it by string; a rename
@@ -100,16 +102,9 @@ pub const ABILITY_UNPUBLISH: &str = crate::daemon::ability::names::federation::A
 /// because publish is rare and the registry lookup is cheap (no
 /// hot-path concern). No captured state to keep coherent.
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner(
-        "ability.publish",
-        OwnerKind::Device,
-        Arc::new(publish_handler),
-    );
-    reg.register_rpc_with_owner(
-        "ability.unpublish",
-        OwnerKind::Device,
-        Arc::new(unpublish_handler),
-    );
+    let owner = OwnerKind::ability_management_system();
+    reg.register_rpc_with_owner(ABILITY_PUBLISH, owner.clone(), Arc::new(publish_handler));
+    reg.register_rpc_with_owner(ABILITY_UNPUBLISH, owner, Arc::new(unpublish_handler));
 }
 
 /// `ability.publish` handler.
@@ -342,18 +337,24 @@ fn parse_unpublish_args(args: &Value) -> anyhow::Result<(String, String, String,
 }
 
 fn resolve_owner_root(owner_id: &str) -> anyhow::Result<PathBuf> {
-    let registry = agents::load_agents()?;
-    let entry = registry.agents.get(owner_id).ok_or_else(|| {
-        anyhow::anyhow!(
-            "owner agent id {owner_id:?} is not registered (registered agents: {:?}); \
-             create the agent first via `easynet agent new`",
-            registry.agents.keys().collect::<Vec<_>>()
-        )
-    })?;
-    let root = entry
-        .root_path
-        .clone()
-        .unwrap_or_else(|| crate::daemon::persistence::config::agents_root().join(owner_id));
+    let root = match AgentAggregateRepository::load_registered_agent_workspace(
+        owner_id,
+        "ability.publish",
+    ) {
+        Ok(workspace) => workspace.root_path().to_path_buf(),
+        Err(AgentRegisteredAgentLoadError::Lookup(
+            AgentRegisteredWorkspaceLookupError::Missing {
+                registered_agent_ids,
+                ..
+            },
+        )) => {
+            anyhow::bail!(
+                "owner agent id {owner_id:?} is not registered (registered agents: {registered_agent_ids:?}); \
+                 create the agent first via `easynet agent new`"
+            );
+        }
+        Err(error) => return Err(error.into_source_or_self()),
+    };
     if !root.is_dir() {
         anyhow::bail!(
             "owner agent {owner_id:?} has no on-disk workspace at {} — cannot publish \
@@ -516,7 +517,8 @@ mod tests {
     }
     use crate::cli::commands::test_support::HomeGuard;
     use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+    use crate::daemon::persistence::agent_registry as agents;
+    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
 
     /// Materialise a throwaway agent inside a `HomeGuard`-isolated
     /// `~/.easynet/`. The HomeGuard already holds the process-global
@@ -539,10 +541,10 @@ mod tests {
             spec,
         )
         .unwrap();
-        let mut registry = agents::load_agents().unwrap_or_else(|_| AgentRegistry::default());
-        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
+        let mut registry = AgentRegistry::default();
+        let mut entry = AgentEntry::new(RuntimeKind::ClaudeCode, None);
         entry.root_path = Some(agent_root.clone());
-        registry.agents.insert(name.clone(), entry);
+        registry.agents.insert(format!("default/{name}"), entry);
         agents::save_agents(&registry).unwrap();
         name
     }
@@ -589,7 +591,7 @@ type = "object"
         let entry = agents::load_agents()
             .unwrap()
             .agents
-            .get(&name)
+            .get(&format!("default/{name}"))
             .cloned()
             .unwrap();
         let manifests =
@@ -645,6 +647,31 @@ type = "object"
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("not registered"));
+    }
+
+    #[test]
+    fn publish_rejects_malformed_agent_registry_before_defaulting_empty() {
+        let _g = HomeGuard::new();
+        let agents_path = crate::daemon::persistence::config::state_dir().join("agents.json");
+        std::fs::create_dir_all(
+            agents_path
+                .parent()
+                .expect("canonical agents registry path has parent"),
+        )
+        .expect("create state dir");
+        std::fs::write(&agents_path, b"{not-json")
+            .expect("write malformed agents registry sentinel");
+
+        let err = publish_handler(json!({
+            "owner_ura": owner_ura("publish-corrupt-registry"),
+            "manifest_toml": well_formed_manifest_toml("foo"),
+        }))
+        .expect_err("malformed agent registry must fail closed before empty-registry fallback");
+        let message = err.to_string();
+        assert!(
+            message.contains("parse") && message.contains("agents.json"),
+            "expected malformed registry parse error, got: {message}"
+        );
     }
 
     #[test]

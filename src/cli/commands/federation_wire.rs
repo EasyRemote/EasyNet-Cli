@@ -9,7 +9,7 @@
 // running daemon (boot-time read + SIGHUP-aware reload). What
 // was missing was the populate-on-join step: when this device
 // pairs, the local hub-mode daemon (if any) needs that mapping
-// so cross-hub `federation.forward_invoke` calls targeting the
+// so cross-hub `Invocation::Invoke` calls targeting the
 // just-joined realm resolve a hub URA.
 //
 // This module owns one helper: `auto_wire_federated_peer_from_
@@ -25,15 +25,15 @@
 //      `https://host:port` shape the cross-hub dialer needs
 //      (see `daemon/federation/client/cross_hub_dial.rs`).
 //   3. Atomically rename-replace daemon-config.toml.
-//   4. Best-effort SIGHUP the running daemon (Unix only) so the
-//      `SharedFederatedPeers` cell picks up the new entry without
-//      a daemon restart.
+//   4. Reload the running daemon with SIGHUP (Unix only, no-op when no
+//      daemon pidfile exists) so the `SharedFederatedPeers` cell picks up
+//      the new entry without a daemon restart.
 //
 // Failure handling
 // ----------------
-// The join command treats this helper as a best-effort side effect, but the
-// helper itself returns failures. That keeps the stage UI honest: a skipped
-// federation wiring step must not be rendered as a completed one.
+// The join command treats this helper as a required local authority wiring
+// transition. That keeps the stage UI honest: a failed federation wiring step
+// must not be rendered as a completed join.
 //
 // Why CLI-side and not backend-side
 // ---------------------------------
@@ -48,57 +48,66 @@
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 
 use crate::daemon::persistence::config::{self, Credentials};
 
-/// Default daemon-config.toml location. Mirrors
-/// `persistence::daemon_config::DEFAULT_DAEMON_CONFIG_PATH`. We
-/// re-derive the path here rather than `pub use` the constant so
-/// this module stays a leaf consumer that does not pull in the
-/// `axon-pb`-feature-gated daemon_config module.
-fn daemon_config_path() -> PathBuf {
-    if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(".easynet/daemon-config.toml");
+fn required_pairing_fact<'a>(
+    value: &'a str,
+    field: &str,
+    operation: &str,
+) -> anyhow::Result<&'a str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("{operation} requires non-empty pairing {field}");
     }
-    PathBuf::from(".easynet/daemon-config.toml")
+    Ok(trimmed)
 }
 
-/// Canonical hub-to-hub TLS port. Used as a fallback when the
-/// operator did not pass `--peer-hub` and the Hub-supplied
-/// endpoint carries the backend's inbound-from-device port (e.g.
-/// `axon://...:50051`). Operators running on a non-default port
-/// must pass `--peer-hub` explicitly; otherwise this guess is
-/// emitted with a warning so they know to verify daemon-config.toml.
-const CANONICAL_HUB_TO_HUB_PORT: u16 = 50443;
-
-/// Outcome of resolving the federated_peers value to write. The
-/// classification feeds the operator-facing warning so they know
-/// whether the entry is `Confident` (operator-supplied or already
-/// TLS-shaped) or `Guessed` (the helper picked the canonical
-/// port for them).
-#[derive(Debug)]
-enum PeerHubResolution {
-    /// Either the operator passed `--peer-hub`, or the Hub-
-    /// supplied endpoint was already an `https://...` URL whose
-    /// port the operator can be assumed to own. No warning needed.
-    Confident(String),
-    /// The endpoint shape required substitution to look like a
-    /// daemon TLS listener. The operator gets a warning so they
-    /// can verify the resulting `daemon-config.toml` matches
-    /// their actual topology.
-    Guessed { endpoint: String, source: String },
+#[derive(Clone, Copy)]
+struct PairingTrustFacts<'a> {
+    realm: &'a str,
+    node_id: &'a str,
 }
 
-impl PeerHubResolution {
+impl<'a> PairingTrustFacts<'a> {
+    fn from_credentials(creds: &'a Credentials, operation: &str) -> anyhow::Result<Self> {
+        Ok(Self {
+            realm: required_pairing_fact(&creds.realm, "realm", operation)?,
+            node_id: required_pairing_fact(&creds.node_id, "node_id", operation)?,
+        })
+    }
+
+    fn device_ura(self) -> String {
+        crate::core::ura::device_ura(self.realm, self.node_id)
+    }
+
+    fn hub_ura(self) -> String {
+        crate::core::ura::hub_ura(self.realm)
+    }
+}
+
+/// Explicit source of the peer-hub endpoint written into
+/// `[daemon.federated_peers]`. There is intentionally no
+/// inferred/derived state: peer hub topology must be an
+/// operator fact or an already-TLS pairing fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PeerHubEndpointSource {
+    OperatorOverride,
+    PairingTlsEndpoint,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedPeerHubEndpoint {
+    endpoint: String,
+    source: PeerHubEndpointSource,
+}
+
+impl ResolvedPeerHubEndpoint {
     fn endpoint(&self) -> &str {
-        match self {
-            Self::Confident(s) => s,
-            Self::Guessed { endpoint, .. } => endpoint,
-        }
+        &self.endpoint
     }
 }
 
@@ -107,79 +116,64 @@ impl PeerHubResolution {
 /// Precedence:
 ///   1. Operator-supplied `--peer-hub` wins outright. The operator
 ///      knows the peer daemon's TLS listen address; we trust it
-///      and pass through.
-///   2. `https://...` Hub endpoint passes through (rare in
-///      practice — backends emit `axon://` or `http://` — but
-///      preserves operator-set TLS endpoints when they appear).
-///   3. `axon://host[:port]` → `https://host:50443` with a
-///      warning. The Hub's `Axon.Endpoint` carries the inbound-
-///      from-device gRPC port; the daemon's TLS port is by
-///      convention 50443. Guessing keeps the auto-wire working
-///      for the canonical deployment but warns so non-default
-///      ports get caught.
-///   4. `http://host[:port]` → `https://host:50443` with a
-///      warning. Same shape as (3) but a different scheme; the
-///      backend port (commonly 50051 in local-dev) must NOT be
-///      written verbatim, since that would target the backend's
-///      gRPC listener instead of the peer daemon's TLS listener.
-///   5. Anything else → prepend `https://`, no port substitution
-///      (we have no signal to know what port the operator wants).
+///      after validation.
+///   2. An already-`https://...` pairing endpoint may be used as
+///      the peer hub endpoint because it is already a TLS topology
+///      fact.
+///
+/// Any other pairing endpoint shape is the device-to-hub dial
+/// target, not peer-hub topology. The resolver rejects it instead
+/// of synthesizing host/port topology.
 fn resolve_peer_hub_endpoint(
     operator_override: Option<&str>,
     creds_hub_endpoint: &str,
-) -> PeerHubResolution {
-    if let Some(raw) = operator_override.map(str::trim).filter(|s| !s.is_empty()) {
-        return PeerHubResolution::Confident(raw.to_string());
+) -> anyhow::Result<ResolvedPeerHubEndpoint> {
+    if let Some(raw) = operator_override {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!("--peer-hub must not be empty");
+        }
+        if !trimmed.starts_with("https://") {
+            anyhow::bail!("--peer-hub must be an https:// endpoint");
+        }
+        return Ok(ResolvedPeerHubEndpoint {
+            endpoint: trimmed.to_string(),
+            source: PeerHubEndpointSource::OperatorOverride,
+        });
     }
 
     let trimmed = creds_hub_endpoint.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("federated_peers auto-wire requires non-empty pairing hub_endpoint");
+    }
 
     if trimmed.starts_with("https://") {
-        return PeerHubResolution::Confident(trimmed.to_string());
+        return Ok(ResolvedPeerHubEndpoint {
+            endpoint: trimmed.to_string(),
+            source: PeerHubEndpointSource::PairingTlsEndpoint,
+        });
     }
 
-    if let Some(rest) = trimmed.strip_prefix("axon://") {
-        let host = rest.split(':').next().unwrap_or(rest);
-        return PeerHubResolution::Guessed {
-            endpoint: format!("https://{host}:{CANONICAL_HUB_TO_HUB_PORT}"),
-            source: trimmed.to_string(),
-        };
-    }
-
-    if let Some(rest) = trimmed.strip_prefix("http://") {
-        let host = rest.split(':').next().unwrap_or(rest);
-        return PeerHubResolution::Guessed {
-            endpoint: format!("https://{host}:{CANONICAL_HUB_TO_HUB_PORT}"),
-            source: trimmed.to_string(),
-        };
-    }
-
-    PeerHubResolution::Guessed {
-        endpoint: format!("https://{trimmed}"),
-        source: trimmed.to_string(),
-    }
+    anyhow::bail!(
+        "federated_peers auto-wire requires --peer-hub when pairing hub_endpoint is not https://; got `{trimmed}`"
+    )
 }
 
 /// Auto-wire the `(realm, peer_hub)` mapping from a
 /// successful `easynet device join` into the local daemon's
-/// `[daemon.federated_peers]` table. The join flow treats this
-/// side effect as best-effort, but this helper still returns real
-/// errors so the stage renderer can distinguish "done" from
-/// "skipped with reason".
+/// `[daemon.federated_peers]` table. The join flow treats this side effect as
+/// a required local runtime authority transition, so this helper returns real
+/// errors and the stage renderer can abort before issuing unusable credentials.
 ///
 /// `operator_peer_hub` is the optional `--peer-hub` flag. When
-/// set it overrides the credentials-derived endpoint; when
-/// absent the helper falls back to a port-50443 guess off the
-/// Hub-supplied endpoint and emits an operator warning so
-/// non-default deployments are caught.
+/// set it overrides the credentials-derived endpoint after validation. When
+/// absent, the pairing endpoint must already be an `https://` peer-hub endpoint.
 pub fn auto_wire_federated_peer_from_credentials(
     creds: &Credentials,
     operator_peer_hub: Option<&str>,
 ) -> anyhow::Result<()> {
-    if creds.realm.trim().is_empty() {
-        return Ok(());
-    }
-    let path = daemon_config_path();
+    let realm = required_pairing_fact(&creds.realm, "realm", "federated_peers auto-wire")?;
+    let path = crate::cli::commands::federation_paths::daemon_config_path("auto-wire")?;
     if !path.exists() {
         // No daemon-config means no hub-mode daemon on this
         // device. Nothing to wire; return silently.
@@ -196,19 +190,11 @@ pub fn auto_wire_federated_peer_from_credentials(
         }
     };
 
-    let resolution = resolve_peer_hub_endpoint(operator_peer_hub, &creds.hub_endpoint);
-    if let PeerHubResolution::Guessed { endpoint, source } = &resolution {
-        eprintln!(
-            "[easynet device join] peer hub endpoint not supplied; guessing '{endpoint}' from \
-             `{source}` (canonical hub-to-hub port {CANONICAL_HUB_TO_HUB_PORT}). \
-             If your peer daemon's TLS listener is on a different host or port, \
-             re-run join with `--peer-hub <https://host:port>` or edit \
-             `[daemon.federated_peers]` in daemon-config.toml directly."
-        );
-    }
-    let peer_hub = resolution.endpoint();
+    let peer_hub = resolve_peer_hub_endpoint(operator_peer_hub, &creds.hub_endpoint)
+        .context("resolve explicit peer hub endpoint for federated_peers auto-wire")?;
+    let peer_hub = peer_hub.endpoint();
 
-    let with_peer = match upsert_federated_peer_in_toml(&raw, &creds.realm, peer_hub) {
+    let with_peer = match upsert_federated_peer_in_toml(&raw, realm, peer_hub) {
         Ok(s) => s,
         Err(err) => {
             anyhow::bail!("could not edit daemon-config.toml for federated_peers: {err}");
@@ -225,7 +211,7 @@ pub fn auto_wire_federated_peer_from_credentials(
     //
     // CRITICAL: this MUST be `creds.hub_endpoint` (the device-to-
     // hub dial target the backend handed us at pairing time), NOT
-    // `peer_hub` (the hub-to-hub TLS guess on port 50443). The
+    // `peer_hub` (the hub-to-hub TLS endpoint). The
     // two are different protocols on different ports:
     //
     //   * `[daemon].hub_endpoint`        ← creds.hub_endpoint
@@ -233,11 +219,11 @@ pub fn auto_wire_federated_peer_from_credentials(
     //       on :50051 in dev / TLS axon:// in prod)
     //
     //   * `[daemon.federated_peers].<t>` ← peer_hub
-    //     = THIS hub dials peer hubs for `forward_invoke`
-    //       (always TLS on :50443)
+    //     = THIS hub dials peer hubs for `canonical_invoke`
+    //       (TLS endpoint supplied explicitly by operator/pairing)
     //
     // Conflating them broke single-host host-mode v4.1.5: the
-    // 50443 guess overrode the working :50051 dial target, the
+    // peer-hub endpoint overrode the working :50051 dial target, the
     // daemon's `session.open` bidi never connected, and the
     // device never showed ONLINE. Idempotent on a no-op.
     let updated = match upsert_daemon_hub_endpoint_in_toml(&with_peer, &creds.hub_endpoint) {
@@ -258,20 +244,11 @@ pub fn auto_wire_federated_peer_from_credentials(
         return Ok(());
     }
 
-    if let Err(err) = atomic_write(&path, updated.as_bytes()) {
+    if let Err(err) = config::atomic_write(&path, updated.as_bytes()) {
         anyhow::bail!("could not write daemon-config.toml for federated_peers: {err}");
     }
 
-    // Best-effort SIGHUP so the running daemon picks up the new
-    // peer entry without a restart (PR-N1 commit 10/N
-    // SharedFederatedPeers cell). Failure here is benign — the
-    // operator can SIGHUP / restart manually.
-    if let Err(err) = sighup_running_daemon_best_effort() {
-        eprintln!(
-            "[easynet device join] daemon-config.toml updated; SIGHUP to reload it failed ({err}). \
-             The new federated_peers entry will activate on the next daemon restart."
-        );
-    }
+    reload_running_daemon_after_join().context("reload daemon after federated_peers update")?;
 
     Ok(())
 }
@@ -290,20 +267,21 @@ pub fn auto_wire_federated_peer_from_credentials(
 /// the backend is mocked or absent, so the trust anchor stays
 /// empty and the local daemon rejects its own paired device's
 /// `session.open` admission. This helper closes that gap by
-/// pre-populating the device's self-entry on `easynet device join`,
-/// derived deterministically from `(realm, node_id)` via the
-/// same `derive_owner_public_key_b64` the runtime publish path
-/// uses. Production deploys with a real backend continue to use
+/// pre-populating the device's self-entry on `easynet device join`
+/// from the daemon key service's public projection. Production
+/// deploys with a real backend continue to use
 /// the canonical pairing-flow writer; this helper is a no-op when
 /// the entry is already present (idempotent).
 ///
 /// Failure handling
 /// ----------------
-/// Mirrors `auto_wire_federated_peer_from_credentials`: the join
-/// command treats this as a best-effort stage, but this helper
-/// returns real errors so operator output remains truthful. Empty
-/// `realm` or `node_id` is a silent no-op (test fixtures with
-/// synthetic credentials hit this).
+/// Mirrors `auto_wire_federated_peer_from_credentials`: the join command
+/// treats this as a required local authority wiring stage, so this helper
+/// returns real errors and operator output remains truthful.
+/// Missing `realm` or `node_id` is invalid pairing state, not a
+/// successful no-op: otherwise `runtime start` can proceed with
+/// incomplete authority facts and surface later as route,
+/// descriptor, or admission failures.
 ///
 /// Path resolution
 /// ---------------
@@ -316,11 +294,47 @@ pub fn auto_wire_federated_peer_from_credentials(
 /// operators on production deploys rely on the backend's
 /// `identity.register_pubkey` writer instead.
 pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyhow::Result<()> {
-    if creds.realm.trim().is_empty() || creds.node_id.trim().is_empty() {
-        return Ok(());
+    let facts = PairingTrustFacts::from_credentials(creds, "realm-trust auto-wire")?;
+    if creds
+        .hub_pubkey_b64
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        anyhow::bail!("pairing credentials missing hub_public_key_b64");
     }
-    let path = realm_trust_path_for_join();
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    use crate::daemon::identity::self_identity::load_runtime_caller_signer;
+    use crate::daemon::keyring::lifecycle::ensure_bootstrap_key_service_running;
+    use base64::Engine as _;
+
+    let agent_ura = facts.device_ura();
+    ensure_bootstrap_key_service_running()
+        .context("ensure key service for joined Device runtime identity")?;
+    let identity = load_runtime_caller_signer(agent_ura.clone())
+        .map_err(|error| anyhow::anyhow!("resolve joined Device runtime identity: {error}"))?;
+    let public_key = identity
+        .signing_public_key()
+        .map_err(|error| anyhow::anyhow!("project joined Device public key: {error}"))?;
+    let public_key_b64 = base64::engine::general_purpose::STANDARD.encode(public_key.to_bytes());
+    auto_wire_self_realm_trust_with_public_key(creds, facts, &public_key_b64)
+}
+
+fn auto_wire_self_realm_trust_with_public_key(
+    creds: &Credentials,
+    facts: PairingTrustFacts<'_>,
+    public_key_b64: &str,
+) -> anyhow::Result<()> {
+    let path = realm_trust_path_for_join()?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "realm-trust auto-wire path must include a parent directory: {}",
+                path.display()
+            )
+        })?;
     if !parent.exists() {
         if let Err(err) = fs::create_dir_all(parent) {
             anyhow::bail!(
@@ -346,11 +360,7 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
     // `/device/` role segment; emitting the legacy `/agent/`
     // shape would land in a parallel namespace the parser
     // strict-rejects.
-    let agent_ura = crate::core::ura::device_ura(creds.realm.trim(), creds.node_id.trim());
-    let public_key_b64 = crate::daemon::federation::publish::derive_owner_public_key_b64(
-        creds.realm.trim(),
-        creds.node_id.trim(),
-    );
+    let agent_ura = facts.device_ura();
     let added_at_unix_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -363,37 +373,31 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
     // 401s with "caller URA ... is not in the realm trust anchor"
     // and the device pins as REMOVED forever.
     //
-    // The hub pubkey: cross-machine cold-start (hub in US, CLI in
-    // SG) cannot read `~/.easynet-hub/<realm>/identity.json` because
-    // the file lives on the hub host. The cold-start fix surfaces
-    // the pubkey in `PairingPreflightResp.hub_public_key_b64` so
-    // the device receives it during `validate_pairing_token` and
-    // stashes it on `Credentials.hub_pubkey_b64`. Prefer that when
-    // present; fall back to the on-disk file lookup for single-host
-    // dev rigs where the device + hub share `$HOME`.
-    let hub_ura = crate::core::ura::hub_ura(creds.realm.trim());
+    // The hub pubkey is supplied by the pairing response and stored on
+    // Credentials.hub_pubkey_b64. Device join must not read hub-host identity
+    // files; the Hub URA key is owned by the SDK keyring on the hub runtime.
+    let hub_ura = facts.hub_ura();
     let hub_pubkey_b64_opt: Option<String> = creds
         .hub_pubkey_b64
         .as_ref()
         .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .or_else(|| read_backend_hub_pubkey_b64(creds.realm.trim()));
+        .filter(|s| !s.is_empty());
 
     let after_device =
-        match upsert_self_trusted_agent(&raw, &agent_ura, &public_key_b64, added_at_unix_ms) {
+        match upsert_self_trusted_agent(&raw, &agent_ura, public_key_b64, added_at_unix_ms) {
             Ok(s) => s,
             Err(err) => {
                 anyhow::bail!("could not edit realm-trust.toml for device entry: {err}");
             }
         };
-    let hub_ca_pem_path = persist_hub_tls_ca_pem_for_join(creds)?;
+    let hub_ca_pem_path = persist_hub_tls_ca_pem_for_join(creds, facts.realm)?;
 
     let updated = match hub_pubkey_b64_opt {
         Some(hub_pubkey_b64) => match upsert_hub_trusted_agent(
             &after_device,
             &hub_ura,
             &hub_pubkey_b64,
-            creds.realm.trim(),
+            facts.realm,
             creds.hub_endpoint.trim(),
             hub_ca_pem_path.as_deref(),
             added_at_unix_ms,
@@ -405,10 +409,8 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
         },
         None => {
             anyhow::bail!(
-                "pairing response did not include hub_public_key_b64, and no local \
-                 ~/.easynet-hub/{}/identity.json fallback exists; refusing to mark \
-                 realm-trust complete without the hub trust-anchor entry",
-                creds.realm.trim()
+                "pairing response did not include hub_public_key_b64; refusing to mark \
+                 realm-trust complete without the Hub URA trust-anchor entry"
             );
         }
     };
@@ -418,22 +420,11 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
         return Ok(());
     }
 
-    if let Err(err) = atomic_write(&path, updated.as_bytes()) {
+    if let Err(err) = config::atomic_write(&path, updated.as_bytes()) {
         anyhow::bail!("could not write realm-trust.toml: {err}");
     }
 
-    // Best-effort SIGHUP so a co-located hub-mode daemon picks up
-    // the new entry without a restart (PR-7 commit 5/N
-    // SharedTrustAnchor cell, same SIGHUP-aware reload path the
-    // canonical `identity.register_pubkey` writer uses). The
-    // SIGHUP also reloads `[daemon.federated_peers]`; one signal
-    // covers both files.
-    if let Err(err) = sighup_running_daemon_best_effort() {
-        eprintln!(
-            "[easynet device join] realm-trust.toml updated; SIGHUP to reload it failed ({err}). \
-             The new self-entry will activate on the next daemon restart."
-        );
-    }
+    reload_running_daemon_after_join().context("reload daemon after realm-trust update")?;
 
     Ok(())
 }
@@ -448,61 +439,20 @@ pub fn auto_wire_self_realm_trust_from_credentials(creds: &Credentials) -> anyho
 /// the join-time fallback: it requires root and operators on
 /// production deploys go through the backend's
 /// `identity.register_pubkey` writer, not this helper.
-/// Read backend's hub identity file at `~/.easynet-hub/<realm>/identity.json`
-/// and project its private-key seed → ed25519 pubkey base64. Returns
-/// `None` when the file is absent, malformed, or the seed is the
-/// wrong length — every callsite treats `None` as "skip the hub
-/// trust entry; backend hasn't booted yet" rather than failing the
-/// join.
-///
-/// The file shape mirrors backend's `runtime/subject_context.go::
-/// backendIdentityRecord`:
-///   {
-///     "private_key_seed_hex": "<64-hex>",
-///     "agent_ura": "easynet:///r/<realm>/hub",
-///     "created_at_unix_ms": <int>
-///   }
-fn read_backend_hub_pubkey_b64(realm: &str) -> Option<String> {
-    use base64::Engine as _;
-    use ed25519_dalek::SigningKey;
-
-    let home = std::env::var_os("HOME")?;
-    let path = std::path::Path::new(&home)
-        .join(".easynet-hub")
-        .join(realm)
-        .join("identity.json");
-    let raw = std::fs::read_to_string(&path).ok()?;
-
-    #[derive(serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct BackendIdentityRecord {
-        private_key_seed_hex: String,
-        agent_ura: String,
-        #[serde(rename = "created_at_unix_ms")]
-        _created_at_unix_ms: u64,
-    }
-    let parsed: BackendIdentityRecord = serde_json::from_str(&raw).ok()?;
-    if parsed.agent_ura != crate::core::ura::hub_ura(realm) {
-        return None;
-    }
-    let seed_bytes = hex::decode(parsed.private_key_seed_hex.trim()).ok()?;
-    if seed_bytes.len() != 32 {
-        return None;
-    }
-    let mut seed = [0u8; 32];
-    seed.copy_from_slice(&seed_bytes);
-    let signing = SigningKey::from_bytes(&seed);
-    Some(base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes()))
-}
-
-fn realm_trust_path_for_join() -> PathBuf {
+fn realm_trust_path_for_join() -> anyhow::Result<PathBuf> {
     if let Some(override_path) = std::env::var_os("EASYNET_REALM_TRUST_PATH") {
-        return PathBuf::from(override_path);
+        if override_path.to_string_lossy().trim().is_empty() {
+            anyhow::bail!("EASYNET_REALM_TRUST_PATH must not be empty");
+        }
+        return Ok(PathBuf::from(override_path));
     }
     if let Some(home) = std::env::var_os("HOME") {
-        return PathBuf::from(home).join(".easynet/realm-trust.toml");
+        if home.to_string_lossy().trim().is_empty() {
+            anyhow::bail!("HOME is required for realm-trust auto-wire path");
+        }
+        return Ok(PathBuf::from(home).join(".easynet/realm-trust.toml"));
     }
-    PathBuf::from(".easynet/realm-trust.toml")
+    anyhow::bail!("HOME is required for realm-trust auto-wire path")
 }
 
 fn hub_tls_ca_path_for_join(realm: &str) -> PathBuf {
@@ -511,7 +461,10 @@ fn hub_tls_ca_path_for_join(realm: &str) -> PathBuf {
     trust_dir.join(format!("{realm}.ca.pem"))
 }
 
-fn persist_hub_tls_ca_pem_for_join(creds: &Credentials) -> anyhow::Result<Option<PathBuf>> {
+fn persist_hub_tls_ca_pem_for_join(
+    creds: &Credentials,
+    realm: &str,
+) -> anyhow::Result<Option<PathBuf>> {
     use anyhow::Context as _;
     use base64::Engine as _;
 
@@ -527,21 +480,18 @@ fn persist_hub_tls_ca_pem_for_join(creds: &Credentials) -> anyhow::Result<Option
     let pem = base64::engine::general_purpose::STANDARD
         .decode(raw_b64)
         .context("decode hub_tls_ca_pem_b64")?;
-    let path = hub_tls_ca_path_for_join(creds.realm.trim());
+    let path = hub_tls_ca_path_for_join(realm);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
-    atomic_write(&path, &pem)?;
+    config::atomic_write(&path, &pem)?;
     Ok(Some(path))
 }
 
 /// TOML edit: insert-or-update a `[[trusted_agent]]` row whose
 /// `agent_ura` matches the joining device. Preserves every other
-/// row + comment via `toml_edit`. Idempotent when the row already
-/// has the same `public_key_b64` (the deterministic derivation
-/// from `(realm, node_id)` should always produce the same
-/// pubkey for the same identity, so a re-run of `easynet device join`
-/// against the same credentials is a no-op).
+/// row + comment via `toml_edit`. Idempotent when the row already has the same
+/// daemon key-service public projection for the joined device identity.
 fn upsert_self_trusted_agent(
     raw: &str,
     agent_ura: &str,
@@ -581,10 +531,10 @@ fn upsert_hub_trusted_agent(
     })
 }
 
-/// Generic [[trusted_agent]] upsert. Device rows stay append-only;
-/// hub rows are upgraded in place so legacy v4.1.4 entries gain the
-/// schema-B `origin_realm` / `hub_endpoint` / `tls_ca_pem_path`
-/// fields required by device-mode `session.open` bootstrap.
+/// Generic [[trusted_agent]] upsert. The row keyed by `agent_ura` is
+/// materialized through one canonical path for every role. Existing
+/// rows preserve their original `added_at_unix_ms` when present, but
+/// stale key, role, and role-specific schema fields are replaced.
 struct TrustedAgentUpsert<'a> {
     raw: &'a str,
     agent_ura: &'a str,
@@ -596,8 +546,18 @@ struct TrustedAgentUpsert<'a> {
     added_at_unix_ms: u64,
 }
 
+struct TrustedAgentRow<'a> {
+    agent_ura: &'a str,
+    public_key_b64: &'a str,
+    role: &'a str,
+    origin_realm: Option<&'a str>,
+    hub_endpoint: Option<&'a str>,
+    tls_ca_pem_path: Option<&'a Path>,
+    added_at_unix_ms: u64,
+}
+
 fn upsert_trusted_agent_inner(upsert: TrustedAgentUpsert<'_>) -> anyhow::Result<String> {
-    use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
+    use toml_edit::{ArrayOfTables, DocumentMut, Item};
 
     let TrustedAgentUpsert {
         raw,
@@ -633,45 +593,54 @@ fn upsert_trusted_agent_inner(upsert: TrustedAgentUpsert<'_>) -> anyhow::Result<
             .map(|s| s == agent_ura)
             .unwrap_or(false)
     });
+    let existing_added_at = existing_index
+        .and_then(|index| agents.get(index))
+        .and_then(|existing| existing.get("added_at_unix_ms"))
+        .and_then(|value| value.as_integer())
+        .and_then(|value| u64::try_from(value).ok())
+        .unwrap_or(added_at_unix_ms);
+    let replacement = trusted_agent_row(TrustedAgentRow {
+        agent_ura,
+        public_key_b64,
+        role,
+        origin_realm,
+        hub_endpoint,
+        tls_ca_pem_path,
+        added_at_unix_ms: existing_added_at,
+    });
+
     if let Some(existing_index) = existing_index {
         let existing = agents
             .get_mut(existing_index)
             .ok_or_else(|| anyhow::anyhow!("trusted_agent index disappeared during update"))?;
-        if role != "hub" {
-            return Ok(doc.to_string());
-        }
-        existing.insert("public_key_b64", value(public_key_b64));
-        existing.insert("role", value(role));
-        if let Some(v) = origin_realm {
-            existing.insert("origin_realm", value(v));
-        }
-        if let Some(v) = hub_endpoint {
-            existing.insert("hub_endpoint", value(v));
-        }
-        if let Some(v) = tls_ca_pem_path {
-            existing.insert("tls_ca_pem_path", value(v.display().to_string()));
-        }
+        *existing = replacement;
         return Ok(doc.to_string());
     }
 
     // No existing entry: append a fresh row.
-    let mut row = Table::new();
-    row.insert("agent_ura", value(agent_ura));
-    row.insert("public_key_b64", value(public_key_b64));
-    row.insert("role", value(role));
-    row.insert("added_at_unix_ms", value(added_at_unix_ms as i64));
-    if let Some(v) = origin_realm {
-        row.insert("origin_realm", value(v));
-    }
-    if let Some(v) = hub_endpoint {
-        row.insert("hub_endpoint", value(v));
-    }
-    if let Some(v) = tls_ca_pem_path {
-        row.insert("tls_ca_pem_path", value(v.display().to_string()));
-    }
-    agents.push(row);
+    agents.push(replacement);
 
     Ok(doc.to_string())
+}
+
+fn trusted_agent_row(upsert: TrustedAgentRow<'_>) -> toml_edit::Table {
+    use toml_edit::{value, Table};
+
+    let mut row = Table::new();
+    row.insert("agent_ura", value(upsert.agent_ura));
+    row.insert("public_key_b64", value(upsert.public_key_b64));
+    row.insert("role", value(upsert.role));
+    row.insert("added_at_unix_ms", value(upsert.added_at_unix_ms as i64));
+    if let Some(v) = upsert.origin_realm {
+        row.insert("origin_realm", value(v));
+    }
+    if let Some(v) = upsert.hub_endpoint {
+        row.insert("hub_endpoint", value(v));
+    }
+    if let Some(v) = upsert.tls_ca_pem_path {
+        row.insert("tls_ca_pem_path", value(v.display().to_string()));
+    }
+    row
 }
 
 /// TOML edit step: insert-or-update `[daemon.federated_peers]
@@ -734,48 +703,12 @@ fn upsert_daemon_hub_endpoint_in_toml(raw: &str, hub_endpoint: &str) -> anyhow::
     Ok(doc.to_string())
 }
 
-/// Atomic write: write to a sibling tempfile, fsync, then
-/// `rename(2)` on top of the existing file. POSIX guarantees
-/// rename is atomic for same-filesystem replacements; mirrors
-/// the discipline `realm_trust_anchor::save` uses for the trust
-/// anchor file.
-fn atomic_write(path: &Path, body: &[u8]) -> anyhow::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let tmp_name = match path.file_name() {
-        Some(name) => {
-            let mut s = name.to_os_string();
-            s.push(".tmp");
-            s
-        }
-        None => anyhow::bail!("daemon-config path has no file name component"),
-    };
-    let tmp_path = parent.join(tmp_name);
-
-    {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&tmp_path)
-            .with_context(|| format!("open {} for write", tmp_path.display()))?;
-        file.write_all(body)
-            .with_context(|| format!("write {}", tmp_path.display()))?;
-        file.sync_all()
-            .with_context(|| format!("fsync {}", tmp_path.display()))?;
-    }
-    fs::rename(&tmp_path, path).with_context(|| {
-        let _ = fs::remove_file(&tmp_path);
-        format!("atomic rename {} → {}", tmp_path.display(), path.display())
-    })?;
-    Ok(())
-}
-
-/// Send SIGHUP to the running easynet-daemon, if any. Returns
-/// `Ok(())` even if the pidfile is absent (no daemon running →
-/// nothing to reload). Errors only when the pidfile names a PID
-/// the OS rejects.
+/// Send SIGHUP to the running easynet-daemon, if any. Returns `Ok(())` when
+/// the pidfile is absent because there is no running runtime read model to
+/// refresh. If a pidfile exists, reload is part of the join authority
+/// transition and OS rejection is returned to the caller.
 #[cfg(unix)]
-fn sighup_running_daemon_best_effort() -> anyhow::Result<()> {
+fn reload_running_daemon_after_join() -> anyhow::Result<()> {
     let pid_path = config::easynet_daemon_pid_path();
     if !pid_path.exists() {
         return Ok(());
@@ -795,99 +728,138 @@ fn sighup_running_daemon_best_effort() -> anyhow::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn sighup_running_daemon_best_effort() -> anyhow::Result<()> {
+fn reload_running_daemon_after_join() -> anyhow::Result<()> {
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    use std::ffi::OsString;
 
-    fn endpoint_of(r: &PeerHubResolution) -> &str {
+    fn endpoint_of(r: &ResolvedPeerHubEndpoint) -> &str {
         r.endpoint()
     }
 
-    fn with_home<T>(home: &Path, f: impl FnOnce() -> T) -> T {
-        let prev_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", home);
-        struct HomeEnvGuard(Option<std::ffi::OsString>);
-        impl Drop for HomeEnvGuard {
-            fn drop(&mut self) {
-                match self.0.take() {
-                    Some(v) => std::env::set_var("HOME", v),
-                    None => std::env::remove_var("HOME"),
-                }
+    struct RealmTrustEnvGuard {
+        previous_path: Option<OsString>,
+        previous_home: Option<OsString>,
+    }
+
+    impl RealmTrustEnvGuard {
+        fn capture() -> Self {
+            Self {
+                previous_path: std::env::var_os("EASYNET_REALM_TRUST_PATH"),
+                previous_home: std::env::var_os("HOME"),
             }
         }
-        let _guard = HomeEnvGuard(prev_home);
-        f()
+    }
+
+    impl Drop for RealmTrustEnvGuard {
+        fn drop(&mut self) {
+            match self.previous_path.take() {
+                Some(value) => std::env::set_var("EASYNET_REALM_TRUST_PATH", value),
+                None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
+            }
+            match self.previous_home.take() {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
     }
 
     #[test]
     fn operator_peer_hub_override_wins_over_creds() {
-        let r = resolve_peer_hub_endpoint(Some("https://peer-b.example:50443"), "axon://hub:50051");
-        assert!(matches!(r, PeerHubResolution::Confident(_)));
+        let r = resolve_peer_hub_endpoint(Some("https://peer-b.example:50443"), "axon://hub:50051")
+            .expect("explicit peer hub");
+        assert_eq!(r.source, PeerHubEndpointSource::OperatorOverride);
         assert_eq!(endpoint_of(&r), "https://peer-b.example:50443");
     }
 
     #[test]
-    fn empty_operator_override_falls_through_to_creds() {
-        let r = resolve_peer_hub_endpoint(Some("   "), "https://hub.example:50443");
-        assert!(matches!(r, PeerHubResolution::Confident(_)));
-        assert_eq!(endpoint_of(&r), "https://hub.example:50443");
+    fn empty_operator_override_is_invalid() {
+        let err = resolve_peer_hub_endpoint(Some("   "), "https://hub.example:50443")
+            .expect_err("blank override must not fall through to credentials");
+        assert!(err.to_string().contains("--peer-hub must not be empty"));
     }
 
     #[test]
     fn https_creds_endpoint_passes_through_confident() {
-        let r = resolve_peer_hub_endpoint(None, "https://hub.example:50443");
-        assert!(matches!(r, PeerHubResolution::Confident(_)));
+        let r = resolve_peer_hub_endpoint(None, "https://hub.example:50443")
+            .expect("https pairing endpoint");
+        assert_eq!(r.source, PeerHubEndpointSource::PairingTlsEndpoint);
         assert_eq!(endpoint_of(&r), "https://hub.example:50443");
     }
 
     #[test]
-    fn axon_scheme_creds_endpoint_guesses_canonical_port() {
-        let r = resolve_peer_hub_endpoint(None, "axon://easynet.run:50051");
-        match &r {
-            PeerHubResolution::Guessed { endpoint, source } => {
-                assert_eq!(endpoint, "https://easynet.run:50443");
-                assert_eq!(source, "axon://easynet.run:50051");
-            }
-            other => panic!("expected Guessed, got {other:?}"),
-        }
+    fn explicit_peer_hub_must_be_https() {
+        let err = resolve_peer_hub_endpoint(Some("http://peer.example:50443"), "https://hub")
+            .expect_err("explicit peer hub must be TLS");
+        assert!(err
+            .to_string()
+            .contains("--peer-hub must be an https:// endpoint"));
     }
 
     #[test]
-    fn http_scheme_creds_endpoint_guesses_canonical_port_not_backend_port() {
-        // Real production failure mode: backend Axon.Endpoint
-        // arrives as `http://localhost:50051`. Writing that
-        // verbatim into [daemon.federated_peers] would point the
-        // cross-hub dialer at the backend's gRPC port, which is
-        // not the peer daemon's TLS listener. The resolver must
-        // substitute the canonical hub-to-hub port and flag the
-        // outcome as Guessed so the operator gets a warning.
-        let r = resolve_peer_hub_endpoint(None, "http://localhost:50051");
-        match &r {
-            PeerHubResolution::Guessed { endpoint, source } => {
-                assert_eq!(endpoint, "https://localhost:50443");
-                assert_eq!(source, "http://localhost:50051");
-            }
-            other => panic!("expected Guessed, got {other:?}"),
-        }
+    fn realm_trust_join_path_rejects_missing_home_before_cwd_fallback() {
+        let _lock = crate::cli::commands::test_support::env_lock();
+        let _guard = RealmTrustEnvGuard::capture();
+        std::env::remove_var("EASYNET_REALM_TRUST_PATH");
+        std::env::remove_var("HOME");
+
+        let error =
+            realm_trust_path_for_join().expect_err("missing HOME must not resolve under cwd");
+
+        assert!(
+            error
+                .to_string()
+                .contains("HOME is required for realm-trust auto-wire path"),
+            "unexpected error: {error:#}"
+        );
     }
 
     #[test]
-    fn axon_without_port_guesses_canonical_port() {
-        let r = resolve_peer_hub_endpoint(None, "axon://hub.local");
-        assert_eq!(endpoint_of(&r), "https://hub.local:50443");
-        assert!(matches!(r, PeerHubResolution::Guessed { .. }));
+    fn realm_trust_join_path_rejects_blank_home_before_relative_state_path() {
+        let _lock = crate::cli::commands::test_support::env_lock();
+        let _guard = RealmTrustEnvGuard::capture();
+        std::env::remove_var("EASYNET_REALM_TRUST_PATH");
+        std::env::set_var("HOME", " ");
+
+        let error = realm_trust_path_for_join().expect_err("blank HOME must not resolve under cwd");
+
+        assert!(
+            error
+                .to_string()
+                .contains("HOME is required for realm-trust auto-wire path"),
+            "unexpected error: {error:#}"
+        );
     }
 
     #[test]
-    fn unknown_scheme_falls_back_to_https_prefix_no_port_substitution() {
-        let r = resolve_peer_hub_endpoint(None, "hub.example:50443");
-        assert_eq!(endpoint_of(&r), "https://hub.example:50443");
-        assert!(matches!(r, PeerHubResolution::Guessed { .. }));
+    fn axon_pairing_endpoint_requires_explicit_peer_hub() {
+        let err = resolve_peer_hub_endpoint(None, "axon://easynet.run:50051")
+            .expect_err("device hub endpoint must not become peer hub topology");
+        assert!(err
+            .to_string()
+            .contains("requires --peer-hub when pairing hub_endpoint is not https://"));
+    }
+
+    #[test]
+    fn http_pairing_endpoint_requires_explicit_peer_hub() {
+        let err = resolve_peer_hub_endpoint(None, "http://localhost:50051")
+            .expect_err("backend gRPC endpoint must not become peer hub topology");
+        assert!(err
+            .to_string()
+            .contains("requires --peer-hub when pairing hub_endpoint is not https://"));
+    }
+
+    #[test]
+    fn bare_pairing_endpoint_requires_explicit_peer_hub() {
+        let err = resolve_peer_hub_endpoint(None, "hub.example:50443")
+            .expect_err("bare endpoint must not be promoted into peer hub topology");
+        assert!(err
+            .to_string()
+            .contains("requires --peer-hub when pairing hub_endpoint is not https://"));
     }
 
     #[test]
@@ -953,21 +925,21 @@ listen_tcp = "127.0.0.1:50443"
     }
 
     #[test]
-    fn auto_wire_writes_creds_hub_endpoint_not_peer_hub_guess() {
+    fn auto_wire_writes_creds_hub_endpoint_not_peer_hub_endpoint() {
         // Regression pin for the v4.1.5 host-mode ONLINE bug:
         // join used to overwrite [daemon].hub_endpoint with
-        // peer_hub (the :50443 TLS guess), which broke the
+        // peer_hub (the TLS peer endpoint), which broke the
         // device-mode dial target. The fix is to write
         // creds.hub_endpoint into [daemon].hub_endpoint and
-        // reserve peer_hub for [daemon.federated_peers] only.
+        // reserve explicit peer_hub for [daemon.federated_peers] only.
         //
         // Two-protocol invariant:
         //   * [daemon].hub_endpoint        ← creds.hub_endpoint  (gRPC plaintext / axon://, :50051 in dev)
-        //   * [daemon.federated_peers].T   ← peer_hub            (TLS, :50443)
+        //   * [daemon.federated_peers].T   ← peer_hub            (explicit TLS endpoint)
         //
         // This test creates a daemon-config under HOME, runs the
         // auto-wire, and asserts that [daemon].hub_endpoint is the
-        // creds value, NOT the 50443 guess. HomeGuard serialises
+        // creds value, NOT the peer hub endpoint. HomeGuard serialises
         // HOME mutation against every other test that touches it
         // — without the guard a parallel agent_sessions /
         // boot::tests run was racing and seeing this test's
@@ -999,7 +971,8 @@ listen_tcp = "127.0.0.1:50443"
             hub_tls_ca_pem_b64: None,
             join_receipt_hash: None,
         };
-        auto_wire_federated_peer_from_credentials(&creds, None).expect("auto-wire");
+        auto_wire_federated_peer_from_credentials(&creds, Some("https://127.0.0.1:50443"))
+            .expect("auto-wire");
 
         let updated = std::fs::read_to_string(&cfg_path).unwrap();
         assert!(
@@ -1008,10 +981,10 @@ listen_tcp = "127.0.0.1:50443"
         );
         assert!(
             !updated.contains("hub_endpoint = \"https://127.0.0.1:50443\""),
-            "[daemon].hub_endpoint regressed to the 50443 TLS guess; got:\n{updated}"
+            "[daemon].hub_endpoint regressed to the TLS peer hub endpoint; got:\n{updated}"
         );
-        // Federated_peers entry SHOULD be the 50443 guess (cross-
-        // hub dial target is TLS).
+        // Federated_peers entry SHOULD be the explicit peer hub endpoint
+        // because cross-hub dial target is TLS.
         assert!(
             updated.contains(":50443") && updated.contains("[daemon.federated_peers]"),
             "[daemon.federated_peers] missing or wrong; got:\n{updated}"
@@ -1019,11 +992,48 @@ listen_tcp = "127.0.0.1:50443"
     }
 
     #[test]
-    fn auto_wire_returns_ok_when_daemon_config_absent() {
-        // Empty realm is the no-op branch the helper short-
-        // circuits on; this test pins that contract so a Hub
-        // that briefly returns empty realm (or the test
-        // fixture with cleared HOME) does not fail join.
+    fn auto_wire_rejects_ambiguous_pairing_endpoint_without_writing_config() {
+        use std::io::Write;
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let tmp_home = std::path::PathBuf::from(std::env::var("HOME").unwrap());
+
+        let cfg_path = tmp_home.join(".easynet").join("daemon-config.toml");
+        std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
+        let mut f = std::fs::File::create(&cfg_path).unwrap();
+        writeln!(
+            f,
+            "[daemon]\nmode = \"device\"\nrealm = \"localhost\"\nhub_endpoint = \"http://stale-host:50051\"\nuds_path = \"/tmp/x.sock\"\n"
+        )
+        .unwrap();
+        drop(f);
+        let before = std::fs::read_to_string(&cfg_path).unwrap();
+
+        let creds = Credentials {
+            node_id: "n1".into(),
+            credential_token: "tok".into(),
+            hub_endpoint: "axon://hub:50051".into(),
+            realm: "localhost".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+        let err = auto_wire_federated_peer_from_credentials(&creds, None)
+            .expect_err("ambiguous pairing endpoint must fail before config write");
+        assert!(
+            err.to_string()
+                .contains("resolve explicit peer hub endpoint for federated_peers auto-wire"),
+            "error should identify peer-hub resolution boundary, got {err:#}"
+        );
+        let after = std::fs::read_to_string(&cfg_path).unwrap();
+        assert_eq!(after, before, "daemon-config must remain unchanged");
+    }
+
+    #[test]
+    fn auto_wire_federated_peer_rejects_empty_realm() {
         let creds = Credentials {
             node_id: "n1".into(),
             credential_token: "tok".into(),
@@ -1037,7 +1047,33 @@ listen_tcp = "127.0.0.1:50443"
             hub_tls_ca_pem_b64: None,
             join_receipt_hash: None,
         };
-        auto_wire_federated_peer_from_credentials(&creds, None).expect("empty tenant is no-op");
+        let err = auto_wire_federated_peer_from_credentials(&creds, None)
+            .expect_err("empty pairing realm must fail closed");
+        assert!(
+            err.to_string()
+                .contains("federated_peers auto-wire requires non-empty pairing realm"),
+            "error should name the missing pairing realm, got {err:#}"
+        );
+    }
+
+    #[test]
+    fn auto_wire_returns_ok_when_daemon_config_absent() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let creds = Credentials {
+            node_id: "n1".into(),
+            credential_token: "tok".into(),
+            hub_endpoint: "axon://hub:50051".into(),
+            realm: "localhost".into(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+        auto_wire_federated_peer_from_credentials(&creds, None)
+            .expect("absent daemon-config means no local hub-mode config to wire");
     }
 
     // ── LB-52 Gap 3 — realm-trust auto-wire on join ────────────────
@@ -1076,17 +1112,16 @@ listen_tcp = "127.0.0.1:50443"
     }
 
     #[test]
-    fn upsert_self_trusted_agent_idempotent_when_ura_already_present() {
-        // An existing row with our URA is left untouched even if
-        // the pubkey differs — the canonical
-        // `identity.register_pubkey` writer (or an operator
-        // edit) is authoritative.
+    fn upsert_self_trusted_agent_normalizes_existing_device_row() {
         let raw = r#"
 [[trusted_agent]]
 agent_ura = "easynet:///r/tenant-a/device/dev-1"
-public_key_b64 = "OPERATOR-WRITTEN-VALUE"
-role = "device"
+public_key_b64 = "STALE-KEY"
+role = "hub"
 added_at_unix_ms = 100
+origin_realm = "old"
+hub_endpoint = "https://old.example"
+tls_ca_pem_path = "/tmp/old-ca.pem"
 "#;
         let updated = upsert_self_trusted_agent(
             raw,
@@ -1094,12 +1129,33 @@ added_at_unix_ms = 100
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
             999_999_999_999,
         )
-        .expect("idempotent path");
-        // Pubkey untouched, no second row appended.
-        assert!(updated.contains("OPERATOR-WRITTEN-VALUE"));
-        assert!(!updated.contains("AAAAAAAA"));
+        .expect("canonical replacement path");
         let arr_count = updated.matches("[[trusted_agent]]").count();
         assert_eq!(arr_count, 1, "no duplicate row appended");
+        let parsed: toml::Value = updated.parse().expect("parses");
+        let row = parsed
+            .get("trusted_agent")
+            .and_then(|v| v.as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|v| v.as_table())
+            .expect("trusted_agent row");
+        assert_eq!(
+            row.get("public_key_b64").and_then(|v| v.as_str()),
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+            "stale key must be replaced by canonical join-time key projection"
+        );
+        assert_eq!(row.get("role").and_then(|v| v.as_str()), Some("device"));
+        assert_eq!(
+            row.get("added_at_unix_ms").and_then(|v| v.as_integer()),
+            Some(100),
+            "existing added_at_unix_ms is stable across canonical replacement"
+        );
+        assert!(
+            row.get("origin_realm").is_none()
+                && row.get("hub_endpoint").is_none()
+                && row.get("tls_ca_pem_path").is_none(),
+            "device row must not retain hub-only schema fields: {row:?}"
+        );
     }
 
     #[test]
@@ -1130,7 +1186,83 @@ added_at_unix_ms = 1
     }
 
     #[test]
-    fn auto_wire_self_realm_trust_short_circuits_on_empty_node_id() {
+    fn upsert_hub_trusted_agent_normalizes_existing_hub_row() {
+        let raw = r#"
+[[trusted_agent]]
+agent_ura = "easynet:///r/tenant-a/authority"
+public_key_b64 = "STALE-HUB-KEY"
+role = "device"
+added_at_unix_ms = 200
+"#;
+        let ca_path = Path::new("/tmp/tenant-a.ca.pem");
+        let updated = upsert_hub_trusted_agent(
+            raw,
+            "easynet:///r/tenant-a/authority",
+            "HUB-KEY",
+            "tenant-a",
+            "https://hub-a:50443",
+            Some(ca_path),
+            1_700_000_000_000,
+        )
+        .expect("canonical hub replacement");
+
+        let parsed: toml::Value = updated.parse().expect("parses");
+        let row = parsed
+            .get("trusted_agent")
+            .and_then(|v| v.as_array())
+            .and_then(|rows| rows.first())
+            .and_then(|v| v.as_table())
+            .expect("trusted_agent row");
+        assert_eq!(
+            row.get("public_key_b64").and_then(|v| v.as_str()),
+            Some("HUB-KEY")
+        );
+        assert_eq!(row.get("role").and_then(|v| v.as_str()), Some("hub"));
+        assert_eq!(
+            row.get("added_at_unix_ms").and_then(|v| v.as_integer()),
+            Some(200),
+            "existing added_at_unix_ms is stable across canonical replacement"
+        );
+        assert_eq!(
+            row.get("origin_realm").and_then(|v| v.as_str()),
+            Some("tenant-a")
+        );
+        assert_eq!(
+            row.get("hub_endpoint").and_then(|v| v.as_str()),
+            Some("https://hub-a:50443")
+        );
+        assert_eq!(
+            row.get("tls_ca_pem_path").and_then(|v| v.as_str()),
+            Some("/tmp/tenant-a.ca.pem")
+        );
+    }
+
+    #[test]
+    fn auto_wire_self_realm_trust_rejects_empty_realm() {
+        let creds = Credentials {
+            node_id: "dev-1".into(),
+            credential_token: "tok".into(),
+            hub_endpoint: "axon://hub:50051".into(),
+            realm: String::new(),
+            deploy_signature: "sig".into(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+        let err = auto_wire_self_realm_trust_from_credentials(&creds)
+            .expect_err("empty pairing realm must fail closed");
+        assert!(
+            err.to_string()
+                .contains("realm-trust auto-wire requires non-empty pairing realm"),
+            "error should name the missing pairing realm, got {err:#}"
+        );
+    }
+
+    #[test]
+    fn auto_wire_self_realm_trust_rejects_empty_node_id() {
         let creds = Credentials {
             node_id: String::new(),
             credential_token: "tok".into(),
@@ -1144,8 +1276,13 @@ added_at_unix_ms = 1
             hub_tls_ca_pem_b64: None,
             join_receipt_hash: None,
         };
-        auto_wire_self_realm_trust_from_credentials(&creds)
-            .expect("empty node_id is a no-op (no panic, no write)");
+        let err = auto_wire_self_realm_trust_from_credentials(&creds)
+            .expect_err("empty pairing node_id must fail closed");
+        assert!(
+            err.to_string()
+                .contains("realm-trust auto-wire requires non-empty pairing node_id"),
+            "error should name the missing pairing node_id, got {err:#}"
+        );
     }
 
     #[test]
@@ -1200,48 +1337,13 @@ added_at_unix_ms = 1
     }
 
     #[test]
-    fn read_backend_hub_pubkey_rejects_legacy_agent_uri_field() {
-        let _hg = crate::cli::commands::test_support::HomeGuard::new();
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let identity_dir = tmp.path().join(".easynet-hub").join("tenant-a");
-        std::fs::create_dir_all(&identity_dir).expect("create identity dir");
-        std::fs::write(
-            identity_dir.join("identity.json"),
-            r#"{"private_key_seed_hex":"2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a","agent_uri":"easynet:///r/tenant-a/hub","created_at_unix_ms":1}"#,
-        )
-        .expect("write identity.json");
-
-        with_home(tmp.path(), || {
-            assert_eq!(read_backend_hub_pubkey_b64("tenant-a"), None);
-        });
-    }
-
-    #[test]
-    fn read_backend_hub_pubkey_rejects_mismatched_agent_ura() {
-        let _hg = crate::cli::commands::test_support::HomeGuard::new();
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let identity_dir = tmp.path().join(".easynet-hub").join("tenant-a");
-        std::fs::create_dir_all(&identity_dir).expect("create identity dir");
-        std::fs::write(
-            identity_dir.join("identity.json"),
-            r#"{"private_key_seed_hex":"2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a","agent_ura":"easynet:///r/other/hub","created_at_unix_ms":1}"#,
-        )
-        .expect("write identity.json");
-
-        with_home(tmp.path(), || {
-            assert_eq!(read_backend_hub_pubkey_b64("tenant-a"), None);
-        });
-    }
-
-    #[test]
     fn auto_wire_self_realm_trust_writes_entry_under_env_override() {
         // Drive the helper end-to-end by pointing
-        // EASYNET_REALM_TRUST_PATH at a tempdir-rooted path AND
-        // staging a backend identity.json under the same tempdir's
-        // ~/.easynet-hub/<realm>/ subtree so the helper finds the
-        // hub pubkey. Asserts the file contains BOTH:
-        //   - device entry (deterministic pubkey derivation)
-        //   - hub entry (pubkey derived from staged seed)
+        // EASYNET_REALM_TRUST_PATH at a tempdir-rooted path and using
+        // the pairing response's hub_public_key_b64. Asserts the file
+        // contains BOTH:
+        //   - device entry (daemon key-service public projection)
+        //   - hub entry (pubkey supplied by pairing)
         //
         // HomeGuard serialises HOME mutation against every other
         // test that touches it; without it parallel test runs were
@@ -1250,47 +1352,31 @@ added_at_unix_ms = 1
         let tmp = tempfile::tempdir().expect("tempdir");
         let trust_path = tmp.path().join("realm-trust.toml");
 
-        // Stage a backend identity at <HOME>/.easynet-hub/tenant-a/identity.json
-        // with a known seed so we can reverse-derive the pubkey for
-        // assertion. Using a deterministic 32-byte seed keeps the
-        // assertion stable.
+        // Derive a stable Hub public key from a deterministic seed so the
+        // assertion is reproducible while the production code still receives
+        // the value through Credentials.hub_pubkey_b64.
         let staged_seed: [u8; 32] = [42; 32];
         let staged_ca_pem = b"-----BEGIN CERTIFICATE-----\ndocker-ca\n-----END CERTIFICATE-----\n";
-        let staged_seed_hex = staged_seed
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>();
-        let identity_dir = tmp.path().join(".easynet-hub").join("tenant-a");
-        std::fs::create_dir_all(&identity_dir).expect("create identity dir");
-        std::fs::write(
-            identity_dir.join("identity.json"),
-            format!(
-                r#"{{"private_key_seed_hex":"{staged_seed_hex}","agent_ura":"{}","created_at_unix_ms":1}}"#,
-                crate::core::ura::hub_ura("tenant-a"),
-            ),
-        )
-        .expect("write identity.json");
+        use base64::Engine as _;
+        use ed25519_dalek::SigningKey;
+        let signing = SigningKey::from_bytes(&staged_seed);
+        let expected_hub_pk =
+            base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes());
+        let expected_dev_pk = base64::engine::general_purpose::STANDARD
+            .encode(SigningKey::from_bytes(&[41; 32]).verifying_key().to_bytes());
 
-        // Override HOME so read_backend_hub_pubkey_b64 finds the
-        // staged identity.json — same tempdir as the trust file.
         let prev = std::env::var_os("EASYNET_REALM_TRUST_PATH");
-        let prev_home = std::env::var_os("HOME");
         std::env::set_var("EASYNET_REALM_TRUST_PATH", &trust_path);
-        std::env::set_var("HOME", tmp.path());
-        struct EnvGuard(Option<std::ffi::OsString>, Option<std::ffi::OsString>);
+        struct EnvGuard(Option<std::ffi::OsString>);
         impl Drop for EnvGuard {
             fn drop(&mut self) {
                 match self.0.take() {
                     Some(v) => std::env::set_var("EASYNET_REALM_TRUST_PATH", v),
                     None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
                 }
-                match self.1.take() {
-                    Some(v) => std::env::set_var("HOME", v),
-                    None => std::env::remove_var("HOME"),
-                }
             }
         }
-        let _guard = EnvGuard(prev, prev_home);
+        let _guard = EnvGuard(prev);
 
         let creds = Credentials {
             node_id: "dev-1".into(),
@@ -1301,13 +1387,16 @@ added_at_unix_ms = 1
             hub_api_base: None,
             username: Some("alice".into()),
             user_id: Some("user-alice".into()),
-            hub_pubkey_b64: None,
+            hub_pubkey_b64: Some(expected_hub_pk.clone()),
             hub_tls_ca_pem_b64: Some(
                 base64::engine::general_purpose::STANDARD.encode(staged_ca_pem),
             ),
             join_receipt_hash: None,
         };
-        auto_wire_self_realm_trust_from_credentials(&creds).expect("auto-wire ok");
+        let facts = PairingTrustFacts::from_credentials(&creds, "realm-trust auto-wire")
+            .expect("validated pairing facts");
+        auto_wire_self_realm_trust_with_public_key(&creds, facts, &expected_dev_pk)
+            .expect("auto-wire ok");
 
         let body = std::fs::read_to_string(&trust_path).expect("file exists");
         let parsed: toml::Value = body.parse().expect("parses");
@@ -1333,13 +1422,10 @@ added_at_unix_ms = 1
             device_row.get("agent_ura").and_then(|v| v.as_str()),
             Some("easynet:///r/tenant-a/device/dev-1"),
         );
-        let expected_dev_pk =
-            crate::daemon::federation::publish::derive_owner_public_key_b64("tenant-a", "dev-1");
         assert_eq!(
             device_row.get("public_key_b64").and_then(|v| v.as_str()),
             Some(expected_dev_pk.as_str()),
-            "device pubkey must be the deterministic derivation (matches what \
-             identity.register_pubkey would write)"
+            "device pubkey must be the daemon key-service public projection"
         );
 
         let hub_row = arr
@@ -1350,21 +1436,13 @@ added_at_unix_ms = 1
         assert_eq!(
             hub_row.get("agent_ura").and_then(|v| v.as_str()),
             Some(crate::core::ura::hub_ura("tenant-a").as_str()),
-            "hub URA must use Axon's canonical /hub identity shape; admits backend's federation.* dispatches",
+            "hub URA must use Axon's canonical /authority identity shape; admits backend's federation.* dispatches",
         );
 
-        // The hub pubkey we wrote came from the staged seed
-        // (read_backend_hub_pubkey_b64 hex-decoded private_key_seed_hex
-        // and projected through ed25519_dalek). Reverse-derive here.
-        use base64::Engine as _;
-        use ed25519_dalek::SigningKey;
-        let signing = SigningKey::from_bytes(&staged_seed);
-        let expected_hub_pk =
-            base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes());
         assert_eq!(
             hub_row.get("public_key_b64").and_then(|v| v.as_str()),
             Some(expected_hub_pk.as_str()),
-            "hub pubkey must be the ed25519 projection of the staged identity.json's seed",
+            "hub pubkey must come from the pairing response",
         );
         assert_eq!(
             hub_row.get("origin_realm").and_then(|v| v.as_str()),
@@ -1386,7 +1464,8 @@ added_at_unix_ms = 1
 
         // Re-running is idempotent: file size unchanged.
         let body_before = body;
-        auto_wire_self_realm_trust_from_credentials(&creds).expect("second auto-wire is a no-op");
+        auto_wire_self_realm_trust_with_public_key(&creds, facts, &expected_dev_pk)
+            .expect("second auto-wire is a no-op");
         let body_after = std::fs::read_to_string(&trust_path).expect("file exists");
         assert_eq!(body_after, body_before, "second run is byte-identical");
     }

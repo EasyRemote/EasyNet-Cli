@@ -4,7 +4,7 @@
 
 ## Summary
 
-The literal `legacy self alias` token currently appears as a *namespace prefix* in EasyNet ability names — `<agent>.discover`, `<agent>.invoke`, `device.keyring.sign`, `session.open`, `identity.register_pubkey`, `legacy self alias.api_key.create`, and similar. This token is **late-binding sugar** that the dispatcher resolves at call time using the `caller` URA on the AXIOM Invocation envelope. It is *not* a URA, and it does not appear anywhere in the v4.1.5 §A.URA grammar.
+The literal `legacy self alias` token currently appears as a *namespace prefix* in EasyNet ability names — `<agent>.discover`, `<agent>.invoke`, `device.keyring.get_public`, `session.open`, `identity.register_pubkey`, `legacy self alias.api_key.create`, and similar. This token is **late-binding sugar** that the dispatcher resolves at call time using the `caller` URA on the AXIOM Invocation envelope. It is *not* a URA, and it does not appear anywhere in the v4.1.5 §A.URA grammar.
 
 Co-locating a dispatch-time variable in the ability-name namespace breaks several invariants that the rest of the system depends on. This document captures **why** the alias is wrong, **where** it leaks, and **the staged path** to remove it. It is filed as an open question rather than an executed PR because the change is protocol-level (device ⇄ hub wire), spans ~30 files / 75 active references, and must coordinate with EasyNet-Axon and the LLM prompt corpus.
 
@@ -32,7 +32,7 @@ Given the bare string `legacy self alias`, a reader can answer *nothing*. The to
 
 **Layer A — per-agent self-alias.** Examples: `<agent>.discover`, `<agent>.invoke`, `legacy self alias.api_key.create`. Registered via `discover_ability::register_for_agent(reg, agent_name, …)` and friends. The dispatcher mounts one copy per LLM sub-agent (`claude`, `codex`, `web-builder`, …) and resolves `legacy self alias` against the caller's agent URA at dispatch time. The handler runs *as that agent*, the receipt's `callee` is that agent's URA, and visibility filtering scopes against that agent.
 
-**Layer B — daemon device-bundle.** Examples: `device.keyring.sign`, `device.keyring.federate_user_identity_token`, `session.open`, `identity.register_pubkey`. Registered via `register_for_owner(reg, "legacy self alias", handle)` directly on the daemon, **without** a sub-agent context. The handler runs once on the daemon (it owns the device-scoped keyring or the long-lived bidi session to the hub); the `callee` is the device URA. Per RFC-002 §3.3 these abilities are *device-bundled* — their owner is conceptually the daemon, the `legacy self alias` prefix is purely historical.
+**Layer B — daemon device-bundle.** Examples: `device.keyring.get_public`, `device.keyring.federate_user_identity_token`, `session.open`, `identity.register_pubkey`. Registered via `register_for_owner(reg, "legacy self alias", handle)` directly on the daemon, **without** a sub-agent context. The handler runs once on the daemon (it owns the device-scoped keyring or the long-lived bidi session to the hub); the `callee` is the device URA. Per RFC-002 §3.3 these abilities are *device-bundled* — their owner is conceptually the daemon, the `legacy self alias` prefix is purely historical.
 
 The two layers share a token but have **disjoint owner kinds** (`agent/<u>.<a>` vs `device/<id>`) and **disjoint multiplicity** (one row per sub-agent vs. exactly one row). Telling them apart from the name alone requires knowing the registration site — which the descriptor catalogue does not preserve. As of this writing, `meta_ability::list_abilities_handler` synthesises both layers' descriptors with the device URA as owner, which is correct for Layer B by accident and wrong for Layer A.
 
@@ -58,7 +58,7 @@ The terminal state encodes two principles:
 
 **P1 — Owner is named at the registration site, not derived from the name.** The ability registry stores `(name, handler, owner_uri)`. `register_for_agent(reg, agent_name, …)` stamps the agent URA; `register_for_owner(reg, OwnerKind::Device, …)` stamps the device URA; `openai_compat_ability::register` stamps the realm hub URA. `meta_ability::list_abilities_handler` reads the stored owner verbatim, never sniffs prefixes.
 
-**P2 — Ability names embed the owner explicitly.** Layer A becomes `<agent-name>.discover` / `<agent-name>.invoke` / `<agent-name>.api_key.create` (one row per sub-agent, name varies). Layer B uses first-class daemon namespaces: `device.keyring.sign`, `session.open`, `runtime.invoke_remote`, and `identity.register_pubkey`. The literal string `legacy self alias` does not appear in any descriptor, receipt, advertise payload, or wire field.
+**P2 — Ability names embed the owner explicitly.** Layer A becomes `<agent-name>.discover` / `<agent-name>.invoke` / `<agent-name>.api_key.create` (one row per sub-agent, name varies). Layer B uses first-class daemon namespaces: `device.keyring.get_public`, `session.open`, `runtime.invoke_remote`, and `identity.register_pubkey`. The literal string `legacy self alias` does not appear in any descriptor, receipt, advertise payload, or wire field.
 
 After P2, every ability name in the catalogue carries enough information to answer "whose verb is this" by inspection, and the `legacy self alias` resolution code path is deleted, not optional.
 

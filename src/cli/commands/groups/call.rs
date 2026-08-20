@@ -24,7 +24,11 @@ use anyhow::Context;
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
-use crate::support::platform::local_invoke::invoke_local_ability;
+use crate::cli::daemon_client::remote_system_ability::{
+    invoke_current_realm_hub_system_ability, RealmHubSystemAbility,
+};
+use crate::daemon::ability::builtins::resources::voice_contract::VoiceEndReason;
+use crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer;
 use crate::support::platform::output::{self, OutputFormat};
 
 #[derive(Debug, Args)]
@@ -159,28 +163,25 @@ pub fn run(args: CallArgs) -> anyhow::Result<()> {
     }
 }
 
-fn invoke_call_signaling(ability: &str, args: Value) -> anyhow::Result<Value> {
-    #[cfg(feature = "axon-pb")]
-    if let Ok(creds) = crate::daemon::persistence::config::load_credentials() {
-        let realm = creds.realm_str().trim();
-        let node_id = creds.node_id.trim();
-        if !realm.is_empty() && !node_id.is_empty() {
-            let hub_ura = crate::core::ura::hub_ura(realm);
-            let caller_ura = crate::core::ura::device_ura(realm, node_id);
-            let target_call =
-                crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
-                    &hub_ura, ability,
-                )?;
-            return crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target(
-                &target_call,
-                args,
-                Some(&caller_ura),
-            )
-            .with_context(|| format!("invoke {ability} against realm hub"));
+struct CallSignalingIssuer;
+
+impl CallSignalingIssuer {
+    fn invoke(ability: RealmHubSystemAbility, args: Value) -> anyhow::Result<Value> {
+        if let Some(value) = invoke_current_realm_hub_system_ability(ability, args.clone())? {
+            return Ok(value);
         }
+        Self::invoke_local(ability, args)
     }
 
-    invoke_local_ability(ability, args).with_context(|| format!("invoke {ability} locally"))
+    fn invoke_local(ability: RealmHubSystemAbility, args: Value) -> anyhow::Result<Value> {
+        let ability = ability.as_str();
+        LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity(ability, args)
+            .with_context(|| format!("invoke {ability} locally"))
+    }
+}
+
+fn invoke_call_signaling(ability: RealmHubSystemAbility, args: Value) -> anyhow::Result<Value> {
+    CallSignalingIssuer::invoke(ability, args)
 }
 
 fn run_create(args: CreateArgs) -> anyhow::Result<()> {
@@ -193,13 +194,10 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
     if !args.call_id.is_empty() {
         body["call_id"] = json!(args.call_id);
     }
-    let participant_id = crate::daemon::persistence::config::load_credentials()
-        .ok()
-        .map(|creds| creds.node_id)
-        .filter(|node_id| !node_id.trim().is_empty())
-        .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_string());
+    let participant_identity = CallParticipantIdentity::resolve_paired_device()?;
+    let participant_id = participant_identity.participant_id();
     body["participant_id"] = json!(participant_id);
-    let result = invoke_call_signaling("voice.create_call", body)?;
+    let result = invoke_call_signaling(RealmHubSystemAbility::CreateCall, body)?;
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
@@ -217,8 +215,44 @@ fn run_create(args: CreateArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CallParticipantIdentity {
+    node_id: String,
+}
+
+impl CallParticipantIdentity {
+    fn resolve_paired_device() -> anyhow::Result<Self> {
+        let credentials = crate::daemon::persistence::config::load_credentials_optional()?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "call participant identity requires paired device credentials; run `easynet start` before call signaling"
+                )
+            })?;
+        Self::from_credentials(&credentials)
+    }
+
+    fn from_credentials(
+        credentials: &crate::daemon::persistence::config::Credentials,
+    ) -> anyhow::Result<Self> {
+        let node_id = credentials.node_id.trim();
+        if node_id.is_empty() {
+            anyhow::bail!("call participant identity requires credentials.node_id");
+        }
+        Ok(Self {
+            node_id: node_id.to_string(),
+        })
+    }
+
+    fn participant_id(&self) -> &str {
+        &self.node_id
+    }
+}
+
 fn run_show(args: ShowArgs) -> anyhow::Result<()> {
-    let result = invoke_call_signaling("voice.show_call", json!({"call_id": args.call_id}))?;
+    let result = invoke_call_signaling(
+        RealmHubSystemAbility::ShowCall,
+        json!({"call_id": args.call_id}),
+    )?;
     if args.format == OutputFormat::Json {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
@@ -240,11 +274,12 @@ fn run_show(args: ShowArgs) -> anyhow::Result<()> {
 }
 
 fn run_join(args: JoinArgs) -> anyhow::Result<()> {
-    let pid = args
-        .participant_id
-        .unwrap_or_else(|| gethostname::gethostname().to_string_lossy().to_string());
+    let pid = args.participant_id.map(Ok).unwrap_or_else(|| {
+        CallParticipantIdentity::resolve_paired_device()
+            .map(|identity| identity.participant_id().to_string())
+    })?;
     let result = invoke_call_signaling(
-        "voice.join_call",
+        RealmHubSystemAbility::JoinCall,
         json!({"call_id": args.call_id, "participant_id": pid}),
     )?;
     output::success(&format!("Joined call {} as {pid}", args.call_id));
@@ -256,7 +291,7 @@ fn run_join(args: JoinArgs) -> anyhow::Result<()> {
 
 fn run_leave(args: LeaveArgs) -> anyhow::Result<()> {
     invoke_call_signaling(
-        "voice.leave_call",
+        RealmHubSystemAbility::LeaveCall,
         json!({
             "call_id": args.call_id,
             "participant_id": args.participant_id,
@@ -271,20 +306,34 @@ fn run_leave(args: LeaveArgs) -> anyhow::Result<()> {
 }
 
 fn run_end(args: EndArgs) -> anyhow::Result<()> {
-    let result = invoke_call_signaling(
-        "voice.end_call",
-        json!({"call_id": args.call_id, "end_reason": 1}),
-    )?;
-    output::success(&format!("Call {} ended", args.call_id));
+    let call_id = args.call_id.clone();
+    let result = invoke_call_signaling(RealmHubSystemAbility::EndCall, end_call_args(args)?)?;
+    output::success(&format!("Call {call_id} ended"));
     if let Some(state) = result.get("state").and_then(Value::as_str) {
         output::detail("terminal_state", state);
     }
-    let _ = &args.reason; // surfaced in the ability args for forward-compat
+    if let Some(reason) = result.get("end_reason").and_then(Value::as_str) {
+        output::detail("end_reason", reason);
+    }
+    if let Some(code) = result.get("end_reason_code").and_then(Value::as_i64) {
+        output::detail("end_reason_code", &code.to_string());
+    }
     Ok(())
 }
 
+fn end_call_args(args: EndArgs) -> anyhow::Result<Value> {
+    let end_reason = VoiceEndReason::from_cli_token(&args.reason)?;
+    Ok(json!({
+        "call_id": args.call_id,
+        "end_reason": end_reason.to_wire_i32(),
+    }))
+}
+
 fn run_watch(args: WatchArgs) -> anyhow::Result<()> {
-    let result = invoke_call_signaling("voice.watch_call", json!({"call_id": args.call_id}))?;
+    let result = invoke_call_signaling(
+        RealmHubSystemAbility::WatchCall,
+        json!({"call_id": args.call_id}),
+    )?;
     let events = result.get("events").and_then(Value::as_array);
     let mut count = 0;
     if let Some(events) = events {
@@ -310,7 +359,7 @@ fn run_metrics(args: MetricsArgs) -> anyhow::Result<()> {
         "packet_loss_ratio": args.loss,
     });
     let _ = invoke_call_signaling(
-        "voice.report_metrics",
+        RealmHubSystemAbility::ReportMetrics,
         json!({
             "call_id":        args.call_id,
             "participant_id": args.participant_id,
@@ -319,4 +368,125 @@ fn run_metrics(args: MetricsArgs) -> anyhow::Result<()> {
     )?;
     output::success("Metrics reported");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn call_participant_rejects_unpaired_hostname_fallback() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+
+        let error = CallParticipantIdentity::resolve_paired_device()
+            .expect_err("unpaired call signaling must fail before hostname identity fallback");
+        let message = format!("{error:#}");
+
+        assert!(
+            message.contains("requires paired device credentials"),
+            "wrong unpaired identity error: {message}"
+        );
+    }
+
+    #[test]
+    fn call_participant_uses_valid_credential_node_id() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        crate::daemon::persistence::config::save_credentials(
+            &crate::daemon::persistence::config::Credentials {
+                node_id: "dev-a".to_string(),
+                credential_token: "token".to_string(),
+                realm: "acme".to_string(),
+                hub_endpoint: "axon://hub.example:50051".to_string(),
+                username: Some("alice".to_string()),
+                user_id: Some("user-alice".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("write test credentials");
+
+        let identity =
+            CallParticipantIdentity::resolve_paired_device().expect("credential identity");
+
+        assert_eq!(
+            identity,
+            CallParticipantIdentity {
+                node_id: "dev-a".to_string()
+            }
+        );
+        assert_eq!(identity.participant_id(), "dev-a");
+    }
+
+    #[test]
+    fn call_participant_rejects_malformed_credentials() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(crate::daemon::persistence::config::state_dir())
+            .expect("state dir");
+        std::fs::write(
+            crate::daemon::persistence::config::state_dir().join("credentials.json"),
+            b"{",
+        )
+        .expect("write malformed credentials");
+
+        let error = CallParticipantIdentity::resolve_paired_device()
+            .expect_err("malformed credentials must not become hostname identity");
+
+        assert!(
+            error.to_string().contains("parse credentials"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[test]
+    fn call_participant_rejects_incomplete_credentials() {
+        let _guard = crate::cli::commands::test_support::HomeGuard::new();
+        std::fs::create_dir_all(crate::daemon::persistence::config::state_dir())
+            .expect("state dir");
+        std::fs::write(
+            crate::daemon::persistence::config::state_dir().join("credentials.json"),
+            r#"{
+  "node_id": "",
+  "credential_token": "token",
+  "hub_endpoint": "axon://hub.example:7700",
+  "realm": "acme",
+  "username": "alice",
+  "user_id": "user-alice"
+}
+"#,
+        )
+        .expect("write incomplete credentials");
+
+        let error = CallParticipantIdentity::resolve_paired_device()
+            .expect_err("incomplete credentials must not become hostname identity");
+
+        assert!(
+            error.to_string().contains("validate credentials"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[test]
+    fn call_end_args_preserve_explicit_reason() {
+        let args = end_call_args(EndArgs {
+            call_id: "call-1".to_string(),
+            reason: "policy_denied".to_string(),
+        })
+        .expect("build explicit end args");
+
+        assert_eq!(args["call_id"], "call-1");
+        assert_eq!(args["end_reason"], 4);
+    }
+
+    #[test]
+    fn call_end_args_reject_unknown_reason_before_invoke() {
+        let error = end_call_args(EndArgs {
+            call_id: "call-1".to_string(),
+            reason: "just_because".to_string(),
+        })
+        .expect_err("unknown call end reason must fail before invocation");
+
+        assert!(
+            error.to_string().contains("unknown voice end reason"),
+            "unexpected error: {error}"
+        );
+    }
 }

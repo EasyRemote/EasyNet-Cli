@@ -4,7 +4,7 @@
 // File: src/daemon/ability/builtins/device_control/terminal/io.rs
 //
 // The unary-RPC half of the PTY data-plane. Pairs with
-// `pty_lifecycle_ability` (create / close) and `pty_attach_ability`
+// `terminal_lifecycle_ability` (create / close) and `terminal_attach_ability`
 // (bidi attach). Backend's PTYDriver — the production path used by
 // every Frontend Terminal session before the WS bidi optimisation
 // lands — depends on this trio:
@@ -13,7 +13,7 @@
 //   * `terminal.read`   (RPC) — drain stdout up to timeout
 //   * `terminal.resize` (RPC) — set cols × rows
 //
-// Why a separate file from `pty_lifecycle_ability`
+// Why a separate file from `terminal_lifecycle_ability`
 // ------------------------------------------------
 // Lifecycle owns the session-table mutations (create row / drop
 // row). I/O owns the per-session continuous reader thread + the
@@ -31,24 +31,24 @@
 //   * a dedicated std::thread that loops `Read::read` on the
 //     PTY master fd and pushes chunks into a `VecDeque<u8>`
 //     guarded by a Mutex + Condvar.
-//   * `pty_session_read` waits on the Condvar with a timeout;
+//   * `terminal.read` waits on the Condvar with a timeout;
 //     returns the drained bytes (or empty if the timeout hit).
 //
 // The thread is created lazily on the first read call so a
-// session that's only ever attached via `pty_session_attach`
+// session that's only ever attached via `terminal.attach`
 // (bidi mode) never spins up a competing reader. Once started,
-// the buffer collects until `pty_session_close` fires (which
+// the buffer collects until `terminal.close` fires (which
 // purges the I/O state row).
 //
 // Coexistence rule
 // ----------------
-// `pty_session_attach` (bidi) and the unary read path are
+// `terminal.attach` (bidi) and the unary read path are
 // MUTUALLY EXCLUSIVE per session. portable-pty's
 // `try_clone_reader` returns a fresh fd dup, so two readers
 // would race for incoming bytes — each would see ~half. We
 // document that constraint here and rely on the operator picking
 // one mode per session. A future axis-tagged mode field on
-// `pty_session_create` could enforce it; v1 ships the
+// `terminal.create` could enforce it; v1 ships the
 // documentation gate.
 //
 // Why a writer cache (instead of `take_writer()` per call)
@@ -69,17 +69,17 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::execution::pty::{PtyService, PtySessionId};
 
-pub const ABILITY_PTY_SESSION_INPUT: &str =
+pub const ABILITY_TERMINAL_INPUT: &str =
     crate::daemon::ability::names::device_control::TERMINAL_INPUT;
-pub const ABILITY_PTY_SESSION_READ: &str =
+pub const ABILITY_TERMINAL_READ: &str =
     crate::daemon::ability::names::device_control::TERMINAL_READ;
-pub const ABILITY_PTY_SESSION_RESIZE: &str =
+pub const ABILITY_TERMINAL_RESIZE: &str =
     crate::daemon::ability::names::device_control::TERMINAL_RESIZE;
 
 /// Default per-call read budget when the caller doesn't supply one.
@@ -92,7 +92,7 @@ const DEFAULT_READ_TIMEOUT_SECS: f64 = 5.0;
 /// a worker thread for hours. 60s is plenty for any legitimate
 /// poll; longer sessions repeat the call.
 const MAX_READ_TIMEOUT_SECS: f64 = 60.0;
-/// Maximum bytes a single `pty_session_read` call returns. Prevents
+/// Maximum bytes a single `terminal.read` call returns. Prevents
 /// a runaway producer (a `yes` loop, e.g.) from generating multi-MB
 /// payloads inside one Invoke envelope. The buffer keeps growing
 /// in memory; the next read drains the rest.
@@ -102,16 +102,16 @@ const MAX_READ_CHUNK_BYTES: usize = 256 * 1024;
 /// and OOM the daemon. When the buffer is full, the reader thread
 /// drops the oldest bytes — same policy `tail -f` survivors use.
 const OUTPUT_BUFFER_CAP_BYTES: usize = 4 * 1024 * 1024;
-/// Per-thread read chunk. Mirrors pty_attach_ability::READ_CHUNK_SIZE
+/// Per-thread read chunk. Mirrors terminal_attach_ability::READ_CHUNK_SIZE
 /// so behaviour is consistent across the two surfaces.
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Per-session I/O state. One row per session that has had an
-/// input or read call (lazy init). Removed by `pty_session_close`
+/// input or read call (lazy init). Removed by `terminal.close`
 /// — see `register`'s wrapper around the lifecycle close handler.
 struct SessionIo {
     /// Output buffer + Condvar. The reader thread pushes here;
-    /// `pty_session_read` waits on `cv` with a timeout. The buffer
+    /// `terminal.read` waits on `cv` with a timeout. The buffer
     /// also stores a "PTY ended" flag so the read handler can
     /// surface session_dead to the backend's typed-error path.
     output: Arc<(Mutex<OutputState>, Condvar)>,
@@ -272,7 +272,7 @@ impl PtyIoService {
                             Ok(n) => n,
                             Err(_) => {
                                 // I/O error → treat as EOF. Same
-                                // policy as pty_attach_ability.
+                                // policy as terminal_attach_ability.
                                 let (lock, cv) = &*output;
                                 if let Ok(mut s) = lock.lock() {
                                     s.closed = true;
@@ -335,23 +335,47 @@ impl PtyIoService {
 /// every handler observes the same session and state tables.
 ///
 pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>, io: PtyIoService) {
-    use crate::daemon::ability::dispatch::LocalRpcHandler;
+    let owner = OwnerKind::terminal_system();
     {
         let pty = Arc::clone(&pty);
         let io = io.clone();
-        let handler: LocalRpcHandler = Arc::new(move |args: Value| input_handler(&pty, &io, args));
-        reg.register_rpc_with_owner("terminal.input", OwnerKind::Device, handler);
+        let handler = Arc::new(move |env, args: Value| {
+            let input_args = TerminalInputArgs::parse(args)?;
+            super::authority::require_session_authority(
+                &env,
+                input_args.session_id(),
+                "terminal.input",
+            )?;
+            input_session(&pty, &io, input_args)
+        });
+        reg.register_rpc_with_envelope_and_owner("terminal.input", owner.clone(), handler);
     }
     {
         let pty = Arc::clone(&pty);
         let io = io.clone();
-        let handler: LocalRpcHandler = Arc::new(move |args: Value| read_handler(&pty, &io, args));
-        reg.register_rpc_with_owner("terminal.read", OwnerKind::Device, handler);
+        let handler = Arc::new(move |env, args: Value| {
+            let read_args = TerminalReadArgs::parse(args)?;
+            super::authority::require_session_authority(
+                &env,
+                read_args.session_id(),
+                "terminal.read",
+            )?;
+            read_session(&pty, &io, read_args)
+        });
+        reg.register_rpc_with_envelope_and_owner("terminal.read", owner.clone(), handler);
     }
     {
         let pty = Arc::clone(&pty);
-        let handler: LocalRpcHandler = Arc::new(move |args: Value| resize_handler(&pty, args));
-        reg.register_rpc_with_owner("terminal.resize", OwnerKind::Device, handler);
+        let handler = Arc::new(move |env, args: Value| {
+            let resize_args = TerminalResizeArgs::parse(args)?;
+            super::authority::require_session_authority(
+                &env,
+                resize_args.session_id(),
+                "terminal.resize",
+            )?;
+            resize_session(&pty, resize_args)
+        });
+        reg.register_rpc_with_envelope_and_owner("terminal.resize", owner, handler);
     }
 }
 
@@ -362,21 +386,24 @@ pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>, io: PtyIoSer
 /// `error` field on a malformed request; ack=false + `code:
 /// "session_dead"` when the PTY reported EOF/error before this
 /// write completed.
+#[cfg(test)]
 fn input_handler(pty: &Arc<PtyService>, io: &PtyIoService, args: Value) -> anyhow::Result<Value> {
-    let session_id = require_session_id(&args)?;
-    let data_b64 = args
-        .get("data")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("`data` (base64 string) required"))?;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data_b64)
-        .map_err(|e| anyhow::anyhow!("`data` base64 decode failed: {e}"))?;
+    input_session(pty, io, TerminalInputArgs::parse(args)?)
+}
+
+fn input_session(
+    pty: &Arc<PtyService>,
+    io: &PtyIoService,
+    input_args: TerminalInputArgs,
+) -> anyhow::Result<Value> {
+    let bytes = input_args.bytes;
     if bytes.is_empty() {
         // No-op write is idempotent and cheap; ack so a caller
         // pushing an empty heartbeat doesn't get an error.
         return Ok(json!({"ack": true, "bytes_written": 0}));
     }
 
+    let session_id = input_args.session_id;
     let id = PtySessionId::new(&session_id);
     let row = io.get_or_init(pty, &id)?;
 
@@ -442,8 +469,17 @@ fn input_handler(pty: &Arc<PtyService>, io: &PtyIoService, args: Value) -> anyho
 ///   * `{ output: "", bytes: 0, code: "session_not_found" }` when
 ///     the underlying PtyService row is gone (lifecycle close
 ///     fired before this call landed).
+#[cfg(test)]
 fn read_handler(pty: &Arc<PtyService>, io: &PtyIoService, args: Value) -> anyhow::Result<Value> {
-    let session_id = require_session_id(&args)?;
+    read_session(pty, io, TerminalReadArgs::parse(args)?)
+}
+
+fn read_session(
+    pty: &Arc<PtyService>,
+    io: &PtyIoService,
+    read_args: TerminalReadArgs,
+) -> anyhow::Result<Value> {
+    let session_id = read_args.session_id;
     let id = PtySessionId::new(&session_id);
 
     if pty.get(&id).is_none() {
@@ -454,7 +490,7 @@ fn read_handler(pty: &Arc<PtyService>, io: &PtyIoService, args: Value) -> anyhow
         }));
     }
 
-    let timeout_secs = parse_timeout(&args)?;
+    let timeout_secs = read_args.timeout_secs;
 
     // Non-blocking poll fast path. When the caller said `timeout = 0`
     // ("give me current state, don't block"), look up the row
@@ -544,56 +580,166 @@ fn read_handler(pty: &Arc<PtyService>, io: &PtyIoService, args: Value) -> anyhow
 /// Returns: `{ ack: bool }`. ack=false when the session_id is
 /// unknown so a caller polling SIGWINCH on a closed session can
 /// stop without special-casing.
+#[cfg(test)]
 fn resize_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<Value> {
-    let session_id = require_session_id(&args)?;
-    let cols = require_u16(&args, "cols")?;
-    let rows = require_u16(&args, "rows")?;
-    if cols == 0 || rows == 0 {
-        anyhow::bail!("cols and rows must be > 0");
-    }
-    let id = PtySessionId::new(&session_id);
+    resize_session(pty, TerminalResizeArgs::parse(args)?)
+}
+
+fn resize_session(pty: &Arc<PtyService>, resize_args: TerminalResizeArgs) -> anyhow::Result<Value> {
+    let id = PtySessionId::new(&resize_args.session_id);
     let session = match pty.get(&id) {
         Some(s) => s,
         None => return Ok(json!({"ack": false})),
     };
-    futures::executor::block_on(session.resize(cols, rows))?;
+    futures::executor::block_on(session.resize(resize_args.cols, resize_args.rows))?;
     Ok(json!({"ack": true}))
 }
 
 // ── Argument parsing helpers ─────────────────────────────────────
 
-fn require_session_id(args: &Value) -> anyhow::Result<String> {
-    let s = args
-        .get("session_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("`session_id` required"))?;
-    if s.is_empty() {
-        anyhow::bail!("`session_id` must not be empty");
-    }
-    Ok(s.to_string())
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TerminalInputArgs {
+    session_id: String,
+    bytes: Vec<u8>,
 }
 
-fn parse_timeout(args: &Value) -> anyhow::Result<f64> {
+impl TerminalInputArgs {
+    fn parse(args: Value) -> anyhow::Result<Self> {
+        let args = terminal_io_args_object(&args, "terminal.input", &["session_id", "data"])?;
+        let session_id = terminal_io_required_session_id(args, "terminal.input")?;
+        let data_b64 = terminal_io_required_string(args, "data", "terminal.input")?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data_b64)
+            .map_err(|e| anyhow::anyhow!("terminal.input: `data` base64 decode failed: {e}"))?;
+        Ok(Self { session_id, bytes })
+    }
+
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TerminalReadArgs {
+    session_id: String,
+    timeout_secs: f64,
+}
+
+impl TerminalReadArgs {
+    fn parse(args: Value) -> anyhow::Result<Self> {
+        let args = terminal_io_args_object(&args, "terminal.read", &["session_id", "timeout"])?;
+        let session_id = terminal_io_required_session_id(args, "terminal.read")?;
+        let timeout_secs = parse_timeout(args, "terminal.read")?;
+        Ok(Self {
+            session_id,
+            timeout_secs,
+        })
+    }
+
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TerminalResizeArgs {
+    session_id: String,
+    cols: u16,
+    rows: u16,
+}
+
+impl TerminalResizeArgs {
+    fn parse(args: Value) -> anyhow::Result<Self> {
+        let args =
+            terminal_io_args_object(&args, "terminal.resize", &["session_id", "cols", "rows"])?;
+        let session_id = terminal_io_required_session_id(args, "terminal.resize")?;
+        let cols = terminal_io_required_u16(args, "cols", "terminal.resize")?;
+        let rows = terminal_io_required_u16(args, "rows", "terminal.resize")?;
+        if cols == 0 || rows == 0 {
+            anyhow::bail!("terminal.resize: cols and rows must be > 0");
+        }
+        Ok(Self {
+            session_id,
+            cols,
+            rows,
+        })
+    }
+
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+}
+
+fn terminal_io_args_object<'a>(
+    args: &'a Value,
+    ability: &str,
+    allowed_keys: &[&str],
+) -> anyhow::Result<&'a Map<String, Value>> {
+    let object = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{ability}: args must be an object"))?;
+    let mut unknown = object
+        .keys()
+        .filter(|key| !allowed_keys.contains(&key.as_str()))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        unknown.sort_unstable();
+        anyhow::bail!(
+            "{ability}: unsupported argument field(s): {}",
+            unknown.join(", ")
+        );
+    }
+    Ok(object)
+}
+
+fn terminal_io_required_session_id(
+    args: &Map<String, Value>,
+    ability: &str,
+) -> anyhow::Result<String> {
+    let session_id = terminal_io_required_string(args, "session_id", ability)?.trim();
+    if session_id.is_empty() {
+        anyhow::bail!("{ability}: `session_id` must not be empty");
+    }
+    Ok(session_id.to_string())
+}
+
+fn terminal_io_required_string<'a>(
+    args: &'a Map<String, Value>,
+    key: &str,
+    ability: &str,
+) -> anyhow::Result<&'a str> {
+    args.get(key)
+        .ok_or_else(|| anyhow::anyhow!("{ability}: `{key}` required"))?
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("{ability}: `{key}` must be a string"))
+}
+
+fn parse_timeout(args: &Map<String, Value>, ability: &str) -> anyhow::Result<f64> {
     let raw = match args.get("timeout") {
         None | Some(Value::Null) => return Ok(DEFAULT_READ_TIMEOUT_SECS),
         Some(v) => v
             .as_f64()
-            .ok_or_else(|| anyhow::anyhow!("`timeout` must be a number"))?,
+            .ok_or_else(|| anyhow::anyhow!("{ability}: `timeout` must be a number"))?,
     };
     if !raw.is_finite() || raw < 0.0 {
-        anyhow::bail!("`timeout` must be a non-negative finite number (got {raw})");
+        anyhow::bail!("{ability}: `timeout` must be a non-negative finite number (got {raw})");
     }
     Ok(raw.min(MAX_READ_TIMEOUT_SECS))
 }
 
-fn require_u16(args: &Value, key: &str) -> anyhow::Result<u16> {
+fn terminal_io_required_u16(
+    args: &Map<String, Value>,
+    key: &str,
+    ability: &str,
+) -> anyhow::Result<u16> {
     match args.get(key) {
-        None | Some(Value::Null) => anyhow::bail!("`{key}` required"),
+        None | Some(Value::Null) => anyhow::bail!("{ability}: `{key}` required"),
         Some(Value::Number(n)) => n
             .as_u64()
             .and_then(|v| u16::try_from(v).ok())
-            .ok_or_else(|| anyhow::anyhow!("`{key}` must fit in u16 (got {n})")),
-        Some(other) => anyhow::bail!("`{key}` must be a number, got {other}"),
+            .ok_or_else(|| anyhow::anyhow!("{ability}: `{key}` must fit in u16 (got {n})")),
+        Some(other) => anyhow::bail!("{ability}: `{key}` must be a number, got {other}"),
     }
 }
 
@@ -682,14 +828,20 @@ mod tests {
         .expect("spawn /bin/sh")
     }
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/terminal-io";
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
+    }
+
     #[test]
     fn registration_mounts_three_rpcs() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         let (pty, io) = fresh();
         register(&mut reg, pty, io);
-        assert!(reg.get_rpc(ABILITY_PTY_SESSION_INPUT).is_some());
-        assert!(reg.get_rpc(ABILITY_PTY_SESSION_READ).is_some());
-        assert!(reg.get_rpc(ABILITY_PTY_SESSION_RESIZE).is_some());
+        assert!(reg.resolve_rpc_with_env(ABILITY_TERMINAL_INPUT).is_some());
+        assert!(reg.resolve_rpc_with_env(ABILITY_TERMINAL_READ).is_some());
+        assert!(reg.resolve_rpc_with_env(ABILITY_TERMINAL_RESIZE).is_some());
     }
 
     #[test]
@@ -723,6 +875,39 @@ mod tests {
         let err = input_handler(&pty, &io, json!({"session_id": id.as_str()})).unwrap_err();
         assert!(format!("{err}").contains("`data`"));
         pty.close(&id);
+    }
+
+    #[test]
+    fn input_rejects_unknown_fields_before_io_row_allocation() {
+        let (pty, io) = fresh();
+        let id = spawn_sh(&pty);
+        let err = input_handler(
+            &pty,
+            &io,
+            json!({"session_id": id.as_str(), "data": "aGk=", "legacy_mode": true}),
+        )
+        .unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("terminal.input: unsupported argument field(s): legacy_mode"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            io.get_existing(&id).is_none(),
+            "unknown fields must fail before writer allocation or I/O row creation"
+        );
+        pty.close(&id);
+    }
+
+    #[test]
+    fn input_rejects_wrong_typed_session_id_before_io_row_allocation() {
+        let (pty, io) = fresh();
+        let err = input_handler(&pty, &io, json!({"session_id": 42, "data": "aGk="})).unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("terminal.input: `session_id` must be a string"),
+            "unexpected error: {message}"
+        );
     }
 
     #[test]
@@ -774,13 +959,22 @@ mod tests {
     fn parse_timeout_clamps_to_max() {
         // A caller passing a billion seconds gets clamped to the
         // ceiling rather than letting the handler hang for years.
-        let got = parse_timeout(&json!({"timeout": 1_000_000.0})).unwrap();
+        let got = TerminalReadArgs::parse(json!({
+            "session_id": "session-1",
+            "timeout": 1_000_000.0
+        }))
+        .unwrap()
+        .timeout_secs;
         assert_eq!(got, MAX_READ_TIMEOUT_SECS);
     }
 
     #[test]
     fn parse_timeout_rejects_negative() {
-        let err = parse_timeout(&json!({"timeout": -1.5})).unwrap_err();
+        let err = TerminalReadArgs::parse(json!({
+            "session_id": "session-1",
+            "timeout": -1.5
+        }))
+        .unwrap_err();
         assert!(format!("{err}").contains("non-negative"));
     }
 
@@ -796,9 +990,43 @@ mod tests {
         // "timeout" instead, which lands in the `as_f64() = None`
         // branch and surfaces a clean "must be a number" error.
         let mut obj = serde_json::Map::new();
+        obj.insert("session_id".to_string(), json!("session-1"));
         obj.insert("timeout".to_string(), json!("not-a-number"));
-        let err = parse_timeout(&Value::Object(obj)).unwrap_err();
+        let err = TerminalReadArgs::parse(Value::Object(obj)).unwrap_err();
         assert!(format!("{err}").contains("number"));
+    }
+
+    #[test]
+    fn read_rejects_unknown_fields_before_reader_allocation() {
+        let (pty, io) = fresh();
+        let id = spawn_sh(&pty);
+        let err = read_handler(
+            &pty,
+            &io,
+            json!({"session_id": id.as_str(), "timeout": 0.05, "legacy_mode": true}),
+        )
+        .unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("terminal.read: unsupported argument field(s): legacy_mode"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            io.get_existing(&id).is_none(),
+            "unknown fields must fail before lazy reader allocation"
+        );
+        pty.close(&id);
+    }
+
+    #[test]
+    fn read_rejects_blank_session_id_before_session_lookup() {
+        let (pty, io) = fresh();
+        let err = read_handler(&pty, &io, json!({"session_id": "   "})).unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("terminal.read: `session_id` must not be empty"),
+            "unexpected error: {message}"
+        );
     }
 
     #[test]
@@ -981,5 +1209,37 @@ mod tests {
         .unwrap_err();
         assert!(format!("{err}").contains("> 0"));
         pty.close(&id);
+    }
+
+    #[test]
+    fn resize_rejects_unknown_fields_before_session_lookup() {
+        let (pty, _) = fresh();
+        let id = spawn_sh(&pty);
+        let err = resize_handler(
+            &pty,
+            json!({"session_id": id.as_str(), "cols": 80, "rows": 24, "legacy_mode": true}),
+        )
+        .unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("terminal.resize: unsupported argument field(s): legacy_mode"),
+            "unexpected error: {message}"
+        );
+        pty.close(&id);
+    }
+
+    #[test]
+    fn resize_rejects_wrong_typed_dimensions_before_session_lookup() {
+        let (pty, _) = fresh();
+        let err = resize_handler(
+            &pty,
+            json!({"session_id": "nope", "cols": "wide", "rows": 24}),
+        )
+        .unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("terminal.resize: `cols` must be a number"),
+            "unexpected error: {message}"
+        );
     }
 }

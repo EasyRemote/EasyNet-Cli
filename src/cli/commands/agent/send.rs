@@ -3,8 +3,6 @@
 
 use console::style;
 
-use crate::cli::commands::mission_runs::{self, MissionRunOpts};
-
 use super::*;
 
 fn resolve_session_id(args: &SendArgs) -> anyhow::Result<Option<String>> {
@@ -31,7 +29,7 @@ fn resolve_session_id(args: &SendArgs) -> anyhow::Result<Option<String>> {
     }
 
     if args.follow {
-        match chat_sessions::latest_session(&args.name) {
+        match chat_sessions::latest_session(&args.name)? {
             Some(sid) => return Ok(Some(sid)),
             None => anyhow::bail!(
                 "agent '{}' has no recorded sessions yet — \
@@ -42,7 +40,7 @@ fn resolve_session_id(args: &SendArgs) -> anyhow::Result<Option<String>> {
     }
 
     if args.resume {
-        let sessions = chat_sessions::list_sessions(&args.name);
+        let sessions = chat_sessions::list_sessions(&args.name)?;
         if sessions.is_empty() {
             anyhow::bail!(
                 "agent '{}' has no recorded sessions yet — \
@@ -143,6 +141,26 @@ fn prompt_session_picker(
     }
 }
 
+fn required_agent_reply(output: &serde_json::Value) -> anyhow::Result<String> {
+    let reply = match output {
+        serde_json::Value::Object(object) => object
+            .get("reply")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| object.get("output").and_then(serde_json::Value::as_str)),
+        serde_json::Value::String(text) => Some(text.as_str()),
+        _ => None,
+    }
+    .map(str::trim)
+    .filter(|text| !text.is_empty())
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "agent chat completed without a non-empty `reply` or `output`: {}",
+            output
+        )
+    })?;
+    Ok(reply.to_string())
+}
+
 /// Format an RFC3339 timestamp as a short relative-age string
 /// ("5m ago", "3h ago", "2d ago"). Used by the resume picker so
 /// each row stays scannable. Falls back to the raw timestamp if
@@ -169,8 +187,14 @@ fn relative_age(ts: &str) -> String {
 pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // Validate through the daemon's Axon ability surface so the CLI
     // does not own a parallel registry read path.
-    let daemon_client = required_local_daemon_agent_client()?;
-    let _row = daemon_agent_row(&daemon_client, &args.name)?;
+    let gateway = agent_read_gateway();
+    let row = daemon_agent_row(gateway.as_ref(), &args.name)?;
+    let agent_ura = row.ura.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "agent.list omitted the canonical Agent URA for {:?}; refresh or restart the daemon before invoking it",
+            args.name
+        )
+    })?;
 
     // `--resume` is picker-only — single job, no prompt allowed.
     // Validate this BEFORE resolving the session id so we don't
@@ -260,37 +284,41 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // pulled out of `MissionRunResult.bound_vars`. `eal_string_literal`
     // can fail if the user's prompt contains an embedded NUL byte — we
     // surface that as a CLI error rather than silently truncating.
-    let eal_source = match resolved_session_id.as_deref() {
-        Some(sid) => format!(
-            "mission \"agent-send\" {{\n    let __reply = {agent}.chat(prompt: {prompt}, session_id: {sid})\n}}\n",
-            agent = args.name,
-            prompt = eal_string_literal(&composed_prompt)?,
-            sid = eal_string_literal(sid)?,
-        ),
-        None => format!(
-            "mission \"agent-send\" {{\n    let __reply = {agent}.chat(prompt: {prompt})\n}}\n",
-            agent = args.name,
-            prompt = eal_string_literal(&composed_prompt)?,
-        ),
-    };
+    let eal_source =
+        build_agent_send_eal_source(&args.name, &composed_prompt, resolved_session_id.as_deref())?;
 
-    // Hand the source to THE single in-process mission entry point.
-    // The runner installs a typed `DispatchContext`; nested
-    // `dispatch::send_to_agent` calls satisfy Step 9's invariant without
-    // mutating the parent process environment.
-    let result = mission_runs::run_mission_inproc(
-        &eal_source,
-        MissionRunOpts {
-            source_label: Some(format!("agent send {}", args.name)),
-            // `--trace <path>` is accepted by the CLI but the mission
-            // runner's authoritative trace remains the run directory.
-            // Keep the path on MissionRunOpts so a future export layer
-            // has the caller's requested destination without inventing
-            // a second mission execution path.
-            trace_path: args.trace.clone(),
-            invocation_context: None,
-        },
+    let identity =
+        crate::support::platform::remote_device::PairedInvocationIdentity::load("agent send")?;
+    let value = crate::cli::daemon_client::remote_system_ability::invoke_agent_subject_mission_run(
+        identity.local_device_ura(),
+        identity.caller_user_ura(),
+        agent_ura,
+        serde_json::json!({
+            "source": eal_source,
+            "label": format!("agent send {}", args.name),
+        }),
+        std::time::Duration::from_secs(3600),
     )?;
+    let result: crate::daemon::ability::builtins::automation::mission::MissionRunResponse =
+        serde_json::from_value(value).map_err(|error| {
+            anyhow::anyhow!("mission.run returned an invalid response: {error}")
+        })?;
+    if !result.ok {
+        anyhow::bail!(
+            "agent send Mission {} failed (status={}, steps_failed={}, run_dir={})",
+            result.run_id,
+            result.meta.status,
+            result.meta.steps_failed,
+            result.run_dir
+        );
+    }
+    if !result.outputs.contains_key("__reply") {
+        anyhow::bail!(
+            "agent send Mission {} completed without required output __reply (run_dir={})",
+            result.run_id,
+            result.run_dir
+        );
+    }
 
     // Pull the agent's reply out of the mission's bound vars. The
     // mission ability returns a JSON object. Two shapes can appear:
@@ -300,22 +328,16 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     //     `{ok, agent, output, model, duration_ms}`
     // The user-visible reply lives in `reply` for chat and `output`
     // for shell-out — try both.
-    let reply_obj = match result.bound_vars.get("__reply") {
+    let reply_obj = match result.outputs.get("__reply") {
         Some(serde_json::Value::Object(obj)) => Some(obj.clone()),
         _ => None,
     };
-    let reply_text: String = match &reply_obj {
-        Some(obj) => obj
-            .get("reply")
-            .and_then(|v| v.as_str())
-            .or_else(|| obj.get("output").and_then(|v| v.as_str()))
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| serde_json::Value::Object(obj.clone()).to_string()),
-        None => match result.bound_vars.get("__reply") {
-            Some(other) => other.to_string(),
-            None => String::new(),
-        },
-    };
+    let reply_text = required_agent_reply(
+        result
+            .outputs
+            .get("__reply")
+            .expect("required __reply output checked above"),
+    )?;
     // Server-minted session id (when caller passed none) or echoed-back
     // (when the caller pinned one via --follow / --session-id). Echoed
     // to the user so they can copy it for a later --session-id call.
@@ -333,18 +355,10 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
         style(format!("{:.1}s", result.meta.duration_ms as f64 / 1000.0)).cyan(),
     );
 
-    // Token line: read the nested agent run dir's meta.json. The mission
-    // run dir contains the agent run dir as a sibling artefact (the
-    // dispatch layer creates it independently under
-    // ~/.easynet/workspaces/<agent>/runs/). We surface the most recent
-    // one for this agent — for a one-step `agent send` it is unambiguous.
-    //
-    // TODO(token-meta-aggregation): this token aggregation logic is a
-    // presentation-layer leak into execution detail. The right home is
-    // `MissionRunMeta` itself — after every step, the mission runner
-    // should sum the agent run stats into a `MissionRunMeta.token_usage`
-    // field. Defer to a follow-up PR.
-    if let Some(usage) = read_latest_agent_usage(&args.name) {
+    // Token line: read the mission runtime's own aggregate. The CLI
+    // presentation layer must not inspect nested agent run directories or
+    // guess which sibling run belongs to this mission.
+    if let Some(usage) = result.meta.token_usage.as_ref() {
         let total_in = usage.input_tokens + usage.cache_read_tokens + usage.cache_creation_tokens;
         eprintln!(
             "  {} in={} out={} cache_read={} cache_write={} turns={} cost=${:.4}",
@@ -366,7 +380,7 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     eprintln!(
         "  {} {}",
         style("saved").dim(),
-        style(result.run_dir.display().to_string()).cyan(),
+        style(&result.run_dir).cyan(),
     );
     if let Some(sid) = response_session_id.as_deref() {
         eprintln!(
@@ -389,8 +403,10 @@ pub(super) fn run_send(args: SendArgs) -> anyhow::Result<()> {
     // otherwise print raw text so piping into other tools stays clean.
     if console::Term::stdout().is_term() {
         let skin = build_markdown_skin();
-        let compact = compact_markdown(&reply_text);
-        skin.print_text(&compact);
+        let compact = crate::cli::source_highlighting::compact_markdown(&reply_text);
+        let stdout = std::io::stdout();
+        let mut stdout = stdout.lock();
+        crate::cli::source_highlighting::write_markdown(&mut stdout, &skin, &compact)?;
     } else {
         println!("{}", reply_text);
     }
@@ -438,73 +454,22 @@ pub(super) fn eal_string_literal(s: &str) -> anyhow::Result<String> {
     Ok(out)
 }
 
-/// Read the most recent agent run dir for `agent_name` and extract the
-/// usage stats from its `meta.json`. Returns `None` if no run dir
-/// exists or the meta is unreadable. This is the temporary glue that
-/// powers the token line in `run_send` — see the
-/// `TODO(token-meta-aggregation)` comment in `run_send` for the
-/// long-term plan.
-fn read_latest_agent_usage(agent_name: &str) -> Option<AgentUsageReader> {
-    use std::fs;
-
-    // Source of truth for the per-agent root directory is
-    // `agents_root()`: it returns the new `~/.easynet/agents/`
-    // layout when present and falls back to the legacy
-    // `workspaces/` path otherwise. A direct join on `state_dir()`
-    // here would break reads against agents created under the new
-    // layout.
-    let runs_root = crate::daemon::persistence::config::agents_root()
-        .join(agent_name)
-        .join("runs");
-    if !runs_root.exists() {
-        return None;
+fn build_agent_send_eal_source(
+    agent_name: &str,
+    composed_prompt: &str,
+    session_id: Option<&str>,
+) -> anyhow::Result<String> {
+    let agent = eal_string_literal(agent_name)?;
+    let prompt = eal_string_literal(composed_prompt)?;
+    match session_id {
+        Some(sid) => Ok(format!(
+            "mission \"agent-send\" {{\n    let __reply = {agent}.chat(prompt: {prompt}, session_id: {sid})\n}}\n",
+            sid = eal_string_literal(sid)?,
+        )),
+        None => Ok(format!(
+            "mission \"agent-send\" {{\n    let __reply = {agent}.chat(prompt: {prompt})\n}}\n",
+        )),
     }
-
-    let mut latest: Option<(String, std::path::PathBuf)> = None;
-    for entry in fs::read_dir(&runs_root).ok()? {
-        let entry = entry.ok()?;
-        if !entry.path().is_dir() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        if latest
-            .as_ref()
-            .map(|(n, _)| name.as_str() > n.as_str())
-            .unwrap_or(true)
-        {
-            latest = Some((name, entry.path()));
-        }
-    }
-    let (_, path) = latest?;
-    let meta_path = path.join("meta.json");
-    let raw = fs::read_to_string(&meta_path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    Some(AgentUsageReader {
-        input_tokens: v.get("input_tokens").and_then(|x| x.as_u64()).unwrap_or(0),
-        output_tokens: v.get("output_tokens").and_then(|x| x.as_u64()).unwrap_or(0),
-        cache_read_tokens: v
-            .get("cache_read_tokens")
-            .and_then(|x| x.as_u64())
-            .unwrap_or(0),
-        cache_creation_tokens: v
-            .get("cache_creation_tokens")
-            .and_then(|x| x.as_u64())
-            .unwrap_or(0),
-        num_turns: v.get("num_turns").and_then(|x| x.as_u64()).unwrap_or(0),
-        total_cost_usd: v
-            .get("total_cost_usd")
-            .and_then(|x| x.as_f64())
-            .unwrap_or(0.0),
-    })
-}
-
-struct AgentUsageReader {
-    input_tokens: u64,
-    output_tokens: u64,
-    cache_read_tokens: u64,
-    cache_creation_tokens: u64,
-    num_turns: u64,
-    total_cost_usd: f64,
 }
 
 /// Build a custom termimad skin: compact spacing, colourful header levels,
@@ -576,24 +541,66 @@ fn build_markdown_skin() -> termimad::MadSkin {
     skin
 }
 
-/// Collapse consecutive blank lines down to a single blank line and strip
-/// leading/trailing blanks, so the rendered output stays compact without
-/// fighting termimad's layout engine.
-fn compact_markdown(src: &str) -> String {
-    let mut out = String::with_capacity(src.len());
-    let mut prev_blank = true; // treat start-of-doc as already-blank
-    for line in src.lines() {
-        let is_blank = line.trim().is_empty();
-        if is_blank && prev_blank {
-            continue; // skip duplicate blank lines
+#[cfg(test)]
+mod tests {
+    use crate::eal::parser::ast::{FieldValue, Statement, TargetKind};
+
+    use super::*;
+
+    #[test]
+    fn agent_send_eal_quotes_non_identifier_agent_receiver() {
+        let source = build_agent_send_eal_source("er_agent_20260719-071307", "hello", None)
+            .expect("agent send source");
+
+        assert!(source.contains(r#""er_agent_20260719-071307".chat("#));
+        assert!(!source.contains("er_agent_20260719-071307.chat("));
+
+        let parsed = crate::eal::parser::parse(&source).expect("generated source must parse");
+        let Statement::LetCall { call, .. } = &parsed.mission.statements[0] else {
+            panic!("agent send should generate one let-bound member call");
+        };
+        assert_eq!(call.target_kind, TargetKind::Agent);
+        assert_eq!(
+            call.target_node.as_deref(),
+            Some("er_agent_20260719-071307")
+        );
+        assert_eq!(call.function_name, "chat");
+    }
+
+    #[test]
+    fn agent_send_eal_preserves_session_id_as_named_arg() {
+        let source = build_agent_send_eal_source(
+            "claude",
+            "hello",
+            Some("8f7dd3b3-992a-48c7-9ecf-e1c9821eda4b"),
+        )
+        .expect("agent send source");
+
+        let parsed = crate::eal::parser::parse(&source).expect("generated source must parse");
+        let Statement::LetCall { call, .. } = &parsed.mission.statements[0] else {
+            panic!("agent send should generate one let-bound member call");
+        };
+        let session = call
+            .arguments
+            .iter()
+            .find(|field| field.key == "session_id")
+            .expect("session_id argument");
+        match &session.value {
+            FieldValue::String(value) => {
+                assert_eq!(value, "8f7dd3b3-992a-48c7-9ecf-e1c9821eda4b")
+            }
+            value => panic!("session_id must be a string literal, got {value:?}"),
         }
-        out.push_str(line);
-        out.push('\n');
-        prev_blank = is_blank;
     }
-    // Trim trailing blank line.
-    while out.ends_with("\n\n") {
-        out.pop();
+
+    #[test]
+    fn agent_send_reply_contract_rejects_empty_or_unstructured_output() {
+        assert_eq!(
+            required_agent_reply(&serde_json::json!({"reply": " hello "})).unwrap(),
+            "hello"
+        );
+        assert!(required_agent_reply(&serde_json::json!({"reply": ""})).is_err());
+        assert!(required_agent_reply(&serde_json::json!({"ok": true})).is_err());
+        assert!(required_agent_reply(&serde_json::Value::Null).is_err());
     }
-    out
 }

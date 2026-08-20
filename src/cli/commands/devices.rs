@@ -15,10 +15,10 @@
 // fanned out only the local probe view + a same-realm
 // `federation.resolve` fallback. The joint plan
 // (海峰 + 凉冰, 2026-05-03) collapses every cross-device dispatch
-// onto `federation.forward_invoke`; for read-only directory
+// onto the canonical `Invocation::Invoke` RPC; for read-only directory
 // queries the canonical surface is `federation.discover`. One
-// helper, one path; the legacy `node.list` arm gets
-// removed in the cull phase.
+// helper, one path; the legacy `node.list` arm has been culled from
+// the daemon catalogue.
 //
 // Wire shape (post-cut)
 // ---------------------
@@ -42,8 +42,7 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
-#[cfg(feature = "axon-pb")]
-use anyhow::Context;
+use anyhow::{bail, Context};
 use clap::Args;
 use console::style;
 use serde_json::{json, Value};
@@ -71,21 +70,14 @@ pub struct DevicesArgs {
 }
 
 pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
-    let creds = config::load_credentials().ok();
-    let current_node_id = creds
-        .as_ref()
-        .map(|c| c.node_id.clone())
-        .unwrap_or_default();
-    let self_ura = creds
-        .as_ref()
-        .map(|c| crate::core::ura::device_ura(&c.realm, &c.node_id));
+    let read = DeviceDirectoryRead::load()?;
 
-    let entries = fetch_directory_entries(self_ura.as_deref())?;
+    let entries = fetch_directory_entries(&read)?;
     let nodes: Vec<Value> = entries
         .into_iter()
         .filter(is_device_entry)
-        .map(|e| project_directory_entry(e, self_ura.as_deref()))
-        .collect();
+        .map(|e| project_directory_entry(e, read.self_ura.as_deref()))
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     let filtered: Vec<Value> = nodes
         .into_iter()
@@ -138,22 +130,109 @@ pub fn run(args: DevicesArgs) -> anyhow::Result<()> {
     println!();
 
     for n in &filtered {
-        print_device(n, &current_node_id);
+        print_device(n, &read.current_node_id);
     }
 
     Ok(())
 }
 
+struct DeviceDirectoryRead {
+    scope: DeviceDirectoryReadScope,
+    current_node_id: String,
+    self_ura: Option<String>,
+}
+
+enum DeviceDirectoryReadScope {
+    User { local_user_id: String },
+    UnboundFederationNative { reason: String },
+    OperatorAudit,
+}
+
+impl DeviceDirectoryRead {
+    fn load() -> anyhow::Result<Self> {
+        match config::load_credentials() {
+            Ok(creds) => Self::from_credentials(creds),
+            Err(error) => Self::load_operator_audit_for_local_authority(error),
+        }
+    }
+
+    fn from_credentials(creds: config::Credentials) -> anyhow::Result<Self> {
+        let current_node_id = creds.node_id.clone();
+        let self_ura = crate::core::ura::device_ura(&creds.realm, &creds.node_id);
+        let scope = match creds.runtime_user_binding()? {
+            config::RuntimeUserBinding::Bound { .. } => DeviceDirectoryReadScope::User {
+                local_user_id: creds.user_id()?.to_string(),
+            },
+            config::RuntimeUserBinding::Unbound { reason } => {
+                DeviceDirectoryReadScope::UnboundFederationNative {
+                    reason: reason.to_string(),
+                }
+            }
+        };
+        Ok(Self {
+            scope,
+            current_node_id,
+            self_ura: Some(self_ura),
+        })
+    }
+
+    fn load_operator_audit_for_local_authority(
+        credentials_error: anyhow::Error,
+    ) -> anyhow::Result<Self> {
+        let local_daemon_ura = match crate::daemon::identity::local_invocation::local_daemon_ura() {
+            Ok(value) => value,
+            Err(_) => {
+                return Err(credentials_error).context(
+                    "device list requires paired credentials for user-scoped federation.discover",
+                );
+            }
+        };
+        let parsed = match crate::core::ura::parse_ura(&local_daemon_ura) {
+            Ok(parsed) => parsed,
+            Err(_) => return Err(credentials_error),
+        };
+        if parsed.kind != crate::core::ura::URAKind::Authority {
+            return Err(credentials_error).context(
+                "device list requires paired credentials for user-scoped federation.discover",
+            );
+        }
+        Ok(Self {
+            scope: DeviceDirectoryReadScope::OperatorAudit,
+            current_node_id: String::new(),
+            self_ura: None,
+        })
+    }
+}
+
 #[cfg(feature = "axon-pb")]
-fn fetch_directory_entries(_self_ura: Option<&str>) -> anyhow::Result<Vec<Value>> {
-    crate::daemon::invocation::routing::federation_invoke::invoke_federation_discover(None)
-        .context("invoke federation.discover for device list")
+fn fetch_directory_entries(read: &DeviceDirectoryRead) -> anyhow::Result<Vec<Value>> {
+    match &read.scope {
+        DeviceDirectoryReadScope::User { local_user_id } => {
+            crate::daemon::federation::directory_reader::read_federated_directory_for_user(
+                None,
+                local_user_id,
+            )
+            .context("invoke user-scoped federation.discover for device list")
+        }
+        DeviceDirectoryReadScope::UnboundFederationNative { reason } => {
+            anyhow::bail!(
+                "device list requires a user-bound runtime identity; current device is {reason}. \
+                 Bind a user principal during join, or run device list from a local Authority daemon."
+            )
+        }
+        DeviceDirectoryReadScope::OperatorAudit => {
+            crate::daemon::federation::directory_reader::read_federated_directory_for_operator_audit(
+                None,
+            )
+            .context("invoke operator/audit federation.discover for hub device list")
+        }
+    }
 }
 
 #[cfg(not(feature = "axon-pb"))]
-fn fetch_directory_entries(_self_ura: Option<&str>) -> anyhow::Result<Vec<Value>> {
+fn fetch_directory_entries(_read: &DeviceDirectoryRead) -> anyhow::Result<Vec<Value>> {
     Err(
-        crate::support::platform::local_invoke::federation_not_wired_error(
+        crate::support::platform::local_invoke::federation_capability_unsupported_error(
             "listing devices via federation.discover",
         ),
     )
@@ -175,36 +254,33 @@ fn is_device_entry(entry: &Value) -> bool {
 
 /// Project a `DirectoryEntry` into the row shape `print_device`
 /// + `node::is_online` / `node::node_state_str` already consume.
-/// The mapping is straight-line: `status: "active"` → `state:
-/// "HEALTHY"`, `status: "stale"` → `state: "SUSPECT"` (sweep-
-/// candidate), `status: "draining"` → `state: "DRAINING"`. Any
-/// other value lands as `state: "UNKNOWN"` rather than crashing
-/// the renderer.
-fn project_directory_entry(entry: Value, self_ura: Option<&str>) -> Value {
-    let agent_ura = entry
-        .get("agent_ura")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let node_id = entry
-        .get("node_id")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+/// The mapping is schema-bound: canonical Device URA, matching
+/// `node_id`, and explicit supported `status` are required before
+/// the row can be rendered.
+fn project_directory_entry(entry: Value, self_ura: Option<&str>) -> anyhow::Result<Value> {
+    let agent_ura = required_string_field(&entry, "agent_ura")?;
+    let parsed = crate::core::ura::parse_ura(&agent_ura)
+        .map_err(|err| anyhow::anyhow!("directory device row has invalid agent_ura: {err}"))?;
+    if parsed.kind != crate::core::ura::URAKind::Device {
+        bail!("directory device row agent_ura {agent_ura:?} is not a canonical Device URA");
+    }
+    let device_id = parsed
+        .device_id()
+        .ok_or_else(|| anyhow::anyhow!("directory device row agent_ura omitted device id"))?;
+
+    let node_id = required_string_field(&entry, "node_id")?;
+    if node_id != device_id {
+        bail!(
+            "directory device row node_id {node_id:?} does not match Device URA id {device_id:?}"
+        );
+    }
+
     let display_name = entry
         .get("display_name")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let status = entry
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("active");
-    let state = match status {
-        "active" => "HEALTHY",
-        "stale" => "SUSPECT",
-        "draining" => "DRAINING",
-        _ => "UNKNOWN",
-    };
+    let status = required_string_field(&entry, "status")?;
+    let state = directory_device_state(&status)?;
     let online = state == "HEALTHY" || state == "REGISTERED";
     let last_seen_unix_ms = entry.get("last_seen_unix_ms").cloned();
     let origin_realm = entry
@@ -230,12 +306,31 @@ fn project_directory_entry(entry: Value, self_ura: Option<&str>) -> Value {
         row["last_seen_unix_ms"] = v;
     }
     if let Some(realm) = origin_realm {
-        row["tenant_id"] = Value::String(realm);
+        row["origin_realm"] = Value::String(realm);
     }
     if let Some(endpoint) = hub_endpoint {
         row["hub_endpoint"] = Value::String(endpoint);
     }
-    row
+    Ok(row)
+}
+
+fn required_string_field(entry: &Value, field: &str) -> anyhow::Result<String> {
+    entry
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("directory device row omitted string `{field}`"))
+}
+
+fn directory_device_state(status: &str) -> anyhow::Result<&'static str> {
+    Ok(match status {
+        "active" => "HEALTHY",
+        "stale" => "SUSPECT",
+        "draining" => "DRAINING",
+        other => bail!("directory device row has unsupported status {other:?}"),
+    })
 }
 
 fn print_device(n: &Value, current_node_id: &str) {
@@ -306,7 +401,6 @@ fn device_platform_info(n: &Value) -> (String, String, String) {
     let os = device_meta
         .and_then(|d| d.get("os"))
         .and_then(|v| v.as_str())
-        .or_else(|| n.get("os").and_then(|v| v.as_str()))
         .unwrap_or("");
     let os_version = device_meta
         .and_then(|d| d.get("os_version"))
@@ -319,7 +413,6 @@ fn device_platform_info(n: &Value) -> (String, String, String) {
     let arch = device_meta
         .and_then(|d| d.get("architecture"))
         .and_then(|v| v.as_str())
-        .or_else(|| n.get("arch").and_then(|v| v.as_str()))
         .unwrap_or("");
 
     let os_label = node::friendly_os(os);
@@ -343,10 +436,7 @@ fn device_platform_info(n: &Value) -> (String, String, String) {
 }
 
 fn device_last_active(n: &Value) -> String {
-    let last_seen = n
-        .get("last_seen_unix_ms")
-        .and_then(Value::as_i64)
-        .or_else(|| n.get("last_heartbeat_unix_ms").and_then(Value::as_i64));
+    let last_seen = n.get("last_seen_unix_ms").and_then(Value::as_i64);
     match last_seen {
         Some(ms) if ms > 0 => output::relative_time(ms),
         _ => String::new(),
@@ -395,11 +485,16 @@ mod tests {
             "status": "active",
             "origin_realm": "r1",
         });
-        let row = project_directory_entry(entry, Some("easynet:///r/r1/device/n1"));
+        let row = project_directory_entry(entry, Some("easynet:///r/r1/device/n1"))
+            .expect("valid device directory row");
         assert_eq!(row["state"], "HEALTHY");
         assert_eq!(row["online"], true);
         assert_eq!(row["is_self"], true);
-        assert_eq!(row["tenant_id"], "r1");
+        assert_eq!(row["origin_realm"], "r1");
+        assert!(
+            row.get("tenant_id").is_none(),
+            "device directory projection must not emit retired tenant alias"
+        );
     }
 
     #[test]
@@ -409,9 +504,157 @@ mod tests {
             "node_id": "n2",
             "status": "stale",
         });
-        let row = project_directory_entry(entry, None);
+        let row = project_directory_entry(entry, None).expect("valid stale device directory row");
         assert_eq!(row["state"], "SUSPECT");
         assert_eq!(row["online"], false);
         assert_eq!(row["is_self"], false);
+    }
+
+    #[test]
+    fn project_rejects_missing_node_id_instead_of_rendering_empty_device() {
+        let entry = json!({
+            "agent_ura": "easynet:///r/r1/device/n1",
+            "status": "active",
+        });
+        let error =
+            project_directory_entry(entry, None).expect_err("missing node_id must fail closed");
+
+        assert!(
+            error.to_string().contains("omitted string `node_id`"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[test]
+    fn project_rejects_missing_status_instead_of_defaulting_active() {
+        let entry = json!({
+            "agent_ura": "easynet:///r/r1/device/n1",
+            "node_id": "n1",
+        });
+        let error =
+            project_directory_entry(entry, None).expect_err("missing status must fail closed");
+
+        assert!(
+            error.to_string().contains("omitted string `status`"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[test]
+    fn project_rejects_unknown_status_instead_of_rendering_unknown() {
+        let entry = json!({
+            "agent_ura": "easynet:///r/r1/device/n1",
+            "node_id": "n1",
+            "status": "ghost",
+        });
+        let error =
+            project_directory_entry(entry, None).expect_err("unknown status must fail closed");
+
+        assert!(
+            error.to_string().contains("unsupported status"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[test]
+    fn project_rejects_node_id_that_disagrees_with_device_ura() {
+        let entry = json!({
+            "agent_ura": "easynet:///r/r1/device/n1",
+            "node_id": "n2",
+            "status": "active",
+        });
+        let error =
+            project_directory_entry(entry, None).expect_err("mismatched node_id must fail closed");
+
+        assert!(
+            error.to_string().contains("does not match Device URA id"),
+            "wrong error: {error}"
+        );
+    }
+
+    #[test]
+    fn directory_read_uses_user_scope_for_bound_credentials() {
+        let read = DeviceDirectoryRead::from_credentials(test_credentials(Some("alice"), None))
+            .expect("bound credentials");
+
+        assert_eq!(read.current_node_id, "dev-a");
+        assert_eq!(
+            read.self_ura.as_deref(),
+            Some("easynet:///r/r1/device/dev-a")
+        );
+        match read.scope {
+            DeviceDirectoryReadScope::User { local_user_id } => {
+                assert_eq!(local_user_id, "alice");
+            }
+            DeviceDirectoryReadScope::UnboundFederationNative { .. }
+            | DeviceDirectoryReadScope::OperatorAudit => {
+                panic!("bound credentials must keep user-scoped directory read");
+            }
+        }
+    }
+
+    #[test]
+    fn directory_read_marks_unbound_federation_native_credentials_unsupported_for_user_directory() {
+        let read = DeviceDirectoryRead::from_credentials(test_credentials(
+            None,
+            Some("join-receipt-hash"),
+        ))
+        .expect("unbound federation-native credentials");
+
+        assert_eq!(read.current_node_id, "dev-a");
+        assert_eq!(
+            read.self_ura.as_deref(),
+            Some("easynet:///r/r1/device/dev-a")
+        );
+        match read.scope {
+            DeviceDirectoryReadScope::UnboundFederationNative { reason } => {
+                assert!(reason.contains("federation-native device credential"));
+            }
+            DeviceDirectoryReadScope::User { .. } | DeviceDirectoryReadScope::OperatorAudit => {
+                panic!("unbound federation-native device must not enter a directory read scope");
+            }
+        }
+    }
+
+    fn test_credentials(
+        user_id: Option<&str>,
+        join_receipt_hash: Option<&str>,
+    ) -> config::Credentials {
+        config::Credentials {
+            node_id: "dev-a".to_string(),
+            credential_token: "token".to_string(),
+            hub_endpoint: "https://hub.example".to_string(),
+            realm: "r1".to_string(),
+            deploy_signature: "sig".to_string(),
+            hub_api_base: None,
+            username: user_id.map(str::to_string),
+            user_id: user_id.map(str::to_string),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: join_receipt_hash.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn renderer_ignores_legacy_top_level_platform_aliases() {
+        let row = json!({
+            "os": "macos",
+            "arch": "arm64"
+        });
+
+        let (platform, os_detail, hardware_model) = device_platform_info(&row);
+
+        assert_eq!(platform, "—");
+        assert_eq!(os_detail, "");
+        assert_eq!(hardware_model, "");
+    }
+
+    #[test]
+    fn renderer_ignores_legacy_last_heartbeat_alias() {
+        let row = json!({
+            "last_heartbeat_unix_ms": 1784562194214i64
+        });
+
+        assert_eq!(device_last_active(&row), "");
     }
 }

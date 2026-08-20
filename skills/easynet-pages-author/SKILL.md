@@ -135,7 +135,7 @@ You'll see something like:
 
 ```
 Published.
-  project_uri:  easynet:///r/easynet.run/resource/<user>.<project_id>/
+  project_ura:  easynet:///r/easynet.run/resource/<user>.<project_id>/
   url_root:     http://<project_id>.<user>.pages.localhost:8787/
 ```
 

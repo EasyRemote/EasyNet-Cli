@@ -1,0 +1,15 @@
+id: runtime_host/permission_denied
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+description: Socket or runtime-host permission failures map to the canonical SDK PermissionDenied error class without falling back to untyped transport or admission text parsing.
+steps:
+  - action: deny_runtime_permission
+  - action: project_typed_error
+expect:
+  code: PERMISSION_DENIED
+  retry: never
+  error_class: permission

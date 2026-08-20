@@ -1,0 +1,26 @@
+id: bidi/close_send_not_cancel
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+  - node
+  - java
+  - swift
+description: Runtime Core bidi close-send is a local half-close, not cancellation, and keeps the receive side alive until a terminal frame or close.
+steps:
+  - action: open_bidi
+    fixture: invocation.complete.v4.json
+  - action: project_bidi_terminal_frame
+    schema: bidi-frame.schema.json
+  - action: close_bidi_send
+  - action: send_bidi_after_close_send
+  - action: close_bidi
+expect:
+  result: bidi_half_close_observed
+  bidi_terminal_schema: bidi-frame.schema.json
+  bidi_close_send_keeps_session_registered: true
+  bidi_close_send_unknown_error: ERR_INVALID_HANDLE
+  bidi_send_after_close_send_error: ERR_CANCELLED
+  bidi_close_releases_session: true

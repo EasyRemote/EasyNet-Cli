@@ -33,7 +33,10 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::collections::HashMap;
+
 use crate::core::domain::NodeId;
+use axon_sdk::invocation::CausalContext;
 use serde_json::Value;
 
 /// Descriptor-bound local invocation target for a canonical Ability URA.
@@ -47,9 +50,9 @@ use serde_json::Value;
 /// the tuple fields needed to construct one descriptor-bound local invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalAbilityTarget {
+    ability_ura: String,
     dispatch_name: String,
     callee_ura: String,
-    default_subject_ura: String,
 }
 
 impl LocalAbilityTarget {
@@ -57,20 +60,14 @@ impl LocalAbilityTarget {
     ///
     /// Invariant 1: `dispatch_name` is the daemon registry key.
     /// Invariant 2: `callee_ura` is the Ability owner identity.
-    /// Invariant 3: `default_subject_ura` is descriptor-bound. Agent/device
-    /// owners can be subjects directly; hub owners use the Ability URA because
-    /// Axon's descriptor-bound subject set intentionally excludes Hub.
+    /// Invariant 3: daemon-system subject policy is not stored on this route
+    /// object. It is derived only by named daemon-system issuers.
     #[must_use]
     pub fn from_selector(selector: &crate::core::ura::AbilitySelector) -> Self {
-        let default_subject_ura = if selector.owner_kind() == "hub" {
-            selector.ability_ura()
-        } else {
-            selector.owner_ura()
-        };
         Self {
+            ability_ura: selector.ability_ura().to_string(),
             dispatch_name: selector.local_registry_ability().to_string(),
             callee_ura: selector.owner_ura().to_string(),
-            default_subject_ura: default_subject_ura.to_string(),
         }
     }
 
@@ -78,25 +75,99 @@ impl LocalAbilityTarget {
     pub fn new(
         dispatch_name: impl Into<String>,
         callee_ura: impl Into<String>,
-        default_subject_ura: impl Into<String>,
+    ) -> anyhow::Result<Self> {
+        let dispatch_name = dispatch_name.into();
+        Self::new_with_public_ability(dispatch_name.clone(), callee_ura, dispatch_name)
+    }
+
+    /// Build from already-resolved protocol identities when the public
+    /// descriptor name differs from the daemon-local handler key.
+    pub fn new_with_public_ability(
+        dispatch_name: impl Into<String>,
+        callee_ura: impl Into<String>,
+        public_ability: impl Into<String>,
     ) -> anyhow::Result<Self> {
         let dispatch_name = dispatch_name.into();
         let callee_ura = callee_ura.into();
-        let default_subject_ura = default_subject_ura.into();
+        let public_ability = public_ability.into();
         if dispatch_name.trim().is_empty() {
             anyhow::bail!("local ability target dispatch_name must not be empty");
         }
         if callee_ura.trim().is_empty() {
             anyhow::bail!("local ability target callee_ura must not be empty");
         }
-        if default_subject_ura.trim().is_empty() {
-            anyhow::bail!("local ability target default_subject_ura must not be empty");
+        if public_ability.trim().is_empty() {
+            anyhow::bail!("local ability target public_ability must not be empty");
         }
+        crate::core::ura::parse_ura(&callee_ura).map_err(|error| {
+            anyhow::anyhow!("local ability target callee_ura is invalid: {error}")
+        })?;
+        let public_name =
+            crate::core::ura::descriptor_public_ability_name(&callee_ura, &public_ability);
+        let ability_ura = crate::core::ura::owner_ability_ura(&callee_ura, &public_name)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "local ability target cannot derive Ability URA for callee `{callee_ura}` and public ability `{public_ability}`"
+                )
+            })?;
         Ok(Self {
+            ability_ura,
             dispatch_name,
             callee_ura,
-            default_subject_ura,
         })
+    }
+
+    /// Project a Device execution host to the declared SystemAgent owner of
+    /// `public_ability`, then build the descriptor-bound local target.
+    pub fn for_device_sponsored_system_ability(
+        public_ability: impl Into<String>,
+        execution_host_device_ura: &str,
+    ) -> anyhow::Result<Self> {
+        let public_ability = public_ability.into();
+        Self::for_device_sponsored_system_ability_with_dispatch(
+            public_ability.clone(),
+            public_ability,
+            execution_host_device_ura,
+        )
+    }
+
+    /// Project a Device execution host to the declared SystemAgent owner of
+    /// `public_ability`, while preserving a distinct daemon-local dispatch
+    /// key for legacy handlers whose committed descriptor name is canonicalized
+    /// by their manifest.
+    pub fn for_device_sponsored_system_ability_with_dispatch(
+        public_ability: impl Into<String>,
+        dispatch_name: impl Into<String>,
+        execution_host_device_ura: &str,
+    ) -> anyhow::Result<Self> {
+        let public_ability = public_ability.into();
+        let dispatch_name = dispatch_name.into();
+        let host = crate::core::ura::parse_ura(execution_host_device_ura).map_err(|error| {
+            anyhow::anyhow!("local system ability execution host is invalid: {error}")
+        })?;
+        if host.kind != crate::core::ura::URAKind::Device {
+            anyhow::bail!("local system ability execution host must be a Device URA");
+        }
+        let device_id = host
+            .device_id()
+            .ok_or_else(|| anyhow::anyhow!("local system ability Device URA has no device id"))?;
+        let owner = crate::daemon::ability::catalog::ownership::device_sponsored_system_agent_owner_for_public_ability(
+            &public_ability,
+        )
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "local system ability {public_ability:?} has no declared SystemAgent owner"
+            )
+        })?;
+        let callee_ura =
+            crate::core::ura::device_agent_ura(&host.realm, device_id, owner.system_agent_id());
+        Self::new_with_public_ability(dispatch_name, callee_ura, public_ability)
+    }
+
+    /// Canonical Ability URA selected by the descriptor/control-plane route.
+    #[must_use]
+    pub fn ability_ura(&self) -> &str {
+        &self.ability_ura
     }
 
     /// Daemon `AxonAbilityCatalog` key used for local dispatch.
@@ -105,16 +176,50 @@ impl LocalAbilityTarget {
         &self.dispatch_name
     }
 
-    /// Canonical Agent/Device/Hub identity that advertises the ability.
+    /// Canonical Agent/Device/Authority identity that advertises the ability.
     #[must_use]
     pub fn callee_ura(&self) -> &str {
         &self.callee_ura
     }
 
-    /// Subject used when the caller did not provide an explicit subject.
+    pub(crate) fn daemon_system_subject_ura(&self) -> anyhow::Result<String> {
+        let subject = daemon_system_subject_ura_for_descriptor(&self.ability_ura, &self.callee_ura);
+        checked_subject_ura(&subject, "local ability target daemon system subject")
+    }
+}
+
+/// One daemon-system root invocation issued for a local ability target.
+///
+/// The target owns dispatch and callee identity; the issuer owns the derived
+/// subject. Transport helpers receive this value as already-bound tuple facts
+/// and must not derive another subject policy from `LocalAbilityTarget`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalTargetRootInvocation {
+    target: LocalAbilityTarget,
+    normalized_args: Value,
+    call_mode: CallMode,
+    subject_ura: String,
+}
+
+impl LocalTargetRootInvocation {
     #[must_use]
-    pub fn default_subject_ura(&self) -> &str {
-        &self.default_subject_ura
+    pub fn target(&self) -> &LocalAbilityTarget {
+        &self.target
+    }
+
+    #[must_use]
+    pub fn normalized_args(&self) -> &Value {
+        &self.normalized_args
+    }
+
+    #[must_use]
+    pub fn call_mode(&self) -> CallMode {
+        self.call_mode
+    }
+
+    #[must_use]
+    pub fn subject_ura(&self) -> &str {
+        &self.subject_ura
     }
 }
 
@@ -140,17 +245,232 @@ pub struct InvocationPlan {
     /// Streaming vs single-shot RPC.
     pub call_mode: CallMode,
 
-    /// AXIOM 7-tuple `subject` — the resource URA the invocation
-    /// acts on. `None` means the local runtime adapter must provide
-    /// the degenerate `subject = callee` envelope subject; handlers
-    /// that require a real resource URA must still reject that
-    /// degenerate subject themselves. Per **INV-SUBJECT-ENVELOPE**:
-    /// when set, this MUST come from the invocation envelope (signed
-    /// cross-process bytes), NEVER from args. The IPC translator that
-    /// builds this plan reads the signed envelope's subject field;
-    /// future in-process callers supply it explicitly via the
-    /// `with_subject` builder on the resolved target.
-    pub subject: Option<String>,
+    /// Source of tuple authority for the resolved target.
+    ///
+    /// Public ingress carries inspectable signed tuple facts. Daemon-local
+    /// system calls use a named system derivation policy. Keeping this as a
+    /// sum type prevents the resolver from interpreting a missing public
+    /// `subject` or `causal_context` as a valid root invocation.
+    pub ingress: InvocationPlanIngress,
+}
+
+/// Invocation tuple authority available before target resolution.
+///
+/// `DaemonSystem` is the only resolver-level source allowed to derive the
+/// descriptor subject and root causal context. `PublicIngress` must already
+/// contain the caller-visible tuple facts recovered from signed ingress
+/// material.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InvocationPlanIngress {
+    DaemonSystem,
+    PublicIngress {
+        subject: String,
+        causal_context: CausalContext,
+    },
+}
+
+impl InvocationPlanIngress {
+    #[must_use]
+    pub fn daemon_system() -> Self {
+        Self::DaemonSystem
+    }
+
+    #[must_use]
+    pub fn public_ingress(subject: impl Into<String>, causal_context: CausalContext) -> Self {
+        Self::PublicIngress {
+            subject: subject.into(),
+            causal_context,
+        }
+    }
+
+    fn into_target_bindings(self) -> anyhow::Result<(InvocationSubject, InvocationCausalContext)> {
+        match self {
+            Self::DaemonSystem => Ok((
+                InvocationSubject::daemon_system_derived(),
+                InvocationCausalContext::daemon_system_root(),
+            )),
+            Self::PublicIngress {
+                subject,
+                causal_context,
+            } => {
+                let subject = checked_public_subject(subject)?;
+                Ok((
+                    InvocationSubject::explicit(subject),
+                    InvocationCausalContext::explicit(causal_context),
+                ))
+            }
+        }
+    }
+}
+
+fn checked_public_subject(subject: String) -> anyhow::Result<String> {
+    checked_subject_ura(&subject, "public invocation ingress subject")
+}
+
+fn checked_subject_ura(subject: &str, field: &str) -> anyhow::Result<String> {
+    let subject = subject.trim();
+    if subject.is_empty() {
+        anyhow::bail!("{field} must not be empty");
+    }
+    crate::core::ura::parse_ura(subject)
+        .map_err(|err| anyhow::anyhow!("{field} is not a URA: {err}"))?;
+    Ok(subject.to_string())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DaemonSystemSubjectPolicy {
+    RealmAuthorityAbilitySubject(String),
+    DeployedAbilitySubject(String),
+    CalleeOwnerSubject(String),
+}
+
+impl DaemonSystemSubjectPolicy {
+    fn for_descriptor(ability: &str, callee_ura: &str) -> Self {
+        match crate::core::ura::AbilitySelector::parse(ability) {
+            Ok(selector) if selector.owner_kind() == "authority" => {
+                Self::RealmAuthorityAbilitySubject(selector.ability_ura().to_string())
+            }
+            Ok(selector)
+                if is_ability_management_system_agent_callee(callee_ura)
+                    && selector.owner_ura() == callee_ura =>
+            {
+                Self::DeployedAbilitySubject(selector.ability_ura().to_string())
+            }
+            Ok(_) if is_ability_management_system_agent_callee(callee_ura) => {
+                Self::CalleeOwnerSubject(callee_ura.to_string())
+            }
+            _ if is_ability_management_system_agent_callee(callee_ura) => {
+                match crate::core::ura::owner_ability_ura(callee_ura, ability) {
+                    Some(ability_ura) => Self::DeployedAbilitySubject(ability_ura),
+                    None => Self::CalleeOwnerSubject(callee_ura.to_string()),
+                }
+            }
+            _ if is_runtime_introspection_read(ability) => {
+                Self::CalleeOwnerSubject(runtime_introspection_subject_ura(callee_ura))
+            }
+            _ => Self::CalleeOwnerSubject(callee_ura.to_string()),
+        }
+    }
+
+    fn subject_ura(&self) -> &str {
+        match self {
+            Self::RealmAuthorityAbilitySubject(subject)
+            | Self::DeployedAbilitySubject(subject)
+            | Self::CalleeOwnerSubject(subject) => subject,
+        }
+    }
+}
+
+fn daemon_system_subject_ura_for_descriptor(ability: &str, callee_ura: &str) -> String {
+    DaemonSystemSubjectPolicy::for_descriptor(ability, callee_ura)
+        .subject_ura()
+        .to_string()
+}
+
+fn is_runtime_introspection_read(ability: &str) -> bool {
+    let public_name = crate::core::ura::AbilitySelector::parse(ability)
+        .map(|selector| selector.public_name().to_string())
+        .unwrap_or_else(|_| ability.to_string());
+    matches!(
+        public_name.as_str(),
+        crate::daemon::ability::names::governance::META_DESCRIBE
+            | crate::daemon::ability::names::governance::META_LIST_ABILITIES
+            | crate::daemon::ability::names::resources::META_LIST_RESOURCES
+    )
+}
+
+fn runtime_introspection_subject_ura(callee_ura: &str) -> String {
+    let Ok(parsed) = crate::core::ura::parse_ura(callee_ura) else {
+        return callee_ura.to_string();
+    };
+    if let Some((device_id, agent_id)) = parsed.device_agent_ids() {
+        if agent_id
+            == crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID
+        {
+            return crate::core::ura::device_ura(&parsed.realm, device_id);
+        }
+    }
+    callee_ura.to_string()
+}
+
+fn is_ability_management_system_agent_callee(callee_ura: &str) -> bool {
+    let Ok(parsed) = crate::core::ura::parse_ura(callee_ura) else {
+        return false;
+    };
+    parsed.device_agent_ids().is_some_and(|(_, agent_id)| {
+        agent_id == crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID
+    })
+}
+
+/// Explicit subject binding state for a daemon-local runtime dispatch.
+///
+/// Public ingress may arrive with a signed envelope subject. Daemon-internal
+/// system calls may instead select the descriptor-derived system subject
+/// policy. This type makes that choice inspectable before Axon dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InvocationSubject {
+    Explicit(String),
+    DaemonSystemDerived,
+}
+
+impl InvocationSubject {
+    #[must_use]
+    pub fn explicit(subject: impl Into<String>) -> Self {
+        Self::Explicit(subject.into())
+    }
+
+    #[must_use]
+    pub fn daemon_system_derived() -> Self {
+        Self::DaemonSystemDerived
+    }
+
+    #[must_use]
+    pub fn as_deref(&self) -> Option<&str> {
+        match self {
+            Self::Explicit(subject) => Some(subject.as_str()),
+            Self::DaemonSystemDerived => None,
+        }
+    }
+
+    fn resolve_for_callee(&self, ability: &str, callee_ura: &str) -> anyhow::Result<String> {
+        match self {
+            Self::Explicit(subject) => checked_subject_ura(subject, "InvocationTarget.subject"),
+            Self::DaemonSystemDerived => {
+                let derived_subject = daemon_system_subject_ura_for_descriptor(ability, callee_ura);
+                checked_subject_ura(&derived_subject, "daemon system derived subject")
+            }
+        }
+    }
+}
+
+/// Explicit causal-context binding state for a daemon-local runtime dispatch.
+///
+/// `DaemonSystemRoot` is the named derivation policy for internal root calls;
+/// public ingress must carry an explicit causal context.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InvocationCausalContext {
+    Explicit(CausalContext),
+    DaemonSystemRoot,
+}
+
+impl InvocationCausalContext {
+    #[must_use]
+    pub fn explicit(causal_context: CausalContext) -> Self {
+        Self::Explicit(causal_context)
+    }
+
+    #[must_use]
+    pub fn daemon_system_root() -> Self {
+        Self::DaemonSystemRoot
+    }
+
+    #[must_use]
+    pub fn as_axon(&self) -> CausalContext {
+        match self {
+            Self::Explicit(causal_context) => causal_context.clone(),
+            Self::DaemonSystemRoot => CausalContext::None,
+        }
+    }
 }
 
 /// Resolved target. Feature PR handlers consume this type; they are
@@ -168,59 +488,261 @@ pub struct InvocationTarget {
     /// need a subject MUST consume it from this field; they MUST
     /// NOT accept a `subject` key in `normalized_args`. The
     /// `reject_subject_in_args` guard in resources::media enforces
-    /// the negative half. `None` is not an implicit missing tuple:
-    /// the LocalRuntime adapter resolves it through its typed
-    /// `LocalRuntimeSubjectPolicy` as a descriptor default. Resource
-    /// scoped abilities must still provide an explicit subject.
-    pub subject: Option<String>,
-    /// Optional AXIOM causal context for local/runtime calls that need to bind
-    /// the invocation to a prior receipt. This is how local callers represent
-    /// product consent receipts without smuggling protocol state through args.
-    pub causal_context: Option<easynet_axon::invocation::CausalContext>,
+    /// the negative half. Daemon-internal descriptor defaults are represented
+    /// by the explicit `DaemonSystemDerived` state, never by absence.
+    pub subject: InvocationSubject,
+    /// AXIOM causal context binding. Root system calls are represented by the
+    /// explicit `DaemonSystemRoot` state, never by absence.
+    pub causal_context: InvocationCausalContext,
+    /// Transport metadata admitted before local dispatch. Authority semantics
+    /// remain owned by the admission layer; this field is only the carrier.
+    pub request_metadata: HashMap<String, String>,
 }
 
 impl InvocationTarget {
-    /// Builder: attach a subject to the resolved target. Used by
-    /// callers that have envelope context (the IPC translator, or a
-    /// future planner). In-process tests construct the literal
-    /// directly with `subject: None`; the LocalRuntime adapter maps
-    /// that through a typed descriptor-default policy.
-    pub fn with_subject(mut self, subject: impl Into<String>) -> Self {
-        self.subject = Some(subject.into());
+    /// Construct a local daemon-system dispatch using the named descriptor
+    /// subject and root-causal derivation policy.
+    #[must_use]
+    fn local_daemon_system(
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+    ) -> Self {
+        Self::local_with_bindings(
+            ability,
+            normalized_args,
+            call_mode,
+            InvocationSubject::daemon_system_derived(),
+            InvocationCausalContext::daemon_system_root(),
+        )
+    }
+
+    /// Construct a local daemon-system dispatch that acts on an explicit
+    /// subject while still using the named root-causal system policy.
+    #[must_use]
+    fn local_daemon_system_for_subject(
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+        subject: impl Into<String>,
+    ) -> Self {
+        Self::local_with_bindings(
+            ability,
+            normalized_args,
+            call_mode,
+            InvocationSubject::explicit(subject),
+            InvocationCausalContext::daemon_system_root(),
+        )
+    }
+
+    /// Construct a local target from explicit tuple facts already recovered
+    /// by an ingress adapter or caller-owned policy object.
+    #[must_use]
+    fn local_explicit_tuple(
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+        subject: impl Into<String>,
+        causal_context: CausalContext,
+    ) -> Self {
+        Self::local_with_bindings(
+            ability,
+            normalized_args,
+            call_mode,
+            InvocationSubject::explicit(subject),
+            InvocationCausalContext::explicit(causal_context),
+        )
+    }
+
+    /// Construct a remote daemon-system dispatch using the named descriptor
+    /// subject and root-causal derivation policy.
+    #[must_use]
+    fn remote_daemon_system(
+        node: NodeId,
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+    ) -> Self {
+        Self::with_scope_and_bindings(
+            TargetScope::Remote { node },
+            ability,
+            normalized_args,
+            call_mode,
+            InvocationSubject::daemon_system_derived(),
+            InvocationCausalContext::daemon_system_root(),
+        )
+    }
+
+    fn local_with_bindings(
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+        subject: InvocationSubject,
+        causal_context: InvocationCausalContext,
+    ) -> Self {
+        Self::with_scope_and_bindings(
+            TargetScope::Local,
+            ability,
+            normalized_args,
+            call_mode,
+            subject,
+            causal_context,
+        )
+    }
+
+    fn with_scope_and_bindings(
+        scope: TargetScope,
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+        subject: InvocationSubject,
+        causal_context: InvocationCausalContext,
+    ) -> Self {
+        Self {
+            scope,
+            ability: ability.into(),
+            normalized_args,
+            call_mode,
+            subject,
+            causal_context,
+            request_metadata: HashMap::new(),
+        }
+    }
+
+    pub fn with_request_metadata(mut self, request_metadata: HashMap<String, String>) -> Self {
+        self.request_metadata = request_metadata;
         self
     }
 
-    /// Builder: attach a causal context to the resolved target.
-    pub fn with_causal_context(
-        mut self,
-        causal_context: easynet_axon::invocation::CausalContext,
-    ) -> Self {
-        self.causal_context = Some(causal_context);
-        self
+    /// Resolve the target's tuple subject against the selected callee.
+    ///
+    /// Public ingress has an explicit subject and daemon-system ingress has a
+    /// named descriptor-derived policy. Keeping that policy here prevents
+    /// LocalRuntime adapters from inventing their own fallback subject rules.
+    pub fn resolved_subject_ura(&self, callee_ura: &str) -> anyhow::Result<String> {
+        self.subject.resolve_for_callee(&self.ability, callee_ura)
+    }
+
+    /// Convert the target's explicit causal binding into Axon's runtime type.
+    #[must_use]
+    pub fn resolved_causal_context(&self) -> CausalContext {
+        self.causal_context.as_axon()
+    }
+}
+
+/// Canonical issuer for daemon-system invocation targets.
+///
+/// Product modules may select ability, arguments, call mode, and optional
+/// subject, but they do not construct daemon-system root subject/causal policy
+/// directly. Keeping target issuance here aligns local dispatch with the
+/// descriptor-bound request issuer used by `LocalRuntime`.
+pub struct SystemInvocationTargetIssuer;
+
+impl SystemInvocationTargetIssuer {
+    #[must_use]
+    pub fn local_root(
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+    ) -> InvocationTarget {
+        InvocationTarget::local_daemon_system(ability, normalized_args, call_mode)
+    }
+
+    #[must_use]
+    pub fn local_root_for_subject(
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+        subject: impl Into<String>,
+    ) -> InvocationTarget {
+        InvocationTarget::local_daemon_system_for_subject(
+            ability,
+            normalized_args,
+            call_mode,
+            subject,
+        )
+    }
+
+    pub fn local_root_for_target(
+        target: &LocalAbilityTarget,
+        normalized_args: Value,
+        call_mode: CallMode,
+    ) -> anyhow::Result<InvocationTarget> {
+        Ok(InvocationTarget::local_daemon_system_for_subject(
+            target.ability_ura().to_string(),
+            normalized_args,
+            call_mode,
+            target.daemon_system_subject_ura()?,
+        ))
+    }
+
+    pub fn local_target_root(
+        target: &LocalAbilityTarget,
+        normalized_args: Value,
+        call_mode: CallMode,
+    ) -> anyhow::Result<LocalTargetRootInvocation> {
+        Ok(LocalTargetRootInvocation {
+            target: target.clone(),
+            normalized_args,
+            call_mode,
+            subject_ura: target.daemon_system_subject_ura()?,
+        })
+    }
+
+    #[must_use]
+    pub fn remote_root(
+        node: NodeId,
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+    ) -> InvocationTarget {
+        InvocationTarget::remote_daemon_system(node, ability, normalized_args, call_mode)
+    }
+}
+
+/// Canonical issuer for public-ingress invocation targets.
+///
+/// Public ingress has already supplied explicit tuple facts. This issuer is
+/// the single production boundary that converts those facts into the resolved
+/// local target value object. Keeping the constructor here prevents handlers,
+/// metadata providers, and transport adapters from treating
+/// `InvocationTarget` itself as a public ingress policy factory.
+pub struct PublicInvocationTargetIssuer;
+
+impl PublicInvocationTargetIssuer {
+    pub fn local_explicit_tuple(
+        ability: impl Into<String>,
+        normalized_args: Value,
+        call_mode: CallMode,
+        subject: impl Into<String>,
+        causal_context: CausalContext,
+    ) -> anyhow::Result<InvocationTarget> {
+        let subject = checked_public_subject(subject.into())?;
+        Ok(InvocationTarget::local_explicit_tuple(
+            ability,
+            normalized_args,
+            call_mode,
+            subject,
+            causal_context,
+        ))
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TargetScope {
-    /// Ability runs in-process on this daemon. The executor calls
-    /// the local AbilityToolAdapter handler.
+    /// Ability runs through the daemon's local Axon runtime after canonical
+    /// route selection and admission.
     Local,
     /// Ability runs on a remote node via Axon `send_a2a_task`.
     Remote { node: NodeId },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CallMode {
-    /// Single-shot request/response.
-    Rpc,
-    /// Streaming: one request, multiple response frames, explicit
-    /// terminal frame at the end.
-    Stream,
-    /// Bidirectional session: long-lived, both ends may push frames
-    /// at any time until either closes. See C-M3a design doc and
-    /// `LocalBidiHandler` for the contract.
-    Bidi,
-}
+/// The daemon control-plane transport mode selected for this invocation.
+///
+/// Routing does not define a parallel mode taxonomy. The mode is a governed
+/// descriptor fact and is converted to Axon's canonical mode only at the
+/// Axon boundary.
+pub use crate::daemon::ability::descriptors::CallMode;
 
 /// Trait for the resolver. Concrete impl: `LocalNodeResolver`.
 pub trait TargetResolver: Send + Sync {
@@ -263,13 +785,15 @@ impl TargetResolver for LocalNodeResolver {
             Some(node) if node == &self.local_node => TargetScope::Local,
             Some(node) => TargetScope::Remote { node: node.clone() },
         };
+        let (subject, causal_context) = plan.ingress.into_target_bindings()?;
         Ok(InvocationTarget {
             scope,
             ability: plan.ability,
             normalized_args: plan.args,
             call_mode: plan.call_mode,
-            subject: plan.subject,
-            causal_context: None,
+            subject,
+            causal_context,
+            request_metadata: HashMap::new(),
         })
     }
 }
@@ -303,7 +827,7 @@ mod tests {
             args: json!({}),
             target_node_hint: hint.map(NodeId::new),
             call_mode: CallMode::Rpc,
-            subject: None,
+            ingress: InvocationPlanIngress::daemon_system(),
         }
     }
 
@@ -333,8 +857,8 @@ mod tests {
     #[test]
     fn resolver_hint_different_from_local_means_remote() {
         // The cross-machine case: Client named a peer. Resolver
-        // surfaces a Remote scope; the executor will dispatch via
-        // GatewayApi.
+        // surfaces a Remote scope; daemon Invocation routing owns the
+        // cross-device dispatch.
         let r = LocalNodeResolver::new(NodeId::new("alpha"));
         let t = r.resolve(plan(Some("beta"))).unwrap();
         assert_eq!(
@@ -356,53 +880,483 @@ mod tests {
             args: json!({"prompt": "hello", "count": 3}),
             target_node_hint: None,
             call_mode: CallMode::Rpc,
-            subject: None,
+            ingress: InvocationPlanIngress::daemon_system(),
         };
         let t = r.resolve(plan).unwrap();
         assert_eq!(t.normalized_args, json!({"prompt": "hello", "count": 3}));
     }
 
     #[test]
-    fn resolver_threads_subject_from_plan_to_target() {
-        // INV-SUBJECT-ENVELOPE: when the IPC translator built a
-        // plan with a subject (read from the signed envelope), the
-        // resolver MUST surface it on the resolved target so the
-        // downstream `register_*_with_envelope` handler can read
-        // it. Dropping it here would force handlers back to args
-        // and break the invariant in flight.
+    fn resolver_threads_public_ingress_tuple_context_to_target() {
+        // INV-SUBJECT-ENVELOPE: when the IPC translator builds a
+        // public-ingress plan from signed material, the resolver MUST
+        // surface both subject and causal context on the resolved
+        // target. Dropping either would force handlers back to args or
+        // hidden root defaults and break the seven-tuple invariant.
         let r = LocalNodeResolver::new(NodeId::new("self"));
+        let causal_context = CausalContext::None;
         let plan = InvocationPlan {
             ability: "camera.snapshot".into(),
             args: json!({}),
             target_node_hint: None,
             call_mode: CallMode::Rpc,
-            subject: Some("easynet:///r/acme/resource/01CAM".into()),
+            ingress: InvocationPlanIngress::public_ingress(
+                "easynet:///r/acme/resource/01CAM",
+                causal_context.clone(),
+            ),
         };
         let t = r.resolve(plan).unwrap();
         assert_eq!(
             t.subject.as_deref(),
             Some("easynet:///r/acme/resource/01CAM")
         );
+        assert_eq!(
+            t.causal_context,
+            InvocationCausalContext::explicit(causal_context)
+        );
     }
 
     #[test]
-    fn target_with_subject_builder_attaches_ura() {
-        // The builder is the dispatcher-side path: a caller that
-        // already has a resolved target can attach a subject after
-        // the fact (used by the IPC layer translator that resolves
-        // first, then rebuilds with envelope context).
-        let t = InvocationTarget {
-            scope: TargetScope::Local,
+    fn resolver_rejects_public_ingress_without_valid_subject() {
+        let r = LocalNodeResolver::new(NodeId::new("self"));
+        let plan = InvocationPlan {
             ability: "camera.snapshot".into(),
-            normalized_args: json!({}),
+            args: json!({}),
+            target_node_hint: None,
             call_mode: CallMode::Rpc,
-            subject: None,
-            causal_context: None,
+            ingress: InvocationPlanIngress::public_ingress("not a ura", CausalContext::None),
         };
-        let with = t.with_subject("easynet:///r/acme/resource/01CAM");
-        assert_eq!(
-            with.subject.as_deref(),
-            Some("easynet:///r/acme/resource/01CAM")
+
+        let err = r
+            .resolve(plan)
+            .expect_err("invalid public subject must fail");
+        assert!(
+            err.to_string()
+                .contains("public invocation ingress subject"),
+            "{err}"
         );
+    }
+
+    #[test]
+    fn local_daemon_system_constructor_names_root_derivation_policy() {
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                "observe.health",
+                json!({}),
+                CallMode::Rpc,
+            );
+
+        assert_eq!(target.scope, TargetScope::Local);
+        assert_eq!(target.ability, "observe.health");
+        assert_eq!(target.subject, InvocationSubject::daemon_system_derived());
+        assert_eq!(
+            target.causal_context,
+            InvocationCausalContext::daemon_system_root()
+        );
+        assert!(target.request_metadata.is_empty());
+    }
+
+    #[test]
+    fn local_daemon_system_subject_constructor_keeps_policy_explicit() {
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            "claude.chat",
+            json!({"prompt": "hello"}),
+            CallMode::Rpc,
+            "easynet:///r/acme/agent/claude",
+        );
+
+        assert_eq!(target.scope, TargetScope::Local);
+        assert_eq!(
+            target.subject.as_deref(),
+            Some("easynet:///r/acme/agent/claude")
+        );
+        assert_eq!(
+            target.causal_context,
+            InvocationCausalContext::daemon_system_root()
+        );
+    }
+
+    #[test]
+    fn local_target_root_issues_target_bound_tuple_facts() {
+        let ability_ura = crate::core::ura::hub_ability_ura("acme", "principal.lifecycle.get");
+        let selector =
+            crate::core::ura::AbilitySelector::parse(&ability_ura).expect("ability selector");
+        let local_target = LocalAbilityTarget::from_selector(&selector);
+        let issued =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_target_root(
+                &local_target,
+                json!({"principal_ura": "easynet:///r/acme/user/alice"}),
+                CallMode::Rpc,
+            )
+            .expect("issued target root");
+
+        assert_eq!(issued.target(), &local_target);
+        assert_eq!(issued.call_mode(), CallMode::Rpc);
+        assert_eq!(
+            issued.normalized_args(),
+            &json!({"principal_ura": "easynet:///r/acme/user/alice"})
+        );
+        assert_eq!(issued.subject_ura(), ability_ura);
+    }
+
+    #[test]
+    fn remote_daemon_system_constructor_names_root_derivation_policy() {
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::remote_root(
+                NodeId::new("peer-1"),
+                "observe.health",
+                json!({}),
+                CallMode::Rpc,
+            );
+
+        assert_eq!(
+            target.scope,
+            TargetScope::Remote {
+                node: NodeId::new("peer-1")
+            }
+        );
+        assert_eq!(target.ability, "observe.health");
+        assert_eq!(target.subject, InvocationSubject::daemon_system_derived());
+        assert_eq!(
+            target.causal_context,
+            InvocationCausalContext::daemon_system_root()
+        );
+        assert!(target.request_metadata.is_empty());
+    }
+
+    #[test]
+    fn local_explicit_tuple_constructor_preserves_causal_context() {
+        let causal_context = CausalContext::None;
+        let target = PublicInvocationTargetIssuer::local_explicit_tuple(
+            "camera.snapshot",
+            json!({}),
+            CallMode::Rpc,
+            "easynet:///r/acme/resource/camera.1",
+            causal_context.clone(),
+        )
+        .expect("valid public tuple target");
+
+        assert_eq!(
+            target.subject.as_deref(),
+            Some("easynet:///r/acme/resource/camera.1")
+        );
+        assert_eq!(
+            target.causal_context,
+            InvocationCausalContext::explicit(causal_context)
+        );
+    }
+
+    #[test]
+    fn public_explicit_tuple_resolution_preserves_non_root_causal_context() {
+        let causal_context = CausalContext::Scalar(axon_sdk::invocation::ReceiptRef {
+            receipt_hash: [0x42; 32],
+            receipt_ura: "easynet:///r/acme/resource/runtime/invocation/parent/receipt/1".into(),
+        });
+        let target = PublicInvocationTargetIssuer::local_explicit_tuple(
+            "camera.snapshot",
+            json!({}),
+            CallMode::Rpc,
+            "easynet:///r/acme/resource/camera.1",
+            causal_context.clone(),
+        )
+        .expect("valid public tuple target");
+
+        assert_eq!(target.resolved_causal_context(), causal_context);
+    }
+
+    #[test]
+    fn public_explicit_tuple_issuer_rejects_invalid_subject_before_target_construction() {
+        let error = PublicInvocationTargetIssuer::local_explicit_tuple(
+            "camera.snapshot",
+            json!({}),
+            CallMode::Rpc,
+            "not-a-ura",
+            CausalContext::None,
+        )
+        .expect_err("public ingress subject must fail before target construction");
+        assert!(
+            error
+                .to_string()
+                .contains("public invocation ingress subject"),
+            "issuer must report the public ingress boundary: {error}"
+        );
+    }
+
+    #[test]
+    fn daemon_system_subject_resolves_to_callee_for_non_hub_ability() {
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                "observe.health",
+                json!({}),
+                CallMode::Rpc,
+            );
+
+        assert_eq!(
+            target
+                .resolved_subject_ura("easynet:///r/acme/device/dev-a")
+                .unwrap(),
+            "easynet:///r/acme/device/dev-a"
+        );
+    }
+
+    #[test]
+    fn daemon_system_subject_policy_names_callee_owner_subject() {
+        let policy = DaemonSystemSubjectPolicy::for_descriptor(
+            "observe.health",
+            "easynet:///r/acme/device/dev-a",
+        );
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::CalleeOwnerSubject(
+                "easynet:///r/acme/device/dev-a".to_string()
+            )
+        );
+        assert_eq!(policy.subject_ura(), "easynet:///r/acme/device/dev-a");
+    }
+
+    #[test]
+    fn runtime_introspection_subject_projects_system_agent_callee_to_host_device() {
+        let runtime_introspection_owner = crate::core::ura::device_agent_ura(
+            "acme",
+            "dev-a",
+            crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+        );
+        let policy = DaemonSystemSubjectPolicy::for_descriptor(
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+            &runtime_introspection_owner,
+        );
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::CalleeOwnerSubject(
+                "easynet:///r/acme/device/dev-a".to_string()
+            )
+        );
+        assert_eq!(policy.subject_ura(), "easynet:///r/acme/device/dev-a");
+    }
+
+    #[test]
+    fn runtime_introspection_subject_accepts_canonical_ability_ura() {
+        let runtime_introspection_owner = crate::core::ura::device_agent_ura(
+            "acme",
+            "dev-a",
+            crate::daemon::ability::names::governance::RUNTIME_INTROSPECTION_SYSTEM_AGENT_ID,
+        );
+        let ability_ura = crate::core::ura::owner_ability_ura(
+            &runtime_introspection_owner,
+            crate::daemon::ability::names::governance::META_LIST_ABILITIES,
+        )
+        .expect("runtime-introspection ability URA");
+        let policy =
+            DaemonSystemSubjectPolicy::for_descriptor(&ability_ura, &runtime_introspection_owner);
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::CalleeOwnerSubject(
+                "easynet:///r/acme/device/dev-a".to_string()
+            )
+        );
+        assert_eq!(policy.subject_ura(), "easynet:///r/acme/device/dev-a");
+    }
+
+    #[test]
+    fn runtime_introspection_subject_keeps_non_introspection_system_agent_callee() {
+        let runtime_health_owner = crate::core::ura::device_agent_ura(
+            "acme",
+            "dev-a",
+            crate::daemon::ability::names::governance::RUNTIME_HEALTH_SYSTEM_AGENT_ID,
+        );
+        let policy = DaemonSystemSubjectPolicy::for_descriptor(
+            crate::daemon::ability::names::governance::OBSERVE_HEALTH,
+            &runtime_health_owner,
+        );
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::CalleeOwnerSubject(runtime_health_owner.clone())
+        );
+        assert_eq!(policy.subject_ura(), runtime_health_owner);
+    }
+
+    #[test]
+    fn deployed_dynamic_ability_subject_resolves_to_ability_ura_for_public_name() {
+        let ability_management_owner = crate::core::ura::device_agent_ura(
+            "acme",
+            "dev-a",
+            crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
+        let expected_ability_ura =
+            crate::core::ura::owner_ability_ura(&ability_management_owner, "er.generate")
+                .expect("deployed ability URA");
+        let policy =
+            DaemonSystemSubjectPolicy::for_descriptor("er.generate", &ability_management_owner);
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::DeployedAbilitySubject(expected_ability_ura.clone())
+        );
+        assert_eq!(policy.subject_ura(), expected_ability_ura);
+    }
+
+    #[test]
+    fn deployed_dynamic_ability_subject_accepts_canonical_ability_ura() {
+        let ability_management_owner = crate::core::ura::device_agent_ura(
+            "acme",
+            "dev-a",
+            crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&ability_management_owner, "remote_desktop.attach")
+                .expect("easyremote dynamic ability URA");
+        let policy =
+            DaemonSystemSubjectPolicy::for_descriptor(&ability_ura, &ability_management_owner);
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::DeployedAbilitySubject(ability_ura.clone())
+        );
+        assert_eq!(policy.subject_ura(), ability_ura);
+    }
+
+    #[test]
+    fn deployed_dynamic_ability_subject_rejects_cross_owner_ability_ura() {
+        let ability_management_owner = crate::core::ura::device_agent_ura(
+            "acme",
+            "dev-a",
+            crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
+        let other_owner = crate::core::ura::device_agent_ura(
+            "acme",
+            "dev-b",
+            crate::daemon::ability::names::federation::ABILITY_MANAGEMENT_SYSTEM_AGENT_ID,
+        );
+        let ability_ura =
+            crate::core::ura::owner_ability_ura(&other_owner, "remote_desktop.attach")
+                .expect("other hosted ability URA");
+        let policy =
+            DaemonSystemSubjectPolicy::for_descriptor(&ability_ura, &ability_management_owner);
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::CalleeOwnerSubject(ability_management_owner.clone())
+        );
+        assert_eq!(policy.subject_ura(), ability_management_owner);
+    }
+
+    #[test]
+    fn daemon_system_subject_resolves_to_ability_ura_for_realm_authority_owner() {
+        let authority_ability =
+            crate::core::ura::authority_ability_ura("acme", "federation.status");
+        let target =
+            crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+                authority_ability,
+                json!({}),
+                CallMode::Rpc,
+            );
+
+        assert_eq!(
+            target
+                .resolved_subject_ura(&crate::core::ura::authority_ura("acme"))
+                .unwrap(),
+            crate::core::ura::authority_ability_ura("acme", "federation.status")
+        );
+    }
+
+    #[test]
+    fn daemon_system_subject_policy_names_realm_authority_ability_subject() {
+        let authority_ability =
+            crate::core::ura::authority_ability_ura("acme", "federation.status");
+        let policy = DaemonSystemSubjectPolicy::for_descriptor(
+            &authority_ability,
+            &crate::core::ura::authority_ura("acme"),
+        );
+
+        assert_eq!(
+            policy,
+            DaemonSystemSubjectPolicy::RealmAuthorityAbilitySubject(authority_ability.clone())
+        );
+        assert_eq!(policy.subject_ura(), authority_ability);
+    }
+
+    #[test]
+    fn explicit_subject_resolution_rejects_non_ura_values() {
+        let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+            "camera.snapshot",
+            json!({}),
+            CallMode::Rpc,
+            "camera-01",
+        );
+
+        let err = target
+            .resolved_subject_ura("easynet:///r/acme/device/dev-a")
+            .expect_err("subject must be a URA");
+        assert!(err.to_string().contains("InvocationTarget.subject"));
+    }
+
+    #[test]
+    fn local_system_target_projects_device_host_to_registry_owned_system_agent() {
+        let target = LocalAbilityTarget::for_device_sponsored_system_ability(
+            crate::daemon::ability::builtins::agents::discover::DEVICE_DISCOVER_ABILITY,
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("agent.discover local system target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.agent-management"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.agent-management.agent.discover"
+        );
+    }
+
+    #[test]
+    fn local_terminal_target_preserves_namespace_when_owner_has_same_id() {
+        let target = LocalAbilityTarget::for_device_sponsored_system_ability(
+            "terminal.create",
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect("terminal SystemAgent target");
+
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/agent/device.dev-a.terminal"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/system-agent.dev-a.terminal.terminal.create"
+        );
+    }
+
+    #[test]
+    fn local_service_target_can_separate_public_descriptor_from_dispatch_key() {
+        let target = LocalAbilityTarget::new_with_public_ability(
+            "project_list",
+            "easynet:///r/acme/service/user-a.pages",
+            "project_list",
+        )
+        .expect("pages list Service target");
+
+        assert_eq!(target.dispatch_name(), "project_list");
+        assert_eq!(
+            target.callee_ura(),
+            "easynet:///r/acme/service/user-a.pages"
+        );
+        assert_eq!(
+            target.ability_ura(),
+            "easynet:///r/acme/ability/service.user-a.pages.project_list"
+        );
+    }
+
+    #[test]
+    fn local_system_target_rejects_device_as_public_callee_for_unknown_ability() {
+        let error = LocalAbilityTarget::for_device_sponsored_system_ability(
+            "unknown.ability",
+            "easynet:///r/acme/device/dev-a",
+        )
+        .expect_err("unknown ability must not fall back to Device owner");
+        assert!(error.to_string().contains("no declared SystemAgent owner"));
     }
 }

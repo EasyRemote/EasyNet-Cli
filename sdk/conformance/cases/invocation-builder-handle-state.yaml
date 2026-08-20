@@ -1,0 +1,21 @@
+id: invocation/builder_handle_state
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+  - node
+description: Builder handles expose complete draft inspection and are consumed by build or prepare success.
+steps:
+  - action: create_builder
+  - action: set_complete_tuple
+    fixture: invocation.complete.v4.json
+  - action: inspect_builder
+  - action: build_builder
+  - action: inspect_builder
+expect:
+  result: error_after_build
+  first_inspect: ok
+  build_consumes_handle: true
+  error_code: InvalidHandle

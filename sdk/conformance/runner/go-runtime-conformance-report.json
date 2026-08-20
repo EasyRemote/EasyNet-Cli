@@ -1,0 +1,568 @@
+{
+  "report_kind": "language_facade_conformance_tests",
+  "language": "go",
+  "records": [
+    {
+      "case_id": "ability/descriptor_projection",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/ability_descriptor_test.go",
+          "sha256": "2db8c0e1a3065be90601ac3a04d8aa659d7c315a3fd044d47a1458560d971cac"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "authority/metadata",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/authority_test.go",
+          "sha256": "b410bde9f2d25ce748d9380b8f6030b9a26dc75257e560eef6cf31d6593f7636"
+        }
+      ],
+      "profile": "authority"
+    },
+    {
+      "case_id": "invocation/terminal_receipt_facts",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_test.go",
+          "sha256": "7d14b93f1d4898e336215813b7795b556b06e63dc035828a1ccdfb3dd180ba1e"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "sdk/product_neutrality",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go",
+          "sha256": "019ed037ba2bcf5815c831ecb0818f2cb43144e98ce25855612bbb8c77df26a5"
+        }
+      ],
+      "profile": "conformance"
+    },
+    {
+      "case_id": "runtime_core/canonical_addressing_provider",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/addressing_test.go",
+          "sha256": "d011057612b2671ad72267b150f66518c9894adaab8285182c0c7cd65d734a96"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "runtime/ability_lowering",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_ability_test.go",
+          "sha256": "2873b0464ec09e0663ac0e7b9aa6908f09b24284552403fd3f741a2eece03133"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "access_control/provider",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/access_control_test.go",
+          "sha256": "f79b422d3efd1623f6aec110bba856a6dd705ca7a8a7eefc87974b432254aa20"
+        }
+      ],
+      "profile": "access_control"
+    },
+    {
+      "case_id": "authority/mutual_exclusion",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/authority_test.go",
+          "sha256": "b410bde9f2d25ce748d9380b8f6030b9a26dc75257e560eef6cf31d6593f7636"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "bidi/close_send_not_cancel",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/cabi_runtime_test.go",
+          "sha256": "ae3f6cb18c4ce2b9a03f8c00c10559418d5eee99f9d31e7be987a0fcd6c8459d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "runtime/control_only",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/health_test.go",
+          "sha256": "3955b660c6150a694985cddb193e71502b3e580ffc59f14ac8eedbd010338c3f"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "runtime_host/permission_denied",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/errors_test.go",
+          "sha256": "b6ae0a1515db8965e87739cb4d6aac4a28531a8541efded7e246a7511f9798dc"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "environment/process_root",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/environment_test.go",
+          "sha256": "b5efe0883cffc3ea8890a15d617d1ba65314b2b4f9ef7813b708ac850b73397a"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "error/profile_source_refs",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/errors_test.go",
+          "sha256": "b6ae0a1515db8965e87739cb4d6aac4a28531a8541efded7e246a7511f9798dc"
+        }
+      ],
+      "profile": "errors"
+    },
+    {
+      "case_id": "error/retry_hint",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/errors_test.go",
+          "sha256": "b6ae0a1515db8965e87739cb4d6aac4a28531a8541efded7e246a7511f9798dc"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "error/typed_json",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/errors_test.go",
+          "sha256": "b6ae0a1515db8965e87739cb4d6aac4a28531a8541efded7e246a7511f9798dc"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "health/api_vs_runtime",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/health_test.go",
+          "sha256": "3955b660c6150a694985cddb193e71502b3e580ffc59f14ac8eedbd010338c3f"
+        }
+      ],
+      "profile": "health"
+    },
+    {
+      "case_id": "invocation/builder_handle_state",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/invocation_test.go",
+          "sha256": "f33f3c8a1e8af8b24311780a308bf7dfb2ed2c3c5a9944ec84fd0df34891d631"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/canonical_material",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/invocation_canonical_test.go",
+          "sha256": "d8d8a2dd39b6c8490a7f55edb07b316bc6320bc36e40ec51f5169f203611516c"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/complete_tuple",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/invocation_test.go",
+          "sha256": "f33f3c8a1e8af8b24311780a308bf7dfb2ed2c3c5a9944ec84fd0df34891d631"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/provider_managed_signing_boundary",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/signing_test.go",
+          "sha256": "fafc329e222b902ac82162b888c227245466f1d1c22810676f6c423881ea43be"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "managed_signing/provider_lifecycle",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/managed_signing_test.go",
+          "sha256": "8eee0e6f45f5df1c8c1cb2cbd83eb6a24d78906c9c0fce2ae7ccaec91657ba14"
+        }
+      ],
+      "profile": "managed_signing"
+    },
+    {
+      "case_id": "directory/resolution_provider",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/directory_test.go",
+          "sha256": "07f4897a8e95ec6d9ed8128dfb019b7cd4f3eac120dd5a64ba2c686c3064f7c6"
+        }
+      ],
+      "profile": "directory"
+    },
+    {
+      "case_id": "principal/lifecycle_seam",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/principal_test.go",
+          "sha256": "0ce36bc6a640f23c350c44cc17daa13ffc249eee60f6d0c56df8f697ed4acb8e"
+        }
+      ],
+      "profile": "principal"
+    },
+    {
+      "case_id": "principal/lifecycle_provider",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/principal_test.go",
+          "sha256": "0ce36bc6a640f23c350c44cc17daa13ffc249eee60f6d0c56df8f697ed4acb8e"
+        }
+      ],
+      "profile": "principal"
+    },
+    {
+      "case_id": "receipt/history_provider",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/receipt_test.go",
+          "sha256": "aa74586769def01f2ba55bf27faffa9bf16de614698300481a0fac4a5542e484"
+        }
+      ],
+      "profile": "receipts"
+    },
+    {
+      "case_id": "runtime/administration_seam",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_admin_test.go",
+          "sha256": "2c9fd0cb98f5bc9e7479e10ed1fdc9de31a1faa4bd1a25354cf17b363055dc3f"
+        }
+      ],
+      "profile": "runtime_administration"
+    },
+    {
+      "case_id": "runtime/events_seam",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_events_test.go",
+          "sha256": "71c7505d85cd840ca59c763cc88eeeac92796cfe4e68526cd07d9ef78cb72d10"
+        }
+      ],
+      "profile": "runtime_events"
+    },
+    {
+      "case_id": "invocation/prepared_not_submittable",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/signing_test.go",
+          "sha256": "fafc329e222b902ac82162b888c227245466f1d1c22810676f6c423881ea43be"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/presigned_submit",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_test.go",
+          "sha256": "7d14b93f1d4898e336215813b7795b556b06e63dc035828a1ccdfb3dd180ba1e"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/terminal_monotonicity",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/stream_test.go",
+          "sha256": "5f054446679ab48488e317336a247032463891c5e5e79f2bc63cc632078e3141"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "runtime_core/feature_discovery",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/client_test.go",
+          "sha256": "a1faf7dd60ee60e7b80ff99d4133faa515ba129a23caba2f92bf20815c911528"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "sdk/seven_language_capability_matrix",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/conformance_test.go",
+          "sha256": "019ed037ba2bcf5815c831ecb0818f2cb43144e98ce25855612bbb8c77df26a5"
+        }
+      ],
+      "profile": "sdk_parity"
+    },
+    {
+      "case_id": "stream/backpressure_bound",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/cabi_runtime_test.go",
+          "sha256": "ae3f6cb18c4ce2b9a03f8c00c10559418d5eee99f9d31e7be987a0fcd6c8459d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "stream/order_terminal",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/cabi_runtime_test.go",
+          "sha256": "ae3f6cb18c4ce2b9a03f8c00c10559418d5eee99f9d31e7be987a0fcd6c8459d"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "version/abi_compatible",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/client_test.go",
+          "sha256": "a1faf7dd60ee60e7b80ff99d4133faa515ba129a23caba2f92bf20815c911528"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "version/abi_incompatible",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/client_test.go",
+          "sha256": "a1faf7dd60ee60e7b80ff99d4133faa515ba129a23caba2f92bf20815c911528"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "bidi/cancel_request",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/cabi_runtime_test.go",
+          "sha256": "ae3f6cb18c4ce2b9a03f8c00c10559418d5eee99f9d31e7be987a0fcd6c8459d"
+        }
+      ]
+    },
+    {
+      "case_id": "bidi/deadline_owner",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/cabi_runtime_test.go",
+          "sha256": "ae3f6cb18c4ce2b9a03f8c00c10559418d5eee99f9d31e7be987a0fcd6c8459d"
+        }
+      ]
+    },
+    {
+      "case_id": "bidi/dispatch_provider",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/cabi_runtime_test.go",
+          "sha256": "ae3f6cb18c4ce2b9a03f8c00c10559418d5eee99f9d31e7be987a0fcd6c8459d"
+        }
+      ]
+    },
+    {
+      "case_id": "bidi/frame0_required",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/cabi_runtime_test.go",
+          "sha256": "ae3f6cb18c4ce2b9a03f8c00c10559418d5eee99f9d31e7be987a0fcd6c8459d"
+        }
+      ]
+    },
+    {
+      "case_id": "invocation/receipt_proof_required",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_test.go",
+          "sha256": "7d14b93f1d4898e336215813b7795b556b06e63dc035828a1ccdfb3dd180ba1e"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/ability_child_dispatch",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_ability_test.go",
+          "sha256": "2873b0464ec09e0663ac0e7b9aa6908f09b24284552403fd3f741a2eece03133"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/ability_deadline_owner",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_ability_direct_test.go",
+          "sha256": "71e88862858ba28eda75063ef146590f9aa951700b1d48167a18bb643eb125c2"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/ability_provider_lifecycle",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_ability_test.go",
+          "sha256": "2873b0464ec09e0663ac0e7b9aa6908f09b24284552403fd3f741a2eece03133"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/ability_restart_recover",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_ability_test.go",
+          "sha256": "2873b0464ec09e0663ac0e7b9aa6908f09b24284552403fd3f741a2eece03133"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/ability_start_provider",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/native_runtime_test.go",
+          "sha256": "8f957443d314b123e94d13ea0598c8de6a31194db0a8d6bc8718024d24a3da44"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/deadline_owner",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/direct_runtime_test.go",
+          "sha256": "70d1c4b8b609684782d3528e3018a902a27843a361103991ce3df39bca98b8b4"
+        }
+      ]
+    },
+    {
+      "case_id": "runtime/restart_recovery",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/runtime_test.go",
+          "sha256": "7d14b93f1d4898e336215813b7795b556b06e63dc035828a1ccdfb3dd180ba1e"
+        }
+      ]
+    },
+    {
+      "case_id": "stream/cancel_request",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/cabi_runtime_test.go",
+          "sha256": "ae3f6cb18c4ce2b9a03f8c00c10559418d5eee99f9d31e7be987a0fcd6c8459d"
+        }
+      ]
+    },
+    {
+      "case_id": "stream/deadline_owner",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/cabi_runtime_test.go",
+          "sha256": "ae3f6cb18c4ce2b9a03f8c00c10559418d5eee99f9d31e7be987a0fcd6c8459d"
+        }
+      ]
+    },
+    {
+      "case_id": "stream/dispatch_provider",
+      "profile": "runtime_core",
+      "evidence": [
+        {
+          "kind": "go_test",
+          "ref_path": "sdk/go/cabi_runtime_test.go",
+          "sha256": "ae3f6cb18c4ce2b9a03f8c00c10559418d5eee99f9d31e7be987a0fcd6c8459d"
+        }
+      ]
+    }
+  ],
+  "schema_version": 2
+}

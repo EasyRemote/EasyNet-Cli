@@ -51,14 +51,26 @@ pub enum RuntimeLifecycleError {
         actual: String,
     },
 
-    /// Start refused because `runtime.json` describes the retired raw
-    /// Axon bridge runtime. The stop path owns that legacy cleanup.
-    #[error("legacy Axon bridge runtime projection exists; run `easynet runtime stop` before starting the product daemon")]
-    StartRefusedLegacyAxonBridge,
+    /// Start refused because a live daemon is missing a readiness capability
+    /// required by the requested runtime mode.
+    #[error("daemon runtime capability `{capability}` is required for {mode} attach but was not advertised")]
+    StartRefusedMissingRuntimeCapability {
+        mode: &'static str,
+        capability: &'static str,
+    },
+
+    /// Start refused because daemon discovery exists but is invalid, so attach
+    /// identity and runtime readiness cannot be trusted.
+    #[error("daemon discovery is invalid; refusing attach/start until control.json is repaired or removed: {message}")]
+    StartRefusedInvalidDaemonDiscovery { message: String },
 
     /// Removing a stale runtime projection failed during start preflight.
     #[error("remove stale runtime projection failed: {message}")]
     ProjectionRemoveFailed { message: String },
+
+    /// Reading `runtime.json` failed before lifecycle classification.
+    #[error("load runtime projection failed: {message}")]
+    ProjectionLoadFailed { message: String },
 
     /// Persisting `runtime.json` failed while attaching to an existing
     /// daemon; no rollback was attempted because this process does not
@@ -87,14 +99,19 @@ impl RuntimeLifecycleError {
     /// State-machine status implied by this boundary error.
     pub fn status_hint(&self) -> Option<RuntimeLifecycleStatus> {
         match self {
-            Self::StartRefusedIdentityMismatch { .. } => {
+            Self::StartRefusedIdentityMismatch { .. }
+            | Self::StartRefusedMissingRuntimeCapability { .. } => {
                 Some(RuntimeLifecycleStatus::IdentityMismatch)
+            }
+            Self::StartRefusedInvalidDaemonDiscovery { .. } => {
+                Some(RuntimeLifecycleStatus::DaemonDiscoveryInvalid)
             }
             Self::ProjectionPersistFailed { .. }
             | Self::ProjectionPersistRolledBack { .. }
             | Self::ProjectionPersistRollbackFailed { .. } => {
                 Some(RuntimeLifecycleStatus::StartProjectionCommitFailed)
             }
+            Self::ProjectionLoadFailed { .. } => None,
             _ => None,
         }
     }
@@ -113,6 +130,18 @@ mod tests {
         assert_eq!(
             err.status_hint(),
             Some(RuntimeLifecycleStatus::StartProjectionCommitFailed)
+        );
+    }
+
+    #[test]
+    fn invalid_discovery_error_maps_to_invalid_discovery_status() {
+        let err = RuntimeLifecycleError::StartRefusedInvalidDaemonDiscovery {
+            message: "control.json malformed".to_string(),
+        };
+
+        assert_eq!(
+            err.status_hint(),
+            Some(RuntimeLifecycleStatus::DaemonDiscoveryInvalid)
         );
     }
 }

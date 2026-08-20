@@ -12,7 +12,7 @@
 # What this demonstrates:
 #   - /v1/models   lists chat-base abilities as OpenAI models
 #   - /v1/chat/completions  unary  + streaming SSE
-#   - capability-URI auth (Bearer easynet-sk-<256-bit-id>),
+#   - capability-URA auth (Bearer easynet-sk-<256-bit-id>),
 #     no OAuth, mints + revoke as ability calls
 #   - openai-python SDK works zero-change
 
@@ -24,7 +24,7 @@ ensure_daemon
 LABEL="${LABEL:-demo-3}"
 
 step "1. Mint an API key"
-note "  this is a capability-URI: resource/api_key.<256-bit-id>"
+note "  this is a capability-URA: resource/api_key.<256-bit-id>"
 run "$EASYNET" api-key create --label "$LABEL"
 TOKEN=$(grep default_token "$HOME/.easynet/api_keys.local.toml" | cut -d'"' -f2)
 ok "token cached at ~/.easynet/api_keys.local.toml (mode 0600)"

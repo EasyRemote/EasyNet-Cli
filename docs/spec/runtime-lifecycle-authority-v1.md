@@ -28,8 +28,8 @@ The remaining problem is lifecycle authority:
   and `daemon.sock` are the actual daemon discovery and liveness facts.
 - `easynet runtime stop` has fallback process cleanup, but `status` and
   portions of `start` still reason from the projection first.
-- Legacy cleanup for `AxonBridge` and the retired heartbeat sidecar is still
-  rendered as if it were part of the normal lifecycle.
+- Retired bridge runtime state must be rejected rather than interpreted as a
+  second product lifecycle.
 
 The result is a management split. It is not a product runtime split, but it is
 enough to produce operator-visible dirty start/stop behavior.
@@ -47,14 +47,15 @@ Observed before the local lifecycle authority implementation in this branch:
    a `RuntimeState { runtime_kind: DaemonOnly, ... }`.
 3. Hub start uses `DaemonStartConfig::hub().start()` and also saves
    `RuntimeKind::DaemonOnly`.
-4. `easynet-daemon` owns the control socket, invocation socket,
-   runtime-dispatch socket, pages listener, and `control.json`.
+4. `easynet-daemon` owns the control socket, invocation socket, pages listener,
+   and `control.json`; its embedded Axon `LocalRuntime` executes admitted local
+   calls in process.
 5. `status` first tried to load `runtime.json`; if it was absent, it reported
    `Runtime: not running`.
 6. `stop` first derived its stop shape from `runtime.json`, but it also swept
    `easynet-daemon` by pidfile and `pgrep` when projection was missing.
-7. The daemon entry point states that the legacy heartbeat sidecar was retired,
-   but stop still has a visible `stop-heartbeat` stage.
+7. The daemon entry point stated that the legacy heartbeat sidecar was retired,
+   while stop still exposed a heartbeat cleanup stage.
 8. The release E2E flow currently references a non-existent install harness
    path before it reaches the runtime start/stop assertions.
 9. The heartbeat mechanism was migrated, not removed. The old sidecar is
@@ -92,7 +93,7 @@ alive and callable?"
 ### 3.2 Session Projection
 
 `~/.easynet/runtime.json` is a session projection. It is useful for operator
-display, start metadata, and legacy compatibility. It is not the daemon fact.
+display and start metadata. It is not the daemon fact.
 
 The target name is:
 
@@ -107,17 +108,12 @@ and with which operator-facing metadata?"
 
 Projection absence must not mean "daemon absent".
 
-### 3.3 Legacy Cleanup
+### 3.3 Obsolete State Rejection
 
-Legacy cleanup is a compatibility janitor:
-
-- legacy `RuntimeKind::AxonBridge`
-- stale `heartbeat.pid`
-- stale old socket files
-- stale old log paths
-
-Legacy cleanup must be named as legacy. It must not appear as a normal product
-daemon lifecycle stage.
+`RuntimeKind` has one valid value: `DaemonOnly`. Retired bridge runtime kinds
+are not parsed, classified, or rendered as a second lifecycle. Stale files
+owned by the daemon may be removed by normal discovery cleanup; a cleanup path
+must not preserve an obsolete process model.
 
 ### 3.4 Product Presence Facts
 
@@ -228,7 +224,7 @@ pub struct RuntimeLifecycleService<P, D, S, L> {
     preflight: P,
     daemon: D,
     projection_store: S,
-    legacy_cleanup: L,
+    discovery_cleanup: L,
 }
 
 impl<P, D, S, L> RuntimeLifecycleService<P, D, S, L> {
@@ -254,7 +250,7 @@ Traits are allowed only at real I/O seams:
 - `DaemonDiscovery`: pidfile, control discovery, socket probing.
 - `RuntimeProjectionStore`: projection load/save/remove.
 - `ProductPresenceObserver`: session admission and directory read probes.
-- `LegacyRuntimeJanitor`: legacy axon/heartbeat cleanup.
+- `DaemonDiscoveryJanitor`: stale daemon-owned discovery file cleanup.
 
 Do not create traits for every helper. Three collaborators with real alternate
 implementations justify a trait. Otherwise use concrete structs.
@@ -287,7 +283,7 @@ Invariant 3: projection absence never changes these fact fields.
 ```rust
 pub struct RuntimeSessionProjection {
     pub endpoint: String,
-    pub process_kind: RuntimeProcessKind,
+    pub runtime_kind: RuntimeKind,
     pub pid: Option<u32>,
     pub hub: Option<String>,
     pub realm: Option<String>,
@@ -297,12 +293,11 @@ pub struct RuntimeSessionProjection {
 }
 ```
 
-`RuntimeProcessKind`:
+`RuntimeKind`:
 
 ```rust
-pub enum RuntimeProcessKind {
-    EasynetDaemon,
-    LegacyAxonBridge,
+pub enum RuntimeKind {
+    DaemonOnly,
 }
 ```
 
@@ -325,7 +320,7 @@ pub struct StartRuntimeReport {
 pub struct StopRuntimeReport {
     pub revoke: StageOutcome,
     pub daemon_stop: StageOutcome,
-    pub legacy_cleanup: Vec<StageOutcome>,
+    pub discovery_cleanup: Vec<StageOutcome>,
     pub projection_removed: StageOutcome,
     pub remaining_daemons: Vec<u32>,
 }
@@ -392,7 +387,7 @@ ControlOnlyInvocationDown
 IdentityMismatch
 StartProjectionCommitFailed
 StopTimedOut
-LegacyCleanupFailed
+DiscoveryCleanupFailed
 ```
 
 `status` must surface degraded states. It must not collapse them into
@@ -434,7 +429,7 @@ Expected effect: hub and device lifecycle share one product daemon model.
 3. If projection and credentials support revoke, call revoke best-effort.
 4. Stop the daemon by pidfile or attached process handle.
 5. Confirm control and invocation endpoints are no longer accepting.
-6. Run legacy cleanup.
+6. Remove stale daemon-owned discovery files.
 7. Remove projection.
 8. Return `StopRuntimeReport`.
 
@@ -509,13 +504,15 @@ Target behavior:
 - Every stale-state start check must use process identity and endpoint probes,
   not `is_pid_alive` alone.
 
-### 9.6 Legacy Axon Bridge Projection
+### 9.6 Retired Runtime Projection
 
 Target behavior:
 
-- `LegacyAxonBridge` is explicitly classified as legacy.
-- Stop runs legacy cleanup.
-- Start never creates a new legacy projection.
+- A projection containing a retired runtime kind is invalid input.
+- Status reports an invalid projection without inventing a second process
+  class.
+- Start and stop reason only from daemon discovery facts and never recreate
+  the retired projection.
 
 ### 9.7 Stop Timeout
 
@@ -606,10 +603,10 @@ remaining process facts.
 Operator-visible effects:
 
 - `status` distinguishes clean stopped, running, projection missing, stale
-  projection, control-only, and legacy states.
+  projection, control-only, and invalid projection states.
 - `start` either starts one daemon, attaches to one matching daemon, or refuses
   with a precise mismatch.
-- `stop` reports whether daemon stop, projection removal, and legacy cleanup
+- `stop` reports whether daemon stop, discovery cleanup, and projection removal
   each succeeded.
 - `status` separates local daemon state from product presence state.
 - CLI help and docs no longer say "Axon runtime" for product daemon start.
@@ -621,8 +618,7 @@ Engineering effects:
 - File/probe/process cleanup is centralized.
 - Product presence checks become read-only observers rather than hidden start
   or stop side effects.
-- Legacy cleanup is isolated and can be deleted later without touching the
-  happy path.
+- No alternate runtime process class survives in lifecycle classification.
 
 ## 12. Metrics and Acceptance Gates
 
@@ -637,7 +633,7 @@ A table-driven test must cover at least these input states:
 | present daemon | absent | down | down | `ProjectionPresentProcessMissing` |
 | present daemon | alive | up | up | `Running` |
 | present daemon | alive | up | down | `ControlOnlyInvocationDown` |
-| present legacy | legacy pid | n/a | n/a | `LegacyAxonBridge` |
+| invalid projection | absent | down | down | projection parse error + `Stopped` process facts |
 
 ### 12.2 Repeated Start/Stop Cleanliness
 

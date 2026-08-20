@@ -16,9 +16,11 @@
 
 use clap::{Args, Subcommand, ValueEnum};
 
+use crate::cli::daemon_client::agent_gateway::{
+    agent_command_gateway, agent_read_gateway, AgentCommandGateway, AgentReadGateway,
+};
 use crate::cli::daemon_client::agent_view::{AgentRuntimeKind, DaemonAgentRow};
 use crate::daemon::execution::mission::directory::AgentDirectory;
-use crate::support::platform::local_daemon_grpc::LocalDaemonAbilityClient;
 use crate::support::platform::timeouts;
 
 #[derive(Debug, Args)]
@@ -185,15 +187,11 @@ pub struct SendArgs {
     #[arg(long, value_name = "TEXT")]
     pub context: Option<String>,
     /// Per-call deadline in seconds. LLM dispatches can legitimately
-    /// take many minutes, so the default is 15 min
-    /// ('support::timeouts::AGENT_SEND_DEFAULT_SECS'). '0' inherits the
+    /// take many minutes, so the default is 1 hour
+    /// (`support::timeouts::AGENT_SEND_DEFAULT_SECS`). '0' inherits the
     /// runtime default.
     #[arg(long, value_name = "SECS", default_value_t = timeouts::AGENT_SEND_DEFAULT_SECS)]
     pub timeout: u64,
-    /// Write the raw stream-json trace (one event per line) to this file.
-    /// The prompt is saved alongside it as '<file>.prompt.txt'.
-    #[arg(long, value_name = "FILE")]
-    pub trace: Option<std::path::PathBuf>,
     /// Continue the most-recent session for this agent. Reads the
     /// session_id from the agent's session log index. Mutually
     /// exclusive with --resume / --session-id; without any of the
@@ -236,7 +234,7 @@ pub enum McpAction {
     Add(McpAddArgs),
 }
 
-/// CLI adapter for [`crate::core::ability::spec::CostKind`].
+/// CLI adapter for [`crate::daemon::ability::manifest::CostKind`].
 ///
 /// **Why a separate enum.** `CostKind` lives in `core/`, which is the
 /// zero-dependency ontology layer — it must not pull in `clap`. So we
@@ -252,8 +250,8 @@ pub enum CostKindArg {
 }
 
 impl CostKindArg {
-    pub(crate) fn into_core(self) -> crate::core::ability::spec::CostKind {
-        use crate::core::ability::spec::CostKind;
+    pub(crate) fn into_core(self) -> crate::daemon::ability::manifest::CostKind {
+        use crate::daemon::ability::manifest::CostKind;
         match self {
             CostKindArg::Free => CostKind::Free,
             CostKindArg::ExternalMetered => CostKind::ExternalMetered,
@@ -337,11 +335,8 @@ pub struct SetArgs {
 pub struct PublishArgs {
     /// Registered agent name (from `easynet agent list`).
     pub name: String,
-    /// Currently required — the only supported mode in this PR is
-    /// dry-run. Live publishing through Axon lands in a later PR;
-    /// until then the flag is mandatory so scripts that assume
-    /// "publish = dry-run" today can still say so explicitly and
-    /// won't silently flip behaviour when the live path arrives.
+    /// Inspect the current committed live publication without reconciling
+    /// durable manifests into the runtime first.
     #[arg(long)]
     pub dry_run: bool,
 }
@@ -393,51 +388,21 @@ use publish::*;
 use send::*;
 
 // ── Shared daemon-registry helpers ──────────────────────────────────
-// Transplanted verbatim from the pre-split agent.rs (HEAD) when the
-// module split left these glue functions behind — every sub-module
-// reads agent rows through this one client/row path. pub(super) so
-// the split stays the only consumer surface.
-
-#[cfg(feature = "axon-pb")]
-fn resolve_local_daemon_caller_ura() -> Option<String> {
-    let creds = crate::daemon::persistence::config::load_credentials().ok()?;
-    let user_id = creds.user_id().ok()?;
-    let username = creds.username_slug().ok()?;
-    let plan = crate::cli::commands::start::build_bootstrap_plan_from(
-        &creds.realm,
-        &creds.node_id,
-        user_id,
-        username,
-    )
-    .ok()?;
-    Some(plan.host_device_ura)
-}
-
-pub(super) fn required_local_daemon_agent_client() -> anyhow::Result<LocalDaemonAbilityClient> {
-    #[cfg(feature = "axon-pb")]
-    let caller_ura = resolve_local_daemon_caller_ura();
-    #[cfg(not(feature = "axon-pb"))]
-    let caller_ura = None;
-
-    LocalDaemonAbilityClient::for_agent_management(caller_ura).map_err(|msg| {
-        anyhow::anyhow!(
-            "agent registry is daemon-owned, but the local daemon Axon ability surface is \
-             unavailable: {msg}"
-        )
-    })
-}
+// Every Agent subcommand reads daemon-owned projections through the read
+// gateway and mutates through the command gateway. Filesystem access below is
+// limited to a root path already authorized and projected by `agent.list`.
 
 pub(super) fn invoke_daemon_agent_list_required(
-    client: &LocalDaemonAbilityClient,
+    gateway: &dyn AgentReadGateway,
 ) -> anyhow::Result<Vec<DaemonAgentRow>> {
-    crate::cli::daemon_client::agent_view::list_agents_with_client(client)
+    crate::cli::daemon_client::agent_view::list_agents_with_gateway(gateway)
 }
 
 pub(super) fn daemon_agent_row(
-    client: &LocalDaemonAbilityClient,
+    gateway: &dyn AgentReadGateway,
     name: &str,
 ) -> anyhow::Result<DaemonAgentRow> {
-    invoke_daemon_agent_list_required(client)?
+    invoke_daemon_agent_list_required(gateway)?
         .into_iter()
         .find(|row| row.name == name)
         .ok_or_else(|| {
@@ -452,14 +417,14 @@ pub(super) fn daemon_row_agent_type(row: &DaemonAgentRow) -> anyhow::Result<Agen
     crate::cli::daemon_client::agent_view::agent_kind(row)
 }
 
-pub(super) fn daemon_row_root(row: &DaemonAgentRow) -> std::path::PathBuf {
+pub(super) fn daemon_row_root(row: &DaemonAgentRow) -> anyhow::Result<std::path::PathBuf> {
     crate::cli::daemon_client::agent_view::agent_root(row)
 }
 
 pub(super) fn open_registered_agent(name: &str) -> anyhow::Result<AgentDirectory> {
-    let daemon_client = required_local_daemon_agent_client()?;
-    let row = daemon_agent_row(&daemon_client, name)?;
-    let root = daemon_row_root(&row);
+    let gateway = agent_read_gateway();
+    let row = daemon_agent_row(gateway.as_ref(), name)?;
+    let root = daemon_row_root(&row)?;
     if !root.exists() {
         anyhow::bail!(
             "agent '{name}' has no on-disk root at {}. Either the directory was \

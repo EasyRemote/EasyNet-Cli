@@ -10,11 +10,9 @@ use crate::daemon::ability::dispatch::{
     AxonAbilityCatalog, ControlPlaneImplementation, LocalBidiHandlerWithEnvelope,
     LocalRpcHandlerWithEnvelope, LocalStreamHandlerWithEnvelope, OwnerKind,
 };
-use crate::daemon::ability::{AbilityImplSource, RuntimeEnv};
+use crate::daemon::ability::{AbilityImplSource, CallMode, RuntimeEnv};
 use crate::daemon::plugins::errors::{PluginHostError, Result};
-use crate::daemon::plugins::manifest::{
-    PluginCallMode, PluginKind, PluginRealtimeCapability, PluginRuntimeLimits,
-};
+use crate::daemon::plugins::manifest::{PluginKind, PluginRealtimeCapability, PluginRuntimeLimits};
 
 /// Resource and permission declarations supplied by a plugin package.
 ///
@@ -87,11 +85,11 @@ pub enum PluginAbilityHandler {
 }
 
 impl PluginAbilityHandler {
-    pub const fn call_mode(&self) -> PluginCallMode {
+    pub const fn call_mode(&self) -> CallMode {
         match self {
-            Self::Rpc(_) => PluginCallMode::Rpc,
-            Self::Stream(_) => PluginCallMode::Stream,
-            Self::Bidi(_) => PluginCallMode::Bidi,
+            Self::Rpc(_) => CallMode::Rpc,
+            Self::Stream(_) => CallMode::Stream,
+            Self::Bidi(_) => CallMode::Bidi,
         }
     }
 }
@@ -100,16 +98,16 @@ impl PluginAbilityHandler {
 #[derive(Clone)]
 pub struct PluginAbilityContribution {
     name: String,
-    call_mode: PluginCallMode,
-    manifest: crate::core::ability::spec::AbilityManifest,
+    call_mode: CallMode,
+    manifest: crate::daemon::ability::manifest::AbilityManifest,
     implementation: PluginImplementationBinding,
 }
 
 impl PluginAbilityContribution {
     pub fn new(
         name: impl Into<String>,
-        call_mode: PluginCallMode,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        call_mode: CallMode,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         implementation: PluginImplementationBinding,
     ) -> Result<Self> {
         let name = name.into();
@@ -135,11 +133,11 @@ impl PluginAbilityContribution {
         &self.name
     }
 
-    pub const fn call_mode(&self) -> PluginCallMode {
+    pub const fn call_mode(&self) -> CallMode {
         self.call_mode
     }
 
-    pub fn manifest(&self) -> &crate::core::ability::spec::AbilityManifest {
+    pub fn manifest(&self) -> &crate::daemon::ability::manifest::AbilityManifest {
         &self.manifest
     }
 
@@ -154,6 +152,7 @@ pub struct PluginPackageContribution {
     package_id: String,
     package_version: String,
     kind: PluginKind,
+    public_owner: OwnerKind,
     requirements: PluginRequirementSet,
     limits: PluginRuntimeLimits,
     realtime_capabilities: Vec<PluginRealtimeCapability>,
@@ -171,6 +170,10 @@ impl PluginPackageContribution {
 
     pub const fn kind(&self) -> PluginKind {
         self.kind
+    }
+
+    pub fn public_owner(&self) -> &OwnerKind {
+        &self.public_owner
     }
 
     pub fn requirements(&self) -> &PluginRequirementSet {
@@ -200,13 +203,15 @@ impl PluginPackageContribution {
 
 /// Builder used by plugin package loaders and builtin bindings.
 ///
-/// The builder records executable implementation bindings only. It deliberately
-/// has no authority/owner setters; those are daemon policy decisions applied by
-/// [`DaemonPluginBinder`].
+/// The builder records executable implementation bindings and the daemon-owned
+/// public owner policy selected for the package. Generic plugin packages
+/// publish through plugin-management; daemon-native product packages may opt
+/// into a dedicated SystemAgent while still contributing only AbilityImpls.
 pub struct PluginContributionBuilder {
     package_id: String,
     package_version: String,
     kind: PluginKind,
+    public_owner: OwnerKind,
     requirements: PluginRequirementSet,
     limits: PluginRuntimeLimits,
     realtime_capabilities: Vec<PluginRealtimeCapability>,
@@ -227,6 +232,7 @@ impl PluginContributionBuilder {
             package_id: package_id.into(),
             package_version: package_version.into(),
             kind,
+            public_owner: OwnerKind::plugin_management_system(),
             requirements,
             limits,
             realtime_capabilities,
@@ -247,17 +253,21 @@ impl PluginContributionBuilder {
         RuntimeEnv::plugin(self.package_id(), self.package_version())
     }
 
+    pub fn set_public_owner(&mut self, owner: OwnerKind) {
+        self.public_owner = owner;
+    }
+
     pub fn rpc(
         &mut self,
         ability: impl Into<String>,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         source: AbilityImplSource,
         runtime_env: RuntimeEnv,
         handler: LocalRpcHandlerWithEnvelope,
     ) -> Result<()> {
         self.push(
             ability,
-            PluginCallMode::Rpc,
+            CallMode::Rpc,
             manifest,
             PluginImplementationBinding::new(
                 source,
@@ -270,14 +280,14 @@ impl PluginContributionBuilder {
     pub fn stream(
         &mut self,
         ability: impl Into<String>,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         source: AbilityImplSource,
         runtime_env: RuntimeEnv,
         handler: LocalStreamHandlerWithEnvelope,
     ) -> Result<()> {
         self.push(
             ability,
-            PluginCallMode::Stream,
+            CallMode::Stream,
             manifest,
             PluginImplementationBinding::new(
                 source,
@@ -290,14 +300,14 @@ impl PluginContributionBuilder {
     pub fn bidi(
         &mut self,
         ability: impl Into<String>,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         source: AbilityImplSource,
         runtime_env: RuntimeEnv,
         handler: LocalBidiHandlerWithEnvelope,
     ) -> Result<()> {
         self.push(
             ability,
-            PluginCallMode::Bidi,
+            CallMode::Bidi,
             manifest,
             PluginImplementationBinding::new(
                 source,
@@ -310,8 +320,8 @@ impl PluginContributionBuilder {
     fn push(
         &mut self,
         ability: impl Into<String>,
-        call_mode: PluginCallMode,
-        manifest: crate::core::ability::spec::AbilityManifest,
+        call_mode: CallMode,
+        manifest: crate::daemon::ability::manifest::AbilityManifest,
         implementation: PluginImplementationBinding,
     ) -> Result<()> {
         let ability = ability.into();
@@ -353,6 +363,7 @@ impl PluginContributionBuilder {
             package_id: self.package_id,
             package_version: self.package_version,
             kind: self.kind,
+            public_owner: self.public_owner,
             requirements: self.requirements,
             limits: self.limits,
             realtime_capabilities: self.realtime_capabilities,
@@ -403,25 +414,24 @@ enum BinderTarget<'a> {
 ///
 /// The binder is the boundary where plugin-provided implementation bindings
 /// are projected into daemon authority policy and Axon runtime registration.
-/// Today the policy is the existing device authority projection; keeping it
-/// here prevents plugin packages from becoming authority roots.
+/// Plugin packages do not become authority roots. Each package declares the
+/// device-sponsored public owner under which its AbilityDescriptors are
+/// published; the Device remains only the execution host for the plugin
+/// runtime.
 pub struct DaemonPluginBinder<'a> {
     target: BinderTarget<'a>,
-    owner_policy: OwnerKind,
 }
 
 impl<'a> DaemonPluginBinder<'a> {
     pub fn static_catalog(catalog: &'a mut AxonAbilityCatalog) -> Self {
         Self {
             target: BinderTarget::Static(catalog),
-            owner_policy: OwnerKind::Device,
         }
     }
 
     pub fn dynamic_catalog(catalog: &'a AxonAbilityCatalog) -> Self {
         Self {
             target: BinderTarget::Dynamic(catalog),
-            owner_policy: OwnerKind::Device,
         }
     }
 
@@ -437,13 +447,17 @@ impl<'a> DaemonPluginBinder<'a> {
     pub fn bind_package(&mut self, package: &PluginPackageContribution) -> Result<Vec<String>> {
         let mut registered = Vec::new();
         for ability in package.abilities() {
-            self.bind_ability(ability)?;
+            self.bind_ability(ability, package.public_owner())?;
             registered.push(ability.name().to_string());
         }
         Ok(registered)
     }
 
-    fn bind_ability(&mut self, ability: &PluginAbilityContribution) -> Result<()> {
+    fn bind_ability(
+        &mut self,
+        ability: &PluginAbilityContribution,
+        public_owner: &OwnerKind,
+    ) -> Result<()> {
         let implementation = ControlPlaneImplementation::new(
             ability.implementation().source().clone(),
             ability.implementation().runtime_env().clone(),
@@ -452,7 +466,7 @@ impl<'a> DaemonPluginBinder<'a> {
             (BinderTarget::Static(catalog), PluginAbilityHandler::Rpc(handler)) => catalog
                 .register_rpc_with_envelope_and_spec_and_impl(
                     ability.name().to_string(),
-                    self.owner_policy.clone(),
+                    public_owner.clone(),
                     ability.manifest().clone(),
                     handler.clone(),
                     implementation,
@@ -464,7 +478,7 @@ impl<'a> DaemonPluginBinder<'a> {
             (BinderTarget::Static(catalog), PluginAbilityHandler::Stream(handler)) => catalog
                 .register_stream_with_envelope_and_spec_and_impl(
                     ability.name().to_string(),
-                    self.owner_policy.clone(),
+                    public_owner.clone(),
                     ability.manifest().clone(),
                     handler.clone(),
                     implementation,
@@ -476,7 +490,7 @@ impl<'a> DaemonPluginBinder<'a> {
             (BinderTarget::Static(catalog), PluginAbilityHandler::Bidi(handler)) => catalog
                 .register_bidi_with_envelope_and_spec_and_impl(
                     ability.name().to_string(),
-                    self.owner_policy.clone(),
+                    public_owner.clone(),
                     ability.manifest().clone(),
                     handler.clone(),
                     implementation,
@@ -488,7 +502,7 @@ impl<'a> DaemonPluginBinder<'a> {
             (BinderTarget::Dynamic(catalog), PluginAbilityHandler::Rpc(handler)) => catalog
                 .hot_register_rpc_with_envelope_and_spec_and_impl(
                     ability.name().to_string(),
-                    self.owner_policy.clone(),
+                    public_owner.clone(),
                     ability.manifest().clone(),
                     handler.clone(),
                     implementation,
@@ -500,7 +514,7 @@ impl<'a> DaemonPluginBinder<'a> {
             (BinderTarget::Dynamic(catalog), PluginAbilityHandler::Stream(handler)) => catalog
                 .hot_register_stream_with_envelope_and_spec_and_impl(
                     ability.name().to_string(),
-                    self.owner_policy.clone(),
+                    public_owner.clone(),
                     ability.manifest().clone(),
                     handler.clone(),
                     implementation,
@@ -512,7 +526,7 @@ impl<'a> DaemonPluginBinder<'a> {
             (BinderTarget::Dynamic(catalog), PluginAbilityHandler::Bidi(handler)) => catalog
                 .hot_register_bidi_with_envelope_and_spec_and_impl(
                     ability.name().to_string(),
-                    self.owner_policy.clone(),
+                    public_owner.clone(),
                     ability.manifest().clone(),
                     handler.clone(),
                     implementation,
@@ -522,5 +536,95 @@ impl<'a> DaemonPluginBinder<'a> {
                     reason: error.to_string(),
                 }),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn test_catalog() -> AxonAbilityCatalog {
+        let device_ura = crate::core::ura::device_ura("plugin-owner-test", "dev-1");
+        AxonAbilityCatalog::new_metadata_only_with_authority_context(
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root(
+                &device_ura,
+            )
+            .expect("device authority context"),
+        )
+    }
+
+    fn plugin_contribution(ability: &str) -> PluginPackageContribution {
+        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+            ability,
+            "test plugin ability",
+            serde_json::json!({"type": "object"}),
+        )
+        .and_then(|manifest| manifest.with_admission_action("invoke"))
+        .expect("valid plugin manifest");
+        let handler: LocalRpcHandlerWithEnvelope =
+            Arc::new(|_env, _args| Ok(serde_json::json!({"ok": true})));
+        let mut builder = PluginContributionBuilder::new(
+            "owner-test",
+            "1.0.0",
+            PluginKind::Sidecar,
+            PluginRuntimeLimits::new(1, 1),
+            PluginRequirementSet::default(),
+            Vec::new(),
+        );
+        builder
+            .rpc(
+                ability,
+                manifest,
+                AbilityImplSource::SidecarPlugin,
+                RuntimeEnv::plugin("owner-test", "1.0.0"),
+                handler,
+            )
+            .expect("plugin rpc contribution");
+        builder.finish().expect("plugin package contribution")
+    }
+
+    fn plugin_contribution_with_owner(
+        ability: &str,
+        owner: OwnerKind,
+    ) -> PluginPackageContribution {
+        let mut package = plugin_contribution(ability);
+        package.public_owner = owner;
+        package
+    }
+
+    #[test]
+    fn daemon_plugin_binder_uses_plugin_management_system_agent_owner() {
+        let mut catalog = test_catalog();
+        let package = plugin_contribution("plugin_owner_test");
+
+        DaemonPluginBinder::static_catalog(&mut catalog)
+            .bind_package(&package)
+            .expect("bind plugin contribution");
+
+        let row = catalog
+            .authority_ability_catalog_snapshot()
+            .into_iter()
+            .find(|row| row.name == "plugin_owner_test")
+            .expect("plugin owner_test row");
+        assert_eq!(row.owner, OwnerKind::plugin_management_system());
+    }
+
+    #[test]
+    fn daemon_plugin_binder_uses_package_public_owner_policy() {
+        let mut catalog = test_catalog();
+        let package =
+            plugin_contribution_with_owner("plugin_owner_custom", OwnerKind::media_system());
+
+        DaemonPluginBinder::static_catalog(&mut catalog)
+            .bind_package(&package)
+            .expect("bind plugin contribution");
+
+        let row = catalog
+            .authority_ability_catalog_snapshot()
+            .into_iter()
+            .find(|row| row.name == "plugin_owner_custom")
+            .expect("plugin owner_custom row");
+        assert_eq!(row.owner, OwnerKind::media_system());
     }
 }

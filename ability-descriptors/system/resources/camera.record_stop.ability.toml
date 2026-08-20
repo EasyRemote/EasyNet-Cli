@@ -1,6 +1,24 @@
-schema_version = "1"
+schema_version = "3"
 name = "camera.record_stop"
+descriptor_version = "1.0.0"
 description = "Stop a camera recording session and persist the captured device-camera artifact. Subject MUST be the same camera resource_ura used for camera.record_start."
+exposure = "task"
+dedicated_surface = "media"
+subject_contract_kind = "dedicated-surface"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "stream"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "state_transition"
+transition_id = "camera.record_stop@v1"
+transition_class = "operational"
 
 [input_schema]
 type = "object"

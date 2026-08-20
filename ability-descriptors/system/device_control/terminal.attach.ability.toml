@@ -1,6 +1,22 @@
-schema_version = "1"
+schema_version = "3"
 name = "terminal.attach"
+descriptor_version = "1.0.0"
 description = "Attach to an existing PTY session over InvokeBidi: pump stdin from the wire to the PTY master, stream stdout / stderr back as base64-encoded `stdout` frames, surface child exit as a final `exit` frame. Pair with terminal.create (open the session) and terminal.close (terminate it). Part of the baseline-locomotion-v1 profile (AXIOM Tier 2.5)."
+exposure = "operator"
+dedicated_surface = "terminal"
+subject_contract_kind = "dedicated-surface"
+call_mode = "bidi"
+capability_state = "cutover_ready"
+admission_action = "stream"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":true}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

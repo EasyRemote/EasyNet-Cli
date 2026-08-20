@@ -81,6 +81,9 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::execution::mission::invocation_gateway::{
+    DaemonMissionInvocationGateway, MissionInvocationGateway, MissionInvocationRequest,
+};
 
 /// Wire name. Pinned because the CLI (`easynet mission think`) and
 /// any future EAL caller bind to it by string.
@@ -99,21 +102,22 @@ pub const DEFAULT_MAX_CYCLES: u32 = 5;
 /// a real long-running task would need.
 pub const HARD_MAX_CYCLES: u32 = 50;
 
-/// Register the ability. The `dispatch_registry_handle` lets the
-/// handler resolve `<agent>.chat` in-process — symmetric to
-/// `mission.discuss_round`'s mechanism. Going back through the IPC
-/// client would deadlock the daemon's accept loop because we are
-/// already mid-call.
-pub fn register(
-    reg: &mut AxonAbilityCatalog,
-    dispatch_registry_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-) {
+/// Register the ability. Worker, judge, curator, and publish calls all use
+/// the daemon's canonical Invocation service through one Mission gateway.
+pub fn register(reg: &mut AxonAbilityCatalog) {
     use crate::daemon::ability::dispatch::OwnerKind;
-    let handle = Arc::clone(&dispatch_registry_handle);
-    reg.register_rpc_with_owner(
+    let runtime = reg.runtime();
+    reg.register_rpc_with_envelope_and_owner(
         "mission.think",
-        OwnerKind::Device,
-        Arc::new(move |args| think_handler(&handle, args)),
+        OwnerKind::automation_system(),
+        Arc::new(move |envelope, args| {
+            let runtime = runtime.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("mission.think execution requires an executable canonical runtime")
+            })?;
+            let gateway =
+                DaemonMissionInvocationGateway::from_envelope(&envelope, Arc::clone(runtime))?;
+            think_handler(&gateway, args)
+        }),
     );
 }
 
@@ -142,27 +146,17 @@ pub fn register(
 /// }
 /// ```
 fn think_handler(
-    dispatch_registry_handle: &Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
+    invocation_gateway: &dyn MissionInvocationGateway,
     args: Value,
 ) -> anyhow::Result<Value> {
-    let registry = dispatch_registry_handle.get().ok_or_else(|| {
-        anyhow::anyhow!(
-            "mission.think: dispatch registry handle not yet set; this is an internal \
-             init-order bug — register() must run after the daemon's OnceLock is bound"
-        )
-    })?;
-    think_with_registry(registry, args)
+    think_with_gateway(invocation_gateway, args)
 }
 
-/// Core orchestration loop with the registry passed in directly.
-/// Production code reaches this through `think_handler` (which
-/// pulls the registry from the daemon's OnceLock); tests can call
-/// it directly with a hand-built registry containing stub
-/// `<agent>.chat` handlers, exercising the full worker+judge+
-/// curator flow without an LLM subprocess. Same boundary the
-/// shell/http executors use to keep their core unit-testable.
-pub(crate) fn think_with_registry(
-    registry: &Arc<AxonAbilityCatalog>,
+/// Core orchestration loop over the same child-Invocation port used in
+/// production. Tests inject an in-memory implementation of the port without
+/// changing orchestration semantics.
+pub(crate) fn think_with_gateway(
+    invocation_gateway: &dyn MissionInvocationGateway,
     args: Value,
 ) -> anyhow::Result<Value> {
     let parsed = parse_think_args(&args)?;
@@ -174,13 +168,9 @@ pub(crate) fn think_with_registry(
         dry_run,
     } = parsed;
 
-    // Resolve the two chat ability names up front. Worker and judge
-    // can be the same agent — the sessions are independent (each call
+    // Worker and judge can be the same agent — the sessions are independent (each call
     // is a new chat session with its own session_id), the model and
     // tool catalog are the agent's.
-    let worker_chat_name = format!("{owner}.chat");
-    let judge_chat_name = format!("{judge}.chat");
-
     let mut transcript: Vec<Value> = Vec::new();
     let mut worker_session_id: Option<String> = None;
     let mut last_parsed_verdict: Option<Value> = None;
@@ -211,7 +201,7 @@ pub(crate) fn think_with_registry(
         // distinguishable reason so the operator can audit. Same
         // failure-soft policy as the curator step at the end of
         // the loop.
-        let worker_resp = match invoke_chat_protected(registry, &worker_chat_name, worker_args) {
+        let worker_resp = match invoke_agent_chat(invocation_gateway, &owner, worker_args) {
             Ok(v) => v,
             Err(e) => {
                 termination = "worker_error";
@@ -265,23 +255,20 @@ pub(crate) fn think_with_registry(
         // outer loop continues with no parsed verdict for this
         // cycle, and termination flips to "judge_error" so the
         // operator sees it in the envelope.
-        let judge_resp = match invoke_chat_protected(
-            registry,
-            &judge_chat_name,
-            json!({"prompt": judge_prompt}),
-        ) {
-            Ok(v) => v,
-            Err(e) => {
-                termination = "judge_error";
-                transcript.push(json!({
-                    "cycle": cycle,
-                    "worker": worker_text,
-                    "judge_error": format!("{e}"),
-                    "judge_parsed": null,
-                }));
-                break;
-            }
-        };
+        let judge_resp =
+            match invoke_agent_chat(invocation_gateway, &judge, json!({"prompt": judge_prompt})) {
+                Ok(v) => v,
+                Err(e) => {
+                    termination = "judge_error";
+                    transcript.push(json!({
+                        "cycle": cycle,
+                        "worker": worker_text,
+                        "judge_error": format!("{e}"),
+                        "judge_parsed": null,
+                    }));
+                    break;
+                }
+            };
         let judge_raw = judge_resp
             .get("reply")
             .and_then(Value::as_str)
@@ -339,19 +326,25 @@ pub(crate) fn think_with_registry(
     // `<agent>.fictional_verb(...)` references); validation also
     // uses it to refuse a manifest whose [exec] kind="eal" source
     // calls a verb that does not exist.
-    let catalog = collect_owner_catalog(&owner);
-
     let curator_outcome = match last_parsed_verdict.as_ref() {
-        Some(v) if should_curate(v) => Some(run_curator_turn(CuratorTurnRequest {
-            registry,
-            owner: &owner,
-            curator_agent: &judge,
-            initial_prompt: &prompt,
-            verdict: v,
-            transcript: &transcript,
-            catalog: &catalog,
-            dry_run,
-        })),
+        Some(v) if should_curate(v) => match collect_owner_catalog(&owner) {
+            Ok(catalog) => Some(run_curator_turn(CuratorTurnRequest {
+                invocation_gateway,
+                owner: &owner,
+                curator_agent: &judge,
+                initial_prompt: &prompt,
+                verdict: v,
+                transcript: &transcript,
+                catalog: &catalog,
+                dry_run,
+            })),
+            Err(error) => Some(json!({
+                "attempted": true,
+                "ok": false,
+                "stage": "catalog",
+                "error": error,
+            })),
+        },
         _ => None,
     };
 
@@ -410,13 +403,14 @@ fn should_curate(verdict: &Value) -> bool {
 /// only what the curator needs to write a working reference: the
 /// fully-qualified verb (`<agent>.<verb>`) plus a short description
 /// so the LLM can pick the right one.
+#[derive(Debug)]
 pub(crate) struct CatalogEntry {
     pub qualified: String,
     pub description: String,
 }
 
 struct CuratorTurnRequest<'a> {
-    registry: &'a Arc<AxonAbilityCatalog>,
+    invocation_gateway: &'a dyn MissionInvocationGateway,
     owner: &'a str,
     curator_agent: &'a str,
     initial_prompt: &'a str,
@@ -436,27 +430,26 @@ struct CuratorTurnRequest<'a> {
 ///      point at one of these verbs, else the resulting ability is
 ///      dead on arrival.
 ///
-/// Catalog gathering is best-effort: an unreadable agent dir
-/// returns an empty list, and validation downstream emits a clear
-/// "no catalog available" rather than refusing to publish.
-pub(crate) fn collect_owner_catalog(owner: &str) -> Vec<CatalogEntry> {
-    let registry = match crate::daemon::persistence::agent_registry::load_agents() {
-        Ok(r) => r,
-        Err(_) => return Vec::new(),
-    };
+/// A missing owner row means the owner currently publishes no catalog-backed
+/// abilities. An unreadable/corrupt Agent registry projection is unavailable
+/// catalogue state and must be surfaced before curator authoring; otherwise the
+/// curator can publish against a false empty catalog.
+pub(crate) fn collect_owner_catalog(owner: &str) -> Result<Vec<CatalogEntry>, String> {
+    let registry = crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_registered_agent_registry_projection()
+        .map_err(|error| format!("owner ability catalog unavailable: {error}"))?;
     let entry = match registry.agents.get(owner) {
         Some(e) => e.clone(),
-        None => return Vec::new(),
+        None => return Ok(Vec::new()),
     };
     let manifests =
         crate::daemon::execution::mission::agent_ability_specs::manifests_for(owner, &entry);
-    manifests
+    Ok(manifests
         .into_iter()
         .map(|m| CatalogEntry {
             qualified: format!("{owner}.{}", m.name()),
             description: m.description().to_string(),
         })
-        .collect()
+        .collect())
 }
 
 /// Validate the curator's authored ability body before publish.
@@ -492,7 +485,7 @@ pub(crate) fn validate_authored_ability(
     body: &str,
     catalog: &[CatalogEntry],
 ) -> Result<(), String> {
-    use crate::core::ability::spec::{AbilityExec, AbilityManifest};
+    use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest};
 
     let manifest =
         AbilityManifest::from_toml_str(body).map_err(|e| format!("manifest parse failed: {e}"))?;
@@ -574,7 +567,7 @@ fn collect_member_call_targets(program: &crate::eal::parser::ast::EalProgram) ->
 /// publish step without grep'ing the daemon log.
 fn run_curator_turn(request: CuratorTurnRequest<'_>) -> Value {
     let CuratorTurnRequest {
-        registry,
+        invocation_gateway,
         owner,
         curator_agent,
         initial_prompt,
@@ -590,10 +583,8 @@ fn run_curator_turn(request: CuratorTurnRequest<'_>) -> Value {
         .unwrap_or("private");
     let target = if scope == "team" { "ability" } else { "skill" };
 
-    let curator_chat_name = format!("{curator_agent}.chat");
-
     let prompt = render_curator_prompt(target, initial_prompt, verdict, transcript, catalog);
-    let resp = match invoke_chat_protected(registry, &curator_chat_name, json!({"prompt": prompt}))
+    let resp = match invoke_agent_chat(invocation_gateway, curator_agent, json!({"prompt": prompt}))
     {
         Ok(v) => v,
         Err(e) => {
@@ -668,8 +659,8 @@ fn run_curator_turn(request: CuratorTurnRequest<'_>) -> Value {
         });
     }
 
-    // Dispatch to the matching publish handler through the same
-    // LocalRuntime-backed path as worker/judge dispatch.
+    // Dispatch to the matching publish Ability through the same daemon
+    // Invocation gateway as worker, judge, and curator chat.
     let (publish_name, publish_args) = if target == "ability" {
         (
             "ability.publish",
@@ -710,21 +701,12 @@ fn run_curator_turn(request: CuratorTurnRequest<'_>) -> Value {
         )
     };
 
-    if !registry.has_rpc(publish_name) {
-        return json!({
-            "attempted": true,
-            "ok": false,
-            "stage": "resolve_publish",
-            "error": format!("{publish_name} not registered"),
-            "authored_body_len": authored.len(),
-        });
-    }
-    match registry.invoke_rpc_json(publish_name, publish_args) {
-        Ok(v) => json!({
+    match invocation_gateway.invoke(MissionInvocationRequest::system(publish_name, publish_args)) {
+        Ok(outcome) => json!({
             "attempted": true,
             "ok": true,
             "target": target,
-            "publish_result": v,
+            "publish_result": outcome.value,
         }),
         Err(e) => json!({
             "attempted": true,
@@ -1122,34 +1104,14 @@ const CONTINUE_HINT: &str =
     "Continue with the task. If you have arrived at a satisfactory result, summarise it. \
      If you are blocked, state the blocker so the next step is unambiguous.";
 
-/// Wrap a chat invocation in `catch_unwind` so an `eprintln!` to a
-/// closed stderr (broken pipe → panic in the std macros) does not
-/// take down the think handler. Same defensive pattern
-/// `mission.discuss_round` uses; the chat handler does heavy fd
-/// juggling around the LLM subprocess and rare paths can panic on
-/// stderr writes when the parent shell's stderr is gone.
-fn invoke_chat_protected(
-    registry: &Arc<AxonAbilityCatalog>,
-    ability: &str,
+fn invoke_agent_chat(
+    invocation_gateway: &dyn MissionInvocationGateway,
+    agent: &str,
     args: Value,
 ) -> anyhow::Result<Value> {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        registry.invoke_rpc_json(ability, args)
-    }));
-    match result {
-        Ok(Ok(v)) => Ok(v),
-        Ok(Err(e)) => Err(anyhow::anyhow!("{e}")),
-        Err(payload) => {
-            let msg = if let Some(s) = payload.downcast_ref::<&'static str>() {
-                (*s).to_string()
-            } else if let Some(s) = payload.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "non-string panic from chat handler".to_string()
-            };
-            Err(anyhow::anyhow!("chat handler panicked: {msg}"))
-        }
-    }
+    invocation_gateway
+        .invoke(MissionInvocationRequest::hosted_agent(agent, "chat", args))
+        .map(|outcome| outcome.value)
 }
 
 /// Parsed args carrier. A struct beats a 5-tuple because the
@@ -1715,6 +1677,37 @@ allowed-tools: [Read]\n\
     }
 
     #[test]
+    fn collect_owner_catalog_keeps_missing_registry_as_empty_catalog() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+
+        let catalog = collect_owner_catalog("alice").expect("missing registry is first-run empty");
+
+        assert!(
+            catalog.is_empty(),
+            "first-run owner with no registry row publishes no catalog-backed abilities"
+        );
+    }
+
+    #[test]
+    fn collect_owner_catalog_rejects_corrupt_registry_projection() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let state_dir = crate::daemon::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("state dir");
+        std::fs::write(state_dir.join("agents.json"), "{not-json").expect("corrupt registry");
+
+        let err = collect_owner_catalog("alice").expect_err("corrupt registry must fail closed");
+
+        assert!(
+            err.contains("owner ability catalog unavailable"),
+            "error identifies catalog projection: {err}"
+        );
+        assert!(
+            err.contains("load Agent registry projection"),
+            "error preserves registry source: {err}"
+        );
+    }
+
+    #[test]
     fn validate_accepts_discovery_only_ability_without_exec_block() {
         // No [exec] block means the manifest is discovery-only. Catalog
         // is irrelevant; validation accepts the TOML shape but dispatch
@@ -1925,7 +1918,7 @@ This skill does X.\n";
 
     // ── Integration tests with stub chat handlers ────────────────
     //
-    // These tests build a `AxonAbilityCatalog`, register stub
+    // These tests build a test Invocation gateway over an `AxonAbilityCatalog`, register stub
     // `<agent>.chat` handlers that return canned JSON envelopes
     // matching the chat ability's wire shape, then drive the full
     // worker+judge+curator loop. Boundaries:
@@ -1940,18 +1933,38 @@ This skill does X.\n";
 
     use std::sync::Mutex as StdMutex;
 
-    /// Build a registry with stub chat for a single agent. The stub
+    /// Build a test gateway with stub chat for a single agent. The stub
     /// returns the next canned reply each call; once exhausted, it
     /// cycles. Each call advances the session_id so a test can
     /// distinguish "resumed" from "fresh".
-    fn registry_with_stub_chat(agent: &str, replies: Vec<&'static str>) -> Arc<AxonAbilityCatalog> {
+    fn gateway_with_stub_chat(
+        agent: &str,
+        replies: Vec<&'static str>,
+    ) -> crate::daemon::execution::mission::invocation_gateway::CatalogMissionInvocationGateway
+    {
         let counter: Arc<StdMutex<usize>> = Arc::new(StdMutex::new(0));
         let replies: Arc<Vec<String>> = Arc::new(replies.into_iter().map(String::from).collect());
-        let mut reg = AxonAbilityCatalog::new();
+        let hosted_agent_ura = crate::core::ura::agent_ura("test", "user-1", agent);
+        let authority_context = crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+                crate::core::ura::device_ura("test", "local"),
+                vec![hosted_agent_ura],
+            )
+            .expect("test hosted Agent root is canonical");
+        let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            authority_context,
+        );
         let counter_c = Arc::clone(&counter);
         let replies_c = Arc::clone(&replies);
-        reg.register_rpc(
+        let agent_owner = crate::daemon::ability::dispatch::OwnerKind::Agent(agent.to_string());
+        reg.register_rpc_with_spec_and_action(
             format!("{agent}.chat"),
+            agent_owner,
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+            crate::daemon::ability::manifest::default_chat_manifest(),
             Arc::new(move |args: Value| {
                 let mut idx = counter_c.lock().unwrap();
                 let i = *idx;
@@ -1968,7 +1981,9 @@ This skill does X.\n";
                 }))
             }),
         );
-        Arc::new(reg)
+        crate::daemon::execution::mission::invocation_gateway::CatalogMissionInvocationGateway::new(
+            Arc::new(reg),
+        )
     }
 
     #[test]
@@ -1977,9 +1992,9 @@ This skill does X.\n";
         // termination_reason = "worker_silent" before the judge
         // runs. We pre-stuff judge replies but they should never
         // be consumed.
-        let reg = registry_with_stub_chat("alice", vec!["", "{\"terminate\":true}"]);
-        let resp = think_with_registry(
-            &reg,
+        let gateway = gateway_with_stub_chat("alice", vec!["", "{\"terminate\":true}"]);
+        let resp = think_with_gateway(
+            &gateway,
             json!({"owner_agent_id": "alice", "prompt": "do the thing"}),
         )
         .expect("ok");
@@ -1991,15 +2006,15 @@ This skill does X.\n";
     fn judge_terminate_true_ends_loop_with_no_curator() {
         // Worker emits text. Judge says terminate=true with
         // memory_type="none" → curator must NOT run.
-        let reg = registry_with_stub_chat(
+        let gateway = gateway_with_stub_chat(
             "alice",
             vec![
                 "I have completed the task: the answer is 42.",
                 r#"{"terminate":true,"memory_type":"none","scope":"private","what_to_save":"","why":"","how_to_apply":"","exclusion_check":{"is_derivable_from_code":false,"is_in_git_log":false,"is_debug_recipe":false,"is_ephemeral":false}}"#,
             ],
         );
-        let resp = think_with_registry(
-            &reg,
+        let resp = think_with_gateway(
+            &gateway,
             json!({"owner_agent_id": "alice", "prompt": "what is 6 times 7"}),
         )
         .expect("ok");
@@ -2017,7 +2032,7 @@ This skill does X.\n";
         // Judge replies are unparseable (so terminate stays false
         // by default), worker keeps speaking. Loop should run
         // exactly max_cycles times.
-        let reg = registry_with_stub_chat(
+        let gateway = gateway_with_stub_chat(
             "alice",
             vec![
                 "working on it",
@@ -2028,8 +2043,8 @@ This skill does X.\n";
                 "still working",
             ],
         );
-        let resp = think_with_registry(
-            &reg,
+        let resp = think_with_gateway(
+            &gateway,
             json!({
                 "owner_agent_id": "alice",
                 "prompt": "p",
@@ -2046,15 +2061,15 @@ This skill does X.\n";
 
     #[test]
     fn curator_attempts_publish_when_verdict_qualifies() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
         // Stub a 3-call sequence:
         //   call 0 (worker cycle 1):   "did the work"
         //   call 1 (judge cycle 1):    sinkable verdict, terminate=true
         //   call 2 (curator):          authors a SKILL.md body
         // We do NOT register a real skill.publish handler — we
-        // observe `curator.stage = "resolve_publish"` to confirm the
-        // handler reached publish dispatch (which is the boundary
-        // we want to verify in this slice; full publish lives in
-        // the publish handler's own tests).
+        // observe `curator.stage = "publish"` to confirm the handler
+        // submitted the publish Invocation (full publish lives in the
+        // publish handler's own tests).
         let verdict = r#"{"terminate":true,"memory_type":"feedback","scope":"private","what_to_save":"prefer ripgrep over grep when scanning","why":"better unicode + faster on large repos","how_to_apply":"reach for rg before grep when searching codebases","exclusion_check":{"is_derivable_from_code":false,"is_in_git_log":false,"is_debug_recipe":false,"is_ephemeral":false}}"#;
         // Stub curator returns an Anthropic-canonical SKILL.md so
         // it passes validate_authored_skill and the test reaches
@@ -2077,21 +2092,21 @@ Use this skill when the user:\n\
 - Asks about grep alternatives\n\
 - Mentions slow searches\n\
 - Wants to scan a codebase\n";
-        let reg = registry_with_stub_chat("alice", vec!["did the work", verdict, stub_skill_md]);
-        let resp = think_with_registry(
-            &reg,
+        let gateway = gateway_with_stub_chat("alice", vec!["did the work", verdict, stub_skill_md]);
+        let resp = think_with_gateway(
+            &gateway,
             json!({"owner_agent_id": "alice", "prompt": "scan for foo"}),
         )
         .expect("ok");
         assert_eq!(resp["termination_reason"], "judge_terminate");
         let curator = &resp["curator"];
         assert_eq!(curator["attempted"], true);
-        // No skill.publish in this stubbed registry → resolve_publish
-        // is the failure stage. That confirms the handler correctly
-        // reached the publish dispatch step with a `target = "skill"`.
+        // No skill.publish in this test gateway. The canonical gateway owns
+        // resolution, so the failure is reported by the publish Invocation
+        // instead of a Mission-side preflight branch.
         assert_eq!(curator["ok"], false);
         assert_eq!(
-            curator["stage"], "resolve_publish",
+            curator["stage"], "publish",
             "curator should fail at publish dispatch when no publish handler is registered: {}",
             curator
         );
@@ -2104,7 +2119,7 @@ Use this skill when the user:\n\
         // cycle 2's worker call sees that same id back, confirming
         // the orchestrator captured + replayed it.
         let unparseable_judge = "I cannot decide";
-        let reg = registry_with_stub_chat(
+        let gateway = gateway_with_stub_chat(
             "alice",
             vec![
                 "cycle 1 worker",
@@ -2113,8 +2128,8 @@ Use this skill when the user:\n\
                 unparseable_judge,
             ],
         );
-        let resp = think_with_registry(
-            &reg,
+        let resp = think_with_gateway(
+            &gateway,
             json!({
                 "owner_agent_id": "alice",
                 "prompt": "p",

@@ -1,0 +1,28 @@
+schema_version = "3"
+name = "device.keyring.get_public"
+descriptor_version = "1.0.0"
+description = "Return the public key and fingerprint for one managed signing key without exposing private key material."
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "route-target"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["key_id"]
+additionalProperties = false
+
+[input_schema.properties.key_id]
+type = "string"
+minLength = 1

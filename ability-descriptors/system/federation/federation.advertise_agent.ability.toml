@@ -1,0 +1,33 @@
+schema_version = "3"
+name = "federation.advertise_agent"
+descriptor_version = "2.0.0"
+description = "Register one Device-hosted Agent incarnation and receive the Hub-owned generation assignment."
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "route-target"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{\"additionalProperties\":false,\"properties\":{\"ack\":{\"const\":true,\"type\":\"boolean\"},\"assignment\":{\"additionalProperties\":false,\"properties\":{\"agent_ura\":{\"minLength\":1,\"type\":\"string\"},\"generation\":{\"minimum\":1,\"type\":\"integer\"},\"host_device_ura\":{\"minLength\":1,\"type\":\"string\"},\"incarnation_id\":{\"pattern\":\"^[0-9a-f]{32}$\",\"type\":\"string\"}},\"required\":[\"agent_ura\",\"host_device_ura\",\"incarnation_id\",\"generation\"],\"type\":\"object\"}},\"required\":[\"ack\",\"assignment\"],\"type\":\"object\"}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["agent_ura", "incarnation_id"]
+additionalProperties = false
+
+[input_schema.properties.agent_ura]
+type = "string"
+description = "Hosted Agent URA being advertised."
+
+[input_schema.properties.incarnation_id]
+type = "string"
+description = "Device-persisted opaque incarnation id; exactly 32 lowercase hexadecimal characters."
+pattern = "^[0-9a-f]{32}$"

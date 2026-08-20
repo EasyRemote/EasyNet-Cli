@@ -5,7 +5,6 @@
 //! catalog projection stay outside this module.
 
 pub mod ability_management;
-pub mod browser;
 pub mod file_edit;
 pub mod file_transfer;
 pub mod files;

@@ -2,39 +2,34 @@
 // ===================================================
 //
 // File: src/daemon/invocation/state/pending_dispatch.rs
-// Description: Cross-call correlation table for `runtime.invoke_remote`
-//              dispatches awaiting their reply on a target device's
-//              `session.open` stream.
+// Description: Correlates typed session `DispatchCall` / `DispatchResult`
+//              frames by call_id, including streaming deliveries.
 //
 // Why this module exists
 // ----------------------
-// `runtime.invoke_remote` (PR-3, this commit) is the per-call bidi the
-// caller opens against the daemon. The daemon pushes a `Dispatch`
-// frame down the target device's pre-existing `session.open`
-// reverse channel (PR-2 lands the session accept side). The target
-// device runs the requested ability locally and writes a `Result`
-// frame back up its session stream. PR-2's session-receive task
-// must then route that `Result` back to the *original*
-// `runtime.invoke_remote` caller — by call_id.
+// The daemon sends a canonical `DispatchCall` over the target's existing
+// `session.open` reverse channel. The device returns `DispatchResult`, and
+// this table settles the original unary or streaming waiter by call_id.
 //
 // `PendingDispatchMap` is the shared correlation surface:
 //
-//   * `runtime.invoke_remote` handler (PR-3, this commit's caller):
-//     `register_pending(call_id) -> oneshot::Receiver<DispatchResult>`.
+//   * canonical invocation dispatcher:
+//     `register_pending_for(target_ura) -> PendingHandle`.
 //     The handler awaits the receiver while a target session task
-//     races to fulfil it.
+//     races to fulfil it. The target URA is mandatory so presence
+//     loss can deterministically terminate the waiter.
 //
 //   * PR-2 `session.open` receive task (planned):
 //     `complete(call_id, DispatchResult)` invoked when the device's
 //     `Result { call_id, ... }` frame arrives. The matching
-//     oneshot is fulfilled and the invoke_remote handler wakes.
+//     oneshot is fulfilled and the invocation dispatcher wakes.
 //
 // Lifetime + bounded growth
 // -------------------------
-// Each `register_pending` adds one entry; either `complete` removes
+// Each `register_pending_for` adds one entry; either `complete` removes
 // it on reply, or the handler drops the receiver on caller cancel
 // and the entry's oneshot sender becomes a no-op on next `complete`
-// — but the entry itself stays. To bound growth, `register_pending`
+// — but the entry itself stays. To bound growth, `register_pending_for`
 // returns a `PendingHandle` that auto-removes the entry on Drop, so
 // caller cancellation reclaims the slot without explicit cleanup.
 //
@@ -69,7 +64,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::daemon::invocation::bidi::state::session_failure::SessionFailure;
 
 #[cfg(feature = "axon-pb")]
-pub type DispatchReceipt = easynet_axon::pb::axon::v1::InvocationReceipt;
+pub type DispatchReceipt = axon_sdk::pb::axon::v1::InvocationReceipt;
 
 #[cfg(not(feature = "axon-pb"))]
 #[derive(Debug, Clone, PartialEq)]
@@ -82,12 +77,16 @@ pub enum DispatchReceipt {}
 pub struct DispatchResult {
     /// Reply payload from the target ability (opaque bytes).
     pub payload: Vec<u8>,
-    /// Callee-signed execution receipt when the target spoke
-    /// carrier-v1 (DEC-F004 landing audit 3). Internal projection
-    /// field — never serialized; the invoke_remote consumer side
-    /// projects it into the hub ledger where the full call context
-    /// (ability, route) lives. `None` on the JSON carrier.
-    pub receipt: Option<DispatchReceipt>,
+    /// MIME type for `payload`. The session carrier owns this result fact; it
+    /// is intentionally not recovered from the signed receipt checkpoint.
+    pub result_content_type: String,
+    /// Exact callee-signed admission checkpoint. Unary carries this together
+    /// with terminal; stream/bidi deliver it through the ordered admission
+    /// event before data.
+    pub admission_receipt: Option<DispatchReceipt>,
+    /// Exact callee-signed terminal checkpoint. This is never synthesized by
+    /// the hub or by a carrier error path.
+    pub terminal_receipt: Option<DispatchReceipt>,
     /// `Some(message)` if the target reported an execution error;
     /// `None` for a clean reply.
     pub error: Option<String>,
@@ -143,7 +142,7 @@ impl Drop for PendingHandle {
 /// device the caller is waiting on so a `PresenceEvent::Offline`
 /// for that URA can fail-fast every outstanding waiter targeting
 /// it (PR-N6 mid-flight cancellation: pre-fix the daemon's
-/// `forward_invoke` `await_reply()` blocked indefinitely when the
+/// the invocation wait blocked indefinitely when the
 /// target session dropped, surfacing on the operator side as a
 /// 30s HTTP timeout instead of an immediate `target_offline`).
 struct PendingEntry {
@@ -166,8 +165,8 @@ impl std::fmt::Debug for PendingEntry {
     }
 }
 
-/// Shared correlation table between `runtime.invoke_remote` (writer)
-/// and `session.open` (completer). Constructed once per daemon
+/// Shared correlation table between canonical dispatch (writer) and
+/// `session.open` (completer). Constructed once per daemon
 /// process; cloned by `Arc` into each handler that needs it.
 #[derive(Debug, Clone, Default)]
 pub struct PendingDispatchMap {
@@ -179,14 +178,6 @@ impl PendingDispatchMap {
         Self::default()
     }
 
-    /// Register a new pending dispatch with no target URA. Kept for
-    /// callers that haven't been wired to the cancel-on-offline path
-    /// yet — they simply won't be auto-cancelled when the target
-    /// goes offline (the legacy "wait until oneshot drops" behaviour).
-    pub fn register_pending(&self) -> PendingHandle {
-        self.register_pending_for("")
-    }
-
     /// Register a new pending dispatch keyed to a specific
     /// `target_ura`. When that URA's session goes offline the
     /// daemon's presence-event watcher calls `cancel_for(ura,
@@ -195,6 +186,7 @@ impl PendingDispatchMap {
     /// HTTP / gRPC request timeout (30s) for a session that's
     /// already known-dead.
     pub fn register_pending_for(&self, target_ura: &str) -> PendingHandle {
+        let target_ura = require_pending_target_ura(target_ura);
         let sequence = self.inner.next_call_id.fetch_add(1, Ordering::Relaxed);
         let call_id = sequence << 1;
         let (tx, rx) = oneshot::channel();
@@ -226,7 +218,7 @@ impl PendingDispatchMap {
     /// Cancel every outstanding pending dispatch whose `target_ura`
     /// matches. Called from the daemon's presence-event watcher
     /// when a `session.open` reverse channel drops — without this,
-    /// `forward_invoke` callers would block on `oneshot::Receiver`
+    /// invocation callers would block on `oneshot::Receiver`
     /// until their HTTP request timeout fired (typically 30s) for a
     /// target whose offline state is already known. Returns the
     /// number of entries cancelled.
@@ -243,6 +235,7 @@ impl PendingDispatchMap {
             if let Some((_, entry)) = self.inner.entries.remove(&call_id) {
                 let _ = entry.sender.send(DispatchResult {
                     payload: Vec::new(),
+                    result_content_type: String::new(),
                     error: Some(error_reason.to_string()),
                     failure: Some(SessionFailure::from_reason(
                         error_reason,
@@ -250,7 +243,8 @@ impl PendingDispatchMap {
                         true,
                     )),
                     request_id: None,
-                    receipt: None,
+                    admission_receipt: None,
+                    terminal_receipt: None,
                 });
                 count += 1;
             }
@@ -267,9 +261,11 @@ impl PendingDispatchMap {
 
 /// One streamed event flowing back from a target device's remote
 /// bidi session. Same-hub remote `fs.transfer` uses this:
-/// zero or more `Chunk`s followed by exactly one `Terminal`.
+/// one canonical `Admission`, zero or more `Chunk`s, then exactly one
+/// `Terminal`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DispatchStreamEvent {
+    Admission(Box<DispatchReceipt>),
     Chunk(Vec<u8>),
     Terminal(Box<DispatchResult>),
 }
@@ -318,6 +314,7 @@ struct PendingStreamDispatchInner {
 struct PendingStreamEntry {
     sender: mpsc::Sender<DispatchStreamEvent>,
     target_ura: String,
+    delivery_policy: StreamDeliveryPolicy,
 }
 
 impl std::fmt::Debug for PendingStreamEntry {
@@ -334,6 +331,12 @@ pub struct PendingStreamDispatchMap {
     inner: Arc<PendingStreamDispatchInner>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamDeliveryPolicy {
+    BoundedNoWait,
+    LosslessBackpressure,
+}
+
 impl PendingStreamDispatchMap {
     const CHANNEL_CAPACITY: usize = 32;
 
@@ -341,13 +344,25 @@ impl PendingStreamDispatchMap {
         Self::default()
     }
 
-    pub fn register_pending(&self) -> PendingStreamHandle {
-        self.register_pending_for("")
+    pub fn register_pending_for(&self, target_ura: &str) -> PendingStreamHandle {
+        self.register_pending_for_policy(target_ura, StreamDeliveryPolicy::BoundedNoWait)
     }
 
-    pub fn register_pending_for(&self, target_ura: &str) -> PendingStreamHandle {
-        // SessionDispatch::Result frames share one session-wide
-        // keyspace across unary and streaming paths. Reserve odd
+    /// Register a lossless streamed dispatch. Remote bidi/file-transfer carries
+    /// user bytes, so a full per-call queue must apply backpressure instead of
+    /// evicting the entry and truncating the stream before its terminal receipt.
+    pub fn register_lossless_pending_for(&self, target_ura: &str) -> PendingStreamHandle {
+        self.register_pending_for_policy(target_ura, StreamDeliveryPolicy::LosslessBackpressure)
+    }
+
+    fn register_pending_for_policy(
+        &self,
+        target_ura: &str,
+        delivery_policy: StreamDeliveryPolicy,
+    ) -> PendingStreamHandle {
+        let target_ura = require_pending_target_ura(target_ura);
+        // DispatchResult frames share one session-wide keyspace across
+        // unary and streaming paths. Reserve odd
         // call_ids for streaming so a late terminal/chunk frame cannot
         // accidentally complete a unary waiter (or vice versa).
         let sequence = self.inner.next_call_id.fetch_add(1, Ordering::Relaxed);
@@ -358,6 +373,7 @@ impl PendingStreamDispatchMap {
             PendingStreamEntry {
                 sender: tx,
                 target_ura: target_ura.to_string(),
+                delivery_policy,
             },
         );
         PendingStreamHandle {
@@ -390,6 +406,96 @@ impl PendingStreamDispatchMap {
                 .await
                 .is_ok(),
             None => false,
+        }
+    }
+
+    /// Deliver a chunk according to the entry's explicit lifecycle policy.
+    /// Lossless entries await downstream capacity; bounded entries keep the
+    /// existing no-wait stall isolation semantics.
+    pub async fn deliver_chunk(&self, call_id: u64, payload: Vec<u8>) -> StreamDeliver {
+        let Some((sender, delivery_policy)) = self
+            .inner
+            .entries
+            .get(&call_id)
+            .map(|entry| (entry.sender.clone(), entry.delivery_policy))
+        else {
+            return StreamDeliver::NoMatch;
+        };
+        match delivery_policy {
+            StreamDeliveryPolicy::BoundedNoWait => self.try_push_chunk(call_id, payload),
+            StreamDeliveryPolicy::LosslessBackpressure => {
+                match sender.send(DispatchStreamEvent::Chunk(payload)).await {
+                    Ok(()) => StreamDeliver::Delivered,
+                    Err(_) => {
+                        self.inner.entries.remove(&call_id);
+                        StreamDeliver::NoMatch
+                    }
+                }
+            }
+        }
+    }
+
+    /// Deliver the target runtime's exact admission receipt before data. This
+    /// uses the same per-call backpressure policy as ordinary stream frames;
+    /// callers must never synthesize admission when this event is absent.
+    pub async fn deliver_admission(&self, call_id: u64, receipt: DispatchReceipt) -> StreamDeliver {
+        let Some((sender, delivery_policy)) = self
+            .inner
+            .entries
+            .get(&call_id)
+            .map(|entry| (entry.sender.clone(), entry.delivery_policy))
+        else {
+            return StreamDeliver::NoMatch;
+        };
+        match delivery_policy {
+            StreamDeliveryPolicy::BoundedNoWait => {
+                match sender.try_send(DispatchStreamEvent::Admission(Box::new(receipt))) {
+                    Ok(()) => StreamDeliver::Delivered,
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        self.inner.entries.remove(&call_id);
+                        StreamDeliver::ConsumerStalled
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => StreamDeliver::NoMatch,
+                }
+            }
+            StreamDeliveryPolicy::LosslessBackpressure => {
+                match sender
+                    .send(DispatchStreamEvent::Admission(Box::new(receipt)))
+                    .await
+                {
+                    Ok(()) => StreamDeliver::Delivered,
+                    Err(_) => {
+                        self.inner.entries.remove(&call_id);
+                        StreamDeliver::NoMatch
+                    }
+                }
+            }
+        }
+    }
+
+    /// Deliver the terminal event according to the entry's policy. Lossless
+    /// streams must not drop the terminal receipt behind buffered chunks.
+    pub async fn deliver_terminal(&self, call_id: u64, result: DispatchResult) -> StreamDeliver {
+        match self.inner.entries.remove(&call_id) {
+            Some((_, entry)) => match entry.delivery_policy {
+                StreamDeliveryPolicy::BoundedNoWait => match entry
+                    .sender
+                    .try_send(DispatchStreamEvent::Terminal(Box::new(result)))
+                {
+                    Ok(()) => StreamDeliver::Delivered,
+                    Err(mpsc::error::TrySendError::Full(_)) => StreamDeliver::ConsumerStalled,
+                    Err(mpsc::error::TrySendError::Closed(_)) => StreamDeliver::NoMatch,
+                },
+                StreamDeliveryPolicy::LosslessBackpressure => match entry
+                    .sender
+                    .send(DispatchStreamEvent::Terminal(Box::new(result)))
+                    .await
+                {
+                    Ok(()) => StreamDeliver::Delivered,
+                    Err(_) => StreamDeliver::NoMatch,
+                },
+            },
+            None => StreamDeliver::NoMatch,
         }
     }
 
@@ -460,6 +566,7 @@ impl PendingStreamDispatchMap {
                     .sender
                     .try_send(DispatchStreamEvent::Terminal(Box::new(DispatchResult {
                         payload: Vec::new(),
+                        result_content_type: String::new(),
                         error: Some(error_reason.to_string()),
                         failure: Some(SessionFailure::from_reason(
                             error_reason,
@@ -467,7 +574,8 @@ impl PendingStreamDispatchMap {
                             true,
                         )),
                         request_id: None,
-                        receipt: None,
+                        admission_receipt: None,
+                        terminal_receipt: None,
                     })));
                 count += 1;
             }
@@ -480,9 +588,21 @@ impl PendingStreamDispatchMap {
     }
 }
 
+fn require_pending_target_ura(target_ura: &str) -> &str {
+    let target_ura = target_ura.trim();
+    assert!(
+        !target_ura.is_empty(),
+        "pending dispatch target_ura is required"
+    );
+    target_ura
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEST_TARGET_URA: &str = "easynet:///r/realm/device/target";
+    const OTHER_TARGET_URA: &str = "easynet:///r/realm/device/other";
 
     #[test]
     fn new_map_is_empty() {
@@ -490,10 +610,24 @@ mod tests {
         assert_eq!(map.outstanding(), 0);
     }
 
+    #[test]
+    #[should_panic(expected = "pending dispatch target_ura is required")]
+    fn unary_pending_registration_rejects_empty_target_ura() {
+        let map = PendingDispatchMap::new();
+        let _ = map.register_pending_for(" ");
+    }
+
+    #[test]
+    #[should_panic(expected = "pending dispatch target_ura is required")]
+    fn stream_pending_registration_rejects_empty_target_ura() {
+        let map = PendingStreamDispatchMap::new();
+        let _ = map.register_pending_for(" ");
+    }
+
     #[tokio::test]
     async fn register_then_complete_delivers_result() {
         let map = PendingDispatchMap::new();
-        let handle = map.register_pending();
+        let handle = map.register_pending_for(TEST_TARGET_URA);
         let id = handle.call_id();
         assert_eq!(map.outstanding(), 1);
 
@@ -503,10 +637,12 @@ mod tests {
                 id,
                 DispatchResult {
                     payload: b"reply".to_vec(),
+                    result_content_type: "application/json".to_string(),
                     error: None,
                     failure: None,
                     request_id: None,
-                    receipt: None,
+                    admission_receipt: None,
+                    terminal_receipt: None,
                 },
             )
         });
@@ -522,7 +658,7 @@ mod tests {
     #[tokio::test]
     async fn drop_handle_removes_entry() {
         let map = PendingDispatchMap::new();
-        let handle = map.register_pending();
+        let handle = map.register_pending_for(TEST_TARGET_URA);
         assert_eq!(map.outstanding(), 1);
         drop(handle);
         assert_eq!(map.outstanding(), 0);
@@ -531,15 +667,17 @@ mod tests {
     #[tokio::test]
     async fn complete_after_drop_is_silent_noop() {
         let map = PendingDispatchMap::new();
-        let handle = map.register_pending();
+        let handle = map.register_pending_for(TEST_TARGET_URA);
         let id = handle.call_id();
         drop(handle);
 
         let still_completes = map.complete(
             id,
             DispatchResult {
-                receipt: None,
+                admission_receipt: None,
+                terminal_receipt: None,
                 payload: b"too late".to_vec(),
+                result_content_type: "application/json".to_string(),
                 error: None,
                 failure: None,
                 request_id: None,
@@ -551,7 +689,7 @@ mod tests {
     #[tokio::test]
     async fn complete_with_error_propagates_to_handle() {
         let map = PendingDispatchMap::new();
-        let handle = map.register_pending();
+        let handle = map.register_pending_for(TEST_TARGET_URA);
         let id = handle.call_id();
 
         let map_clone = map.clone();
@@ -562,10 +700,12 @@ mod tests {
                 id,
                 DispatchResult {
                     payload: Vec::new(),
+                    result_content_type: String::new(),
                     error: Some("target ability raised".into()),
                     failure: Some(failure),
                     request_id: None,
-                    receipt: None,
+                    admission_receipt: None,
+                    terminal_receipt: None,
                 },
             )
         });
@@ -581,9 +721,9 @@ mod tests {
     #[tokio::test]
     async fn call_ids_are_monotonic() {
         let map = PendingDispatchMap::new();
-        let h1 = map.register_pending();
-        let h2 = map.register_pending();
-        let h3 = map.register_pending();
+        let h1 = map.register_pending_for(TEST_TARGET_URA);
+        let h2 = map.register_pending_for(TEST_TARGET_URA);
+        let h3 = map.register_pending_for(TEST_TARGET_URA);
         assert_eq!(h1.call_id() + 2, h2.call_id());
         assert_eq!(h2.call_id() + 2, h3.call_id());
         assert_eq!(
@@ -606,8 +746,8 @@ mod tests {
     #[tokio::test]
     async fn many_pending_entries_isolate_their_completions() {
         let map = PendingDispatchMap::new();
-        let h1 = map.register_pending();
-        let h2 = map.register_pending();
+        let h1 = map.register_pending_for(TEST_TARGET_URA);
+        let h2 = map.register_pending_for(TEST_TARGET_URA);
         let id2 = h2.call_id();
 
         // Complete only h2 — h1 should still be pending.
@@ -617,10 +757,12 @@ mod tests {
                 id2,
                 DispatchResult {
                     payload: b"two".to_vec(),
+                    result_content_type: "application/json".to_string(),
                     error: None,
                     failure: None,
                     request_id: None,
-                    receipt: None,
+                    admission_receipt: None,
+                    terminal_receipt: None,
                 },
             )
         });
@@ -637,7 +779,7 @@ mod tests {
     #[tokio::test]
     async fn dropped_completer_surfaces_to_handle_as_recv_error() {
         let map = PendingDispatchMap::new();
-        let handle = map.register_pending();
+        let handle = map.register_pending_for(TEST_TARGET_URA);
 
         // Simulate the session task crashing: drop the inner
         // sender by removing the entry without completing.
@@ -653,7 +795,7 @@ mod tests {
     #[tokio::test]
     async fn pending_stream_map_yields_chunk_then_terminal() {
         let map = PendingStreamDispatchMap::new();
-        let mut handle = map.register_pending();
+        let mut handle = map.register_pending_for(TEST_TARGET_URA);
         let id = handle.call_id();
 
         let writer = {
@@ -664,8 +806,10 @@ mod tests {
                     map.finish(
                         id,
                         DispatchResult {
-                            receipt: None,
+                            admission_receipt: None,
+                            terminal_receipt: None,
                             payload: br#"{"sha256":"abc"}"#.to_vec(),
+                            result_content_type: "application/json".to_string(),
                             error: None,
                             failure: None,
                             request_id: None,
@@ -683,8 +827,10 @@ mod tests {
         assert_eq!(
             handle.recv().await,
             Some(DispatchStreamEvent::Terminal(Box::new(DispatchResult {
-                receipt: None,
+                admission_receipt: None,
+                terminal_receipt: None,
                 payload: br#"{"sha256":"abc"}"#.to_vec(),
+                result_content_type: "application/json".to_string(),
                 error: None,
                 failure: None,
                 request_id: None,
@@ -696,7 +842,7 @@ mod tests {
     #[tokio::test]
     async fn pending_stream_map_cancel_for_target_yields_terminal_failure_after_chunks() {
         let map = PendingStreamDispatchMap::new();
-        let mut handle = map.register_pending_for("easynet:///r/realm/device/target");
+        let mut handle = map.register_pending_for(TEST_TARGET_URA);
         let id = handle.call_id();
 
         assert_eq!(map.outstanding(), 1);
@@ -705,13 +851,13 @@ mod tests {
             StreamDeliver::Delivered
         );
         assert_eq!(
-            map.cancel_for("easynet:///r/realm/device/other", "target_offline"),
+            map.cancel_for(OTHER_TARGET_URA, "target_offline"),
             0,
             "non-matching target URA must not cancel this stream"
         );
         assert_eq!(map.outstanding(), 1);
         assert_eq!(
-            map.cancel_for("easynet:///r/realm/device/target", "target_offline"),
+            map.cancel_for(TEST_TARGET_URA, "target_offline"),
             1,
             "matching target URA must cancel the pending stream"
         );
@@ -737,9 +883,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pending_stream_lossless_entry_backpressures_instead_of_evicting() {
+        let map = PendingStreamDispatchMap::new();
+        let mut handle = map.register_lossless_pending_for("easynet:///r/realm/device/file-target");
+        let id = handle.call_id();
+
+        for i in 0..PendingStreamDispatchMap::CHANNEL_CAPACITY {
+            assert_eq!(
+                map.deliver_chunk(id, vec![i as u8]).await,
+                StreamDeliver::Delivered
+            );
+        }
+        assert_eq!(map.outstanding(), 1);
+
+        let map_for_writer = map.clone();
+        let blocked_writer = tokio::spawn(async move {
+            map_for_writer
+                .deliver_chunk(id, b"after-capacity".to_vec())
+                .await
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(
+            map.outstanding(),
+            1,
+            "lossless delivery must keep the pending entry while waiting for capacity"
+        );
+
+        assert_eq!(
+            handle.recv().await,
+            Some(DispatchStreamEvent::Chunk(vec![0]))
+        );
+        assert_eq!(
+            blocked_writer.await.expect("writer joined"),
+            StreamDeliver::Delivered
+        );
+        assert_eq!(map.outstanding(), 1);
+
+        let map_for_terminal = map.clone();
+        let terminal_writer = tokio::spawn(async move {
+            map_for_terminal
+                .deliver_terminal(
+                    id,
+                    DispatchResult {
+                        payload: br#"{"sha256":"abc"}"#.to_vec(),
+                        result_content_type: "application/json".to_string(),
+                        error: None,
+                        failure: None,
+                        request_id: None,
+                        admission_receipt: None,
+                        terminal_receipt: None,
+                    },
+                )
+                .await
+        });
+
+        for _ in 1..PendingStreamDispatchMap::CHANNEL_CAPACITY {
+            let _ = handle.recv().await.expect("buffered chunk");
+        }
+        assert_eq!(
+            handle.recv().await,
+            Some(DispatchStreamEvent::Chunk(b"after-capacity".to_vec()))
+        );
+        assert_eq!(
+            terminal_writer.await.expect("terminal writer joined"),
+            StreamDeliver::Delivered
+        );
+        assert_eq!(
+            handle.recv().await,
+            Some(DispatchStreamEvent::Terminal(Box::new(DispatchResult {
+                payload: br#"{"sha256":"abc"}"#.to_vec(),
+                result_content_type: "application/json".to_string(),
+                error: None,
+                failure: None,
+                request_id: None,
+                admission_receipt: None,
+                terminal_receipt: None,
+            })))
+        );
+        assert_eq!(map.outstanding(), 0);
+    }
+
+    #[tokio::test]
     async fn pending_stream_handle_drop_removes_entry() {
         let map = PendingStreamDispatchMap::new();
-        let handle = map.register_pending();
+        let handle = map.register_pending_for(TEST_TARGET_URA);
         let id = handle.call_id();
         assert_eq!(map.outstanding(), 1);
         drop(handle);
@@ -749,10 +976,12 @@ mod tests {
                 id,
                 DispatchResult {
                     payload: Vec::new(),
+                    result_content_type: String::new(),
                     error: None,
                     failure: None,
                     request_id: None,
-                    receipt: None,
+                    admission_receipt: None,
+                    terminal_receipt: None,
                 },
             )
             .await
@@ -764,10 +993,10 @@ mod tests {
         let unary = PendingDispatchMap::new();
         let stream = PendingStreamDispatchMap::new();
 
-        let unary_one = unary.register_pending();
-        let unary_two = unary.register_pending();
-        let stream_one = stream.register_pending();
-        let stream_two = stream.register_pending();
+        let unary_one = unary.register_pending_for(TEST_TARGET_URA);
+        let unary_two = unary.register_pending_for(TEST_TARGET_URA);
+        let stream_one = stream.register_pending_for(TEST_TARGET_URA);
+        let stream_two = stream.register_pending_for(TEST_TARGET_URA);
 
         assert_eq!(unary_one.call_id() & 1, 0);
         assert_eq!(unary_two.call_id() & 1, 0);

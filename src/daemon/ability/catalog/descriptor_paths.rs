@@ -11,6 +11,10 @@ use crate::daemon::ability::names::{
 /// callers that use this module.
 pub const SYSTEM_ABILITY_DESCRIPTOR_ROOT: &str = "ability-descriptors/system";
 
+/// Optional explicit descriptor root for embedded SDK hosts whose process
+/// working directory is unrelated to the EasyNet repository or install root.
+pub const SYSTEM_ABILITY_DESCRIPTOR_ROOT_ENV: &str = "EASYNET_SYSTEM_ABILITY_DESCRIPTOR_ROOT";
+
 /// Clean-final product group for a daemon-owned system AbilityDescriptor.
 ///
 /// What this is: the source-of-truth mapping from a stable public ability name
@@ -30,6 +34,8 @@ pub enum SystemAbilityDescriptorGroup {
     Automation,
     /// External protocol and plugin integration surfaces.
     Integrations,
+    /// Hub federation, namespace, and federation directory daemon Invocation surfaces.
+    Federation,
     /// Safety, audit, observation, and meta-governance surfaces.
     Governance,
 }
@@ -47,6 +53,7 @@ impl SystemAbilityDescriptorGroup {
             Self::Resources => "resources",
             Self::Automation => "automation",
             Self::Integrations => "integrations",
+            Self::Federation => "federation",
             Self::Governance => "governance",
         }
     }
@@ -66,16 +73,14 @@ impl SystemAbilityDescriptorGroup {
             | agents::AGENT_LIST
             | agents::AGENT_START
             | agents::AGENT_STOP
+            | agents::AGENT_PURGE
+            | agents::AGENT_PURGE_RECONCILE
             | agents::AGENT_REFRESH
+            | agents::AGENT_ABILITY_PUT
             | agents::CHAT_HISTORY_LIST
             | agents::CHAT_HISTORY_GET => Ok(Self::Agents),
 
-            device_control::BROWSER_OPEN_SESSION
-            | device_control::BROWSER_SEND_INPUT
-            | device_control::BROWSER_CAPTURE_VIEWPORT
-            | device_control::BROWSER_CLOSE_SESSION
-            | device_control::BROWSER_ATTACH_SESSION
-            | device_control::FS_READ
+            device_control::FS_READ
             | device_control::FS_WRITE
             | device_control::FS_STAT
             | device_control::FS_LIST
@@ -94,9 +99,8 @@ impl SystemAbilityDescriptorGroup {
             | device_control::TERMINAL_INPUT
             | device_control::TERMINAL_READ
             | device_control::TERMINAL_RESIZE
-            | federation::NODE_LIST
-            | federation::NODE_DESCRIBE
-            | federation::NODE_REMOVE
+            | device_control::NODE_DESCRIBE
+            | device_control::NODE_REMOVE
             | federation::ABILITY_DEPLOY
             | federation::ABILITY_UNINSTALL
             | federation::ABILITY_PUBLISH
@@ -106,6 +110,7 @@ impl SystemAbilityDescriptorGroup {
             | resources::CONTEXT_CLIPBOARD_GET
             | resources::CONTEXT_CLIPBOARD_TRACK
             | resources::CONTEXT_CLIPBOARD_REMOVE
+            | resources::CONTEXT_CATALOG
             | resources::CONTEXT_FOLDERS_LIST
             | resources::CONTEXT_FS_LIST
             | resources::CONTEXT_FAVORITES_LIST
@@ -113,6 +118,7 @@ impl SystemAbilityDescriptorGroup {
             | resources::CONTEXT_FAVORITES_REMOVE
             | resources::CONTEXT_CAPTURES_LIST
             | resources::CONTEXT_CAPTURES_GET
+            | resources::CONTEXT_CAPTURES_READ
             | resources::MEDIA_MIC_SUBSCRIBE
             | resources::MEDIA_CAMERA_SUBSCRIBE
             | resources::MEDIA_CAMERA_SNAPSHOT
@@ -121,7 +127,17 @@ impl SystemAbilityDescriptorGroup {
             | resources::MEDIA_SCREEN_SUBSCRIBE
             | resources::MEDIA_SCREEN_SNAPSHOT
             | resources::MEDIA_SPEAKER_PUBLISH
+            | "files.get"
+            | "files.list"
+            | "files.put"
             | resources::META_LIST_RESOURCES
+            | "pages.get"
+            | "pages.health"
+            | "pages.publish"
+            | "pages.unpublish"
+            | "project_list"
+            | resources::RESOURCE_REFRESH_REMOTE_TARGETS
+            | resources::RESOURCE_WATCH_REMOTE_TARGETS
             | resources::SKILL_INSTALL
             | resources::SKILL_REMOVE
             | resources::SKILL_UPGRADE
@@ -169,14 +185,44 @@ impl SystemAbilityDescriptorGroup {
             | integrations::MCP_CLIENT_CALL
             | integrations::OPENAI_CHAT_COMPLETIONS
             | integrations::OPENAI_LIST_MODELS
+            | integrations::OPENAI_FILES_UPLOAD
+            | integrations::OPENAI_FILES_RETRIEVE
+            | integrations::OPENAI_FILES_DELETE
             | integrations::PLUGIN_RELOAD
             | integrations::PLUGIN_STATUS
             | integrations::PLUGIN_ACTIVATE_REALTIME
-            | federation::RUNTIME_INVOKE_REMOTE => Ok(Self::Integrations),
+            | integrations::PLUGIN_COMPANION_STATUS
+            | integrations::PLUGIN_COMPANION_RECONCILE => Ok(Self::Integrations),
+
+            federation::JOIN
+            | federation::ADVERTISE_AGENT
+            | federation::ADVERTISE_ABILITIES
+            | federation::HEARTBEAT
+            | federation::RESOLVE
+            | federation::NAMESPACE_RESOLVE
+            | federation::NAMESPACE_PROXY_RESOLVE
+            | federation::RESOLVE_KEY
+            | federation::DISCOVER
+            | federation::SUBSCRIBE_DIRECTORY_V2
+            | federation::LIST_USER_DEVICES
+            | federation::PROXY_LIST_USER_DEVICES
+            | federation::REVOKE
+            | federation::STATUS => Ok(Self::Federation),
 
             governance::ADMIN_STATUS
+            | governance::KEYRING_CREATE
+            | governance::KEYRING_LIST
+            | governance::KEYRING_GET_PUBLIC
+            | governance::KEYRING_ROTATE
+            | governance::KEYRING_REVOKE
+            | governance::KEYRING_EXPIRE_SET
+            | governance::KEYRING_BIND_SUBJECT
+            | governance::KEYRING_PEER_ADD
+            | governance::KEYRING_PEER_LIST
+            | governance::KEYRING_FEDERATE_USER_IDENTITY_TOKEN
             | governance::OBSERVE_HEALTH
             | governance::OBSERVE_NETWORK_HEALTH
+            | governance::RUNTIME_BOOTSTRAP_SELF_IDENTITY
             | governance::SYSTEM_WATCH_BOOT
             | governance::CONSENT_SUBSCRIBE
             | governance::CONSENT_DECIDE
@@ -186,14 +232,46 @@ impl SystemAbilityDescriptorGroup {
             | governance::INVOCATION_HISTORY_PATH
             | governance::INVOCATION_RECORD_GET
             | governance::INVOCATION_TRACE_GET
+            | governance::INVOCATION_CANCEL
+            | governance::AUTHORITY_BINDING_GRANT
+            | governance::AUTHORITY_BINDING_REVOKE
+            | governance::AUTHORITY_BINDING_LIST
+            | governance::AUTHORITY_BINDING_CHECK
+            | governance::POLICY_REQUEST_CREATE
+            | governance::POLICY_REQUEST_RESOLVE
+            | governance::POLICY_REQUEST_LIST
+            | governance::ADMISSION_EXPLAIN
             | governance::META_ACQUIRE
             | governance::META_DESCRIBE
             | governance::META_FORGET
             | governance::META_LIST_ABILITIES
             | governance::META_TEACH
+            | governance::PRINCIPAL_CREATE
+            | governance::PRINCIPAL_BIND_FIRST_KEY
+            | governance::PRINCIPAL_ADD_KEY
+            | governance::PRINCIPAL_ROTATE_KEY
+            | governance::PRINCIPAL_REVOKE_KEY
+            | governance::PRINCIPAL_CONFIGURE_RECOVERY
+            | governance::PRINCIPAL_RECOVER
+            | governance::PRINCIPAL_SUSPEND
+            | governance::PRINCIPAL_REACTIVATE
+            | governance::PRINCIPAL_DELETE
+            | governance::PRINCIPAL_ISSUE_ENROLLMENT
+            | governance::PRINCIPAL_REVOKE_ENROLLMENT
+            | governance::PRINCIPAL_ISSUE_GRANT
+            | governance::PRINCIPAL_REVOKE_GRANT
+            | governance::PRINCIPAL_GET
             | federation::IDENTITY_LIST_USER_PUBKEYS
             | federation::IDENTITY_REGISTER_PUBKEY
             | federation::IDENTITY_REVOKE_USER_PUBKEY => Ok(Self::Governance),
+
+            // Deterministic SystemInventory descriptors for the user-scoped
+            // API-key family. Do not match arbitrary `<user>.api_key.*` names
+            // here: live user-specific registrations are dynamic rows with an
+            // explicit admission action, not one TOML file per user id.
+            "catalog-pages-owner.api_key.create"
+            | "catalog-pages-owner.api_key.list"
+            | "catalog-pages-owner.api_key.revoke" => Ok(Self::Governance),
 
             other => Err(DescriptorPathError::UnknownSystemAbility(other.to_string())),
         }
@@ -212,10 +290,47 @@ pub enum DescriptorPathError {
 
 /// Return the canonical root directory for daemon-owned system descriptors.
 ///
-/// The returned path is relative to the repository or installed contract root.
+/// The returned path is relative only when the current process is already at
+/// the repository/install root. Embedded SDK callers may load the Rust C ABI
+/// from a different working directory, so the resolver falls back to the
+/// compile-time crate root instead of letting descriptor reads depend on the
+/// caller process cwd.
 #[must_use]
 pub fn system_ability_descriptor_root() -> PathBuf {
-    PathBuf::from(SYSTEM_ABILITY_DESCRIPTOR_ROOT)
+    let explicit_root = std::env::var_os(SYSTEM_ABILITY_DESCRIPTOR_ROOT_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let current_dir = std::env::current_dir().ok();
+    resolve_system_ability_descriptor_root(
+        current_dir.as_deref(),
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        explicit_root.as_deref(),
+    )
+}
+
+fn resolve_system_ability_descriptor_root(
+    current_dir: Option<&Path>,
+    crate_root: &Path,
+    explicit_root: Option<&Path>,
+) -> PathBuf {
+    if let Some(root) = explicit_root {
+        return root.to_path_buf();
+    }
+
+    let relative = PathBuf::from(SYSTEM_ABILITY_DESCRIPTOR_ROOT);
+    if current_dir
+        .map(|cwd| cwd.join(&relative).exists())
+        .unwrap_or(false)
+    {
+        return relative;
+    }
+
+    let crate_root_descriptor_root = crate_root.join(&relative);
+    if crate_root_descriptor_root.exists() {
+        return crate_root_descriptor_root;
+    }
+
+    relative
 }
 
 /// Resolve a stable public ability name to its grouped descriptor path.
@@ -300,6 +415,41 @@ mod tests {
     }
 
     #[test]
+    fn descriptor_root_uses_crate_root_when_process_cwd_is_not_repo_root() {
+        let crate_dir = tempfile::tempdir().expect("crate tempdir");
+        let descriptor_root = crate_dir.path().join(SYSTEM_ABILITY_DESCRIPTOR_ROOT);
+        std::fs::create_dir_all(&descriptor_root).expect("descriptor root");
+        let host_dir = tempfile::tempdir().expect("host tempdir");
+
+        let resolved =
+            resolve_system_ability_descriptor_root(Some(host_dir.path()), crate_dir.path(), None);
+
+        assert_eq!(resolved, descriptor_root);
+    }
+
+    #[test]
+    fn descriptor_root_keeps_relative_path_when_cwd_is_repo_root() {
+        let repo_dir = tempfile::tempdir().expect("repo tempdir");
+        std::fs::create_dir_all(repo_dir.path().join(SYSTEM_ABILITY_DESCRIPTOR_ROOT))
+            .expect("descriptor root");
+
+        let resolved =
+            resolve_system_ability_descriptor_root(Some(repo_dir.path()), repo_dir.path(), None);
+
+        assert_eq!(resolved, PathBuf::from(SYSTEM_ABILITY_DESCRIPTOR_ROOT));
+    }
+
+    #[test]
+    fn descriptor_root_respects_explicit_embedded_contract_root() {
+        let explicit = PathBuf::from("/opt/easynet/contracts/system");
+
+        let resolved =
+            resolve_system_ability_descriptor_root(None, Path::new("/unused"), Some(&explicit));
+
+        assert_eq!(resolved, explicit);
+    }
+
+    #[test]
     fn descriptor_group_classifies_cross_prefix_abilities_by_owner() {
         assert_eq!(
             SystemAbilityDescriptorGroup::for_ability_name("meta.list_resources").unwrap(),
@@ -316,6 +466,14 @@ mod tests {
         assert_eq!(
             SystemAbilityDescriptorGroup::for_ability_name("openai.chat_completions").unwrap(),
             SystemAbilityDescriptorGroup::Integrations
+        );
+        assert_eq!(
+            SystemAbilityDescriptorGroup::for_ability_name("federation.join").unwrap(),
+            SystemAbilityDescriptorGroup::Federation
+        );
+        assert_eq!(
+            SystemAbilityDescriptorGroup::for_ability_name("principal.lifecycle.create").unwrap(),
+            SystemAbilityDescriptorGroup::Governance
         );
     }
 

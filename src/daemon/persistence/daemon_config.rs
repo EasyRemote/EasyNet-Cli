@@ -157,12 +157,9 @@ pub fn resolved_local_uds_path() -> PathBuf {
 /// **Why this lives here (not in `support/`):** `support/` is the
 /// leaf layer per `src/support/mod.rs` and must not depend on
 /// `persistence/`. The env-override-then-config-file recipe is one
-/// step on top of [`resolved_local_uds_path`] and belongs with it;
-/// the previous home (`support/local_daemon_grpc::resolve_socket_path`)
-/// inverted the dependency direction. Callers that need the
-/// CLI-resolved path import this function directly; the old name
-/// remains as a `pub(crate) use` re-export in `support` so call
-/// sites stay short.
+/// step on top of [`resolved_local_uds_path`] and belongs with it.
+/// Callers that need the CLI-resolved path import this function directly
+/// instead of going through support-layer re-export shims.
 pub fn resolved_local_uds_path_with_env_override() -> PathBuf {
     let raw = std::env::var("EASYNET_DAEMON_GRPC_UDS").ok();
     match raw {
@@ -188,12 +185,12 @@ pub fn resolved_local_uds_path_with_env_override() -> PathBuf {
 /// Ensure the local daemon has at least the minimal device-mode config
 /// needed to boot its gRPC/session sidecar.
 ///
-/// Idempotent: if the canonical config file already exists in device
-/// mode, only the credential-derived identity fields (`realm`,
-/// `hub_endpoint`) are synchronized. Operator-authored fields such as
-/// custom `uds_path` and `federated_peers` survive intact. Hub/both
-/// mode configs are left untouched because they describe a different
-/// deployment topology.
+/// Idempotent: if the canonical config file already exists, the runtime role
+/// and credential-derived identity fields (`mode`, `realm`, `hub_endpoint`)
+/// are synchronized to the joined device epoch. Operator-authored generic
+/// fields such as custom `uds_path`, `ledger_dir`, `federated_peers`, and quota
+/// survive intact. Hub-only listener fields are removed because device mode
+/// must not bind public TCP.
 pub fn ensure_minimal_device_config(
     creds: &crate::daemon::persistence::config::Credentials,
 ) -> anyhow::Result<()> {
@@ -291,25 +288,26 @@ fn sync_existing_device_config_toml(
     creds: &crate::daemon::persistence::config::Credentials,
 ) -> anyhow::Result<String> {
     use anyhow::Context as _;
-    use toml_edit::{value, DocumentMut, Item, Table};
+    use toml_edit::{value, DocumentMut};
 
     let mut doc: DocumentMut = raw.parse().context("parse daemon-config.toml")?;
-    let daemon_item = doc
+    let daemon_table = doc
         .as_table_mut()
-        .entry("daemon")
-        .or_insert_with(|| Item::Table(Table::new()));
-    let daemon_table = daemon_item
+        .get_mut("daemon")
+        .ok_or_else(|| anyhow::anyhow!("[daemon] is required in existing daemon-config.toml"))?
         .as_table_mut()
         .ok_or_else(|| anyhow::anyhow!("[daemon] is not a TOML table"))?;
 
-    let mode = daemon_table
+    let mode_raw = daemon_table
         .get("mode")
         .and_then(|item| item.as_str())
-        .unwrap_or("device");
-    if mode != "device" {
-        return Ok(raw.to_string());
-    }
-
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "[daemon].mode is required in existing daemon-config.toml; refusing to infer device mode"
+            )
+        })?;
+    let mode = DaemonMode::parse_config_value(mode_raw)
+        .ok_or_else(|| anyhow::anyhow!("[daemon].mode has unsupported value {mode_raw:?}"))?;
     let realm = if creds.realm.trim().is_empty() {
         "localhost"
     } else {
@@ -318,6 +316,10 @@ fn sync_existing_device_config_toml(
     let hub_endpoint = creds.hub_endpoint.trim();
     let mut changed = false;
 
+    if mode != DaemonMode::Device {
+        daemon_table.insert("mode", value(DaemonMode::Device.as_str()));
+        changed = true;
+    }
     if daemon_table.get("realm").and_then(|item| item.as_str()) != Some(realm) {
         daemon_table.insert("realm", value(realm));
         changed = true;
@@ -329,6 +331,11 @@ fn sync_existing_device_config_toml(
     {
         daemon_table.insert("hub_endpoint", value(hub_endpoint));
         changed = true;
+    }
+    for hub_only_field in ["listen_tcp", "tls_cert_pem", "tls_key_pem"] {
+        if daemon_table.remove(hub_only_field).is_some() {
+            changed = true;
+        }
     }
 
     if changed {
@@ -369,6 +376,15 @@ impl DaemonMode {
             DaemonMode::Both => "both",
         }
     }
+
+    fn parse_config_value(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "device" => Some(DaemonMode::Device),
+            "hub" => Some(DaemonMode::Hub),
+            "both" => Some(DaemonMode::Both),
+            _ => None,
+        }
+    }
 }
 
 /// Parsed and invariant-validated representation of
@@ -393,34 +409,18 @@ pub struct DaemonConfig {
     ledger_dir: PathBuf,
     /// **PR-N1 commit 3a/N**. Operator-curated `realm → hub_endpoint`
     /// map the federation dispatcher consults when `federation.
-    /// forward_invoke` targets a realm that is not local.
-    /// Empty = no cross-realm routing configured (legacy
-    /// `target_online: false` fallback). PR-N3 will replace this
-    /// hand-curated map with the auto-discovered cross-realm
-    /// directory; until then the map is the operator's manual
-    /// statement of "these are the peer realms I federate with".
+    /// canonical_invoke` targets a realm that is not local.
+    /// Empty = no cross-realm dispatch endpoint is configured. The
+    /// route resolver then returns a typed no-route/offline answer for
+    /// cross-realm invocation targets. Federated-directory snapshots are
+    /// observability read models and do not synthesize dispatch endpoints;
+    /// the map remains the operator's manual statement of "these are the
+    /// peer realms I federate with".
     ///
     /// `BTreeMap` over `HashMap` for stable iteration order (TOML
     /// dump in operator audit + `cargo test` byte-stable
     /// expectation).
     federated_peers: BTreeMap<String, String>,
-    /// **PR-N3 / 2026-05-25 hardening**. When `true`, the federation
-    /// dispatcher is allowed to dial a peer hub whose endpoint comes
-    /// from an observed `federated_directory` entry (hub-to-hub
-    /// sync) — i.e. without an operator-curated `federated_peers`
-    /// mapping for the target realm. When `false` (the default), an
-    /// unmapped target realm returns `target_offline` regardless of
-    /// what the directory has observed.
-    ///
-    /// **Why default-off:** `federated_directory.hub_endpoint` is a
-    /// string the peer hub published about itself; trusting it
-    /// blindly hands a peer-hub-controlled URL to our outbound
-    /// federation client. Until the directory sync's transport
-    /// layer ratchets to "endpoints only flow from authenticated
-    /// peers", the safer default is "operator-declared peers only".
-    /// See [`crate::daemon::invocation::routing::hub_resolver`] for the
-    /// resolver-side enforcement and the threat-model write-up.
-    allow_directory_auto_route: bool,
     /// #185: per-consumer invocation quota policy (caps applied per
     /// ability per window — see [`QuotaConfig`]). `None` = the feature
     /// is off and every caller is unmetered. `Some` even with no caps
@@ -470,7 +470,6 @@ impl DaemonConfig {
             uds_path,
             ledger_dir,
             federated_peers,
-            allow_directory_auto_route,
             quota,
         } = daemon;
 
@@ -511,7 +510,6 @@ impl DaemonConfig {
             uds_path,
             ledger_dir,
             federated_peers: federated_peers.unwrap_or_default(),
-            allow_directory_auto_route: allow_directory_auto_route.unwrap_or(false),
             quota: quota.map(QuotaConfig::from),
         })
     }
@@ -544,7 +542,7 @@ impl DaemonConfig {
     }
 
     /// The realm this daemon and every device it serves belong to.
-    /// Used as the `realm` component when minting URIs and when
+    /// Used as the `realm` component when minting URAs and when
     /// deriving `join_receipt_hash` (spec §5.1).
     pub fn realm(&self) -> &str {
         &self.realm
@@ -587,21 +585,11 @@ impl DaemonConfig {
     }
 
     /// **PR-N1 commit 3a/N**. Operator-curated cross-realm
-    /// dispatch map. Empty when the operator did not configure
-    /// any federation peers — the federation dispatcher then
-    /// falls back to the legacy `target_online: false` shape
-    /// for cross-realm `federation.forward_invoke` calls.
+    /// dispatch map. Empty when the operator did not configure any
+    /// federation peers — the federation dispatcher then returns typed
+    /// no-route/offline for cross-realm `Invocation::Invoke` calls.
     pub fn federated_peers(&self) -> &BTreeMap<String, String> {
         &self.federated_peers
-    }
-
-    /// True when the daemon is allowed to dial a peer hub whose
-    /// endpoint comes from an observed `federated_directory` entry
-    /// (i.e. without an operator-curated `federated_peers` mapping
-    /// for the target realm). Default `false`; see the field
-    /// doc-comment for the threat model.
-    pub fn allow_directory_auto_route(&self) -> bool {
-        self.allow_directory_auto_route
     }
 
     /// The per-consumer invocation quota policy (#185), or `None` when
@@ -638,19 +626,11 @@ pub(crate) struct RawDaemonSection {
     #[serde(default)]
     pub(crate) ledger_dir: Option<String>,
     /// PR-N1 commit 3a/N: operator-curated `realm → hub_endpoint`
-    /// map for cross-realm `federation.forward_invoke` routing.
+    /// map for cross-realm `Invocation::Invoke` routing.
     /// `#[serde(default)]` so configs that omit federation routing
     /// policy load with an empty map.
     #[serde(default)]
     pub(crate) federated_peers: Option<BTreeMap<String, String>>,
-    /// 2026-05-25 P0 hardening: opt-in to dialing peer hubs whose
-    /// endpoint came from an observed `federated_directory` entry
-    /// rather than `federated_peers`. Default `false` (secure
-    /// default); see [`DaemonConfig::allow_directory_auto_route`]
-    /// for the threat model. `#[serde(default)]` so existing
-    /// configs load unchanged and inherit the default.
-    #[serde(default)]
-    pub(crate) allow_directory_auto_route: Option<bool>,
     /// #185: per-consumer invocation quota. Absent = the whole
     /// feature is off (every caller unmetered). `#[serde(default)]`
     /// so existing configs load unchanged.
@@ -834,7 +814,6 @@ mod tests {
                 uds_path: None,
                 ledger_dir: None,
                 federated_peers: None,
-                allow_directory_auto_route: None,
                 quota: None,
             },
         }
@@ -856,35 +835,6 @@ mod tests {
         assert_eq!(cfg.realm(), "easynet.run");
         assert_eq!(cfg.hub_endpoint(), Some("https://hub.example.com:50051"));
         assert!(cfg.listen_tcp().is_none());
-    }
-
-    #[test]
-    fn allow_directory_auto_route_defaults_to_false_and_round_trips_when_set() {
-        // **P0 secure-default pin**. A legacy daemon-config.toml
-        // without the `allow_directory_auto_route` key must load
-        // with the secure default (false). An operator who
-        // explicitly opts in via `allow_directory_auto_route = true`
-        // must see that value preserved end-to-end.
-        let mut raw = raw(
-            DaemonMode::Device,
-            "easynet.run",
-            Some("https://hub.example.com:50051"),
-            None,
-            None,
-            None,
-        );
-        let defaulted = DaemonConfig::from_raw(raw.clone()).expect("default config");
-        assert!(
-            !defaulted.allow_directory_auto_route(),
-            "absence of the key MUST mean false (secure default), not true"
-        );
-
-        raw.daemon.allow_directory_auto_route = Some(true);
-        let opted_in = DaemonConfig::from_raw(raw).expect("opted-in config");
-        assert!(
-            opted_in.allow_directory_auto_route(),
-            "explicit `allow_directory_auto_route = true` must be honoured"
-        );
     }
 
     #[test]
@@ -1010,6 +960,24 @@ mod tests {
         assert!(
             err.to_string().contains("billing_dir"),
             "error should name retired billing_dir field: {err}"
+        );
+    }
+
+    #[test]
+    fn retired_directory_auto_route_key_is_rejected() {
+        let err = toml::from_str::<RawDaemonConfig>(
+            r#"
+            [daemon]
+            mode = "device"
+            realm = "easynet.run"
+            hub_endpoint = "https://hub.example.com:50051"
+            allow_directory_auto_route = true
+            "#,
+        )
+        .expect_err("retired directory auto-route switch must not deserialize");
+        assert!(
+            err.to_string().contains("allow_directory_auto_route"),
+            "error should name retired allow_directory_auto_route field: {err}"
         );
     }
 
@@ -1271,7 +1239,7 @@ uds_path = "/tmp/custom.sock"
     }
 
     #[test]
-    fn ensure_minimal_device_config_does_not_rewrite_hub_mode_config() {
+    fn ensure_minimal_device_config_converges_hub_mode_config_to_device_epoch() {
         let _g = HomeGuard::new();
         let creds = crate::daemon::persistence::config::Credentials {
             node_id: "node-1".into(),
@@ -1294,11 +1262,97 @@ realm = "hub-realm"
 listen_tcp = "0.0.0.0:50443"
 tls_cert_pem = "/tmp/cert.pem"
 tls_key_pem = "/tmp/key.pem"
+uds_path = "/tmp/operator.sock"
+
+[daemon.federated_peers]
+"tenant-b" = "https://hub-b:50443"
 "#;
         std::fs::write(&path, raw).expect("write hub config");
 
-        ensure_minimal_device_config(&creds).expect("hub mode left alone");
-        let unchanged = std::fs::read_to_string(&path).expect("read hub config");
+        ensure_minimal_device_config(&creds).expect("hub config converged to device");
+        let converged = std::fs::read_to_string(&path).expect("read converged config");
+        assert!(converged.contains("mode = \"device\""));
+        assert!(converged.contains("realm = \"tenant-a\""));
+        assert!(converged.contains("hub_endpoint = \"https://127.0.0.1:50443\""));
+        assert!(converged.contains("uds_path = \"/tmp/operator.sock\""));
+        assert!(converged.contains("\"tenant-b\" = \"https://hub-b:50443\""));
+        assert!(!converged.contains("listen_tcp"));
+        assert!(!converged.contains("tls_cert_pem"));
+        assert!(!converged.contains("tls_key_pem"));
+
+        let cfg = DaemonConfig::load(&path).expect("converged device config must load");
+        assert_eq!(cfg.mode(), DaemonMode::Device);
+        assert!(cfg.listen_tcp().is_none());
+    }
+
+    #[test]
+    fn ensure_minimal_device_config_rejects_existing_config_without_explicit_mode() {
+        let _g = HomeGuard::new();
+        let creds = crate::daemon::persistence::config::Credentials {
+            node_id: "node-1".into(),
+            credential_token: "token".into(),
+            hub_endpoint: "https://127.0.0.1:50443".into(),
+            realm: "tenant-a".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+        let path = default_config_path();
+        std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir");
+        let raw = r#"[daemon]
+realm = "old-tenant"
+hub_endpoint = "https://hub:50443"
+"#;
+        std::fs::write(&path, raw).expect("write malformed config");
+
+        let error = ensure_minimal_device_config(&creds)
+            .expect_err("existing config without mode must fail closed");
+        assert!(
+            error.to_string().contains("[daemon].mode is required"),
+            "unexpected error: {error:#}"
+        );
+        let unchanged = std::fs::read_to_string(&path).expect("read config");
+        assert_eq!(unchanged, raw);
+    }
+
+    #[test]
+    fn ensure_minimal_device_config_rejects_existing_config_with_unknown_mode() {
+        let _g = HomeGuard::new();
+        let creds = crate::daemon::persistence::config::Credentials {
+            node_id: "node-1".into(),
+            credential_token: "token".into(),
+            hub_endpoint: "https://127.0.0.1:50443".into(),
+            realm: "tenant-a".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+        let path = default_config_path();
+        std::fs::create_dir_all(path.parent().expect("config parent")).expect("mkdir");
+        let raw = r#"[daemon]
+mode = "controller"
+realm = "old-tenant"
+hub_endpoint = "https://hub:50443"
+"#;
+        std::fs::write(&path, raw).expect("write malformed config");
+
+        let error = ensure_minimal_device_config(&creds)
+            .expect_err("existing config with unknown mode must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("[daemon].mode has unsupported value"),
+            "unexpected error: {error:#}"
+        );
+        let unchanged = std::fs::read_to_string(&path).expect("read config");
         assert_eq!(unchanged, raw);
     }
 

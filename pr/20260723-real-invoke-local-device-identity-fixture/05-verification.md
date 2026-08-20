@@ -1,0 +1,39 @@
+# Verification
+
+- `cargo test -q real_device_node_list_returns_local_view_envelope --features axon-pb`
+  - Passed: 1 test.
+- `cargo test -q real_device_node_describe_via_invoke_helper_returns_self_envelope --features axon-pb`
+  - Passed: 1 test.
+- `cargo test -q real_device_node_describe_local_returns_self_envelope --features axon-pb`
+  - Passed: 1 test.
+- `cargo test -q real_device_ability_deploy_validates_resource_ref_argument --features axon-pb`
+  - Passed: 1 test.
+- `cargo test -q real_device_ability_uninstall_refuses_unwired_runtime --features axon-pb`
+  - Passed: 1 test.
+- `cargo test -q real_fs_read_reads_an_actual_file --features axon-pb`
+  - Passed: 1 test.
+- `cargo test -q real_fs_edit_replaces_a_unique_match --features axon-pb`
+  - Passed: 1 test.
+- `cargo test -q real_device_fs_transfer_uploads_a_round_trip_through_dispatcher --features axon-pb`
+  - Passed: 1 test.
+- `cargo test -q real_device_fs_transfer_downloads_a_round_trip_through_dispatcher --features axon-pb`
+  - Passed: 1 test.
+- `cargo test -q real_invoke_tests --features axon-pb -- --test-threads=1`
+  - Failed: 129 passed, 5 failed.
+  - Remaining failures are terminal session authority callee mismatch only.
+  - Local device identity and filesystem ResourceRef failure classes are closed
+    by this slice.
+- `cargo fmt --check`
+  - Passed.
+- `git diff --check`
+  - Passed.
+- `bash tools/scripts/check-architecture-convergence.sh`
+  - Passed: `architecture-convergence: OK`.
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+  - Passed: `canonical-runtime-convergence-v2: OK`.
+- `/Users/macbook.silan.tech/.local/bin/codegraph sync`
+  - Passed.
+- `/Users/macbook.silan.tech/.local/bin/codegraph status`
+  - Passed: index is up to date.
+- `rg -n "registry_with_joined_temp_home" src/daemon/ability/builtins/real_invoke_tests.rs -S`
+  - Passed with no matches.

@@ -6,13 +6,15 @@ use super::retry::{
 };
 use super::trace::{CappedTraceBuffer, CapturedResult, TRACE_CAP_HEAD, TRACE_CAP_TAIL};
 use super::*;
-use crate::eal::runtime::ir::IrFailurePolicy;
+use crate::eal::runtime::ir::{IrCall, IrFailurePolicy};
 use std::collections::BTreeMap;
 
 #[cfg(test)]
 mod cases {
     use super::*;
-    use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry, AgentType};
+    use crate::daemon::execution::child_invocation::{
+        ChildInvocationReceiptAnchor, ChildInvocationRecord,
+    };
     use crate::eal::{parser, runtime::planner};
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Arc, Mutex};
@@ -33,6 +35,8 @@ mod cases {
         calls: Arc<Mutex<Vec<(String, Instant)>>>,
         /// Record of run trace ids observed by dispatch calls.
         traces: Arc<Mutex<Vec<String>>>,
+        /// Record of dispatch timeout budgets observed by calls.
+        timeouts: Arc<Mutex<Vec<Option<u64>>>>,
     }
 
     impl MockDispatcher {
@@ -44,6 +48,7 @@ mod cases {
                 fail_functions: Arc::new(std::collections::HashSet::new()),
                 calls: Arc::new(Mutex::new(Vec::new())),
                 traces: Arc::new(Mutex::new(Vec::new())),
+                timeouts: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -58,25 +63,6 @@ mod cases {
         }
     }
 
-    fn dummy_agent_entry() -> AgentEntry {
-        use crate::core::agent::spec::{AgentSpec, RuntimeKind};
-        use crate::daemon::execution::mission::directory::{AgentDirectory, Location};
-
-        let root = crate::daemon::persistence::config::agents_root().join("alice");
-        let _ = std::fs::remove_dir_all(&root);
-        AgentDirectory::create(
-            &Location::Local { root: root.clone() },
-            AgentSpec::new("alice".to_string(), RuntimeKind::ClaudeCode),
-        )
-        .expect("create manifest-backed dummy agent directory");
-
-        let mut entry = AgentEntry::new(AgentType::ClaudeCode, None);
-        entry.command = "easynet-test-nonexistent-agent-binary".to_string();
-        entry.root_path = Some(root);
-        entry.timeout_secs = 1;
-        entry
-    }
-
     impl StepDispatcher for MockDispatcher {
         fn dispatch(
             &self,
@@ -84,8 +70,8 @@ mod cases {
             _target: &IrTarget,
             ability: &AbilityName,
             _arguments: &Value,
-            _timeout_ms: Option<u64>,
-            _causal_parents: &[Value],
+            timeout_ms: Option<u64>,
+            _dependency_receipts: &[ChildInvocationReceiptAnchor],
         ) -> Result<StepDispatchOutcome, EalError> {
             let ability_str = ability.as_str().to_string();
             let call_num = self.call_count.fetch_add(1, Ordering::SeqCst);
@@ -94,6 +80,7 @@ mod cases {
                 .unwrap()
                 .push((ability_str.clone(), Instant::now()));
             self.traces.lock().unwrap().push(run.trace_id.to_string());
+            self.timeouts.lock().unwrap().push(timeout_ms);
 
             // Simulate work
             if self.delay_ms > 0 {
@@ -123,6 +110,10 @@ mod cases {
             .into())
         }
 
+        fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+            StepDispatchConcurrency::Parallel
+        }
+
         fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
             Ok(Box::new(MockDispatcher {
                 delay_ms: self.delay_ms,
@@ -131,6 +122,7 @@ mod cases {
                 fail_functions: Arc::clone(&self.fail_functions),
                 calls: Arc::clone(&self.calls),
                 traces: Arc::clone(&self.traces),
+                timeouts: Arc::clone(&self.timeouts),
             }))
         }
     }
@@ -196,6 +188,34 @@ mod cases {
             *observed.lock().unwrap(),
             vec!["run-trace-42".to_string()],
             "child dispatch must carry the caller-owned mission trace id"
+        );
+    }
+
+    #[test]
+    fn run_deadline_bounds_step_dispatch_timeout() {
+        let ir = planner::compile(
+            &parser::parse(r#"mission "deadline" { let r = call "slow.op" on "n1" timeout 120 }"#)
+                .unwrap(),
+        )
+        .unwrap();
+        let dispatcher = MockDispatcher::new(0);
+
+        let report = execute_with_dispatcher_for_trace_with_timeout(
+            &dispatcher,
+            "test",
+            &ir,
+            "deadline-run".into(),
+            Some(Duration::from_millis(500)),
+        )
+        .unwrap();
+
+        assert_eq!(report.steps_failed, 0);
+        let observed = dispatcher.timeouts.lock().unwrap().clone();
+        assert_eq!(observed.len(), 1);
+        let timeout = observed[0].expect("run deadline must produce dispatch timeout");
+        assert!(
+            timeout <= 500 && timeout > 0,
+            "dispatch timeout must be clipped to remaining run deadline, got {timeout}"
         );
     }
 
@@ -337,13 +357,17 @@ mod cases {
                 _ability: &AbilityName,
                 _arguments: &Value,
                 _timeout_ms: Option<u64>,
-                _causal_parents: &[Value],
+                _dependency_receipts: &[ChildInvocationReceiptAnchor],
             ) -> Result<StepDispatchOutcome, EalError> {
                 self.seen.lock().unwrap().push(
                     crate::daemon::execution::mission::context::current().map(|c| c.mission_id),
                 );
                 Ok(StepDispatchOutcome::from(serde_json::json!({})))
             }
+            fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+                StepDispatchConcurrency::Parallel
+            }
+
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
                 Ok(Box::new(ContextProbe {
                     seen: Arc::clone(&self.seen),
@@ -501,44 +525,6 @@ mod cases {
         assert!(json.contains("\"result_sha256\""));
         // Roundtrip
         let _: ExecutionTrace = serde_json::from_str(&json).unwrap();
-    }
-
-    #[test]
-    fn dispatch_to_agent_chat_stays_local_when_daemon_is_absent() {
-        // Regression pin for `easynet agent send`: chat must not go
-        // through the legacy unary control-socket invoke, because
-        // that hides the driver's live stderr timeline inside the
-        // daemon process. The local path fails here on the bogus
-        // binary name, not on missing control.json.
-        let _g = crate::cli::commands::test_support::HomeGuard::new();
-        let mut registry = AgentRegistry::default();
-        registry
-            .agents
-            .insert("alice".to_string(), dummy_agent_entry());
-
-        let agent_id = crate::core::agent::id::AgentId::parse("alice").expect("valid agent id");
-        let ability =
-            AbilityName::parse(crate::daemon::ability::builtins::agents::chat::ABILITY_VERB)
-                .expect("valid chat ability");
-        let err = dispatch_to_agent(
-            &registry,
-            &agent_id,
-            &ability,
-            &serde_json::json!({"prompt": "hi"}),
-            &[],
-            "trace-test",
-        )
-        .expect_err("bogus binary must fail on local chat dispatch");
-        let msg = format!("{err}");
-
-        assert!(
-            msg.contains("easynet-test-nonexistent-agent-binary"),
-            "expected local driver spawn failure, got: {msg}"
-        );
-        assert!(
-            !msg.contains("control.json") && !msg.contains("daemon:"),
-            "chat dispatch must not depend on daemon unary invoke, got: {msg}"
-        );
     }
 
     // ── Test 5: Retry with exponential backoff ──
@@ -814,12 +800,13 @@ mod cases {
         );
     }
 
-    // ── Test 11: Graceful fallback to sequential when clone_for_thread fails ──
+    // ── Test 11: Explicit sequential dispatch policy ──
 
     #[test]
-    fn fallback_to_sequential_when_not_cloneable() {
-        // Non-cloneable dispatcher simulates a production dispatcher that
-        // cannot safely cross rayon worker threads.
+    fn declared_sequential_dispatcher_runs_phase_without_thread_clone() {
+        // Sequential dispatcher declares its concurrency policy up-front.
+        // `clone_for_thread` is not a capability probe and must never be
+        // consulted for this phase.
         struct SeqOnlyDispatcher(Arc<AtomicU32>);
         impl StepDispatcher for SeqOnlyDispatcher {
             fn dispatch(
@@ -829,13 +816,17 @@ mod cases {
                 ability: &AbilityName,
                 _: &Value,
                 _: Option<u64>,
-                _: &[Value],
+                _: &[ChildInvocationReceiptAnchor],
             ) -> Result<StepDispatchOutcome, EalError> {
                 self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(serde_json::json!({"ok": true, "function": ability.as_str()}).into())
             }
+            fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+                StepDispatchConcurrency::Sequential
+            }
+
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
-                Err(EalError::Internal("not cloneable".into()))
+                panic!("sequential dispatcher must not be cloned for worker threads")
             }
         }
 
@@ -918,13 +909,17 @@ mod cases {
             ability: &AbilityName,
             arguments: &Value,
             _timeout_ms: Option<u64>,
-            _causal_parents: &[Value],
+            _dependency_receipts: &[ChildInvocationReceiptAnchor],
         ) -> Result<StepDispatchOutcome, EalError> {
             self.seen
                 .lock()
                 .unwrap()
                 .push((target.clone(), ability.clone(), arguments.clone()));
             Ok(serde_json::json!({"ok": true}).into())
+        }
+
+        fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+            StepDispatchConcurrency::Parallel
         }
 
         fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
@@ -952,10 +947,14 @@ mod cases {
                 _ability: &AbilityName,
                 _arguments: &Value,
                 _timeout_ms: Option<u64>,
-                _causal_parents: &[Value],
+                _dependency_receipts: &[ChildInvocationReceiptAnchor],
             ) -> Result<StepDispatchOutcome, EalError> {
                 Err(EalError::NotFound("device 'node-x' not registered".into()))
             }
+            fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+                StepDispatchConcurrency::Parallel
+            }
+
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
                 Ok(Box::new(CategorisedDispatcher))
             }
@@ -981,20 +980,17 @@ mod cases {
     ///
     /// This test is the contract between this module and any external
     /// consumer that reads trace files (CI scrapers, external auditors,
-    /// the future trace-replay UI). Adding a field with
-    /// `#[serde(default)]` keeps this test green and is a backwards-
-    /// compatible change. *Renaming* a field, removing one, or changing
-    /// a numeric type fails this test — at which point the codebase is
-    /// telling you to bump `EXECUTION_TRACE_SCHEMA_VERSION` and write a
-    /// reader-side migration.
+    /// the future trace-replay UI). Renaming a field, removing one, or
+    /// changing a numeric type fails this test — at which point the
+    /// codebase is telling you to bump `EXECUTION_TRACE_SCHEMA_VERSION`
+    /// and write an explicit reader-side migration.
     ///
     /// We assert two properties:
     ///   1. A freshly constructed trace serializes with
     ///      `schema_version = EXECUTION_TRACE_SCHEMA_VERSION` and the
     ///      full set of expected top-level keys.
-    ///   2. A *legacy* JSON payload (no `schema_version` field) round-
-    ///      trips through deserialization and lands at version 1 — the
-    ///      tolerant-read promise documented on the constant.
+    ///   2. A JSON payload without `schema_version` fails closed instead
+    ///      of being inferred as the current schema.
     #[test]
     fn trace_schema_v1_is_stable() {
         // Use a hand-built trace rather than running a real mission so
@@ -1036,12 +1032,9 @@ mod cases {
             "steps_skipped",
             "outcome",
             "step_traces",
-            // `traces_truncated` is a v1-compatible additive field: it
-            // serializes as `0` for missions under the cap and older
-            // readers ignore unknown keys. Its presence here pins that
-            // the on-the-wire shape includes it for every fresh trace;
-            // the legacy-deserialize property below confirms old
-            // payloads without this key still parse.
+            // `traces_truncated` serializes as `0` for missions under
+            // the cap. Its presence here pins that the on-the-wire
+            // shape includes it for every fresh trace.
             "traces_truncated",
         ]
         .into_iter()
@@ -1059,12 +1052,10 @@ mod cases {
              and update this test."
         );
 
-        // Property 2: legacy payloads (no `schema_version`) read back
-        // as version 1 — the tolerant-read promise. A reader who pulls
-        // a pre-stamp trace file off disk must not get a deser error.
-        let legacy_json = serde_json::json!({
-            "mission_id": "legacy",
-            "mission_name": "legacy",
+        // Property 2: payloads without `schema_version` fail closed.
+        let missing_version_json = serde_json::json!({
+            "mission_id": "missing-version",
+            "mission_name": "missing-version",
             "started_at_unix_ms": 0,
             "completed_at_unix_ms": 0,
             "total_elapsed_ms": 0,
@@ -1075,11 +1066,11 @@ mod cases {
             "outcome": "completed",
             "step_traces": [],
         });
-        let legacy: ExecutionTrace = serde_json::from_value(legacy_json)
-            .expect("pre-stamp trace JSON must deserialize via #[serde(default)]");
-        assert_eq!(
-            legacy.schema_version, 1,
-            "pre-stamp traces must read back as v1 — bump current_trace_schema_version() if v2+ landed"
+        let err = serde_json::from_value::<ExecutionTrace>(missing_version_json)
+            .expect_err("trace JSON without schema_version must fail closed");
+        assert!(
+            err.to_string().contains("schema_version"),
+            "strict schema error should name schema_version: {err}"
         );
     }
 
@@ -1097,7 +1088,7 @@ mod cases {
         let mut input_refs = BTreeMap::new();
         input_refs.insert("input".to_string(), "upstream".to_string());
 
-        let step = IrStep {
+        let step = IrCall {
             step_id: "consumer".to_string(),
             step_name: "consumer".to_string(),
             ability: AbilityName::parse("review").unwrap(),
@@ -1120,7 +1111,7 @@ mod cases {
             "upstream".to_string(),
             CapturedResult {
                 value: b"{not json".to_vec(),
-                invocation: None,
+                invocation: ChildInvocationRecord::for_test("test.malformed", 0x61),
             },
         );
 
@@ -1163,7 +1154,7 @@ mod cases {
         let mut input_refs = BTreeMap::new();
         input_refs.insert("input".to_string(), "producer".to_string());
 
-        let step = IrStep {
+        let step = IrCall {
             step_id: "consumer".to_string(),
             step_name: "consumer".to_string(),
             ability: AbilityName::parse("review").unwrap(),
@@ -1205,7 +1196,7 @@ mod cases {
         let mut input_refs = BTreeMap::new();
         input_refs.insert("input".to_string(), "upstream".to_string());
 
-        let step = IrStep {
+        let step = IrCall {
             step_id: "consumer".to_string(),
             step_name: "consumer".to_string(),
             ability: AbilityName::parse("review").unwrap(),
@@ -1225,7 +1216,7 @@ mod cases {
             "upstream".to_string(),
             CapturedResult {
                 value: b"{\"answer\": 42}".to_vec(),
-                invocation: None,
+                invocation: ChildInvocationRecord::for_test("test.producer", 0x62),
             },
         );
 
@@ -1371,7 +1362,7 @@ mod cases {
             ability: &AbilityName,
             _arguments: &Value,
             _timeout_ms: Option<u64>,
-            _causal_parents: &[Value],
+            _dependency_receipts: &[ChildInvocationReceiptAnchor],
         ) -> Result<StepDispatchOutcome, EalError> {
             let k = ability.as_str().to_string();
             self.calls.lock().unwrap().push(k.clone());
@@ -1391,12 +1382,12 @@ mod cases {
             }
             Ok(self.default.clone().into())
         }
+        fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+            StepDispatchConcurrency::Sequential
+        }
+
         fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
-            // Loops are sequential by design — no thread cloning needed
-            // for these tests. Signal "fall back to sequential" via Err.
-            Err(EalError::Internal(
-                "scripted dispatcher is single-thread".into(),
-            ))
+            panic!("scripted dispatcher is declared sequential")
         }
     }
 
@@ -1432,22 +1423,21 @@ mod cases {
             .outputs
             .get("review.result")
             .expect("review.result must be exported on winning iter");
-        assert!(
-            winner.contains("winner"),
-            "result must carry verify final output; got: {winner}"
+        assert_eq!(
+            winner.get("payload").and_then(Value::as_str),
+            Some("winner")
         );
     }
 
-    /// Loop-internal steps thread causal parents from the iteration
-    /// scope and receive the mission run's `RunContext` (trace_id =
-    /// mission_id): the receipt chain stays connected inside loop
-    /// bodies, and every lowered envelope is ledger-groupable.
+    /// Loop-internal joins retain dependency receipts from the
+    /// iteration scope and receive the mission run's `RunContext`
+    /// (trace_id = mission_id).
     #[test]
-    fn loop_steps_thread_causal_parents_and_trace_id() {
-        type RecordedCalls = Arc<Mutex<Vec<(String, String, Vec<Value>)>>>;
+    fn loop_steps_retain_dependency_receipts_and_trace_id() {
+        type RecordedCalls = Arc<Mutex<Vec<(String, String, Vec<ChildInvocationReceiptAnchor>)>>>;
 
         struct RecordingDispatcher {
-            // (ability, trace_id, causal_parents) per dispatch.
+            // (ability, trace_id, dependency receipts) per dispatch.
             calls: RecordedCalls,
         }
         impl StepDispatcher for RecordingDispatcher {
@@ -1458,28 +1448,25 @@ mod cases {
                 ability: &AbilityName,
                 _arguments: &Value,
                 _timeout_ms: Option<u64>,
-                causal_parents: &[Value],
+                dependency_receipts: &[ChildInvocationReceiptAnchor],
             ) -> Result<StepDispatchOutcome, EalError> {
                 let qualified = format!("a.{}", ability.as_str());
                 self.calls.lock().unwrap().push((
                     ability.as_str().to_string(),
                     run.trace_id.to_string(),
-                    causal_parents.to_vec(),
+                    dependency_receipts.to_vec(),
                 ));
                 Ok(StepDispatchOutcome {
                     value: serde_json::json!({"done": true}),
-                    invocation: Some(serde_json::json!({
-                        "ability": qualified,
-                        "invocation_ura": format!("ura:{qualified}"),
-                        "receipt": {"anchor": {
-                            "receipt_ura": format!("ura:{qualified}/receipt/1"),
-                            "receipt_hash": "ab",
-                        }},
-                    })),
+                    invocation: ChildInvocationRecord::for_test(&qualified, 0xab),
                 })
             }
+            fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+                StepDispatchConcurrency::Sequential
+            }
+
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
-                Err(EalError::Internal("single-thread".into()))
+                panic!("recording dispatcher is declared sequential")
             }
         }
 
@@ -1510,18 +1497,101 @@ mod cases {
         let (_, _, step_parents) = &calls[0];
         assert!(
             step_parents.is_empty(),
-            "iteration root must have no causal parents"
+            "iteration root must have no dependency receipts"
         );
         let (_, _, ok_parents) = &calls[1];
         assert_eq!(
             ok_parents.len(),
             1,
-            "verify step must name the body step as its causal parent"
+            "verify step must retain the body step receipt"
         );
-        assert_eq!(
-            ok_parents[0].get("node").and_then(Value::as_str),
-            Some("a.step")
-        );
+        assert!(ok_parents[0]
+            .projection()
+            .get("receipt_ura")
+            .and_then(Value::as_str)
+            .is_some());
+    }
+
+    #[test]
+    fn fan_in_join_retains_each_producer_receipt() {
+        type RecordedCalls = Arc<Mutex<Vec<(String, Vec<ChildInvocationReceiptAnchor>)>>>;
+
+        struct JoinRecordingDispatcher {
+            calls: RecordedCalls,
+            next_marker: Arc<AtomicU32>,
+        }
+
+        impl StepDispatcher for JoinRecordingDispatcher {
+            fn dispatch(
+                &self,
+                _run: RunContext<'_>,
+                _target: &IrTarget,
+                ability: &AbilityName,
+                _arguments: &Value,
+                _timeout_ms: Option<u64>,
+                dependency_receipts: &[ChildInvocationReceiptAnchor],
+            ) -> Result<StepDispatchOutcome, EalError> {
+                self.calls
+                    .lock()
+                    .unwrap()
+                    .push((ability.as_str().to_string(), dependency_receipts.to_vec()));
+                let marker = self.next_marker.fetch_add(1, Ordering::SeqCst) as u8;
+                Ok(StepDispatchOutcome {
+                    value: serde_json::json!({"ability": ability.as_str()}),
+                    invocation: ChildInvocationRecord::for_test(ability.as_str(), marker),
+                })
+            }
+
+            fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+                StepDispatchConcurrency::Parallel
+            }
+
+            fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
+                Ok(Box::new(Self {
+                    calls: Arc::clone(&self.calls),
+                    next_marker: Arc::clone(&self.next_marker),
+                }))
+            }
+        }
+
+        let source = r#"
+            mission "fan-in" {
+                let left = call "produce.left" on "local"
+                let right = call "produce.right" on "local"
+                let joined = call "join" on "local" with {
+                    left = left.output,
+                    right = right.output
+                }
+            }
+        "#;
+        let ir = planner::compile(&parser::parse(source).unwrap()).unwrap();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let dispatcher = JoinRecordingDispatcher {
+            calls: Arc::clone(&calls),
+            next_marker: Arc::new(AtomicU32::new(1)),
+        };
+
+        let report = execute_with_dispatcher(&dispatcher, "test", &ir).unwrap();
+        assert_eq!(report.steps_failed, 0);
+
+        let calls = calls.lock().unwrap();
+        let (_, join_receipts) = calls
+            .iter()
+            .find(|(ability, _)| ability == "join")
+            .expect("join step dispatched");
+        assert_eq!(join_receipts.len(), 2);
+        let receipt_uras = join_receipts
+            .iter()
+            .map(|receipt| {
+                receipt
+                    .projection()
+                    .get("receipt_ura")
+                    .and_then(Value::as_str)
+                    .expect("typed receipt reference has canonical URA")
+                    .to_string()
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(receipt_uras.len(), 2, "join must retain both producers");
     }
 
     /// `done: bool` must be found through the daemon shell-executor
@@ -1544,17 +1614,16 @@ mod cases {
     }
 
     /// A named loop's `<name>.result` export feeds a downstream step
-    /// (`.result` accessor): the downstream step names the winning
-    /// iteration's final verify invocation as its causal parent (the
-    /// receipt chain crosses the loop boundary), and the run-level
+    /// (`.result` accessor): the downstream step retains the winning
+    /// iteration's verified terminal receipt, and the run-level
     /// `__runner_receipt_graph__` substitution carries loop-internal
     /// invocation records.
     #[test]
     fn loop_result_feeds_downstream_step_with_receipt_chain() {
-        type RecordedCalls = Arc<Mutex<Vec<(String, Value, Vec<Value>)>>>;
+        type RecordedCalls = Arc<Mutex<Vec<(String, Value, Vec<ChildInvocationReceiptAnchor>)>>>;
 
         struct ArgRecordingDispatcher {
-            // (ability, arguments, causal_parents) per dispatch.
+            // (ability, arguments, dependency receipts) per dispatch.
             calls: RecordedCalls,
         }
         impl StepDispatcher for ArgRecordingDispatcher {
@@ -1565,28 +1634,25 @@ mod cases {
                 ability: &AbilityName,
                 arguments: &Value,
                 _timeout_ms: Option<u64>,
-                causal_parents: &[Value],
+                dependency_receipts: &[ChildInvocationReceiptAnchor],
             ) -> Result<StepDispatchOutcome, EalError> {
                 let qualified = format!("a.{}", ability.as_str());
                 self.calls.lock().unwrap().push((
                     ability.as_str().to_string(),
                     arguments.clone(),
-                    causal_parents.to_vec(),
+                    dependency_receipts.to_vec(),
                 ));
                 Ok(StepDispatchOutcome {
                     value: serde_json::json!({"done": true}),
-                    invocation: Some(serde_json::json!({
-                        "ability": qualified,
-                        "invocation_ura": format!("ura:{qualified}"),
-                        "receipt": {"anchor": {
-                            "receipt_ura": format!("ura:{qualified}/receipt/1"),
-                            "receipt_hash": "ab",
-                        }},
-                    })),
+                    invocation: ChildInvocationRecord::for_test(&qualified, 0xab),
                 })
             }
+            fn dispatch_concurrency(&self) -> StepDispatchConcurrency {
+                StepDispatchConcurrency::Sequential
+            }
+
             fn clone_for_thread(&self) -> Result<Box<dyn StepDispatcher + Send>, EalError> {
-                Err(EalError::Internal("single-thread".into()))
+                panic!("argument recording dispatcher is declared sequential")
             }
         }
 
@@ -1617,10 +1683,11 @@ mod cases {
         // Loop-boundary receipt edge: the publish step's parent is the
         // winning iteration's final verify invocation.
         assert_eq!(publish_parents.len(), 1);
-        assert_eq!(
-            publish_parents[0].get("node").and_then(Value::as_str),
-            Some("a.ok")
-        );
+        assert!(publish_parents[0]
+            .projection()
+            .get("receipt_ura")
+            .and_then(Value::as_str)
+            .is_some());
         // `doc:` resolved from the loop's exported result payload.
         assert_eq!(
             publish_args.get("doc").and_then(|d| d.get("done")),

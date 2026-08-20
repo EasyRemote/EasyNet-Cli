@@ -1,0 +1,15 @@
+id: runtime_core/canonical_addressing_provider
+profile: runtime_core
+required_for:
+  - go
+  - python
+description: Native Runtime handles expose product-neutral Axon-backed Addressing with a shared canonical projection corpus.
+steps:
+  - action: project_canonical_addressing_fixture
+    fixture: canonical-addressing.v5.json
+expect:
+  result: canonical_addressing_observed
+  grammar_owner: axon
+  supports_device_owned_agent: true
+  rejects_noncanonical_tails: true
+  opens_product_identity_profile: false

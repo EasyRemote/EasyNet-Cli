@@ -61,6 +61,38 @@ pub enum PluginHostError {
     InvalidDeclarativeBinding { id: String, reason: String },
     #[error("plugin manifest declares invalid realtime capability for {id}: {reason}")]
     InvalidRealtimeCapability { id: String, reason: String },
+    #[error("plugin manifest declares invalid desktop companion for {id}: {reason}")]
+    InvalidCompanionManifest { id: String, reason: String },
+    #[error(
+        "desktop companion install rollback failed for {id}@{version}: install_error={install_error}; rollback_error={rollback_error}; stale_path={stale_path}"
+    )]
+    CompanionInstallRollbackFailed {
+        id: String,
+        version: String,
+        install_error: String,
+        rollback_error: String,
+        stale_path: PathBuf,
+    },
+    #[error(
+        "desktop companion update rollback failed for {id}@{version}: update_error={update_error}; rollback_error={rollback_error}; stale_path={stale_path}"
+    )]
+    CompanionUpdateRollbackFailed {
+        id: String,
+        version: String,
+        update_error: String,
+        rollback_error: String,
+        stale_path: PathBuf,
+    },
+    #[error(
+        "desktop companion remove rollback failed for {id}@{version}: remove_error={remove_error}; rollback_error={rollback_error}; stale_path={stale_path}"
+    )]
+    CompanionRemoveRollbackFailed {
+        id: String,
+        version: String,
+        remove_error: String,
+        rollback_error: String,
+        stale_path: PathBuf,
+    },
     #[error("plugin ability {ability:?} control-plane registration failed: {reason}")]
     ControlPlaneRegistrationFailed { ability: String, reason: String },
     #[error("plugin contribution for {package} ability {ability:?} is invalid: {reason}")]
@@ -69,6 +101,8 @@ pub enum PluginHostError {
         ability: String,
         reason: String,
     },
+    #[error("plugin active state {path} is invalid: {reason}")]
+    InvalidPluginState { path: PathBuf, reason: String },
     #[error(
         "plugin manifest entrypoint {declared:?} does not match compiled binding {expected:?}"
     )]
@@ -118,6 +152,29 @@ pub enum PluginHostError {
     },
     #[error("plugin package {0} has no compiled builtin binding")]
     MissingBuiltinBinding(String),
+    #[error("native-static provider is missing for plugin package {0}")]
+    ProviderMissing(String),
+    #[error("native-static provider id mismatch: registry={registry}, provider={provider}")]
+    ProviderIdMismatch {
+        registry: &'static str,
+        provider: &'static str,
+    },
+    #[error(
+        "native-static provider manifest mismatch for {package}: manifest={manifest}, provider={provider}"
+    )]
+    ProviderManifestMismatch {
+        package: String,
+        manifest: String,
+        provider: &'static str,
+    },
+    #[error("native-static provider ability mismatch for {package}: {reason}")]
+    ProviderAbilityMismatch { package: String, reason: String },
+    #[error("native-static provider contribution failed for {package}: {reason}")]
+    ProviderContributionFailed { package: String, reason: String },
+    #[error("native-static provider registry duplicate for package {package}")]
+    ProviderRegistryDuplicate { package: &'static str },
+    #[error("plugin project boundary violation: {reason}")]
+    PluginProjectBoundaryViolation { reason: String },
     #[error("plugin package {0} is already installed")]
     PackageAlreadyInstalled(String),
     #[error("plugin package {0} is not installed")]
@@ -220,6 +277,58 @@ impl PartialEq for PluginHostError {
                 InvalidRealtimeCapability { id: bi, reason: br },
             ) => ai == bi && ar == br,
             (
+                InvalidCompanionManifest { id: ai, reason: ar },
+                InvalidCompanionManifest { id: bi, reason: br },
+            ) => ai == bi && ar == br,
+            (
+                CompanionInstallRollbackFailed {
+                    id: ai,
+                    version: av,
+                    install_error: aierr,
+                    rollback_error: arerr,
+                    stale_path: ap,
+                },
+                CompanionInstallRollbackFailed {
+                    id: bi,
+                    version: bv,
+                    install_error: bierr,
+                    rollback_error: brerr,
+                    stale_path: bp,
+                },
+            ) => ai == bi && av == bv && aierr == bierr && arerr == brerr && ap == bp,
+            (
+                CompanionUpdateRollbackFailed {
+                    id: ai,
+                    version: av,
+                    update_error: aierr,
+                    rollback_error: arerr,
+                    stale_path: ap,
+                },
+                CompanionUpdateRollbackFailed {
+                    id: bi,
+                    version: bv,
+                    update_error: bierr,
+                    rollback_error: brerr,
+                    stale_path: bp,
+                },
+            ) => ai == bi && av == bv && aierr == bierr && arerr == brerr && ap == bp,
+            (
+                CompanionRemoveRollbackFailed {
+                    id: ai,
+                    version: av,
+                    remove_error: aierr,
+                    rollback_error: arerr,
+                    stale_path: ap,
+                },
+                CompanionRemoveRollbackFailed {
+                    id: bi,
+                    version: bv,
+                    remove_error: bierr,
+                    rollback_error: brerr,
+                    stale_path: bp,
+                },
+            ) => ai == bi && av == bv && aierr == bierr && arerr == brerr && ap == bp,
+            (
                 InvalidContribution {
                     package: ap,
                     ability: aa,
@@ -231,6 +340,16 @@ impl PartialEq for PluginHostError {
                     reason: br,
                 },
             ) => ap == bp && aa == ba && ar == br,
+            (
+                InvalidPluginState {
+                    path: ap,
+                    reason: ar,
+                },
+                InvalidPluginState {
+                    path: bp,
+                    reason: br,
+                },
+            ) => ap == bp && ar == br,
             (
                 EntrypointMismatch {
                     declared: ad,

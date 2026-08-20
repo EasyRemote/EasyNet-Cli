@@ -1,6 +1,22 @@
-schema_version = "1"
+schema_version = "3"
 name = "voice.end_call"
+descriptor_version = "1.0.0"
 description = "Terminate a call. Idempotent: a second invocation returns the existing terminal envelope with `already_ended = true` rather than erroring."
+exposure = "task"
+dedicated_surface = "voice"
+subject_contract_kind = "dedicated-surface"
+call_mode = "rpc"
+capability_state = "seam"
+admission_action = "invoke"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{\"additionalProperties\":false,\"properties\":{\"already_ended\":{\"type\":\"boolean\"},\"call_id\":{\"type\":\"string\"},\"end_reason\":{\"type\":\"string\"},\"end_reason_code\":{\"type\":\"integer\"},\"state\":{\"type\":\"string\"},\"state_code\":{\"type\":\"integer\"}},\"required\":[\"call_id\",\"state\",\"state_code\"],\"type\":\"object\"}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"

@@ -1,16 +1,88 @@
-schema_version = "1"
+schema_version = "3"
 name = "remote_desktop.create_session"
-description = "Create a remote desktop control session for a display/window/application resource. Subject MUST be the resource_ura in the invocation envelope. The session advertises WebRTC as the production media transport and exposes quality targets; diagnostic preview paths stay marked fallback."
+descriptor_version = "1.0.0"
+description = "Create a remote desktop control session for a display/window/application resource. Subject MUST be the resource_ura in the invocation envelope. The session advertises WebRTC as the production media transport and exposes quality targets; preview paths stay marked as diagnostic transports."
+exposure = "operator"
+dedicated_surface = "remote_desktop"
+subject_contract_kind = "dedicated-surface"
+call_mode = "rpc"
+capability_state = "provider_backed"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "only_ura_kinds"
+scope_subjects_uras = ["resource"]
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
+required = ["consent_ticket"]
 additionalProperties = false
+
+[input_schema.properties.consent_ticket]
+type = "string"
+minLength = 64
+maxLength = 64
 
 [input_schema.properties.input]
 type = "object"
+additionalProperties = false
+
+[input_schema.properties.input.properties.clipboard]
+type = "boolean"
+
+[input_schema.properties.input.properties.clipboard_enabled]
+type = "boolean"
+
+[input_schema.properties.input.properties.file_drop]
+type = "boolean"
+
+[input_schema.properties.input.properties.file_drop_enabled]
+type = "boolean"
+
+[input_schema.properties.input.properties.keyboard]
+type = "boolean"
+
+[input_schema.properties.input.properties.keyboard_enabled]
+type = "boolean"
+
+[input_schema.properties.input.properties.pointer]
+type = "boolean"
+
+[input_schema.properties.input.properties.pointer_enabled]
+type = "boolean"
 
 [input_schema.properties.input_policy]
 type = "object"
+additionalProperties = false
+
+[input_schema.properties.input_policy.properties.clipboard]
+type = "boolean"
+
+[input_schema.properties.input_policy.properties.clipboard_enabled]
+type = "boolean"
+
+[input_schema.properties.input_policy.properties.file_drop]
+type = "boolean"
+
+[input_schema.properties.input_policy.properties.file_drop_enabled]
+type = "boolean"
+
+[input_schema.properties.input_policy.properties.keyboard]
+type = "boolean"
+
+[input_schema.properties.input_policy.properties.keyboard_enabled]
+type = "boolean"
+
+[input_schema.properties.input_policy.properties.pointer]
+type = "boolean"
+
+[input_schema.properties.input_policy.properties.pointer_enabled]
+type = "boolean"
 
 [input_schema.properties.lease_ttl_ms]
 type = "integer"
@@ -35,3 +107,51 @@ items = { enum = ["webrtc", "invoke_bidi", "preview_stream"], type = "string" }
 
 [input_schema.properties.video]
 type = "object"
+additionalProperties = false
+
+[input_schema.properties.video.properties.codec_preferences]
+type = "array"
+items = { enum = ["h264", "hevc", "av1", "vp9", "vp8"], type = "string" }
+minItems = 1
+
+[input_schema.properties.video.properties.drop_stale_frames]
+type = "boolean"
+
+[input_schema.properties.video.properties.hardware_acceleration_required]
+type = "boolean"
+
+[input_schema.properties.video.properties.max_bitrate_kbps]
+type = "integer"
+minimum = 1
+maximum = 250000
+
+[input_schema.properties.video.properties.max_fps]
+type = "integer"
+minimum = 1
+maximum = 144
+
+[input_schema.properties.video.properties.max_frame_queue_depth]
+type = "integer"
+minimum = 1
+maximum = 1
+
+[input_schema.properties.video.properties.max_height]
+type = "integer"
+minimum = 1
+maximum = 8192
+
+[input_schema.properties.video.properties.max_width]
+type = "integer"
+minimum = 1
+maximum = 8192
+
+[input_schema.properties.video.properties.region]
+type = "string"
+
+[input_schema.properties.video.properties.scale_mode]
+type = "string"
+
+[input_schema.properties.video.properties.target_latency_ms]
+type = "integer"
+minimum = 1
+maximum = 1000

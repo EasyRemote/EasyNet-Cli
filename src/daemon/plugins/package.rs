@@ -10,13 +10,20 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::Value;
+
+use crate::daemon::ability::descriptors::{AbilityHints, AdmissionAction};
+use crate::daemon::ability::manifest::{
+    AbilityDedicatedSurface, AbilityExposure, AbilitySubjectContractKind,
+};
+use crate::daemon::ability::CallMode;
 use sha2::{Digest, Sha256};
 
 use crate::daemon::plugins::errors::{PluginHostError, Result};
 use crate::daemon::plugins::manifest::{
-    validate_builtin_entrypoint, PluginAbilityLayer, PluginBidiWireKind, PluginCallMode,
-    PluginPackageManifest, PluginRuntimeLimits,
+    validate_builtin_entrypoint, PluginAbilityLayer, PluginBidiWireKind, PluginPackageManifest,
+    PluginRuntimeLimits,
 };
+use crate::daemon::plugins::provider::ProviderBackedBuiltinBinding;
 
 /// Stable plugin package identifier.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -67,12 +74,107 @@ impl PackageHash {
 /// name, product layer, bidi wire profile, description, and input schema. The
 /// package manifest is validated against this table at index time; generated
 /// descriptor TOMLs are projections of this table, not independent facts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BuiltinPluginAbilityHints {
+    pub read_only: bool,
+    pub destructive: bool,
+    pub idempotent: bool,
+}
+
+impl BuiltinPluginAbilityHints {
+    pub const NONE: Self = Self {
+        read_only: false,
+        destructive: false,
+        idempotent: false,
+    };
+    pub const READ_ONLY: Self = Self {
+        read_only: true,
+        destructive: false,
+        idempotent: false,
+    };
+    pub const READ_ONLY_IDEMPOTENT: Self = Self {
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+    };
+    pub const DESTRUCTIVE_IDEMPOTENT: Self = Self {
+        read_only: false,
+        destructive: true,
+        idempotent: true,
+    };
+
+    fn descriptor_hints(self) -> AbilityHints {
+        AbilityHints {
+            read_only: self.read_only,
+            destructive: self.destructive,
+            idempotent: self.idempotent,
+        }
+    }
+}
+
+/// Product execution contract published with a builtin plugin ability.
+///
+/// This belongs to the compiled ability row because the same row feeds both
+/// runtime registration and generated descriptor TOML. Product clients must
+/// never infer a lifecycle surface or subject policy from an ability name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuiltinPluginFrontendContract {
+    pub exposure: AbilityExposure,
+    pub dedicated_surface: AbilityDedicatedSurface,
+    pub subject_contract_kind: AbilitySubjectContractKind,
+    pub subject_contract_ura: Option<&'static str>,
+}
+
+pub const REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA: &str =
+    "easynet:///r/_system/resource/ability-contract.remote-desktop/host-local-permission-subject";
+
+impl BuiltinPluginFrontendContract {
+    pub const INTERNAL_EXPLICIT_URA: Self = Self {
+        exposure: AbilityExposure::Internal,
+        dedicated_surface: AbilityDedicatedSurface::None,
+        subject_contract_kind: AbilitySubjectContractKind::ExplicitUra,
+        subject_contract_ura: None,
+    };
+
+    pub const OPERATOR_BROWSER: Self = Self {
+        exposure: AbilityExposure::Operator,
+        dedicated_surface: AbilityDedicatedSurface::Browser,
+        subject_contract_kind: AbilitySubjectContractKind::DedicatedSurface,
+        subject_contract_ura: None,
+    };
+
+    pub const OPERATOR_MEDIA: Self = Self {
+        exposure: AbilityExposure::Operator,
+        dedicated_surface: AbilityDedicatedSurface::Media,
+        subject_contract_kind: AbilitySubjectContractKind::DedicatedSurface,
+        subject_contract_ura: None,
+    };
+
+    pub const OPERATOR_REMOTE_DESKTOP: Self = Self {
+        exposure: AbilityExposure::Operator,
+        dedicated_surface: AbilityDedicatedSurface::RemoteDesktop,
+        subject_contract_kind: AbilitySubjectContractKind::DedicatedSurface,
+        subject_contract_ura: None,
+    };
+
+    pub const OPERATOR_REMOTE_DESKTOP_HOST_LOCAL_PERMISSION: Self = Self {
+        exposure: AbilityExposure::Operator,
+        dedicated_surface: AbilityDedicatedSurface::RemoteDesktop,
+        subject_contract_kind: AbilitySubjectContractKind::DedicatedSurface,
+        subject_contract_ura: Some(REMOTE_DESKTOP_HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA),
+    };
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct BuiltinPluginAbilitySpec {
     pub name: &'static str,
     pub layer: PluginAbilityLayer,
-    pub call_mode: PluginCallMode,
+    pub call_mode: CallMode,
+    pub admission_action: AdmissionAction,
     pub bidi_wire_kind: Option<PluginBidiWireKind>,
+    pub subject_ura_kinds: &'static [&'static str],
+    pub hints: BuiltinPluginAbilityHints,
+    pub frontend_contract: BuiltinPluginFrontendContract,
     pub description: fn() -> &'static str,
     pub input_schema: fn() -> Value,
 }
@@ -85,22 +187,51 @@ impl BuiltinPluginAbilitySpec {
     /// (`remote_desktop.create_session`), while `AbilityManifest` names are
     /// verb-local. The catalog key remains the full ability name at
     /// registration; only the manifest body stores the local verb.
-    pub fn to_registry_manifest(&self) -> Result<crate::core::ability::spec::AbilityManifest> {
+    pub fn to_registry_manifest(
+        &self,
+    ) -> Result<crate::daemon::ability::manifest::AbilityManifest> {
         let verb = self.name.rsplit('.').next().ok_or_else(|| {
             PluginHostError::DescriptorProjectionFailed {
                 ability: self.name.to_string(),
                 reason: "ability name has no verb segment".to_string(),
             }
         })?;
-        crate::core::ability::spec::AbilityManifest::new(
+        let mut manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             verb,
             (self.description)(),
             (self.input_schema)(),
         )
+        .and_then(|manifest| manifest.with_admission_action(self.admission_action.as_str()))
         .map_err(|source| PluginHostError::DescriptorProjectionFailed {
             ability: self.name.to_string(),
             reason: source.to_string(),
-        })
+        })?;
+        manifest = manifest
+            .with_frontend_contract(
+                self.frontend_contract.exposure,
+                self.frontend_contract.dedicated_surface,
+                self.frontend_contract.subject_contract_kind,
+                self.frontend_contract
+                    .subject_contract_ura
+                    .map(str::to_string),
+            )
+            .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+                ability: self.name.to_string(),
+                reason: source.to_string(),
+            })?;
+        if !self.subject_ura_kinds.is_empty() {
+            manifest = manifest
+                .with_subject_scope(
+                    crate::daemon::ability::manifest::ManifestSubjectScope::only_ura_kinds(
+                        self.subject_ura_kinds.iter().copied(),
+                    ),
+                )
+                .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+                    ability: self.name.to_string(),
+                    reason: source.to_string(),
+                })?;
+        }
+        Ok(manifest)
     }
 }
 
@@ -112,15 +243,28 @@ impl BuiltinPluginAbilitySpec {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PluginAbilityDescriptor {
     name: String,
+    descriptor_version: String,
     description: String,
     input_schema: Value,
     output_schema: Option<Value>,
+    admission_action: AdmissionAction,
+    subject_ura_kinds: Vec<String>,
+    hints: AbilityHints,
+    exposure: AbilityExposure,
+    dedicated_surface: AbilityDedicatedSurface,
+    subject_contract_kind: AbilitySubjectContractKind,
+    subject_contract_ura: Option<String>,
 }
 
 impl PluginAbilityDescriptor {
     /// Full daemon ability name declared by the descriptor.
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Governed callable interface version declared by the descriptor.
+    pub fn descriptor_version(&self) -> &str {
+        &self.descriptor_version
     }
 
     /// Human-readable ability description.
@@ -138,6 +282,34 @@ impl PluginAbilityDescriptor {
         self.output_schema.as_ref()
     }
 
+    pub fn admission_action(&self) -> AdmissionAction {
+        self.admission_action
+    }
+
+    pub fn subject_ura_kinds(&self) -> &[String] {
+        &self.subject_ura_kinds
+    }
+
+    pub fn hints(&self) -> &AbilityHints {
+        &self.hints
+    }
+
+    pub fn exposure(&self) -> AbilityExposure {
+        self.exposure
+    }
+
+    pub fn dedicated_surface(&self) -> AbilityDedicatedSurface {
+        self.dedicated_surface
+    }
+
+    pub fn subject_contract_kind(&self) -> AbilitySubjectContractKind {
+        self.subject_contract_kind
+    }
+
+    pub fn subject_contract_ura(&self) -> Option<&str> {
+        self.subject_contract_ura.as_deref()
+    }
+
     /// Project this plugin descriptor into the daemon registry manifest shape.
     ///
     /// What this is NOT: the package truth. The descriptor remains the package
@@ -146,14 +318,16 @@ impl PluginAbilityDescriptor {
     /// names are verb-local, so plugin ability names such as
     /// `plugin.echo` project to `echo` while the catalog key remains the
     /// full ability name.
-    pub fn to_registry_manifest(&self) -> Result<crate::core::ability::spec::AbilityManifest> {
+    pub fn to_registry_manifest(
+        &self,
+    ) -> Result<crate::daemon::ability::manifest::AbilityManifest> {
         let verb = self.name.rsplit('.').next().ok_or_else(|| {
             PluginHostError::DescriptorProjectionFailed {
                 ability: self.name.clone(),
                 reason: "ability name has no verb segment".to_string(),
             }
         })?;
-        let mut manifest = crate::core::ability::spec::AbilityManifest::new(
+        let mut manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             verb,
             self.description.clone(),
             self.input_schema.clone(),
@@ -162,6 +336,29 @@ impl PluginAbilityDescriptor {
             ability: self.name.clone(),
             reason: source.to_string(),
         })?;
+        manifest = manifest
+            .with_descriptor_version(&self.descriptor_version)
+            .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+                ability: self.name.clone(),
+                reason: source.to_string(),
+            })?;
+        manifest = manifest
+            .with_admission_action(self.admission_action.as_str())
+            .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+                ability: self.name.clone(),
+                reason: source.to_string(),
+            })?;
+        manifest = manifest
+            .with_frontend_contract(
+                self.exposure,
+                self.dedicated_surface,
+                self.subject_contract_kind,
+                self.subject_contract_ura.clone(),
+            )
+            .map_err(|source| PluginHostError::DescriptorProjectionFailed {
+                ability: self.name.clone(),
+                reason: source.to_string(),
+            })?;
         if let Some(output_schema) = &self.output_schema {
             manifest = manifest
                 .with_output_schema(output_schema.clone())
@@ -178,17 +375,47 @@ impl PluginAbilityDescriptor {
 ///
 /// What this is NOT: package metadata. If a field can live in `plugin.toml`, it
 /// belongs in [`PluginPackageManifest`] and is reached through the package.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct BuiltinPluginBinding {
-    pub manifest_path: &'static str,
-    pub manifest_body: &'static str,
-    pub expected_entrypoint: &'static str,
-    pub enabled_env_var: Option<&'static str>,
-    pub ability_specs: fn() -> Vec<BuiltinPluginAbilitySpec>,
-    pub contribute: fn(
-        &mut crate::daemon::plugins::contribution::PluginContributionBuilder,
-        PluginRuntimeLimits,
-    ) -> Result<()>,
+    provider: ProviderBackedBuiltinBinding,
+}
+
+impl BuiltinPluginBinding {
+    pub fn new(provider: ProviderBackedBuiltinBinding) -> Self {
+        Self { provider }
+    }
+
+    pub fn manifest_path(&self) -> &'static str {
+        self.provider.manifest_path()
+    }
+
+    pub fn manifest_body(&self) -> &'static str {
+        self.provider.manifest_body()
+    }
+
+    pub fn expected_entrypoint(&self) -> &'static str {
+        self.provider.expected_entrypoint()
+    }
+
+    pub fn installable_package_root(&self) -> Option<PathBuf> {
+        self.provider.installable_package_root()
+    }
+
+    pub fn enabled_env_var(&self) -> Option<&'static str> {
+        self.provider.enabled_env_var()
+    }
+
+    pub fn ability_specs(&self) -> Vec<BuiltinPluginAbilitySpec> {
+        self.provider.ability_specs()
+    }
+
+    pub fn contribute(
+        &self,
+        builder: &mut crate::daemon::plugins::contribution::PluginContributionBuilder,
+        limits: PluginRuntimeLimits,
+    ) -> Result<()> {
+        self.provider.contribute(builder, limits)
+    }
 }
 
 /// Source class for a package in the package index.
@@ -212,19 +439,18 @@ pub struct PluginPackage {
 impl PluginPackage {
     /// Build one builtin package from a compiled binding.
     pub fn from_builtin(binding: BuiltinPluginBinding) -> Result<Self> {
-        let manifest = PluginPackageManifest::parse(binding.manifest_path, binding.manifest_body)?;
-        validate_builtin_entrypoint(&manifest, binding.expected_entrypoint)?;
-        let specs = (binding.ability_specs)();
+        let manifest =
+            PluginPackageManifest::parse(binding.manifest_path(), binding.manifest_body())?;
+        validate_builtin_entrypoint(&manifest, binding.expected_entrypoint())?;
+        let specs = binding.ability_specs();
         validate_builtin_specs(&manifest, &specs)?;
         let descriptors = builtin_descriptors(&manifest, &specs)?;
-        let root = Path::new(binding.manifest_path)
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+        let root = builtin_package_root(&binding)?;
+        let manifest_path = root.join("plugin.toml");
         let hash = hash_installable_surface(&root)?;
         Ok(Self {
             root,
-            manifest_path: PathBuf::from(binding.manifest_path),
+            manifest_path,
             manifest,
             descriptors,
             hash,
@@ -288,7 +514,7 @@ impl PluginPackage {
     pub fn ability_registry_manifest(
         &self,
         ability: &str,
-    ) -> Result<crate::core::ability::spec::AbilityManifest> {
+    ) -> Result<crate::daemon::ability::manifest::AbilityManifest> {
         let descriptor = self.ability_descriptor(ability).ok_or_else(|| {
             PluginHostError::InvalidAbilityDescriptor {
                 path: self.manifest_path.clone(),
@@ -330,8 +556,8 @@ impl PluginPackage {
 
     /// Compiled builtin binding, when this package is builtin.
     pub fn builtin_binding(&self) -> Option<BuiltinPluginBinding> {
-        match self.source {
-            PluginPackageSource::Builtin(binding) => Some(binding),
+        match &self.source {
+            PluginPackageSource::Builtin(binding) => Some(binding.clone()),
             PluginPackageSource::Installed => None,
         }
     }
@@ -340,12 +566,52 @@ impl PluginPackage {
 /// Shared package handle.
 pub type SharedPluginPackage = Arc<PluginPackage>;
 
+fn builtin_package_root(binding: &BuiltinPluginBinding) -> Result<PathBuf> {
+    if let Some(root) = binding.installable_package_root() {
+        if root.as_os_str().is_empty() {
+            return Err(PluginHostError::PluginProjectBoundaryViolation {
+                reason: format!(
+                    "builtin plugin provider for {} returned an empty installable package root",
+                    binding.manifest_path()
+                ),
+            });
+        }
+        return Ok(root);
+    }
+
+    let manifest_path = Path::new(binding.manifest_path());
+    let Some(parent) = manifest_path.parent() else {
+        return Err(PluginHostError::PluginProjectBoundaryViolation {
+            reason: format!(
+                "builtin plugin manifest path {:?} has no package root; provider must declare installable_package_root",
+                binding.manifest_path()
+            ),
+        });
+    };
+    if parent.as_os_str().is_empty() {
+        return Err(PluginHostError::PluginProjectBoundaryViolation {
+            reason: format!(
+                "builtin plugin manifest path {:?} does not declare a package directory; provider must declare installable_package_root",
+                binding.manifest_path()
+            ),
+        });
+    }
+    Ok(parent.to_path_buf())
+}
+
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawPluginAbilityDescriptor {
-    #[serde(default)]
-    schema_version: Option<String>,
+    schema_version: String,
     name: String,
+    descriptor_version: String,
     description: String,
+    exposure: AbilityExposure,
+    dedicated_surface: AbilityDedicatedSurface,
+    subject_contract_kind: AbilitySubjectContractKind,
+    #[serde(default)]
+    subject_contract_ura: Option<String>,
+    admission_action: AdmissionAction,
     input_schema: Value,
     #[serde(default)]
     output_schema: Option<Value>,
@@ -367,9 +633,25 @@ fn builtin_descriptors(
             spec.name.to_string(),
             Arc::new(PluginAbilityDescriptor {
                 name: spec.name.to_string(),
+                descriptor_version: crate::daemon::ability::manifest::DEFAULT_DESCRIPTOR_VERSION
+                    .to_string(),
                 description: (spec.description)().to_string(),
                 input_schema: (spec.input_schema)(),
                 output_schema: None,
+                admission_action: spec.admission_action,
+                subject_ura_kinds: spec
+                    .subject_ura_kinds
+                    .iter()
+                    .map(|kind| (*kind).to_string())
+                    .collect(),
+                hints: spec.hints.descriptor_hints(),
+                exposure: spec.frontend_contract.exposure,
+                dedicated_surface: spec.frontend_contract.dedicated_surface,
+                subject_contract_kind: spec.frontend_contract.subject_contract_kind,
+                subject_contract_ura: spec
+                    .frontend_contract
+                    .subject_contract_ura
+                    .map(str::to_string),
             }),
         );
     }
@@ -413,17 +695,11 @@ fn validate_descriptor(
     expected_name: &str,
     raw: RawPluginAbilityDescriptor,
 ) -> Result<PluginAbilityDescriptor> {
-    if raw
-        .schema_version
-        .as_deref()
-        .is_some_and(|version| version != "1")
+    if raw.schema_version != crate::daemon::ability::catalog::ability_toml::CONTRACT_SCHEMA_VERSION
     {
         return Err(PluginHostError::InvalidAbilityDescriptor {
             path: path.to_path_buf(),
-            reason: format!(
-                "unsupported schema_version {:?}",
-                raw.schema_version.unwrap_or_default()
-            ),
+            reason: format!("unsupported schema_version {:?}", raw.schema_version),
         });
     }
     if raw.name != expected_name {
@@ -441,6 +717,11 @@ fn validate_descriptor(
             reason: "description must be non-empty".to_string(),
         });
     }
+    crate::daemon::ability::descriptors::AbilityDescriptorVersion::new(&raw.descriptor_version)
+        .map_err(|source| PluginHostError::InvalidAbilityDescriptor {
+            path: path.to_path_buf(),
+            reason: source.to_string(),
+        })?;
     if !raw.input_schema.is_object() {
         return Err(PluginHostError::InvalidAbilityDescriptor {
             path: path.to_path_buf(),
@@ -457,11 +738,44 @@ fn validate_descriptor(
             reason: "output_schema, when present, must be a JSON object".to_string(),
         });
     }
+    crate::daemon::ability::manifest::AbilityManifest::new(
+        "plugin-descriptor",
+        &raw.description,
+        raw.input_schema.clone(),
+    )
+    .and_then(|manifest| {
+        manifest.with_frontend_contract(
+            raw.exposure,
+            raw.dedicated_surface,
+            raw.subject_contract_kind,
+            raw.subject_contract_ura.clone(),
+        )
+    })
+    .map_err(|source| PluginHostError::InvalidAbilityDescriptor {
+        path: path.to_path_buf(),
+        reason: source.to_string(),
+    })?;
+    if let Some(subject_contract_ura) = raw.subject_contract_ura.as_deref() {
+        crate::core::ura::parse_ura(subject_contract_ura).map_err(|source| {
+            PluginHostError::InvalidAbilityDescriptor {
+                path: path.to_path_buf(),
+                reason: format!("subject_contract_ura must be a canonical URA: {source}"),
+            }
+        })?;
+    }
     Ok(PluginAbilityDescriptor {
         name: raw.name,
+        descriptor_version: raw.descriptor_version,
         description: raw.description,
         input_schema: raw.input_schema,
         output_schema: raw.output_schema,
+        admission_action: raw.admission_action,
+        subject_ura_kinds: Vec::new(),
+        hints: AbilityHints::default(),
+        exposure: raw.exposure,
+        dedicated_surface: raw.dedicated_surface,
+        subject_contract_kind: raw.subject_contract_kind,
+        subject_contract_ura: raw.subject_contract_ura,
     })
 }
 
@@ -537,12 +851,13 @@ fn validate_builtin_specs(
     Ok(())
 }
 
-/// Compute SHA-256 over `plugin.toml`, `abilities/`, and `bin/`.
+/// Compute SHA-256 over the package executable surface.
 pub fn hash_installable_surface(root: &Path) -> Result<PackageHash> {
     let mut files = Vec::new();
     collect_existing_files(root, Path::new("plugin.toml"), &mut files)?;
     collect_existing_files(root, Path::new("abilities"), &mut files)?;
     collect_existing_files(root, Path::new("bin"), &mut files)?;
+    collect_existing_files(root, Path::new("dist"), &mut files)?;
     files.sort();
 
     let mut hasher = Sha256::new();
@@ -643,7 +958,52 @@ fn validate_package_child_path(root: &Path, allowed_root: &Path, path: &Path) ->
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::daemon::plugins::manifest::{PluginAbilityLayer, PluginCallMode};
+    use crate::daemon::ability::CallMode;
+    use crate::daemon::plugins::manifest::PluginAbilityLayer;
+    use crate::daemon::plugins::provider::{PluginProvider, PluginProviderKind};
+
+    struct TestBuiltinProvider {
+        manifest: &'static str,
+        ability_specs: fn() -> Vec<BuiltinPluginAbilitySpec>,
+        contribute: fn(
+            &mut crate::daemon::plugins::PluginContributionBuilder,
+            PluginRuntimeLimits,
+        ) -> Result<()>,
+    }
+
+    impl PluginProvider for TestBuiltinProvider {
+        fn package_id(&self) -> &'static str {
+            "test.plugin"
+        }
+
+        fn provider_kind(&self) -> PluginProviderKind {
+            PluginProviderKind::NativeStatic
+        }
+
+        fn manifest_body(&self) -> &'static str {
+            self.manifest
+        }
+
+        fn manifest_path(&self) -> &'static str {
+            "plugins/test/plugin.toml"
+        }
+
+        fn expected_entrypoint(&self) -> &'static str {
+            "test::register"
+        }
+
+        fn ability_specs(&self) -> Vec<BuiltinPluginAbilitySpec> {
+            (self.ability_specs)()
+        }
+
+        fn contribute(
+            &self,
+            builder: &mut crate::daemon::plugins::PluginContributionBuilder,
+            limits: PluginRuntimeLimits,
+        ) -> Result<()> {
+            (self.contribute)(builder, limits)
+        }
+    }
 
     #[test]
     fn plugin_host_package_rejects_hash_mismatch() {
@@ -674,8 +1034,12 @@ pub(crate) mod tests {
             vec![BuiltinPluginAbilitySpec {
                 name: "test.echo",
                 layer: PluginAbilityLayer::Observation,
-                call_mode: PluginCallMode::Rpc,
+                call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Read,
                 bidi_wire_kind: None,
+                subject_ura_kinds: &[],
+                hints: BuiltinPluginAbilityHints::NONE,
+                frontend_contract: BuiltinPluginFrontendContract::INTERNAL_EXPLICIT_URA,
                 description,
                 input_schema,
             }]
@@ -699,21 +1063,221 @@ max_frame_queue = 1
 [[ability_metadata]]
 name = "test.echo"
 layer = "control"
+call_mode = "rpc"
 "#;
 
-        let err = match PluginPackage::from_builtin(BuiltinPluginBinding {
-            manifest_path: "plugins/test/plugin.toml",
-            manifest_body: manifest,
-            expected_entrypoint: "test::register",
-            enabled_env_var: None,
-            ability_specs,
-            contribute,
-        }) {
+        let err = match PluginPackage::from_builtin(BuiltinPluginBinding::new(
+            ProviderBackedBuiltinBinding::new(Arc::new(TestBuiltinProvider {
+                manifest,
+                ability_specs,
+                contribute,
+            })),
+        )) {
             Ok(_) => panic!("manifest layer must match compiled spec"),
             Err(err) => err,
         };
 
         assert!(matches!(err, PluginHostError::BuiltinSpecMismatch { .. }));
+    }
+
+    #[test]
+    fn plugin_host_builtin_package_rejects_manifest_path_without_package_root() {
+        struct RootlessProvider {
+            manifest: &'static str,
+        }
+
+        impl PluginProvider for RootlessProvider {
+            fn package_id(&self) -> &'static str {
+                "test.desktop.rootless"
+            }
+
+            fn provider_kind(&self) -> PluginProviderKind {
+                PluginProviderKind::InstallablePackage
+            }
+
+            fn manifest_body(&self) -> &'static str {
+                self.manifest
+            }
+
+            fn manifest_path(&self) -> &'static str {
+                "plugin.toml"
+            }
+
+            fn expected_entrypoint(&self) -> &'static str {
+                "dist/macos/Test.app"
+            }
+
+            fn ability_specs(&self) -> Vec<BuiltinPluginAbilitySpec> {
+                Vec::new()
+            }
+
+            fn contribute(
+                &self,
+                _: &mut crate::daemon::plugins::PluginContributionBuilder,
+                _: PluginRuntimeLimits,
+            ) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let manifest = r#"
+schema_version = "1"
+id = "test.desktop.rootless"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "dist/macos/Test.app"
+abilities = []
+permissions = ["clipboard_read"]
+resources = ["desktop_session"]
+platforms = ["macos"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[companion]
+display_name = "Rootless Test"
+lifecycle = "user_session"
+boot_policy = "ensure_running_after_daemon_ready"
+stop_policy = "keep_running"
+health = "status_file"
+status_file = "companions/test.desktop.rootless/status.json"
+
+[companion.macos]
+bundle_id = "test.desktop.rootless"
+app_bundle = "dist/macos/Test.app"
+supervisor = "launch_agent"
+launch_agent_label = "test.desktop.rootless"
+session = "aqua"
+"#;
+
+        let err = PluginPackage::from_builtin(BuiltinPluginBinding::new(
+            ProviderBackedBuiltinBinding::new(Arc::new(RootlessProvider {
+                manifest: Box::leak(manifest.to_string().into_boxed_str()),
+            })),
+        ))
+        .expect_err("builtin provider must declare a stable package root");
+
+        assert!(matches!(
+            err,
+            PluginHostError::PluginProjectBoundaryViolation { .. }
+        ));
+        assert!(err
+            .to_string()
+            .contains("provider must declare installable_package_root"));
+    }
+
+    #[test]
+    fn plugin_host_builtin_package_uses_provider_installable_root() {
+        struct MaterializedProvider {
+            manifest: &'static str,
+            root: PathBuf,
+        }
+
+        impl PluginProvider for MaterializedProvider {
+            fn package_id(&self) -> &'static str {
+                "test.desktop.menubar"
+            }
+
+            fn provider_kind(&self) -> PluginProviderKind {
+                PluginProviderKind::InstallablePackage
+            }
+
+            fn manifest_body(&self) -> &'static str {
+                self.manifest
+            }
+
+            fn manifest_path(&self) -> &'static str {
+                "plugins/test-desktop/plugin.toml"
+            }
+
+            fn expected_entrypoint(&self) -> &'static str {
+                "dist/macos/Test.app"
+            }
+
+            fn installable_package_root(&self) -> Option<PathBuf> {
+                Some(self.root.clone())
+            }
+
+            fn ability_specs(&self) -> Vec<BuiltinPluginAbilitySpec> {
+                Vec::new()
+            }
+
+            fn contribute(
+                &self,
+                _: &mut crate::daemon::plugins::PluginContributionBuilder,
+                _: PluginRuntimeLimits,
+            ) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let materialized = tempfile::tempdir().expect("materialized root");
+        let manifest = r#"
+schema_version = "1"
+id = "test.desktop.menubar"
+version = "0.1.0"
+kind = "desktop_companion"
+entrypoint = "dist/macos/Test.app"
+abilities = []
+permissions = ["clipboard_read"]
+resources = ["desktop_session"]
+platforms = ["macos"]
+
+[limits]
+max_sessions = 1
+max_frame_queue = 1
+
+[companion]
+display_name = "Test Menu Bar"
+lifecycle = "user_session"
+boot_policy = "ensure_running_after_daemon_ready"
+stop_policy = "keep_running"
+health = "status_file"
+status_file = "companions/test.desktop.menubar/status.json"
+
+[companion.macos]
+bundle_id = "test.desktop.menubar"
+app_bundle = "dist/macos/Test.app"
+supervisor = "launch_agent"
+launch_agent_label = "test.desktop.menubar"
+session = "aqua"
+"#;
+        std::fs::write(materialized.path().join("plugin.toml"), manifest)
+            .expect("materialized manifest");
+        std::fs::create_dir_all(
+            materialized
+                .path()
+                .join("dist/macos/Test.app/Contents/MacOS"),
+        )
+        .expect("materialized app dir");
+        std::fs::write(
+            materialized
+                .path()
+                .join("dist/macos/Test.app/Contents/MacOS/Test"),
+            "binary",
+        )
+        .expect("materialized app binary");
+
+        let package = PluginPackage::from_builtin(BuiltinPluginBinding::new(
+            ProviderBackedBuiltinBinding::new(Arc::new(MaterializedProvider {
+                manifest: Box::leak(manifest.to_string().into_boxed_str()),
+                root: materialized.path().to_path_buf(),
+            })),
+        ))
+        .expect("builtin package");
+
+        assert_eq!(package.root(), materialized.path());
+        assert_eq!(
+            package.manifest_path(),
+            &materialized.path().join("plugin.toml")
+        );
+        assert!(package
+            .hash()
+            .as_str()
+            .eq(hash_installable_surface(materialized.path())
+                .unwrap()
+                .as_str()));
     }
 
     #[test]
@@ -732,6 +1296,137 @@ layer = "control"
             err,
             PluginHostError::InvalidAbilityDescriptor { .. }
         ));
+    }
+
+    #[test]
+    fn plugin_host_installed_package_rejects_unknown_descriptor_fields() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_test_package(dir.path(), "0.1.0");
+        std::fs::write(
+            dir.path().join("abilities/test.echo.ability.toml"),
+            r#"schema_version = "3"
+name = "test.echo"
+descriptor_version = "1.2.3"
+description = "test descriptor for test.echo"
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "explicit-ura"
+admission_action = "invoke"
+retired_descriptor_hash = "sha256:retired"
+
+[input_schema]
+type = "object"
+additionalProperties = false
+"#,
+        )
+        .expect("descriptor with retired field");
+
+        let err = PluginPackage::from_installed(dir.path(), None)
+            .expect_err("unknown descriptor fields must fail package indexing");
+        assert!(
+            matches!(err, PluginHostError::DescriptorParseFailed { .. }),
+            "unknown descriptor field must fail at typed parse, got: {err}"
+        );
+        assert!(
+            format!("{err}").contains("unknown field `retired_descriptor_hash`"),
+            "parse error should name rejected descriptor field: {err}"
+        );
+    }
+
+    #[test]
+    fn plugin_host_installed_package_rejects_missing_descriptor_version() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_test_package(dir.path(), "0.1.0");
+        std::fs::write(
+            dir.path().join("abilities/test.echo.ability.toml"),
+            r#"schema_version = "3"
+name = "test.echo"
+description = "test descriptor for test.echo"
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "explicit-ura"
+admission_action = "invoke"
+
+[input_schema]
+type = "object"
+additionalProperties = false
+"#,
+        )
+        .expect("descriptor without descriptor_version");
+
+        let err = PluginPackage::from_installed(dir.path(), None)
+            .expect_err("missing descriptor_version must fail package indexing");
+        assert!(
+            matches!(err, PluginHostError::DescriptorParseFailed { .. }),
+            "missing descriptor_version must fail at typed parse, got: {err}"
+        );
+        assert!(
+            format!("{err}").contains("missing field `descriptor_version`"),
+            "parse error should name descriptor_version: {err}"
+        );
+    }
+
+    #[test]
+    fn plugin_descriptor_projection_preserves_descriptor_version() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_test_package(dir.path(), "0.1.0");
+
+        let package = PluginPackage::from_installed(dir.path(), None).expect("package");
+        let descriptor = package.ability_descriptor("test.echo").expect("descriptor");
+        assert_eq!(descriptor.descriptor_version(), "1.2.3");
+
+        let manifest = descriptor
+            .to_registry_manifest()
+            .expect("registry projection");
+        assert_eq!(manifest.descriptor_version(), "1.2.3");
+    }
+
+    #[test]
+    fn plugin_descriptor_projection_preserves_frontend_contract() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_test_package(dir.path(), "0.1.0");
+        std::fs::write(
+            dir.path().join("abilities/test.echo.ability.toml"),
+            r#"schema_version = "3"
+name = "test.echo"
+descriptor_version = "1.2.3"
+description = "test descriptor for test.echo"
+exposure = "operator"
+dedicated_surface = "browser"
+subject_contract_kind = "dedicated-surface"
+admission_action = "invoke"
+
+[input_schema]
+type = "object"
+additionalProperties = false
+"#,
+        )
+        .expect("descriptor");
+
+        let package = PluginPackage::from_installed(dir.path(), None).expect("package");
+        let descriptor = package.ability_descriptor("test.echo").expect("descriptor");
+        assert_eq!(descriptor.exposure(), AbilityExposure::Operator);
+        assert_eq!(
+            descriptor.dedicated_surface(),
+            AbilityDedicatedSurface::Browser
+        );
+        assert_eq!(
+            descriptor.subject_contract_kind(),
+            AbilitySubjectContractKind::DedicatedSurface
+        );
+
+        let manifest = descriptor
+            .to_registry_manifest()
+            .expect("registry projection");
+        assert_eq!(manifest.exposure(), Some(AbilityExposure::Operator));
+        assert_eq!(
+            manifest.dedicated_surface(),
+            Some(AbilityDedicatedSurface::Browser)
+        );
+        assert_eq!(
+            manifest.subject_contract_kind(),
+            Some(AbilitySubjectContractKind::DedicatedSurface)
+        );
     }
 
     #[test]
@@ -761,6 +1456,7 @@ max_frame_queue = 1
 [[ability_metadata]]
 name = "test.echo"
 layer = "control"
+call_mode = "rpc"
 "#,
         )
         .expect("manifest");
@@ -776,6 +1472,19 @@ layer = "control"
             err,
             PluginHostError::PackagePathEscapesRoot { .. }
         ));
+    }
+
+    #[test]
+    fn plugin_host_hash_includes_dist_artifacts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_test_package(dir.path(), "0.1.0");
+        std::fs::create_dir_all(dir.path().join("dist/macos/Test.app")).expect("dist dir");
+        std::fs::write(dir.path().join("dist/macos/Test.app/app"), "one").expect("dist file");
+        let first = hash_installable_surface(dir.path()).expect("first hash");
+        std::fs::write(dir.path().join("dist/macos/Test.app/app"), "two").expect("dist change");
+        let second = hash_installable_surface(dir.path()).expect("second hash");
+
+        assert_ne!(first.as_str(), second.as_str());
     }
 
     pub(crate) fn write_test_package(root: &Path, version: &str) {
@@ -801,6 +1510,7 @@ max_frame_queue = 1
 [[ability_metadata]]
 name = "test.echo"
 layer = "control"
+call_mode = "rpc"
 "#
             ),
         )
@@ -814,9 +1524,14 @@ layer = "control"
 
     pub(crate) fn test_descriptor(ability: &str) -> String {
         format!(
-            r#"schema_version = "1"
+            r#"schema_version = "3"
 name = "{ability}"
+descriptor_version = "1.2.3"
 description = "test descriptor for {ability}"
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "explicit-ura"
+admission_action = "invoke"
 
 [input_schema]
 type = "object"

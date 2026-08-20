@@ -54,9 +54,7 @@ cat > "$SB/src/daemon/invocation/mod.rs" <<'EOF'
 pub fn invocation_plane() {}
 EOF
 cat > "$SB/src/daemon/execution/mod.rs" <<'EOF'
-use crate::daemon::federation::gateway_api::GatewayApi;
-
-pub fn run(_gateway: &dyn GatewayApi) {}
+pub fn run() {}
 EOF
 
 expect_pass "clean final layout"
@@ -86,15 +84,13 @@ pub fn control_plane() {}
 EOF
 
 cat > "$SB/src/daemon/execution/mod.rs" <<'EOF'
-use crate::daemon::federation::gateway::Gateway;
+use crate::daemon::federation::client::FederationClient;
 
-pub fn run(_gateway: Gateway) {}
+pub fn run(_client: FederationClient) {}
 EOF
 expect_fail "execution importing concrete gateway"
 cat > "$SB/src/daemon/execution/mod.rs" <<'EOF'
-use crate::daemon::federation::gateway_api::GatewayApi;
-
-pub fn run(_gateway: &dyn GatewayApi) {}
+pub fn run() {}
 EOF
 
 mkdir -p "$SB/src/daemon/kernel"

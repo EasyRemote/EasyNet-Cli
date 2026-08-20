@@ -69,5 +69,5 @@ pub use core::ura;
 
 #[cfg(feature = "axon-pb")]
 pub mod pb {
-    pub use easynet_axon::pb::axon;
+    pub use axon_sdk::pb::axon;
 }

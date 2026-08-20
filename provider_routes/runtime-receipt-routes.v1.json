@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "provider": "runtime",
+  "capability": "receipt",
+  "profile": "receipt",
+  "routes": [
+    {
+      "id": "history_list",
+      "go_const": "receiptHistoryListAbility",
+      "python_const": "_RECEIPT_HISTORY_LIST",
+      "daemon_const": "INVOCATION_HISTORY_LIST",
+      "ability": "invocation.history.list"
+    },
+    {
+      "id": "history_get",
+      "go_const": "receiptHistoryGetAbility",
+      "python_const": "_RECEIPT_HISTORY_GET",
+      "daemon_const": "INVOCATION_HISTORY_GET",
+      "ability": "invocation.history.get"
+    },
+    {
+      "id": "trace_get",
+      "go_const": "receiptTraceGetAbility",
+      "python_const": "_RECEIPT_TRACE_GET",
+      "daemon_const": "INVOCATION_TRACE_GET",
+      "ability": "invocation.trace.get"
+    }
+  ]
+}

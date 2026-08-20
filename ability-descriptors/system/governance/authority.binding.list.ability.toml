@@ -1,0 +1,54 @@
+schema_version = "3"
+name = "authority.binding.list"
+descriptor_version = "1.0.0"
+description = "List RFC-014 PermissionGrant records by owner and filters."
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "route-target"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["owner_ura"]
+additionalProperties = false
+
+[input_schema.properties.ability_ura_pattern]
+type = "string"
+
+[input_schema.properties.action]
+type = "string"
+
+[input_schema.properties.callee_ura]
+type = "string"
+
+[input_schema.properties.effect]
+type = "string"
+
+[input_schema.properties.owner_ura]
+type = "string"
+
+[input_schema.properties.principal_kind]
+type = "string"
+
+[input_schema.properties.principal_ura]
+type = "string"
+
+[input_schema.properties.state]
+type = "string"
+
+[input_schema.properties.subject_ura_pattern]
+type = "string"
+
+[input_schema.properties.token_id]
+type = "string"

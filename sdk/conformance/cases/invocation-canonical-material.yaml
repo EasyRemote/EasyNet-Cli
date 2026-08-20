@@ -1,0 +1,18 @@
+id: invocation/canonical_material
+profile: runtime_core
+required_for:
+  - rust
+  - c_abi
+  - go
+  - python
+  - node
+  - java
+  - swift
+description: All languages obtain signing material from the Axon delegated helper path.
+steps:
+  - action: prepare
+    fixture: invocation.complete.v4.json
+expect:
+  result: ok
+  material_owner: axon_delegated
+  fixture: prepared.signing-material.v4.json

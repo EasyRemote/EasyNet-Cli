@@ -49,7 +49,7 @@ state_key
     A tuple that uniquely identifies one state object instance
     within a state_type. Stable for the lifetime of the object;
     survives node restart, ownership transfer, and replay.
-    For easynet.web_app: (realm, owner_agent_uri, app_slug).
+    For easynet.web_app: (realm, owner_agent_ura, app_slug).
 
 canonical_state_hash
     A deterministic hash over the canonical fields of one state
@@ -94,11 +94,11 @@ is pure construction.
 state_type:  easynet.web_app
 
 state_key:
-    (realm, owner_agent_uri, app_slug)
+    (realm, owner_agent_ura, app_slug)
 
       realm             logical namespace, e.g. "default" or
                         "acme"; carried in URAs.
-      owner_agent_uri   the canonical authority for this state
+      owner_agent_ura   the canonical authority for this state
                         object. Every CanonicalReceipt MUST carry
                         this agent's signature. The owner_agent
                         is named at create time and IMMUTABLE for
@@ -177,7 +177,7 @@ must produce a state object whose canonical hash does not depend on
 any of them.
 
 ```
-runtime_node_uri      which node currently executes this app
+runtime_node_ura      which node currently executes this app
                       (build, serve). MAY change between
                       OperationalReceipts; MUST NOT change
                       canonical hash.
@@ -257,7 +257,7 @@ Stopped     no executor process associated with this app on any
 Starting    webapp.serve has been invoked; an executor is
             launching the dev/preview server but it has not yet
             confirmed liveness.
-Running     executor is up; bound_port and runtime_node_uri are
+Running     executor is up; bound_port and runtime_node_ura are
             populated; HTTP/WS reverse proxy can succeed.
 Crashed     executor exited unexpectedly while previously
             Running; the canonical state is unchanged. May be
@@ -347,9 +347,9 @@ webapp.serve
     canonical precondition:  WebAppState == Built
     runtime pre :  Stopped | Crashed
     runtime post:  Starting → Running | Crashed
-    args:  optional port_hint, optional executor_node_uri
+    args:  optional port_hint, optional executor_node_ura
     receipt class: OperationalReceipt
-        runtime_node_uri = chosen executor
+        runtime_node_ura = chosen executor
         bound_port       = allocated
         started_at       = now
     canonical_state_hash MUST NOT change across this call.
@@ -466,7 +466,7 @@ runtime_state)` pair are deterministic functions of that pair
 
 Before any view is computed, the hub translates the HTTP request
 into an EasyNet invocation. The resulting envelope.caller is NOT
-the hub's agent URI; it is the structured principal URI defined in
+the hub's agent URA; it is the structured principal URA defined in
 TR-INV-12:
 
 ```
@@ -491,7 +491,7 @@ emits. Concretely:
   TR-INV-12 extension) would record under
   `principal/human-auth/<provider>/<user-id>`;
 * an EasyNet agent reading the same URA via direct RPC (no hub)
-  records under its own `agent/<id>` URI.
+  records under its own `agent/<id>` URA.
 
 The three caller classes are distinguishable in the receipt log
 without consulting any field other than caller. This is the
@@ -499,10 +499,10 @@ foundation TR-INV-11's traceability invariant rests on at the
 public-web boundary: "this version of the page was read by
 ip-hash X with session Y" is provable from receipts alone.
 
-Hubs MUST forward the caller URI verbatim to the owner node;
+Hubs MUST forward the caller URA verbatim to the owner node;
 owner nodes MUST validate that hub-translated callers carry the
 human-anon prefix (or another principal/ prefix the hub is
-authorised to mint) and MUST NOT accept arbitrary caller URIs
+authorised to mint) and MUST NOT accept arbitrary caller URAs
 from hub requests. This forms the trust boundary: the hub may
 introduce anonymous principals into the system, but it cannot
 impersonate agents.
@@ -513,9 +513,9 @@ impersonate agents.
 carry **observation context** — where the visitor came from, what
 client they used, whether they look like a crawler. That context
 is structurally separate: it lives in `envelope.caller_context`,
-NOT in the caller URI. Two HTTP requests from the same IP and
+NOT in the caller URA. Two HTTP requests from the same IP and
 session arriving via different referrers produce identical caller
-URIs (same identity) and different caller_context maps (different
+URAs (same identity) and different caller_context maps (different
 observations).
 
 ```
@@ -574,9 +574,9 @@ Properties this structure must preserve:
 ```
 CCX-1  Identity stability
        Two requests from the same (ip, session) MUST yield identical
-       caller URIs. caller_context MAY differ between them. Hub
+       caller URAs. caller_context MAY differ between them. Hub
        implementations that fold any caller_context field into the
-       caller URI break TR-INV-11's audit chain.
+       caller URA break TR-INV-11's audit chain.
 
 CCX-2  Untrusted source
        caller_context fields originate in HTTP headers the visitor
@@ -593,7 +593,7 @@ CCX-3  Privacy default
        both. The schema accommodates both stances.
 
 CCX-4  Bot identity is observation, not authority
-       agent_class.kind="bot" does NOT change the caller URI prefix.
+       agent_class.kind="bot" does NOT change the caller URA prefix.
        A GPTBot caller is still principal/human-anon/<ip>/<sid> at
        the identity layer; "this is a bot" is recorded only in
        caller_context. A future authenticated-crawler scheme would
@@ -648,7 +648,7 @@ questions previously unanswerable on the traditional web:
   version-6?" → filter agent_class.bot_id ∈ {gptbot, claudebot, …}
   intersected with version range.
 * "Two browser users on the same IP — same person or family?"
-  → distinguishable by session-id within the caller URI.
+  → distinguishable by session-id within the caller URA.
 
 The view-projection layer (TR-INV-7) MAY consult caller_context to
 adapt agent_view output (e.g. omit runtime endpoint details for
@@ -732,7 +732,7 @@ Built / Starting
 
 Built / Running
     human_view   200  HTTP and WebSocket reverse-proxied to
-                      runtime_node_uri:bound_port. WS upgrade is
+                      runtime_node_ura:bound_port. WS upgrade is
                       mandatory — dev servers like Vite require
                       HMR; a hub that strips Upgrade headers
                       breaks the demo.
@@ -958,7 +958,7 @@ TR-INV-11  URA-receipt traceability
 TR-INV-12  Hub-translated caller identity
            When a Hub translates an external (HTTP/WS) request into
            an EasyNet invocation, the resulting envelope.caller MUST
-           be a structured principal URI in the form:
+           be a structured principal URA in the form:
 
              easynet:///principal/human-anon/<ip-hash>/<session-id|"-">
 
@@ -986,7 +986,7 @@ TR-INV-12  Hub-translated caller identity
                            pollute the receipt log with orphan
                            sessions that look distinct but aren't.
 
-           Hubs MUST NOT substitute their own agent URI as caller
+           Hubs MUST NOT substitute their own agent URA as caller
            for translated requests. Doing so would corrupt the
            audit chain (every public reader would appear in
            receipt logs as the hub itself), defeating TR-INV-11.
@@ -1009,7 +1009,7 @@ TR-INV-12  Hub-translated caller identity
            requests into pages.get / webapp ability invocations.
            Without an explicit caller scheme for the resulting
            envelope, implementers face three bad choices: lie
-           (use hub's agent URI), invent (each hub picks a
+           (use hub's agent URA), invent (each hub picks a
            different placeholder, unbiddably), or break the
            invariant (empty caller). All three corrupt audit;
            the third also breaks scope-check. RFC-006 main MUST
@@ -1024,10 +1024,10 @@ TR-INV-13  Caller-context as observability channel
            detected.
            caller_context MUST satisfy:
              (a) Identity stability: two requests from the same
-                 (ip, session) yield identical caller URIs even
+                 (ip, session) yield identical caller URAs even
                  when their caller_context maps differ. Hubs MUST
                  NOT fold any caller_context field into the caller
-                 URI.
+                 URA.
              (b) Operational only: caller_context MAY appear in
                  OperationalReceipts; it MUST NOT appear in
                  CanonicalReceipts and MUST NOT participate in
@@ -1053,7 +1053,7 @@ TR-INV-13  Caller-context as observability channel
                  heuristic, not a verifiable assertion. RFC-006
                  main MUST NOT attach trust semantics to any
                  caller_context field; trust attaches to the
-                 caller URI alone.
+                 caller URA alone.
            Why surfaced: TR-INV-12 fixed identity at the public-web
            boundary. Identity is necessary but insufficient: a
            shopping page wants to know whether reads came from a

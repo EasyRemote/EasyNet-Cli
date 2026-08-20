@@ -5,7 +5,7 @@
 // Description: Pure-function TLS-pinning helpers shared by every
 //              outbound dial that targets a hub-mode peer
 //              (`cross_hub_dial::resolve_peer_channel` for hub-to-hub
-//              cross-realm forward_invoke, `daemon::invocation::session_
+//              cross-realm canonical_invoke, `daemon::invocation::session_
 //              initiator::dial_and_run_session` for device-to-hub
 //              `session.open` bootstrap).
 //
@@ -58,7 +58,7 @@ use tonic::transport::{Certificate, ClientTlsConfig};
 
 /// Typed failure variants for [`pinned_tls_config`]. Callers wrap
 /// these into their own error families (e.g.
-/// `FederationClientError::DialFailed { hub, detail }` or
+/// `FederationClientError::DialFailed { endpoint, detail }` or
 /// `SessionError::TlsCaRead { path, source }`) so each call site's
 /// upstream error contract stays intact.
 #[derive(Debug)]

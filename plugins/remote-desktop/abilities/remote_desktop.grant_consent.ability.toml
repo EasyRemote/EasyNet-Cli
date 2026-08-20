@@ -1,0 +1,28 @@
+schema_version = "3"
+name = "remote_desktop.grant_consent"
+descriptor_version = "1.0.0"
+description = "Record explicit local-user consent for creating a remote desktop session on the selected display/window/application resource. The terminal receipt of this invocation must be supplied as causal_context to remote_desktop.create_session."
+exposure = "operator"
+dedicated_surface = "remote_desktop"
+subject_contract_kind = "dedicated-surface"
+call_mode = "rpc"
+capability_state = "provider_backed"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "only_ura_kinds"
+scope_subjects_uras = ["resource"]
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["intent"]
+additionalProperties = false
+
+[input_schema.properties.intent]
+type = "string"
+enum = ["remote_desktop_session"]

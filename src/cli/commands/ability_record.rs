@@ -23,8 +23,8 @@ use crate::daemon::persistence::config::{
     atomic_write_with_permissions, state_dir, WritePermissions,
 };
 use crate::support::platform::local_invoke::{
-    invoke_local_ability, invoke_local_ability_target_stream_with_subject,
-    invoke_local_ability_target_with_subject_timeout, LocalAbilityTarget, LocalStreamFrame,
+    LocalAbilityTarget, LocalDaemonSystemAbilityIssuer, LocalRuntimeCatalogueReadIssuer,
+    LocalStreamFrame,
 };
 use crate::support::platform::{output, timeouts};
 
@@ -49,7 +49,7 @@ pub struct RecordArgs {
     /// Camera recording duration in milliseconds.
     #[arg(long, value_name = "MS", default_value_t = DEFAULT_CAMERA_RECORD_DURATION_MS)]
     pub duration_ms: u64,
-    /// Per-invocation transport deadline in seconds. '0' inherits the runtime default.
+    /// Per-invocation transport guard in seconds. '0' uses the configured invocation guard.
     #[arg(long, value_name = "SECS", default_value_t = timeouts::INVOKE_DEFAULT_SECS)]
     pub timeout: u64,
     /// Directory where mic stream recording files are created.
@@ -98,10 +98,10 @@ fn run_camera_transition_recording(plan: &RecordingPlan) -> anyhow::Result<()> {
     let stop_target = LocalAbilityTarget::from_selector(&stop_selector);
     let start_args = camera_start_arguments(plan)?;
 
-    let start = invoke_local_ability_target_with_subject_timeout(
+    let start = LocalDaemonSystemAbilityIssuer::invoke_target_root_timeout(
         &start_target,
         start_args,
-        Some(plan.subject.clone()),
+        &plan.subject,
         plan.timeout,
     )
     .context("invoke camera.record_start")?;
@@ -117,10 +117,10 @@ fn run_camera_transition_recording(plan: &RecordingPlan) -> anyhow::Result<()> {
 
     std::thread::sleep(plan.duration);
 
-    let stop = invoke_local_ability_target_with_subject_timeout(
+    let stop = LocalDaemonSystemAbilityIssuer::invoke_target_root_timeout(
         &stop_target,
         json!({ "recording_session_id": session_id }),
-        Some(plan.subject.clone()),
+        &plan.subject,
         plan.timeout,
     )
     .context("invoke camera.record_stop")?;
@@ -190,13 +190,6 @@ impl MediaRecordingKind {
             Self::Camera => "jpg",
         }
     }
-
-    fn fallback_content_type(self) -> &'static str {
-        match self {
-            Self::Mic => "audio/L16",
-            Self::Camera => "image/jpeg",
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -243,9 +236,8 @@ impl RecordingPlan {
             Some(subject) => subject.to_string(),
             None => default_resource_ura(kind)?,
         };
-        let timeout_ms = timeouts::effective_ms(args.timeout)
-            .map_err(anyhow::Error::msg)?
-            .unwrap_or(timeouts::INVOKE_DEFAULT_SECS * 1000);
+        let timeout =
+            timeouts::invocation_transport_guard(args.timeout).map_err(anyhow::Error::msg)?;
         let target = LocalAbilityTarget::from_selector(&selector);
 
         Ok(Self {
@@ -254,7 +246,7 @@ impl RecordingPlan {
             kind,
             arguments,
             subject,
-            timeout: Duration::from_millis(timeout_ms),
+            timeout,
             duration: Duration::from_millis(args.duration_ms),
             max_frames: args.max_frames,
             output_dir: args.output_dir,
@@ -263,10 +255,10 @@ impl RecordingPlan {
     }
 
     fn invoke_stream(&self) -> anyhow::Result<Vec<LocalStreamFrame>> {
-        invoke_local_ability_target_stream_with_subject(
+        LocalDaemonSystemAbilityIssuer::stream_target_root(
             &self.target,
             self.arguments.clone(),
-            Some(self.subject.clone()),
+            &self.subject,
             self.timeout,
             Some(self.max_frames),
         )
@@ -319,25 +311,76 @@ fn camera_start_arguments(plan: &RecordingPlan) -> anyhow::Result<Value> {
 fn default_resource_ura(kind: MediaRecordingKind) -> anyhow::Result<String> {
     let resource_type = kind.resource_type();
     let response =
-        invoke_local_ability("meta.list_resources", json!({"types": [resource_type]}))
+        LocalRuntimeCatalogueReadIssuer::list_resources(json!({"types": [resource_type]}))
             .with_context(|| format!("invoke meta.list_resources(types=[\"{resource_type}\"])"))?;
+    select_default_resource_ura(kind, &response)
+}
+
+fn select_default_resource_ura(
+    kind: MediaRecordingKind,
+    response: &Value,
+) -> anyhow::Result<String> {
+    let resource_type = kind.resource_type();
     let resources = response
         .get("resources")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("meta.list_resources response missing resources array"))?;
-    resources
-        .iter()
-        .filter(|entry| entry.get("type").and_then(Value::as_str) == Some(resource_type))
-        .filter_map(|entry| entry.get("resource_ura").and_then(Value::as_str))
+    let mut selected = None;
+    for (idx, entry) in resources.iter().enumerate() {
+        let resource_ura = resource_row_ura(idx, entry, resource_type)?;
+        if selected.is_none() {
+            selected = Some(resource_ura.to_string());
+        }
+    }
+    if let Some(resource_ura) = selected {
+        return Ok(resource_ura);
+    }
+    anyhow::bail!(
+        "no {resource_type} resource is registered on this daemon; restart the daemon so \
+         media resource bootstrap can scan devices, or pass --subject with a resource_ura"
+    )
+}
+
+fn resource_row_ura<'a>(
+    idx: usize,
+    entry: &'a Value,
+    expected_type: &str,
+) -> anyhow::Result<&'a str> {
+    let object = entry
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("meta.list_resources resources[{idx}] must be an object"))?;
+    let resource_type = object
+        .get("type")
+        .and_then(Value::as_str)
         .map(str::trim)
-        .find(|resource_ura| !resource_ura.is_empty())
-        .map(str::to_string)
+        .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            anyhow::anyhow!(
-                "no {resource_type} resource is registered on this daemon; restart the daemon so \
-                 media resource bootstrap can scan devices, or pass --subject with a resource_ura"
-            )
-        })
+            anyhow::anyhow!("meta.list_resources resources[{idx}] missing non-empty type")
+        })?;
+    if resource_type != expected_type {
+        anyhow::bail!(
+            "meta.list_resources resources[{idx}] type {resource_type:?} did not match requested {expected_type:?}"
+        );
+    }
+    let resource_ura = object
+        .get("resource_ura")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!("meta.list_resources resources[{idx}] missing non-empty resource_ura")
+        })?;
+    let parsed = crate::core::ura::parse_ura(resource_ura).map_err(|error| {
+        anyhow::anyhow!(
+            "meta.list_resources resources[{idx}] resource_ura {resource_ura:?} is not canonical: {error}"
+        )
+    })?;
+    if parsed.kind != crate::core::ura::URAKind::Resource {
+        anyhow::bail!(
+            "meta.list_resources resources[{idx}] resource_ura {resource_ura:?} is not a Resource URA"
+        );
+    }
+    Ok(resource_ura)
 }
 
 #[derive(Debug)]
@@ -420,6 +463,7 @@ impl RecordingSink {
         else {
             return Ok(());
         };
+        let content_type = artifact_content_type(frame, self.kind)?;
         let bytes = BASE64_STANDARD.decode(encoded).with_context(|| {
             format!(
                 "decode {} from stream frame {}",
@@ -435,7 +479,6 @@ impl RecordingSink {
         let path = self.directory.join(&file_name);
         atomic_write_with_permissions(&path, &bytes, WritePermissions::OwnerReadWrite)
             .with_context(|| format!("write recording artifact {}", path.display()))?;
-        let content_type = frame_content_type(frame, self.kind);
 
         self.byte_count += bytes.len();
         self.artifact_count += 1;
@@ -495,14 +538,24 @@ struct RecordingArtifact {
     content_type: String,
 }
 
-fn frame_content_type(frame: &LocalStreamFrame, kind: MediaRecordingKind) -> String {
-    frame
+fn artifact_content_type(
+    frame: &LocalStreamFrame,
+    kind: MediaRecordingKind,
+) -> anyhow::Result<String> {
+    let content_type = frame
         .payload
         .get("content_type")
         .and_then(Value::as_str)
-        .or_else(|| (!frame.content_type.trim().is_empty()).then_some(frame.content_type.as_str()))
-        .unwrap_or_else(|| kind.fallback_content_type())
-        .to_string()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "recording artifact frame {} for {} omitted content_type",
+                frame.sequence,
+                kind.directory_name()
+            )
+        })?;
+    Ok(content_type.to_string())
 }
 
 fn recording_directory(plan: &RecordingPlan, started_at: DateTime<Utc>) -> anyhow::Result<PathBuf> {
@@ -538,8 +591,10 @@ mod tests {
     use super::*;
 
     fn mic_plan(output_dir: PathBuf) -> RecordingPlan {
-        let selector =
-            AbilitySelector::parse("easynet:///r/acme/ability/device.dev.mic.subscribe").unwrap();
+        let selector = AbilitySelector::parse(
+            "easynet:///r/acme/ability/system-agent.dev.media.mic.subscribe",
+        )
+        .unwrap();
         let target = LocalAbilityTarget::from_selector(&selector);
         RecordingPlan {
             selector,
@@ -558,7 +613,8 @@ mod tests {
     #[test]
     fn record_rejects_zero_frame_budget_before_ipc() {
         let err = RecordingPlan::from_args(RecordArgs {
-            ability_ura: "easynet:///r/acme/ability/device.dev.mic.subscribe".to_string(),
+            ability_ura: "easynet:///r/acme/ability/system-agent.dev.media.mic.subscribe"
+                .to_string(),
             args: None,
             subject: Some("easynet:///r/acme/resource/device.dev/streams/mic.1".to_string()),
             max_frames: 0,
@@ -591,19 +647,20 @@ mod tests {
 
     #[test]
     fn camera_recording_uses_same_owner_transition_abilities() {
-        let selector =
-            AbilitySelector::parse("easynet:///r/acme/ability/device.dev.camera.subscribe")
-                .unwrap();
+        let selector = AbilitySelector::parse(
+            "easynet:///r/acme/ability/system-agent.dev.media.camera.subscribe",
+        )
+        .unwrap();
         let start = sibling_ability_selector(&selector, "camera.record_start").unwrap();
         let stop = sibling_ability_selector(&selector, "camera.record_stop").unwrap();
 
         assert_eq!(
             start.ability_ura(),
-            "easynet:///r/acme/ability/device.dev.camera.record_start"
+            "easynet:///r/acme/ability/system-agent.dev.media.camera.record_start"
         );
         assert_eq!(
             stop.ability_ura(),
-            "easynet:///r/acme/ability/device.dev.camera.record_stop"
+            "easynet:///r/acme/ability/system-agent.dev.media.camera.record_stop"
         );
         assert_eq!(start.owner_ura(), selector.owner_ura());
         assert_eq!(stop.owner_ura(), selector.owner_ura());
@@ -611,9 +668,10 @@ mod tests {
 
     #[test]
     fn camera_start_arguments_add_recording_defaults() {
-        let selector =
-            AbilitySelector::parse("easynet:///r/acme/ability/device.dev.camera.subscribe")
-                .unwrap();
+        let selector = AbilitySelector::parse(
+            "easynet:///r/acme/ability/system-agent.dev.media.camera.subscribe",
+        )
+        .unwrap();
         let target = LocalAbilityTarget::from_selector(&selector);
         let plan = RecordingPlan {
             selector,
@@ -632,6 +690,95 @@ mod tests {
         assert_eq!(args["codec"], "mjpeg");
         assert_eq!(args["fps"], 5);
         assert_eq!(args["max_duration_ms"], 3_000);
+    }
+
+    #[test]
+    fn default_resource_selection_returns_schema_bound_resource_ura() {
+        let selected = select_default_resource_ura(
+            MediaRecordingKind::Mic,
+            &json!({
+                "resources": [{
+                    "type": "mic",
+                    "resource_ura": "easynet:///r/acme/resource/device.dev/streams/mic.1",
+                    "display_name": "Built-in Mic"
+                }]
+            }),
+        )
+        .expect("valid resource row");
+
+        assert_eq!(
+            selected,
+            "easynet:///r/acme/resource/device.dev/streams/mic.1"
+        );
+    }
+
+    #[test]
+    fn default_resource_selection_rejects_matching_row_without_resource_ura() {
+        let err = select_default_resource_ura(
+            MediaRecordingKind::Mic,
+            &json!({
+                "resources": [{
+                    "type": "mic",
+                    "display_name": "Built-in Mic"
+                }]
+            }),
+        )
+        .expect_err("malformed resource row must fail closed");
+
+        assert!(
+            err.to_string()
+                .contains("resources[0] missing non-empty resource_ura"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !err.to_string().contains("no mic resource"),
+            "malformed read-model row must not be projected as empty inventory: {err}"
+        );
+    }
+
+    #[test]
+    fn default_resource_selection_rejects_non_resource_ura() {
+        let err = select_default_resource_ura(
+            MediaRecordingKind::Camera,
+            &json!({
+                "resources": [{
+                    "type": "camera",
+                    "resource_ura": "easynet:///r/acme/device/dev"
+                }]
+            }),
+        )
+        .expect_err("resource row must carry Resource URA");
+
+        assert!(
+            err.to_string().contains("is not a Resource URA"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn default_resource_selection_validates_all_returned_rows_before_selecting() {
+        let err = select_default_resource_ura(
+            MediaRecordingKind::Mic,
+            &json!({
+                "resources": [
+                    {
+                        "type": "mic",
+                        "resource_ura": "easynet:///r/acme/resource/device.dev/streams/mic.1"
+                    },
+                    {
+                        "type": "mic",
+                        "resource_ura": ""
+                    }
+                ]
+            }),
+        )
+        .expect_err("later malformed rows must not be hidden by first valid row");
+
+        assert!(
+            err.to_string()
+                .contains("resources[1] missing non-empty resource_ura"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -660,5 +807,57 @@ mod tests {
         assert_eq!(manifest["kind"], "mic");
         assert_eq!(manifest["artifact_count"], 1);
         assert_eq!(manifest["artifacts"][0]["file"], "frame-000003.pcm");
+        assert_eq!(
+            manifest["artifacts"][0]["content_type"],
+            "audio/L16; rate=48000; channels=1"
+        );
+    }
+
+    #[test]
+    fn recording_sink_rejects_artifact_without_content_type() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let output_dir = state_dir().join("test-recordings");
+        let plan = mic_plan(output_dir);
+        let frames = vec![LocalStreamFrame {
+            sequence: 3,
+            content_type: String::new(),
+            terminal: false,
+            payload: json!({
+                "samples_b64": BASE64_STANDARD.encode([0, 1, 2, 3]),
+            }),
+        }];
+
+        let mut sink = RecordingSink::create(&plan).unwrap();
+        let error = sink
+            .write_frames(&frames)
+            .expect_err("artifact content_type is mandatory");
+        assert!(
+            error.to_string().contains("omitted content_type"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn recording_sink_rejects_artifact_content_type_from_transport_fallback() {
+        let _g = crate::cli::commands::test_support::HomeGuard::new();
+        let output_dir = state_dir().join("test-recordings");
+        let plan = mic_plan(output_dir);
+        let frames = vec![LocalStreamFrame {
+            sequence: 3,
+            content_type: "application/json".to_string(),
+            terminal: false,
+            payload: json!({
+                "samples_b64": BASE64_STANDARD.encode([0, 1, 2, 3]),
+            }),
+        }];
+
+        let mut sink = RecordingSink::create(&plan).unwrap();
+        let error = sink
+            .write_frames(&frames)
+            .expect_err("artifact MIME must not fall back to transport content_type");
+        assert!(
+            error.to_string().contains("omitted content_type"),
+            "unexpected error: {error}"
+        );
     }
 }

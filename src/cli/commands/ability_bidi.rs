@@ -4,14 +4,17 @@
 // File: src/cli/ability_bidi.rs
 // Description: `easynet ability bidi <ability-ura> [--args JSON]`.
 
-use std::time::Duration;
-
 use anyhow::Context;
 use clap::{Args, ValueEnum};
 use serde_json::{json, Value};
 
+#[cfg(not(feature = "axon-pb"))]
+use crate::cli::commands::invocation_tuple::remote_invocation_transport_unsupported;
+use crate::cli::commands::invocation_tuple::{
+    required_causal_context, required_nonce_hex, required_subject, AbilityInvocationRef,
+};
 use crate::support::platform::local_invoke::{
-    invoke_local_ability_target_bidi_json_frames_with_subject, LocalAbilityTarget, LocalBidiFrame,
+    invoke_local_target_bidi_json_frames_explicit_causal, LocalAbilityTarget, LocalBidiFrame,
 };
 use crate::support::platform::{output, timeouts};
 
@@ -29,18 +32,33 @@ pub enum BidiOutputFormat {
 pub struct BidiArgs {
     /// Canonical Ability URA returned by `easynet ability list`.
     pub ability_ura: String,
+    /// Route through a Device placement locator or pin the exact catalogue
+    /// Agent/SystemAgent/Service/Authority callee through canonical InvokeBidi.
+    #[arg(long, short = 'n', value_name = "URA")]
+    pub node: Option<String>,
     /// JSON object passed as the bidi session's initial arguments.
     #[arg(long, value_name = "JSON")]
     pub args: Option<String>,
     /// Optional JSON frame to send after open. Can be repeated.
     #[arg(long = "input", value_name = "JSON")]
     pub input_frames: Vec<String>,
-    /// Per-session transport deadline in seconds. '0' inherits the runtime default.
+    /// Per-session transport guard in seconds. '0' uses the configured invocation guard.
     #[arg(long, value_name = "SECS", default_value_t = timeouts::INVOKE_DEFAULT_SECS)]
     pub timeout: u64,
     /// AXIOM envelope subject, expressed as a canonical resource URA.
     #[arg(long, value_name = "URA")]
     pub subject: Option<String>,
+    /// Explicit 16-byte invocation nonce as 32 hex characters.
+    #[arg(long, value_name = "HEX")]
+    pub nonce_hex: Option<String>,
+    /// Declare this bidi session as a root invocation with an empty causal parent set.
+    /// Mutually exclusive with --causal-context-json.
+    #[arg(long)]
+    pub causal_root: bool,
+    /// Explicit non-root causal context JSON. Root sessions must use
+    /// --causal-root so root placement has one encoding.
+    #[arg(long, value_name = "JSON")]
+    pub causal_context_json: Option<String>,
     /// Stop after this many down frames. Defaults to a bounded diagnostic sample.
     #[arg(long, value_name = "N")]
     pub max_frames: Option<usize>,
@@ -59,8 +77,35 @@ pub fn run(args: BidiArgs) -> anyhow::Result<()> {
     if args.max_frames == Some(0) {
         anyhow::bail!("--max-frames must be greater than 0 when provided");
     }
-    let ability_selector = crate::core::ura::AbilitySelector::parse(&args.ability_ura)
-        .context("parse <ability-ura>")?;
+    let ability_ref = AbilityInvocationRef::parse(&args.ability_ura)?;
+    let ability_selector = ability_ref.selector();
+    let route_target: Option<
+        crate::daemon::invocation::routing::route_target::RemoteAbilityRouteTarget,
+    > = match args.node.as_deref().map(str::trim) {
+        None => None,
+        Some("") => anyhow::bail!(
+            "--node was given but empty; omit the flag to open bidi locally, \
+             or pass a Device placement or exact Agent/SystemAgent/Service/Authority callee URA"
+        ),
+        Some(node) => {
+            #[cfg(feature = "axon-pb")]
+            {
+                Some(
+                    crate::daemon::invocation::routing::route_target::RemoteAbilityRouteTarget::parse(
+                        node,
+                        ability_selector,
+                    )?,
+                )
+            }
+            #[cfg(not(feature = "axon-pb"))]
+            {
+                let _ = node;
+                return Err(remote_invocation_transport_unsupported(
+                    "remote ability bidi with --node",
+                ));
+            }
+        }
+    };
     let arguments: Value = match args.args.as_deref() {
         Some(s) => serde_json::from_str(s).context("parse --args JSON")?,
         None => Value::Object(Default::default()),
@@ -70,25 +115,77 @@ pub fn run(args: BidiArgs) -> anyhow::Result<()> {
         .iter()
         .map(|raw| serde_json::from_str(raw).context("parse --input JSON"))
         .collect::<anyhow::Result<Vec<Value>>>()?;
-    let timeout_ms = timeouts::effective_ms(args.timeout)
-        .map_err(anyhow::Error::msg)?
-        .unwrap_or(timeouts::INVOKE_DEFAULT_SECS * 1000);
-    let target = LocalAbilityTarget::from_selector(&ability_selector);
-    let frames = invoke_local_ability_target_bidi_json_frames_with_subject(
-        &target,
-        arguments,
-        args.subject
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string),
-        Duration::from_millis(timeout_ms),
-        input_frames,
-        drain_limit(args.max_frames, args.until_terminal),
-    )?;
+    let timeout = timeouts::invocation_transport_guard(args.timeout).map_err(anyhow::Error::msg)?;
+    let target = LocalAbilityTarget::from_selector(ability_selector);
+    let frames = match route_target.as_ref() {
+        #[cfg(feature = "axon-pb")]
+        Some(route_target) => {
+            let identity = crate::support::platform::remote_device::PairedInvocationIdentity::load(
+                "remote ability bidi",
+            )?;
+            let remote_target = ability_ref
+                .remote_target_for_mode(route_target, crate::daemon::ability::CallMode::Bidi)?;
+            let surface = "remote ability bidi with --node";
+            let subject = required_subject(args.subject.as_deref(), surface)?.to_string();
+            let invocation_nonce = required_nonce_hex(args.nonce_hex.as_deref(), surface)?;
+            let causal_context = required_causal_context(
+                args.causal_root,
+                args.causal_context_json.as_deref(),
+                surface,
+            )?;
+            let request =
+                crate::daemon::invocation::routing::remote_invoke::RemoteInvocationTuplePlan::public_explicit(
+                    &remote_target,
+                    identity.caller_user_ura().to_string(),
+                    subject,
+                    invocation_nonce,
+                    causal_context,
+                    arguments,
+                    timeout,
+                )?
+                .into_request()?;
+            crate::daemon::invocation::routing::remote_invoke::invoke_remote_target_bidi_json_frames(
+                request,
+                input_frames,
+                drain_limit(args.max_frames, args.until_terminal),
+            )?
+        }
+        #[cfg(not(feature = "axon-pb"))]
+        Some(_) => unreachable!("--node unsupported return handled before dispatch"),
+        None => {
+            if ability_ref.is_descriptor_ref() {
+                anyhow::bail!(
+                    "local ability bidi does not accept descriptor refs; omit `@version` \
+                     for local dispatch or pass `--node` for remote descriptor-bound origin proof"
+                );
+            }
+            let surface = "local ability bidi";
+            let subject = required_subject(args.subject.as_deref(), surface)?;
+            let invocation_nonce = required_nonce_hex(args.nonce_hex.as_deref(), surface)?;
+            let causal_context = required_causal_context(
+                args.causal_root,
+                args.causal_context_json.as_deref(),
+                surface,
+            )?;
+            invoke_local_target_bidi_json_frames_explicit_causal(
+                &target,
+                arguments,
+                subject,
+                invocation_nonce,
+                causal_context,
+                timeout,
+                input_frames,
+                drain_limit(args.max_frames, args.until_terminal),
+            )?
+        }
+    };
     print_frames(&frames, args.raw, args.format)?;
+    let fulfilled_by = route_target
+        .as_ref()
+        .map(|target| format!("canonical InvokeBidi target={}", target.as_str()))
+        .unwrap_or_else(|| "local daemon".to_string());
     output::success(&format!(
-        "{} -> bidi drained {} frame(s) (local daemon)",
+        "{} -> bidi drained {} frame(s) ({fulfilled_by})",
         ability_selector.ability_ura(),
         frames.len()
     ));
@@ -162,11 +259,17 @@ mod tests {
     #[test]
     fn zero_max_frames_is_rejected_before_ipc() {
         let err = run(BidiArgs {
-            ability_ura: "easynet:///r/acme/ability/device.dev.remote_desktop.attach".to_string(),
+            ability_ura:
+                "easynet:///r/acme/ability/system-agent.dev.plugin-management.remote_desktop.attach"
+                    .to_string(),
+            node: None,
             args: None,
             input_frames: Vec::new(),
             timeout: 60,
             subject: None,
+            nonce_hex: None,
+            causal_root: false,
+            causal_context_json: None,
             max_frames: Some(0),
             until_terminal: false,
             raw: false,

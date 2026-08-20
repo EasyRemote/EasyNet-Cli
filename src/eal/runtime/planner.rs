@@ -657,10 +657,12 @@ fn lower_call(step: &AnalyzedStep) -> anyhow::Result<IrStep> {
             IrTarget::Agent(agent_id)
         }
         TargetKind::Device => {
-            // Traditional form may omit `on "..."` (legacy missions);
-            // store as empty node id rather than failing the compile.
-            // The dispatcher will surface a clearer error at runtime.
-            let node_id = step.call.target_node.clone().unwrap_or_default();
+            let node_id = step.call.target_node.clone().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "step '{}': traditional call form requires explicit `on \"device\"` target",
+                    step.step_id
+                )
+            })?;
             IrTarget::Device { node_id }
         }
     };

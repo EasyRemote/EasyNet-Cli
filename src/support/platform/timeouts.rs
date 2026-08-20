@@ -4,7 +4,7 @@
 // File: src/shared/timeouts.rs
 // Description: Single source of truth for every timeout constant in
 //              the CLI — both the user-visible `--timeout` defaults
-//              and the internal plumbing deadlines (bridge connect,
+//              and the internal plumbing deadlines (daemon connect,
 //              …). Values are declared *here* and referenced by each
 //              call site, so help text, compiled-in value, and
 //              cross-command policy cannot drift from one another.
@@ -18,12 +18,12 @@
 //    three buckets chosen for a human's wall-clock expectation of the
 //    operation:
 //
-//     - [`INVOKE_DEFAULT_SECS`]      — short network-bound tool calls.
-//                                      60 s is generous for any
-//                                      well-behaved ability; a longer
-//                                      budget belongs in the ability's
-//                                      own execution window, not at
-//                                      the CLI surface.
+//     - [`INVOKE_DEFAULT_SECS`]      — ability invocations over unary,
+//                                      stream, bidi, exec, and recording
+//                                      surfaces. The concrete transport guard
+//                                      is one hour because real tool-using
+//                                      abilities can legitimately run for
+//                                      minutes-to-tens-of-minutes.
 //     - [`AGENT_SEND_DEFAULT_SECS`]  — LLM-backed dispatches (Claude
 //                                      Code / Codex). These can stream
 //                                      for many minutes on a large
@@ -32,39 +32,27 @@
 //                                      users can raise it explicitly.
 //     - [`THINK_DEFAULT_SECS`]       — per-cycle budget inside the
 //                                      autonomous loop. Each cycle is
-//                                      one think + one action; 120 s
-//                                      is the legacy value kept for
-//                                      back-compat.
+//                                      one think + one action; it shares the
+//                                      same one-hour invocation budget.
+//     - [`CATALOGUE_READ_DEFAULT_SECS`]
+//                                    — metadata/catalogue reads. These are
+//                                      discovery operations, not long-running
+//                                      tool executions, so they use a short
+//                                      bounded deadline.
+//     - [`REMOTE_SYSTEM_DEFAULT_SECS`]
+//                                    — target-owned daemon system abilities
+//                                      such as node.describe and voice control.
 //
-// 2. **Infrastructure** (internal plumbing deadlines, never surfaced
-//    as a flag). Today there is one:
-//
-//     - [`BRIDGE_CONNECT_TIMEOUT_MS`] — how long a `DendriteBridge::
-//                                      connect` is allowed to block
-//                                      before we declare the local
-//                                      runtime unreachable. 5 s is
-//                                      short enough to fail fast for
-//                                      an unattended CLI invocation
-//                                      yet long enough to absorb a
-//                                      cold UDS accept under load.
-//
-// The number `0` is reserved across the CLI to mean "inherit the
-// runtime default" — never hard-coded, but often plumbed through the
-// bridge layer for per-operation budgets. [`effective_ms`] converts a
-// user-facing seconds value to an `Option<u64>` in milliseconds so
-// bridge callers can feed it straight into
-// `call_mcp_tool_with_timeout`.
+// The number `0` is interpreted by a named [`TimeoutPolicy`]. Payload
+// deadlines may preserve `0` as "inherit the runtime default". Transport
+// guards cannot be absent, so they explicitly resolve `0` to the command's
+// configured guard deadline instead of leaving each CLI command to hand-roll a
+// fallback.
 //
 // Why the infrastructure constant lives here, not in `shared::mod`
 // ----------------------------------------------------------------
 //
-// Before this consolidation, `BRIDGE_CONNECT_TIMEOUT_MS` sat bare at
-// the top of `shared/mod.rs` alongside an ad-hoc `connect_bridge()`
-// helper. Two readers went looking for "what deadline governs X?"
-// and found answers in two files — the timeout tower claimed to be
-// the single source of truth while the most-called timeout in the
-// codebase escaped it. Hoisting this constant into the tower closes
-// that gap: every `grep` for timeout policy lands in one file.
+// All timeout policy lives here so callers cannot silently drift.
 //
 // Unit convention
 // ---------------
@@ -97,6 +85,21 @@ pub const INVOKE_DEFAULT_SECS: u64 = 3600;
 /// legitimately run for tens of minutes without being stuck.
 pub const AGENT_SEND_DEFAULT_SECS: u64 = 3600;
 
+/// Default deadline for metadata/catalogue reads such as
+/// `meta.list_abilities` and `meta.list_resources`, in seconds.
+///
+/// Catalogue reads are runtime discovery operations. They must fail quickly
+/// with a typed route/deadline error instead of behaving like long-running
+/// ability execution.
+pub const CATALOGUE_READ_DEFAULT_SECS: u64 = 30;
+
+/// Default deadline for target-owned daemon system abilities, in seconds.
+///
+/// These are control-plane operations, not LLM/tool execution. Keep them
+/// short and explicit, but separate from catalogue reads so ownership remains
+/// visible at call sites.
+pub const REMOTE_SYSTEM_DEFAULT_SECS: u64 = 30;
+
 /// Default per-cycle deadline for `easynet think`, in seconds.
 /// Test-only today — `easynet think` is not yet wired through this
 /// constant in production code. Kept under `#[cfg(test)]` so a
@@ -104,29 +107,73 @@ pub const AGENT_SEND_DEFAULT_SECS: u64 = 3600;
 #[cfg(test)]
 pub const THINK_DEFAULT_SECS: u64 = 3600;
 
-/// How long a `DendriteBridge::connect` may block before we declare
-/// the local Axon runtime unreachable, in milliseconds.
+use std::time::Duration;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ZeroTimeoutPolicy {
+    RuntimeDefault,
+    DefaultTransportGuard,
+}
+
+/// Canonical timeout policy for a CLI surface.
 ///
-/// 5 s is the calibrated floor:
-///
-/// - Long enough to absorb a cold UDS / TCP accept on a loaded box,
-///   where the runtime's `accept` loop can stall under heavy fork /
-///   heartbeat traffic for ~1 s in the worst case observed in
-///   practice. A 1 s floor produced flakes under CI load; 5 s
-///   eliminates them without making the "runtime is not running"
-///   error path feel stuck.
-/// - Short enough that an unattended CLI invocation against a down
-///   runtime fails fast — well under the 30 s a human waits before
-///   hitting Ctrl-C.
-///
-/// Not user-tunable by design: every `easynet` command that touches
-/// the runtime should wait the same amount, so `doctor` output is
-/// comparable across commands and operators can learn the shape of a
-/// "runtime down" failure once.
-pub const BRIDGE_CONNECT_TIMEOUT_MS: u64 = 5_000;
+/// The policy owns the difference between an optional runtime request deadline
+/// and a mandatory local transport guard. Callers must choose one of the named
+/// methods rather than converting `0` and then applying ad-hoc fallbacks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeoutPolicy {
+    default_secs: u64,
+    zero: ZeroTimeoutPolicy,
+}
+
+impl TimeoutPolicy {
+    pub const fn runtime_request_default(default_secs: u64) -> Self {
+        Self {
+            default_secs,
+            zero: ZeroTimeoutPolicy::RuntimeDefault,
+        }
+    }
+
+    pub const fn transport_guard_default(default_secs: u64) -> Self {
+        Self {
+            default_secs,
+            zero: ZeroTimeoutPolicy::DefaultTransportGuard,
+        }
+    }
+
+    pub fn request_timeout_ms(self, secs: u64) -> Result<Option<u64>, &'static str> {
+        effective_ms(secs)
+    }
+
+    pub fn transport_guard(self, secs: u64) -> Result<Duration, &'static str> {
+        let millis = match (self.zero, effective_ms(secs)?) {
+            (_, Some(ms)) => ms,
+            (ZeroTimeoutPolicy::DefaultTransportGuard, None) => self.default_ms()?,
+            (ZeroTimeoutPolicy::RuntimeDefault, None) => {
+                return Err("transport guard requires a concrete timeout")
+            }
+        };
+        Ok(Duration::from_millis(millis))
+    }
+
+    fn default_ms(self) -> Result<u64, &'static str> {
+        self.default_secs
+            .checked_mul(1000)
+            .ok_or("timeout default is too large (overflow converting seconds to milliseconds)")
+    }
+}
+
+pub const INVOCATION_TRANSPORT_TIMEOUT: TimeoutPolicy =
+    TimeoutPolicy::transport_guard_default(INVOKE_DEFAULT_SECS);
+pub const RUNTIME_REQUEST_TIMEOUT: TimeoutPolicy =
+    TimeoutPolicy::runtime_request_default(INVOKE_DEFAULT_SECS);
+pub const CATALOGUE_READ_TRANSPORT_TIMEOUT: TimeoutPolicy =
+    TimeoutPolicy::transport_guard_default(CATALOGUE_READ_DEFAULT_SECS);
+pub const REMOTE_SYSTEM_TRANSPORT_TIMEOUT: TimeoutPolicy =
+    TimeoutPolicy::transport_guard_default(REMOTE_SYSTEM_DEFAULT_SECS);
 
 /// Convert a user-facing seconds value (from a `--timeout <N>` flag) to
-/// the `Option<Duration>`-in-milliseconds shape used by the bridge API.
+/// the `Option<Duration>`-in-milliseconds shape used by request payloads.
 ///
 /// `0` is the canonical "inherit the runtime default" sentinel: it maps
 /// to `None`, which the bridge layer interprets as "use whatever the
@@ -142,6 +189,22 @@ pub fn effective_ms(secs: u64) -> Result<Option<u64>, &'static str> {
             .map(Some)
             .ok_or("--timeout is too large (overflow converting seconds to milliseconds)"),
     }
+}
+
+pub fn invocation_transport_guard(secs: u64) -> Result<Duration, &'static str> {
+    INVOCATION_TRANSPORT_TIMEOUT.transport_guard(secs)
+}
+
+pub fn runtime_request_timeout_ms(secs: u64) -> Result<Option<u64>, &'static str> {
+    RUNTIME_REQUEST_TIMEOUT.request_timeout_ms(secs)
+}
+
+pub fn catalogue_read_transport_guard(secs: u64) -> Result<Duration, &'static str> {
+    CATALOGUE_READ_TRANSPORT_TIMEOUT.transport_guard(secs)
+}
+
+pub fn remote_system_transport_guard(secs: u64) -> Result<Duration, &'static str> {
+    REMOTE_SYSTEM_TRANSPORT_TIMEOUT.transport_guard(secs)
 }
 
 #[cfg(test)]
@@ -162,7 +225,38 @@ mod tests {
         // the floor here.
         assert_eq!(effective_ms(INVOKE_DEFAULT_SECS), Ok(Some(3_600_000)));
         assert_eq!(effective_ms(AGENT_SEND_DEFAULT_SECS), Ok(Some(3_600_000)));
+        assert_eq!(effective_ms(CATALOGUE_READ_DEFAULT_SECS), Ok(Some(30_000)));
+        assert_eq!(effective_ms(REMOTE_SYSTEM_DEFAULT_SECS), Ok(Some(30_000)));
         assert_eq!(effective_ms(THINK_DEFAULT_SECS), Ok(Some(3_600_000)));
+    }
+
+    #[test]
+    fn invocation_transport_guard_uses_default_guard_for_zero() {
+        assert_eq!(
+            invocation_transport_guard(0),
+            Ok(Duration::from_secs(INVOKE_DEFAULT_SECS))
+        );
+    }
+
+    #[test]
+    fn runtime_request_timeout_preserves_zero_as_runtime_default() {
+        assert_eq!(runtime_request_timeout_ms(0), Ok(None));
+    }
+
+    #[test]
+    fn catalogue_read_transport_guard_uses_short_default_for_zero() {
+        assert_eq!(
+            catalogue_read_transport_guard(0),
+            Ok(Duration::from_secs(CATALOGUE_READ_DEFAULT_SECS))
+        );
+    }
+
+    #[test]
+    fn remote_system_transport_guard_uses_short_default_for_zero() {
+        assert_eq!(
+            remote_system_transport_guard(0),
+            Ok(Duration::from_secs(REMOTE_SYSTEM_DEFAULT_SECS))
+        );
     }
 
     #[test]
@@ -170,20 +264,5 @@ mod tests {
         // u64::MAX seconds * 1000 would overflow. Surface it as an error
         // rather than silently wrapping or panicking in debug.
         assert!(effective_ms(u64::MAX).is_err());
-    }
-
-    /// Pin the bridge-connect budget so a silent re-tune (e.g. "lower
-    /// it to 1 s to speed up offline tests") has to be made with eyes
-    /// open. The tower's whole purpose is that any change to this
-    /// value is reviewed as a timeout-policy decision, not as an
-    /// incidental `const` edit hidden in some other PR.
-    #[test]
-    fn bridge_connect_budget_is_calibrated_not_ambient() {
-        assert_eq!(
-            BRIDGE_CONNECT_TIMEOUT_MS, 5_000,
-            "BRIDGE_CONNECT_TIMEOUT_MS is a reviewed timeout-policy \
-             constant — if you are changing it, update the module \
-             doc's rationale too"
-        );
     }
 }

@@ -6,11 +6,13 @@
 // runs the registered `command` + `args`, feeds the NL prompt on stdin,
 // and returns stdout as the answer.
 
-use crate::daemon::execution::mission::adapter::{AdapterOutput, AgentAdapter, InvokeOpts};
+use crate::daemon::execution::mission::adapter::{
+    AdapterOutput, AgentAdapter, DriverIsolation, InvokeOpts,
+};
 use crate::daemon::execution::mission::process_runner::{self, ChildOptions};
 use crate::daemon::persistence::agent_registry::AgentEntry;
 
-/// Zero-sized singleton driver for `AgentType::External`.
+/// Zero-sized singleton driver for `RuntimeKind::External`.
 pub(crate) struct ExternalAdapter;
 
 impl AgentAdapter for ExternalAdapter {
@@ -28,20 +30,19 @@ impl AgentAdapter for ExternalAdapter {
         prompt: &str,
         opts: InvokeOpts,
     ) -> anyhow::Result<AdapterOutput> {
-        let command = if !entry.command.is_empty() {
-            entry.command.clone()
-        } else {
-            opts.command.clone()
-        };
-        if command.is_empty() {
+        if opts.system_prompt.is_some() || opts.isolation == DriverIsolation::Strict {
+            anyhow::bail!("external agent drivers do not implement structured strict chat input");
+        }
+        let command = opts.command.explicit();
+        let Some(command) = command else {
             anyhow::bail!(
                 "external agent has no command configured; register it with \
                  `easynet agent add <name> --type external --command <program> [--arg ...]`"
             );
-        }
+        };
         let args: Vec<&str> = entry.args.iter().map(String::as_str).collect();
         let result = process_runner::run_child(
-            &command,
+            command,
             &args,
             ChildOptions {
                 timeout: opts.timeout,

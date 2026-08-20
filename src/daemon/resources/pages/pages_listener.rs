@@ -4,15 +4,15 @@
 // File: src/daemon/hub/pages_listener.rs
 // Description: in-daemon axum listener bound to
 //              `127.0.0.1:<port>`. Per-request: parses the Host
-//              header into `(project, user)`, calls the Hub's
-//              `pages.serve` adapter, and frames the result as
+//              header into `(project, user)`, consumes the local
+//              Pages HTTP byte projection, and frames the result as
 //              an HTTP response.
 //
 //              This listener is the MVP's HTTP boundary. Production
-//              traffic enters EasyNet through the Go backend's
-//              wildcard listener at `*.*.pages.easynet.run`; the
-//              cut-over (Phase 2) replaces this listener but
-//              keeps the same `01HUB.pages.serve` ability shape.
+//              traffic can enter EasyNet through a product backend
+//              wildcard listener, but this daemon listener remains
+//              a bounded HTTP adapter rather than a canonical
+//              Invocation/receipt surface.
 //
 // Conformance: RFC-006-B v0.6 §3.2 (URL form),
 //              INV-1 (Adapter Purity), INV-3 (Deterministic
@@ -30,9 +30,12 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::routing::any;
 use axum::Router;
+use bytes::Bytes;
+use std::convert::Infallible;
 use tokio::task::JoinHandle;
+use tokio_stream::wrappers::ReceiverStream;
 
-use super::pages_serve_ability::{serve_bytes, ServedBytes};
+use super::pages_http_projection::{serve_bytes, ServedBytes};
 
 const PAGES_HEALTH_PATH: &str = "/_easynet/pages/health";
 
@@ -210,10 +213,14 @@ async fn handle(req: Request<Body>) -> Response<Body> {
             Ok(b) => b,
             Err(_) => return text_response(StatusCode::BAD_REQUEST, "body too large\n"),
         };
-        let body_value: serde_json::Value = if body_bytes.is_empty() {
-            serde_json::Value::Null
-        } else {
-            serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null)
+        let body_value = match parse_pages_api_body(&body_bytes) {
+            Ok(value) => value,
+            Err(err) => {
+                return text_response(
+                    StatusCode::BAD_REQUEST,
+                    &format!("invalid JSON body: {err}\n"),
+                );
+            }
         };
 
         let user_owned = user.clone();
@@ -341,6 +348,14 @@ fn text_response(status: StatusCode, msg: &str) -> Response<Body> {
         .expect("text response build")
 }
 
+fn parse_pages_api_body(body_bytes: &[u8]) -> Result<serde_json::Value, serde_json::Error> {
+    if body_bytes.is_empty() {
+        Ok(serde_json::Value::Null)
+    } else {
+        serde_json::from_slice(body_bytes)
+    }
+}
+
 /// CORS preflight — the Hub allows cross-origin POST so a frontend
 /// served at `<project>.<user>.pages.localhost:<port>` can call
 /// `<other-project>.<user>.pages.localhost:<port>/api/...` without
@@ -358,6 +373,10 @@ fn cors_preflight() -> Response<Body> {
         .expect("preflight response")
 }
 
+fn json_body_bytes(value: &serde_json::Value) -> Vec<u8> {
+    serde_json::to_vec(value).expect("serde_json::Value serializes to JSON")
+}
+
 /// Wrap an api ability's `{status, body, content_type}` shape into
 /// an HTTP response. Adds `Access-Control-Allow-Origin: *` so the
 /// frontend on a sibling subdomain receives the body.
@@ -373,7 +392,7 @@ fn api_response(value: serde_json::Value) -> Response<Body> {
         .unwrap_or("application/json; charset=utf-8")
         .to_string();
     let body = match value.get("body") {
-        Some(b) => serde_json::to_vec(b).unwrap_or_default(),
+        Some(b) => json_body_bytes(b),
         None => Vec::new(),
     };
 
@@ -400,7 +419,7 @@ fn pages_health_response(head_only: bool) -> Response<Body> {
     let body = if head_only {
         Vec::new()
     } else {
-        serde_json::to_vec(&payload).unwrap_or_default()
+        json_body_bytes(&payload)
     };
 
     let mut builder = Response::builder().status(StatusCode::OK);
@@ -480,6 +499,10 @@ async fn handle_v1_chat_completions(req: Request<Body>) -> Response<Body> {
         adapter_args["auth_token"] = serde_json::json!(token);
     }
 
+    if stream {
+        return streaming_chat_completions_response(openai_runtime, adapter_args);
+    }
+
     // Run the adapter on the blocking pool (it can take a long
     // time — calls into the agent dispatcher).
     let adapter_result = tokio::task::spawn_blocking(move || match openai_runtime {
@@ -509,52 +532,73 @@ async fn handle_v1_chat_completions(req: Request<Body>) -> Response<Body> {
         Err(_) => return text_response(StatusCode::INTERNAL_SERVER_ERROR, "panic\n"),
     };
 
-    if !stream {
-        // Unary path. Strip easynet-only metadata and return.
-        let mut response = value;
-        if let serde_json::Value::Object(ref mut m) = response {
-            m.remove("easynet_user_ura");
-        }
-        return json_response_with_cors(StatusCode::OK, response);
+    // Unary path. Strip easynet-only metadata and return.
+    let mut response = value;
+    if let serde_json::Value::Object(ref mut m) = response {
+        m.remove("easynet_user_ura");
     }
-
-    // Streaming path: walk the chunks list and emit SSE.
-    let chunks = value
-        .get("chunks")
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let done = value
-        .get("done_sentinel")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("[DONE]")
-        .to_string();
-    sse_response(chunks, done)
+    json_response_with_cors(StatusCode::OK, response)
 }
 
-/// Build a Server-Sent-Events response from a list of OpenAI
-/// chunk objects. Sends each as `data: {json}\n\n`, then a
-/// `data: [DONE]\n\n` sentinel.
-///
-/// Implementation note: axum's `Body::from_stream` would be the
-/// cleanest path, but for simplicity v0.1 buffers everything into
-/// one body. The chunks are tiny (≤ ~256 bytes each); there is no
-/// observable lag for typical reply sizes (< 8 KiB). v0.2 will
-/// switch to a real `Body::from_stream` once the underlying chat
-/// ability becomes a true bidi (so the chunks arrive over time
-/// rather than all at once).
-fn sse_response(chunks: Vec<serde_json::Value>, done: String) -> Response<Body> {
-    let mut buf = String::with_capacity(chunks.len() * 256);
-    for chunk in chunks {
-        let line = serde_json::to_string(&chunk).unwrap_or_else(|_| "{}".to_string());
-        buf.push_str("data: ");
-        buf.push_str(&line);
-        buf.push_str("\n\n");
-    }
-    buf.push_str("data: ");
-    buf.push_str(&done);
-    buf.push_str("\n\n");
+fn streaming_chat_completions_response(
+    openai_runtime: Option<
+        crate::daemon::ability::builtins::integrations::openai_compat::OpenAICompatRuntime,
+    >,
+    adapter_args: serde_json::Value,
+) -> Response<Body> {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, Infallible>>(16);
+    tokio::spawn(async move {
+        if tx
+            .send(Ok(Bytes::from_static(b": easynet-openai-stream\n\n")))
+            .await
+            .is_err()
+        {
+            return;
+        }
 
+        let adapter_result = tokio::task::spawn_blocking(move || match openai_runtime {
+            Some(runtime) => runtime.handle_chat_completions(adapter_args),
+            None => {
+                crate::daemon::ability::builtins::integrations::openai_compat::handle_chat_completions(
+                    adapter_args,
+                )
+            }
+        })
+        .await;
+
+        match adapter_result {
+            Ok(Ok(value)) => {
+                let projection = match OpenAIStreamProjection::from_adapter_output(value) {
+                    Ok(projection) => projection,
+                    Err(err) => {
+                        let _ = send_sse_json(&tx, &openai_stream_error(err.to_string())).await;
+                        let _ = send_sse_data(&tx, "[DONE]").await;
+                        return;
+                    }
+                };
+                for chunk in projection.chunks {
+                    if send_sse_json(&tx, &chunk).await.is_err() {
+                        return;
+                    }
+                }
+                let _ = send_sse_data(&tx, &projection.done_sentinel).await;
+            }
+            Ok(Err(err)) => {
+                let _ = send_sse_json(&tx, &openai_stream_error(err.to_string())).await;
+                let _ = send_sse_data(&tx, "[DONE]").await;
+            }
+            Err(err) => {
+                let _ = send_sse_json(
+                    &tx,
+                    &openai_stream_error(format!("chat completion worker join failed: {err}")),
+                )
+                .await;
+                let _ = send_sse_data(&tx, "[DONE]").await;
+            }
+        }
+    });
+
+    let body = Body::from_stream(ReceiverStream::new(rx));
     Response::builder()
         .status(StatusCode::OK)
         .header(
@@ -564,14 +608,76 @@ fn sse_response(chunks: Vec<serde_json::Value>, done: String) -> Response<Body> 
         .header(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))
         .header("Access-Control-Allow-Origin", HeaderValue::from_static("*"))
         .header("X-Accel-Buffering", HeaderValue::from_static("no"))
-        .body(Body::from(buf))
+        .body(body)
         .expect("sse response build")
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct OpenAIStreamProjection {
+    chunks: Vec<serde_json::Value>,
+    done_sentinel: String,
+}
+
+impl OpenAIStreamProjection {
+    fn from_adapter_output(value: serde_json::Value) -> anyhow::Result<Self> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("OpenAI stream adapter output must be a JSON object"))?;
+        let chunks = object
+            .get("chunks")
+            .ok_or_else(|| anyhow::anyhow!("OpenAI stream adapter output missing `chunks`"))?
+            .as_array()
+            .ok_or_else(|| {
+                anyhow::anyhow!("OpenAI stream adapter output `chunks` must be an array")
+            })?
+            .clone();
+        let done_sentinel = object
+            .get("done_sentinel")
+            .ok_or_else(|| anyhow::anyhow!("OpenAI stream adapter output missing `done_sentinel`"))?
+            .as_str()
+            .map(str::trim)
+            .filter(|done| !done.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "OpenAI stream adapter output `done_sentinel` must be a non-empty string"
+                )
+            })?
+            .to_string();
+        Ok(Self {
+            chunks,
+            done_sentinel,
+        })
+    }
+}
+
+async fn send_sse_json(
+    tx: &tokio::sync::mpsc::Sender<Result<Bytes, Infallible>>,
+    value: &serde_json::Value,
+) -> Result<(), tokio::sync::mpsc::error::SendError<Result<Bytes, Infallible>>> {
+    let line = serde_json::to_string(value).expect("serde_json::Value serializes to JSON");
+    send_sse_data(tx, &line).await
+}
+
+async fn send_sse_data(
+    tx: &tokio::sync::mpsc::Sender<Result<Bytes, Infallible>>,
+    data: &str,
+) -> Result<(), tokio::sync::mpsc::error::SendError<Result<Bytes, Infallible>>> {
+    tx.send(Ok(Bytes::from(format!("data: {data}\n\n")))).await
+}
+
+fn openai_stream_error(message: String) -> serde_json::Value {
+    serde_json::json!({
+        "error": {
+            "message": message,
+            "type": "easynet_error",
+        }
+    })
 }
 
 /// JSON response with CORS open. Used by /v1/models and /v1/chat/completions
 /// (non-streaming).
 fn json_response_with_cors(status: StatusCode, value: serde_json::Value) -> Response<Body> {
-    let body = serde_json::to_vec(&value).unwrap_or_default();
+    let body = json_body_bytes(&value);
     let mut builder = Response::builder().status(status);
     let headers = builder.headers_mut().expect("builder always has headers");
     headers.insert(
@@ -588,7 +694,11 @@ fn json_response_with_cors(status: StatusCode, value: serde_json::Value) -> Resp
 
 #[cfg(test)]
 mod tests {
-    use super::{handle, pages_health_response, parse_pages_host};
+    use super::OpenAIStreamProjection;
+    use super::{
+        api_response, handle, json_response_with_cors, pages_health_response, parse_pages_api_body,
+        parse_pages_host,
+    };
     use axum::body::{to_bytes, Body};
     use axum::http::{header, Request, StatusCode};
     use serde_json::json;
@@ -598,7 +708,7 @@ mod tests {
 
     use crate::daemon::ability::builtins::resources::pages::sandbox::open_directory;
     use crate::daemon::ability::builtins::resources::pages::state::{
-        ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
+        PageVisibility, ProjectHandle, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
     };
     use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
 
@@ -639,6 +749,34 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn api_response_materializes_json_body_without_empty_fallback() {
+        let resp = api_response(json!({
+            "status": 201,
+            "content_type": "application/json; charset=utf-8",
+            "body": {"ok": true, "source": "api"}
+        }));
+
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = to_bytes(resp.into_body(), 1024).await.expect("body bytes");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(payload, json!({"ok": true, "source": "api"}));
+    }
+
+    #[tokio::test]
+    async fn json_response_with_cors_materializes_openai_body_without_empty_fallback() {
+        let resp = json_response_with_cors(
+            StatusCode::ACCEPTED,
+            json!({"object": "list", "data": [{"id": "model-a"}]}),
+        );
+
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        let body = to_bytes(resp.into_body(), 1024).await.expect("body bytes");
+        let payload: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(payload["object"], "list");
+        assert_eq!(payload["data"][0]["id"], "model-a");
+    }
+
     fn publish_temp_project(user: &str, project_id: &str, files: &[(&str, &str)]) -> TempDir {
         let dir = TempDir::new().expect("tempdir");
         for (rel_path, content) in files {
@@ -657,7 +795,7 @@ mod tests {
                 project_id: project_id.to_string(),
                 folder_handle,
                 canonical_root,
-                visibility: Visibility::Public,
+                visibility: PageVisibility::Public,
                 file_size_cap: DEFAULT_FILE_SIZE_CAP,
                 started_at: SystemTime::now(),
             }),
@@ -667,10 +805,25 @@ mod tests {
 
     fn openai_http_runtime(
     ) -> crate::daemon::ability::builtins::integrations::openai_compat::OpenAICompatRuntime {
-        let mut reg = AxonAbilityCatalog::new();
-        reg.register_rpc_with_owner(
+        let codex_agent_ura = crate::core::ura::agent_ura("easynet.run", "alice", "codex");
+        let authority_context =
+            crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+                "easynet:///r/easynet.run/device/pages-test",
+                vec![codex_agent_ura],
+            )
+            .expect("pages test hosted Agent authority is canonical");
+        let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            authority_context,
+        );
+        reg.register_rpc_with_spec_and_action(
             "codex.chat",
             OwnerKind::Agent("codex".into()),
+            crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+            crate::daemon::ability::manifest::default_chat_manifest(),
             Arc::new(|_args| Ok(json!({"reply":"ok"}))),
         );
         let reg = Arc::new(reg);
@@ -682,14 +835,64 @@ mod tests {
             handle,
             crate::daemon::ability::builtins::resources::pages::PagesIdentity {
                 user: Some("alice".into()),
+                owner_user_id: Some("alice".into()),
                 realm: Some("easynet.run".into()),
                 listener_port: Some(8787),
             },
         )
+        .expect("pages test OpenAI runtime identity is complete")
     }
 
     fn attach_openai_runtime(req: &mut Request<Body>) {
         req.extensions_mut().insert(openai_http_runtime());
+    }
+
+    #[test]
+    fn openai_stream_projection_requires_explicit_chunks() {
+        let error = OpenAIStreamProjection::from_adapter_output(json!({"done_sentinel": "[DONE]"}))
+            .expect_err("missing chunks must fail closed");
+
+        assert!(
+            error.to_string().contains("missing `chunks`"),
+            "wrong error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn openai_stream_projection_rejects_non_array_chunks() {
+        let error = OpenAIStreamProjection::from_adapter_output(json!({
+            "chunks": {},
+            "done_sentinel": "[DONE]"
+        }))
+        .expect_err("non-array chunks must fail closed");
+
+        assert!(
+            error.to_string().contains("`chunks` must be an array"),
+            "wrong error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn openai_stream_projection_requires_explicit_done_sentinel() {
+        let error = OpenAIStreamProjection::from_adapter_output(json!({"chunks": []}))
+            .expect_err("missing done sentinel must fail closed");
+
+        assert!(
+            error.to_string().contains("missing `done_sentinel`"),
+            "wrong error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn openai_stream_projection_accepts_typed_stream_envelope() {
+        let projection = OpenAIStreamProjection::from_adapter_output(json!({
+            "chunks": [{"id": "chunk-1"}],
+            "done_sentinel": "[DONE]"
+        }))
+        .expect("valid stream envelope");
+
+        assert_eq!(projection.chunks, vec![json!({"id": "chunk-1"})]);
+        assert_eq!(projection.done_sentinel, "[DONE]");
     }
 
     #[tokio::test]
@@ -723,6 +926,36 @@ mod tests {
         assert_eq!(payload["source"], "pages");
 
         PUBLISHED_PROJECTS.remove(&key);
+    }
+
+    #[test]
+    fn pages_api_body_treats_absent_body_as_null() {
+        assert_eq!(
+            parse_pages_api_body(b"").expect("empty body"),
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn pages_api_body_rejects_malformed_json() {
+        assert!(parse_pages_api_body(br#"{"unterminated": true"#).is_err());
+    }
+
+    #[tokio::test]
+    async fn api_route_rejects_malformed_json_body_before_dispatch() {
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/hello")
+            .header(header::HOST, "recipes.alice.pages.localhost:8787")
+            .body(Body::from(br#"{"unterminated": true"#.as_slice()))
+            .expect("request");
+
+        let resp = handle(req).await;
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(resp.into_body(), 1024).await.expect("body bytes");
+        let text = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(text.starts_with("invalid JSON body:"));
     }
 
     #[tokio::test]
@@ -770,5 +1003,38 @@ mod tests {
             "easynet:///r/easynet.run/ability/alice.codex.chat"
         );
         assert_eq!(payload["choices"][0]["message"]["content"], "ok");
+    }
+
+    #[tokio::test]
+    async fn v1_chat_completions_stream_returns_sse_body() {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({
+                    "model": "easynet:///r/easynet.run/ability/alice.codex.chat",
+                    "stream": true,
+                    "messages": [
+                        {"role": "user", "content": "reply with: ok"}
+                    ]
+                })
+                .to_string(),
+            ))
+            .expect("request");
+        attach_openai_runtime(&mut req);
+        let resp = handle(req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("text/event-stream")
+        );
+        let body = to_bytes(resp.into_body(), 4096).await.expect("body bytes");
+        let text = String::from_utf8(body.to_vec()).expect("utf8 body");
+        assert!(text.starts_with(": easynet-openai-stream\n\n"));
+        assert!(text.contains("\"object\":\"chat.completion.chunk\""));
+        assert!(text.contains("data: [DONE]\n\n"));
     }
 }

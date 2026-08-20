@@ -16,5 +16,5 @@ pub(crate) mod a2a_labels;
 #[cfg(feature = "axon-pb")]
 pub mod ability_catalog;
 pub mod advertised_agents;
-pub mod hub_published_abilities;
-pub(crate) mod owner_projection;
+pub mod authority_published_abilities;
+pub mod owner_projection;

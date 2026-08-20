@@ -1,0 +1,39 @@
+schema_version = "3"
+name = "files.put"
+descriptor_version = "1.0.0"
+description = "Write a content-addressed file blob for the user account."
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "route-target"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["filename", "bytes_b64", "content_type"]
+additionalProperties = false
+
+[input_schema.properties.bytes_b64]
+type = "string"
+description = "Base64-encoded blob bytes supplied by the producer."
+minLength = 1
+
+[input_schema.properties.content_type]
+type = "string"
+description = "Producer-supplied payload media type. The file store never infers this from filename."
+minLength = 1
+
+[input_schema.properties.filename]
+type = "string"
+description = "Producer-supplied display filename for the stored blob."
+minLength = 1

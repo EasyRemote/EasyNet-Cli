@@ -24,7 +24,7 @@ Evidence (ledger `inv_1026189adb8b4376`):
    `remoteTransportCaller` returns `HubURA(realm)` when `PresignedCallerSignature
    != nil`. The real user URA + the browser signature are discarded; neither
    reaches `RemoteInvokeParams` (which has no presigned-signature field).
-2. **`EasyNet-Cli .../dispatch_shim.rs:457`** — the self-target dispatch path
+2. **`EasyNet-Cli .../descriptor_bound_dispatch.rs:457`** — the self-target dispatch path
    hardcodes caller `easynet:///r/_system/agent/_system.local` and calls
    `LocalRuntime::invoke_async` (system/trust-domain), so the inner ability's
    `EnvelopeContext.caller` is `_system`.
@@ -77,7 +77,7 @@ re-deriving it.
 | backend frame0 | `internal/daemon_grpc/invoke_remote.go` | serialize `OriginCaller` into the `x-easynet-origin-caller` metadata item |
 | daemon wire | `invoke_remote_initiator.rs` | (no field change — metadata already exists) document the new key |
 | daemon dispatch | `daemon_invocation_service.rs::dispatch_self_targeted_invoke_remote` | parse `x-easynet-origin-caller`; when present, build the inner `InvocationEnvelope` with the user caller + verify via `invoke_externally_signed_async`; else fall back to the existing `_system` path |
-| daemon shim | `dispatch_shim.rs` | add `dispatch_rpc_local_externally_signed(runtime, envelope, signature, payload)` that calls `invoke_externally_signed_async` |
+| daemon adapter | `descriptor_bound_dispatch.rs` | add `dispatch_rpc_local_externally_signed(runtime, envelope, signature, payload)` that calls `invoke_externally_signed_async` |
 | consent | `remote_desktop/session_consent.rs` | once the real user caller arrives, the existing `owner_self_consent` carve-out (user URA matches paired user) grants — no `_system` special-case needed |
 
 ### Security properties
@@ -107,7 +107,7 @@ re-deriving it.
   backend/hub; non-presigned invoke leaves `OriginCaller` nil.
 - **backend**: `invoke_remote_test.go` — frame0 round-trips the
   `x-easynet-origin-caller` metadata item.
-- **daemon**: `dispatch_shim` test — `invoke_externally_signed` path carries the
+- **daemon**: `descriptor_bound_dispatch` test — `invoke_externally_signed` path carries the
   user caller into `EnvelopeContext.caller`.
 - **daemon**: `session_consent` test (existing) — real user caller grants
   `owner_self_consent`; foreign callers stay fail-closed.

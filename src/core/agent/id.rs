@@ -15,8 +15,8 @@
 //   - `NodeId`         — validated hosting-substrate handle.
 //
 // What this file is NOT:
-//   - Not a URI parser. URI shapes (`easynet://...`) belong to URA L3,
-//     a separate (future) layer.
+//   - Not a URA parser. URA shapes (`easynet://...`) belong to
+//     `crate::core::ura`, the L3 canonical runtime identity layer.
 //   - Not a registry directory. Resolution lives in
 //     `src/daemon/persistence/agent_registry.rs`.
 //   - Not a routing decision. The dispatcher in
@@ -86,7 +86,7 @@ impl AgentId {
     /// - empty segments (`/`, `claude/`, `/claude`)
     /// - more than two segments (`a/b/c` — multi-level reserved for v2)
     /// - instance ids (`claude#42` — reserved for v2 per ontology §6.4)
-    /// - URI-shaped strings (`easynet://...` — wrong layer)
+    /// - URA-shaped strings (`easynet://...` — wrong layer)
     /// - non-ASCII characters
     /// - uppercase letters
     /// - characters outside `[a-z0-9_-]`
@@ -128,24 +128,15 @@ impl AgentId {
     /// Construct an `AgentId` from already-validated parts. Useful when
     /// the caller knows the parts came from a trusted source. Both
     /// segments are still validated — there is no unchecked path.
-    /// Used by tests today; production code constructs `AgentId` via
-    /// `parse` from EAL surface forms.
-    #[allow(dead_code)]
+    /// Used by production code when the tenant and name are already
+    /// separated by an owning parser or projection. Public surface strings
+    /// still enter through `parse`.
     pub fn new(tenant: impl Into<String>, name: impl Into<String>) -> Result<Self, AgentIdError> {
         let tenant = tenant.into();
         let name = name.into();
         validate_segment(&tenant, "tenant")?;
         validate_segment(&name, "name")?;
         Ok(Self { tenant, name })
-    }
-
-    /// Convert the CLI shorthand identity into Axon's canonical Agent URA.
-    ///
-    /// `AgentId` stays a front-door convenience for EAL/member-call syntax;
-    /// cross-runtime identity is always the Axon SDK URA shape
-    /// `easynet:///r/<realm>/agent/<tenant>.<name>`.
-    pub fn to_axon_agent_ura(&self, realm: &str) -> String {
-        crate::core::ura::agent_ura(realm, &self.tenant, &self.name)
     }
 }
 
@@ -323,11 +314,9 @@ impl NodeId {
     /// Borrow the underlying string. As with `AbilityName`, there is
     /// no separate canonical form; the stored bytes *are* the value.
     ///
-    /// `#[allow(dead_code)]` covers the transitional period while
-    /// boundaries are still exchanging `&str`: once CLI parsing and
-    /// bridge payloads also carry `NodeId` end-to-end, this method
-    /// will be called from production code and the allow can go.
-    #[allow(dead_code)]
+    /// Production boundaries still exchange `&str` and explicit wire
+    /// structs; this method is the canonical borrow point for those
+    /// boundaries.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -335,8 +324,7 @@ impl NodeId {
     /// Consume the `NodeId` and return its inner `String`. Used at
     /// boundaries that cannot accept the newtype (serde fields on
     /// existing wire-schema structs) — internal code should prefer
-    /// `as_str`. Same transitional `#[allow]` as `as_str`.
-    #[allow(dead_code)]
+    /// `as_str`.
     pub fn into_string(self) -> String {
         self.0
     }
@@ -410,7 +398,7 @@ pub enum AgentIdError {
     /// identity model. Distinct error so future code can flip the
     /// rejection without changing the error vocabulary.
     ReservedV2 { feature: &'static str },
-    /// Input looked like a URI from L3 (URA), which belongs to a
+    /// Input looked like a URA from L3, which belongs to a
     /// different addressing layer entirely.
     WrongLayer,
 }
@@ -443,7 +431,7 @@ impl fmt::Display for AgentIdError {
             ),
             Self::WrongLayer => write!(
                 f,
-                "agent id looks like a URI; URI addressing belongs to \
+                "agent id looks like a URA; URA addressing belongs to \
                  the URA L3 layer (../URA/README.md), not to AgentId"
             ),
         }
@@ -602,15 +590,6 @@ mod tests {
             let reparsed = AgentId::parse(&displayed).unwrap();
             assert_eq!(parsed, reparsed, "round-trip failed for {input:?}");
         }
-    }
-
-    #[test]
-    fn axon_agent_ura_projection_uses_sdk_builder() {
-        let id = AgentId::parse("silan/claude").unwrap();
-        assert_eq!(
-            id.to_axon_agent_ura("easynet.run"),
-            "easynet:///r/easynet.run/agent/silan.claude"
-        );
     }
 
     // ── AgentId — rejection rules from AGENT_IDENTITY.md §3.2 ────────────

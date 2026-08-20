@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "bindings": [
+    {"fixture": "authority-metadata.v4.json", "schema": "authority.schema.json"},
+    {"fixture": "canonical-addressing.v5.json", "schema": "addressing-corpus.schema.json"},
+    {"fixture": "diagnostics.ready.v4.json", "schema": "diagnostics.schema.json"},
+    {"fixture": "feature-discovery.v7.json", "schema": "feature-discovery.schema.json"},
+    {"fixture": "health.ready.v4.json", "schema": "health.schema.json"},
+    {"fixture": "invocation.complete.v4.json", "schema": "invocation.schema.json"},
+    {"fixture": "prepared.signing-material.v4.json", "schema": "prepared-invocation.schema.json"},
+    {"fixture": "runtime.error.v4.json", "schema": "error.schema.json"}
+  ]
+}

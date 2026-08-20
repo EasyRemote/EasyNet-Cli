@@ -5,7 +5,7 @@
 //
 //   1. The ability's wire-level URA matches the canonical shape
 //      `easynet:///r/<realm>/ability/<user>.<agent>.<verb>` produced
-//      by `easynet_axon::ura::URA::ability`.
+//      by `axon_sdk::ura::URA::ability`.
 //   2. The URA literal contains NO implementation label such as
 //      `mcp_upstream` (the discipline gate 2 enforces at script
 //      level — duplicated in code so a regression trips here even
@@ -23,10 +23,28 @@
 
 use std::sync::Arc;
 
-use easynet_axon::ura::{ability_ura, agent_ura};
+#[path = "support/runtime_fixture.rs"]
+mod runtime_fixture;
+
+use axon_sdk::ura::{ability_ura, agent_ura};
 use easynet_cli::daemon::ability::builtins::integrations::mcp::reflective_registry::reflect_all;
-use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
+use easynet_cli::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
 use easynet_cli::daemon::execution::mcp::{McpClientService, McpClientsFile, McpServerSpec};
+
+fn registry_for_mcp_owner(owner_ura: &str) -> AxonAbilityCatalog {
+    let owner = easynet_cli::core::ura::parse_ura(owner_ura).expect("canonical MCP owner URA");
+    let device_ura = easynet_cli::core::ura::device_ura(&owner.realm, "mcp-ura-test-device");
+    let authority_context =
+        AbilityAuthorityContext::for_combined_authority_roots_with_hosted_agents(
+            device_ura,
+            [owner_ura.to_string()],
+        )
+        .expect("MCP owner must be hosted by the test Device authority");
+    AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        runtime_fixture::rejecting_runtime(),
+        authority_context,
+    )
+}
 
 fn write_echo_script(dir: &std::path::Path) -> std::path::PathBuf {
     let script = dir.join("echo_mcp.sh");
@@ -106,7 +124,7 @@ async fn reflective_ability_ura_is_clean_canonical_shape() {
         "agent_ura builder shape sanity"
     );
 
-    let mut reg = AxonAbilityCatalog::new();
+    let mut reg = registry_for_mcp_owner(&owner_ura);
     let result = reflect_all(&svc, &mut reg, &owner_ura).await;
     assert!(
         result.failed.is_empty(),
@@ -224,7 +242,7 @@ while True:
     let agent = "mcp";
     let owner_ura = agent_ura(realm, user, agent);
 
-    let mut reg = AxonAbilityCatalog::new();
+    let mut reg = registry_for_mcp_owner(&owner_ura);
     let result = reflect_all(&svc, &mut reg, &owner_ura).await;
     assert!(result.failed.is_empty(), "{:?}", result.failed);
     assert_eq!(result.registered.len(), 1);

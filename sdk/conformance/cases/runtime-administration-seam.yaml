@@ -1,0 +1,13 @@
+id: runtime/administration_seam
+profile: runtime_administration
+required_for:
+  - go
+  - python
+description: Product-neutral runtime administration has typed commands and readiness results.
+steps:
+  - action: require_typed_commands
+  - action: require_lifecycle_state
+  - action: reject_product_workflows
+expect:
+  result: runtime_administration_contract
+  provider_required: true

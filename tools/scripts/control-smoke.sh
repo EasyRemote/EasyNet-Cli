@@ -24,7 +24,7 @@ done
 
 if [ ! -x "$DAEMON_BIN" ] || [ ! -x "$CLI_BIN" ]; then
   echo "[smoke] building easynet + easynet-daemon (debug, product defaults)..."
-  (cd "$REPO_ROOT" && cargo build --bin easynet --bin easynet-daemon)
+  "$REPO_ROOT/tools/scripts/build-daemon-process-set.sh" --bin easynet
 fi
 
 pkill -f "$DAEMON_BIN" 2>/dev/null || true
@@ -44,7 +44,7 @@ if [ ! -S "$DAEMON_SOCK" ]; then
   exit 1
 fi
 
-ABILITY_URA="easynet:///r/cli/ability/device.local.observe.health"
+ABILITY_URA="easynet:///r/cli/ability/system-agent.local.runtime-health.observe.health"
 echo "[smoke] invoking $ABILITY_URA through daemon-hosted Axon..."
 RESP="$("$CLI_BIN" ability invoke "$ABILITY_URA" --args '{"smoke":"ok"}' --raw)"
 echo "[smoke] response: $RESP"

@@ -19,7 +19,7 @@ The AXIOM §7 warning is explicit: a runtime that only reaches the RPC-with-audi
 Three Axon-side artefacts are still marked `\deferred` in AXIOM:
 
 1. **URA v2 namespace** for CLI-hosted agents. AXIOM §5.4 shows an example form `easynet:///r/org/<tenant>/<agent>` but no normative profile document pins it. An `AgentIdentity { uri, profile }` composite cannot be constructed without this.
-2. **`document/profiles/DEFAULT_PROFILE.md`**. Profile selector (`easynet-strict-v2` vs `web-safe-v2`) is structurally bound to identity per AXIOM §5 Axis B; until the profile document exists, the composite's `profile` field has no canonical value.
+2. **`document/profiles/DEFAULT_PROFILE.md`**. Profile selector (`axon-strict-v2` vs `web-safe-v2`) is structurally bound to identity per AXIOM §5 Axis B; until the profile document exists, the composite's `profile` field has no canonical value.
 3. **Discovery agent reserved URA**. A first-class Invocation from the CLI would typically cite the discovery-agent publish receipt in its `causal_context` (capability grant). Without the discovery agent, the first-hop `causal_context` has no typed predecessor.
 
 Moving the CLI to signed envelopes before any of these three stabilises would either (a) hardcode a URA shape Axon later rejects, or (b) ship a profile string that does not match Axon's eventual canonical form. Both are one-way easy to get wrong.

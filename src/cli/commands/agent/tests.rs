@@ -42,6 +42,156 @@ use crate::daemon::execution::mission::directory::Location;
 use crate::daemon::persistence::agent_registry as agents;
 use crate::daemon::persistence::agent_registry::CURRENT_REGISTRY_SCHEMA;
 use std::fs;
+use std::sync::{Arc, OnceLock};
+
+#[derive(Debug)]
+struct AgentCommandFixtureGateway;
+
+impl AgentCommandGateway for AgentCommandFixtureGateway {
+    fn invoke(&self, ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        invoke_agent_command_fixture(ability, args)
+    }
+}
+
+impl AgentReadGateway for AgentCommandFixtureGateway {
+    fn list_agents(&self) -> anyhow::Result<serde_json::Value> {
+        invoke_agent_command_fixture("agent.list", serde_json::json!({}))
+    }
+
+    fn list_agent_abilities(&self, agent_ura: &str) -> anyhow::Result<serde_json::Value> {
+        invoke_agent_command_fixture(
+            "meta.list_abilities",
+            serde_json::json!({
+                "scope": "local",
+                "agent_ura": agent_ura,
+            }),
+        )
+    }
+}
+
+fn invoke_agent_command_fixture(
+    ability: &str,
+    args: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let runtime = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+        crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+        None,
+    );
+    let dispatch_handle = Arc::new(OnceLock::new());
+    let registrar = crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRegistrar::new_pending(
+        Arc::new(Vec::new()),
+        Arc::clone(&dispatch_handle),
+        Arc::new(
+            crate::daemon::ability::builtins::agents::discover::DetachedDiscoverFederationResolver,
+        ),
+    );
+    registrar
+        .set_runtime(Arc::clone(&runtime))
+        .map_err(|error| anyhow::anyhow!("wire Agent command fixture runtime: {error}"))?;
+
+    let hot_registrar: Arc<
+        crate::daemon::ability::builtins::agents::lifecycle::SharedHotRegistrarCell,
+    > = Arc::new(OnceLock::new());
+    hot_registrar
+        .set(registrar)
+        .map_err(|_| anyhow::anyhow!("wire Agent command fixture registrar twice"))?;
+
+    let authority_context =
+        crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+            crate::core::ura::device_ura("localhost", "dev-1"),
+            Vec::<String>::new(),
+        )
+        .map_err(|error| anyhow::anyhow!("build Agent command fixture authority: {error}"))?;
+    let mut catalog = crate::daemon::ability::dispatch::AxonAbilityCatalog::new_with_runtime_and_authority_context(
+        runtime,
+        authority_context,
+    );
+    crate::daemon::ability::builtins::agents::list::register(&mut catalog, || {
+        crate::daemon::persistence::agent_aggregate::AgentAggregateRepository::load_snapshot()
+            .map_err(|error| anyhow::anyhow!("fixture agent.list aggregate load: {error:#}"))
+    });
+    crate::daemon::ability::builtins::agents::lifecycle::register(
+        &mut catalog,
+        Arc::clone(&hot_registrar),
+    );
+    let meta_catalog_handle = Arc::clone(&dispatch_handle);
+    catalog.register_rpc_with_owner(
+        "meta.list_abilities",
+        crate::daemon::ability::dispatch::OwnerKind::runtime_introspection_system(),
+        Arc::new(move |args: serde_json::Value| {
+            let owner_ura = args
+                .get("agent_ura")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("fixture meta.list_abilities requires agent_ura"))?;
+            let catalog = meta_catalog_handle
+                .get()
+                .ok_or_else(|| anyhow::anyhow!("fixture catalog handle is not initialized"))?;
+            let publication =
+                crate::daemon::ability::catalog::LocalAbilityPublicationSnapshot::capture(
+                    catalog.as_ref(),
+                );
+            let abilities = publication
+                .owner_descriptors(owner_ura)
+                .into_iter()
+                .map(serde_json::to_value)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(serde_json::json!({"abilities": abilities}))
+        }),
+    );
+    let catalog = Arc::new(catalog);
+    dispatch_handle
+        .set(Arc::clone(&catalog))
+        .map_err(|_| anyhow::anyhow!("wire Agent command fixture dispatch handle twice"))?;
+    if ability == "meta.list_abilities" {
+        let registrar = hot_registrar
+            .get()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("fixture registrar is not initialized"))?;
+        let rows = agents::load_agents()?;
+        crate::daemon::axon_bridge::hot_agent_registrar::block_on_hot_registrar(async move {
+            for (name, entry) in rows.agents {
+                registrar.register_agent(&name, &entry).await?;
+            }
+            Ok::<(), crate::daemon::axon_bridge::hot_agent_registrar::HotAgentRegistrarError>(())
+        })?;
+    }
+    if let Some(handler) = catalog.resolve_rpc_with_env(ability) {
+        let device_ura = crate::core::ura::device_ura("localhost", "dev-1");
+        let callee_ura = if ability
+            == crate::daemon::ability::builtins::agents::authoring::ABILITY_PUT_AGENT_ABILITY
+        {
+            crate::core::ura::device_agent_ura(
+                "localhost",
+                "dev-1",
+                crate::daemon::ability::names::agents::AGENT_MANAGEMENT_SYSTEM_AGENT_ID,
+            )
+        } else {
+            device_ura.clone()
+        };
+        return handler(
+            crate::daemon::ability::dispatch::EnvelopeContext::for_test_targeted_ability(
+                crate::core::ura::LOCAL_SYSTEM_AGENT_URA,
+                &callee_ura,
+                ability,
+                &device_ura,
+            ),
+            args,
+        );
+    }
+    catalog.invoke_rpc_target_json(
+        crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root(
+            ability,
+            args,
+            crate::daemon::invocation::routing::target::CallMode::Rpc,
+        ),
+    )
+}
+
+struct JoinedHome {
+    _home: HomeGuard,
+    _gateway: crate::cli::daemon_client::agent_gateway::TestAgentCommandGatewayGuard,
+    _state_gateway: crate::cli::daemon_client::agent_gateway::TestAgentReadGatewayGuard,
+}
 
 /// Build the AddArgs shape the CLI surface would construct
 /// for `easynet agent add <name> --type <t> --model <m>`.
@@ -73,10 +223,20 @@ fn seed_joined_credentials() {
     .expect("seed joined credentials");
 }
 
-fn joined_home() -> HomeGuard {
-    let guard = HomeGuard::new();
+fn joined_home() -> JoinedHome {
+    let home = HomeGuard::new();
     seed_joined_credentials();
-    guard
+    let fixture_gateway = Arc::new(AgentCommandFixtureGateway);
+    let gateway = crate::cli::daemon_client::agent_gateway::install_test_agent_command_gateway(
+        fixture_gateway.clone(),
+    );
+    let state_gateway =
+        crate::cli::daemon_client::agent_gateway::install_test_agent_read_gateway(fixture_gateway);
+    JoinedHome {
+        _home: home,
+        _gateway: gateway,
+        _state_gateway: state_gateway,
+    }
 }
 
 #[cfg(unix)]
@@ -172,10 +332,10 @@ fn run_mcp_add_writes_mcp_exec_manifest_for_agent() {
         .join("mcp_echo_server_echo_text.ability.toml");
     let body = fs::read_to_string(&manifest_path).expect("manifest written");
     let manifest =
-        crate::core::ability::spec::AbilityManifest::from_toml_str(&body).expect("parse");
+        crate::daemon::ability::manifest::AbilityManifest::from_toml_str(&body).expect("parse");
     assert_eq!(manifest.name(), "mcp_echo_server_echo_text");
     match manifest.exec().expect("exec") {
-        crate::core::ability::spec::AbilityExec::Mcp(exec) => {
+        crate::daemon::ability::manifest::AbilityExec::Mcp(exec) => {
             assert_eq!(exec.server, "Echo Server");
             assert_eq!(exec.tool, "echo-text");
         }
@@ -188,6 +348,77 @@ fn run_mcp_add_writes_mcp_exec_manifest_for_agent() {
 }
 
 #[test]
+fn scoped_script_add_commits_manifest_through_daemon_authoring_transaction() {
+    let _home = joined_home();
+    run_add(add_args("codex", "codex", None)).expect("agent add");
+
+    crate::cli::commands::agent_new_ability::run_scoped(
+        "codex",
+        &[
+            "new-ability".to_string(),
+            "script".to_string(),
+            "add".to_string(),
+            "echo_value".to_string(),
+            "--".to_string(),
+            "printf".to_string(),
+            "{{ value }}".to_string(),
+        ],
+    )
+    .expect("script ability authoring transaction");
+
+    let path = config::agents_root()
+        .join("codex")
+        .join("abilities")
+        .join("echo_value.ability.toml");
+    let body = fs::read_to_string(path).expect("daemon committed manifest");
+    let manifest = crate::daemon::ability::manifest::AbilityManifest::from_toml_str(&body)
+        .expect("committed manifest parses");
+    assert_eq!(manifest.name(), "echo_value");
+    assert!(manifest.exec().is_some());
+}
+
+#[test]
+fn daemon_authoring_response_proves_custom_ability_is_in_live_publication() {
+    let _home = joined_home();
+    run_add(add_args("codex", "codex", None)).expect("agent add");
+    let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
+        "echo_live",
+        "Echo one value",
+        serde_json::json!({
+            "type": "object",
+            "properties": {"value": {"type": "string"}}
+        }),
+    )
+    .unwrap()
+    .with_exec(crate::daemon::ability::manifest::AbilityExec::Shell(
+        crate::daemon::ability::manifest::ShellExec {
+            argv: vec!["printf".to_string(), "{{ value }}".to_string()],
+            stdout: None,
+            sandbox: None,
+        },
+    ))
+    .unwrap();
+    let response = agent_command_gateway()
+        .invoke(
+            crate::daemon::ability::builtins::agents::authoring::ABILITY_PUT_AGENT_ABILITY,
+            serde_json::json!({
+                "name": "codex",
+                "manifests_toml": [manifest.to_toml_string().unwrap()],
+                "overwrite": false,
+                "conflict_policy": "reject"
+            }),
+        )
+        .expect("daemon authoring transaction");
+
+    assert_eq!(response["state"], "committed");
+    assert!(response["publication"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|descriptor| descriptor["name"] == "echo_live"));
+}
+
+#[test]
 fn normalize_mcp_input_schema_removes_toml_unsupported_nulls() {
     let normalized = normalize_mcp_input_schema(Some(serde_json::json!({
         "type": "object",
@@ -195,7 +426,7 @@ fn normalize_mcp_input_schema_removes_toml_unsupported_nulls() {
             "q": {"type": ["string", null], "default": null}
         }
     })));
-    let manifest = crate::core::ability::spec::AbilityManifest::new(
+    let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
         "mcp_null_schema",
         "schema with upstream nulls",
         normalized,
@@ -220,7 +451,10 @@ fn run_add_writes_v2_row_and_materializes_agent_directory() {
     run_add(add_args("alice", "claude-code", Some("claude-opus-4-7"))).unwrap();
 
     let registry = agents::load_agents().unwrap();
-    let alice = registry.agents.get("alice").expect("alice registered");
+    let alice = registry
+        .agents
+        .get("default/alice")
+        .expect("alice registered");
     assert_eq!(alice.schema_version, CURRENT_REGISTRY_SCHEMA);
     assert!(alice.root_path.is_some());
     // Fat-field cleanliness: fresh v2 row must not carry
@@ -250,7 +484,11 @@ fn run_add_update_preserves_operator_edits_to_agent_toml() {
     run_add(add_args("alice", "claude-code", Some("old-model"))).unwrap();
 
     let registry = agents::load_agents().unwrap();
-    let root = registry.agents["alice"].root_path.as_ref().unwrap().clone();
+    let root = registry.agents["default/alice"]
+        .root_path
+        .as_ref()
+        .unwrap()
+        .clone();
 
     // Hand-edit agent.toml to add a description.
     let mut spec =
@@ -279,7 +517,7 @@ fn run_remove_default_keeps_the_on_disk_root() {
     // legitimately want the old history back.
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();
@@ -292,7 +530,10 @@ fn run_remove_default_keeps_the_on_disk_root() {
     .unwrap();
 
     // Registry row gone.
-    assert!(!agents::load_agents().unwrap().agents.contains_key("alice"));
+    assert!(!agents::load_agents()
+        .unwrap()
+        .agents
+        .contains_key("default/alice"));
     // Directory still present.
     assert!(
         root.join("agent.toml").exists(),
@@ -306,7 +547,7 @@ fn run_remove_with_purge_deletes_the_on_disk_root() {
     // This is the explicit destructive path.
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();
@@ -324,10 +565,96 @@ fn run_remove_with_purge_deletes_the_on_disk_root() {
     );
 }
 
+#[derive(Default)]
+struct RecordingRemovalGateway {
+    calls: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+}
+
+impl AgentCommandGateway for RecordingRemovalGateway {
+    fn invoke(&self, ability: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        self.calls.lock().unwrap().push((ability.to_string(), args));
+        match ability {
+            "agent.stop" => Ok(serde_json::json!({
+                "ack": true,
+                "runtime_removed": 0,
+                "removed_entry": {"root_path": "/tmp/kept-agent-root"},
+            })),
+            "agent.purge" => Ok(serde_json::json!({
+                "ack": true,
+                "runtime_removed": 0,
+                "purge_state": "purged",
+                "purged_path": "/tmp/purged-agent-root",
+            })),
+            other => anyhow::bail!("unexpected ability {other}"),
+        }
+    }
+}
+
+#[test]
+fn remove_routes_non_destructive_and_destructive_authority_separately() {
+    let _home = HomeGuard::new();
+    let gateway = Arc::new(RecordingRemovalGateway::default());
+    let _gateway_guard =
+        crate::cli::daemon_client::agent_gateway::install_test_agent_command_gateway(
+            gateway.clone(),
+        );
+
+    run_remove(RemoveArgs {
+        name: "kept".into(),
+        purge: false,
+    })
+    .unwrap();
+    run_remove(RemoveArgs {
+        name: "destroyed".into(),
+        purge: true,
+    })
+    .unwrap();
+
+    let calls = gateway.calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(
+        calls[0],
+        (
+            "agent.stop".to_string(),
+            serde_json::json!({"name": "kept"})
+        )
+    );
+    assert_eq!(
+        calls[1],
+        (
+            "agent.purge".to_string(),
+            serde_json::json!({"name": "destroyed"})
+        )
+    );
+}
+
 fn set_args(name: &str, model: Option<&str>) -> SetArgs {
     SetArgs {
         name: name.into(),
         model: model.map(str::to_string),
+    }
+}
+
+#[derive(Default)]
+struct MissingRootAgentReadGateway {
+    calls: std::sync::Mutex<Vec<&'static str>>,
+}
+
+impl AgentReadGateway for MissingRootAgentReadGateway {
+    fn list_agents(&self) -> anyhow::Result<serde_json::Value> {
+        self.calls.lock().unwrap().push("list_agents");
+        Ok(serde_json::json!({
+            "agents": [{
+                "name": "alice",
+                "runtime": "claude-code",
+                "model": "sonnet",
+                "root_exists": null
+            }]
+        }))
+    }
+
+    fn list_agent_abilities(&self, _agent_ura: &str) -> anyhow::Result<serde_json::Value> {
+        anyhow::bail!("unexpected agent ability catalogue read")
     }
 }
 
@@ -344,7 +671,7 @@ fn run_set_changes_model_in_both_agent_toml_and_registry_row() {
     run_set(set_args("alice", Some("opus"))).unwrap();
 
     // Registry row updated.
-    let entry = agents::load_agents().unwrap().agents["alice"].clone();
+    let entry = agents::load_agents().unwrap().agents["default/alice"].clone();
     assert_eq!(entry.model.as_deref(), Some("opus"));
 
     // agent.toml on disk updated.
@@ -378,13 +705,14 @@ fn run_set_preserves_project_local_root_path() {
     .unwrap();
 
     let mut registry = agents::load_agents().unwrap();
-    registry.agents.get_mut("alice").unwrap().root_path = Some(custom_root.clone());
+    registry.agents.get_mut("default/alice").unwrap().root_path = Some(custom_root.clone());
     agents::save_agents(&registry).unwrap();
 
     run_set(set_args("alice", Some("opus"))).unwrap();
 
-    let entry = agents::load_agents().unwrap().agents["alice"].clone();
-    assert_eq!(entry.root_path.as_deref(), Some(custom_root.as_path()));
+    let entry = agents::load_agents().unwrap().agents["default/alice"].clone();
+    let canonical_root = std::fs::canonicalize(&custom_root).unwrap();
+    assert_eq!(entry.root_path.as_deref(), Some(canonical_root.as_path()));
     let spec =
         AgentSpec::from_toml_str(&fs::read_to_string(custom_root.join("agent.toml")).unwrap())
             .unwrap();
@@ -403,7 +731,7 @@ fn run_set_with_empty_model_string_clears_the_field() {
 
     run_set(set_args("alice", Some(""))).unwrap();
 
-    let entry = agents::load_agents().unwrap().agents["alice"].clone();
+    let entry = agents::load_agents().unwrap().agents["default/alice"].clone();
     assert!(
         entry.model.is_none(),
         "empty-string --model must clear; got {:?}",
@@ -432,6 +760,22 @@ fn run_set_rejects_unknown_agent_with_actionable_message() {
 }
 
 #[test]
+fn run_set_missing_root_path_fails_before_agent_start_is_sent() {
+    let _home = HomeGuard::new();
+    let gateway = Arc::new(MissingRootAgentReadGateway::default());
+    let _state_gateway_guard =
+        crate::cli::daemon_client::agent_gateway::install_test_agent_read_gateway(gateway.clone());
+
+    let error = run_set(set_args("alice", Some("opus")))
+        .expect_err("missing daemon root projection must block set");
+
+    assert!(error.to_string().contains("omitted root_path"));
+    let calls = gateway.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1, "agent.start must not be sent");
+    assert_eq!(calls[0], "list_agents");
+}
+
+#[test]
 fn run_set_with_no_flags_errors_explicitly() {
     // `agent set alice` (no --model) is meaningless today.
     // We could silently no-op, but that risks operators
@@ -453,7 +797,7 @@ fn run_set_does_not_validate_model_string_against_any_allow_list() {
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
     run_set(set_args("alice", Some("definitely-not-a-real-model-xyz"))).unwrap();
-    let entry = agents::load_agents().unwrap().agents["alice"].clone();
+    let entry = agents::load_agents().unwrap().agents["default/alice"].clone();
     assert_eq!(
         entry.model.as_deref(),
         Some("definitely-not-a-real-model-xyz")
@@ -471,7 +815,7 @@ fn run_prune_removes_orphaned_rows_only() {
     run_add(add_args("bob", "codex", None)).unwrap();
 
     // Orphan bob by deleting its root.
-    let bob_root = agents::load_agents().unwrap().agents["bob"]
+    let bob_root = agents::load_agents().unwrap().agents["default/bob"]
         .root_path
         .clone()
         .unwrap();
@@ -480,8 +824,14 @@ fn run_prune_removes_orphaned_rows_only() {
     run_prune(PruneArgs { dry_run: false }).unwrap();
 
     let registry = agents::load_agents().unwrap();
-    assert!(registry.agents.contains_key("alice"), "alice must survive");
-    assert!(!registry.agents.contains_key("bob"), "bob must be pruned");
+    assert!(
+        registry.agents.contains_key("default/alice"),
+        "alice must survive"
+    );
+    assert!(
+        !registry.agents.contains_key("default/bob"),
+        "bob must be pruned"
+    );
 }
 
 #[test]
@@ -491,7 +841,7 @@ fn run_prune_dry_run_leaves_registry_unchanged() {
     // the registry after the command returns.
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();
@@ -503,7 +853,10 @@ fn run_prune_dry_run_leaves_registry_unchanged() {
     // mutate the registry. This is the load-bearing
     // property that makes `prune --dry-run` safe to run
     // as a recon step.
-    assert!(agents::load_agents().unwrap().agents.contains_key("alice"));
+    assert!(agents::load_agents()
+        .unwrap()
+        .agents
+        .contains_key("default/alice"));
 }
 
 // ── abilities / publish dry-run ─────────────────────────────────────
@@ -551,7 +904,7 @@ fn run_abilities_reports_missing_root_as_an_error() {
     // to see the true cause.
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();
@@ -570,7 +923,7 @@ fn run_abilities_handles_empty_abilities_directory_without_error() {
     // no panic, no error — just an empty-list signal.
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();
@@ -590,7 +943,7 @@ fn run_abilities_surfaces_manifest_parse_errors() {
     // ability set before a publish.
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();
@@ -622,20 +975,14 @@ fn run_publish_dry_run_succeeds_on_a_fresh_agent() {
 }
 
 #[test]
-fn run_publish_requires_dry_run_flag_for_now() {
-    // Until live publishing lands, we refuse to let scripts
-    // call `agent publish <name>` without `--dry-run`. This
-    // prevents a silent behaviour change when the live path
-    // arrives.
+fn run_publish_reconciles_and_projects_live_publication() {
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let err = run_publish(PublishArgs {
+    run_publish(PublishArgs {
         name: "alice".into(),
         dry_run: false,
     })
-    .expect_err("non-dry-run must be refused in this release");
-    let msg = format!("{err}");
-    assert!(msg.contains("dry-run"), "error must name the flag: {msg}");
+    .expect("non-dry-run must reconcile the daemon live publication");
 }
 
 #[test]
@@ -654,16 +1001,10 @@ fn run_publish_reports_unknown_agent_before_checking_flags() {
 }
 
 #[test]
-fn run_publish_dry_run_works_even_with_empty_abilities() {
-    // An agent with zero manifests is a legitimate state;
-    // dry-run prints "Nothing to advertise" rather than
-    // erroring. The rationale: `agent publish --dry-run` is
-    // a read-only diagnostic; forcing it to fail on an
-    // empty set would make it unusable as a preflight check
-    // during partial setup.
+fn run_publish_dry_run_reads_live_baseline_after_manifest_directory_is_empty() {
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();
@@ -673,7 +1014,7 @@ fn run_publish_dry_run_works_even_with_empty_abilities() {
         name: "alice".into(),
         dry_run: true,
     })
-    .expect("dry-run over empty abilities must not error");
+    .expect("dry-run must project the live hosted-Agent baseline");
 }
 
 #[test]
@@ -684,7 +1025,7 @@ fn run_publish_dry_run_does_not_mutate_registry_or_filesystem() {
     // abilities directory modtime before/after.
     let _g = joined_home();
     run_add(add_args("alice", "claude-code", None)).unwrap();
-    let root = agents::load_agents().unwrap().agents["alice"]
+    let root = agents::load_agents().unwrap().agents["default/alice"]
         .root_path
         .clone()
         .unwrap();
@@ -771,9 +1112,7 @@ fn run_add_refuses_when_root_carries_agent_toml_but_registry_empty() {
 #[test]
 fn generated_mcp_ability_name_is_slug_safe_and_deterministic() {
     // Prefix + server + tool slugify independently and join with
-    // the dotted-verb convention (single `_` between prefix and
-    // server, double `__` between server and tool — operators
-    // grep the double underscore to identify the tool half).
+    // a uniform single `_` separator across the emitted ability name.
     // Note: `slug_segment` collapses `-` to `_` along with other
     // non-alnum punctuation, so `geocode-address` lands as
     // `geocode_address` rather than retaining the hyphen.
@@ -791,14 +1130,14 @@ fn generated_mcp_ability_name_collapses_runs_of_punctuation() {
 }
 
 #[test]
-fn generated_mcp_ability_name_falls_back_to_hash_when_slug_empty() {
+fn generated_mcp_ability_name_digest_disambiguates_empty_slug_projection() {
     // Upstream pair that slugifies to nothing (e.g. all
     // non-alphanumeric) must still produce a stable, unique
     // ability name so collisions surface as different bindings.
     let a = generated_mcp_ability_name("", "...", "///");
     let b = generated_mcp_ability_name("", "***", "===");
-    assert!(a.starts_with("mcp_"), "fallback prefix: {a}");
-    assert!(b.starts_with("mcp_"), "fallback prefix: {b}");
+    assert!(a.starts_with("mcp_"), "digest prefix: {a}");
+    assert!(b.starts_with("mcp_"), "digest prefix: {b}");
     assert_ne!(a, b, "distinct upstream pairs must hash to distinct names");
     // Determinism: same input → same output.
     let a2 = generated_mcp_ability_name("", "...", "///");
@@ -827,7 +1166,9 @@ fn existing_mcp_binding_extracts_server_and_tool() {
         cost: None,
     };
     let body = mcp_manifest_for(&plan).unwrap().to_toml_string().unwrap();
-    let binding = existing_mcp_binding(&body).expect("manifest declares an mcp binding");
+    let binding = existing_mcp_binding(&body)
+        .expect("manifest must parse")
+        .expect("manifest declares an mcp binding");
     assert_eq!(binding, ("echo".to_string(), "ping".to_string()));
 }
 
@@ -844,20 +1185,25 @@ description = "Operator-authored manifest."
 [input_schema]
 type = "object"
 "#;
-    assert_eq!(existing_mcp_binding(manifest_toml), None);
+    assert_eq!(
+        existing_mcp_binding(manifest_toml).expect("valid non-MCP manifest must parse"),
+        None
+    );
 }
 
 #[test]
-fn existing_mcp_binding_returns_none_for_malformed_toml() {
-    // Don't panic on garbage on disk; the caller will then fall
-    // through to the "refuse to overwrite without --overwrite"
-    // branch, which is the safer disposition.
-    assert_eq!(existing_mcp_binding("this is not valid toml @@@"), None);
+fn existing_mcp_binding_rejects_malformed_toml() {
+    let error = existing_mcp_binding("this is not valid toml @@@")
+        .expect_err("malformed existing manifest must fail closed");
+    assert!(
+        error.to_string().contains("failed to parse ability.toml"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
 fn mcp_manifest_for_emits_mcp_exec_with_pinned_server_tool() {
-    use crate::core::ability::spec::{AbilityExec, AbilityManifest};
+    use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest};
     let plan = McpAbilityPlan {
         server: "echo".into(),
         tool: "ping".into(),
@@ -950,10 +1296,10 @@ fn assert_tools_filter_satisfied_lists_every_missing_tool() {
 fn cost_kind_arg_round_trips_to_core_cost_kind() {
     // Pins the CLI ↔ core enum lockstep documented on
     // `CostKindArg`. If a future variant lands on
-    // `core::ability_spec::CostKind` and someone forgets the
+    // `daemon::ability::manifest::CostKind` and someone forgets the
     // mirror, this test fails loud instead of leaving operators
     // with an unreachable flag.
-    use crate::core::ability::spec::CostKind;
+    use crate::daemon::ability::manifest::CostKind;
     assert_eq!(CostKindArg::Free.into_core(), CostKind::Free);
     assert_eq!(
         CostKindArg::ExternalMetered.into_core(),
@@ -980,7 +1326,7 @@ fn build_cost_meta_normalises_blank_label_to_none() {
     // label outright. Treat empty-ish input as "label omitted" so
     // the kind still lands without dragging a useless blank
     // string onto disk.
-    use crate::core::ability::spec::CostKind;
+    use crate::daemon::ability::manifest::CostKind;
     let meta = build_cost_meta(Some(CostKindArg::ExternalMetered), Some("   "))
         .unwrap()
         .expect("kind set => meta present");
@@ -990,7 +1336,7 @@ fn build_cost_meta_normalises_blank_label_to_none() {
 
 #[test]
 fn build_cost_meta_carries_kind_and_trimmed_label() {
-    use crate::core::ability::spec::CostKind;
+    use crate::daemon::ability::manifest::CostKind;
     let meta = build_cost_meta(
         Some(CostKindArg::ExternalMetered),
         Some("  Google Maps API — $5 per 1000 requests  "),
@@ -1014,7 +1360,7 @@ fn mcp_manifest_for_stamps_declared_cost_on_disk() {
     // carry that `[cost]` table verbatim, and re-parsing it must
     // surface the same `CostMeta` — that is what `profiles::mcp`
     // reads to stop reporting `cost: unknown` on this row.
-    use crate::core::ability::spec::{AbilityManifest, CostKind, CostMeta};
+    use crate::daemon::ability::manifest::{AbilityManifest, CostKind, CostMeta};
     let plan = McpAbilityPlan {
         server: "Google Maps MCP".into(),
         tool: "geocode-address".into(),

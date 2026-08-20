@@ -9,24 +9,37 @@ fail() {
   exit 1
 }
 
-TARGET="src/daemon/execution/mission/dispatch.rs"
+TARGETS=(
+  "src/daemon/execution/mission/dispatch.rs"
+  "src/daemon/execution/mission/context.rs"
+)
 
-[[ -f "$TARGET" ]] || fail "missing $TARGET"
+for target in "${TARGETS[@]}"; do
+  [[ -f "$target" ]] || fail "missing $target"
+done
 
-if rg -n 'send_to_agent_missing_mission_context|continuing in release|backwards compat|back-compat shim|active\.is_none|fallback.*mission context|EASYNET_AGENT_DEPTH"\.to_string\(\)' "$TARGET"; then
+if rg -n 'send_to_agent_missing_mission_context|continuing in release|backwards compat|back-compat shim|active\.is_none|fallback.*mission context|mission context.*fallback|env-var fallback|EASYNET_AGENT_DEPTH"\.to_string\(\)' "${TARGETS[@]}"; then
   fail "dispatch must hard-fail missing mission context instead of continuing in degraded mode"
 fi
 
-if rg -n '#\[cfg\((not\()?debug_assertions\)?\)\]' "$TARGET"; then
+if rg -n '#\[cfg\((not\()?debug_assertions\)?\)\]' "${TARGETS[@]}"; then
   fail "mission-context enforcement must not diverge between debug and release builds"
 fi
 
-if ! rg -n 'without a mission context' "$TARGET" >/dev/null; then
+if ! rg -n 'without a mission context' src/daemon/execution/mission/dispatch.rs >/dev/null; then
   fail "dispatch must expose an explicit missing mission-context error"
 fi
 
-if ! rg -n 'does not correspond to an existing' "$TARGET" >/dev/null; then
+if ! rg -n 'does not correspond to an existing' src/daemon/execution/mission/dispatch.rs >/dev/null; then
   fail "dispatch must reject forged mission ids whose run dir is absent"
+fi
+
+if ! rg -n 'DispatchContextSource' src/daemon/execution/mission/context.rs >/dev/null; then
+  fail "dispatch context lookup must model source explicitly"
+fi
+
+if ! rg -n 'ProcessEnvironment' src/daemon/execution/mission/context.rs >/dev/null; then
+  fail "dispatch context lookup must name the subprocess environment source"
 fi
 
 echo "check-dispatch-mission-context-boundary: ok"

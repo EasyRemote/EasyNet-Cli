@@ -52,19 +52,46 @@ use serde_json::{json, Value};
 use super::sandbox::open_beneath;
 use super::state::PUBLISHED_PROJECTS;
 use crate::core::ura::AbilitySelector;
-use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
-use crate::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
+use crate::daemon::ability::dispatch::AxonAbilityCatalog;
+use crate::daemon::invocation::routing::target::CallMode;
+use crate::daemon::resources::projection::PagesApiResponse;
 
 /// Process-wide handle to the live ability registry. Set once at
 /// boot by `pages::register`; read by the `kind="ability"` branch
 /// to dispatch requests directly through the in-process registry
 /// instead of round-tripping through the daemon's own IPC socket
 /// (which would self-deadlock).
+#[cfg(not(test))]
 static DISPATCH_HANDLE: Lazy<std::sync::OnceLock<Arc<OnceLock<Arc<AxonAbilityCatalog>>>>> =
     Lazy::new(std::sync::OnceLock::new);
 
+#[cfg(test)]
+static DISPATCH_HANDLE: Lazy<std::sync::RwLock<Option<Arc<OnceLock<Arc<AxonAbilityCatalog>>>>>> =
+    Lazy::new(|| std::sync::RwLock::new(None));
+
+#[cfg(not(test))]
 pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>) {
     let _ = DISPATCH_HANDLE.set(handle);
+}
+
+#[cfg(test)]
+pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>) {
+    *DISPATCH_HANDLE
+        .write()
+        .expect("pages dispatch handle test lock poisoned") = Some(handle);
+}
+
+#[cfg(not(test))]
+fn dispatch_handle() -> Option<Arc<OnceLock<Arc<AxonAbilityCatalog>>>> {
+    DISPATCH_HANDLE.get().cloned()
+}
+
+#[cfg(test)]
+fn dispatch_handle() -> Option<Arc<OnceLock<Arc<AxonAbilityCatalog>>>> {
+    DISPATCH_HANDLE
+        .read()
+        .expect("pages dispatch handle test lock poisoned")
+        .clone()
 }
 
 /// One TOML manifest under `<project>/api/<verb>.toml`.
@@ -147,6 +174,10 @@ fn toml_to_json(t: toml::Value) -> Value {
     }
 }
 
+fn api_response(body: Value) -> anyhow::Result<Value> {
+    Ok(serde_json::to_value(PagesApiResponse::json_ok(body))?)
+}
+
 /// Top-level API handler. Dispatches on the manifest's `kind`.
 ///
 /// args:
@@ -172,11 +203,7 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
     match manifest.kind.as_str() {
         "static_json" => {
             let resp = manifest.response.map(toml_to_json).unwrap_or(Value::Null);
-            Ok(json!({
-                "status":       200,
-                "body":         resp,
-                "content_type": "application/json; charset=utf-8",
-            }))
+            api_response(resp)
         }
         "echo" => {
             let body = args.get("body").cloned().unwrap_or(Value::Null);
@@ -202,11 +229,7 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
                 }
                 (other, _) => other,
             };
-            Ok(json!({
-                "status":       200,
-                "body":         merged,
-                "content_type": "application/json; charset=utf-8",
-            }))
+            api_response(merged)
         }
         "ability" => {
             // The manifest forwards the request to a real EasyNet
@@ -228,20 +251,18 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
             // Use the daemon's shared Axon LocalRuntime. We are
             // already inside the daemon process, so an IPC round trip
             // would self-deadlock the original request.
-            let handle = DISPATCH_HANDLE.get().ok_or_else(|| {
+            let handle = dispatch_handle().ok_or_else(|| {
                 anyhow::anyhow!("dispatch handle not set; pages::register must run at boot")
             })?;
             let registry = handle.get().ok_or_else(|| {
                 anyhow::anyhow!("dispatch handle empty; build site forgot to populate OnceLock")
             })?;
-            let target = InvocationTarget {
-                scope: TargetScope::Local,
-                ability: selector.local_registry_ability().to_string(),
-                normalized_args: invoke_args,
-                call_mode: CallMode::Rpc,
-                subject: Some(selector.owner_ura().to_string()),
-                causal_context: None,
-            };
+            let target = crate::daemon::invocation::routing::target::SystemInvocationTargetIssuer::local_root_for_subject(
+                selector.local_registry_ability().to_string(),
+                invoke_args,
+                CallMode::Rpc,
+                selector.owner_ura().to_string(),
+            );
             let result = registry.invoke_rpc_target_json(target).map_err(|e| {
                 anyhow::anyhow!(
                     "ability `{}` ({}) failed: {e}",
@@ -249,11 +270,7 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
                     selector.local_registry_ability()
                 )
             })?;
-            Ok(json!({
-                "status":       200,
-                "body":         result,
-                "content_type": "application/json; charset=utf-8",
-            }))
+            api_response(result)
         }
         other => anyhow::bail!("unsupported api manifest kind: {other:?}"),
     }
@@ -263,6 +280,20 @@ fn api_ability_name(user: &str, project_id: &str, verb: &str) -> String {
     format!("{user}.{project_id}.api.{verb}")
 }
 
+fn api_ability_manifest(verb: &str) -> crate::daemon::ability::manifest::AbilityManifest {
+    let manifest_name = verb.rsplit('.').next().unwrap_or(verb);
+    crate::daemon::ability::manifest::AbilityManifest::new(
+        manifest_name,
+        "Invoke a published Pages project API endpoint.",
+        json!({
+            "type": "object",
+            "additionalProperties": true
+        }),
+    )
+    .and_then(|manifest| manifest.with_admission_action("invoke"))
+    .expect("dynamic Pages API manifest is well-formed")
+}
+
 fn is_api_ability_verb(verb: &str) -> bool {
     !verb.is_empty()
         && verb
@@ -270,17 +301,20 @@ fn is_api_ability_verb(verb: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
-pub(crate) fn api_ability_names_for_project(user: &str, project_id: &str) -> Vec<String> {
+pub(crate) fn api_ability_names_for_project(
+    user: &str,
+    project_id: &str,
+) -> anyhow::Result<Vec<String>> {
     let key = (user.to_string(), project_id.to_string());
     let Some(handle) = PUBLISHED_PROJECTS.get(&key) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let api_dir = handle.canonical_root.join("api");
     drop(handle);
 
     let read_dir = match fs::read_dir(&api_dir) {
         Ok(read_dir) => read_dir,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => {
             let user_field = user;
             let project_field = project_id;
@@ -295,15 +329,21 @@ pub(crate) fn api_ability_names_for_project(user: &str, project_id: &str) -> Vec
                 path = path,
                 error = err_msg,
             );
-            return Vec::new();
+            anyhow::bail!("scan pages API directory {}: {err}", api_dir.display());
         }
     };
 
     let mut names = BTreeSet::new();
-    for entry in read_dir.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
+    for entry in read_dir {
+        let entry = entry.map_err(|err| {
+            anyhow::anyhow!("scan pages API directory {}: {err}", api_dir.display())
+        })?;
+        let file_type = entry.file_type().map_err(|err| {
+            anyhow::anyhow!(
+                "read pages API entry type {}: {err}",
+                entry.path().display()
+            )
+        })?;
         if !file_type.is_file() {
             continue;
         }
@@ -331,16 +371,17 @@ pub(crate) fn api_ability_names_for_project(user: &str, project_id: &str) -> Vec
         }
         names.insert(api_ability_name(user, project_id, verb));
     }
-    names.into_iter().collect()
+    Ok(names.into_iter().collect())
 }
 
 pub(crate) fn register_api_abilities_for_project(
     registry: &AxonAbilityCatalog,
+    owner_user_id: &str,
     user: &str,
     project_id: &str,
 ) -> anyhow::Result<usize> {
-    let names = api_ability_names_for_project(user, project_id);
-    let owner = OwnerKind::User(user.to_string());
+    let names = api_ability_names_for_project(user, project_id)?;
+    let owner = super::pages_service_owner(owner_user_id);
     for name in &names {
         let Some(verb) = name.rsplit_once(".api.").map(|(_prefix, verb)| verb) else {
             continue;
@@ -348,9 +389,10 @@ pub(crate) fn register_api_abilities_for_project(
         let user = user.to_string();
         let project_id = project_id.to_string();
         let verb = verb.to_string();
-        registry.hot_register_rpc(
+        registry.hot_register_rpc_with_spec(
             name.clone(),
             owner.clone(),
+            api_ability_manifest(&verb),
             Arc::new(move |args| handle_api(&user, &project_id, &verb, args)),
         )?;
     }
@@ -362,7 +404,7 @@ mod tests {
     use super::*;
     use crate::daemon::ability::builtins::resources::pages::sandbox::open_directory;
     use crate::daemon::ability::builtins::resources::pages::state::{
-        ProjectHandle, Visibility, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
+        PageVisibility, ProjectHandle, DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
     };
     use crate::daemon::ability::dispatch::{AxonAbilityCatalog, OwnerKind};
     use serde_json::json;
@@ -380,6 +422,10 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("api")).expect("api dir");
         std::fs::write(dir.path().join(format!("api/{verb}.toml")), manifest_toml)
             .expect("manifest");
+        publish_project_root(user, project_id, dir)
+    }
+
+    fn publish_project_root(user: &str, project_id: &str, dir: TempDir) -> TempDir {
         let canonical_root = std::fs::canonicalize(dir.path()).expect("canonical root");
         let folder_handle = open_directory(&canonical_root).expect("open directory");
         PUBLISHED_PROJECTS.insert(
@@ -389,7 +435,7 @@ mod tests {
                 project_id: project_id.to_string(),
                 folder_handle,
                 canonical_root,
-                visibility: Visibility::Public,
+                visibility: PageVisibility::Public,
                 file_size_cap: DEFAULT_FILE_SIZE_CAP,
                 started_at: SystemTime::now(),
             }),
@@ -400,10 +446,31 @@ mod tests {
     fn install_dispatch_registry_once() {
         static INIT: OnceLock<()> = OnceLock::new();
         INIT.get_or_init(|| {
-            let mut reg = AxonAbilityCatalog::new();
-            reg.register_rpc_with_owner(
+            let device_ura = crate::core::ura::device_ura("localhost", "pages-test");
+            let demo_agent_ura = crate::core::ura::agent_ura("localhost", "dev", "demo");
+            let authority_context =
+                crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+                    device_ura,
+                    vec![demo_agent_ura],
+                )
+                .expect("pages API test hosted Agent authority is canonical");
+            let mut reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+                crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                    crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                    None,
+                ),
+                authority_context,
+            );
+            reg.register_rpc_with_spec_and_action(
                 "demo.backend",
                 OwnerKind::Agent("demo".into()),
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+                crate::daemon::ability::manifest::AbilityManifest::new(
+                    "backend",
+                    "Pages API test backend fixture.",
+                    json!({"type": "object", "additionalProperties": true}),
+                )
+                .expect("pages API test backend manifest"),
                 Arc::new(|args| Ok(json!({"ok": true, "echo": args}))),
             );
             let reg = Arc::new(reg);
@@ -413,6 +480,67 @@ mod tests {
                 .expect("dispatch handle OnceLock should set once");
             set_dispatch_handle(handle);
         });
+    }
+
+    fn assert_api_projection_shape(resp: &Value) {
+        assert_eq!(resp["status"], 200);
+        assert_eq!(resp["content_type"], "application/json; charset=utf-8");
+        assert!(resp.get("manifest_path").is_none());
+        assert!(resp.get("canonical_root").is_none());
+    }
+
+    #[test]
+    fn static_json_manifest_returns_typed_payload_projection_shape() {
+        let user = "alice-static-api";
+        let project_id = "todo-static-api";
+        let key = (user.to_string(), project_id.to_string());
+        let _dir = publish_project_with_manifest(
+            user,
+            project_id,
+            "ping",
+            "kind = \"static_json\"\n[response]\npong = true\n",
+        );
+
+        let resp = handle_api(
+            user,
+            project_id,
+            "ping",
+            json!({"body": {}, "method": "GET"}),
+        )
+        .expect("static api response");
+
+        assert_api_projection_shape(&resp);
+        assert_eq!(resp["body"]["pong"], true);
+        PUBLISHED_PROJECTS.remove(&key);
+    }
+
+    #[test]
+    fn echo_manifest_returns_typed_payload_projection_shape() {
+        let user = "alice-echo-api";
+        let project_id = "todo-echo-api";
+        let key = (user.to_string(), project_id.to_string());
+        let _dir = publish_project_with_manifest(
+            user,
+            project_id,
+            "submit",
+            "kind = \"echo\"\n[extra]\naccepted = true\n",
+        );
+
+        let resp = handle_api(
+            user,
+            project_id,
+            "submit",
+            json!({
+                "body": {"task": "ship projection"},
+                "method": "POST"
+            }),
+        )
+        .expect("echo api response");
+
+        assert_api_projection_shape(&resp);
+        assert_eq!(resp["body"]["task"], "ship projection");
+        assert_eq!(resp["body"]["accepted"], true);
+        PUBLISHED_PROJECTS.remove(&key);
     }
 
     #[test]
@@ -439,7 +567,7 @@ mod tests {
         )
         .expect("handle_api ok");
 
-        assert_eq!(resp["status"], 200);
+        assert_api_projection_shape(&resp);
         assert_eq!(resp["body"]["ok"], true);
         assert_eq!(resp["body"]["echo"]["task"], "ship windows support");
 
@@ -475,6 +603,39 @@ mod tests {
             "error should point at retired ability field or replacement field: {msg}"
         );
 
+        PUBLISHED_PROJECTS.remove(&key);
+    }
+
+    #[test]
+    fn api_ability_names_missing_api_dir_is_empty_project_api_surface() {
+        let user = "alice-no-api";
+        let project_id = "todo-no-api";
+        let key = (user.to_string(), project_id.to_string());
+        let dir = TempDir::new().expect("tempdir");
+        let _dir = publish_project_root(user, project_id, dir);
+
+        let names = api_ability_names_for_project(user, project_id).expect("scan api names");
+
+        assert!(names.is_empty());
+        PUBLISHED_PROJECTS.remove(&key);
+    }
+
+    #[test]
+    fn api_ability_names_rejects_corrupt_api_directory_state() {
+        let user = "alice-bad-api";
+        let project_id = "todo-bad-api";
+        let key = (user.to_string(), project_id.to_string());
+        let dir = TempDir::new().expect("tempdir");
+        std::fs::write(dir.path().join("api"), "not a directory").expect("poison api path");
+        let _dir = publish_project_root(user, project_id, dir);
+
+        let error = api_ability_names_for_project(user, project_id)
+            .expect_err("corrupt api path must fail ability discovery");
+
+        assert!(
+            error.to_string().contains("scan pages API directory"),
+            "wrong error: {error}"
+        );
         PUBLISHED_PROJECTS.remove(&key);
     }
 }

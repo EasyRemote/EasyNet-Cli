@@ -16,9 +16,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-use crate::daemon::plugins::{
-    PluginBidiWireKind, PluginCallMode, PluginHostError, PluginRuntimeState,
-};
+use crate::daemon::ability::CallMode;
+use crate::daemon::plugins::{PluginBidiWireKind, PluginHostError, PluginRuntimeState};
 
 /// Bidi wire codec used when an ability crosses the daemon/Axon session bridge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,7 +111,7 @@ fn plugin_bidi_from_state(state: &PluginRuntimeState) -> BTreeMap<String, Abilit
             continue;
         }
         for ability in entry.package().manifest().abilities() {
-            if ability.call_mode() != PluginCallMode::Bidi {
+            if ability.call_mode() != CallMode::Bidi {
                 continue;
             }
             if let Some(kind) = ability.bidi_wire_kind() {
@@ -129,32 +128,14 @@ impl Default for AbilityWireRegistry {
     }
 }
 
-/// Return the declared bidi wire profile for a locally hosted ability.
-pub fn bidi_wire_kind_for(ability: &str) -> Option<AbilityBidiWireKind> {
-    core_bidi_wire_kind_for(ability).or_else(|| {
-        AbilityWireRegistry::load_default_profile()
-            .ok()
-            .and_then(|registry| registry.bidi_wire_kind_for(ability))
-    })
-}
-
-/// Return true when the runtime has a daemon/session wire adapter for `ability`.
-pub fn is_bidi_wire_ability(ability: &str) -> bool {
-    bidi_wire_kind_for(ability).is_some()
-}
-
 pub(crate) fn core_bidi_wire_kind_for(ability: &str) -> Option<AbilityBidiWireKind> {
-    if ability == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH {
+    if ability == crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_TERMINAL_ATTACH {
         return Some(AbilityBidiWireKind::Pty);
     }
     if ability
         == crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER
     {
         return Some(AbilityBidiWireKind::FileTransfer);
-    }
-    if ability == crate::daemon::ability::builtins::device_control::browser::ABILITY_ATTACH_SESSION
-    {
-        return Some(AbilityBidiWireKind::JsonFrames);
     }
     None
 }
@@ -175,7 +156,7 @@ mod tests {
         let registry = AbilityWireRegistry::core();
         assert_eq!(
             registry.bidi_wire_kind_for(
-                crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_PTY_SESSION_ATTACH
+                crate::daemon::ability::builtins::device_control::terminal::attach::ABILITY_TERMINAL_ATTACH
             ),
             Some(AbilityBidiWireKind::Pty)
         );
@@ -184,12 +165,6 @@ mod tests {
                 crate::daemon::ability::builtins::device_control::file_transfer::ABILITY_FILE_TRANSFER
             ),
             Some(AbilityBidiWireKind::FileTransfer)
-        );
-        assert_eq!(
-            registry.bidi_wire_kind_for(
-                crate::daemon::ability::builtins::device_control::browser::ABILITY_ATTACH_SESSION
-            ),
-            Some(AbilityBidiWireKind::JsonFrames)
         );
     }
 
@@ -254,9 +229,14 @@ bidi_wire_kind = "json_frames"
         std::fs::write(
             root.join(format!("abilities/{ability}.ability.toml")),
             format!(
-                r#"schema_version = "1"
+                r#"schema_version = "3"
 name = "{ability}"
+descriptor_version = "1.2.3"
 description = "test descriptor for {ability}"
+exposure = "task"
+dedicated_surface = "none"
+subject_contract_kind = "authenticated-user"
+admission_action = "stream"
 
 [input_schema]
 type = "object"

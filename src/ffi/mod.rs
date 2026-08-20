@@ -13,7 +13,7 @@
 // Every symbol exported from this module with `#[no_mangle]` and
 // `extern "C"` is part of the ABI stability contract. Breaking a
 // symbol (rename / signature change) requires bumping
-// `easynet_abi_version()`. Downstream Client bindings refuse to
+// `runtime_abi_version()`. Downstream Client bindings refuse to
 // initialise when the lib's reported ABI version does not match the
 // one they were compiled against.
 //
@@ -30,20 +30,12 @@
 //   strings/   — UTF-8 C string ↔ Rust &str conversion helpers.
 //   invocation/ — complete Axon Invocation ABI.
 //
-// v3 status (daemon Invocation ABI)
-// -------------------------------
-// - ABI version + handle registry + last-error TLS.
-// - `easynet_init` / `easynet_shutdown`: daemon handle setup.
-// - `easynet_daemon_start/stop/status/invocation_endpoint`:
-//   product daemon lifecycle and endpoint discovery.
-// - `easynet_invocation_invoke`: complete unary Axon Invocation over
-//   daemon.sock when the `axon-pb` feature is enabled.
-// - `easynet_invocation_stream_open/cancel`: complete server-stream
-//   Axon Invocation over daemon.sock.
-// - `easynet_invocation_bidi_open/send/close/cancel`: complete
-//   InvokeBidi session ABI over daemon.sock.
-// - No `easynet_ability_*` exports. The ability+args ABI was removed
-//   instead of retained as hard-fail compatibility symbols.
+// v5 status (generic Runtime Core ABI)
+// ------------------------------------
+// - Daemon lifecycle and generic Runtime/Invocation ownership only.
+// - Unary, prepared/signed/handle, stream, and bidi state machines.
+// - Stable feature, health, diagnostics, and typed-error JSON DTOs.
+// - Domain profiles are language-SDK abstractions and are never C exports.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -51,6 +43,7 @@
 pub mod client;
 pub mod daemon;
 pub mod errors;
+pub mod features;
 pub mod invocation;
 pub mod strings;
 
@@ -58,12 +51,12 @@ use std::os::raw::c_char;
 
 use crate::daemon::control::discovery;
 use crate::ffi::client as ipc_client;
-use crate::ffi::client::handle::{alloc, get, lib_runtime, release, ClientSession, EasynetHandle};
+use crate::ffi::client::handle::{alloc, get, lib_runtime, release, ClientSession, RuntimeHandle};
 use crate::ffi::errors::{
-    clear_last_error, set_last_error, EASYNET_OK, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_HANDLE,
-    ERR_NULL_POINTER, ERR_VERSION_INCOMPATIBLE,
+    clear_last_error, set_last_error_code, ERR_DAEMON_DOWN, ERR_GENERIC, ERR_INVALID_HANDLE,
+    ERR_INVALID_UTF8, ERR_NULL_POINTER, ERR_VERSION_INCOMPATIBLE, RUNTIME_OK,
 };
-use crate::ffi::strings::read_cstr;
+use crate::ffi::strings::{alloc_output_cstring, read_cstr};
 
 /// Current ABI version. Every breaking change to an exported
 /// `#[no_mangle] extern "C"` function bumps this integer; the CI
@@ -75,7 +68,12 @@ use crate::ffi::strings::read_cstr;
 /// ability+args retirement symbols.
 /// v3 = 3. Complete Invocation-only ABI; `easynet_ability_*` symbols
 /// are removed from the exported C surface.
-pub const EASYNET_ABI_VERSION: u32 = 3;
+/// v4 = 4. Additive Daemon SDK Runtime Core object-family symbols:
+/// feature discovery, attach/discover/detach/endpoints, runtime
+/// health, and prepare/sign/submit handles.
+/// v5 = 5. Generic-only C surface: daemon lifecycle, Runtime/Invocation,
+/// stream/bidi, and stable runtime/error DTOs. Domain profile exports removed.
+pub const RUNTIME_ABI_VERSION: u32 = 7;
 
 /// Report the ABI version of this library build. Client bindings
 /// call this first thing at dlopen time and refuse to proceed when
@@ -84,8 +82,38 @@ pub const EASYNET_ABI_VERSION: u32 = 3;
 /// # Safety
 /// No pointer parameters; no preconditions; always safe to call.
 #[no_mangle]
-pub extern "C" fn easynet_abi_version() -> u32 {
-    EASYNET_ABI_VERSION
+pub extern "C" fn runtime_abi_version() -> u32 {
+    RUNTIME_ABI_VERSION
+}
+
+/// Return ABI and SDK feature discovery as JSON.
+///
+/// The returned string is caller-owned and must be freed with
+/// `runtime_string_free`.
+///
+/// # Safety
+/// `out_features_json` must be a non-null caller-owned pointer.
+#[no_mangle]
+pub unsafe extern "C" fn runtime_feature_discovery(out_features_json: *mut *mut c_char) -> i32 {
+    if out_features_json.is_null() {
+        set_last_error_code(
+            ERR_NULL_POINTER,
+            "runtime_feature_discovery: out_features_json pointer is null",
+        );
+        return ERR_NULL_POINTER;
+    }
+    unsafe { *out_features_json = std::ptr::null_mut() };
+    let ptr = alloc_output_cstring(features::feature_discovery_json());
+    if ptr.is_null() {
+        set_last_error_code(
+            ERR_GENERIC,
+            "runtime_feature_discovery: out-of-memory allocating features string",
+        );
+        return ERR_GENERIC;
+    }
+    unsafe { *out_features_json = ptr };
+    clear_last_error();
+    RUNTIME_OK
 }
 
 /// Open an IPC connection to the local daemon and return a handle.
@@ -96,7 +124,7 @@ pub extern "C" fn easynet_abi_version() -> u32 {
 /// `daemon::control::server::run` boots.
 ///
 /// On success: writes the new handle to `*out_handle`, returns
-/// `EASYNET_OK`, clears the last-error slot.
+/// `RUNTIME_OK`, clears the last-error slot.
 ///
 /// On failure: writes 0 to `*out_handle`, returns one of:
 ///   - `ERR_NULL_POINTER`         — `out_handle` is null.
@@ -104,7 +132,7 @@ pub extern "C" fn easynet_abi_version() -> u32 {
 ///                                  unreachable.
 ///   - `ERR_VERSION_INCOMPATIBLE` — IPC version overlap empty.
 ///   - `ERR_GENERIC`              — runtime construction failed.
-/// and records a human-readable message via `set_last_error`.
+/// and records a schema-backed typed last-error JSON record.
 ///
 /// # Safety
 /// - `control_path` may be NULL; if non-null it must point to a
@@ -112,12 +140,12 @@ pub extern "C" fn easynet_abi_version() -> u32 {
 /// - `out_handle` must be a non-null pointer to a `u64` the caller
 ///   owns.
 #[no_mangle]
-pub unsafe extern "C" fn easynet_init(
+pub unsafe extern "C" fn runtime_init(
     control_path: *const c_char,
-    out_handle: *mut EasynetHandle,
+    out_handle: *mut RuntimeHandle,
 ) -> i32 {
     if out_handle.is_null() {
-        set_last_error("easynet_init: out_handle pointer is null");
+        set_last_error_code(ERR_NULL_POINTER, "runtime_init: out_handle pointer is null");
         return ERR_NULL_POINTER;
     }
     // Initialise the out value first so the caller can safely read it
@@ -126,13 +154,22 @@ pub unsafe extern "C" fn easynet_init(
 
     // Resolve control.json path: caller-supplied or default.
     let path = if control_path.is_null() {
-        discovery::default_path()
+        match discovery::try_default_path() {
+            Ok(path) => path,
+            Err(error) => {
+                set_last_error_code(ERR_GENERIC, format!("runtime_init: {error}"));
+                return ERR_GENERIC;
+            }
+        }
     } else {
         match read_cstr(control_path) {
             Ok(s) => std::path::PathBuf::from(s),
             Err(_) => {
-                set_last_error("easynet_init: control_path is not a valid UTF-8 C string");
-                return ERR_NULL_POINTER;
+                set_last_error_code(
+                    ERR_INVALID_UTF8,
+                    "runtime_init: control_path is not a valid UTF-8 C string",
+                );
+                return ERR_INVALID_UTF8;
             }
         }
     };
@@ -142,27 +179,22 @@ pub unsafe extern "C" fn easynet_init(
     let rt = match lib_runtime() {
         Ok(rt) => rt,
         Err(e) => {
-            set_last_error(format!("easynet_init: {e}"));
+            set_last_error_code(ERR_GENERIC, format!("runtime_init: {e}"));
             return ERR_GENERIC;
         }
     };
 
     // Block on the connect; the runtime is single-thread so this is
-    // a serial dial, which is what we want — `easynet_init` is a
+    // a serial dial, which is what we want — `runtime_init` is a
     // setup call, not on the hot path.
-    let connect_result = rt.block_on(ipc_client::connect(&path));
-    let client = match connect_result {
+    let client = match rt.block_on(ipc_client::connect(&path)) {
         Ok(c) => c,
-        Err(e) => {
-            let msg = format!("{e:#}");
-            set_last_error(format!("easynet_init: {msg}"));
-            // Distinguish version-incompat from "no daemon" so Client
-            // bindings can branch on the right code. Fall back to
-            // ERR_DAEMON_DOWN for everything else (refused connect,
-            // missing control.json, IO error).
-            if msg.contains("version negotiation failed") {
-                return ERR_VERSION_INCOMPATIBLE;
-            }
+        Err(err @ ipc_client::IpcConnectError::VersionIncompatible { .. }) => {
+            set_last_error_code(ERR_VERSION_INCOMPATIBLE, format!("runtime_init: {err}"));
+            return ERR_VERSION_INCOMPATIBLE;
+        }
+        Err(ipc_client::IpcConnectError::DaemonUnavailable(err)) => {
+            set_last_error_code(ERR_DAEMON_DOWN, format!("runtime_init: {err:#}"));
             return ERR_DAEMON_DOWN;
         }
     };
@@ -171,14 +203,14 @@ pub unsafe extern "C" fn easynet_init(
     let (id, _arc) = alloc(session);
     unsafe { *out_handle = id };
     clear_last_error();
-    EASYNET_OK
+    RUNTIME_OK
 }
 
-/// Release a handle previously returned from `easynet_init`. The
+/// Release a handle previously returned from `runtime_init`. The
 /// IPC connection inside the session is closed when the registry
 /// drops the last `Arc<ClientSession>`.
 ///
-/// Returns `EASYNET_OK` if the handle was known and removed,
+/// Returns `RUNTIME_OK` if the handle was known and removed,
 /// `ERR_INVALID_HANDLE` if it was not (or had already been freed —
 /// double-shutdown is a programmer error, not a retriable
 /// condition, but it does not crash).
@@ -187,18 +219,33 @@ pub unsafe extern "C" fn easynet_init(
 /// `handle` may be any value, including 0; the function does not
 /// dereference any pointers.
 #[no_mangle]
-pub extern "C" fn easynet_shutdown(handle: EasynetHandle) -> i32 {
-    if get(handle).is_none() {
-        set_last_error(format!(
-            "easynet_shutdown: handle {handle} is not registered (already shut down?)"
-        ));
-        return ERR_INVALID_HANDLE;
-    }
+pub extern "C" fn runtime_shutdown(handle: RuntimeHandle) -> i32 {
+    let session = match get(handle) {
+        Some(session) => session,
+        None => {
+            set_last_error_code(
+                ERR_INVALID_HANDLE,
+                format!("runtime_shutdown: handle {handle} is not registered (already shut down?)"),
+            );
+            return ERR_INVALID_HANDLE;
+        }
+    };
+    let binding = match session.begin_closing(handle) {
+        Ok(binding) => binding,
+        Err(_) => {
+            set_last_error_code(
+                ERR_INVALID_HANDLE,
+                format!("runtime_shutdown: handle {handle} is already closing or released"),
+            );
+            return ERR_INVALID_HANDLE;
+        }
+    };
 
-    invocation::cancel_invocations_for_handle(handle);
+    invocation::cancel_invocations_for_binding(binding);
     let _ = release(handle);
+    session.mark_released();
     clear_last_error();
-    EASYNET_OK
+    RUNTIME_OK
 }
 
 #[cfg(test)]
@@ -211,7 +258,7 @@ mod tests {
         // logic, no environment-based branching. A regression that
         // returned a runtime value would silently break every
         // Client's version-match check.
-        assert_eq!(easynet_abi_version(), EASYNET_ABI_VERSION);
+        assert_eq!(runtime_abi_version(), RUNTIME_ABI_VERSION);
     }
 
     #[test]
@@ -219,7 +266,36 @@ mod tests {
         // Client bindings sometimes check `ver != 0` as a cheap
         // "did the symbol load?" test. If the ABI version ever
         // became 0, that idiom would silently pass; this pins it.
-        const { assert!(EASYNET_ABI_VERSION >= 1) };
+        const { assert!(RUNTIME_ABI_VERSION >= 1) };
+    }
+
+    #[test]
+    fn feature_discovery_rejects_null_output_pointer() {
+        let code = unsafe { runtime_feature_discovery(std::ptr::null_mut()) };
+        assert_eq!(code, ERR_NULL_POINTER);
+    }
+
+    #[test]
+    fn feature_discovery_reports_stream_bidi_lifecycle_symbol() {
+        let mut out: *mut c_char = std::ptr::null_mut();
+        let code = unsafe { runtime_feature_discovery(&mut out) };
+        assert_eq!(code, RUNTIME_OK);
+        assert!(!out.is_null());
+        let json: serde_json::Value = unsafe {
+            serde_json::from_str(std::ffi::CStr::from_ptr(out).to_str().unwrap()).unwrap()
+        };
+        unsafe { strings::runtime_string_free(out) };
+        assert_eq!(json["abi_version"], RUNTIME_ABI_VERSION);
+        for (profile, status) in features::PROFILES {
+            assert_eq!(json["profiles"][*profile], *status);
+        }
+        for symbol in features::ALWAYS_ON_SYMBOLS {
+            assert_eq!(json["symbols"][*symbol], true);
+        }
+        assert_eq!(
+            json["symbols"]["stream_bidi_lifecycle"],
+            serde_json::json!(cfg!(feature = "axon-pb"))
+        );
     }
 
     #[test]
@@ -228,7 +304,7 @@ mod tests {
         // regression that started I/O before validating the output
         // pointer would attempt to write into memory the caller did
         // not provide; pin the early return here.
-        let code = unsafe { easynet_init(std::ptr::null(), std::ptr::null_mut()) };
+        let code = unsafe { runtime_init(std::ptr::null(), std::ptr::null_mut()) };
         assert_eq!(code, ERR_NULL_POINTER);
     }
 
@@ -239,18 +315,63 @@ mod tests {
         // ERR_DAEMON_DOWN. This pins the operator-visible message
         // for that path.
         let bogus = std::ffi::CString::new("/tmp/eznt-no-such-file.json").unwrap();
-        let mut h: EasynetHandle = 999;
-        let code = unsafe { easynet_init(bogus.as_ptr(), &mut h) };
+        let mut h: RuntimeHandle = 999;
+        let code = unsafe { runtime_init(bogus.as_ptr(), &mut h) };
         assert_eq!(code, ERR_DAEMON_DOWN);
         assert_eq!(h, 0, "out_handle must be zeroed on the failure path");
+    }
+
+    #[test]
+    fn init_returns_typed_version_incompatible_without_message_fallback() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let control_path = dir
+            .path()
+            .join(crate::daemon::control::discovery::CONTROL_JSON_FILENAME);
+        crate::daemon::control::discovery::write(
+            &control_path,
+            &crate::daemon::control::discovery::ControlDiscovery {
+                socket_path: Some(dir.path().join("unreachable-control.sock")),
+                pipe_name: None,
+                invocation_endpoint: Some(dir.path().join("unreachable-daemon.sock")),
+                daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                    mode: "device".to_string(),
+                    realm: "localhost".to_string(),
+                    node_id: Some("version-incompatible-node".to_string()),
+                }),
+                pid: 1,
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                    crate::daemon::control::discovery::IPC_VERSION_V1 + 1,
+                ),
+                capability_flags: Vec::new(),
+                pages_port: None,
+            },
+        )
+        .expect("write incompatible control discovery");
+
+        let raw_path = std::ffi::CString::new(control_path.display().to_string()).unwrap();
+        let mut h: RuntimeHandle = 999;
+        let code = unsafe { runtime_init(raw_path.as_ptr(), &mut h) };
+
+        assert_eq!(code, ERR_VERSION_INCOMPATIBLE);
+        assert_eq!(h, 0, "out_handle must be zeroed on the failure path");
+        let error = read_last_error_json();
+        assert_eq!(error["code"], "VERSION_MISMATCH");
+        assert_eq!(error["details"]["abi_code"], ERR_VERSION_INCOMPATIBLE);
+        assert_eq!(error["details"]["abi_symbol"], "ERR_VERSION_INCOMPATIBLE");
     }
 
     #[test]
     fn shutdown_with_unknown_handle_returns_invalid_handle() {
         // The handle 9_999_999 was never issued; shutdown must report
         // it as invalid rather than silently succeeding.
-        let code = easynet_shutdown(9_999_999);
+        let code = runtime_shutdown(9_999_999);
         assert_eq!(code, ERR_INVALID_HANDLE);
+
+        let error = read_last_error_json();
+        assert_eq!(error["code"], "INVALID_HANDLE");
+        assert_eq!(error["details"]["abi_code"], ERR_INVALID_HANDLE);
+        assert_eq!(error["details"]["abi_symbol"], "ERR_INVALID_HANDLE");
     }
 
     #[test]
@@ -259,7 +380,19 @@ mod tests {
         // is a programming error and must surface as
         // ERR_INVALID_HANDLE — silently returning OK would mask
         // double-shutdown bugs in Client code.
-        let code = easynet_shutdown(0);
+        let code = runtime_shutdown(0);
         assert_eq!(code, ERR_INVALID_HANDLE);
+    }
+
+    fn read_last_error_json() -> serde_json::Value {
+        let mut out: *mut c_char = std::ptr::null_mut();
+        let code = unsafe { errors::runtime_last_error_json(&mut out) };
+        assert_eq!(code, RUNTIME_OK);
+        assert!(!out.is_null());
+        let value = unsafe {
+            serde_json::from_str(std::ffi::CStr::from_ptr(out).to_str().unwrap()).unwrap()
+        };
+        unsafe { strings::runtime_string_free(out) };
+        value
     }
 }

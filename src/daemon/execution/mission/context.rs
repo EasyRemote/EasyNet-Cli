@@ -50,61 +50,11 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
 /// Reserved env-var keys at the subprocess boundary. Kept here, not in
 /// dispatch.rs, so any future read/write site goes through this module.
 const ENV_MISSION_ID: &str = "EASYNET_MISSION_ID";
 const ENV_AGENT_DEPTH: &str = "EASYNET_AGENT_DEPTH";
 const ENV_ORIGIN_AGENT: &str = "EASYNET_ORIGIN_AGENT";
-const ENV_PARENT_INVOCATION: &str = "EASYNET_PARENT_INVOCATION";
-
-/// Parent AXIOM invocation context carried by a mission/EAL dispatch root.
-///
-/// This is the daemon-local projection of the AXIOM fields that an EAL-backed
-/// plugin invocation received from `EnvelopeContext`. It exists so mission
-/// dispatch, subprocess env propagation, and audit payloads do not pass loose
-/// JSON maps internally.
-///
-/// What this is NOT: a canonical invocation object, signature carrier, or
-/// receipt builder. Axon still owns canonical seven-tuple encoding and receipt
-/// semantics; this type only preserves the parent tuple while daemon-owned EAL
-/// orchestration runs.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ParentInvocationContext {
-    /// AXIOM 7-tuple `caller`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub caller: Option<String>,
-    /// AXIOM 7-tuple `callee`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub callee: Option<String>,
-    /// AXIOM 7-tuple `ability`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ability: Option<String>,
-    /// AXIOM 7-tuple `subject`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subject: Option<String>,
-    /// AXIOM 7-tuple `nonce`, kept as raw bytes to match `EnvelopeContext`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub invocation_nonce: Option<Vec<u8>>,
-    /// Host-side projection of AXIOM `causal_context`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub causal_context: Option<Value>,
-}
-
-impl ParentInvocationContext {
-    /// Convert the typed context into the JSON shape exposed to plugin EAL
-    /// templates and persisted in mission metadata.
-    pub fn to_json_value(&self) -> Value {
-        serde_json::to_value(self).expect("ParentInvocationContext serializes")
-    }
-
-    /// Parse a JSON context supplied by the plugin-host boundary.
-    pub fn from_json_value(value: Value) -> serde_json::Result<Self> {
-        serde_json::from_value(value)
-    }
-}
 
 /// Typed mission context for one cross-agent dispatch chain.
 ///
@@ -133,16 +83,6 @@ pub struct DispatchContext {
     /// the audit log so operators can attribute a dispatch chain to the
     /// agent that started it.
     pub origin_agent: Option<String>,
-
-    /// Parent AXIOM invocation context for mission/EAL executions that were
-    /// themselves triggered by an ability invocation.
-    ///
-    /// What this is NOT: a replacement for Axon's canonical receipt model.
-    /// It is the daemon-owned propagation channel that lets child dispatch and
-    /// agent subprocesses preserve the parent caller/callee/subject/causal
-    /// tuple while Axon remains the sole owner of canonical invocation and
-    /// receipt construction.
-    pub parent_invocation: Option<ParentInvocationContext>,
 }
 
 impl DispatchContext {
@@ -153,17 +93,7 @@ impl DispatchContext {
             depth: 0,
             mission_run_dir: Some(mission_run_dir),
             origin_agent: None,
-            parent_invocation: None,
         }
-    }
-
-    /// Attach parent invocation context to a mission root.
-    pub fn with_parent_invocation(
-        mut self,
-        parent_invocation: Option<ParentInvocationContext>,
-    ) -> Self {
-        self.parent_invocation = parent_invocation;
-        self
     }
 
     /// Derive a child context for the next link in the dispatch chain.
@@ -192,7 +122,6 @@ impl DispatchContext {
             depth: self.depth.saturating_add(1),
             mission_run_dir: self.mission_run_dir.clone(),
             origin_agent,
-            parent_invocation: self.parent_invocation.clone(),
         }
     }
 
@@ -213,11 +142,6 @@ impl DispatchContext {
                 env.insert(ENV_ORIGIN_AGENT.to_string(), origin.clone());
             }
         }
-        if let Some(parent_invocation) = &self.parent_invocation {
-            if let Ok(serialized) = serde_json::to_string(parent_invocation) {
-                env.insert(ENV_PARENT_INVOCATION.to_string(), serialized);
-            }
-        }
     }
 
     /// Recover a context from the process env vars. Used at the entry
@@ -232,22 +156,15 @@ impl DispatchContext {
         if mission_id.is_empty() {
             return None;
         }
-        let depth = std::env::var(ENV_AGENT_DEPTH)
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(0);
+        let depth = std::env::var(ENV_AGENT_DEPTH).ok()?.parse::<u32>().ok()?;
         let origin_agent = std::env::var(ENV_ORIGIN_AGENT)
             .ok()
             .filter(|s| !s.is_empty());
-        let parent_invocation = std::env::var(ENV_PARENT_INVOCATION)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<ParentInvocationContext>(&raw).ok());
         Some(Self {
             mission_id,
             depth,
             mission_run_dir: None,
             origin_agent,
-            parent_invocation,
         })
     }
 }
@@ -293,19 +210,48 @@ pub fn enter(ctx: DispatchContext) -> ContextGuard {
     ContextGuard { prev }
 }
 
-/// Read the current thread's dispatch context, falling back to the
-/// process env vars if no in-process context is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DispatchContextSource {
+    ThreadLocal,
+    ProcessEnvironment,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedDispatchContext {
+    source: DispatchContextSource,
+    context: DispatchContext,
+}
+
+fn current_with_source() -> Option<ResolvedDispatchContext> {
+    if let Some(context) = CURRENT.with(|cell| cell.borrow().clone()) {
+        return Some(ResolvedDispatchContext {
+            source: DispatchContextSource::ThreadLocal,
+            context,
+        });
+    }
+
+    DispatchContext::from_env().map(|context| ResolvedDispatchContext {
+        source: DispatchContextSource::ProcessEnvironment,
+        context,
+    })
+}
+
+/// Read the current dispatch context from the explicit source chain.
 ///
-/// The fallback is the load-bearing reason this function exists: when
-/// the parent (a CLI mission runner) spawns an agent CLI subprocess,
-/// the child starts a fresh process with no thread-local set, but it
-/// inherits the env vars and must reconstruct the same view its parent
-/// had. Without the env-var fallback, the child would have to re-derive
-/// the depth from scratch and the recursion guard would never fire.
+/// The source ordering is load-bearing: in-process mission execution
+/// reads the thread-local context installed by `enter`; child agent
+/// subprocesses start without that thread-local and reconstruct the same
+/// typed context from the serialized process-environment handoff. This
+/// preserves recursion depth and audit attribution across process
+/// boundaries without treating the environment as a degraded compatibility
+/// path.
 pub fn current() -> Option<DispatchContext> {
-    CURRENT
-        .with(|cell| cell.borrow().clone())
-        .or_else(DispatchContext::from_env)
+    let resolved = current_with_source()?;
+    match resolved.source {
+        DispatchContextSource::ThreadLocal | DispatchContextSource::ProcessEnvironment => {
+            Some(resolved.context)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -319,7 +265,6 @@ mod tests {
             depth,
             mission_run_dir: None,
             origin_agent: None,
-            parent_invocation: None,
         }
     }
 
@@ -398,13 +343,6 @@ mod tests {
             depth: 3,
             mission_run_dir: None,
             origin_agent: Some("claude".to_string()),
-            parent_invocation: Some(
-                ParentInvocationContext::from_json_value(serde_json::json!({
-                    "caller": "easynet:///r/acme/agent/alice",
-                    "subject": "easynet:///r/acme/resource/doc",
-                }))
-                .expect("typed parent invocation context"),
-            ),
         };
         parent.serialize_to_env(&mut env);
         assert_eq!(
@@ -416,10 +354,6 @@ mod tests {
             env.get(ENV_ORIGIN_AGENT).map(String::as_str),
             Some("claude")
         );
-        assert!(env
-            .get(ENV_PARENT_INVOCATION)
-            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-            .is_some_and(|value| value["subject"] == "easynet:///r/acme/resource/doc"));
 
         // Mirror serialize_to_env → process env → from_env.
         // We do the env mutation under a mutex because std::env::set_var
@@ -429,23 +363,65 @@ mod tests {
         std::env::set_var(ENV_MISSION_ID, env.get(ENV_MISSION_ID).unwrap());
         std::env::set_var(ENV_AGENT_DEPTH, env.get(ENV_AGENT_DEPTH).unwrap());
         std::env::set_var(ENV_ORIGIN_AGENT, env.get(ENV_ORIGIN_AGENT).unwrap());
-        std::env::set_var(
-            ENV_PARENT_INVOCATION,
-            env.get(ENV_PARENT_INVOCATION).unwrap(),
-        );
         let recovered = DispatchContext::from_env().expect("present");
         std::env::remove_var(ENV_MISSION_ID);
         std::env::remove_var(ENV_AGENT_DEPTH);
         std::env::remove_var(ENV_ORIGIN_AGENT);
-        std::env::remove_var(ENV_PARENT_INVOCATION);
         assert_eq!(recovered.mission_id, "mission-42");
         assert_eq!(recovered.depth, 3);
         assert_eq!(recovered.origin_agent.as_deref(), Some("claude"));
-        let parent = recovered.parent_invocation.as_ref().unwrap();
-        assert_eq!(
-            parent.caller.as_deref(),
-            Some("easynet:///r/acme/agent/alice")
-        );
+    }
+
+    #[test]
+    fn current_reports_process_environment_source_for_child_handoff() {
+        let _lock = test_env_lock().lock().unwrap();
+        std::env::set_var(ENV_MISSION_ID, "child-process-run");
+        std::env::set_var(ENV_AGENT_DEPTH, "4");
+        std::env::remove_var(ENV_ORIGIN_AGENT);
+
+        let resolved = current_with_source().expect("process environment handoff");
+
+        std::env::remove_var(ENV_MISSION_ID);
+        std::env::remove_var(ENV_AGENT_DEPTH);
+        std::env::remove_var(ENV_ORIGIN_AGENT);
+
+        assert_eq!(resolved.source, DispatchContextSource::ProcessEnvironment);
+        assert_eq!(resolved.context.mission_id, "child-process-run");
+        assert_eq!(resolved.context.depth, 4);
+    }
+
+    #[test]
+    fn current_prefers_thread_local_source_over_process_environment() {
+        let _lock = test_env_lock().lock().unwrap();
+        std::env::set_var(ENV_MISSION_ID, "env-run");
+        std::env::set_var(ENV_AGENT_DEPTH, "9");
+        let _guard = enter(ctx("thread-run", 2));
+
+        let resolved = current_with_source().expect("thread-local context");
+
+        std::env::remove_var(ENV_MISSION_ID);
+        std::env::remove_var(ENV_AGENT_DEPTH);
+        std::env::remove_var(ENV_ORIGIN_AGENT);
+
+        assert_eq!(resolved.source, DispatchContextSource::ThreadLocal);
+        assert_eq!(resolved.context.mission_id, "thread-run");
+        assert_eq!(resolved.context.depth, 2);
+    }
+
+    #[test]
+    fn process_environment_handoff_rejects_missing_or_malformed_depth() {
+        let _lock = test_env_lock().lock().unwrap();
+
+        std::env::set_var(ENV_MISSION_ID, "missing-depth");
+        std::env::remove_var(ENV_AGENT_DEPTH);
+        assert!(DispatchContext::from_env().is_none());
+
+        std::env::set_var(ENV_AGENT_DEPTH, "not-a-depth");
+        assert!(DispatchContext::from_env().is_none());
+
+        std::env::remove_var(ENV_MISSION_ID);
+        std::env::remove_var(ENV_AGENT_DEPTH);
+        std::env::remove_var(ENV_ORIGIN_AGENT);
     }
 
     #[test]

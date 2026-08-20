@@ -38,6 +38,12 @@ use tokio::sync::broadcast;
 
 use crate::core::domain::{AgentId, NodeId, Session, SessionId, TenantId};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionRuntimeBinding {
+    node: NodeId,
+    tenant: TenantId,
+}
+
 /// One indexed session, plus its per-session timeline broadcast.
 struct SessionEntry {
     meta: Session,
@@ -55,6 +61,7 @@ struct SessionEntry {
 /// active sessions.
 #[derive(Default)]
 pub struct SessionService {
+    binding: RwLock<Option<SessionRuntimeBinding>>,
     sessions: RwLock<BTreeMap<SessionId, SessionEntry>>,
 }
 
@@ -63,10 +70,42 @@ impl SessionService {
         Self::default()
     }
 
+    pub fn bind_runtime(&self, node: NodeId, tenant: TenantId) -> anyhow::Result<()> {
+        if node.as_str().trim().is_empty() {
+            anyhow::bail!("SessionService runtime node must not be empty");
+        }
+        if tenant.as_str().trim().is_empty() {
+            anyhow::bail!("SessionService runtime tenant must not be empty");
+        }
+        let mut binding = self
+            .binding
+            .write()
+            .map_err(|_| anyhow::anyhow!("SessionService runtime binding lock poisoned"))?;
+        *binding = Some(SessionRuntimeBinding { node, tenant });
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn bind_memory_for_test(&self, node: NodeId, tenant: TenantId) {
+        self.bind_runtime(node, tenant)
+            .expect("bind test session runtime");
+    }
+
+    #[cfg(test)]
+    pub fn poison_index_for_test(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.sessions.write().unwrap();
+            panic!("poison session index");
+        }));
+    }
+
     /// Admit a new session. The caller (Kernel::invoke admission
     /// path) supplies the assembled Session handle; this service
     /// indexes it. Returns the inserted handle's id for chaining.
-    pub fn admit(&self, session: Session) -> anyhow::Result<SessionId> {
+    pub fn admit(&self, mut session: Session) -> anyhow::Result<SessionId> {
+        let binding = self.bound_runtime()?;
+        session.node = binding.node;
+        session.tenant = binding.tenant;
         let id = session.id.clone();
         let mut g = self
             .sessions
@@ -90,6 +129,14 @@ impl SessionService {
         };
         g.insert(id.clone(), entry);
         Ok(id)
+    }
+
+    fn bound_runtime(&self) -> anyhow::Result<SessionRuntimeBinding> {
+        self.binding
+            .read()
+            .map_err(|_| anyhow::anyhow!("SessionService runtime binding lock poisoned"))?
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("SessionService is not bound to a runtime identity"))
     }
 
     /// Mark a session terminated. Writes `ended_unix_ms` to the
@@ -167,19 +214,21 @@ impl SessionService {
     /// Snapshot of every session currently indexed (active or
     /// terminated). v1 returns Vec; v2 will paginate when the
     /// index grows large.
-    pub fn list_active(&self) -> Vec<Session> {
-        match self.sessions.read() {
-            Ok(g) => g.values().map(|e| e.meta.clone()).collect(),
-            Err(_) => Vec::new(),
-        }
+    pub fn list_active(&self) -> anyhow::Result<Vec<Session>> {
+        let sessions = self
+            .sessions
+            .read()
+            .map_err(|_| anyhow::anyhow!("SessionService session index lock poisoned"))?;
+        Ok(sessions.values().map(|e| e.meta.clone()).collect())
     }
 
     /// Lookup by id.
-    pub fn get(&self, id: &SessionId) -> Option<Session> {
-        self.sessions
+    pub fn get(&self, id: &SessionId) -> anyhow::Result<Option<Session>> {
+        let sessions = self
+            .sessions
             .read()
-            .ok()
-            .and_then(|g| g.get(id).map(|e| e.meta.clone()))
+            .map_err(|_| anyhow::anyhow!("SessionService session index lock poisoned"))?;
+        Ok(sessions.get(id).map(|e| e.meta.clone()))
     }
 
     /// Convenience constructor for admission code paths that have
@@ -211,20 +260,36 @@ mod tests {
         SessionService::make_session(
             SessionId::new(id),
             AgentId::new(agent),
-            NodeId::new("self"),
-            TenantId::default_v1(),
+            NodeId::new("caller-node"),
+            TenantId::new("caller-tenant"),
         )
+    }
+
+    fn bound_service() -> SessionService {
+        let svc = SessionService::new();
+        svc.bind_memory_for_test(NodeId::new("runtime-node"), TenantId::new("runtime-tenant"));
+        svc
     }
 
     #[test]
     fn admit_then_list_returns_the_session() {
-        let svc = SessionService::new();
+        let svc = bound_service();
         svc.admit(s("run-1", "alice")).unwrap();
-        let listed = svc.list_active();
+        let listed = svc.list_active().expect("list active");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, SessionId::new("run-1"));
         assert_eq!(listed[0].agent, AgentId::new("alice"));
+        assert_eq!(listed[0].node, NodeId::new("runtime-node"));
+        assert_eq!(listed[0].tenant, TenantId::new("runtime-tenant"));
         assert!(listed[0].ended_unix_ms.is_none());
+    }
+
+    #[test]
+    fn admit_rejects_unbound_runtime_identity() {
+        let svc = SessionService::new();
+        let err = svc.admit(s("unbound", "alice")).unwrap_err();
+        assert!(format!("{err}").contains("not bound to a runtime identity"));
+        assert!(svc.list_active().expect("list active").is_empty());
     }
 
     #[test]
@@ -233,7 +298,7 @@ mod tests {
         // invocation_id at the system level). Two admissions for
         // the same id is an upstream bug — refusing loudly here
         // catches it before the bookkeeping diverges.
-        let svc = SessionService::new();
+        let svc = bound_service();
         svc.admit(s("dup", "x")).unwrap();
         let err = svc.admit(s("dup", "x")).unwrap_err();
         assert!(format!("{err}").contains("already admitted"));
@@ -245,14 +310,14 @@ mod tests {
         // an `ended_unix_ms`. Late-joining readers still see the
         // run, and a "list active only" filter would gate on the
         // None-vs-Some test of this field.
-        let svc = SessionService::new();
+        let svc = bound_service();
         svc.admit(s("done", "alice")).unwrap();
         svc.terminate(&SessionId::new("done"), 1_700_000_000_000)
             .unwrap();
-        let s = svc.get(&SessionId::new("done")).unwrap();
+        let s = svc.get(&SessionId::new("done")).unwrap().expect("session");
         assert_eq!(s.ended_unix_ms, Some(1_700_000_000_000));
         // Entry kept in the index — list_active surfaces it.
-        assert_eq!(svc.list_active().len(), 1);
+        assert_eq!(svc.list_active().expect("list active").len(), 1);
     }
 
     #[tokio::test]
@@ -263,7 +328,7 @@ mod tests {
         // (on the broadcast). This is what makes the session
         // attach view in the GUI not lose state when the user
         // opens the panel late.
-        let svc = SessionService::new();
+        let svc = bound_service();
         svc.admit(s("live", "alice")).unwrap();
         // history at this point = [admitted].
         svc.emit_event(
@@ -294,7 +359,7 @@ mod tests {
     fn since_seq_skips_history_prefix() {
         // since_seq=1 means "I already have frame 0". Replay must
         // begin at frame 1.
-        let svc = SessionService::new();
+        let svc = bound_service();
         svc.admit(s("late", "alice")).unwrap();
         svc.emit_event(&SessionId::new("late"), serde_json::json!({"x": 1}))
             .unwrap();
@@ -307,7 +372,7 @@ mod tests {
 
     #[test]
     fn terminate_unknown_session_errors() {
-        let svc = SessionService::new();
+        let svc = bound_service();
         let err = svc.terminate(&SessionId::new("ghost"), 0).unwrap_err();
         assert!(format!("{err}").contains("not found"));
     }
@@ -316,11 +381,16 @@ mod tests {
     fn list_active_iteration_order_is_deterministic_by_id() {
         // BTreeMap-backed: lexical order on session_id.
         // PR-ATTACH's a2a discovery + golden fixtures rely on this.
-        let svc = SessionService::new();
+        let svc = bound_service();
         svc.admit(s("c", "a")).unwrap();
         svc.admit(s("a", "a")).unwrap();
         svc.admit(s("b", "a")).unwrap();
-        let ids: Vec<_> = svc.list_active().into_iter().map(|s| s.id).collect();
+        let ids: Vec<_> = svc
+            .list_active()
+            .expect("list active")
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
         assert_eq!(
             ids,
             vec![
@@ -329,5 +399,27 @@ mod tests {
                 SessionId::new("c"),
             ]
         );
+    }
+
+    #[test]
+    fn list_active_rejects_poisoned_index_instead_of_empty_sessions() {
+        let svc = SessionService::new();
+        svc.poison_index_for_test();
+
+        let err = svc
+            .list_active()
+            .expect_err("poisoned session index must fail");
+        assert!(format!("{err:#}").contains("SessionService session index lock poisoned"));
+    }
+
+    #[test]
+    fn get_rejects_poisoned_index_instead_of_unknown_session() {
+        let svc = SessionService::new();
+        svc.poison_index_for_test();
+
+        let err = svc
+            .get(&SessionId::new("any"))
+            .expect_err("poisoned session index must fail");
+        assert!(format!("{err:#}").contains("SessionService session index lock poisoned"));
     }
 }

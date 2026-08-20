@@ -2,28 +2,32 @@
 // ===========
 //
 // File: src/cli/commands/join.rs
-// Description: `easynet device join <token>` — pair this device with EasyNet Hub via a one-time
-//              pairing token, establishing a persistent trust relationship.
+// Description: `easynet device join <token-or-hub-ura>` — join this device to
+//              an EasyNet Hub via the staged HTTP pairing facade or the
+//              product Hub URA federation path.
 //
 // Protocol Responsibility:
-// - Validates a one-time pairing token (32-64 hex chars) against the Hub REST API.
-// - POST /api/v1/devices/pairing/{token}/validate with device sysinfo (hostname, OS, arch).
-// - Receives and persists: node_id, credential_token, hub_endpoint, realm, deploy_signature.
-// - This is the ONLY command that creates ~/.easynet/credentials.json; all other commands consume it.
+// - Preserves the historical Backend HTTP pairing path while the staged
+//   product facade remains.
+// - Supports product Hub URA joins through Axon `federation.join`.
+// - Carries optional product-neutral PrincipalLifecycle proof for Hub URA joins.
+// - Creates ~/.easynet/credentials.json; other commands consume it.
 //
 // Implementation Approach:
-// - Synchronous HTTP via ureq with 30s timeout. No retry — pairing tokens are one-shot.
-// - Token format validation before network call to fail fast on typos.
-// - Supports --hub for self-hosted Hubs (defaults to https://easynet.run).
+// - Routes `easynet:///r/<realm>/authority` through the daemon federation client.
+// - Routes legacy tokens through synchronous HTTP until the SPEC authorizes
+//   irreversible deletion.
+// - Lowers PrincipalLifecycle proof without product account fields.
 //
 // Usage Contract:
-// - Run once per device. Re-running overwrites existing credentials (re-pair).
-// - Requires network access to Hub REST API (not the gRPC Axon endpoint).
+// - Run once per device. Re-running overwrites existing credentials.
+// - Principal proof options are valid only on the Hub URA path.
 // - After join, run `easynet connect` to start the device agent.
 //
 // Architectural Position:
-// - Entry point of the device lifecycle: join → start → (heartbeat loop) → stop → reset.
-// - Bridges the Hub's web-based pairing flow with the CLI's local credential store.
+// - Device lifecycle entrypoint: join → start → heartbeat → stop → reset.
+// - The Hub URA path is the canonical runtime model; HTTP pairing is a staged
+//   Backend product facade pending SPEC cutover.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -43,6 +47,9 @@ use crate::daemon::boot::join_connection_state::{
 use crate::daemon::persistence::config;
 use crate::support::platform::{output, sysinfo};
 
+use super::pairing_contract::PairingCredentialEnvelope;
+use super::{auth, login, profile};
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PairingPreflight {
@@ -53,20 +60,16 @@ struct PairingPreflight {
     /// cross-machine fix: backend surfaces this here so the
     /// device can write the hub's `(ura, pubkey, role=hub)` row
     /// into its local `realm-trust.toml` during join, without
-    /// needing on-host access to `~/.easynet-hub/<realm>/
-    /// identity.json`. Empty on pre-v4.1.4 hubs (legacy fallback
-    /// path reads the on-disk identity file when same-host).
-    #[serde(default)]
+    /// needing on-host access to the hub runtime keyring. Empty
+    /// responses are rejected by the trust wiring step.
     hub_public_key_b64: String,
     /// Optional base64-encoded PEM trust anchor for the hub's
     /// public TLS listener. Self-hosted hubs populate this so the
     /// join flow can pin the CA locally before runtime start;
     /// publicly-trusted hubs leave it empty and the daemon later
     /// falls back to native roots.
-    #[serde(default)]
-    hub_tls_ca_pem_b64: String,
-    #[serde(default, rename = "hub_agent_ura")]
-    _hub_agent_ura: String,
+    hub_tls_ca_pem_b64: Option<String>,
+    hub_agent_ura: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -84,9 +87,18 @@ struct ValidatePairingPayload {
 
 #[derive(Debug, Args)]
 pub struct JoinArgs {
-    /// One-time pairing token or hub URA (easynet:///r/<realm>/hub).
-    pub token: String,
-    /// Hub API base URL for self-hosted Hubs.
+    /// Pairing token, hub URA, or '<login-hint>@<realm>'. Omit to use current profile.
+    pub target: Option<String>,
+    /// Profile to use when target is omitted.
+    #[arg(long)]
+    pub profile: Option<String>,
+    /// Explicit login hint for one-step login+join.
+    #[arg(long)]
+    pub user: Option<String>,
+    /// Explicit Realm for one-step login+join.
+    #[arg(long)]
+    pub realm: Option<String>,
+    /// Hub/Auth endpoint override for profile joins; Hub API base for token joins.
     // No `(default: ...)` in the doc-comment — clap already renders
     // the `[default: …]` suffix from `default_value_t` in `--help`.
     // Listing it twice (once in prose, once via clap) is the kind
@@ -101,6 +113,15 @@ pub struct JoinArgs {
     /// Override Hub REST API base URL (local-dev only).
     #[arg(long)]
     pub hub_api: Option<String>,
+    /// Password for one-step login+join. If omitted, prompt when login is needed.
+    #[arg(long)]
+    pub password: Option<String>,
+    /// Register the user if one-step login fails and the backend supports registration.
+    #[arg(long)]
+    pub register_if_missing: bool,
+    /// Nickname to use when --register-if-missing creates a user.
+    #[arg(long)]
+    pub nickname: Option<String>,
     // The doc-comment below is a single paragraph on purpose. clap
     // switches `--help` into multi-paragraph "long help" mode the
     // moment ANY arg's doc-comment has a blank line in it — every
@@ -108,7 +129,7 @@ pub struct JoinArgs {
     // around it. The detailed rationale for `--peer-hub` (Hub
     // pairing response carries the backend Axon endpoint, not the
     // peer daemon's TLS listener; multi-hub deployments diverge)
-    // lives in docs/spec/RFC-002 §federation.forward_invoke and in
+    // lives in docs/spec/RFC-002 §canonical Invocation::Invoke and in
     // the auto-wire commit message — that's where verbose context
     // belongs, not in `--help`.
     /// Peer hub's daemon TLS listener (https://host:port).
@@ -120,6 +141,18 @@ pub struct JoinArgs {
     /// Override the daemon TLS port derived from a hub URA.
     #[arg(long)]
     pub hub_port: Option<u16>,
+    /// Principal URA to bind this joined device to on the Hub URA path.
+    #[arg(long)]
+    pub principal_ura: Option<String>,
+    /// Enrollment capability id for joining this device as --principal-ura.
+    #[arg(long)]
+    pub principal_enrollment_id: Option<String>,
+    /// PrincipalLifecycle proof kind for --principal-ura.
+    #[arg(long)]
+    pub principal_proof_kind: Option<String>,
+    /// PrincipalLifecycle proof reference for --principal-ura.
+    #[arg(long)]
+    pub principal_proof_ref: Option<String>,
     /// Skip confirmation prompts (for non-interactive use)
     #[arg(long, short = 'y')]
     pub yes: bool,
@@ -137,7 +170,210 @@ pub enum JoinBoot {
     No,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProfileJoinOptions {
+    pub boot: JoinBoot,
+    pub allow_replace_existing: bool,
+}
+
+impl ProfileJoinOptions {
+    pub(crate) fn quickstart_login(boot: JoinBoot) -> Self {
+        Self {
+            boot,
+            allow_replace_existing: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum CurrentProfileMembership {
+    AlreadyJoined(config::Credentials),
+    JoinedNow(config::Credentials),
+    BlockedByDifferentDevice(config::Credentials),
+}
+
+enum ResolvedJoinTarget {
+    Direct(String),
+    Profile {
+        profile: Box<profile::ProfileEntry>,
+        token: Option<String>,
+        login_recovery: bool,
+    },
+}
+
+impl ResolvedJoinTarget {
+    fn login_recovery_profile(&self) -> Option<String> {
+        match self {
+            Self::Profile {
+                profile,
+                login_recovery: true,
+                ..
+            } => Some(profile.profile_name.clone()),
+            _ => None,
+        }
+    }
+}
+
+fn resolve_join_target(args: &JoinArgs) -> anyhow::Result<ResolvedJoinTarget> {
+    let target = args
+        .target
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let login_requested =
+        args.user.is_some() || args.realm.is_some() || target.is_some_and(looks_like_login_target);
+
+    if login_requested {
+        let hub_override = explicit_join_login_hub_override(args);
+        let outcome = login::login_and_select_profile(login::LoginArgs {
+            target: args.target.clone(),
+            user: args.user.clone(),
+            realm: args.realm.clone(),
+            hub: hub_override,
+            password: args.password.clone(),
+            register_if_missing: args.register_if_missing,
+            nickname: args.nickname.clone(),
+            no_join: true,
+            no_start: true,
+        })?;
+        login::render_login_outcome(&outcome);
+        return Ok(ResolvedJoinTarget::Profile {
+            profile: Box::new(outcome.profile),
+            token: None,
+            login_recovery: true,
+        });
+    }
+
+    if let Some(target) = target {
+        return Ok(ResolvedJoinTarget::Direct(target.to_string()));
+    }
+
+    let profile = profile::selected_profile(args.profile.as_deref())?;
+    Ok(ResolvedJoinTarget::Profile {
+        profile: Box::new(profile),
+        token: None,
+        login_recovery: false,
+    })
+}
+
+fn explicit_join_login_hub_override(args: &JoinArgs) -> Option<String> {
+    let default_hub = format!("https://{}", config::DEFAULT_HUB_HOST);
+    (args.hub.trim_end_matches('/') != default_hub)
+        .then(|| args.hub.trim_end_matches('/').to_string())
+}
+
+fn looks_like_login_target(target: &str) -> bool {
+    target.contains('@') && !target.starts_with(crate::core::ura::URA_SCHEME)
+}
+
+fn mint_profile_pairing_token(profile: &profile::ProfileEntry) -> anyhow::Result<String> {
+    if profile.account_session != profile::ProfileAccountSessionState::Authenticated {
+        anyhow::bail!(
+            "profile '{}' is logged out — run 'easynet login {}' first",
+            profile.profile_name,
+            profile.profile_name
+        );
+    }
+    let session = auth::load_session()?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "not logged in — run 'easynet login {}' first",
+            profile.profile_name
+        )
+    })?;
+    profile::ensure_auth_session_owns_profile(profile, &session)?;
+    let token = auth::mint_pairing_token()?.pairing_token;
+    Ok(token)
+}
+
 pub fn run(args: JoinArgs) -> anyhow::Result<()> {
+    let target = resolve_join_target(&args)?;
+    let login_recovery_profile = target.login_recovery_profile();
+    run_resolved(args, target).map_err(|err| {
+        if let Some(profile_name) = login_recovery_profile {
+            err.context(format!(
+                "login succeeded and profile '{profile_name}' was saved, but device join failed; retry with `easynet join --profile {profile_name}`"
+            ))
+        } else {
+            err
+        }
+    })
+}
+
+pub(crate) fn reconcile_current_profile_membership(
+    profile: profile::ProfileEntry,
+    options: ProfileJoinOptions,
+) -> anyhow::Result<CurrentProfileMembership> {
+    let existing = config::load_credentials_optional()
+        .context("load current device credentials before login onboarding")?;
+    let was_already_joined = existing
+        .as_ref()
+        .is_some_and(|credentials| existing_credentials_match_profile(credentials, &profile));
+
+    if let Some(credentials) = existing.as_ref() {
+        if !was_already_joined && !options.allow_replace_existing {
+            return Ok(CurrentProfileMembership::BlockedByDifferentDevice(
+                credentials.clone(),
+            ));
+        }
+    }
+
+    let args = JoinArgs {
+        target: None,
+        profile: Some(profile.profile_name.clone()),
+        user: None,
+        realm: None,
+        hub: profile.issuer.clone(),
+        hub_api: None,
+        password: None,
+        register_if_missing: false,
+        nickname: None,
+        peer_hub: None,
+        hub_ca: None,
+        hub_port: None,
+        principal_ura: None,
+        principal_enrollment_id: None,
+        principal_proof_kind: None,
+        principal_proof_ref: None,
+        yes: options.allow_replace_existing,
+        boot: options.boot,
+    };
+
+    run_resolved(
+        args,
+        ResolvedJoinTarget::Profile {
+            profile: Box::new(profile),
+            token: None,
+            login_recovery: false,
+        },
+    )?;
+
+    let credentials =
+        config::load_credentials().context("load current device credentials after onboarding")?;
+    if was_already_joined {
+        Ok(CurrentProfileMembership::AlreadyJoined(credentials))
+    } else {
+        Ok(CurrentProfileMembership::JoinedNow(credentials))
+    }
+}
+
+fn run_resolved(args: JoinArgs, target: ResolvedJoinTarget) -> anyhow::Result<()> {
+    if let ResolvedJoinTarget::Profile {
+        profile,
+        token: None,
+        ..
+    } = &target
+    {
+        if let Ok(existing) = config::load_credentials() {
+            if existing_credentials_match_profile(&existing, profile) {
+                output::info(&format!(
+                    "This device is already joined to Realm {}.",
+                    profile.realm_alias
+                ));
+                return finish_join(args.boot, &existing, args.peer_hub.as_deref());
+            }
+        }
+    }
+
     // Warn if already paired — prevent accidental overwrite.
     if let Ok(existing) = config::load_credentials() {
         output::warn(&format!(
@@ -158,7 +394,7 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         // these credentials. Re-pairing mints a FRESH hub-reserved node_id (the
         // pairing protocol has no stable per-machine id to reuse), so the old
         // device is otherwise abandoned: once its node_id is gone from local
-        // credentials, neither `easynet reset` nor the shutdown hook (both keyed
+        // credentials, neither `easynet device reset` nor the shutdown hook (both keyed
         // on `creds.node_id`) can ever revoke it. It then zombies on the hub
         // until the heartbeat-timeout sweep, stranding its trust/pubkey row —
         // which is what breaks user-trust resync and forces credential churn on
@@ -173,17 +409,58 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         }
     }
 
-    let target = args.token.trim().to_string();
+    let target = match target {
+        ResolvedJoinTarget::Direct(target) => target,
+        ResolvedJoinTarget::Profile {
+            profile,
+            token: Some(token),
+            ..
+        } => {
+            output::info(&format!(
+                "Using profile {} for Realm {}.",
+                profile.profile_name, profile.realm_alias
+            ));
+            token
+        }
+        ResolvedJoinTarget::Profile {
+            profile,
+            token: None,
+            ..
+        } => {
+            output::info(&format!(
+                "Requesting device enrollment for profile {}.",
+                profile.profile_name
+            ));
+            mint_profile_pairing_token(&profile)?
+        }
+    };
     let peer_hub = args.peer_hub.as_deref();
     let creds = if target.starts_with(crate::core::ura::URA_SCHEME) {
-        run_ura_join_stages(&target, args.hub_port, args.hub_ca.as_deref(), peer_hub)?
+        let principal_enrollment = join_principal_enrollment_from_args(
+            args.principal_ura.as_deref(),
+            args.principal_enrollment_id.as_deref(),
+            args.principal_proof_kind.as_deref(),
+            args.principal_proof_ref.as_deref(),
+        )?;
+        run_ura_join_stages(
+            &target,
+            args.hub_port,
+            args.hub_ca.as_deref(),
+            peer_hub,
+            principal_enrollment,
+        )?
     } else {
-        let hub_api_override = args
-            .hub_api
-            .as_ref()
-            .map(|s| s.trim_end_matches('/').to_string());
-        let has_explicit_hub_api_override = hub_api_override.is_some();
-        let validate_base = pick_validate_base(&args.hub, hub_api_override.as_deref());
+        if args.principal_ura.is_some()
+            || args.principal_proof_kind.is_some()
+            || args.principal_proof_ref.is_some()
+            || args.principal_enrollment_id.is_some()
+        {
+            anyhow::bail!(
+                "principal enrollment proof is supported only for hub URA joins; use easynet:///r/<realm>/authority"
+            );
+        }
+        let validation_base = resolve_pairing_validation_base(&args);
+        let validate_base = validation_base.base;
         if let Err(err) = validate_token_format(&target) {
             record_snapshot(JoinConnectionSnapshot::failed_from_parts(
                 JoinFailureParts {
@@ -203,12 +480,51 @@ pub fn run(args: JoinArgs) -> anyhow::Result<()> {
         run_join_stages(
             &target,
             &validate_base,
-            has_explicit_hub_api_override,
+            validation_base.explicit_api_override,
             peer_hub,
         )?
     };
 
+    if let Ok(profile) = profile::selected_profile(args.profile.as_deref()) {
+        if profile.realm_alias == creds.realm_str() {
+            let _ = profile::mark_device_membership(&profile.profile_name, "enrolled");
+        }
+    }
+
     finish_join(args.boot, &creds, peer_hub)
+}
+
+fn existing_credentials_match_profile(
+    existing: &config::Credentials,
+    profile: &profile::ProfileEntry,
+) -> bool {
+    if existing.realm_str() != profile.realm_alias {
+        return false;
+    }
+    if let Some(subject) = profile
+        .subject
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        return existing
+            .user_id()
+            .ok()
+            .is_some_and(|user_id| user_id == subject);
+    }
+    if let Some(login_hint) = profile
+        .login_hint
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        return existing
+            .username
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|username| username == login_hint);
+    }
+    true
 }
 
 fn finish_join(
@@ -250,7 +566,7 @@ impl HubUraTarget {
         let value = value.trim();
         let parsed = crate::core::ura::parse_ura(value)
             .map_err(|err| anyhow::anyhow!("invalid hub URA `{value}`: {err}"))?;
-        if parsed.kind != crate::core::ura::URAKind::Hub {
+        if parsed.kind != crate::core::ura::URAKind::Authority {
             anyhow::bail!("join target URA must identify a hub, got {:?}", parsed.kind);
         }
         require_ura_join_trust_policy(&parsed.realm, hub_ca)?;
@@ -325,6 +641,9 @@ fn run_ura_join_stages(
     hub_port: Option<u16>,
     hub_ca: Option<&Path>,
     peer_hub: Option<&str>,
+    principal_enrollment: Option<
+        crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof,
+    >,
 ) -> anyhow::Result<config::Credentials> {
     let mut renderer = crate::cli::presentation::stage::StageRenderer::new();
 
@@ -342,8 +661,16 @@ fn run_ura_join_stages(
     };
 
     let node_id = uuid::Uuid::new_v4().to_string();
-    let membership_ura = crate::core::ura::device_ura(&target.realm, &node_id);
-    let public_key_hex = derive_device_public_key_hex(&target.realm, &node_id)?;
+    let (membership_ura, _, public_key, key_service_startup) =
+        ensure_device_runtime_identity_with_startup(&target.realm, &node_id)?;
+    let _key_service_guard =
+        crate::daemon::keyring::lifecycle::KeyServiceBootstrapLease::from_startup(
+            key_service_startup,
+        );
+    let public_key_hex = hex::encode(public_key.to_bytes());
+    let local_user_id = principal_enrollment
+        .as_ref()
+        .and_then(|proof| user_id_from_principal_ura(&proof.principal_ura));
 
     renderer.set_active("federation-join");
     let join = match do_federation_join_and_resolve_hub_key(
@@ -351,6 +678,7 @@ fn run_ura_join_stages(
         &membership_ura,
         &public_key_hex,
         hub_ca,
+        principal_enrollment,
     ) {
         Ok(join) => {
             renderer.stage_ok("federation-join");
@@ -370,8 +698,8 @@ fn run_ura_join_stages(
         realm: target.realm.clone(),
         deploy_signature: String::new(),
         hub_api_base: None,
-        username: None,
-        user_id: None,
+        username: local_user_id.clone(),
+        user_id: local_user_id,
         hub_pubkey_b64: Some(hex_public_key_to_b64(&join.hub_public_key_hex)?),
         hub_tls_ca_pem_b64: hub_ca
             .map(read_ca_pem_b64)
@@ -385,10 +713,125 @@ fn run_ura_join_stages(
     persist_join_credentials(renderer, creds, peer_hub, "cli.join.ura")
 }
 
+fn user_id_from_principal_ura(principal_ura: &str) -> Option<String> {
+    let parsed = crate::core::ura::parse_ura(principal_ura).ok()?;
+    if parsed.kind == crate::core::ura::URAKind::User {
+        parsed.user_id().map(str::to_string)
+    } else {
+        None
+    }
+}
+
+fn join_principal_enrollment_from_args(
+    principal_ura: Option<&str>,
+    enrollment_id: Option<&str>,
+    proof_kind: Option<&str>,
+    proof_ref: Option<&str>,
+) -> anyhow::Result<
+    Option<crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof>,
+> {
+    if enrollment_id.is_some() && (proof_kind.is_some() || proof_ref.is_some()) {
+        anyhow::bail!(
+            "--principal-enrollment-id cannot be combined with --principal-proof-kind or --principal-proof-ref"
+        );
+    }
+    match (principal_ura, enrollment_id, proof_kind, proof_ref) {
+        (None, None, None, None) => Ok(None),
+        (Some(principal_ura), Some(enrollment_id), None, None) => {
+            join_principal_enrollment_proof(principal_ura, "enrollment", enrollment_id)
+        }
+        (Some(principal_ura), None, Some(kind), Some(reference)) => {
+            join_principal_enrollment_proof(principal_ura, kind, reference)
+        }
+        _ => anyhow::bail!(
+            "--principal-ura plus either --principal-enrollment-id or the complete --principal-proof-kind/--principal-proof-ref pair must be supplied together"
+        ),
+    }
+}
+
+fn join_principal_enrollment_proof(
+    principal_ura: &str,
+    kind: &str,
+    reference: &str,
+) -> anyhow::Result<
+    Option<crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof>,
+> {
+    let principal_ura = principal_ura.trim();
+    let kind = kind.trim();
+    let reference = reference.trim();
+    if principal_ura.is_empty() || kind.is_empty() || reference.is_empty() {
+        anyhow::bail!(
+            "--principal-ura, --principal-proof-kind and --principal-proof-ref must not be empty"
+        );
+    }
+    let identity = crate::core::identity::RuntimeIdentityUra::parse(principal_ura)
+        .map_err(|err| anyhow::anyhow!("invalid --principal-ura `{principal_ura}`: {err}"))?;
+    if identity.kind() != crate::core::ura::URAKind::User {
+        anyhow::bail!("--principal-ura must identify a User URA");
+    }
+    Ok(Some(
+        crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof {
+            principal_ura: identity.into_string(),
+            proof: crate::daemon::federation::client::ability_contract::PrincipalProofRef {
+                kind: kind.to_string(),
+                reference: reference.to_string(),
+            },
+        },
+    ))
+}
+
 #[derive(Debug)]
 struct UraJoinResult {
     receipt: crate::daemon::federation::client::ability_contract::JoinReceipt,
     hub_public_key_hex: String,
+}
+
+#[cfg(feature = "axon-pb")]
+struct BootstrapJoinSigner {
+    device_ura: String,
+    public_key: ed25519_dalek::VerifyingKey,
+}
+
+#[cfg(feature = "axon-pb")]
+#[async_trait::async_trait]
+impl crate::daemon::identity::self_identity::CanonicalSigner for BootstrapJoinSigner {
+    fn owner_ura(&self) -> &str {
+        &self.device_ura
+    }
+
+    async fn sign_canonical(
+        &self,
+        canonical_bytes: &[u8],
+    ) -> Result<ed25519_dalek::Signature, crate::daemon::identity::self_identity::SelfIdentityError>
+    {
+        let device_ura = self.device_ura.clone();
+        let public_key = self.public_key;
+        let canonical_bytes = canonical_bytes.to_vec();
+        tokio::task::spawn_blocking(move || {
+            let client = crate::daemon::identity::self_identity::KeyringClient::default_path();
+            crate::daemon::identity::self_identity::SelfIdentity::sign_bound(
+                &client,
+                &device_ura,
+                &public_key,
+                &canonical_bytes,
+            )
+        })
+        .await
+        .map_err(|error| {
+            crate::daemon::identity::self_identity::SelfIdentityError::Transport(format!(
+                "bootstrap join signing worker terminated unexpectedly: {error}"
+            ))
+        })?
+    }
+
+    fn signing_public_key(
+        &self,
+    ) -> Result<
+        ed25519_dalek::VerifyingKey,
+        crate::daemon::identity::self_identity::SelfIdentityError,
+    > {
+        Ok(self.public_key)
+    }
 }
 
 fn hex_public_key_to_b64(public_key_hex: &str) -> anyhow::Result<String> {
@@ -410,6 +853,9 @@ fn do_federation_join_and_resolve_hub_key(
     membership_ura: &str,
     public_key_hex: &str,
     hub_ca: Option<&Path>,
+    principal_enrollment: Option<
+        crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof,
+    >,
 ) -> anyhow::Result<UraJoinResult> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -420,6 +866,7 @@ fn do_federation_join_and_resolve_hub_key(
         membership_ura,
         public_key_hex,
         hub_ca,
+        principal_enrollment,
     ))
 }
 
@@ -429,8 +876,15 @@ fn do_federation_join_and_resolve_hub_key(
     _membership_ura: &str,
     _public_key_hex: &str,
     _hub_ca: Option<&Path>,
+    _principal_enrollment: Option<
+        crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof,
+    >,
 ) -> anyhow::Result<UraJoinResult> {
-    Err(crate::support::platform::local_invoke::federation_not_wired_error("joining hub by URA"))
+    Err(
+        crate::support::platform::local_invoke::federation_capability_unsupported_error(
+            "joining hub by URA",
+        ),
+    )
 }
 
 #[cfg(feature = "axon-pb")]
@@ -439,29 +893,51 @@ async fn do_federation_join_and_resolve_hub_key_async(
     membership_ura: &str,
     public_key_hex: &str,
     hub_ca: Option<&Path>,
+    principal_enrollment: Option<
+        crate::daemon::federation::client::ability_contract::PrincipalEnrollmentProof,
+    >,
 ) -> anyhow::Result<UraJoinResult> {
-    use easynet_axon::pb::axon::v1::invocation_client::InvocationClient;
-
     let channel = connect_hub_invocation_channel(&target.hub_endpoint, hub_ca).await?;
-    let mut client = InvocationClient::new(channel);
+    let mut client = crate::daemon::invocation::transport::invocation_client(channel);
 
     let public_key = hex::decode(public_key_hex).context("decode device public key hex")?;
-    let provisional_caller = crate::core::ura::provisional::provisional_ura_for_pubkey(&public_key);
+    let public_key_bytes: [u8; 32] = public_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("device public key must be 32 bytes"))?;
+    let public_key =
+        ed25519_dalek::VerifyingKey::from_bytes(&public_key_bytes).context("decode device key")?;
+    let bootstrap_signer = BootstrapJoinSigner {
+        device_ura: membership_ura.to_string(),
+        public_key,
+    };
     let join_args = crate::daemon::federation::client::ability_contract::JoinArgs {
         realm: target.realm.clone(),
         membership_ura: membership_ura.to_string(),
         public_key_hex: public_key_hex.to_string(),
-        pairing_secret: None,
+        principal_enrollment,
     };
-    let join_request = crate::daemon::invocation::ProtoEnvelope::federation_join_genesis(
-        provisional_caller,
+    let join_arguments =
+        crate::daemon::federation::client::ability_contract::args_to_bytes(&join_args);
+    let join_descriptor_ref =
+        crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
+            &target.hub_ura,
+            crate::daemon::ability::conformance::ABILITY_FEDERATION_JOIN,
+            crate::daemon::ability::CallMode::Rpc,
+        )
+        .map_err(|err| anyhow::anyhow!("derive federation.join descriptor ref: {err}"))?;
+    let join_request = crate::daemon::invocation::ProtoEnvelope::federation_join_bootstrap(
         target.hub_ura.clone(),
         membership_ura.to_string(),
+        crate::daemon::invocation::RootInvocationDerivationIssuer::fresh_root(),
     )?
-    .invoke_request(
+    .signed_descriptor_ref_invoke_request_with_signer(
         crate::daemon::ability::conformance::ABILITY_FEDERATION_JOIN,
-        crate::daemon::federation::client::ability_contract::args_to_bytes(&join_args),
-    )?;
+        join_descriptor_ref,
+        join_arguments,
+        &bootstrap_signer,
+    )
+    .await?;
     let join_response = client.invoke(join_request).await.map_err(|status| {
         anyhow::anyhow!(
             "hub rejected federation.join: code={:?} message={}",
@@ -470,7 +946,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
         )
     })?;
     let join_response = join_response.into_inner();
-    crate::daemon::invocation::routing::federation_invoke::ensure_completed_invoke_response(
+    crate::daemon::invocation::routing::remote_invoke::ensure_completed_invoke_response(
         "federation.join",
         &join_response,
     )?;
@@ -491,29 +967,27 @@ async fn do_federation_join_and_resolve_hub_key_async(
     }
 
     let membership_device_id = membership_ura_device_id(membership_ura)?;
-    let seed = derive_device_seed_hex(&target.realm, &membership_device_id)?;
-    let signer = DeterministicJoinSigner::from_seed_hex(&seed)?;
-    let resolve_args = crate::daemon::federation::client::ability_contract::ResolveKeyArgs {
-        agent_ura: target.hub_ura.clone(),
-    };
+    let (_, signer, _) = ensure_device_runtime_identity(&target.realm, &membership_device_id)?;
     let resolve_arguments =
-        crate::daemon::federation::client::ability_contract::args_to_bytes(&resolve_args);
+        crate::daemon::federation::wire_contract::ResolveKeyRequest::new(target.hub_ura.clone())
+            .to_arguments_bytes()?;
     let subject = crate::core::ura::owner_ability_ura(
         &target.hub_ura,
         crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
     )
     .ok_or_else(|| anyhow::anyhow!("derive federation.resolve_key subject URA"))?;
     let descriptor_ref =
-        crate::daemon::axon_bridge::descriptor_ref::ability_descriptor_ref_for_wire(
+        crate::daemon::axon_bridge::descriptor_ref::system_protocol_descriptor_ref_for_wire(
             &target.hub_ura,
             crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
-            crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+            crate::daemon::ability::CallMode::Rpc,
         )
         .map_err(|err| anyhow::anyhow!("derive federation.resolve_key descriptor ref: {err}"))?;
-    let resolve_request = crate::daemon::invocation::ProtoEnvelope::targeted(
+    let resolve_request = crate::daemon::invocation::ProtoEnvelope::from_target(
         membership_ura.to_string(),
         target.hub_ura.clone(),
         subject,
+        crate::daemon::invocation::RootInvocationDerivationIssuer::fresh_root(),
     )?
     .signed_descriptor_ref_invoke_request(
         crate::daemon::ability::conformance::ABILITY_FEDERATION_RESOLVE_KEY,
@@ -529,7 +1003,7 @@ async fn do_federation_join_and_resolve_hub_key_async(
         )
     })?;
     let resolve_response = resolve_response.into_inner();
-    crate::daemon::invocation::routing::federation_invoke::ensure_completed_invoke_response(
+    crate::daemon::invocation::routing::remote_invoke::ensure_completed_invoke_response(
         "federation.resolve_key",
         &resolve_response,
     )?;
@@ -591,45 +1065,6 @@ fn membership_ura_device_id(membership_ura: &str) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow::anyhow!("membership URA `{membership_ura}` is not a device URA"))
 }
 
-#[cfg(feature = "axon-pb")]
-struct DeterministicJoinSigner {
-    seed: [u8; 32],
-}
-
-#[cfg(feature = "axon-pb")]
-impl DeterministicJoinSigner {
-    fn from_seed_hex(seed_hex: &str) -> anyhow::Result<Self> {
-        let raw = hex::decode(seed_hex).context("decode deterministic device seed")?;
-        let seed: [u8; 32] = raw.try_into().map_err(|raw: Vec<u8>| {
-            anyhow::anyhow!("device seed must be 32 bytes, got {}", raw.len())
-        })?;
-        Ok(Self { seed })
-    }
-}
-
-#[cfg(feature = "axon-pb")]
-impl crate::daemon::identity::self_identity::SelfIdentity for DeterministicJoinSigner {
-    fn sign(
-        &self,
-        _self_ura: &str,
-        canonical_bytes: &[u8],
-    ) -> Result<ed25519_dalek::Signature, crate::daemon::identity::self_identity::SelfIdentityError>
-    {
-        use ed25519_dalek::Signer as _;
-        Ok(ed25519_dalek::SigningKey::from_bytes(&self.seed).sign(canonical_bytes))
-    }
-
-    fn public_key(
-        &self,
-        _self_ura: &str,
-    ) -> Result<
-        ed25519_dalek::VerifyingKey,
-        crate::daemon::identity::self_identity::SelfIdentityError,
-    > {
-        Ok(ed25519_dalek::SigningKey::from_bytes(&self.seed).verifying_key())
-    }
-}
-
 fn render_pairing_summary(title: &str, creds: &config::Credentials, peer_hub: Option<&str>) {
     // Final summary block — same `kv_section` styling as `start`
     // so the two commands look like siblings, not strangers.
@@ -649,11 +1084,11 @@ fn render_pairing_summary(title: &str, creds: &config::Credentials, peer_hub: Op
     eprintln!();
 }
 
-/// Walk through the eight join-time side effects under a live
-/// stage renderer. Network failures abort with `stage_failed +
-/// anyhow::bail`; best-effort steps (keyring, federated-peers,
-/// realm-trust, runtime-refresh) surface as `stage_ok` or
-/// `stage_skipped("(reason)")` and never short-circuit the join.
+/// Walk through the join-time side effects under a live stage renderer.
+/// Pairing, credential persistence, local runtime authority wiring, and
+/// key custody are required lifecycle transitions: a failed transition renders
+/// `stage_failed` and aborts the join instead of producing credentials that the
+/// daemon cannot later admit.
 ///
 /// Returns the resolved `Credentials` so the caller can render the
 /// summary block.
@@ -699,35 +1134,49 @@ fn run_join_stages(
     };
 
     renderer.set_active("validate-token");
-    let mut creds = match validate_pairing_token(token, validate_base, &preflight) {
-        Ok(c) => {
-            renderer.stage_ok("validate-token");
-            record_snapshot(JoinConnectionSnapshot::from_credentials(
-                JoinConnectionState::DeviceValidatedJoining,
-                Some(JoinTransition::ValidateToken),
-                &c,
-                "cli.join",
-            ));
-            c
-        }
-        Err(e) => {
-            record_snapshot(JoinConnectionSnapshot::failed_from_parts(
-                JoinFailureParts {
-                    failure_code: JoinFailureCode::JoinFailedValidate,
-                    transition: JoinTransition::ValidateToken,
-                    realm: preflight.realm.clone(),
-                    node_id: preflight.node_id.clone(),
-                    hub_endpoint: Some(validate_base.to_string()),
-                    message: e.to_string(),
-                    retryable: false,
-                    source: "cli.join".to_string(),
-                },
-            ));
-            renderer.stage_failed("validate-token", &format!("{e}"));
-            renderer.finish();
-            return Err(e);
-        }
-    };
+    let (device_public_key, key_service_startup) =
+        match derive_device_public_key_hex_with_startup(&preflight.realm, &preflight.node_id) {
+            Ok(public_key) => public_key,
+            Err(error) => {
+                renderer.stage_failed("validate-token", &error.to_string());
+                renderer.finish();
+                return Err(error);
+            }
+        };
+    let _key_service_guard =
+        crate::daemon::keyring::lifecycle::KeyServiceBootstrapLease::from_startup(
+            key_service_startup,
+        );
+    let mut creds =
+        match validate_pairing_token(token, validate_base, &preflight, &device_public_key) {
+            Ok(c) => {
+                renderer.stage_ok("validate-token");
+                record_snapshot(JoinConnectionSnapshot::from_credentials(
+                    JoinConnectionState::DeviceValidatedJoining,
+                    Some(JoinTransition::ValidateToken),
+                    &c,
+                    "cli.join",
+                ));
+                c
+            }
+            Err(e) => {
+                record_snapshot(JoinConnectionSnapshot::failed_from_parts(
+                    JoinFailureParts {
+                        failure_code: JoinFailureCode::JoinFailedValidate,
+                        transition: JoinTransition::ValidateToken,
+                        realm: preflight.realm.clone(),
+                        node_id: preflight.node_id.clone(),
+                        hub_endpoint: Some(validate_base.to_string()),
+                        message: e.to_string(),
+                        retryable: false,
+                        source: "cli.join".to_string(),
+                    },
+                ));
+                renderer.stage_failed("validate-token", &format!("{e}"));
+                renderer.finish();
+                return Err(e);
+            }
+        };
     let _ = rewrite_local_docker_session_endpoint(&mut creds, validate_base);
     creds.hub_api_base =
         persisted_hub_api_base_for_pairing(&creds, validate_base, has_explicit_hub_api_override);
@@ -763,32 +1212,25 @@ fn persist_join_credentials(
         source,
     ));
 
-    renderer.set_active("daemon-config");
-    match crate::daemon::persistence::daemon_config::ensure_minimal_device_config(&creds) {
-        Ok(()) => renderer.stage_ok("daemon-config"),
-        Err(e) => renderer.stage_skipped("daemon-config", &format!("({e})")),
-    }
+    run_required_join_stage(&mut renderer, "daemon-config", || {
+        crate::daemon::persistence::daemon_config::ensure_minimal_device_config(&creds)
+            .context("ensure daemon-config.toml for joined device")
+    })?;
 
-    renderer.set_active("federated-peers");
-    match super::federation_wire::auto_wire_federated_peer_from_credentials(&creds, peer_hub) {
-        Ok(()) => renderer.stage_ok("federated-peers"),
-        Err(e) => renderer.stage_skipped("federated-peers", &format!("({e})")),
-    }
+    run_required_join_stage(&mut renderer, "federated-peers", || {
+        super::federation_wire::auto_wire_federated_peer_from_credentials(&creds, peer_hub)
+            .context("wire federated peers for joined device")
+    })?;
 
-    renderer.set_active("keyring");
-    match put_device_keypair_to_keyring(&creds) {
-        Ok(()) => renderer.stage_ok("keyring"),
-        Err(e) => renderer.stage_skipped(
-            "keyring",
-            &format!("(offline: {e}; deterministic key fallback)"),
-        ),
-    }
+    run_required_join_stage(&mut renderer, "keyring", || {
+        ensure_join_runtime_identity_custody(&creds, &KeyServiceJoinRuntimeIdentityCustody)
+            .context("ensure joined runtime identity custody")
+    })?;
 
-    renderer.set_active("realm-trust");
-    match super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds) {
-        Ok(()) => renderer.stage_ok("realm-trust"),
-        Err(e) => renderer.stage_skipped("realm-trust", &format!("({e})")),
-    }
+    run_required_join_stage(&mut renderer, "realm-trust", || {
+        super::federation_wire::auto_wire_self_realm_trust_from_credentials(&creds)
+            .context("wire local realm trust for joined device")
+    })?;
     record_snapshot(JoinConnectionSnapshot::from_credentials(
         JoinConnectionState::LocalTrustWired,
         Some(JoinTransition::WireLocalTrust),
@@ -796,198 +1238,256 @@ fn persist_join_credentials(
         source,
     ));
 
-    renderer.set_active("refresh-runtime");
-    refresh_running_runtime_after_join(&creds);
-    renderer.stage_ok("refresh-runtime");
+    run_required_join_stage(&mut renderer, "refresh-runtime", || {
+        match refresh_running_runtime_after_join(&creds)? {
+            JoinRuntimeRefreshOutcome::NoLiveRuntime => {}
+            JoinRuntimeRefreshOutcome::StoppedForIdentityEpoch => {
+                output::info(
+                    "Stopped existing easynet-daemon so the next start can load the joined identity epoch.",
+                );
+            }
+        }
+        Ok(())
+    })?;
 
     renderer.finish();
     Ok(creds)
 }
 
-/// Push a fresh device keypair into the keyring under the
-/// canonical self URA + hub-role overlay. Phase 3C bridge: when
-/// the keyring is reachable, this is the production secret
-/// When the operator paired AFTER starting the local runtime, the
-/// initial boot missed the joined credentials and therefore never ran
-/// the bootstrap/advertise/register sequence that requires realm +
-/// node identity. Refresh that running runtime in place instead of
-/// forcing a restart.
-///
-/// Best-effort by contract:
-/// - no runtime metadata on disk => nothing is running, silently skip
-/// - stale runtime metadata / failed bridge connect => warn, keep join success
-/// - successful connect => reuse the exact same republish helper
-///   `easynet runtime start` already uses so the bootstrap semantics
-///   stay single-sourced
-fn refresh_running_runtime_after_join(creds: &config::Credentials) {
-    let state = match config::load() {
-        Ok(state) => state,
-        Err(_) => return,
-    };
-    if matches!(
-        state.runtime_kind,
-        crate::daemon::persistence::config::RuntimeKind::DaemonOnly
-    ) {
-        output::warn(
-            "paired successfully, but a local easynet-daemon is already running. \
-             Restart it with `easynet runtime stop && easynet runtime start` so it picks up the new credentials.",
-        );
-        return;
-    }
-    match state.connect_bridge() {
-        Ok(bridge) => {
-            output::detail(
-                "runtime",
-                "running runtime detected; refreshing identity + federation advertisement",
-            );
-            super::start::republish_via_federation_best_effort(&bridge, creds);
+fn run_required_join_stage<F>(
+    renderer: &mut crate::cli::presentation::stage::StageRenderer,
+    name: &'static str,
+    action: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce() -> anyhow::Result<()>,
+{
+    renderer.set_active(name);
+    match action() {
+        Ok(()) => {
+            renderer.stage_ok(name);
+            Ok(())
         }
-        Err(e) => output::warn(&format!(
-            "paired successfully, but could not refresh the running runtime at {}: {e}. \
-             Restart it with `easynet runtime start` if cross-hub lookups keep failing.",
-            state.endpoint
-        )),
+        Err(error) => {
+            let message = error.to_string();
+            renderer.stage_failed(name, &message);
+            renderer.finish();
+            Err(error).with_context(|| format!("join stage `{name}` failed"))
+        }
     }
 }
 
-/// surface; when offline, the caller logs + continues, and the
-/// daemon falls back to deterministic key derivation per
-/// `boot.rs::load_daemon_identity`.
-///
-/// Returns `Ok(())` when the put landed (or when the entry
-/// already existed — pairing the same node twice is a noop, the
-/// pre-existing entry stays). Errors only on transport faults
-/// the operator should see.
-fn put_device_keypair_to_keyring(creds: &config::Credentials) -> anyhow::Result<()> {
-    use crate::daemon::identity::self_identity::{
-        canonical_self_uras, KeyringClient, SelfIdentityError,
+/// Outcome of reconciling the local runtime after join mutates credentials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JoinRuntimeRefreshOutcome {
+    /// No daemon process facts were visible, so autostart can cleanly boot.
+    NoLiveRuntime,
+    /// A live or partially-live daemon was stopped because it belonged to the
+    /// pre-join identity epoch.
+    StoppedForIdentityEpoch,
+}
+
+/// Pure decision for the post-join runtime refresh state machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JoinRuntimeRefreshDecision {
+    NoDaemonFacts,
+    StopForIdentityEpoch,
+}
+
+impl JoinRuntimeRefreshDecision {
+    fn from_status(
+        creds: &config::Credentials,
+        report: &crate::daemon::lifecycle::RuntimeStatusReport,
+    ) -> anyhow::Result<Self> {
+        // Validate that the newly persisted credentials can be interpreted as a
+        // runtime identity epoch before mutating local process state. Both
+        // bound-user and federation-native device credentials are legitimate;
+        // malformed credentials must fail the refresh stage instead of falling
+        // through to autostart.
+        let _ = creds.runtime_user_binding()?;
+        if report.daemon().has_daemon_fact() {
+            Ok(Self::StopForIdentityEpoch)
+        } else {
+            Ok(Self::NoDaemonFacts)
+        }
+    }
+}
+
+/// A running daemon loaded identity, trust, authority state, and Ready
+/// capabilities before this join. Stopping it is the single supported
+/// transition into the newly joined identity epoch; warning-only refresh leaves
+/// autostart stuck behind the fail-closed `paired_user_runtime_signer` gate.
+fn refresh_running_runtime_after_join(
+    creds: &config::Credentials,
+) -> anyhow::Result<JoinRuntimeRefreshOutcome> {
+    refresh_running_runtime_after_join_with(creds, &LifecycleJoinRuntimeRefresh)
+}
+
+trait JoinRuntimeRefresh {
+    fn refresh(&self, creds: &config::Credentials) -> anyhow::Result<JoinRuntimeRefreshOutcome>;
+}
+
+struct LifecycleJoinRuntimeRefresh;
+
+impl JoinRuntimeRefresh for LifecycleJoinRuntimeRefresh {
+    fn refresh(&self, creds: &config::Credentials) -> anyhow::Result<JoinRuntimeRefreshOutcome> {
+        let service = crate::daemon::lifecycle::RuntimeLifecycleService::new();
+        let report = service
+            .status()
+            .context("observe runtime lifecycle after join")?;
+        match JoinRuntimeRefreshDecision::from_status(creds, &report)? {
+            JoinRuntimeRefreshDecision::NoDaemonFacts => {
+                if report.projection().is_some() {
+                    config::remove().context("remove stale runtime projection after join")?;
+                }
+                Ok(JoinRuntimeRefreshOutcome::NoLiveRuntime)
+            }
+            JoinRuntimeRefreshDecision::StopForIdentityEpoch => {
+                stop_join_identity_epoch_runtime(&report)?;
+                Ok(JoinRuntimeRefreshOutcome::StoppedForIdentityEpoch)
+            }
+        }
+    }
+}
+
+fn refresh_running_runtime_after_join_with(
+    creds: &config::Credentials,
+    refresh: &dyn JoinRuntimeRefresh,
+) -> anyhow::Result<JoinRuntimeRefreshOutcome> {
+    refresh.refresh(creds)
+}
+
+fn stop_join_identity_epoch_runtime(
+    report: &crate::daemon::lifecycle::RuntimeStatusReport,
+) -> anyhow::Result<()> {
+    use crate::daemon::lifecycle::{
+        LiveProcessStopOutcome, PidfileStopOutcome, RuntimeStopPlan, RuntimeStopProcessController,
     };
 
-    let realm = creds.realm.trim();
-    let node_id = creds.node_id.trim();
+    let plan = RuntimeStopPlan::from_report(report);
+    let controller = RuntimeStopProcessController::new();
+    let pidfile_outcome = controller.stop_pidfile_process(&config::easynet_daemon_pid_path());
+    if let PidfileStopOutcome::TimedOut { pid } = pidfile_outcome {
+        anyhow::bail!("stop pre-join daemon pid {pid} timed out");
+    }
+    if let Some(pid) = plan.discovery_pid() {
+        if let LiveProcessStopOutcome::TimedOut { pid } =
+            controller.stop_discovered_daemon_process(pid)
+        {
+            anyhow::bail!("stop discovered pre-join daemon pid {pid} timed out");
+        }
+    }
+    let post = crate::daemon::lifecycle::RuntimeLifecycleService::new()
+        .status()
+        .context("observe runtime lifecycle after join stop")?;
+    if post.daemon().has_daemon_fact() {
+        anyhow::bail!(
+            "pre-join easynet-daemon still has live facts after refresh stop (status={})",
+            post.status().as_wire_str()
+        );
+    }
+    if let Ok(path) = crate::daemon::control::discovery::try_default_path() {
+        crate::daemon::control::discovery::remove(&path)
+            .with_context(|| format!("remove stale daemon discovery {}", path.display()))?;
+    }
+    config::remove().context("remove stale runtime projection after join")?;
+    Ok(())
+}
+
+/// Ensure every runtime identity implied by joined credentials exists in the
+/// daemon custody service.
+///
+/// Bound-user credentials imply both a device signer and a managed User signer:
+/// canonical SDK descriptor resolution signs as the User for user-scoped reads,
+/// so letting join finish with only the device signer keeps an obsolete
+/// "start later and maybe reconcile" compatibility window alive. Federation-
+/// native device-only credentials remain explicitly unbound and must not mint a
+/// placeholder User signer.
+fn ensure_join_runtime_identity_custody(
+    creds: &config::Credentials,
+    custody: &dyn JoinRuntimeIdentityCustody,
+) -> anyhow::Result<()> {
+    custody.ensure_device(&creds.realm, &creds.node_id)?;
+    match creds.runtime_user_binding()? {
+        config::RuntimeUserBinding::Bound { user_ura } => custody.ensure_user(&user_ura),
+        config::RuntimeUserBinding::Unbound { .. } => Ok(()),
+    }
+}
+
+trait JoinRuntimeIdentityCustody {
+    fn ensure_device(&self, realm: &str, node_id: &str) -> anyhow::Result<()>;
+    fn ensure_user(&self, user_ura: &str) -> anyhow::Result<()>;
+}
+
+struct KeyServiceJoinRuntimeIdentityCustody;
+
+impl JoinRuntimeIdentityCustody for KeyServiceJoinRuntimeIdentityCustody {
+    fn ensure_device(&self, realm: &str, node_id: &str) -> anyhow::Result<()> {
+        ensure_device_runtime_identity(realm, node_id).map(|_| ())
+    }
+
+    fn ensure_user(&self, user_ura: &str) -> anyhow::Result<()> {
+        let client = crate::daemon::identity::self_identity::KeyringClient::default_path();
+        crate::daemon::identity::self_identity::ensure_user_runtime_signing_identity(
+            &client, user_ura,
+        )
+        .map(|_| ())
+        .map_err(|error| {
+            anyhow::anyhow!("ensure managed User runtime signer `{user_ura}`: {error}")
+        })
+    }
+}
+
+/// Ensure the joined device identity exists in the daemon custody service.
+/// Join is fail-closed when the service cannot create or project the identity;
+/// there is no deterministic private-key fallback.
+fn ensure_device_runtime_identity(
+    realm: &str,
+    node_id: &str,
+) -> anyhow::Result<(
+    String,
+    crate::daemon::identity::self_identity::KeyringClient,
+    ed25519_dalek::VerifyingKey,
+)> {
+    let (primary_self, client, public_key, _) =
+        ensure_device_runtime_identity_with_startup(realm, node_id)?;
+    Ok((primary_self, client, public_key))
+}
+
+fn ensure_device_runtime_identity_with_startup(
+    realm: &str,
+    node_id: &str,
+) -> anyhow::Result<(
+    String,
+    crate::daemon::identity::self_identity::KeyringClient,
+    ed25519_dalek::VerifyingKey,
+    crate::daemon::keyring::lifecycle::KeyServiceStartup,
+)> {
+    use crate::daemon::identity::self_identity::KeyringClient;
+
+    let realm = realm.trim();
+    let node_id = node_id.trim();
     if realm.is_empty() || node_id.is_empty() {
         anyhow::bail!("credentials missing realm or node_id");
     }
-    let (primary_self, role_overlays) = canonical_self_uras(realm, node_id);
+    let primary_self = crate::core::ura::device_ura(realm, node_id);
 
     let client = KeyringClient::default_path();
-    // Probe reachability with a lightweight `list` first. When the
+    // Probe reachability with the constant-size health operation first. When the
     // daemon is already up (operator started it, or a prior join
-    // spawned it) we go straight to `put`. When it is down we
+    // spawned it) we go straight to `ensure`. When it is down we
     // auto-provision it below so the encrypted vault is the default
     // posture rather than something only `dev-backend.sh` sets up.
-    if client.list().is_err() {
-        ensure_keyring_daemon_running()?;
-    }
+    let startup = if client.health().is_err() {
+        crate::daemon::keyring::lifecycle::ensure_bootstrap_key_service_running()?
+    } else {
+        crate::daemon::keyring::lifecycle::KeyServiceStartup::Attached
+    };
 
-    let seed_hex = derive_device_seed_hex(realm, node_id)?;
-    match client.put(&primary_self, role_overlays, seed_hex) {
-        Ok(()) => Ok(()),
-        // already_exists is benign — re-pairing the same device
-        // keeps the existing keypair. Any other error is real.
-        Err(SelfIdentityError::Rejected { kind, .. }) if kind == "already_exists" => Ok(()),
-        Err(e) => Err(anyhow::anyhow!("keyring put: {e}")),
-    }
-}
-
-/// Spawn the `easynet-keyring` daemon and wait until its socket
-/// answers, auto-provisioning a passphrase if the operator has not
-/// supplied one.
-///
-/// Mirrors the daemon-spawn shape in `daemon::boot::process`: locate the
-/// sibling binary next to the running `easynet` executable, run it
-/// detached (`setsid`, stdio to a log), and poll the socket until it
-/// accepts a `list` RPC. The passphrase comes from
-/// `keyring::load_or_create_passphrase`, which is also what `start`
-/// injects into the `easynet-daemon` environment so the daemon can
-/// read the same vault across restarts.
-fn ensure_keyring_daemon_running() -> anyhow::Result<()> {
-    use crate::daemon::identity::self_identity::KeyringClient;
-    use crate::daemon::keyring::{default_socket_path, load_or_create_passphrase};
-    use anyhow::Context as _;
-    use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
-
-    let (passphrase, _generated) =
-        load_or_create_passphrase().context("provision keyring passphrase")?;
-
-    // A stale socket file (previous daemon crashed without unlinking)
-    // makes `easynet-keyring` refuse to bind. Remove it iff nothing is
-    // listening — the `list` ping above already failed, so a leftover
-    // file here is dead.
-    let socket_path = default_socket_path();
-    #[cfg(unix)]
-    if socket_path.exists() {
-        let _ = std::fs::remove_file(&socket_path);
-    }
-
-    let binary = resolve_keyring_bin();
-    let log_path = config::state_dir().join("logs").join("easynet-keyring.log");
-    if let Some(parent) = log_path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .with_context(|| format!("open keyring log at {}", log_path.display()))?;
-
-    let mut cmd = Command::new(&binary);
-    cmd.env("EASYNET_KEYRING_PASSPHRASE", &passphrase);
-    cmd.stdin(Stdio::null());
-    if let Ok(out) = log.try_clone() {
-        cmd.stdout(Stdio::from(out));
-    }
-    cmd.stderr(Stdio::from(log));
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        unsafe {
-            cmd.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
-    cmd.spawn()
-        .with_context(|| format!("spawn easynet-keyring at {}", binary.display()))?;
-
-    // Poll the socket until the daemon answers. The keyring binds and
-    // serves in well under a second on a warm disk; 5s covers a cold
-    // Argon2id KDF on the first vault init.
-    let client = KeyringClient::default_path().with_timeout(Duration::from_secs(2));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if client.list().is_ok() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            anyhow::bail!(
-                "easynet-keyring did not become ready within 5s (see {})",
-                log_path.display()
-            );
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-/// Locate the `easynet-keyring` binary. Prefers an explicit
-/// `EASYNET_KEYRING_BIN` override, then the sibling of the running
-/// executable (the install layout ships all three binaries in one
-/// dir), then bare `easynet-keyring` on `PATH`.
-fn resolve_keyring_bin() -> std::path::PathBuf {
-    use std::path::PathBuf;
-    const KEYRING_BIN: &str = "easynet-keyring";
-    std::env::var_os("EASYNET_KEYRING_BIN")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.join(KEYRING_BIN)))
-        })
-        .unwrap_or_else(|| PathBuf::from(KEYRING_BIN))
+    let public_key = client
+        .ensure(&primary_self)
+        .map_err(|error| anyhow::anyhow!("ensure runtime identity: {error}"))?;
+    Ok((primary_self, client, public_key, startup))
 }
 
 fn validate_token_format(token: &str) -> anyhow::Result<()> {
@@ -1019,25 +1519,91 @@ fn pairing_status_error_message(code: u16, body: &str) -> String {
     match code {
         404 => "pairing token expired or already used — create a new token from the Hub dashboard"
             .into(),
-        409 => "device already paired — run 'easynet reset' first to un-pair, then retry".into(),
+        409 => {
+            "device already paired — run 'easynet device reset' first to un-pair, then retry".into()
+        }
         _ => format!("Hub rejected pairing (HTTP {code}): {body}"),
     }
 }
 
+fn looks_like_plain_http_tls_mismatch(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("invalidcontenttype")
+        || lower.contains("corrupt message")
+        || (lower.contains("tls") && lower.contains("invalid content type"))
+}
+
+fn pairing_transport_error_message(base: &str, error: &dyn std::fmt::Display) -> String {
+    let base = base.trim_end_matches('/');
+    let error = error.to_string();
+    let mut message = format!("cannot reach Hub at {base}: {error}");
+
+    if let Some(parts) = parse_url_endpoint(base) {
+        if parts.scheme.eq_ignore_ascii_case("https")
+            && is_loopback_or_localhost(&parts.host)
+            && looks_like_plain_http_tls_mismatch(&error)
+        {
+            let http_base = format!(
+                "http://{}{}",
+                format_authority(&parts.host, parts.port.as_deref()),
+                parts.suffix
+            );
+            message.push_str(
+                "\n  The URL uses https://, but the local Hub API appears to be speaking plain HTTP.",
+            );
+            message.push_str(&format!("\n  Retry with `--hub {http_base}`."));
+            return message;
+        }
+    }
+
+    message.push_str("\n  Check your network connection and Hub URL.");
+    message
+}
+
 fn validate_pairing_response(
-    envelope: easynet_axon::DeviceJoinCredentialEnvelope,
-) -> anyhow::Result<easynet_axon::DeviceJoinCredentialEnvelope> {
-    if envelope.node_id.is_empty() {
-        anyhow::bail!("pairing response missing node_id");
+    envelope: PairingCredentialEnvelope,
+    expected_device_public_key: &str,
+) -> anyhow::Result<PairingCredentialEnvelope> {
+    require_pairing_field(&envelope.node_id, "node_id")?;
+    require_pairing_field(&envelope.display_name, "display_name")?;
+    require_pairing_field(&envelope.state, "state")?;
+    require_pairing_field(&envelope.trust_level, "trust_level")?;
+    require_pairing_field(&envelope.device_group, "device_group")?;
+    require_pairing_field(&envelope.os, "os")?;
+    require_pairing_field(&envelope.arch, "arch")?;
+    require_pairing_field(&envelope.auth_binding, "auth_binding")?;
+    require_pairing_field(&envelope.device_public_key, "device_public_key")?;
+    require_pairing_field(
+        &envelope.device_public_key_fingerprint,
+        "device_public_key_fingerprint",
+    )?;
+    require_pairing_field(&envelope.credential_token, "credential_token")?;
+    require_pairing_field(&envelope.hub_endpoint, "hub_endpoint")?;
+    require_pairing_field(&envelope.realm, "realm")?;
+    require_pairing_field(&envelope.deploy_signature, "deploy_signature")?;
+    require_pairing_field(&envelope.ura, "ura")?;
+    if !envelope.credential_provisioned {
+        anyhow::bail!("pairing response credential_provisioned must be true");
     }
-    if envelope.credential_token.is_empty() {
-        anyhow::bail!("pairing response missing credential_token");
+    if !envelope.public_key_registered {
+        anyhow::bail!("pairing response public_key_registered must be true");
     }
-    if envelope.hub_endpoint.is_empty() {
-        anyhow::bail!("pairing response missing hub_endpoint");
+    if envelope.device_public_key.trim() != expected_device_public_key.trim() {
+        anyhow::bail!("pairing response device_public_key does not match local runtime signer");
     }
-    if envelope.realm.is_empty() {
-        anyhow::bail!("pairing response missing realm");
+    let expected_device_ura = crate::core::ura::device_ura(&envelope.realm, &envelope.node_id);
+    if envelope.ura.trim() != expected_device_ura {
+        anyhow::bail!(
+            "pairing response ura `{}` does not match canonical joined device URA `{expected_device_ura}`",
+            envelope.ura.trim()
+        );
+    }
+    for peer in &envelope.federated_peers {
+        require_pairing_field(&peer.realm, "federated_peers[].realm")?;
+        require_pairing_field(&peer.peer_hub_url, "federated_peers[].peer_hub_url")?;
+        if let Some(pubkey) = peer.peer_hub_pubkey.as_deref() {
+            require_pairing_field(pubkey, "federated_peers[].peer_hub_pubkey")?;
+        }
     }
     if envelope
         .username
@@ -1048,21 +1614,26 @@ fn validate_pairing_response(
     {
         anyhow::bail!("pairing response missing username");
     }
-    if envelope
+    let user_id = envelope
         .user_id
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .is_none()
-    {
-        anyhow::bail!("pairing response missing user_id");
+        .ok_or_else(|| anyhow::anyhow!("pairing response missing user_id"))?;
+    if crate::core::identity::is_all_zero_principal_id(user_id) {
+        anyhow::bail!("pairing response carries all-zero user_id");
     }
     Ok(envelope)
 }
 
-fn credentials_from_join_envelope(
-    envelope: easynet_axon::DeviceJoinCredentialEnvelope,
-) -> config::Credentials {
+fn require_pairing_field(value: &str, field: &str) -> anyhow::Result<()> {
+    if value.trim().is_empty() {
+        anyhow::bail!("pairing response missing {field}");
+    }
+    Ok(())
+}
+
+fn credentials_from_pairing_contract(envelope: PairingCredentialEnvelope) -> config::Credentials {
     config::Credentials {
         node_id: envelope.node_id,
         credential_token: envelope.credential_token,
@@ -1078,18 +1649,71 @@ fn credentials_from_join_envelope(
     }
 }
 
-/// Pick the REST-API base URL the pairing-token validation call
-/// should hit. Operators commonly run a self-hosted Hub where the
-/// user-facing portal (`--hub`) and the REST API (`--hub-api`)
-/// live on different hosts/ports — e.g. portal at
-/// `https://easynet.run`, REST API at `http://localhost:18080`.
-/// Without preferring `--hub-api` when set, the validation call
-/// hits the portal URL, gets a 404, and surfaces as "pairing
-/// token expired or already used" — a misleading error mode.
-fn pick_validate_base(hub: &str, hub_api_override: Option<&str>) -> String {
-    hub_api_override
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| hub.to_string())
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PairingValidationBase {
+    base: String,
+    explicit_api_override: bool,
+}
+
+/// Pick the REST-API base URL the pairing-token validation call should hit.
+///
+/// Pairing tokens are minted by the authenticated account Hub, while token
+/// joins historically defaulted to the public product Hub. That made
+/// `easynet auth pair` followed by the printed `easynet device join <token>`
+/// fail for local/self-hosted realms. Keep the states separate, but converge
+/// endpoint ownership: explicit CLI endpoints win; otherwise the authenticated
+/// session Hub owns the token; only unauthenticated direct token joins use the
+/// product default.
+fn resolve_pairing_validation_base(args: &JoinArgs) -> PairingValidationBase {
+    let session_hub = auth::load_session()
+        .ok()
+        .flatten()
+        .map(|session| session.hub_url);
+    pick_validate_base_with_session(&args.hub, args.hub_api.as_deref(), session_hub.as_deref())
+}
+
+fn pick_validate_base_with_session(
+    hub: &str,
+    hub_api_override: Option<&str>,
+    session_hub: Option<&str>,
+) -> PairingValidationBase {
+    if let Some(api) = normalize_endpoint_override(hub_api_override) {
+        return PairingValidationBase {
+            base: api,
+            explicit_api_override: true,
+        };
+    }
+
+    let requested_hub = normalize_endpoint(hub);
+    let default_hub = format!("https://{}", config::DEFAULT_HUB_HOST);
+    if requested_hub != default_hub {
+        return PairingValidationBase {
+            base: requested_hub,
+            explicit_api_override: false,
+        };
+    }
+
+    if let Some(session_hub) = normalize_endpoint_override(session_hub) {
+        return PairingValidationBase {
+            base: session_hub,
+            explicit_api_override: false,
+        };
+    }
+
+    PairingValidationBase {
+        base: requested_hub,
+        explicit_api_override: false,
+    }
+}
+
+fn normalize_endpoint(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_string()
+}
+
+fn normalize_endpoint_override(value: Option<&str>) -> Option<String> {
+    value
+        .map(normalize_endpoint)
+        .filter(|value| !value.is_empty())
 }
 
 fn persisted_hub_api_base_for_pairing(
@@ -1169,9 +1793,9 @@ fn is_loopback_or_localhost(host: &str) -> bool {
     lower == "localhost" || lower == "::1" || lower.starts_with("127.")
 }
 
-fn is_docker_internal_hub_host(host: &str) -> bool {
+fn is_internal_authority_transport_host(host: &str) -> bool {
     let lower = host.to_ascii_lowercase();
-    lower == "hub" || lower.starts_with("hub-")
+    lower == "authority" || lower == "hub" || lower.starts_with("hub-")
 }
 
 fn rewrite_local_docker_session_endpoint(
@@ -1188,7 +1812,7 @@ fn rewrite_local_docker_session_endpoint(
     let Some(session_parts) = parse_url_endpoint(&creds.hub_endpoint) else {
         return false;
     };
-    if !is_docker_internal_hub_host(&session_parts.host) {
+    if !is_internal_authority_transport_host(&session_parts.host) {
         return false;
     }
 
@@ -1207,7 +1831,14 @@ fn rewrite_local_docker_session_endpoint(
 
 fn preflight_pairing_token(token: &str, hub_base: &str) -> anyhow::Result<PairingPreflight> {
     let base = hub_base.trim_end_matches('/');
-    let url = format!("{base}/api/v1/devices/pairing/{token}/preflight");
+    let install_id = config::load_or_create_install_id().ok();
+    let url = match install_id.as_deref() {
+        Some(id) if !id.is_empty() => format!(
+            "{base}/api/v1/devices/pairing/{token}/preflight?install_id={}",
+            urlencoding::encode(id)
+        ),
+        _ => format!("{base}/api/v1/devices/pairing/{token}/preflight"),
+    };
 
     let resp = match ureq::get(&url)
         .timeout(std::time::Duration::from_secs(30))
@@ -1219,34 +1850,108 @@ fn preflight_pairing_token(token: &str, hub_base: &str) -> anyhow::Result<Pairin
             anyhow::bail!("{}", pairing_status_error_message(code, &body));
         }
         Err(ureq::Error::Transport(e)) => {
-            anyhow::bail!(
-                "cannot reach Hub at {base}: {e}\n  Check your network connection and Hub URL."
-            );
+            anyhow::bail!("{}", pairing_transport_error_message(base, &e));
         }
     };
 
-    let preflight: PairingPreflight = resp.into_json().map_err(|e| {
+    let raw = resp.into_string().map_err(|e| {
         anyhow::Error::from(e).context(
+            "Hub returned an unreadable pairing preflight response — the Hub response body \
+             could not be read. Verify the Hub URL and that no proxy rewrote the response.",
+        )
+    })?;
+    let preflight = decode_pairing_preflight_response(&raw)?;
+    validate_pairing_preflight(preflight)
+}
+
+fn decode_pairing_preflight_response(raw: &str) -> anyhow::Result<PairingPreflight> {
+    let value: serde_json::Value = serde_json::from_str(raw).map_err(|error| {
+        anyhow::Error::from(error).context(
+            "Hub returned an unreadable pairing preflight response — the Hub returned invalid \
+             JSON. Verify the Hub URL and that no proxy rewrote the response.",
+        )
+    })?;
+    validate_pairing_preflight_wire_value(&value)?;
+    serde_json::from_value(value).map_err(|error| {
+        anyhow::Error::from(error).context(
             "Hub returned an unreadable pairing preflight response — the Hub is likely on an \
              incompatible version, or a proxy rewrote the response. Verify the Hub URL and \
              that CLI + Hub versions match; re-run with a fresh pairing token if so.",
         )
-    })?;
-    if preflight.realm.is_empty() {
-        anyhow::bail!("pairing preflight response missing realm");
+    })
+}
+
+fn validate_pairing_preflight_wire_value(value: &serde_json::Value) -> anyhow::Result<()> {
+    let Some(object) = value.as_object() else {
+        anyhow::bail!("Hub pairing preflight contract violation: response must be a JSON object");
+    };
+    for field in [
+        "state_code",
+        "transition_id",
+        "interrupted_transition",
+        "failure",
+        "resolve_unavailable",
+    ] {
+        if object.contains_key(field) {
+            anyhow::bail!(
+                "Hub pairing preflight contract violation: response leaked device read-model field `{field}`"
+            );
+        }
     }
-    if preflight.node_id.is_empty() {
-        anyhow::bail!("pairing preflight response missing node_id");
+    Ok(())
+}
+
+fn validate_pairing_preflight(mut preflight: PairingPreflight) -> anyhow::Result<PairingPreflight> {
+    require_pairing_preflight_field(&preflight.realm, "realm")?;
+    require_pairing_preflight_field(&preflight.node_id, "node_id")?;
+    require_pairing_preflight_field(&preflight.hub_public_key_b64, "hub_public_key_b64")?;
+    require_pairing_preflight_field(&preflight.hub_agent_ura, "hub_agent_ura")?;
+
+    let expected_hub_ura = crate::core::ura::hub_ura(preflight.realm.trim());
+    if preflight.hub_agent_ura.trim() != expected_hub_ura {
+        anyhow::bail!(
+            "pairing preflight hub_agent_ura `{}` does not match canonical Hub authority URA `{expected_hub_ura}`",
+            preflight.hub_agent_ura.trim()
+        );
     }
+
+    let hub_key = base64::engine::general_purpose::STANDARD
+        .decode(preflight.hub_public_key_b64.trim())
+        .context("decode pairing preflight hub_public_key_b64")?;
+    if hub_key.len() != 32 {
+        anyhow::bail!(
+            "pairing preflight hub_public_key_b64 must decode to 32 bytes, got {}",
+            hub_key.len()
+        );
+    }
+
+    preflight.realm = preflight.realm.trim().to_string();
+    preflight.node_id = preflight.node_id.trim().to_string();
+    preflight.hub_public_key_b64 = preflight.hub_public_key_b64.trim().to_string();
+    preflight.hub_agent_ura = preflight.hub_agent_ura.trim().to_string();
+    preflight.hub_tls_ca_pem_b64 = preflight
+        .hub_tls_ca_pem_b64
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
     Ok(preflight)
+}
+
+fn require_pairing_preflight_field(value: &str, field: &str) -> anyhow::Result<()> {
+    if value.trim().is_empty() {
+        anyhow::bail!("pairing preflight response missing {field}");
+    }
+    Ok(())
 }
 
 fn validate_pairing_token(
     token: &str,
     hub_base: &str,
     preflight: &PairingPreflight,
+    device_public_key: &str,
 ) -> anyhow::Result<config::Credentials> {
-    let payload = build_validate_pairing_payload(preflight)?;
+    let payload = build_validate_pairing_payload(preflight, device_public_key.to_string());
     let base = hub_base.trim_end_matches('/');
     let url = format!("{base}/api/v1/devices/pairing/{token}/validate");
 
@@ -1260,31 +1965,16 @@ fn validate_pairing_token(
             anyhow::bail!("{}", pairing_status_error_message(code, &body));
         }
         Err(ureq::Error::Transport(e)) => {
-            anyhow::bail!(
-                "cannot reach Hub at {base}: {e}\n  Check your network connection and Hub URL."
-            );
+            anyhow::bail!("{}", pairing_transport_error_message(base, &e));
         }
     };
 
-    // The Hub's pairing endpoint is a versioned REST contract (see the
-    // Hub's OpenAPI spec under /api/v1/devices/pairing). If `into_json`
-    // fails, the bytes we got back are either not JSON at all (a proxy
-    // inserted an HTML error page, a middlebox rewrote the response) or
-    // the JSON shape no longer matches Axon's join credential envelope
-    // (the CLI and Hub are on incompatible versions). Either way, the underlying
-    // serde error is noise to an operator — they need to know *what to
-    // do*, not which field's tag didn't match. We keep the raw cause in
-    // the error chain via `context`, so `--verbose` / log scrapers still
-    // surface the full detail, while the top-line stays operator-friendly.
-    let envelope: easynet_axon::DeviceJoinCredentialEnvelope = resp.into_json().map_err(|e| {
-        anyhow::Error::from(e).context(
-            "Hub returned an unreadable pairing response — the Hub is likely on an \
-             incompatible version, or a proxy rewrote the response. Verify the Hub URL \
-             and that CLI + Hub versions match; re-run with a fresh pairing token if so.",
-        )
-    })?;
+    let body = resp
+        .into_string()
+        .context("read Hub pairing response body")?;
+    let envelope = decode_pairing_credential_response(&body)?;
 
-    let envelope = validate_pairing_response(envelope)?;
+    let envelope = validate_pairing_response(envelope, device_public_key)?;
     if envelope.node_id != preflight.node_id {
         anyhow::bail!(
             "Hub returned node_id {} but pairing preflight reserved {}; aborting to avoid \
@@ -1301,54 +1991,83 @@ fn validate_pairing_token(
             preflight.realm
         );
     }
-    // Cross-machine cold-start fix: stash the hub's signing and
-    // TLS trust material from preflight onto the in-memory +
-    // on-disk credentials so the follow-up trust auto-wire can
-    // populate `realm-trust.toml` plus any local pinned CA file
-    // without needing on-host access to hub-local files.
-    let mut creds = credentials_from_join_envelope(envelope);
-    if !preflight.hub_public_key_b64.trim().is_empty() {
-        creds.hub_pubkey_b64 = Some(preflight.hub_public_key_b64.trim().to_string());
-    }
-    if !preflight.hub_tls_ca_pem_b64.trim().is_empty() {
-        creds.hub_tls_ca_pem_b64 = Some(preflight.hub_tls_ca_pem_b64.trim().to_string());
-    }
+    // Cross-machine cold-start: persist the hub's signing and TLS trust
+    // material from preflight onto the in-memory and on-disk credentials so
+    // trust synchronization can populate `realm-trust.toml` plus any local
+    // pinned CA file without needing on-host access to hub-local files.
+    let mut creds = credentials_from_pairing_contract(envelope);
+    creds.hub_pubkey_b64 = Some(preflight.hub_public_key_b64.clone());
+    creds.hub_tls_ca_pem_b64 = preflight.hub_tls_ca_pem_b64.clone();
     Ok(creds)
+}
+
+fn decode_pairing_credential_response(raw: &str) -> anyhow::Result<PairingCredentialEnvelope> {
+    let value: serde_json::Value = serde_json::from_str(raw).map_err(|error| {
+        anyhow::Error::from(error).context(
+            "Hub returned an unreadable pairing response — the Hub returned invalid JSON. \
+             Verify the Hub URL and that no proxy rewrote the response.",
+        )
+    })?;
+    validate_pairing_credential_wire_value(&value)?;
+    serde_json::from_value(value).map_err(|error| {
+        anyhow::Error::from(error).context(
+            "Hub returned an unreadable pairing response — the Hub is likely on an \
+             incompatible version, or a proxy rewrote the response. Verify the Hub URL \
+             and that CLI + Hub versions match; re-run with a fresh pairing token if so.",
+        )
+    })
+}
+
+fn validate_pairing_credential_wire_value(value: &serde_json::Value) -> anyhow::Result<()> {
+    let Some(object) = value.as_object() else {
+        anyhow::bail!("Hub pairing credential contract violation: response must be a JSON object");
+    };
+    for field in [
+        "state_code",
+        "transition_id",
+        "interrupted_transition",
+        "failure",
+        "resolve_unavailable",
+    ] {
+        if object.contains_key(field) {
+            anyhow::bail!(
+                "Hub pairing credential contract violation: response leaked device read-model field `{field}`"
+            );
+        }
+    }
+    match object.get("federated_peers") {
+        Some(serde_json::Value::Array(_)) => {}
+        Some(_) => anyhow::bail!(
+            "Hub pairing credential contract violation: federated_peers must be a JSON array"
+        ),
+        None => anyhow::bail!(
+            "Hub pairing credential contract violation: response missing federated_peers"
+        ),
+    }
+    Ok(())
 }
 
 fn build_validate_pairing_payload(
     preflight: &PairingPreflight,
-) -> anyhow::Result<ValidatePairingPayload> {
-    Ok(ValidatePairingPayload {
+    device_public_key: String,
+) -> ValidatePairingPayload {
+    ValidatePairingPayload {
         info: sysinfo::collect_system_info(),
         node_id: preflight.node_id.clone(),
-        device_public_key: derive_device_public_key_hex(&preflight.realm, &preflight.node_id)?,
+        device_public_key,
         // Best-effort: a failure to read/persist the install id (e.g. an
         // unwritable state dir) must not block pairing — the hub then simply
         // mints a fresh node_id as before.
         install_id: config::load_or_create_install_id().ok(),
-    })
+    }
 }
 
-fn derive_device_public_key_hex(realm: &str, node_id: &str) -> anyhow::Result<String> {
-    use anyhow::Context as _;
-    use base64::Engine as _;
-
-    let (_seed, public_key_b64) = derive_device_keypair(realm, node_id);
-    let public_key = base64::engine::general_purpose::STANDARD
-        .decode(public_key_b64.as_bytes())
-        .context("decode derived device public key")?;
-    Ok(hex::encode(public_key))
-}
-
-fn derive_device_seed_hex(realm: &str, node_id: &str) -> anyhow::Result<String> {
-    let (seed, _public_key_b64) = derive_device_keypair(realm, node_id);
-    Ok(hex::encode(seed))
-}
-
-fn derive_device_keypair(realm: &str, node_id: &str) -> ([u8; 32], String) {
-    let subject_id = easynet_axon::invocation::private_agent_subject_id(node_id);
-    crate::daemon::federation::publish::derive_subject_keypair(realm, &subject_id)
+fn derive_device_public_key_hex_with_startup(
+    realm: &str,
+    node_id: &str,
+) -> anyhow::Result<(String, crate::daemon::keyring::lifecycle::KeyServiceStartup)> {
+    let (_, _, public_key, startup) = ensure_device_runtime_identity_with_startup(realm, node_id)?;
+    Ok((hex::encode(public_key.to_bytes()), startup))
 }
 
 // Deregister the previously-paired device from the hub before a re-pair
@@ -1357,16 +2076,17 @@ fn derive_device_keypair(realm: &str, node_id: &str) -> ([u8; 32], String) {
 // compile).
 #[cfg(feature = "axon-pb")]
 fn invoke_federation_revoke_for_rejoin(device_ura: &str) -> anyhow::Result<()> {
-    crate::daemon::invocation::routing::federation_invoke::invoke_federation_revoke(
+    crate::daemon::invocation::routing::remote_invoke::invoke_federation_revoke(
         device_ura,
         "device-rejoin",
+        device_ura,
     )
 }
 
 #[cfg(not(feature = "axon-pb"))]
 fn invoke_federation_revoke_for_rejoin(_device_ura: &str) -> anyhow::Result<()> {
     Err(
-        crate::support::platform::local_invoke::federation_not_wired_error(
+        crate::support::platform::local_invoke::federation_capability_unsupported_error(
             "deregistering the old device on re-pair",
         ),
     )
@@ -1375,7 +2095,107 @@ fn invoke_federation_revoke_for_rejoin(_device_ura: &str) -> anyhow::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use std::net::TcpListener;
+
+    #[derive(Default)]
+    struct RecordingJoinRuntimeIdentityCustody {
+        devices: RefCell<Vec<(String, String)>>,
+        users: RefCell<Vec<String>>,
+        fail_user: Option<&'static str>,
+    }
+
+    impl RecordingJoinRuntimeIdentityCustody {
+        fn failing_user(message: &'static str) -> Self {
+            Self {
+                fail_user: Some(message),
+                ..Self::default()
+            }
+        }
+    }
+
+    impl JoinRuntimeIdentityCustody for RecordingJoinRuntimeIdentityCustody {
+        fn ensure_device(&self, realm: &str, node_id: &str) -> anyhow::Result<()> {
+            self.devices
+                .borrow_mut()
+                .push((realm.to_string(), node_id.to_string()));
+            Ok(())
+        }
+
+        fn ensure_user(&self, user_ura: &str) -> anyhow::Result<()> {
+            self.users.borrow_mut().push(user_ura.to_string());
+            if let Some(message) = self.fail_user {
+                anyhow::bail!("{message}");
+            }
+            Ok(())
+        }
+    }
+
+    fn test_hub_public_key_b64() -> String {
+        base64::engine::general_purpose::STANDARD.encode([0x11u8; 32])
+    }
+
+    fn canonical_pairing_preflight_json() -> serde_json::Value {
+        serde_json::json!({
+            "realm": "tenant-a",
+            "node_id": "en-test-node",
+            "hub_public_key_b64": test_hub_public_key_b64(),
+            "hub_tls_ca_pem_b64": "",
+            "hub_agent_ura": crate::core::ura::hub_ura("tenant-a")
+        })
+    }
+
+    fn join_identity_test_credentials(
+        user_id: Option<&str>,
+        join_receipt_hash: Option<&str>,
+    ) -> config::Credentials {
+        config::Credentials {
+            node_id: "dev-one".to_string(),
+            credential_token: if join_receipt_hash.is_some() {
+                String::new()
+            } else {
+                "credential-token".to_string()
+            },
+            hub_endpoint: "https://hub.acme.internal:50443".to_string(),
+            realm: "acme".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: user_id.map(|_| "silan".to_string()),
+            user_id: user_id.map(str::to_string),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: join_receipt_hash.map(str::to_string),
+        }
+    }
+
+    fn join_refresh_test_endpoints() -> crate::daemon::boot::DaemonEndpoints {
+        crate::daemon::boot::DaemonEndpoints {
+            control: PathBuf::from("/tmp/easynet-join-refresh-control.sock"),
+            invocation: PathBuf::from("/tmp/easynet-join-refresh-daemon.sock"),
+        }
+    }
+
+    fn join_refresh_test_discovery(
+        capability_flags: Vec<String>,
+    ) -> crate::daemon::control::discovery::ControlDiscovery {
+        crate::daemon::control::discovery::ControlDiscovery {
+            socket_path: Some(PathBuf::from("/tmp/easynet-join-refresh-control.sock")),
+            pipe_name: None,
+            invocation_endpoint: Some(PathBuf::from("/tmp/easynet-join-refresh-daemon.sock")),
+            daemon_identity: Some(crate::daemon::control::discovery::DaemonIdentity {
+                mode: "device".to_string(),
+                realm: "acme".to_string(),
+                node_id: Some("dev-one".to_string()),
+            }),
+            pid: std::process::id(),
+            daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+            supported_ipc_versions: crate::daemon::control::discovery::IpcVersionRange::single(
+                crate::daemon::control::discovery::IPC_VERSION_V1,
+            ),
+            capability_flags,
+            pages_port: Some(8787),
+        }
+    }
 
     #[test]
     fn token_format_accepts_alnum_dash_underscore() {
@@ -1396,23 +2216,203 @@ mod tests {
     }
 
     #[test]
+    fn join_identity_custody_ensures_bound_user_signer() {
+        let creds = join_identity_test_credentials(Some("usr_silan"), None);
+        let custody = RecordingJoinRuntimeIdentityCustody::default();
+
+        ensure_join_runtime_identity_custody(&creds, &custody)
+            .expect("bound join must ensure device and User custody");
+
+        assert_eq!(
+            custody.devices.borrow().as_slice(),
+            &[("acme".to_string(), "dev-one".to_string())]
+        );
+        assert_eq!(
+            custody.users.borrow().as_slice(),
+            &["easynet:///r/acme/user/usr_silan".to_string()]
+        );
+    }
+
+    #[test]
+    fn join_identity_custody_leaves_federation_native_device_only_unbound() {
+        let creds = join_identity_test_credentials(None, Some(&"a".repeat(64)));
+        let custody = RecordingJoinRuntimeIdentityCustody::default();
+
+        ensure_join_runtime_identity_custody(&creds, &custody)
+            .expect("device-only federation-native join must not mint a User signer");
+
+        assert_eq!(
+            custody.devices.borrow().as_slice(),
+            &[("acme".to_string(), "dev-one".to_string())]
+        );
+        assert!(
+            custody.users.borrow().is_empty(),
+            "unbound federation-native credentials must not synthesize User custody"
+        );
+    }
+
+    #[test]
+    fn join_identity_custody_fails_closed_when_bound_user_signer_fails() {
+        let creds = join_identity_test_credentials(Some("usr_silan"), None);
+        let custody =
+            RecordingJoinRuntimeIdentityCustody::failing_user("managed User signer unavailable");
+
+        let error = ensure_join_runtime_identity_custody(&creds, &custody)
+            .expect_err("bound join must fail when User signer custody fails");
+
+        assert!(
+            error
+                .to_string()
+                .contains("managed User signer unavailable"),
+            "error must preserve User signer custody failure: {error:#}"
+        );
+        assert_eq!(
+            custody.users.borrow().as_slice(),
+            &["easynet:///r/acme/user/usr_silan".to_string()]
+        );
+    }
+
+    #[test]
+    fn join_refresh_restarts_live_daemon_missing_paired_user_signer_flag() {
+        let creds = join_identity_test_credentials(Some("usr_silan"), None);
+        let daemon = crate::daemon::lifecycle::DaemonDiscoverySnapshot::from_parts(
+            Some(join_refresh_test_discovery(vec![
+                crate::daemon::control::discovery::flags::BOOT_STATUS.to_string(),
+            ])),
+            Some(std::process::id()),
+            true,
+            true,
+            true,
+            join_refresh_test_endpoints(),
+        );
+        let report = crate::daemon::lifecycle::RuntimeStatusReport::from_parts(None, daemon);
+
+        let decision = JoinRuntimeRefreshDecision::from_status(&creds, &report)
+            .expect("bound user credentials are valid");
+
+        assert_eq!(
+            decision,
+            JoinRuntimeRefreshDecision::StopForIdentityEpoch,
+            "join must restart a live pre-join daemon instead of letting autostart attach to Ready flags that cannot prove paired User signer custody"
+        );
+    }
+
+    #[test]
+    fn join_refresh_allows_clean_autostart_when_no_daemon_facts_exist() {
+        let creds = join_identity_test_credentials(Some("usr_silan"), None);
+        let daemon = crate::daemon::lifecycle::DaemonDiscoverySnapshot::from_parts(
+            None,
+            None,
+            false,
+            false,
+            false,
+            join_refresh_test_endpoints(),
+        );
+        let report = crate::daemon::lifecycle::RuntimeStatusReport::from_parts(None, daemon);
+
+        let decision = JoinRuntimeRefreshDecision::from_status(&creds, &report)
+            .expect("bound user credentials are valid");
+
+        assert_eq!(decision, JoinRuntimeRefreshDecision::NoDaemonFacts);
+    }
+
+    #[test]
+    fn existing_join_idempotency_requires_profile_account_owner() {
+        let existing = config::Credentials {
+            node_id: "dev-one".to_string(),
+            credential_token: "credential-token".to_string(),
+            hub_endpoint: "https://hub.acme.internal".to_string(),
+            realm: "acme".to_string(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: Some("silan".to_string()),
+            user_id: Some("usr_silan".to_string()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        };
+        let silan_profile = profile::ProfileEntry {
+            profile_name: "silan@acme".to_string(),
+            realm_alias: "acme".to_string(),
+            realm_id: None,
+            issuer: "https://hub.acme.internal".to_string(),
+            login_hint: Some("silan".to_string()),
+            subject: Some("usr_silan".to_string()),
+            credential_ref: None,
+            trust_anchor: None,
+            account_session: profile::ProfileAccountSessionState::Authenticated,
+            device_membership: "enrolled".to_string(),
+        };
+        let admin_profile = profile::ProfileEntry {
+            profile_name: "admin@acme".to_string(),
+            login_hint: Some("admin".to_string()),
+            subject: Some("usr_admin".to_string()),
+            ..silan_profile.clone()
+        };
+
+        assert!(existing_credentials_match_profile(
+            &existing,
+            &silan_profile
+        ));
+        assert!(!existing_credentials_match_profile(
+            &existing,
+            &admin_profile
+        ));
+    }
+
+    #[test]
+    fn login_onboarding_never_overwrites_a_different_device_membership() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let existing = join_identity_test_credentials(Some("usr_existing"), None);
+        config::save_credentials(&existing).expect("save existing device credentials");
+        let profile = profile::ProfileEntry {
+            profile_name: "next@acme".to_string(),
+            realm_alias: "acme".to_string(),
+            realm_id: None,
+            issuer: "https://hub.acme.internal".to_string(),
+            login_hint: Some("next".to_string()),
+            subject: Some("usr_next".to_string()),
+            credential_ref: None,
+            trust_anchor: None,
+            account_session: profile::ProfileAccountSessionState::Authenticated,
+            device_membership: "none".to_string(),
+        };
+
+        let outcome = reconcile_current_profile_membership(
+            profile,
+            ProfileJoinOptions::quickstart_login(JoinBoot::No),
+        )
+        .expect("mismatched membership is a typed non-mutating outcome");
+
+        let CurrentProfileMembership::BlockedByDifferentDevice(blocking) = outcome else {
+            panic!("login onboarding must not replace another membership without consent");
+        };
+        assert_eq!(blocking.node_id, existing.node_id);
+        assert_eq!(
+            config::load_credentials().unwrap().user_id,
+            existing.user_id,
+            "the existing device membership remains authoritative"
+        );
+    }
+
+    #[test]
     fn hub_ura_target_derives_endpoint_for_public_realm() {
-        let target =
-            HubUraTarget::parse("easynet:///r/easynet.run/hub", None, None).expect("public realm");
+        let target = HubUraTarget::parse("easynet:///r/easynet.run/authority", None, None)
+            .expect("public realm");
         assert_eq!(target.realm, "easynet.run");
         assert_eq!(target.hub_endpoint, "https://easynet.run:50443");
     }
 
     #[test]
     fn hub_ura_target_requires_ca_for_private_realm() {
-        let err = HubUraTarget::parse("easynet:///r/localhost/hub", None, None)
+        let err = HubUraTarget::parse("easynet:///r/localhost/authority", None, None)
             .expect_err("localhost requires CA");
         assert!(err.to_string().contains("--hub-ca"));
 
         let target = HubUraTarget::parse(
-            "easynet:///r/localhost/hub",
+            "easynet:///r/localhost/authority",
             Some(55443),
-            Some(Path::new("/tmp/hub-ca.pem")),
+            Some(Path::new("/tmp/authority-ca.pem")),
         )
         .expect("private realm with CA");
         assert_eq!(target.hub_endpoint, "https://127.0.0.1:55443");
@@ -1429,32 +2429,69 @@ mod tests {
     }
 
     #[test]
-    fn validate_pairing_response_rejects_empty_node_id() {
-        let envelope = easynet_axon::DeviceJoinCredentialEnvelope {
-            node_id: String::new(),
+    fn pairing_transport_error_message_explains_local_https_plain_http_mismatch() {
+        let error =
+            "tls connection init failed: received corrupt message of type InvalidContentType";
+        let message = pairing_transport_error_message("https://localhost:8080", &error);
+
+        assert!(message.contains("cannot reach Hub at https://localhost:8080"));
+        assert!(message.contains("appears to be speaking plain HTTP"));
+        assert!(message.contains("--hub http://localhost:8080"));
+    }
+
+    #[test]
+    fn pairing_transport_error_message_keeps_generic_network_hint_for_other_failures() {
+        let message =
+            pairing_transport_error_message("https://hub.acme.internal", &"connection refused");
+
+        assert!(message.contains("cannot reach Hub at https://hub.acme.internal"));
+        assert!(message.contains("Check your network connection and Hub URL"));
+        assert!(!message.contains("plain HTTP"));
+    }
+
+    fn pairing_envelope_fixture() -> PairingCredentialEnvelope {
+        PairingCredentialEnvelope {
+            node_id: "node".into(),
+            display_name: "Node".into(),
+            state: "paired".into(),
+            trust_level: "trusted".into(),
+            device_group: "default".into(),
+            os: "macos".into(),
+            arch: "arm64".into(),
+            auth_binding: "user".into(),
+            credential_provisioned: true,
+            public_key_registered: true,
+            device_public_key: "device-public-key".into(),
+            device_public_key_fingerprint: "device-public-key-fingerprint".into(),
             credential_token: "cred".into(),
             hub_endpoint: "axon://easynet.run:50051".into(),
             realm: "tenant".into(),
+            username: Some("alice".into()),
+            user_id: Some("user-alice".into()),
             deploy_signature: "sig".into(),
-            ..Default::default()
-        };
-        let err = validate_pairing_response(envelope).expect_err("missing node_id must fail");
+            federated_peers: Vec::new(),
+            ura: "easynet:///r/tenant/device/node".into(),
+            last_seen_unix_ms: 1,
+        }
+    }
+
+    fn expected_pairing_device_public_key() -> &'static str {
+        "device-public-key"
+    }
+
+    #[test]
+    fn validate_pairing_response_rejects_empty_node_id() {
+        let mut envelope = pairing_envelope_fixture();
+        envelope.node_id.clear();
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("missing node_id must fail");
         assert!(err.to_string().contains("missing node_id"));
     }
 
     #[test]
-    fn credentials_from_join_envelope_projects_axon_wire_shape() {
-        let envelope = easynet_axon::DeviceJoinCredentialEnvelope {
-            node_id: "node".into(),
-            credential_token: "cred".into(),
-            hub_endpoint: "axon://easynet.run:50051".into(),
-            realm: "tenant".into(),
-            deploy_signature: "sig".into(),
-            username: Some("alice".into()),
-            user_id: Some("user-alice".into()),
-            ..Default::default()
-        };
-        let creds = credentials_from_join_envelope(envelope);
+    fn credentials_from_pairing_contract_projects_product_credentials() {
+        let envelope = pairing_envelope_fixture();
+        let creds = credentials_from_pairing_contract(envelope);
         assert_eq!(creds.node_id, "node");
         assert_eq!(creds.realm, "tenant");
         assert_eq!(creds.username.as_deref(), Some("alice"));
@@ -1463,46 +2500,232 @@ mod tests {
 
     #[test]
     fn validate_pairing_response_rejects_missing_username() {
-        let envelope = easynet_axon::DeviceJoinCredentialEnvelope {
-            node_id: "node".into(),
-            credential_token: "cred".into(),
-            hub_endpoint: "axon://easynet.run:50051".into(),
-            realm: "tenant".into(),
-            deploy_signature: "sig".into(),
-            username: None,
-            user_id: Some("user-alice".into()),
-            ..Default::default()
-        };
-        let err = validate_pairing_response(envelope).expect_err("missing username must fail");
+        let mut envelope = pairing_envelope_fixture();
+        envelope.username = None;
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("missing username must fail");
         assert!(err.to_string().contains("missing username"));
     }
 
     #[test]
     fn validate_pairing_response_rejects_missing_user_id() {
-        let envelope = easynet_axon::DeviceJoinCredentialEnvelope {
-            node_id: "node".into(),
-            credential_token: "cred".into(),
-            hub_endpoint: "axon://easynet.run:50051".into(),
-            realm: "tenant".into(),
-            deploy_signature: "sig".into(),
-            username: Some("alice".into()),
-            user_id: None,
-            ..Default::default()
-        };
-        let err = validate_pairing_response(envelope).expect_err("missing user_id must fail");
+        let mut envelope = pairing_envelope_fixture();
+        envelope.user_id = None;
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("missing user_id must fail");
         assert!(err.to_string().contains("missing user_id"));
     }
 
     #[test]
+    fn validate_pairing_response_rejects_all_zero_user_before_credentials_projection() {
+        let mut envelope = pairing_envelope_fixture();
+        envelope.user_id = Some("00000000-0000-0000-0000-000000000000".into());
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("all-zero user_id must fail at pairing");
+        assert!(err.to_string().contains("all-zero user_id"));
+    }
+
+    #[test]
+    fn validate_pairing_response_requires_provisioned_credential_fact() {
+        let mut envelope = pairing_envelope_fixture();
+        envelope.credential_provisioned = false;
+
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("unprovisioned pairing credentials must not be persisted");
+
+        assert!(err.to_string().contains("credential_provisioned"));
+    }
+
+    #[test]
+    fn validate_pairing_response_requires_registered_public_key_fact() {
+        let mut envelope = pairing_envelope_fixture();
+        envelope.public_key_registered = false;
+
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("unregistered pairing public key must not be persisted");
+
+        assert!(err.to_string().contains("public_key_registered"));
+    }
+
+    #[test]
+    fn validate_pairing_response_rejects_mismatched_device_public_key() {
+        let mut envelope = pairing_envelope_fixture();
+        envelope.device_public_key = "other-device-public-key".into();
+
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("Hub device public key fact must bind to the local runtime signer");
+
+        assert!(err.to_string().contains("device_public_key"));
+        assert!(err.to_string().contains("local runtime signer"));
+    }
+
+    #[test]
+    fn validate_pairing_response_rejects_noncanonical_device_ura_fact() {
+        let mut envelope = pairing_envelope_fixture();
+        envelope.ura = "easynet:///r/tenant/device/other".into();
+
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("Hub device URA fact must bind to the joined device identity");
+
+        assert!(err.to_string().contains("canonical joined device URA"));
+    }
+
+    #[test]
+    fn validate_pairing_response_rejects_empty_deploy_signature() {
+        let mut envelope = pairing_envelope_fixture();
+        envelope.deploy_signature.clear();
+
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("missing deploy signature must fail before credentials projection");
+
+        assert!(err.to_string().contains("deploy_signature"));
+    }
+
+    #[test]
+    fn validate_pairing_response_rejects_empty_federated_peer_endpoint() {
+        let mut envelope = pairing_envelope_fixture();
+        envelope
+            .federated_peers
+            .push(crate::cli::commands::pairing_contract::FederatedPeerEntry {
+                realm: "peer".into(),
+                peer_hub_url: " ".into(),
+                peer_hub_pubkey: None,
+            });
+
+        let err = validate_pairing_response(envelope, expected_pairing_device_public_key())
+            .expect_err("federated peer endpoint facts must fail closed");
+
+        assert!(err.to_string().contains("federated_peers[].peer_hub_url"));
+    }
+
+    #[test]
+    fn decode_pairing_credential_response_rejects_read_model_state_before_serde() {
+        let mut body = serde_json::to_value(pairing_envelope_fixture()).expect("fixture JSON");
+        body["state_code"] = serde_json::json!("J200");
+        let raw = serde_json::to_string(&body).expect("raw JSON");
+
+        let err = decode_pairing_credential_response(&raw)
+            .expect_err("device read-model fields must fail at pairing contract ingress");
+        let message = err.to_string();
+
+        assert!(
+            message.contains(
+                "Hub pairing credential contract violation: response leaked device read-model field `state_code`"
+            ),
+            "error should identify product DTO drift before serde decode: {message}"
+        );
+        assert!(
+            !message.contains("unknown field"),
+            "contract drift should not surface as a generic serde unknown-field error: {message}"
+        );
+    }
+
+    #[test]
+    fn decode_pairing_credential_response_rejects_null_federated_peers_before_serde() {
+        let mut body = serde_json::to_value(pairing_envelope_fixture()).expect("fixture JSON");
+        body["federated_peers"] = serde_json::Value::Null;
+        let raw = serde_json::to_string(&body).expect("raw JSON");
+
+        let err = decode_pairing_credential_response(&raw)
+            .expect_err("nullable peer manifest must fail at pairing contract ingress");
+        let message = err.to_string();
+
+        assert!(
+            message.contains(
+                "Hub pairing credential contract violation: federated_peers must be a JSON array"
+            ),
+            "error should identify nullable peer manifest contract drift: {message}"
+        );
+        assert!(
+            !message.contains("expected a sequence"),
+            "contract drift should not surface as a generic serde sequence error: {message}"
+        );
+    }
+
+    #[test]
+    fn decode_pairing_credential_response_rejects_missing_federated_peers_before_serde() {
+        let mut body = serde_json::to_value(pairing_envelope_fixture()).expect("fixture JSON");
+        body.as_object_mut()
+            .expect("object")
+            .remove("federated_peers");
+        let raw = serde_json::to_string(&body).expect("raw JSON");
+
+        let err = decode_pairing_credential_response(&raw)
+            .expect_err("missing peer manifest must fail at pairing contract ingress");
+        let message = err.to_string();
+
+        assert!(
+            message.contains(
+                "Hub pairing credential contract violation: response missing federated_peers"
+            ),
+            "error should identify omitted peer manifest contract drift: {message}"
+        );
+    }
+
+    #[test]
     fn pick_validate_base_prefers_hub_api_when_set() {
-        let chosen = pick_validate_base("https://easynet.run", Some("http://localhost:18080"));
-        assert_eq!(chosen, "http://localhost:18080");
+        let chosen = pick_validate_base_with_session(
+            "https://easynet.run",
+            Some("http://localhost:18080"),
+            None,
+        );
+        assert_eq!(chosen.base, "http://localhost:18080");
+        assert!(chosen.explicit_api_override);
+    }
+
+    #[test]
+    fn pick_validate_base_prefers_hub_api_over_session_hub() {
+        let chosen = pick_validate_base_with_session(
+            "https://easynet.run",
+            Some("http://localhost:18080/"),
+            Some("http://127.0.0.1:8080"),
+        );
+        assert_eq!(
+            chosen,
+            PairingValidationBase {
+                base: "http://localhost:18080".into(),
+                explicit_api_override: true,
+            }
+        );
+    }
+
+    #[test]
+    fn pick_validate_base_prefers_explicit_hub_over_session_hub() {
+        let chosen = pick_validate_base_with_session(
+            "http://hub.internal:8080/",
+            None,
+            Some("http://127.0.0.1:8080"),
+        );
+        assert_eq!(
+            chosen,
+            PairingValidationBase {
+                base: "http://hub.internal:8080".into(),
+                explicit_api_override: false,
+            }
+        );
+    }
+
+    #[test]
+    fn pick_validate_base_uses_session_hub_for_default_token_join() {
+        let chosen = pick_validate_base_with_session(
+            "https://easynet.run",
+            None,
+            Some("http://127.0.0.1:8080/"),
+        );
+        assert_eq!(
+            chosen,
+            PairingValidationBase {
+                base: "http://127.0.0.1:8080".into(),
+                explicit_api_override: false,
+            }
+        );
     }
 
     #[test]
     fn pick_validate_base_falls_back_to_hub_when_api_unset() {
-        let chosen = pick_validate_base("https://easynet.run", None);
-        assert_eq!(chosen, "https://easynet.run");
+        let chosen = pick_validate_base_with_session("https://easynet.run", None, None);
+        assert_eq!(chosen.base, "https://easynet.run");
+        assert!(!chosen.explicit_api_override);
     }
 
     #[test]
@@ -1510,7 +2733,7 @@ mod tests {
         let creds = config::Credentials {
             node_id: "node".into(),
             credential_token: "cred".into(),
-            hub_endpoint: "https://hub:50443".into(),
+            hub_endpoint: "https://authority:50443".into(),
             realm: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
@@ -1529,7 +2752,7 @@ mod tests {
         let creds = config::Credentials {
             node_id: "node".into(),
             credential_token: "cred".into(),
-            hub_endpoint: "https://hub:50443".into(),
+            hub_endpoint: "https://authority:50443".into(),
             realm: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
@@ -1567,7 +2790,7 @@ mod tests {
         let mut creds = config::Credentials {
             node_id: "node".into(),
             credential_token: "cred".into(),
-            hub_endpoint: "https://hub:50443".into(),
+            hub_endpoint: "https://authority:50443".into(),
             realm: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
@@ -1589,7 +2812,7 @@ mod tests {
         let mut creds = config::Credentials {
             node_id: "node".into(),
             credential_token: "cred".into(),
-            hub_endpoint: "https://hub:50443".into(),
+            hub_endpoint: "https://authority:50443".into(),
             realm: "tenant".into(),
             deploy_signature: "sig".into(),
             hub_api_base: None,
@@ -1601,9 +2824,9 @@ mod tests {
         };
         assert!(!rewrite_local_docker_session_endpoint(
             &mut creds,
-            "http://hub:8080"
+            "http://authority:8080"
         ));
-        assert_eq!(creds.hub_endpoint, "https://hub:50443");
+        assert_eq!(creds.hub_endpoint, "https://authority:50443");
     }
 
     #[test]
@@ -1629,58 +2852,35 @@ mod tests {
     }
 
     #[test]
-    fn derive_device_public_key_hex_matches_runtime_derivation() {
-        let realm = "tenant-a";
-        let node_id = "en-test-node";
-        let got = derive_device_public_key_hex(realm, node_id).expect("derive hex");
-        let want_b64 =
-            crate::daemon::federation::publish::derive_owner_public_key_b64(realm, node_id);
-        let want = hex::encode(
-            base64::engine::general_purpose::STANDARD
-                .decode(want_b64.as_bytes())
-                .expect("decode owner b64"),
-        );
-        assert_eq!(got, want);
-    }
-
-    #[test]
-    fn derive_device_seed_hex_matches_pairing_public_key() {
-        let realm = "tenant-a";
-        let node_id = "en-test-node";
-        let seed_hex = derive_device_seed_hex(realm, node_id).expect("derive seed");
-        let seed_bytes = hex::decode(seed_hex).expect("decode seed hex");
-        let seed: [u8; 32] = seed_bytes.as_slice().try_into().expect("seed length");
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
-
-        assert_eq!(
-            hex::encode(signing_key.verifying_key().to_bytes()),
-            derive_device_public_key_hex(realm, node_id).expect("derive public key")
-        );
-    }
-
-    #[test]
     fn pairing_preflight_accepts_current_realm_schema() {
-        let preflight: PairingPreflight = serde_json::from_value(serde_json::json!({
-            "realm": "tenant-a",
-            "node_id": "en-test-node",
-            "hub_public_key_b64": "",
-            "hub_tls_ca_pem_b64": "",
-            "hub_agent_ura": crate::core::ura::hub_ura("tenant-a")
-        }))
-        .expect("current preflight schema");
+        let mut body = canonical_pairing_preflight_json();
+        body["realm"] = serde_json::json!(" tenant-a ");
+        body["node_id"] = serde_json::json!(" en-test-node ");
+        body["hub_tls_ca_pem_b64"] = serde_json::json!("  ");
+        body["hub_agent_ura"] =
+            serde_json::json!(format!(" {} ", crate::core::ura::hub_ura("tenant-a")));
+
+        let preflight: PairingPreflight =
+            serde_json::from_value(body).expect("current preflight schema");
+        let preflight = validate_pairing_preflight(preflight).expect("valid preflight facts");
 
         assert_eq!(preflight.realm, "tenant-a");
         assert_eq!(preflight.node_id, "en-test-node");
+        assert_eq!(preflight.hub_public_key_b64, test_hub_public_key_b64());
+        assert_eq!(preflight.hub_tls_ca_pem_b64, None);
+        assert_eq!(
+            preflight.hub_agent_ura,
+            crate::core::ura::hub_ura("tenant-a")
+        );
     }
 
     #[test]
     fn pairing_preflight_rejects_retired_tenant_id_alias() {
-        let err = serde_json::from_value::<PairingPreflight>(serde_json::json!({
-            "realm": "tenant-a",
-            "tenant_id": "tenant-a",
-            "node_id": "en-test-node"
-        }))
-        .expect_err("retired tenant_id must not be accepted");
+        let mut body = canonical_pairing_preflight_json();
+        body["tenant_id"] = serde_json::json!("tenant-a");
+
+        let err = serde_json::from_value::<PairingPreflight>(body)
+            .expect_err("retired tenant_id must not be accepted");
 
         assert!(
             err.to_string().contains("tenant_id"),
@@ -1689,17 +2889,205 @@ mod tests {
     }
 
     #[test]
+    fn decode_pairing_preflight_response_rejects_read_model_state_before_serde() {
+        let mut body = canonical_pairing_preflight_json();
+        body["state_code"] = serde_json::json!("J100");
+        let raw = serde_json::to_string(&body).expect("raw JSON");
+
+        let err = decode_pairing_preflight_response(&raw)
+            .expect_err("device read-model fields must fail at preflight contract ingress");
+        let message = err.to_string();
+
+        assert!(
+            message.contains(
+                "Hub pairing preflight contract violation: response leaked device read-model field `state_code`"
+            ),
+            "error should identify product DTO drift before serde decode: {message}"
+        );
+        assert!(
+            !message.contains("unknown field"),
+            "contract drift should not surface as a generic serde unknown-field error: {message}"
+        );
+    }
+
+    #[test]
+    fn decode_pairing_preflight_response_rejects_non_object_before_serde() {
+        let err = decode_pairing_preflight_response("[]")
+            .expect_err("preflight response must be an object");
+        let message = err.to_string();
+
+        assert!(
+            message.contains(
+                "Hub pairing preflight contract violation: response must be a JSON object"
+            ),
+            "error should identify malformed preflight envelope: {message}"
+        );
+    }
+
+    #[test]
+    fn decode_pairing_preflight_response_reports_invalid_json() {
+        let err = decode_pairing_preflight_response("{not-json")
+            .expect_err("invalid JSON should fail at the JSON boundary");
+        let message = err.to_string();
+
+        assert!(
+            message.contains("Hub returned an unreadable pairing preflight response"),
+            "error should retain operator-facing preflight context: {message}"
+        );
+    }
+
+    #[test]
+    fn pairing_preflight_rejects_missing_hub_public_key() {
+        let err = serde_json::from_value::<PairingPreflight>(serde_json::json!({
+            "realm": "tenant-a",
+            "node_id": "en-test-node",
+            "hub_agent_ura": crate::core::ura::hub_ura("tenant-a")
+        }))
+        .expect_err("hub public key must not be defaulted");
+
+        assert!(
+            err.to_string().contains("hub_public_key_b64"),
+            "error should name the missing authority fact: {err}"
+        );
+    }
+
+    #[test]
+    fn pairing_preflight_rejects_short_hub_public_key() {
+        let preflight = PairingPreflight {
+            realm: "tenant-a".into(),
+            node_id: "en-test-node".into(),
+            hub_public_key_b64: base64::engine::general_purpose::STANDARD.encode([0x11u8; 31]),
+            hub_tls_ca_pem_b64: None,
+            hub_agent_ura: crate::core::ura::hub_ura("tenant-a"),
+        };
+        let err = validate_pairing_preflight(preflight).expect_err("short hub key must fail");
+
+        assert!(
+            err.to_string().contains("must decode to 32 bytes"),
+            "error should name invalid Hub key length: {err:#}"
+        );
+    }
+
+    #[test]
+    fn pairing_preflight_rejects_mismatched_hub_agent_ura() {
+        let preflight = PairingPreflight {
+            realm: "tenant-a".into(),
+            node_id: "en-test-node".into(),
+            hub_public_key_b64: test_hub_public_key_b64(),
+            hub_tls_ca_pem_b64: None,
+            hub_agent_ura: crate::core::ura::hub_ura("tenant-b"),
+        };
+        let err = validate_pairing_preflight(preflight).expect_err("wrong Hub URA must fail");
+
+        assert!(
+            err.to_string().contains("canonical Hub authority URA"),
+            "error should explain canonical Hub URA mismatch: {err:#}"
+        );
+    }
+
+    #[test]
     fn build_validate_pairing_payload_carries_reserved_identity() {
         let preflight = PairingPreflight {
             realm: "tenant-a".into(),
             node_id: "en-test-node".into(),
-            hub_public_key_b64: String::new(),
-            hub_tls_ca_pem_b64: String::new(),
-            _hub_agent_ura: String::new(),
+            hub_public_key_b64: test_hub_public_key_b64(),
+            hub_tls_ca_pem_b64: None,
+            hub_agent_ura: crate::core::ura::hub_ura("tenant-a"),
         };
-        let payload = build_validate_pairing_payload(&preflight).expect("build payload");
+        let payload = build_validate_pairing_payload(&preflight, "ab".repeat(32));
         assert_eq!(payload.node_id, "en-test-node");
         assert_eq!(payload.device_public_key.len(), 64);
+    }
+
+    #[test]
+    fn join_principal_enrollment_requires_complete_product_neutral_proof() {
+        let err = join_principal_enrollment_from_args(
+            Some("easynet:///r/tenant-a/user/alice"),
+            None,
+            Some("active_key"),
+            None,
+        )
+        .expect_err("partial proof must fail");
+        assert!(err.to_string().contains("must be supplied together"));
+    }
+
+    #[test]
+    fn join_principal_enrollment_rejects_all_zero_user() {
+        let error = join_principal_enrollment_from_args(
+            Some("easynet:///r/tenant/user/00000000-0000-0000-0000-000000000000"),
+            Some("enrollment-1"),
+            None,
+            None,
+        )
+        .expect_err("all-zero User enrollment must reject");
+
+        assert!(error.to_string().contains("all-zero principal"));
+    }
+
+    #[test]
+    fn join_principal_enrollment_lowers_without_product_account_fields() {
+        let proof = join_principal_enrollment_from_args(
+            Some("easynet:///r/tenant-a/user/alice"),
+            None,
+            Some("active_key"),
+            Some("binding-1"),
+        )
+        .expect("proof")
+        .expect("present");
+        let value = serde_json::to_value(&proof).expect("json");
+
+        assert_eq!(value["principal_ura"], "easynet:///r/tenant-a/user/alice");
+        assert_eq!(value["proof"]["kind"], "active_key");
+        assert_eq!(value["proof"]["reference"], "binding-1");
+        assert!(value.get("username").is_none());
+        assert!(value.get("user_id").is_none());
+    }
+
+    #[test]
+    fn join_principal_enrollment_id_lowers_to_enrollment_proof() {
+        let proof = join_principal_enrollment_from_args(
+            Some(" easynet:///r/tenant-a/user/bob "),
+            Some(" enrollment_1 "),
+            None,
+            None,
+        )
+        .expect("proof")
+        .expect("present");
+        let value = serde_json::to_value(&proof).expect("json");
+
+        assert_eq!(value["principal_ura"], "easynet:///r/tenant-a/user/bob");
+        assert_eq!(value["proof"]["kind"], "enrollment");
+        assert_eq!(value["proof"]["reference"], "enrollment_1");
+        assert!(value.get("username").is_none());
+        assert!(value.get("user_id").is_none());
+        assert!(value.get("account_id").is_none());
+    }
+
+    #[test]
+    fn hub_ura_join_credentials_can_derive_local_user_id_from_principal_ura() {
+        assert_eq!(
+            user_id_from_principal_ura("easynet:///r/tenant-a/user/alice").as_deref(),
+            Some("alice")
+        );
+        assert_eq!(
+            user_id_from_principal_ura("easynet:///r/tenant-a/authority"),
+            None
+        );
+    }
+
+    #[test]
+    fn join_principal_enrollment_id_rejects_generic_proof_mix() {
+        let err = join_principal_enrollment_from_args(
+            Some("easynet:///r/tenant-a/user/bob"),
+            Some("enrollment_1"),
+            Some("enrollment"),
+            None,
+        )
+        .expect_err("mixed shorthand and generic proof must fail");
+
+        assert!(err
+            .to_string()
+            .contains("cannot be combined with --principal-proof-kind"));
     }
 
     #[test]
@@ -1722,11 +3110,11 @@ mod tests {
         let preflight = PairingPreflight {
             realm: "tenant-a".into(),
             node_id: "en-test-node".into(),
-            hub_public_key_b64: String::new(),
-            hub_tls_ca_pem_b64: String::new(),
-            _hub_agent_ura: String::new(),
+            hub_public_key_b64: test_hub_public_key_b64(),
+            hub_tls_ca_pem_b64: None,
+            hub_agent_ura: crate::core::ura::hub_ura("tenant-a"),
         };
-        let err = validate_pairing_token("token_1234", &base, &preflight)
+        let err = validate_pairing_token("token_1234", &base, &preflight, &"ab".repeat(32))
             .expect_err("transport failure should error");
         assert!(err.to_string().contains("cannot reach Hub"));
     }

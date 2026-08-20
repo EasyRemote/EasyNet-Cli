@@ -117,7 +117,11 @@ const REDACTED_HEADER_NAMES: &[&str] = &[
 const ALLOWED_SCHEMES: &[&str] = &["http", "https"];
 
 pub fn register(reg: &mut AxonAbilityCatalog) {
-    reg.register_rpc_with_owner("http.request", OwnerKind::Device, Arc::new(handler));
+    reg.register_rpc_with_owner(
+        "http.request",
+        OwnerKind::locomotion_system(),
+        Arc::new(handler),
+    );
 }
 
 fn handler(args: Value) -> Result<Value> {

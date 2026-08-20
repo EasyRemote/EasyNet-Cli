@@ -2,9 +2,8 @@
 // =======================================
 //
 // File: src/daemon/federation/mod.rs
-// Description: Daemon-owned federation runtime adapters. Axon owns the
-//              cross-language protocol contracts; this module owns how
-//              easynet-daemon tracks, reads, dials, and supervises peer hubs.
+// Description: Daemon-owned federation policy, wire vocabulary, and runtime
+//              adapters carried through Axon's generic Invocation transport.
 //
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
@@ -14,10 +13,11 @@ pub mod client;
 #[cfg(feature = "axon-pb")]
 pub mod directory;
 pub mod directory_reader;
-pub mod gateway;
-pub mod gateway_api;
-pub mod init;
+pub(crate) mod hosted_agent_inventory_hydration;
+pub(crate) mod hosted_agent_publication;
 pub mod peers;
-pub mod publish;
 pub mod read_model;
+pub(crate) mod receipt_contract;
 pub mod resolver;
+pub(crate) mod resolver_contract;
+pub(crate) mod wire_contract;

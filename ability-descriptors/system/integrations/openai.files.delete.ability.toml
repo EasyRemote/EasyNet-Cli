@@ -1,0 +1,31 @@
+schema_version = "3"
+name = "openai.files.delete"
+descriptor_version = "1.0.0"
+description = "OpenAI-compatible file deletion served by the device daemon. Projects a deterministic logical delete acknowledgement for content-addressed files whose bytes may be shared by refs."
+exposure = "task"
+dedicated_surface = "none"
+subject_contract_kind = "authenticated-user"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "manage"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["file_id"]
+
+[input_schema.properties.auth_token]
+type = "string"
+description = "Bearer token bound to a `<user>.api_key` entry on this host."
+
+[input_schema.properties.file_id]
+type = "string"
+description = "File id returned by openai.files.upload."

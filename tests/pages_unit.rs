@@ -26,11 +26,24 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+#[path = "key_service_fixture.rs"]
+mod key_service_fixture;
+#[path = "support/runtime_fixture.rs"]
+mod runtime_fixture;
+
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use easynet_axon::invocation::LocalRuntime;
+use axon_sdk::invocation::axiom::authority_proof_expected_hash;
+use axon_sdk::invocation::{
+    sha256, AgentIdentity, AuthorityBinding, AuthorityEvidence, AuthorityOrBootstrap,
+    AuthorityRelation, AxonError, CalleeSignature, CanonicalReceiptProvider,
+    DescriptorBoundEnvelope, InvocationAuthorityProof, LocalRuntime, ReceiptSigningAuthority,
+    UraProfile, VerifiedAdmissionPolicy,
+};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde_json::{json, Value};
 
 use easynet_cli::core::ura;
@@ -39,11 +52,12 @@ use easynet_cli::daemon::ability::builtins::resources::pages::list_get_unpublish
     handle_get, handle_list, handle_unpublish, handle_unpublish_with_registry,
 };
 use easynet_cli::daemon::ability::builtins::resources::pages::publish::handle_publish;
-use easynet_cli::daemon::ability::builtins::resources::pages::state::PUBLISHED_PROJECTS;
+use easynet_cli::daemon::ability::builtins::resources::pages::state::{
+    DEFAULT_FILE_SIZE_CAP, PUBLISHED_PROJECTS,
+};
 use easynet_cli::daemon::ability::builtins::resources::pages::{self, PagesConfig};
-use easynet_cli::daemon::ability::dispatch::AxonAbilityCatalog;
+use easynet_cli::daemon::ability::dispatch::{AbilityAuthorityContext, AxonAbilityCatalog};
 use easynet_cli::daemon::invocation::routing::target::{CallMode, InvocationTarget, TargetScope};
-use std::sync::Arc;
 
 /// Per-test fixture: makes a temp folder with a unique project
 /// id so concurrent test runs do not collide in the global
@@ -98,9 +112,149 @@ struct Fixture {
     registry: Arc<AxonAbilityCatalog>,
 }
 
+fn registry_for_pages_owner(
+    runtime: Arc<LocalRuntime>,
+    realm: &str,
+    _user: &str,
+) -> AxonAbilityCatalog {
+    let authority_context = AbilityAuthorityContext::for_combined_authority_roots(ura::device_ura(
+        realm,
+        "pages-test-device",
+    ))
+    .expect("Pages test Device authority context");
+    AxonAbilityCatalog::new_with_runtime_and_authority_context(runtime, authority_context)
+}
+
+fn configured_local_runtime(realm: &str, user: &str) -> Arc<LocalRuntime> {
+    let pages_service = ura::service_ura(realm, user, "pages");
+    easynet_cli::daemon::axon_bridge::runtime_factory::build_local_runtime_with_receipt_provider(
+        runtime_fixture::rejecting_key_resolver(),
+        Arc::new(PagesCanonicalReceiptProvider::for_owner(pages_service)),
+    )
+}
+
+struct PagesCanonicalReceiptProvider {
+    allowed_owner: String,
+    seen_signers: Mutex<HashMap<String, VerifyingKey>>,
+}
+
+impl PagesCanonicalReceiptProvider {
+    fn for_owner(owner: String) -> Self {
+        Self {
+            allowed_owner: owner,
+            seen_signers: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl CanonicalReceiptProvider for PagesCanonicalReceiptProvider {
+    fn verify_admission_policy(
+        &self,
+        envelope: &DescriptorBoundEnvelope,
+    ) -> Result<VerifiedAdmissionPolicy, AxonError> {
+        let binding = AuthorityOrBootstrap::Binding(AuthorityBinding {
+            authority: AgentIdentity::new(
+                envelope.envelope().caller.ura.clone(),
+                UraProfile::StrictV2,
+            ),
+            relation: AuthorityRelation::Self_,
+            evidence: AuthorityEvidence::Identity,
+        });
+        let mut proof = InvocationAuthorityProof::new(
+            "pages-test-verified-admission",
+            Some(binding.clone()),
+            Vec::new(),
+            [0u8; 32],
+            Some(envelope.envelope().callee.clone()),
+            None,
+            "easynet-cli.pages-test.canonical_receipt_provider.admission.v1",
+        );
+        proof.proof_hash = authority_proof_expected_hash(&proof);
+        VerifiedAdmissionPolicy::new(envelope, binding, proof)
+    }
+
+    async fn resolve_signing_authority(
+        &self,
+        callee: &AgentIdentity,
+    ) -> Result<Arc<dyn ReceiptSigningAuthority>, AxonError> {
+        if callee.ura != self.allowed_owner {
+            return Err(AxonError::permission_denied("pages_test_callee_not_owned"));
+        }
+        let authority = PagesReceiptSigningAuthority::self_signed(callee.clone());
+        self.seen_signers
+            .lock()
+            .map_err(|_| AxonError::internal("pages_test_receipt_authority_lock_poisoned"))?
+            .insert(callee.ura.clone(), authority.verifying_key());
+        Ok(Arc::new(authority))
+    }
+
+    fn resolve_signer_key(&self, signer_ura: &str) -> Result<Option<VerifyingKey>, AxonError> {
+        Ok(self
+            .seen_signers
+            .lock()
+            .map_err(|_| AxonError::internal("pages_test_receipt_authority_lock_poisoned"))?
+            .get(signer_ura)
+            .copied())
+    }
+}
+
+struct PagesReceiptSigningAuthority {
+    callee_identity: AgentIdentity,
+    signing_key: SigningKey,
+}
+
+impl PagesReceiptSigningAuthority {
+    fn self_signed(callee_identity: AgentIdentity) -> Self {
+        Self {
+            signing_key: SigningKey::from_bytes(&sha256(callee_identity.ura.as_bytes())),
+            callee_identity,
+        }
+    }
+
+    fn verifying_key(&self) -> VerifyingKey {
+        self.signing_key.verifying_key()
+    }
+}
+
+#[async_trait::async_trait]
+impl ReceiptSigningAuthority for PagesReceiptSigningAuthority {
+    fn callee_identity(&self) -> &AgentIdentity {
+        &self.callee_identity
+    }
+
+    fn signer_identity(&self) -> &AgentIdentity {
+        &self.callee_identity
+    }
+
+    fn host_attestation(&self) -> &[u8] {
+        &[]
+    }
+
+    fn verifying_key(&self) -> VerifyingKey {
+        self.verifying_key()
+    }
+
+    async fn sign_and_verify(
+        &self,
+        canonical_receipt: &[u8],
+    ) -> Result<CalleeSignature, AxonError> {
+        let signature: Signature = self.signing_key.sign(canonical_receipt);
+        self.verifying_key()
+            .verify(canonical_receipt, &signature)
+            .map_err(|_| AxonError::internal("pages_test_receipt_signature_self_verify_failed"))?;
+        Ok(CalleeSignature {
+            algorithm: "ed25519".to_string(),
+            signature: signature.to_bytes().to_vec(),
+            key_id_hint: "pages-integration-test-receipt-key".to_string(),
+        })
+    }
+}
+
 impl Fixture {
     fn new(name_seed: &str) -> Self {
         let home = TestHomeGuard::new();
+        key_service_fixture::install();
         // unique project_id per call to dodge the duplicate-publish
         // rejection (U8 explicitly tests dup, others rely on
         // uniqueness for isolation)
@@ -121,14 +275,22 @@ impl Fixture {
         .expect("write hello");
         fs::write(folder.join("style.css"), "h1 { color: red; }").expect("write css");
 
+        let user = format!("alice-{pid}");
+        let realm = "easynet.run".to_string();
+        let registry = Arc::new(registry_for_pages_owner(
+            configured_local_runtime(&realm, &user),
+            &realm,
+            &user,
+        ));
+
         Self {
             _home: home,
-            user: format!("alice-{pid}"),
+            user,
             project_id: pid,
             folder,
-            realm: "easynet.run".to_string(),
+            realm,
             listener_port: 8787,
-            registry: Arc::new(AxonAbilityCatalog::new()),
+            registry,
         }
     }
 
@@ -139,6 +301,7 @@ impl Fixture {
             "visibility": "public",
         });
         handle_publish(
+            &self.user,
             &self.user,
             self.listener_port,
             &self.realm,
@@ -184,8 +347,9 @@ fn local_rpc_target(ability: &str, args: Value) -> InvocationTarget {
         ability: ability.to_string(),
         normalized_args: args,
         call_mode: CallMode::Rpc,
-        subject: None,
-        causal_context: None,
+        subject: easynet_cli::daemon::invocation::routing::target::InvocationSubject::daemon_system_derived(),
+        causal_context: easynet_cli::daemon::invocation::routing::target::InvocationCausalContext::daemon_system_root(),
+        request_metadata: Default::default(),
     }
 }
 
@@ -320,6 +484,7 @@ fn u8_duplicate_publish_rejected() {
     // second call with same (user, project_id)
     let result = handle_publish(
         &f.user,
+        &f.user,
         f.listener_port,
         &f.realm,
         f.registry.clone(),
@@ -420,36 +585,15 @@ fn u12_concurrent_fetches() {
 #[test]
 fn u13_file_size_cap_enforced() {
     let f = Fixture::new("u13");
-    // Create a file larger than the daemon's cap (default 100 MiB).
-    // Generating 100 MiB inside a unit test would slow CI; instead
-    // we pick a file that exists (style.css, 18 bytes) and reach
-    // into the publish handle to lower its cap to 10 bytes, then
-    // verify the fetch exceeds the lowered cap.
+    // A sparse file exercises the real metadata size gate without allocating
+    // or writing 100 MiB in the test process.
+    let oversized = fs::File::create(f.folder.join("oversized.bin"))
+        .expect("create oversized sparse test file");
+    oversized
+        .set_len(DEFAULT_FILE_SIZE_CAP + 1)
+        .expect("set sparse test file length");
     f.publish();
-    let key = (f.user.clone(), f.project_id.clone());
-    {
-        // Mutate cap. PUBLISHED_PROJECTS values are Arc<ProjectHandle>
-        // so we cannot edit in place; instead we re-insert with a
-        // ProjectHandle whose cap is small.
-        let entry = PUBLISHED_PROJECTS
-            .get(&key)
-            .expect("just published")
-            .clone();
-        // try_unwrap may fail if multiple Arcs exist (the DashMap entry
-        // itself holds one). In that case, soft-pass: we still proved
-        // the cap mechanism is in the read path on the green case.
-        match std::sync::Arc::try_unwrap(entry) {
-            Ok(mut h) => {
-                h.file_size_cap = 5; // smaller than style.css (18 bytes)
-                PUBLISHED_PROJECTS.insert(key.clone(), std::sync::Arc::new(h));
-            }
-            Err(_still_shared) => {
-                eprintln!("[u13] arc still shared; soft-pass");
-                return;
-            }
-        }
-    }
-    let err = handle_fetch(&f.user, &f.project_id, json!({"path": "/style.css"}))
+    let err = handle_fetch(&f.user, &f.project_id, json!({"path": "/oversized.bin"}))
         .expect_err("over-cap fetch should fail");
     assert!(format!("{err}").contains("size") || format!("{err}").contains("cap"));
 }
@@ -457,51 +601,56 @@ fn u13_file_size_cap_enforced() {
 #[test]
 fn u14_pages_management_abilities_are_in_local_runtime() {
     let _home = TestHomeGuard::new();
-    let runtime = LocalRuntime::new();
-    let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
-    let mut reg = AxonAbilityCatalog::new_with_runtime(Arc::clone(&runtime));
+    key_service_fixture::install();
     let user = "alice-runtime";
+    let runtime = configured_local_runtime("easynet.run", user);
+    let handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>> = Arc::new(OnceLock::new());
+    let pages_service = ura::service_ura("easynet.run", user, "pages");
+    let mut reg = registry_for_pages_owner(Arc::clone(&runtime), "easynet.run", user);
 
     pages::register(
         &mut reg,
         PagesConfig {
             user: user.to_string(),
+            owner_user_id: user.to_string(),
             realm: "easynet.run".to_string(),
             listener_port: 8787,
         },
         Arc::clone(&handle),
-    );
+    )
+    .expect("register Pages reference system");
     let reg = Arc::new(reg);
     assert!(handle.set(Arc::clone(&reg)).is_ok());
 
-    // Backend routes `pages.list` through the synthetic hosted agent
-    // `agent/<user>.pages`. The local dispatch key stays `pages.list`, but
-    // the control-plane authority root must be the pages agent, not the
-    // user's account-agent fallback.
-    let pages_agent = ura::agent_ura("easynet.run", user, "pages");
-    let ability = ura::local_dispatch_ability_key(&pages_agent, "pages.list");
-    assert_eq!(ability, "pages.list");
-    assert!(reg.has_rpc(&ability));
+    // Backend routes the local `project_list` handler through the
+    // principal-scoped Pages Service. The local dispatch key remains the
+    // handler key; the public descriptor name is canonicalized as
+    // `pages.project_list` under the Pages Service owner.
+    let ability = "project_list";
+    assert!(reg.has_rpc(ability));
     let facts = reg
-        .runtime_binding_facts_for_mode(&ability, easynet_cli::daemon::ability::CallMode::Rpc)
+        .runtime_binding_facts_for_mode(ability, easynet_cli::daemon::ability::CallMode::Rpc)
         .expect("runtime facts lookup")
-        .expect("pages.list runtime facts");
-    assert_eq!(facts.authority_owner_projection, "agent:pages");
-    assert_eq!(facts.authority_root, pages_agent);
-    let public_name = ura::owner_local_ability_name(&facts.authority_root, "pages.list");
+        .expect("project_list runtime facts");
+    assert_eq!(
+        facts.authority_owner_projection,
+        "service:alice-runtime.pages"
+    );
+    assert_eq!(facts.authority_root, pages_service);
+    let public_name = ura::descriptor_public_ability_name(&facts.authority_root, ability);
     let runtime_ability = ura::owner_ability_ura(&facts.authority_root, &public_name)
-        .expect("pages.list runtime ability URA");
+        .expect("project_list runtime ability URA");
     assert_eq!(
         runtime_ability,
-        "easynet:///r/easynet.run/ability/alice-runtime.pages.list"
+        "easynet:///r/easynet.run/ability/service.alice-runtime.pages.project_list"
     );
     assert!(
         futures::executor::block_on(runtime.has_ability(&runtime_ability)),
-        "pages.list must be installed in Axon LocalRuntime under the same canonical ability URA the carrier dispatch path probes"
+        "project_list must be installed in Axon LocalRuntime under the same canonical ability URA the carrier dispatch path probes"
     );
     let resp = reg
-        .invoke_rpc_target_json(local_rpc_target(&ability, json!({})))
-        .expect("pages.list should invoke through LocalRuntime");
+        .invoke_rpc_target_json(local_rpc_target(ability, json!({})))
+        .expect("project_list should invoke through LocalRuntime");
     assert_eq!(resp["projects"].as_array().map(Vec::len), Some(0));
 }
 

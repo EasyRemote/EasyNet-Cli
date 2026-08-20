@@ -19,15 +19,15 @@
 //   Handler → client (RecvBidi.frame):
 //     { "type": "stdout", "data": "<base64 bytes>" }
 //     { "type": "exit",   "status": <u32|null> }
-//     { "type": "warn",   "message": "<diagnostic>" }   // §D5
+//     { "type": "error",  "message": "<protocol error>" }
 //
 // `exit` is emitted exactly once per session, when the child
 // terminates. `status` is `null` when the wait surfaces no exit
 // code (extremely rare on unix; the OS reaper still claims the
-// child) OR when the master couldn't lend a reader at attach time
-// (PTY-side failure, no child to wait on). `warn` rides per-frame
-// diagnostics that don't terminate the session — e.g. a malformed
-// stdin frame; the session keeps running.
+// child) OR when the master couldn't lend a reader at attach time.
+// `error` is emitted once for malformed client frames; the writer
+// ingress then terminates instead of treating unknown shapes as
+// forward-compatible extensions.
 //
 // The single TerminalBidi per session_id (§I2) is fired by the IPC
 // forwarder, not this handler. The handler signals "session over"
@@ -78,7 +78,7 @@
 use std::sync::Arc;
 
 use base64::Engine;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::daemon::ability::dispatch::OwnerKind;
 use crate::daemon::ability::dispatch::{
@@ -86,7 +86,7 @@ use crate::daemon::ability::dispatch::{
 };
 use crate::daemon::execution::pty::{PtyService, PtySessionId};
 
-pub const ABILITY_PTY_SESSION_ATTACH: &str =
+pub const ABILITY_TERMINAL_ATTACH: &str =
     crate::daemon::ability::names::device_control::TERMINAL_ATTACH;
 
 /// Description published by the dispatcher's `description_for`
@@ -132,23 +132,87 @@ const READ_CHUNK_SIZE: usize = 4096;
 const EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 pub fn register(reg: &mut AxonAbilityCatalog, pty: Arc<PtyService>) {
-    use crate::daemon::ability::dispatch::LocalBidiHandler;
     let pty_for_attach = Arc::clone(&pty);
-    let handler: LocalBidiHandler =
-        Arc::new(move |args: Value| attach_handler(&pty_for_attach, args));
-    reg.register_bidi_with_owner("terminal.attach", OwnerKind::Device, handler);
+    let handler = Arc::new(move |env, args: Value| {
+        let attach_args = TerminalAttachArgs::parse(args)?;
+        super::authority::require_session_authority(
+            &env,
+            attach_args.session_id(),
+            "terminal.attach",
+        )?;
+        attach_session(&pty_for_attach, attach_args)
+    });
+    reg.register_bidi_with_envelope_and_owner(
+        "terminal.attach",
+        OwnerKind::terminal_system(),
+        handler,
+    );
 }
 
+#[cfg(test)]
 fn attach_handler(pty: &Arc<PtyService>, args: Value) -> anyhow::Result<BidiSource> {
-    let session_id = args
+    attach_session(pty, TerminalAttachArgs::parse(args)?)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TerminalAttachArgs {
+    session_id: String,
+}
+
+impl TerminalAttachArgs {
+    fn parse(args: Value) -> anyhow::Result<Self> {
+        let object = terminal_attach_args_object(&args)?;
+        let session_id = terminal_attach_required_session_id(object)?;
+        Ok(Self { session_id })
+    }
+
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+}
+
+fn terminal_attach_args_object(args: &Value) -> anyhow::Result<&Map<String, Value>> {
+    let object = args
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("terminal.attach: args must be a JSON object"))?;
+    let mut unknown = object
+        .keys()
+        .filter(|key| key.as_str() != "session_id")
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        unknown.sort_unstable();
+        anyhow::bail!(
+            "terminal.attach: unsupported argument field(s): {}",
+            unknown.join(", ")
+        );
+    }
+    Ok(object)
+}
+
+fn terminal_attach_required_session_id(args: &Map<String, Value>) -> anyhow::Result<String> {
+    let raw = args
         .get("session_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("pty_session_attach: `session_id` required"))?
-        .to_string();
+        .ok_or_else(|| anyhow::anyhow!("terminal.attach: `session_id` required"))?;
+    let session_id = raw
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("terminal.attach: `session_id` must be a string"))?
+        .trim();
+    if session_id.is_empty() {
+        anyhow::bail!("terminal.attach: `session_id` must not be empty");
+    }
+    Ok(session_id.to_string())
+}
+
+fn attach_session(
+    pty: &Arc<PtyService>,
+    attach_args: TerminalAttachArgs,
+) -> anyhow::Result<BidiSource> {
+    let session_id = attach_args.session_id;
     let id = PtySessionId::new(&session_id);
     let session = pty
         .get(&id)
-        .ok_or_else(|| anyhow::anyhow!("pty_session_attach: unknown session_id `{session_id}`"))?;
+        .ok_or_else(|| anyhow::anyhow!("terminal.attach: unknown session_id `{session_id}`"))?;
 
     // Channel halves are transport-axis per BidiSource's contract:
     //   xport_to_handler_tx  — IPC pushes here (SendBidi);
@@ -262,34 +326,20 @@ fn spawn_pty_writer(
         let writer = std::sync::Arc::new(std::sync::Mutex::new(writer));
 
         while let Some(frame) = from_client.recv().await {
-            let frame_type = frame.get("type").and_then(Value::as_str).unwrap_or("");
-            match frame_type {
-                "stdin" => {
-                    let Some(data_b64) = frame.get("data").and_then(Value::as_str) else {
-                        // §D5: per-frame error is a diagnostic, not
-                        // a session close. Use a `warn` frame type
-                        // so an MCP client doesn't accidentally print
-                        // an empty `stdout` to the user's terminal.
-                        let _ = to_client
-                            .send(BidiOutputFrame::json(json!({
-                                "type": "warn",
-                                "message": "stdin frame missing `data` field",
-                            })))
-                            .await;
-                        continue;
-                    };
-                    let bytes = match base64::engine::general_purpose::STANDARD.decode(data_b64) {
-                        Ok(b) => b,
-                        Err(e) => {
-                            let _ = to_client
-                                .send(BidiOutputFrame::json(json!({
-                                    "type": "warn",
-                                    "message": format!("stdin base64 decode failed: {e}"),
-                                })))
-                                .await;
-                            continue;
-                        }
-                    };
+            let frame = match TerminalAttachClientFrame::parse(frame) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    let _ = to_client
+                        .send(BidiOutputFrame::json(json!({
+                            "type": "error",
+                            "message": format!("terminal.attach client frame rejected: {error}"),
+                        })))
+                        .await;
+                    break;
+                }
+            };
+            match frame {
+                TerminalAttachClientFrame::Stdin(bytes) => {
                     let writer_clone = std::sync::Arc::clone(&writer);
                     // spawn_blocking returns the inner io::Result so
                     // a closed PTY is observable. A repeated write
@@ -310,23 +360,8 @@ fn spawn_pty_writer(
                         _ => break,
                     }
                 }
-                "resize" => {
-                    let cols = frame
-                        .get("cols")
-                        .and_then(Value::as_u64)
-                        .and_then(|v| u16::try_from(v).ok());
-                    let rows = frame
-                        .get("rows")
-                        .and_then(Value::as_u64)
-                        .and_then(|v| u16::try_from(v).ok());
-                    if let (Some(c), Some(r)) = (cols, rows) {
-                        let _ = session.resize(c, r).await;
-                    }
-                }
-                _ => {
-                    // Unknown frame type: drop silently. Forward-
-                    // compat — a future stdin variant (e.g. paste-
-                    // mode marker) shouldn't break old daemons.
+                TerminalAttachClientFrame::Resize { cols, rows } => {
+                    let _ = session.resize(cols, rows).await;
                 }
             }
         }
@@ -336,6 +371,92 @@ fn spawn_pty_writer(
         // TerminalBidi fires once the reader and waiter also drop
         // their clones.
     });
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TerminalAttachClientFrame {
+    Stdin(Vec<u8>),
+    Resize { cols: u16, rows: u16 },
+}
+
+impl TerminalAttachClientFrame {
+    fn parse(frame: Value) -> anyhow::Result<Self> {
+        let object = terminal_attach_client_frame_object(&frame)?;
+        let frame_type = terminal_attach_required_frame_type(object)?;
+        match frame_type {
+            "stdin" => {
+                terminal_attach_reject_unknown_frame_fields(object, &["type", "data"])?;
+                let data = terminal_attach_required_frame_string(object, "data")?;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .map_err(|error| {
+                        anyhow::anyhow!("stdin `data` base64 decode failed: {error}")
+                    })?;
+                Ok(Self::Stdin(bytes))
+            }
+            "resize" => {
+                terminal_attach_reject_unknown_frame_fields(object, &["type", "cols", "rows"])?;
+                let cols = terminal_attach_required_frame_u16(object, "cols")?;
+                let rows = terminal_attach_required_frame_u16(object, "rows")?;
+                if cols == 0 || rows == 0 {
+                    anyhow::bail!("resize `cols` and `rows` must be > 0");
+                }
+                Ok(Self::Resize { cols, rows })
+            }
+            other => anyhow::bail!("unsupported frame type `{other}`"),
+        }
+    }
+}
+
+fn terminal_attach_client_frame_object(frame: &Value) -> anyhow::Result<&Map<String, Value>> {
+    frame
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("frame must be a JSON object"))
+}
+
+fn terminal_attach_required_frame_type(frame: &Map<String, Value>) -> anyhow::Result<&str> {
+    terminal_attach_required_frame_string(frame, "type")
+}
+
+fn terminal_attach_required_frame_string<'a>(
+    frame: &'a Map<String, Value>,
+    key: &str,
+) -> anyhow::Result<&'a str> {
+    frame
+        .get(key)
+        .ok_or_else(|| anyhow::anyhow!("`{key}` required"))?
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("`{key}` must be a string"))
+}
+
+fn terminal_attach_required_frame_u16(
+    frame: &Map<String, Value>,
+    key: &str,
+) -> anyhow::Result<u16> {
+    match frame.get(key) {
+        None | Some(Value::Null) => anyhow::bail!("`{key}` required"),
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .and_then(|value| u16::try_from(value).ok())
+            .ok_or_else(|| anyhow::anyhow!("`{key}` must fit in u16 (got {number})")),
+        Some(other) => anyhow::bail!("`{key}` must be a number, got {other}"),
+    }
+}
+
+fn terminal_attach_reject_unknown_frame_fields(
+    frame: &Map<String, Value>,
+    allowed_keys: &[&str],
+) -> anyhow::Result<()> {
+    let mut unknown = frame
+        .keys()
+        .filter(|key| !allowed_keys.contains(&key.as_str()))
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        unknown.sort_unstable();
+        anyhow::bail!("unsupported frame field(s): {}", unknown.join(", "));
+    }
+    Ok(())
 }
 
 /// T3: exit-watcher. Polls the child's wait() and emits one `exit`
@@ -401,7 +522,7 @@ pub fn attach_input_schema() -> Value {
         "type": "object",
         "required": ["session_id"],
         "properties": {
-            "session_id": {"type": "string"},
+            "session_id": {"type": "string", "minLength": 1},
         },
         "additionalProperties": false,
     })
@@ -420,8 +541,14 @@ mod tests {
     use super::*;
     use crate::daemon::execution::pty::PtyCreateSpec;
 
+    const TEST_DEVICE_URA: &str = "easynet:///r/test/device/terminal-attach";
+
     fn fresh_service() -> Arc<PtyService> {
         Arc::new(PtyService::new())
+    }
+
+    fn metadata_test_catalog() -> AxonAbilityCatalog {
+        AxonAbilityCatalog::new_test_metadata_for_device_authority(TEST_DEVICE_URA)
     }
 
     fn shell_command() -> String {
@@ -480,14 +607,14 @@ mod tests {
 
     #[tokio::test]
     async fn registration_makes_attach_dispatchable() {
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = metadata_test_catalog();
         register(&mut reg, fresh_service());
         assert!(
-            reg.get_bidi(ABILITY_PTY_SESSION_ATTACH).is_some(),
+            reg.resolve_bidi_with_env(ABILITY_TERMINAL_ATTACH).is_some(),
             "attach must register as a BIDI handler, not RPC/Stream"
         );
         assert!(
-            reg.get_bidi("terminal.attach").is_some(),
+            reg.resolve_bidi_with_env("terminal.attach").is_some(),
             "attach must also publish the canonical runtime alias used by backend WS terminal"
         );
     }
@@ -508,6 +635,70 @@ mod tests {
         let svc = fresh_service();
         let err = attach_handler(&svc, json!({})).unwrap_err();
         assert!(format!("{err}").contains("session_id"));
+    }
+
+    #[tokio::test]
+    async fn attach_rejects_non_object_args_before_lookup() {
+        let svc = fresh_service();
+        let err = attach_handler(&svc, Value::Null).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("args must be a JSON object"),
+            "wrong error: {message}"
+        );
+        assert!(
+            !message.contains("unknown session_id"),
+            "non-object input must fail before PTY lookup: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn attach_rejects_unknown_argument_fields_before_lookup() {
+        let svc = fresh_service();
+        let err = attach_handler(
+            &svc,
+            json!({"session_id": "not-a-session", "legacy_mode": true}),
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("unsupported argument field(s): legacy_mode"),
+            "wrong error: {message}"
+        );
+        assert!(
+            !message.contains("unknown session_id"),
+            "unknown fields must fail before PTY lookup: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn attach_rejects_wrong_typed_session_id_before_lookup() {
+        let svc = fresh_service();
+        let err = attach_handler(&svc, json!({"session_id": 42})).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("`session_id` must be a string"),
+            "wrong error: {message}"
+        );
+        assert!(
+            !message.contains("unknown session_id"),
+            "wrong-typed session_id must fail before PTY lookup: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn attach_rejects_blank_session_id_before_lookup() {
+        let svc = fresh_service();
+        let err = attach_handler(&svc, json!({"session_id": "   "})).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("`session_id` must not be empty"),
+            "wrong error: {message}"
+        );
+        assert!(
+            !message.contains("unknown session_id"),
+            "blank session_id must fail before PTY lookup: {message}"
+        );
     }
 
     #[tokio::test]
@@ -647,10 +838,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_frame_type_is_dropped_silently_no_close() {
-        // §D5 + forward compat: an unrecognised frame type (e.g.
-        // a future "paste-mode" marker) must NOT close the session.
-        // Send junk, then a valid stdin, observe stdin still works.
+    async fn unknown_frame_type_emits_error_and_closes_ingress() {
         let svc = fresh_service();
         let spec = PtyCreateSpec {
             command: Some(shell_command()),
@@ -658,40 +846,92 @@ mod tests {
         };
         let id = svc.create(spec).expect("spawn /bin/sh");
         let source = attach_handler(&svc, json!({"session_id": id.as_str()})).expect("attach");
+        let to_handler = source.to_client;
+        let mut from_handler = source.from_client;
 
-        source
-            .to_client
+        to_handler
             .send(json!({"type": "future_v2_frame_type", "payload": "anything"}))
             .await
             .expect("send unknown frame");
-        let data_b64 = base64::engine::general_purpose::STANDARD.encode(b"echo afterjunk\n");
-        source
-            .to_client
-            .send(json!({"type": "stdin", "data": data_b64}))
-            .await
-            .expect("send stdin");
 
-        let mut from_handler = source.from_client;
-        let mut accum = Vec::new();
         let frames =
-            drain_handler_emit(&mut from_handler, 32, std::time::Duration::from_secs(3)).await;
-        for f in &frames {
-            if f.get("type").and_then(Value::as_str) == Some("stdout") {
-                if let Some(b64) = f.get("data").and_then(Value::as_str) {
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(b64)
-                        .unwrap_or_default();
-                    accum.extend_from_slice(&bytes);
-                }
-            }
-        }
-        let s = String::from_utf8_lossy(&accum);
+            drain_handler_emit(&mut from_handler, 16, std::time::Duration::from_secs(3)).await;
         assert!(
-            s.contains("afterjunk"),
-            "session must survive unknown frame type; got {s:?}"
+            frames.iter().any(|frame| {
+                frame.get("type").and_then(Value::as_str) == Some("error")
+                    && frame
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .is_some_and(|message| message.contains("unsupported frame type"))
+            }),
+            "unknown client frames must produce a visible protocol error; got {frames:?}"
         );
 
+        let data_b64 = base64::engine::general_purpose::STANDARD.encode(b"echo afterjunk\n");
+        if to_handler
+            .send(json!({"type": "stdin", "data": data_b64}))
+            .await
+            .is_ok()
+        {
+            let frames =
+                drain_handler_emit(&mut from_handler, 32, std::time::Duration::from_millis(500))
+                    .await;
+            let mut accum = Vec::new();
+            for frame in &frames {
+                if frame.get("type").and_then(Value::as_str) == Some("stdout") {
+                    if let Some(b64) = frame.get("data").and_then(Value::as_str) {
+                        let bytes = base64::engine::general_purpose::STANDARD
+                            .decode(b64)
+                            .unwrap_or_default();
+                        accum.extend_from_slice(&bytes);
+                    }
+                }
+            }
+            let output = String::from_utf8_lossy(&accum);
+            assert!(
+                !output.contains("afterjunk"),
+                "ingress must not process stdin after protocol rejection; got {output:?}"
+            );
+        }
+
         svc.close(&id);
+    }
+
+    #[test]
+    fn client_frame_parser_rejects_non_object_frames() {
+        let err = TerminalAttachClientFrame::parse(Value::Null).unwrap_err();
+        assert!(
+            format!("{err}").contains("frame must be a JSON object"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn client_frame_parser_rejects_unknown_stdin_fields() {
+        let err = TerminalAttachClientFrame::parse(json!({
+            "type": "stdin",
+            "data": "aGk=",
+            "legacy_mode": true
+        }))
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("unsupported frame field(s): legacy_mode"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn client_frame_parser_rejects_bad_resize_dimensions() {
+        let err = TerminalAttachClientFrame::parse(json!({
+            "type": "resize",
+            "cols": 0,
+            "rows": 24
+        }))
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("must be > 0"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

@@ -1,0 +1,35 @@
+schema_version = "3"
+name = "device.keyring.list"
+descriptor_version = "1.0.0"
+description = "List managed signing keys from the local keyring-management SystemAgent vault, optionally filtered by purpose or status."
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "route-target"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.filter]
+type = "object"
+additionalProperties = false
+
+[input_schema.properties.filter.properties.purpose]
+type = "string"
+minLength = 1
+
+[input_schema.properties.filter.properties.status]
+type = "string"
+enum = ["active", "retired", "revoked"]

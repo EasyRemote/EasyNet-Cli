@@ -16,18 +16,19 @@
 //! Currently wired in system_abilities/agents/chat.rs. The chat handler
 //! is the conversation.send implementation.
 
-use crate::daemon::ability::catalog::SystemAbilityMetadata;
+use crate::daemon::ability::descriptors::AbilityDescriptor;
 
 const LLM_DYNAMIC_ABILITY_PREFIXES: &[&str] = &[
-    // RFC-005 owner-local catalogue names: `meta.*` and the built-in
-    // `session.*` and `skill.<operation>` abilities are device-profile-owned.
+    // RFC-005 owner-local catalogue names: `meta.*` remains direct Device
+    // migration-surface, while built-in `session.*` and `skill.<operation>`
+    // abilities are device-sponsored SystemAgent-owned.
     // LLM profile's dynamic surface is `conversation.*` plus private
     // per-skill `skill.<skill-name>` entries.
     //
     // `voice.*` was previously listed here on the
     // assumption that voice signaling is an LLM-owned ability
     // family (RFC-005 v3.2 A6/A7). The handlers actually run
-    // on the device daemon (`OwnerKind::Device` in the
+    // under the realm Authority (`OwnerKind::RealmAuthority` in the
     // registry); claiming them in this profile caused the
     // catalogue's `descriptors_for(agent_ura)` to stamp every
     // voice verb with the agent URA, so `easynet ability list`
@@ -35,15 +36,16 @@ const LLM_DYNAMIC_ABILITY_PREFIXES: &[&str] = &[
     // the KIND column read `agent`. Per the truth-table spec
     // ownership reflects "where does the handler run", not
     // "which surface category it semantically belongs to" —
-    // voice is host-owned (microphone / camera / speaker
-    // hardware lives on the device) and is now described through
-    // registry `OwnerKind::Device`, not through an LLM prefix claim.
+    // microphone / camera / speaker hardware remains Device-owned,
+    // while voice synthesis, transcription, and signaling are now
+    // described through registry `OwnerKind::RealmAuthority`, not through an
+    // LLM prefix claim.
     "conversation.",
     "skill.",
 ];
 
 fn is_llm_dynamic_ability(ability_name: &str) -> bool {
-    const DEVICE_SKILL_ABILITIES: &[&str] = &[
+    const SYSTEM_SKILL_ABILITIES: &[&str] = &[
         "skill.install",
         "skill.list",
         "skill.publish",
@@ -54,7 +56,7 @@ fn is_llm_dynamic_ability(ability_name: &str) -> bool {
         "skill.upgrade",
         "skill.write_file",
     ];
-    if DEVICE_SKILL_ABILITIES.contains(&ability_name) {
+    if SYSTEM_SKILL_ABILITIES.contains(&ability_name) {
         return false;
     }
     LLM_DYNAMIC_ABILITY_PREFIXES
@@ -79,7 +81,7 @@ pub fn descriptors_for(
 /// `metadata["agent_type"]` with the given string when supplied.
 ///
 /// Per RFC §A4 the wire-level Agent envelope has no `kind` /
-/// `type` field. The legacy `registry::AgentType` Rust enum
+/// `type` field. The legacy `registry::RuntimeKind` Rust enum
 /// (claude-code | codex | codex-app-server) is intentionally kept
 /// as an internal type — refactoring 28+ files to delete it is
 /// out of scope here — but its display string is surfaced through
@@ -107,7 +109,7 @@ pub fn descriptors_for_with_metadata(
 /// projection for each hosted agent.
 #[derive(Debug, Clone)]
 pub struct LlmProfileAbilityCatalog {
-    abilities: Vec<SystemAbilityMetadata>,
+    abilities: Vec<AbilityDescriptor>,
 }
 
 impl LlmProfileAbilityCatalog {
@@ -117,7 +119,7 @@ impl LlmProfileAbilityCatalog {
     }
 
     #[must_use]
-    pub fn from_system_abilities(abilities: Vec<SystemAbilityMetadata>) -> Self {
+    pub fn from_system_abilities(abilities: Vec<AbilityDescriptor>) -> Self {
         Self {
             abilities: abilities
                 .into_iter()
@@ -126,7 +128,7 @@ impl LlmProfileAbilityCatalog {
         }
     }
 
-    fn iter(&self) -> impl Iterator<Item = &SystemAbilityMetadata> {
+    fn iter(&self) -> impl Iterator<Item = &AbilityDescriptor> {
         self.abilities.iter()
     }
 }
@@ -136,21 +138,21 @@ pub fn descriptors_for_with_catalog(
     agent_type_display: Option<&str>,
     catalog: &LlmProfileAbilityCatalog,
 ) -> Vec<crate::daemon::ability::descriptors::AbilityDescriptor> {
-    use crate::daemon::ability::descriptors::{AbilityDescriptor, Visibility};
+    use crate::daemon::ability::descriptors::Visibility;
     catalog
         .iter()
-        .map(|m| {
-            let visibility = if m.name.starts_with("skill.") {
+        .map(|descriptor| {
+            let visibility = if descriptor.name.starts_with("skill.") {
                 Visibility::Private
             } else {
                 Visibility::Scoped
             };
-            let mut desc = AbilityDescriptor::new(m.name.clone(), owner_ura, visibility)
-                .expect("registry-derived names satisfy descriptor invariants")
-                .with_input_schema(m.input_schema.clone())
-                .with_hints(m.hints.clone())
-                .with_source("kernel:built-in")
-                .with_description(m.description.clone());
+            let mut desc = descriptor
+                .clone()
+                .rebind_owner_ura(owner_ura)
+                .expect("registry-derived descriptor accepts canonical LLM owner")
+                .with_visibility(visibility)
+                .with_source("kernel:built-in");
             if let Some(t) = agent_type_display {
                 desc = desc.with_metadata_entry("agent_type", t);
             }
@@ -170,14 +172,15 @@ mod tests {
         // conversation.* and private skill.*.
         assert!(is_llm_dynamic_ability("conversation.send"));
         assert!(is_llm_dynamic_ability("conversation.stream"));
-        assert!(!is_llm_dynamic_ability("session.list"));
+        assert!(!is_llm_dynamic_ability(
+            crate::daemon::ability::names::device_control::SESSION_LIST
+        ));
         assert!(!is_llm_dynamic_ability("session.attach"));
         assert!(is_llm_dynamic_ability("skill.alive-video"));
         assert!(is_llm_dynamic_ability("skill.design"));
         assert!(!is_llm_dynamic_ability("skill.list"));
         assert!(!is_llm_dynamic_ability("skill.tree"));
-        // voice.* is NOT llm-owned post-truth-table fix —
-        // the handlers run on the device daemon.
+        // voice.* is realm Authority-owned post-truth-table cutover.
         assert!(!is_llm_dynamic_ability("voice.subscribe"));
         // meta.* is NOT llm-owned post-M2.
         assert!(!is_llm_dynamic_ability("meta.describe"));
@@ -240,25 +243,22 @@ mod tests {
 
     #[test]
     fn catalog_snapshot_projects_to_multiple_llm_owners_without_mutating_source() {
+        let source_owner = "easynet:///r/acme/agent/device.catalog.runtime-introspection";
+        let descriptor = |name: &str, description: &str| {
+            AbilityDescriptor::new(
+                name,
+                source_owner,
+                crate::daemon::ability::descriptors::Visibility::Scoped,
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke,
+            )
+            .expect("test descriptor")
+            .with_description(description)
+            .with_input_schema(serde_json::json!({"type": "object"}))
+        };
         let catalog = LlmProfileAbilityCatalog::from_system_abilities(vec![
-            SystemAbilityMetadata {
-                name: "conversation.send".to_string(),
-                description: "Send a prompt".to_string(),
-                input_schema: serde_json::json!({"type": "object"}),
-                hints: Default::default(),
-            },
-            SystemAbilityMetadata {
-                name: "skill.design".to_string(),
-                description: "Run a private skill".to_string(),
-                input_schema: serde_json::json!({"type": "object"}),
-                hints: Default::default(),
-            },
-            SystemAbilityMetadata {
-                name: "meta.list_abilities".to_string(),
-                description: "Device-owned metadata".to_string(),
-                input_schema: serde_json::json!({"type": "object"}),
-                hints: Default::default(),
-            },
+            descriptor("conversation.send", "Send a prompt"),
+            descriptor("skill.design", "Run a private skill"),
+            descriptor("meta.list_abilities", "Runtime-introspection metadata"),
         ]);
 
         let alice = descriptors_for_with_catalog(

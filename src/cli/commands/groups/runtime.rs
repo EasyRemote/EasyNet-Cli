@@ -126,17 +126,5 @@ fn run_logs(args: LogsArgs) -> anyhow::Result<()> {
 }
 
 fn resolve_runtime_log_path() -> std::path::PathBuf {
-    let daemon_log = config::state_dir().join("logs").join("easynet-daemon.log");
-    let axon_log = config::state_dir().join("axon.log");
-    match config::load().ok().map(|state| state.runtime_kind) {
-        Some(config::RuntimeKind::DaemonOnly) => daemon_log,
-        Some(config::RuntimeKind::AxonBridge) => axon_log,
-        None => {
-            if daemon_log.exists() {
-                daemon_log
-            } else {
-                axon_log
-            }
-        }
-    }
+    config::state_dir().join("logs").join("easynet-daemon.log")
 }

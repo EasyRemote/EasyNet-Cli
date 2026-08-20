@@ -54,20 +54,21 @@
 // substantive behaviours land in subsequent PRs:
 //
 //   * skills loading: `skills_loaded` enumerates the agent's other
-//     abilities (filtered by mode/include/exclude). Those abilities
-//     are ALREADY callable by the LLM — the workspace's .mcp.json
-//     points at the EasyNet MCP server with `--enable-agent-dispatch`
-//     so the AgentDispatchAdapter advertises every <agent>.chat tool.
-//     The skills filter is currently advisory: we report what we
-//     would expose; per-call enforcement of the include/exclude
-//     filter against claude-code's tool-discovery wire is a follow-up.
+//     abilities (filtered by mode/include/exclude). The workspace MCP
+//     projection exposes callable abilities by geometry; cross-agent
+//     execution remains owned by the mission runtime. The skills filter is
+//     currently advisory: we report what we would expose; per-call
+//     enforcement of the include/exclude filter against the driver's
+//     tool-discovery wire is a follow-up.
 //   * context loaders: the trait seam exists; v1 ships ScheduleLoader
 //     / MemoryLoader / UserProfileLoader. `context_used` reports
 //     which loaders contributed and how many bytes each.
 //   * driver overrides: `driver.model` flows through dispatch via
 //     send_external_with_overrides. `driver.temperature` and
 //     `driver.max_tokens` are rejected at parse time (no v1 CLI
-//     driver exposes either knob; see parse_driver_overrides).
+//     driver exposes either knob), and every other driver-shaped
+//     field is rejected instead of becoming a hidden lifecycle
+//     surface (see parse_driver_overrides).
 //   * stream: register_for_agent mounts both an RPC and a Stream
 //     handler; the stream variant emits typed frames. `stream:true`
 //     under the RPC entry point is rejected with a clear error.
@@ -82,20 +83,25 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use std::path::{Component, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 use crate::daemon::ability::dispatch::{AxonAbilityCatalog, StreamSource};
-use crate::daemon::execution::mission::dispatch::{AgentResponse, DriverOverrides, ToolCall};
+use crate::daemon::execution::mission::adapter::DriverIsolation;
+use crate::daemon::execution::mission::dispatch::{
+    AgentExecution, AgentResponse, DriverOverrides, ToolCall, MAX_INVOCATION_TIMEOUT_MS,
+};
+use crate::daemon::persistence::agent_aggregate::AgentAggregateRepository;
 use crate::daemon::persistence::agent_registry::{AgentEntry, AgentRegistry};
 
 /// The wire-level *verb* portion of every chat ability name. The
 /// fully-qualified ability name is always `<agent>.chat`. A future
 /// rename here would have to ripple through:
 ///   * the parity test in `daemon::execution::mission::agent_ability_specs`
-///   * the manifest seed in `core::ability_spec::default_chat_manifest`
+///   * the manifest seed in `daemon::ability::manifest::default_chat_manifest`
 ///   * the EasyNet backend's frontend that synthesizes / renders chat
 ///
 /// Pinning the constant in one place lets that future PR find the
@@ -156,11 +162,10 @@ pub fn register(
     for (agent_name, entry) in &agents.agents {
         register_for_agent(reg, agent_name.clone(), entry.clone(), Arc::clone(&loaders));
     }
-    // The owner-namespaced `<agent>.discover` and `<agent>.invoke`
-    // self-bundle abilities live in their own modules — see
+    // The owner-namespaced `<agent>.discover` self-bundle ability lives in
+    // its own module — see
     // `daemon::ability::catalog::build_registry_with_services` (called after
-    // the dispatch handle is in scope, since `<agent>.invoke` needs
-    // to resolve through the live registry).
+    // the dispatch handle is in scope).
     //
     // No lookup-miss fallback is installed here. Post-boot agent
     // additions flow through HotAgentRegistrar, which materialises
@@ -190,8 +195,8 @@ pub fn register_for_agent(
     let ability = format!("{agent_name}.{ABILITY_VERB}");
     let owner = OwnerKind::Agent(agent_name.clone());
 
-    // RPC: the legacy synchronous one-shot path. Registered with
-    // the canonical chat manifest so the Frontend
+    // RPC: the synchronous one-shot path. Registered with the
+    // canonical chat manifest so the Frontend
     // `InvokeAbilityDialog` renders a SchemaForm (prompt /
     // context / session_id / skills / context_loaders / driver /
     // stream / attachments) instead of a free-text JSON box.
@@ -203,7 +208,11 @@ pub fn register_for_agent(
     reg.register_rpc_with_spec(
         &ability,
         owner.clone(),
-        crate::core::ability::spec::default_chat_manifest(),
+        crate::daemon::ability::manifest::default_chat_manifest()
+            .with_admission_action(
+                crate::daemon::ability::descriptors::AdmissionAction::Invoke.as_str(),
+            )
+            .expect("chat manifest accepts invoke admission_action"),
         Arc::new(move |args: Value| handler(&rpc_agent, &rpc_entry, &rpc_loaders, args)),
     );
 
@@ -239,9 +248,36 @@ pub fn register_for_agent(
             continue;
         };
         match exec {
-            crate::core::ability::spec::AbilityExec::HostStream(stream_spec) => {
-                let h = build_host_stream_handler(stream_spec.clone());
-                reg.register_stream_with_envelope_and_owner(&ability_name, owner.clone(), h);
+            crate::daemon::ability::manifest::AbilityExec::HostStream(stream_spec) => {
+                if manifest.admission_action() == Some("invoke") {
+                    let h = build_host_rpc_handler(stream_spec.clone());
+                    let manifest = manifest
+                        .clone()
+                        .with_admission_action(
+                            crate::daemon::ability::descriptors::AdmissionAction::Invoke.as_str(),
+                        )
+                        .expect("agent host_stream manifest accepts invoke admission_action");
+                    reg.register_rpc_with_envelope_and_spec(
+                        &ability_name,
+                        owner.clone(),
+                        manifest,
+                        h,
+                    );
+                } else {
+                    let h = build_host_stream_handler(stream_spec.clone());
+                    let manifest = manifest
+                        .clone()
+                        .with_admission_action(
+                            crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str(),
+                        )
+                        .expect("agent host_stream manifest accepts stream admission_action");
+                    reg.register_stream_with_envelope_and_spec(
+                        &ability_name,
+                        owner.clone(),
+                        manifest,
+                        h,
+                    );
+                }
             }
             _ => {
                 let h = build_agent_ability_handler(
@@ -250,7 +286,13 @@ pub fn register_for_agent(
                     Arc::clone(&loaders),
                     bare_ability,
                 );
-                reg.register_rpc_with_owner(&ability_name, owner.clone(), h);
+                let manifest = manifest
+                    .clone()
+                    .with_admission_action(
+                        crate::daemon::ability::descriptors::AdmissionAction::Invoke.as_str(),
+                    )
+                    .expect("agent executor manifest accepts invoke admission_action");
+                reg.register_rpc_with_envelope_and_spec(&ability_name, owner.clone(), manifest, h);
             }
         }
     }
@@ -263,14 +305,18 @@ pub fn register_for_agent(
     reg.register_stream_with_spec(
         &ability,
         owner,
-        crate::core::ability::spec::default_chat_manifest(),
+        crate::daemon::ability::manifest::default_chat_manifest()
+            .with_admission_action(
+                crate::daemon::ability::descriptors::AdmissionAction::Stream.as_str(),
+            )
+            .expect("chat manifest accepts stream admission_action"),
         Arc::new(move |args: Value| stream_handler(&agent_name, &entry, &loaders, args)),
     );
 }
 
 /// Build the envelope-aware stream handler for a `host_stream` ability.
 ///
-/// Registered via `register_stream_with_envelope_and_owner` so the
+/// Registered via `register_stream_with_envelope_and_spec` so the
 /// ability is stream-mode (`modes.stream = true`) and so the handler
 /// sees the AXIOM seven-tuple: the runtime invocation id becomes the
 /// wire `call_id` correlating the request to the external host. The
@@ -279,13 +325,30 @@ pub fn register_for_agent(
 /// immediately; anything that can fail the open surfaces as `Err` so a
 /// failed open never produces a half-live session.
 pub(crate) fn build_host_stream_handler(
-    spec: crate::core::ability::spec::HostStreamExec,
+    spec: crate::daemon::ability::manifest::HostStreamExec,
 ) -> crate::daemon::ability::dispatch::LocalStreamHandlerWithEnvelope {
     Arc::new(
         move |env: crate::daemon::ability::dispatch::EnvelopeContext, args: Value| {
             let call_id = env.invocation_id().to_string();
             let caller = env.caller().to_string();
             crate::daemon::execution::mission::executors::host_stream::run_host_stream(
+                &spec, &args, &call_id, &caller,
+            )
+        },
+    )
+}
+
+/// Build the unary adapter for a `host_stream` transport whose manifest
+/// declares `admission_action=invoke`. The external host still uses framed
+/// transport, while the canonical runtime exposes one RPC result.
+pub(crate) fn build_host_rpc_handler(
+    spec: crate::daemon::ability::manifest::HostStreamExec,
+) -> crate::daemon::ability::dispatch::LocalRpcHandlerWithEnvelope {
+    Arc::new(
+        move |env: crate::daemon::ability::dispatch::EnvelopeContext, args: Value| {
+            let call_id = env.invocation_id().to_string();
+            let caller = env.caller().to_string();
+            crate::daemon::execution::mission::executors::host_stream::run_host_stream_unary(
                 &spec, &args, &call_id, &caller,
             )
         },
@@ -316,8 +379,8 @@ pub(crate) fn build_agent_ability_handler(
     entry: AgentEntry,
     loaders: Arc<Vec<Arc<dyn ContextLoader>>>,
     bare_ability: String,
-) -> crate::daemon::ability::dispatch::LocalRpcHandler {
-    Arc::new(move |args: Value| {
+) -> crate::daemon::ability::dispatch::LocalRpcHandlerWithEnvelope {
+    Arc::new(move |env, args: Value| {
         // Re-read this agent's manifests at invoke time so edits made
         // post-boot change the executor binding without a daemon restart.
         let matching_manifest =
@@ -334,37 +397,39 @@ pub(crate) fn build_agent_ability_handler(
                     .timeout_seconds()
                     .map(std::time::Duration::from_secs);
                 return match exec {
-                    crate::core::ability::spec::AbilityExec::Shell(spec) => {
+                    crate::daemon::ability::manifest::AbilityExec::Shell(spec) => {
                         crate::daemon::execution::mission::executors::shell::run_shell_exec(
                             spec, &args, timeout,
                         )
                     }
-                    crate::core::ability::spec::AbilityExec::Http(spec) => {
+                    crate::daemon::ability::manifest::AbilityExec::Http(spec) => {
                         crate::daemon::execution::mission::executors::http::run_http_exec(
                             spec, &args, timeout,
                         )
                     }
-                    crate::core::ability::spec::AbilityExec::Eal(spec) => {
-                        crate::daemon::execution::mission::executors::eal::run_eal_exec(
-                            spec, &args, timeout,
+                    crate::daemon::ability::manifest::AbilityExec::Eal(spec) => {
+                        let gateway = Arc::new(
+                            crate::daemon::execution::mission::invocation_gateway::DaemonMissionInvocationGateway::from_admitted_envelope(&env)?,
+                        );
+                        crate::daemon::execution::mission::executors::eal::run_eal_exec_with_gateway(
+                            spec, &args, gateway, timeout,
                         )
                     }
-                    crate::core::ability::spec::AbilityExec::Mcp(spec) => {
+                    crate::daemon::ability::manifest::AbilityExec::Mcp(spec) => {
                         let _ = timeout;
                         crate::daemon::ability::builtins::integrations::mcp::executor::run_mcp_exec(
                             spec, &args,
                         )
                     }
-                    crate::core::ability::spec::AbilityExec::HostStream(_) => {
-                        // host_stream registers as a stream-mode ability
-                        // (see register_for_agent): it is dispatched
-                        // through the stream handler, never this unary RPC
-                        // adapter. Reaching here means the ability was
-                        // mis-registered as RPC — fail loudly rather than
-                        // silently collapsing the stream to one value.
+                    crate::daemon::ability::manifest::AbilityExec::HostStream(_) => {
+                        // host_stream is registered through either the RPC
+                        // or stream adapter according to admission_action.
+                        // This executor is only for non-host manifests, so
+                        // reaching here means the catalogue and handler
+                        // registration disagree.
                         Err(anyhow::anyhow!(
-                            "host_stream ability '{bare_ability}' reached the unary \
-                             RPC path; it must be invoked as a server-stream"
+                            "host_stream ability '{bare_ability}' reached the generic agent \
+                             executor; host transport registration is inconsistent"
                         ))
                     }
                 };
@@ -472,9 +537,11 @@ pub(crate) fn build_discover_handler_for(
     // AxonAbilityCatalog`, which we don't have here). The handler
     // re-loads agents on every call so a brand-new peer is visible
     // immediately — same hot-add story as the chat handler.
-    let provider: Arc<
-        dyn Fn() -> crate::daemon::persistence::agent_registry::AgentRegistry + Send + Sync,
-    > = Arc::new(|| crate::daemon::persistence::agent_registry::load_agents().unwrap_or_default());
+    let provider: crate::daemon::ability::builtins::agents::discover::AgentDirectoryProvider =
+        Arc::new(|| {
+            AgentAggregateRepository::load_snapshot()
+                .map_err(|error| anyhow::anyhow!("load discover Agent aggregate: {error:#}"))
+        });
     Arc::new(move |args: Value| {
         // Defer to the discover module's per-call entry. Public
         // entry exposed for this purpose (and test cases).
@@ -483,26 +550,6 @@ pub(crate) fn build_discover_handler_for(
             &provider,
             &dispatch_handle,
             federation_resolver.as_ref(),
-            args,
-        )
-    })
-}
-
-/// Synthesise an `<agent>.invoke` handler for a hot-added agent.
-/// Routes through the same builtin invoke entry the boot-time
-/// registration uses.
-pub(crate) fn build_invoke_handler_for(
-    agent_name: String,
-    dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-) -> crate::daemon::ability::dispatch::LocalRpcHandler {
-    let provider: Arc<
-        dyn Fn() -> crate::daemon::persistence::agent_registry::AgentRegistry + Send + Sync,
-    > = Arc::new(|| crate::daemon::persistence::agent_registry::load_agents().unwrap_or_default());
-    Arc::new(move |args: Value| {
-        crate::daemon::ability::builtins::agents::invoke::dispatch(
-            &agent_name,
-            &provider,
-            &dispatch_handle,
             args,
         )
     })
@@ -562,7 +609,8 @@ pub(crate) fn invoke_direct_with_progress(
     // with is bound as the pointer after the transcript write).
     let lifelong_requested = parsed.session_id.as_deref() == Some(LIFELONG_SESSION_ID);
     if lifelong_requested {
-        parsed.session_id = crate::daemon::persistence::chat_sessions::lifelong_session(agent_name);
+        parsed.session_id =
+            crate::daemon::persistence::chat_sessions::lifelong_session(agent_name)?;
     }
 
     // Session id resolution. When the caller supplies one we echo
@@ -643,7 +691,11 @@ pub(crate) fn invoke_direct_with_progress(
     // has the skill for. Surfaces as a separate context section
     // so the LLM treats own-agent vs other-agent abilities with
     // appropriate precedence.
-    let other_specs = enumerate_other_agent_specs(agent_name);
+    let other_specs = if parsed.execution.isolation == DriverIsolation::Strict {
+        Vec::new()
+    } else {
+        enumerate_other_agent_specs(agent_name)?
+    };
     let cross_agent_hint = format_cross_agent_hint(&other_specs);
 
     // Materialise attachments to a delimited block. Failures bail
@@ -705,7 +757,17 @@ pub(crate) fn invoke_direct_with_progress(
     }
     let driver_overrides = Some(&driver_with_resume);
     let dispatch_call = || {
-        if let Some(progress_tx) = progress_tx.clone() {
+        if parsed.structured {
+            crate::daemon::execution::mission::dispatch::send_external_structured(
+                agent_name,
+                entry,
+                &parsed.prompt,
+                parsed.system_prompt.as_deref(),
+                driver_overrides,
+                &parsed.execution,
+                progress_tx.clone(),
+            )
+        } else if let Some(progress_tx) = progress_tx.clone() {
             crate::daemon::execution::mission::dispatch::send_external_with_overrides_and_progress(
                 agent_name,
                 entry,
@@ -732,31 +794,12 @@ pub(crate) fn invoke_direct_with_progress(
 
     let resp = response_result?;
     let elapsed_ms = started.elapsed().as_millis() as u64;
-    // The session id we report back. Three cases:
-    //
-    //   1. Resume turn (`driver_with_resume.resume_thread_id` was
-    //      Some): the caller already owns the id; we MUST echo it
-    //      back unchanged so subsequent turns keep finding the same
-    //      transcript. Some drivers (claude-code) return a freshly-
-    //      minted id on the resume's stream — that id is internal
-    //      to the resumed run and is NOT a stable handle to the
-    //      original transcript; passing it back would break R3.
-    //
-    //   2. Fresh turn, driver minted an id (codex / claude on
-    //      first turn): use the driver's id so future resume can
-    //      find the transcript.
-    //
-    //   3. Fresh turn, driver did NOT mint an id (no resume-capable
-    //      driver wired to thread_id yet): fall back to the local
-    //      `session_id` we resolved at handler entry — caller-
-    //      supplied or our `uuid_like` mint.
-    let session_id = if let Some(resume_id) = driver_with_resume.resume_thread_id.as_ref() {
-        resume_id.clone()
-    } else if let Some(driver_id) = resp.thread_id.as_ref() {
-        driver_id.clone()
-    } else {
-        session_id
-    };
+    let session_id = ChatTurnSessionId::select(
+        driver_with_resume.resume_thread_id.as_deref(),
+        resp.thread_id.as_deref(),
+        &session_id,
+    )
+    .into_string();
     let usage_value = usage_to_json(&resp).unwrap_or(Value::Null);
     let tool_calls_json = tool_calls_to_json(&resp.tool_calls);
 
@@ -789,6 +832,7 @@ pub(crate) fn invoke_direct_with_progress(
         "reply": resp.content,
         "skills_loaded": skills_loaded,
         "tool_calls": tool_calls_json,
+        "timeline": resp.timeline,
         "context_used": Value::Array(context_used),
         "usage": usage_value,
         "elapsed_ms": elapsed_ms,
@@ -812,7 +856,7 @@ pub(crate) fn invoke_direct_with_progress(
 ///       both lists would be empty) but always present when
 ///       either has content.
 ///
-///   `{"type": "done", "reply": "...", "tool_calls": [...], "context_used": [...], "usage": {...}, "elapsed_ms": N, "session_id": "..."}`
+///   `{"type": "done", "reply": "...", "tool_calls": [...], "timeline": [...], "context_used": [...], "usage": {...}, "elapsed_ms": N, "session_id": "..."}`
 ///       Terminal happy-path frame. Carries the same payload the
 ///       RPC handler returns, so a subscriber that only reads the
 ///       last frame is equivalent to an RPC caller.
@@ -866,7 +910,8 @@ fn stream_handler(
     // see the comment there and on LIFELONG_SESSION_ID.
     let lifelong_requested = parsed.session_id.as_deref() == Some(LIFELONG_SESSION_ID);
     if lifelong_requested {
-        parsed.session_id = crate::daemon::persistence::chat_sessions::lifelong_session(agent_name);
+        parsed.session_id =
+            crate::daemon::persistence::chat_sessions::lifelong_session(agent_name)?;
     }
     let session_id = parsed
         .session_id
@@ -920,7 +965,11 @@ fn stream_handler(
     let skill_specs = enumerate_skill_specs(agent_name, entry, &parsed.skills);
     let skills_loaded: Vec<String> = skill_specs.iter().map(|s| s.name().to_string()).collect();
     let skills_hint = format_skills_hint(&skill_specs);
-    let other_specs = enumerate_other_agent_specs(agent_name);
+    let other_specs = if parsed.execution.isolation == DriverIsolation::Strict {
+        Vec::new()
+    } else {
+        enumerate_other_agent_specs(agent_name)?
+    };
     let cross_agent_hint = format_cross_agent_hint(&other_specs);
     // Files-store root resolved only when a URA attachment is present:
     // root_from_env creates the store directory as a side effect, which
@@ -966,6 +1015,9 @@ fn stream_handler(
     let agent_name_owned = agent_name.to_string();
     let entry_owned = entry.clone();
     let prompt_owned = parsed.prompt.clone();
+    let system_prompt_owned = parsed.system_prompt.clone();
+    let execution_owned = parsed.execution.clone();
+    let structured = parsed.structured;
     // Conversation resume on the stream path mirrors handle_invoke:
     // when the caller's session_id parses as a driver-issued thread
     // id we thread it through `DriverOverrides::resume_thread_id`,
@@ -1007,32 +1059,37 @@ fn stream_handler(
     std::thread::Builder::new()
         .name(format!("chat-stream-{agent_name}"))
         .spawn(move || {
-            let result = crate::daemon::execution::mission::dispatch::send_external_with_overrides_and_progress(
-                &agent_name_owned,
-                &entry_owned,
-                &prompt_owned,
-                composed_context_owned.as_deref(),
-                Some(&driver_owned),
-                Some(progress_callback),
-            );
+            let result = if structured {
+                crate::daemon::execution::mission::dispatch::send_external_structured(
+                    &agent_name_owned,
+                    &entry_owned,
+                    &prompt_owned,
+                    system_prompt_owned.as_deref(),
+                    Some(&driver_owned),
+                    &execution_owned,
+                    Some(progress_callback),
+                )
+            } else {
+                crate::daemon::execution::mission::dispatch::send_external_with_overrides_and_progress(
+                    &agent_name_owned,
+                    &entry_owned,
+                    &prompt_owned,
+                    composed_context_owned.as_deref(),
+                    Some(&driver_owned),
+                    Some(progress_callback),
+                )
+            };
             let elapsed_ms = started.elapsed().as_millis() as u64;
             let frame = match result {
                 Ok(resp) => {
                     let usage_value = usage_to_json(&resp).unwrap_or(Value::Null);
                     let tool_calls_json = tool_calls_to_json(&resp.tool_calls);
-                    // Resolve the terminal-frame session id with the
-                    // same precedence as handle_invoke:
-                    //   1. Resume turn → echo caller's id unchanged.
-                    //   2. Fresh turn, driver minted an id → use it.
-                    //   3. Fresh turn, driver did not surface one →
-                    //      fall back to the locally-resolved id.
-                    let resolved_session_id = if let Some(rid) = resume_id_for_done.as_ref() {
-                        rid.clone()
-                    } else if let Some(did) = resp.thread_id.as_ref() {
-                        did.clone()
-                    } else {
-                        session_id_for_thread.clone()
-                    };
+                    let resolved_session_id = ChatTurnSessionId::select(
+                        resume_id_for_done.as_deref(),
+                        resp.thread_id.as_deref(),
+                        &session_id_for_thread,
+                    )
+                    .into_string();
                     // Persist the streamed turn too — same transcript
                     // contract as the RPC path (invoke_direct_with_progress).
                     crate::daemon::persistence::chat_sessions::write_turn_best_effort_with_elapsed(
@@ -1056,6 +1113,7 @@ fn stream_handler(
                         "reply": resp.content,
                         "skills_loaded": skills_loaded_for_thread,
                         "tool_calls": tool_calls_json,
+                        "timeline": resp.timeline,
                         "context_used": context_used_for_thread,
                         "usage": usage_value,
                         "elapsed_ms": elapsed_ms,
@@ -1138,13 +1196,12 @@ fn enumerate_skill_specs(
 ///     which is what the per-ability route exists to avoid.
 fn enumerate_other_agent_specs(
     self_agent_name: &str,
-) -> Vec<crate::daemon::execution::mission::agent_ability_specs::AgentAbilitySpec> {
-    let registry = match crate::daemon::persistence::agent_registry::load_agents() {
-        Ok(r) => r,
-        Err(_) => return Vec::new(),
-    };
+) -> anyhow::Result<Vec<crate::daemon::execution::mission::agent_ability_specs::AgentAbilitySpec>> {
+    let snapshot = AgentAggregateRepository::load_snapshot().map_err(|error| {
+        anyhow::anyhow!("load cross-agent ability registry projection: {error:#}")
+    })?;
     let mut out = Vec::new();
-    for (other_name, other_entry) in &registry.agents {
+    for (other_name, other_entry) in snapshot.registered_agents() {
         if other_name == self_agent_name {
             continue;
         }
@@ -1159,7 +1216,7 @@ fn enumerate_other_agent_specs(
             out.push(spec);
         }
     }
-    out
+    Ok(out)
 }
 
 /// Build the system-prompt-style "Available skills" hint that we
@@ -1493,12 +1550,15 @@ fn format_cross_agent_hint(
 struct ChatArgs {
     prompt: String,
     context: Option<String>,
+    system_prompt: Option<String>,
+    structured: bool,
     session_id: Option<String>,
     skills: Selection,
     context_loaders: Selection,
     driver: DriverOverrides,
     stream: bool,
     attachments: Vec<AttachmentSpec>,
+    execution: AgentExecution,
 }
 
 #[derive(Debug, Clone)]
@@ -1539,49 +1599,282 @@ impl ChatArgs {
         let obj = args
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("chat: arguments must be a JSON object"))?;
-        let prompt = obj
-            .get("prompt")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("chat: `prompt` (string) required"))?
-            .to_string();
-        if prompt.is_empty() {
-            anyhow::bail!("chat: `prompt` must not be empty");
-        }
-        let context = obj
-            .get("context")
-            .and_then(Value::as_str)
-            .map(str::to_string);
-        let session_id = obj
-            .get("session_id")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        reject_unknown_fields(
+            obj,
+            "chat",
+            &[
+                "prompt",
+                "messages",
+                "context",
+                "session_id",
+                "skills",
+                "context_loaders",
+                "driver",
+                "stream",
+                "attachments",
+                "execution",
+            ],
+        )?;
+        let context = optional_string_field(obj, "context")?;
+        let session_id = optional_string_field(obj, "session_id")?;
+        let (prompt, system_prompt, structured) = match (obj.get("prompt"), obj.get("messages")) {
+            (Some(_), Some(_)) => {
+                anyhow::bail!("chat: exactly one of `prompt` or `messages` is required")
+            }
+            (Some(value), None) => {
+                let prompt = value
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("chat: `prompt` must be a string"))?;
+                if prompt.is_empty() {
+                    anyhow::bail!("chat: `prompt` must not be empty");
+                }
+                (prompt.to_string(), None, false)
+            }
+            (None, Some(value)) => {
+                let (system, user) = parse_structured_messages(value)?;
+                (user, system, true)
+            }
+            (None, None) => {
+                anyhow::bail!("chat: exactly one of `prompt` or `messages` is required")
+            }
+        };
+        let selection_default = || {
+            if structured {
+                Selection::none()
+            } else {
+                Selection::default()
+            }
+        };
         let skills = obj
             .get("skills")
-            .map(Selection::parse)
+            .map(|value| Selection::parse(value, "skills"))
             .transpose()?
-            .unwrap_or_default();
+            .unwrap_or_else(selection_default);
         let context_loaders = obj
             .get("context_loaders")
-            .map(Selection::parse)
+            .map(|value| Selection::parse(value, "context_loaders"))
             .transpose()?
-            .unwrap_or_default();
+            .unwrap_or_else(selection_default);
         let driver = obj
             .get("driver")
             .map(parse_driver_overrides)
             .transpose()?
             .unwrap_or_default();
-        let stream = obj.get("stream").and_then(Value::as_bool).unwrap_or(false);
+        let stream = optional_bool_field(obj, "stream")?.unwrap_or(false);
         let attachments = parse_attachments(obj.get("attachments"))?;
+        let execution = parse_execution(obj.get("execution"), structured)?;
+        if structured {
+            if context.is_some() {
+                anyhow::bail!("chat: `context` cannot be combined with `messages`");
+            }
+            if session_id.is_some() {
+                anyhow::bail!("chat: structured single-turn messages cannot resume `session_id`");
+            }
+            if !skills.is_none() || !context_loaders.is_none() {
+                anyhow::bail!(
+                    "chat: structured benchmark messages require skills.mode and context_loaders.mode to be `none`"
+                );
+            }
+            if !attachments.is_empty() {
+                anyhow::bail!("chat: strict structured messages do not accept attachments");
+            }
+            if execution.isolation != DriverIsolation::Strict {
+                anyhow::bail!("chat: structured messages require execution.isolation `strict`");
+            }
+            if execution.cwd.is_none() {
+                anyhow::bail!("chat: structured messages require execution.cwd");
+            }
+        }
         Ok(Self {
             prompt,
             context,
+            system_prompt,
+            structured,
             session_id,
             skills,
             context_loaders,
             driver,
             stream,
             attachments,
+            execution,
         })
+    }
+}
+
+fn parse_structured_messages(value: &Value) -> anyhow::Result<(Option<String>, String)> {
+    let messages = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("chat: `messages` must be an array"))?;
+    if !(1..=2).contains(&messages.len()) {
+        anyhow::bail!(
+            "chat: `messages` supports exactly one user message with one optional preceding system message"
+        );
+    }
+    let mut parsed = Vec::with_capacity(messages.len());
+    for (index, message) in messages.iter().enumerate() {
+        let object = message
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("chat: messages[{index}] must be an object"))?;
+        reject_unknown_fields(
+            object,
+            &format!("chat: messages[{index}]"),
+            &["role", "content"],
+        )?;
+        let role = object
+            .get("role")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("chat: messages[{index}].role must be a string"))?;
+        let content = object
+            .get("content")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("chat: messages[{index}].content must be a string"))?;
+        if content.is_empty() {
+            anyhow::bail!("chat: messages[{index}].content must not be empty");
+        }
+        parsed.push((role, content));
+    }
+    match parsed.as_slice() {
+        [("user", user)] => Ok((None, (*user).to_string())),
+        [("system", system), ("user", user)] => {
+            Ok((Some((*system).to_string()), (*user).to_string()))
+        }
+        _ => anyhow::bail!(
+            "chat: `messages` must be `[user]` or `[system, user]`; assistant history and multi-turn input are not supported"
+        ),
+    }
+}
+
+fn parse_execution(value: Option<&Value>, structured: bool) -> anyhow::Result<AgentExecution> {
+    let Some(value) = value else {
+        return Ok(AgentExecution {
+            isolation: if structured {
+                DriverIsolation::Strict
+            } else {
+                DriverIsolation::Agent
+            },
+            ..AgentExecution::default()
+        });
+    };
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("chat: `execution` must be an object"))?;
+    reject_unknown_fields(
+        object,
+        "chat: execution",
+        &["cwd", "timeout_ms", "isolation"],
+    )?;
+    let cwd = optional_string_field(object, "cwd")?.map(PathBuf::from);
+    if let Some(path) = cwd.as_deref() {
+        if path.as_os_str().is_empty()
+            || path
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_)))
+        {
+            anyhow::bail!(
+                "chat: execution.cwd must be a non-empty agent-root-relative descendant path"
+            );
+        }
+    }
+    let timeout = match object.get("timeout_ms") {
+        None => None,
+        Some(Value::Number(number)) => {
+            let value = number.as_u64().ok_or_else(|| {
+                anyhow::anyhow!("chat: execution.timeout_ms must be a positive integer")
+            })?;
+            if value == 0 || value > MAX_INVOCATION_TIMEOUT_MS {
+                anyhow::bail!(
+                    "chat: execution.timeout_ms must be between 1 and {MAX_INVOCATION_TIMEOUT_MS}"
+                );
+            }
+            Some(Duration::from_millis(value))
+        }
+        Some(_) => {
+            anyhow::bail!("chat: execution.timeout_ms must be a positive integer")
+        }
+    };
+    let isolation = match object.get("isolation").and_then(Value::as_str) {
+        None if structured => DriverIsolation::Strict,
+        None => DriverIsolation::Agent,
+        Some("agent") => DriverIsolation::Agent,
+        Some("strict") => DriverIsolation::Strict,
+        Some(other) => anyhow::bail!(
+            "chat: invalid execution.isolation {other:?}; expected `agent` or `strict`"
+        ),
+    };
+    Ok(AgentExecution {
+        cwd,
+        timeout,
+        isolation,
+    })
+}
+
+fn reject_unknown_fields(
+    obj: &Map<String, Value>,
+    context: &str,
+    allowed: &[&str],
+) -> anyhow::Result<()> {
+    let mut unknown: Vec<&str> = obj
+        .keys()
+        .map(String::as_str)
+        .filter(|field| !allowed.contains(field))
+        .collect();
+    unknown.sort_unstable();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "{context}: unsupported field(s): {}",
+        unknown
+            .iter()
+            .map(|field| format!("`{field}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn optional_string_field(
+    obj: &Map<String, Value>,
+    field: &'static str,
+) -> anyhow::Result<Option<String>> {
+    match obj.get(field) {
+        None => Ok(None),
+        Some(value) => Ok(Some(
+            value
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("chat: `{field}` must be a string"))?
+                .to_string(),
+        )),
+    }
+}
+
+fn optional_bool_field(
+    obj: &Map<String, Value>,
+    field: &'static str,
+) -> anyhow::Result<Option<bool>> {
+    match obj.get(field) {
+        None => Ok(None),
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| anyhow::anyhow!("chat: `{field}` must be a boolean"))
+            .map(Some),
+    }
+}
+
+fn optional_attachment_string_field(
+    obj: &Map<String, Value>,
+    idx: usize,
+    field: &'static str,
+) -> anyhow::Result<Option<String>> {
+    match obj.get(field) {
+        None => Ok(None),
+        Some(value) => Ok(Some(
+            value
+                .as_str()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("chat: attachments[{idx}].{field} must be a string")
+                })?
+                .to_string(),
+        )),
     }
 }
 
@@ -1601,9 +1894,14 @@ fn parse_attachments(value: Option<&Value>) -> anyhow::Result<Vec<AttachmentSpec
         let obj = item
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("chat: attachments[{idx}] must be an object"))?;
-        let path = obj.get("path").and_then(Value::as_str);
-        let ura = obj.get("ura").and_then(Value::as_str);
-        match (path, ura) {
+        reject_unknown_fields(
+            obj,
+            &format!("chat: attachments[{idx}]"),
+            &["path", "ura", "filename", "encoding"],
+        )?;
+        let path = optional_attachment_string_field(obj, idx, "path")?;
+        let ura = optional_attachment_string_field(obj, idx, "ura")?;
+        match (path.as_deref(), ura.as_deref()) {
             (Some(_), Some(_)) => {
                 anyhow::bail!("chat: attachments[{idx}] must set `path` or `ura`, not both")
             }
@@ -1611,15 +1909,22 @@ fn parse_attachments(value: Option<&Value>) -> anyhow::Result<Vec<AttachmentSpec
                 if path.is_empty() {
                     anyhow::bail!("chat: attachments[{idx}].path must not be empty");
                 }
-                let encoding = match obj.get("encoding").and_then(Value::as_str) {
-                    None => AttachmentEncoding::default(),
-                    Some("utf8") => AttachmentEncoding::Utf8,
-                    Some("base64") => AttachmentEncoding::Base64,
-                    Some(other) => anyhow::bail!(
-                        "chat: attachments[{idx}].encoding must be \"utf8\" or \"base64\" \
+                if obj.contains_key("filename") {
+                    anyhow::bail!(
+                        "chat: attachments[{idx}].filename is only valid with `ura` — \
+                         path attachments are embedded inline"
+                    );
+                }
+                let encoding =
+                    match optional_attachment_string_field(obj, idx, "encoding")?.as_deref() {
+                        None => AttachmentEncoding::default(),
+                        Some("utf8") => AttachmentEncoding::Utf8,
+                        Some("base64") => AttachmentEncoding::Base64,
+                        Some(other) => anyhow::bail!(
+                            "chat: attachments[{idx}].encoding must be \"utf8\" or \"base64\" \
                          (got {other:?})"
-                    ),
-                };
+                        ),
+                    };
                 out.push(AttachmentSpec::Path {
                     path: path.to_string(),
                     encoding,
@@ -1635,10 +1940,7 @@ fn parse_attachments(value: Option<&Value>) -> anyhow::Result<Vec<AttachmentSpec
                          URA attachments are materialised to disk, not inlined"
                     );
                 }
-                let filename = obj
-                    .get("filename")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
+                let filename = optional_attachment_string_field(obj, idx, "filename")?;
                 out.push(AttachmentSpec::Ura {
                     ura: ura.to_string(),
                     filename,
@@ -1672,21 +1974,35 @@ struct Selection {
 }
 
 impl Selection {
-    fn parse(value: &Value) -> anyhow::Result<Self> {
+    fn none() -> Self {
+        Self {
+            mode: SelectionMode::None,
+            include: Vec::new(),
+            exclude: Vec::new(),
+        }
+    }
+
+    fn is_none(&self) -> bool {
+        self.mode == SelectionMode::None && self.include.is_empty() && self.exclude.is_empty()
+    }
+
+    fn parse(value: &Value, field: &'static str) -> anyhow::Result<Self> {
         let obj = value
             .as_object()
-            .ok_or_else(|| anyhow::anyhow!("chat: skills/context_loaders must be an object"))?;
-        let mode = match obj.get("mode").and_then(Value::as_str) {
+            .ok_or_else(|| anyhow::anyhow!("chat: {field} must be an object"))?;
+        reject_unknown_fields(
+            obj,
+            &format!("chat: {field}"),
+            &["mode", "include", "exclude"],
+        )?;
+        let mode = match optional_selection_mode_field(obj, field)? {
             None => SelectionMode::Auto,
-            Some("auto") => SelectionMode::Auto,
-            Some("none") => SelectionMode::None,
-            Some("explicit") => SelectionMode::Explicit,
-            Some(other) => anyhow::bail!(
-                "chat: invalid mode {other:?}; expected one of \"auto\", \"none\", \"explicit\""
-            ),
+            Some(SelectionMode::Auto) => SelectionMode::Auto,
+            Some(SelectionMode::None) => SelectionMode::None,
+            Some(SelectionMode::Explicit) => SelectionMode::Explicit,
         };
-        let include = string_array(obj.get("include"), "include")?;
-        let exclude = string_array(obj.get("exclude"), "exclude")?;
+        let include = string_array(obj.get("include"), &format!("{field}.include"))?;
+        let exclude = string_array(obj.get("exclude"), &format!("{field}.exclude"))?;
         Ok(Self {
             mode,
             include,
@@ -1708,6 +2024,26 @@ impl Selection {
             SelectionMode::None => false,
             SelectionMode::Explicit => self.include.iter().any(|i| i == name),
         }
+    }
+}
+
+fn optional_selection_mode_field(
+    obj: &Map<String, Value>,
+    field: &'static str,
+) -> anyhow::Result<Option<SelectionMode>> {
+    match obj.get("mode") {
+        None => Ok(None),
+        Some(value) => match value
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("chat: {field}.mode must be a string"))?
+        {
+            "auto" => Ok(Some(SelectionMode::Auto)),
+            "none" => Ok(Some(SelectionMode::None)),
+            "explicit" => Ok(Some(SelectionMode::Explicit)),
+            other => anyhow::bail!(
+                "chat: invalid {field}.mode {other:?}; expected one of \"auto\", \"none\", \"explicit\""
+            ),
+        },
     }
 }
 
@@ -1733,7 +2069,15 @@ fn parse_driver_overrides(value: &Value) -> anyhow::Result<DriverOverrides> {
     let obj = value
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("chat: `driver` must be an object"))?;
-    let model = obj.get("model").and_then(Value::as_str).map(str::to_string);
+    let model = match obj.get("model") {
+        None => None,
+        Some(value) => Some(
+            value
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("chat: driver.model must be a string"))?
+                .to_string(),
+        ),
+    };
     // Validate temperature shape first (so a malformed value still
     // surfaces a precise error) before the unsupported-knob rejection.
     let temperature = match obj.get("temperature") {
@@ -1760,6 +2104,23 @@ fn parse_driver_overrides(value: &Value) -> anyhow::Result<DriverOverrides> {
     if max_tokens.is_some() {
         unsupported.push("max_tokens");
     }
+    let mut unknown: Vec<&str> = obj
+        .keys()
+        .map(String::as_str)
+        .filter(|field| !matches!(*field, "model" | "temperature" | "max_tokens"))
+        .collect();
+    unknown.sort_unstable();
+    if !unknown.is_empty() {
+        anyhow::bail!(
+            "chat: unsupported driver field(s): {}. Canonical chat lifecycle uses top-level \
+             `session_id`; driver-shaped lifecycle or runtime knobs are not accepted.",
+            unknown
+                .iter()
+                .map(|field| format!("driver.{field}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+    }
     if !unsupported.is_empty() {
         anyhow::bail!(
             "chat: driver.{} not supported by the v1 claude-code / codex CLI drivers \
@@ -1772,13 +2133,10 @@ fn parse_driver_overrides(value: &Value) -> anyhow::Result<DriverOverrides> {
         model,
         temperature,
         max_tokens,
-        // resume_thread_id is not parsed from the `driver` block; it
-        // is set by the chat handler from the caller's top-level
-        // `session_id` argument (see compute_resume_thread_id at
-        // the call site). Keeping it None here means a caller that
-        // tries to set `driver.resume_thread_id` is silently
-        // ignored — the canonical path is `session_id`, not a
-        // driver-shaped knob, and we do not want two surfaces.
+        // Resume state is derived only from the caller's top-level
+        // `session_id`. The parser rejects `driver.resume_thread_id`
+        // above, so this field cannot become a second lifecycle
+        // input surface.
         resume_thread_id: None,
     })
 }
@@ -1812,11 +2170,11 @@ fn string_array(value: Option<&Value>, field: &str) -> anyhow::Result<Vec<String
 /// any shape that matches that form regardless of the version nibble
 /// — accepting a UUIDv4 the operator fabricated for a test or replay
 /// is harmless; codex itself does the strict validation when we hand
-/// the id to `exec resume`. Strings that match our local `uuid_like`
-/// fallback (`<32-hex>-<16-hex>`) are intentionally NOT accepted —
-/// those are the chat ability's own minted ids that no resume-capable
-/// driver knows about; passing them through would force the driver
-/// into a UUID-parse failure on every legacy session.
+/// the id to `exec resume`. Strings that match the chat ability's
+/// locally minted id shape (`<32-hex>-<16-hex>`) are intentionally NOT
+/// accepted — no resume-capable driver owns those ids, so forwarding
+/// them would turn a local session token into a driver UUID parse
+/// failure.
 fn looks_like_thread_id(s: &str) -> bool {
     let bytes = s.as_bytes();
     if bytes.len() != 36 {
@@ -1835,6 +2193,41 @@ fn looks_like_thread_id(s: &str) -> bool {
         }
     }
     true
+}
+
+/// Canonical lifecycle state for the chat session id surfaced to callers.
+///
+/// The selector is shared by RPC and stream terminal frames:
+/// 1. `ResumeRequested` preserves the caller-owned driver thread id.
+/// 2. `DriverMinted` adopts a fresh driver thread id for future resume.
+/// 3. `LocalResolved` uses the handler-resolved local session handle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChatTurnSessionId {
+    ResumeRequested(String),
+    DriverMinted(String),
+    LocalResolved(String),
+}
+
+impl ChatTurnSessionId {
+    fn select(
+        resume_thread_id: Option<&str>,
+        driver_thread_id: Option<&str>,
+        local_session_id: &str,
+    ) -> Self {
+        if let Some(resume_id) = resume_thread_id {
+            Self::ResumeRequested(resume_id.to_string())
+        } else if let Some(driver_id) = driver_thread_id {
+            Self::DriverMinted(driver_id.to_string())
+        } else {
+            Self::LocalResolved(local_session_id.to_string())
+        }
+    }
+
+    fn into_string(self) -> String {
+        match self {
+            Self::ResumeRequested(id) | Self::DriverMinted(id) | Self::LocalResolved(id) => id,
+        }
+    }
 }
 
 /// Mint a UUID-shaped session id without pulling in the `uuid` crate
@@ -1861,10 +2254,37 @@ mod tests {
     //! agent directories and would otherwise spawn subprocesses.
 
     use super::*;
-    use crate::daemon::persistence::agent_registry::{AgentRegistry, AgentType};
+    use crate::core::agent::spec::RuntimeKind;
+    use crate::daemon::persistence::agent_registry::AgentRegistry;
 
     fn entry() -> AgentEntry {
-        AgentEntry::new(AgentType::ClaudeCode, None)
+        AgentEntry::new(RuntimeKind::ClaudeCode, None)
+    }
+
+    fn materialized_entry(name: &str) -> AgentEntry {
+        let root = crate::daemon::persistence::config::agents_root().join(name);
+        std::fs::create_dir_all(root.join("abilities")).expect("agent fixture root");
+        let spec = crate::core::agent::spec::AgentSpec::new(name, RuntimeKind::ClaudeCode);
+        std::fs::write(
+            root.join("agent.toml"),
+            spec.to_toml_string().expect("canonical agent fixture spec"),
+        )
+        .expect("write canonical agent fixture spec");
+        let mut entry = entry();
+        entry.root_path = Some(root);
+        entry
+    }
+
+    fn agent_chat_test_catalog() -> AxonAbilityCatalog {
+        let authority = crate::daemon::ability::dispatch::AbilityAuthorityContext::for_device_authority_root_with_hosted_agents(
+            "easynet:///r/test/device/agent-chat",
+            [
+                crate::core::ura::agent_ura("test", "local", "alice"),
+                crate::core::ura::agent_ura("test", "local", "bob"),
+            ],
+        )
+        .expect("chat fixture hosted Agent authority");
+        AxonAbilityCatalog::new_metadata_only_with_authority_context(authority)
     }
 
     #[test]
@@ -1872,10 +2292,14 @@ mod tests {
         // Hold the env lock: register() consults HOME-rooted registry
         // state, so a concurrent HOME-mutating test must not race it.
         let _home = crate::cli::commands::test_support::HomeGuard::new();
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = agent_chat_test_catalog();
         let mut agents = AgentRegistry::default();
-        agents.agents.insert("alice".into(), entry());
-        agents.agents.insert("bob".into(), entry());
+        agents
+            .agents
+            .insert("alice".into(), materialized_entry("alice"));
+        agents
+            .agents
+            .insert("bob".into(), materialized_entry("bob"));
         register(
             &mut reg,
             &agents,
@@ -1884,6 +2308,11 @@ mod tests {
         );
         assert!(reg.get_rpc("alice.chat").is_some());
         assert!(reg.get_rpc("bob.chat").is_some());
+        let alice_chat = reg
+            .control_plane_record_for_mode("alice.chat", crate::daemon::ability::CallMode::Rpc)
+            .expect("chat descriptor lookup is unambiguous")
+            .expect("chat registration publishes a descriptor");
+        assert_eq!(alice_chat.descriptor().metadata["exposure"], "task");
         // Stream handler registered too — same name, different mode.
         assert!(reg.get_stream("alice.chat").is_some());
         assert!(reg.get_stream("bob.chat").is_some());
@@ -1897,17 +2326,17 @@ mod tests {
     }
 
     #[test]
-    fn register_does_not_mount_unbound_manifest_as_chat_fallback() {
+    fn register_does_not_mount_unbound_manifest_as_chat_route() {
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let root = crate::daemon::persistence::config::agents_root().join("alice");
         let abilities_dir = root.join("abilities");
         std::fs::create_dir_all(&abilities_dir).expect("abilities dir");
         std::fs::write(
             root.join("agent.toml"),
-            "name = \"alice\"\nruntime = \"claude-code\"\n",
+            "schema_version = \"1\"\nname = \"alice\"\nruntime = \"claude-code\"\n",
         )
         .expect("agent.toml");
-        let manifest = crate::core::ability::spec::AbilityManifest::new(
+        let manifest = crate::daemon::ability::manifest::AbilityManifest::new(
             "echo",
             "Unbound manifest.",
             json!({"type": "object"}),
@@ -1923,7 +2352,7 @@ mod tests {
         entry.root_path = Some(root);
         let mut agents = AgentRegistry::default();
         agents.agents.insert("alice".into(), entry);
-        let mut reg = AxonAbilityCatalog::new();
+        let mut reg = agent_chat_test_catalog();
         register(
             &mut reg,
             &agents,
@@ -1979,6 +2408,15 @@ mod tests {
         // literal "lifelong" never appears on the wire as a session id.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let bound = "38e5640c-6843-4f15-8f3a-2c8de75d0209";
+        crate::daemon::persistence::chat_sessions::write_turn(
+            "alice",
+            bound,
+            "seed",
+            "seed",
+            &[],
+            &json!({}),
+        )
+        .expect("seed bound session");
         crate::daemon::persistence::chat_sessions::set_lifelong_session("alice", bound)
             .expect("bind");
         let entry = entry();
@@ -2042,7 +2480,7 @@ mod tests {
         // `alice/abilities/*.toml` into the real `~/.easynet` between
         // thread switches would inject extra skills and bump the
         // snapshot length to 2. Scoping HOME to a private tmpdir
-        // makes this test see the empty fallback every time, which
+        // makes this test see the empty baseline every time, which
         // is what the assertion expects.
         let _g = crate::cli::commands::test_support::HomeGuard::new();
         let entry = entry();
@@ -2060,7 +2498,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_accepts_legacy_prompt_only_args() {
+    fn parse_accepts_canonical_minimal_prompt_args() {
         let args = ChatArgs::parse(&json!({"prompt": "hi"})).unwrap();
         assert_eq!(args.prompt, "hi");
         assert!(args.context.is_none());
@@ -2069,10 +2507,123 @@ mod tests {
         // Defaults: skills auto, context_loaders auto.
         assert_eq!(args.skills.mode, SelectionMode::Auto);
         assert_eq!(args.context_loaders.mode, SelectionMode::Auto);
+        assert!(!args.structured);
+        assert_eq!(args.execution.isolation, DriverIsolation::Agent);
     }
 
     #[test]
-    fn parse_accepts_legacy_prompt_and_context() {
+    fn parse_accepts_strict_structured_system_and_user_messages() {
+        let args = ChatArgs::parse(&json!({
+            "messages": [
+                {"role": "system", "content": "translate SIGNAL"},
+                {"role": "user", "content": "count cases"}
+            ],
+            "execution": {
+                "cwd": "benchmark/run-1",
+                "timeout_ms": 300000
+            }
+        }))
+        .unwrap();
+        assert!(args.structured);
+        assert_eq!(args.system_prompt.as_deref(), Some("translate SIGNAL"));
+        assert_eq!(args.prompt, "count cases");
+        assert_eq!(args.execution.isolation, DriverIsolation::Strict);
+        assert_eq!(
+            args.execution.cwd.as_deref(),
+            Some(std::path::Path::new("benchmark/run-1"))
+        );
+        assert_eq!(args.execution.timeout, Some(Duration::from_secs(300)));
+        assert!(args.skills.is_none());
+        assert!(args.context_loaders.is_none());
+    }
+
+    #[test]
+    fn parse_accepts_strict_structured_user_only_message() {
+        let args = ChatArgs::parse(&json!({
+            "messages": [{"role": "user", "content": "count cases"}],
+            "execution": {"cwd": "benchmark/run-2"}
+        }))
+        .unwrap();
+        assert!(args.system_prompt.is_none());
+        assert_eq!(args.prompt, "count cases");
+    }
+
+    #[test]
+    fn parse_rejects_prompt_and_messages_together() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "prompt-shape",
+            "messages": [{"role": "user", "content": "structured"}],
+            "execution": {"cwd": "benchmark/run"}
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("exactly one"));
+    }
+
+    #[test]
+    fn parse_rejects_structured_assistant_or_multiturn_history() {
+        for messages in [
+            json!([
+                {"role": "assistant", "content": "prior"},
+                {"role": "user", "content": "next"}
+            ]),
+            json!([
+                {"role": "system", "content": "rules"},
+                {"role": "user", "content": "first"},
+                {"role": "user", "content": "second"}
+            ]),
+        ] {
+            let err = ChatArgs::parse(&json!({
+                "messages": messages,
+                "execution": {"cwd": "benchmark/run"}
+            }))
+            .unwrap_err();
+            let message = format!("{err}");
+            assert!(message.contains("messages"));
+        }
+    }
+
+    #[test]
+    fn parse_rejects_structured_ambient_context_surfaces() {
+        for extra in [
+            json!({"context": "ambient"}),
+            json!({"session_id": "chat-existing"}),
+            json!({"attachments": [{"path": "secret"}]}),
+            json!({"skills": {"mode": "auto"}}),
+            json!({"context_loaders": {"mode": "explicit", "include": ["memory"]}}),
+            json!({"execution": {"cwd": "benchmark/run", "isolation": "agent"}}),
+        ] {
+            let mut request = json!({
+                "messages": [{"role": "user", "content": "case"}],
+                "execution": {"cwd": "benchmark/run"}
+            });
+            request
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            assert!(ChatArgs::parse(&request).is_err(), "request={request}");
+        }
+    }
+
+    #[test]
+    fn parse_rejects_unconfined_or_unbounded_execution() {
+        for execution in [
+            json!({"cwd": "/tmp/escape"}),
+            json!({"cwd": "../escape"}),
+            json!({"cwd": "benchmark/run", "timeout_ms": 0}),
+            json!({"cwd": "benchmark/run", "timeout_ms": MAX_INVOCATION_TIMEOUT_MS + 1}),
+        ] {
+            let err = ChatArgs::parse(&json!({
+                "messages": [{"role": "user", "content": "case"}],
+                "execution": execution
+            }))
+            .unwrap_err();
+            let message = format!("{err}");
+            assert!(message.contains("execution"), "{message}");
+        }
+    }
+
+    #[test]
+    fn parse_accepts_canonical_prompt_and_context_args() {
         let args = ChatArgs::parse(&json!({
             "prompt": "hi",
             "context": "you are helpful"
@@ -2097,6 +2648,45 @@ mod tests {
     fn parse_rejects_non_object_args() {
         let err = ChatArgs::parse(&json!(["not", "an", "object"])).unwrap_err();
         assert!(format!("{err}").contains("object"));
+    }
+
+    #[test]
+    fn parse_rejects_unknown_top_level_fields() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "hi",
+            "driver_context": "second-shape"
+        }))
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("unsupported field"));
+        assert!(msg.contains("driver_context"));
+    }
+
+    #[test]
+    fn parse_rejects_wrongly_typed_optional_string_fields() {
+        for field in ["context", "session_id"] {
+            let mut payload = json!({"prompt": "hi"});
+            payload
+                .as_object_mut()
+                .expect("object payload")
+                .insert(field.to_string(), json!(123));
+            let err = ChatArgs::parse(&payload).unwrap_err();
+            let msg = format!("{err}");
+            assert!(
+                msg.contains(&format!("`{field}` must be a string")),
+                "wrong error for {field}: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_rejects_wrongly_typed_stream_flag() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "hi",
+            "stream": "yes"
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("`stream` must be a boolean"));
     }
 
     #[test]
@@ -2158,6 +2748,16 @@ mod tests {
     }
 
     #[test]
+    fn parse_rejects_non_string_driver_model() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "hi",
+            "driver": {"model": 42}
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("driver.model must be a string"));
+    }
+
+    #[test]
     fn parse_rejects_both_unsupported_knobs_in_one_error() {
         // When the caller sets both, the error must name both — not
         // just the first one we happened to check — so they fix the
@@ -2173,6 +2773,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_rejects_driver_resume_thread_id_as_second_lifecycle_surface() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "hi",
+            "driver": {"resume_thread_id": "018f14f8-6bd7-7a21-8d25-7e7e3c8f6a11"}
+        }))
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("driver.resume_thread_id"));
+        assert!(
+            msg.contains("top-level `session_id`"),
+            "error must point at the canonical lifecycle field: {msg}"
+        );
+    }
+
+    #[test]
     fn parse_rejects_unknown_skills_mode() {
         let err = ChatArgs::parse(&json!({
             "prompt": "hi",
@@ -2180,6 +2795,41 @@ mod tests {
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("mode"));
+    }
+
+    #[test]
+    fn parse_rejects_wrongly_typed_selection_mode() {
+        for field in ["skills", "context_loaders"] {
+            let mut payload = serde_json::Map::new();
+            payload.insert("prompt".to_string(), json!("hi"));
+            payload.insert(field.to_string(), json!({"mode": 123}));
+            let err = ChatArgs::parse(&Value::Object(payload)).unwrap_err();
+            let msg = format!("{err}");
+            assert!(
+                msg.contains(&format!("{field}.mode must be a string")),
+                "wrong error for {field}: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_rejects_unknown_selection_fields() {
+        for field in ["skills", "context_loaders"] {
+            let mut payload = serde_json::Map::new();
+            payload.insert("prompt".to_string(), json!("hi"));
+            payload.insert(
+                field.to_string(),
+                json!({"mode": "auto", "legacy_filter": true}),
+            );
+            let err = ChatArgs::parse(&Value::Object(payload)).unwrap_err();
+            let msg = format!("{err}");
+            assert!(
+                msg.contains(&format!("chat: {field}")),
+                "wrong context: {msg}"
+            );
+            assert!(msg.contains("unsupported field"), "wrong error: {msg}");
+            assert!(msg.contains("legacy_filter"), "wrong field: {msg}");
+        }
     }
 
     #[test]
@@ -2325,6 +2975,22 @@ mod tests {
     }
 
     #[test]
+    fn chat_turn_session_id_prefers_resume_then_driver_then_local() {
+        assert_eq!(
+            ChatTurnSessionId::select(Some("resume-id"), Some("driver-id"), "local-id"),
+            ChatTurnSessionId::ResumeRequested("resume-id".to_string())
+        );
+        assert_eq!(
+            ChatTurnSessionId::select(None, Some("driver-id"), "local-id"),
+            ChatTurnSessionId::DriverMinted("driver-id".to_string())
+        );
+        assert_eq!(
+            ChatTurnSessionId::select(None, None, "local-id"),
+            ChatTurnSessionId::LocalResolved("local-id".to_string())
+        );
+    }
+
+    #[test]
     fn stream_handler_resume_id_only_set_for_uuid_shaped_session() {
         // Pin the wiring contract for the stream path:
         //   - A caller-supplied uuid-shaped session_id should be
@@ -2393,35 +3059,25 @@ mod tests {
     fn kernel_invoke_routes_chat_through_registered_handler() {
         use crate::daemon::boot::kernel::api::KernelApi;
         use crate::daemon::boot::kernel::Kernel;
-        use crate::daemon::federation::gateway::NoopGateway;
-        use crate::daemon::invocation::receipts::runtime_record::{
-            RuntimeCausalContext, RuntimeInvocation,
-        };
-        use easynet_axon::invocation::{
-            make_ability, sign_descriptor_bound_invocation, signing_key_from_bytes, AxonError,
-            KeyResolver, LocalRuntime,
-        };
-        use ed25519_dalek::VerifyingKey;
+        use axon_sdk::invocation::{make_ability, InvocationState};
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let _g = crate::cli::commands::test_support::HomeGuard::new();
-
-        struct FixedKey(VerifyingKey);
-        impl KeyResolver for FixedKey {
-            fn resolve(&self, _agent_ura: &str) -> Result<VerifyingKey, AxonError> {
-                Ok(self.0)
-            }
-        }
 
         // Fake chat handler — increments a counter on every call so we
         // can prove the registered handler is the one that fired.
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_for_handler = Arc::clone(&counter);
-        let rt = LocalRuntime::new();
-        let chat_options = easynet_axon::invocation::AbilityOptions::default()
-            .with_modes(easynet_axon::invocation::AbilityCallModes::RPC)
+        let rt = crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+            crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+            None,
+        );
+        let chat_options = axon_sdk::invocation::AbilityOptions::default()
+            .with_modes(axon_sdk::invocation::AbilityCallModes::RPC)
             .with_descriptor_proof(
                 crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+                "invoke",
+                [0x33; 32],
                 [0x11; 32],
                 [0x22; 32],
             );
@@ -2441,7 +3097,7 @@ mod tests {
                     async move {
                         counter_for_handler.fetch_add(1, Ordering::SeqCst);
                         serde_json::to_vec(&json!({"reply": "fake"})).map_err(|err| {
-                            easynet_axon::invocation::AxonError::internal(format!(
+                            axon_sdk::invocation::AxonError::internal(format!(
                                 "encode fake chat reply: {err}"
                             ))
                         })
@@ -2449,38 +3105,23 @@ mod tests {
                 }),
                 chat_options,
             ),
-            crate::support::async_bridge::NoRuntimeFallback::BuildCurrentThreadTokio,
+            crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
         )
         .expect("register runtime chat ability");
-        let signing_key = signing_key_from_bytes(&[0x42; 32]);
-        rt.set_admission_key_resolver(Arc::new(FixedKey(signing_key.verifying_key())));
-
-        let kernel = Kernel::new(Arc::new(NoopGateway));
+        let kernel = Kernel::new();
         kernel.set_local_runtime(Arc::clone(&rt));
 
         let device_ura = crate::core::ura::device_ura("localhost", "a");
-        let mut inv = RuntimeInvocation {
-            caller: device_ura.clone(),
-            callee: device_ura.clone(),
-            ability: "alice.chat".into(),
-            subject: device_ura,
-            nonce_hex: "aa".repeat(16),
-            causal_context: RuntimeCausalContext::Null,
-            args: json!({"prompt": "hi"}),
-            caller_signature: None,
-        };
-        let (envelope, _) = inv
-            .axon_descriptor_bound_envelope(
-                crate::daemon::ability::DEFAULT_ABILITY_DESCRIPTOR_VERSION,
+        let request = kernel
+            .prepare_local_system_rpc(
+                &device_ura,
+                "alice.chat",
+                &device_ura,
+                serde_json::to_vec(&json!({"prompt": "hi"})).unwrap(),
             )
-            .expect("descriptor-bound envelope");
-        let signature = sign_descriptor_bound_invocation(&signing_key, &envelope, "test-key");
-        inv.caller_signature = Some(signature.signature);
-        let receipt = kernel.invoke(inv).expect("invoke ok");
-        assert!(matches!(
-            receipt.terminal,
-            crate::daemon::invocation::receipts::runtime_record::TerminalState::Succeeded
-        ));
+            .expect("canonical descriptor-bound request");
+        let finalized = kernel.invoke(request).expect("invoke ok");
+        assert_eq!(finalized.terminal_state, InvocationState::Completed);
         assert_eq!(
             counter.load(Ordering::SeqCst),
             1,
@@ -2515,6 +3156,55 @@ mod tests {
         assert!(hint.contains("- `alice.fs.read` — Read a file from disk."));
         // Multi-line descriptions get trimmed to first line.
         assert!(!hint.contains("More detail"));
+    }
+
+    #[test]
+    fn enumerate_other_agent_specs_rejects_unreadable_registry_projection() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let state_dir = crate::daemon::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("state dir");
+        std::fs::write(state_dir.join("agents.json"), "{not-json")
+            .expect("corrupt agents registry");
+
+        let err = enumerate_other_agent_specs("alice")
+            .expect_err("corrupt registry must fail cross-agent discovery");
+        assert!(
+            format!("{err:#}").contains("load cross-agent ability registry projection"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn invoke_direct_rejects_unreadable_cross_agent_registry_projection() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let state_dir = crate::daemon::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("state dir");
+        std::fs::write(state_dir.join("agents.json"), "{not-json")
+            .expect("corrupt agents registry");
+
+        let err =
+            invoke_direct_with_progress("alice", &entry(), &[], json!({"prompt": "hi"}), None)
+                .expect_err("chat must fail before dispatch on corrupt cross-agent registry");
+        assert!(
+            format!("{err:#}").contains("load cross-agent ability registry projection"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn stream_handler_rejects_unreadable_cross_agent_registry_projection() {
+        let _home = crate::cli::commands::test_support::HomeGuard::new();
+        let state_dir = crate::daemon::persistence::config::state_dir();
+        std::fs::create_dir_all(&state_dir).expect("state dir");
+        std::fs::write(state_dir.join("agents.json"), "{not-json")
+            .expect("corrupt agents registry");
+
+        let err = stream_handler("alice", &entry(), &[], json!({"prompt": "hi"}))
+            .expect_err("stream chat must fail before dispatch on corrupt cross-agent registry");
+        assert!(
+            format!("{err:#}").contains("load cross-agent ability registry projection"),
+            "{err:#}"
+        );
     }
 
     #[test]
@@ -2612,6 +3302,52 @@ mod tests {
         }))
         .unwrap_err();
         assert!(format!("{err}").contains("only valid with `path`"));
+    }
+
+    #[test]
+    fn parse_attachments_rejects_filename_on_path() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "p",
+            "attachments": [{"path": "/etc/hosts", "filename": "hosts.txt"}]
+        }))
+        .unwrap_err();
+        assert!(format!("{err}").contains("filename is only valid with `ura`"));
+    }
+
+    #[test]
+    fn parse_attachments_rejects_unknown_item_fields() {
+        let err = ChatArgs::parse(&json!({
+            "prompt": "p",
+            "attachments": [{"path": "/etc/hosts", "content_type": "text/plain"}]
+        }))
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("unsupported field"));
+        assert!(msg.contains("content_type"));
+    }
+
+    #[test]
+    fn parse_attachments_rejects_wrongly_typed_string_fields() {
+        for (field, payload) in [
+            ("path", json!({"path": 123})),
+            ("ura", json!({"ura": 123})),
+            (
+                "filename",
+                json!({"ura": "easynet:///r/x/resource/u.files/a", "filename": 123}),
+            ),
+            ("encoding", json!({"path": "/etc/hosts", "encoding": 123})),
+        ] {
+            let err = ChatArgs::parse(&json!({
+                "prompt": "p",
+                "attachments": [payload]
+            }))
+            .unwrap_err();
+            let msg = format!("{err}");
+            assert!(
+                msg.contains(&format!(".{field} must be a string")),
+                "wrong error for {field}: {msg}"
+            );
+        }
     }
 
     #[test]
@@ -2899,7 +3635,7 @@ mod tests {
     /// any latency probe got a chance to run.
     #[test]
     fn build_agent_ability_handler_routes_shell_exec_manifest_through_shell_executor() {
-        use crate::core::ability::spec::{AbilityExec, AbilityManifest, ShellExec};
+        use crate::daemon::ability::manifest::{AbilityExec, AbilityManifest, ShellExec};
         use crate::daemon::persistence::agent_registry::AgentEntry;
 
         let _g = crate::cli::commands::test_support::HomeGuard::new();
@@ -2944,26 +3680,26 @@ mod tests {
         )
         .expect("HomeGuard'd tmp HOME is writable");
 
-        // Also seed a minimal agent.toml so AgentDirectory::open
-        // accepts the root. The fields here mirror what
-        // `easynet agent add` writes; the test is targeting
-        // dispatch, not the agent.toml schema.
+        // Also seed a canonical agent.toml so AgentDirectory::open accepts the
+        // root. The test is targeting dispatch, so it goes through the same
+        // AgentSpec writer as production rather than hand-writing schema
+        // details.
+        let mut spec = crate::core::agent::spec::AgentSpec::new(
+            "alice",
+            crate::core::agent::spec::RuntimeKind::ClaudeCode,
+        );
+        spec.model = Some("sonnet".to_string());
         std::fs::write(
             ws_root.join("agent.toml"),
-            r#"name = "alice"
-runtime = "claude-code"
-model = "sonnet"
-"#,
+            spec.to_toml_string()
+                .expect("test AgentSpec serialises with canonical schema stamp"),
         )
         .expect("agent.toml write");
 
         // Build the handler the same way the registration paths do:
         // boot-time pre-registration and HotAgentRegistrar both call
         // build_agent_ability_handler.
-        let mut entry = AgentEntry::new(
-            crate::daemon::persistence::agent_registry::AgentType::ClaudeCode,
-            None,
-        );
+        let mut entry = AgentEntry::new(crate::core::agent::spec::RuntimeKind::ClaudeCode, None);
         // `root_path` is the field that `manifests_for` (and
         // `abilities_for`) read to find the on-disk abilities/
         // directory. Without it the helpers fall back to the
@@ -2974,8 +3710,14 @@ model = "sonnet"
         let handler =
             build_agent_ability_handler("alice".to_string(), entry, loaders, "echo".to_string());
 
-        let envelope = handler(json!({ "value": "hello" }))
-            .expect("shell exec must succeed for printf %s hello");
+        let envelope = handler(
+            crate::daemon::ability::dispatch::EnvelopeContext::for_test(
+                "easynet:///r/test/agent/caller",
+                "easynet:///r/test/resource/shell",
+            ),
+            json!({ "value": "hello" }),
+        )
+        .expect("shell exec must succeed for printf %s hello");
 
         assert_eq!(
             envelope.get("fulfilled_by").and_then(|v| v.as_str()),

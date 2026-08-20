@@ -5,7 +5,7 @@
 // Description: One-shot remote command execution. Local targets
 //              dispatch to `process.exec` through the local daemon;
 //              remote targets reuse the same
-//              `federation.forward_invoke` path that powers
+//              canonical `Invocation::Invoke` RPC path that powers
 //              `easynet ability invoke --node`.
 //
 // What this CLI shim does
@@ -27,9 +27,10 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use clap::Args;
 use serde_json::{json, Value};
 
-#[cfg(not(feature = "axon-pb"))]
-use crate::support::platform::local_invoke::federation_not_wired_error;
-use crate::support::platform::local_invoke::invoke_local_ability;
+use crate::cli::daemon_client::remote_system_ability::{
+    invoke_remote_device_system_ability, RemoteTargetSystemAbility,
+};
+use crate::support::platform::local_invoke::LocalDaemonSystemAbilityIssuer;
 use crate::support::platform::{output, timeouts};
 
 #[derive(Debug, Args)]
@@ -37,8 +38,8 @@ pub struct ExecArgs {
     /// Target device node id. Pass `local` for this device or a
     /// real node id once federation Invoke is wired.
     pub node: String,
-    /// Per-call deadline in seconds. '0' inherits the runtime
-    /// default. Default: 60 s ('support::timeouts::INVOKE_DEFAULT_SECS').
+    /// Per-call process deadline in seconds. '0' inherits the runtime default.
+    /// Default: 1 hour, governed by `support::timeouts::INVOKE_DEFAULT_SECS`.
     #[arg(long, value_name = "SECS", default_value_t = timeouts::INVOKE_DEFAULT_SECS)]
     pub timeout: u64,
     /// Command to execute (everything after '--'). Joined with
@@ -55,14 +56,15 @@ pub fn run(args: ExecArgs) -> anyhow::Result<()> {
         "no command specified (use -- to separate)"
     );
 
-    let timeout_ms = timeouts::effective_ms(args.timeout).map_err(anyhow::Error::msg)?;
+    let timeout_ms =
+        timeouts::runtime_request_timeout_ms(args.timeout).map_err(anyhow::Error::msg)?;
     let payload = json!({
         "command": args.command[0].clone(),
         "args": args.command[1..].to_vec(),
         "timeout_ms": timeout_ms,
     });
     let result = if is_local_exec_target(&args.node) {
-        invoke_local_ability("process.exec", payload).context("invoke process.exec")?
+        invoke_local_process_exec(payload)?
     } else {
         invoke_remote_process_exec(&args.node, payload)?
     };
@@ -112,29 +114,18 @@ fn decode_exec_stream(result: &Value, field: &str) -> Vec<u8> {
         .unwrap_or_else(|_| raw.as_bytes().to_vec())
 }
 
-#[cfg(feature = "axon-pb")]
-fn invoke_remote_process_exec(node: &str, payload: Value) -> anyhow::Result<Value> {
-    let target_ura = crate::support::platform::remote_device::resolve_target_device_ura(node)?;
-    let caller_ura = crate::support::platform::remote_device::caller_device_ura_from_credentials();
-    let target_call = crate::daemon::invocation::routing::federation_invoke::RemoteAbilityInvocationTarget::for_target_owned_selector(
-        &target_ura,
-        "process.exec",
-    )?;
-    crate::daemon::invocation::routing::federation_invoke::invoke_via_federation_forward_target(
-        &target_call,
-        payload,
-        caller_ura.as_deref(),
-    )
-    .with_context(|| {
-        format!("invoke process.exec via federation.forward_invoke target={target_ura}")
-    })
+fn invoke_local_process_exec(payload: Value) -> anyhow::Result<Value> {
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_local_daemon_identity("process.exec", payload)
+        .context("invoke process.exec")
 }
 
-#[cfg(not(feature = "axon-pb"))]
-fn invoke_remote_process_exec(node: &str, _payload: Value) -> anyhow::Result<Value> {
-    Err(federation_not_wired_error(&format!(
-        "running a one-shot command on remote node {node:?}"
-    )))
+fn invoke_remote_process_exec(node: &str, payload: Value) -> anyhow::Result<Value> {
+    invoke_remote_device_system_ability(
+        node,
+        RemoteTargetSystemAbility::ProcessExec,
+        payload,
+        &format!("running a one-shot command on remote node {node:?}"),
+    )
 }
 
 #[cfg(test)]

@@ -36,7 +36,7 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::client::conn::http1;
 use hyper::header::ACCEPT;
-use hyper::{Request, Uri};
+use hyper::{Request, Uri as HttpLocator};
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 
@@ -129,17 +129,17 @@ async fn listener_connect_and_pump(
     last_event_id: &Arc<RwLock<Option<String>>>,
     sink_factory: &(dyn Fn() -> Box<dyn NotificationSink + Send> + Send + Sync),
 ) -> anyhow::Result<Option<Duration>> {
-    let target_uri: Uri = format!("{base_url}{endpoint}")
+    let transport_endpoint: HttpLocator = format!("{base_url}{endpoint}")
         .parse()
         .with_context(|| format!("invalid MCP URL: {base_url}{endpoint}"))?;
-    let host = target_uri
+    let host = transport_endpoint
         .host()
         .ok_or_else(|| anyhow!("MCP URL missing host"))?
         .to_string();
-    let port = target_uri
+    let port = transport_endpoint
         .port_u16()
         .unwrap_or(if tls.is_some() { 443 } else { 80 });
-    let path = target_uri
+    let path = transport_endpoint
         .path_and_query()
         .map(|p| p.as_str().to_string())
         .unwrap_or_else(|| "/".to_string());

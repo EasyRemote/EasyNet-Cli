@@ -1,0 +1,40 @@
+schema_version = "3"
+name = "federation.resolve"
+descriptor_version = "1.0.0"
+description = "Resolve live realm agents, devices, and advertised abilities from the federation directory."
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "route-target"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "read"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":true,\"destructive\":false,\"idempotent\":true,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = []
+additionalProperties = false
+
+[input_schema.properties.ability]
+type = "string"
+description = "Optional owner-local ability name to resolve."
+
+[input_schema.properties.agent_ura]
+type = "string"
+description = "Optional exact Agent or Device URA to resolve."
+
+[input_schema.properties.prefix]
+type = "string"
+description = "Optional directory prefix filter."
+
+[input_schema.properties.realm]
+type = "string"
+description = "Optional realm filter."

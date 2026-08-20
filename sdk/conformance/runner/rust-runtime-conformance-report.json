@@ -1,0 +1,205 @@
+{
+  "report_kind": "rust_runtime_core_conformance_tests",
+  "language": "rust",
+  "records": [
+    {
+      "case_id": "bidi/close_send_not_cancel",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "a37d742bff80b8845ffb75af26d7d753809bafccbe26887ea0b81a8916d2c74c"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "bidi/frame0_required",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "a37d742bff80b8845ffb75af26d7d753809bafccbe26887ea0b81a8916d2c74c"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "runtime/control_only",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/mod.rs",
+          "sha256": "3e9268684d513b0778a60269c5bc5a1a2545cd207f2889b5c3efecb3bd22bb89"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "runtime_host/permission_denied",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/daemon/invocation/dispatch/daemon_invocation_service_tests/unary.rs",
+          "sha256": "dc79baec019699416dc0c2e2422b3eccd8fe000af0154e03670ed4c1bcc676d2"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "error/retry_hint",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/errors/mod.rs",
+          "sha256": "d394b3928cd22c9cdc8dff6d7ccd4160f03f36413105eba2d8541e05d79b597f"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "error/typed_json",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/errors/mod.rs",
+          "sha256": "d394b3928cd22c9cdc8dff6d7ccd4160f03f36413105eba2d8541e05d79b597f"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "health/api_vs_runtime",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "a37d742bff80b8845ffb75af26d7d753809bafccbe26887ea0b81a8916d2c74c"
+        }
+      ],
+      "profile": "health"
+    },
+    {
+      "case_id": "invocation/builder_handle_state",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "a37d742bff80b8845ffb75af26d7d753809bafccbe26887ea0b81a8916d2c74c"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/canonical_material",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/daemon/invocation/dispatch/request.rs",
+          "sha256": "2a4c34113e58d76d6794f271e742114a4ba2aefc57492a7db870342dffa01234"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/complete_tuple",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "a37d742bff80b8845ffb75af26d7d753809bafccbe26887ea0b81a8916d2c74c"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/provider_managed_signing_boundary",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/daemon/invocation/dispatch/request.rs",
+          "sha256": "2a4c34113e58d76d6794f271e742114a4ba2aefc57492a7db870342dffa01234"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/prepared_not_submittable",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "a37d742bff80b8845ffb75af26d7d753809bafccbe26887ea0b81a8916d2c74c"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/presigned_submit",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/daemon/invocation/dispatch/request.rs",
+          "sha256": "2a4c34113e58d76d6794f271e742114a4ba2aefc57492a7db870342dffa01234"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "invocation/terminal_monotonicity",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "a37d742bff80b8845ffb75af26d7d753809bafccbe26887ea0b81a8916d2c74c"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "runtime_core/feature_discovery",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/features/mod.rs",
+          "sha256": "4208662aa98621f4ce3b4d8bd3c9514f771d1dff52787612411f32b7b14dffcb"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "stream/order_terminal",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/invocation/mod.rs",
+          "sha256": "a37d742bff80b8845ffb75af26d7d753809bafccbe26887ea0b81a8916d2c74c"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "version/abi_compatible",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/mod.rs",
+          "sha256": "3e9268684d513b0778a60269c5bc5a1a2545cd207f2889b5c3efecb3bd22bb89"
+        }
+      ],
+      "profile": "runtime_core"
+    },
+    {
+      "case_id": "version/abi_incompatible",
+      "evidence": [
+        {
+          "kind": "rust_test",
+          "ref_path": "src/ffi/mod.rs",
+          "sha256": "3e9268684d513b0778a60269c5bc5a1a2545cd207f2889b5c3efecb3bd22bb89"
+        }
+      ],
+      "profile": "runtime_core"
+    }
+  ],
+  "schema_version": 2
+}

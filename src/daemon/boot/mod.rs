@@ -1,6 +1,7 @@
 //! Daemon boot sequencing and startup state projections.
 
 mod error;
+mod identity_fact;
 #[cfg(feature = "axon-pb")]
 pub mod invocation;
 pub mod join_connection_state;
@@ -9,8 +10,11 @@ pub mod lifecycle;
 mod process;
 
 pub use error::DaemonError;
+#[cfg(feature = "axon-pb")]
+pub use error::DaemonInvocationErrorProjection;
 pub use process::{
-    start_daemon, stop_daemon, DaemonEndpoints, DaemonHandle, DaemonStartConfig, DaemonStatus,
+    start_daemon, stop_daemon, DaemonEndpoints, DaemonHandle, DaemonProcessLease,
+    DaemonStartConfig, DaemonStatus,
 };
 
 /// Result alias for daemon boot and process-lifecycle operations.

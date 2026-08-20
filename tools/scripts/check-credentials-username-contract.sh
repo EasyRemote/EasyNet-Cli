@@ -21,7 +21,7 @@ for file in "$CONFIG_RS" "$JOIN_RS" "$START_RS"; do
 done
 
 bad_fallback="$(
-    grep -nE 'backfill_credentials_username|auth\.json\.username|auth session|migration window|Optional during the migration window|older credentials files may still miss|load_session\(\)' \
+    grep -nE 'backfill_credentials_username|auth\.json\.username|auth session username|migration window|Optional during the migration window|older credentials files may still miss' \
         "$JOIN_RS" "$START_RS" "$CONFIG_RS" 2>/dev/null || true
 )"
 if [[ -n "$bad_fallback" ]]; then

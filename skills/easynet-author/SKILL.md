@@ -97,7 +97,7 @@ This catches: bad `schema_version`, missing required keys, unknown `[exec].kind`
 
 ```bash
 # Option 1: drop the file directly + refresh
-cp my-ability.toml ~/.easynet/workspaces/claude/abilities/weather.ability.toml
+cp my-ability.toml ~/.easynet/agents/claude/abilities/weather.ability.toml
 easynet agent refresh
 
 # Option 2: invoke device.ability.publish (works in-process, programmatic)
@@ -233,7 +233,7 @@ User: claude, create an ability that fetches the weather for a city.
 **Process:**
 1. Decide: deterministic recipe, clear I/O → Path A.
 2. Author `weather.ability.toml` with `[exec] kind = "shell"`.
-3. Drop into `~/.easynet/workspaces/claude/abilities/`.
+3. Drop into `~/.easynet/agents/claude/abilities/`.
 4. `easynet agent refresh`.
 5. Test: `easynet ability invoke claude.weather --args '{"location":"Beijing"}'`.
 

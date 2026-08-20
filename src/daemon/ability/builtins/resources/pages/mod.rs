@@ -29,21 +29,23 @@ pub mod state;
 
 use std::sync::Arc;
 
-use crate::daemon::ability::authority::AuthorityScope;
-use crate::daemon::ability::dispatch::{
-    AxonAbilityCatalog, ControlPlaneImplementation, LocalRpcHandler, OwnerKind,
-};
+use anyhow::Context;
 
-pub use identity::PagesIdentity;
+use crate::daemon::ability::dispatch::{AxonAbilityCatalog, LocalRpcHandler, OwnerKind};
 
-/// Installation parameters for the Pages reference system. Carry
-/// the daemon's user identity (the `<user>` segment in every
-/// pages-rooted URI), the realm, and the in-daemon Hub listener
-/// port (only used to format the dev-only listener URL surfaced
-/// from `pages.get`).
+pub use identity::{PagesIdentity, PagesUserRootIdentity};
+
+/// Installation parameters for the Pages reference system.
+///
+/// `user` is the product-facing slug used in URLs and local project storage.
+/// `owner_user_id` is the immutable product principal id used by Pages state,
+/// admission, and the principal-scoped Pages Service owner. The Device still
+/// hosts the directory handles and hot-registration implementation; it is not
+/// the public Pages callee.
 #[derive(Debug, Clone)]
 pub struct PagesConfig {
     pub user: String,
+    pub owner_user_id: String,
     pub realm: String,
     pub listener_port: u16,
 }
@@ -70,7 +72,20 @@ pub struct PagesConfig {
 /// daemon-local form to `pages_dev_listener_url_root`, surfaced
 /// only by `pages.get` for debugging.
 pub fn pages_public_url_root(realm: &str, user: &str, project_id: &str) -> String {
-    format!("https://{realm}/web/{user}/{project_id}/")
+    // The realm label is an identity, not necessarily a reachable hostname
+    // (dev realms are literally "localhost", where https://localhost/ has
+    // no listener). Prefer the hub API base this device actually paired
+    // against — the same origin that serves /web/ — and fall back to the
+    // historical https://{realm} form only when no credentials exist
+    // (production realms are DNS names).
+    let base = crate::daemon::persistence::config::load_credentials_optional()
+        .ok()
+        .flatten()
+        .map(|credentials| credentials.api_base());
+    match base {
+        Some(base) if !base.is_empty() => format!("{base}/web/{user}/{project_id}/"),
+        _ => format!("https://{realm}/web/{user}/{project_id}/"),
+    }
 }
 
 /// Dev-only URL of the daemon's in-process HTTP listener for this
@@ -95,7 +110,7 @@ pub fn register(
     reg: &mut AxonAbilityCatalog,
     config: PagesConfig,
     dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
-) {
+) -> anyhow::Result<()> {
     api::set_dispatch_handle(Arc::clone(&dispatch_handle));
     register_management_abilities(reg, &config, Arc::clone(&dispatch_handle));
 
@@ -114,19 +129,11 @@ pub fn register(
             );
         }
         Ok(_) => {}
-        Err(err) => {
-            let user_field = config.user.as_str();
-            let err_msg = format!("{err}");
-            crate::op_event!(
-                component = pages,
-                kind = restore_failed,
-                level = "warn",
-                user = user_field,
-                error = err_msg,
-            );
-        }
+        Err(err) => return Err(err).context("restore published Pages projects"),
     }
-    register_restored_project_abilities(reg, &config.user);
+    register_restored_project_abilities(reg, &config.owner_user_id, &config.user)
+        .context("register restored Pages project abilities")?;
+    Ok(())
 }
 
 fn register_management_abilities(
@@ -134,10 +141,10 @@ fn register_management_abilities(
     config: &PagesConfig,
     dispatch_handle: Arc<std::sync::OnceLock<Arc<AxonAbilityCatalog>>>,
 ) {
-    let owner = OwnerKind::Agent("pages".to_string());
-    let authority_scope = pages_management_authority_scope(config);
+    let owner = pages_service_owner(&config.owner_user_id);
 
     let user = config.user.clone();
+    let owner_user_id = config.owner_user_id.clone();
     let realm = config.realm.clone();
     let listener_port = config.listener_port;
     let publish_handle = Arc::clone(&dispatch_handle);
@@ -146,13 +153,12 @@ fn register_management_abilities(
             .get()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("pages registry handle not initialised"))?;
-        publish::handle_publish(&user, listener_port, &realm, registry, args)
+        publish::handle_publish(&owner_user_id, &user, listener_port, &realm, registry, args)
     });
     register_management_rpc(
         reg,
         "pages.publish",
         owner.clone(),
-        authority_scope.clone(),
         manifest_for_verb("pages.publish"),
         publish_handler,
     );
@@ -169,7 +175,6 @@ fn register_management_abilities(
         reg,
         "pages.unpublish",
         owner.clone(),
-        authority_scope.clone(),
         manifest_for_verb("pages.unpublish"),
         unpublish_handler,
     );
@@ -182,10 +187,9 @@ fn register_management_abilities(
     });
     register_management_rpc(
         reg,
-        "pages.list",
+        "project_list",
         owner.clone(),
-        authority_scope.clone(),
-        manifest_for_verb("pages.list"),
+        manifest_for_verb("project_list"),
         list_handler,
     );
 
@@ -197,46 +201,48 @@ fn register_management_abilities(
     register_management_rpc(
         reg,
         "pages.get",
-        owner,
-        authority_scope,
+        owner.clone(),
         manifest_for_verb("pages.get"),
         get_handler,
     );
-}
 
-fn pages_management_authority_scope(config: &PagesConfig) -> AuthorityScope {
-    AuthorityScope::new(
-        "agent:pages",
-        crate::core::ura::agent_ura(&config.realm, &config.user, "pages"),
-    )
-    .expect("static pages management authority scope is well-formed")
+    let user = config.user.clone();
+    let realm = config.realm.clone();
+    let health_handle = Arc::clone(&dispatch_handle);
+    let health_handler: LocalRpcHandler = Arc::new(move |args| {
+        let registry = health_handle
+            .get()
+            .ok_or_else(|| anyhow::anyhow!("pages registry handle not initialised"))?;
+        let owner_ura = registry
+            .runtime_binding_facts_for_mode("pages.health", crate::daemon::ability::CallMode::Rpc)
+            .map_err(|error| anyhow::anyhow!("resolve pages.health owner: {error}"))?
+            .ok_or_else(|| anyhow::anyhow!("pages.health owner is not registered"))?
+            .authority_root;
+        list_get_unpublish::handle_health(&owner_ura, &user, &realm, args)
+    });
+    register_management_rpc(
+        reg,
+        "pages.health",
+        owner,
+        manifest_for_verb("pages.health"),
+        health_handler,
+    );
 }
 
 fn register_management_rpc(
     reg: &mut AxonAbilityCatalog,
     ability: &'static str,
     owner: OwnerKind,
-    authority_scope: AuthorityScope,
-    manifest: crate::core::ability::spec::AbilityManifest,
+    manifest: crate::daemon::ability::manifest::AbilityManifest,
     handler: LocalRpcHandler,
 ) {
-    reg.register_rpc_with_spec_impl_and_authority_scope(
-        ability,
-        owner,
-        authority_scope,
-        manifest,
-        handler,
-        ControlPlaneImplementation::native_daemon(),
-    )
-    .unwrap_or_else(|error| {
-        panic!("static pages management registration failed for {ability:?}: {error}")
-    });
+    reg.register_rpc_with_spec(ability, owner, manifest, handler);
 }
 
 /// Build the `AbilityManifest` for a `pages.<verb>` from the shared
 /// spec list. The manifest `name` is the bare verb (`get`), since `.`
 /// is the agent/verb separator AbilityManifest rejects.
-fn manifest_for_verb(relative_name: &str) -> crate::core::ability::spec::AbilityManifest {
+fn manifest_for_verb(relative_name: &str) -> crate::daemon::ability::manifest::AbilityManifest {
     let spec = management_ability_specs()
         .into_iter()
         .find(|s| s.relative_name == relative_name)
@@ -246,6 +252,15 @@ fn manifest_for_verb(relative_name: &str) -> crate::core::ability::spec::Ability
         spec.description,
         spec.input_schema,
     )
+    .with_admission_action(pages_admission_action(spec.relative_name))
+    .expect("static pages manifest admission action is well-formed")
+}
+
+fn pages_admission_action(relative_name: &str) -> &'static str {
+    match relative_name {
+        "pages.publish" | "pages.unpublish" => "invoke",
+        _ => "read",
+    }
 }
 
 /// Build an `AbilityManifest` for a pages verb. Panics only on a
@@ -255,8 +270,8 @@ fn pages_manifest(
     name: &str,
     description: &str,
     input_schema: serde_json::Value,
-) -> crate::core::ability::spec::AbilityManifest {
-    crate::core::ability::spec::AbilityManifest::new(name, description, input_schema)
+) -> crate::daemon::ability::manifest::AbilityManifest {
+    crate::daemon::ability::manifest::AbilityManifest::new(name, description, input_schema)
         .expect("static pages manifest is well-formed")
 }
 
@@ -273,7 +288,7 @@ fn pages_project_id_schema() -> serde_json::Value {
 }
 
 /// One management verb's advertise-facing spec: the registry-relative
-/// ability name (`pages.list`), a human description, and the input
+/// ability name (`project_list`), a human description, and the input
 /// schema. Single source of truth shared by the local registration
 /// (manifests) AND the session-prelude advertise descriptor builder,
 /// so the Frontend InvokeAbilityDialog renders the right form whether
@@ -284,13 +299,33 @@ pub(crate) struct PagesAbilitySpec {
     pub input_schema: serde_json::Value,
 }
 
-/// The four user-scoped pages management verbs and their schemas.
+fn pages_health_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "project_id": {
+                "type": "string",
+                "description": "Optional project id to check."
+            },
+            "surface_ref": {
+                "type": "string",
+                "description": "Optional project resource URA to check."
+            }
+        }
+    })
+}
+
+/// The user-scoped pages management verbs and their schemas.
 pub(crate) fn management_ability_specs() -> Vec<PagesAbilitySpec> {
     vec![
         PagesAbilitySpec {
-            relative_name: "pages.list",
+            relative_name: "project_list",
             description: "List the page projects this user currently publishes on this daemon.",
-            input_schema: serde_json::json!({ "type": "object", "properties": {} }),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            }),
         },
         PagesAbilitySpec {
             relative_name: "pages.publish",
@@ -316,6 +351,11 @@ pub(crate) fn management_ability_specs() -> Vec<PagesAbilitySpec> {
                 "Unpublish a project: release the folder fd and unregister the fetch ability.",
             input_schema: pages_project_id_schema(),
         },
+        PagesAbilitySpec {
+            relative_name: "pages.health",
+            description: "Report daemon Pages registry readiness for this user or one project.",
+            input_schema: pages_health_schema(),
+        },
     ]
 }
 
@@ -329,11 +369,19 @@ pub(crate) fn pages_verb_tail(relative_name: &str) -> &str {
 
 pub(crate) fn register_project_abilities(
     reg: &AxonAbilityCatalog,
+    owner_user_id: &str,
     user: &str,
     project_id: &str,
 ) -> anyhow::Result<usize> {
-    fetch::register_fetch_ability(reg, user, project_id)?;
-    Ok(1 + api::register_api_abilities_for_project(reg, user, project_id)?)
+    fetch::register_fetch_ability(reg, owner_user_id, user, project_id)?;
+    Ok(1 + api::register_api_abilities_for_project(reg, owner_user_id, user, project_id)?)
+}
+
+pub(crate) fn pages_service_owner(owner_user_id: &str) -> OwnerKind {
+    OwnerKind::Service {
+        principal_id: owner_user_id.to_string(),
+        service_id: "pages".to_string(),
+    }
 }
 
 pub(crate) fn registered_project_ability_names(
@@ -366,7 +414,11 @@ pub(crate) fn unregister_project_abilities(
     Ok(())
 }
 
-fn register_restored_project_abilities(reg: &AxonAbilityCatalog, user: &str) {
+fn register_restored_project_abilities(
+    reg: &AxonAbilityCatalog,
+    owner_user_id: &str,
+    user: &str,
+) -> anyhow::Result<usize> {
     let mut project_ids: Vec<String> = state::PUBLISHED_PROJECTS
         .iter()
         .filter_map(|entry| {
@@ -375,18 +427,12 @@ fn register_restored_project_abilities(reg: &AxonAbilityCatalog, user: &str) {
         })
         .collect();
     project_ids.sort();
+    let mut registered = 0;
     for project_id in project_ids {
-        if let Err(error) = register_project_abilities(reg, user, &project_id) {
-            let error_message = error.to_string();
-            crate::op_event!(
-                component = pages,
-                kind = restore_project_abilities_failed,
-                user = user,
-                project_id = project_id.as_str(),
-                error = error_message.as_str(),
-            );
-        }
+        registered += register_project_abilities(reg, owner_user_id, user, &project_id)
+            .with_context(|| format!("register restored Pages project {user}/{project_id}"))?;
     }
+    Ok(registered)
 }
 
 #[cfg(test)]
@@ -416,5 +462,17 @@ mod tests {
         let req = publish.input_schema()["required"].as_array().unwrap();
         assert!(req.iter().any(|v| v == "folder"));
         assert!(req.iter().any(|v| v == "project_id"));
+
+        let specs = management_ability_specs();
+        assert!(
+            specs
+                .iter()
+                .any(|spec| spec.relative_name == "pages.health"),
+            "pages.health must be advertised with the pages management family"
+        );
+        let health = pages_manifest("health", "d", pages_health_schema());
+        assert!(health.input_schema()["properties"]
+            .get("surface_ref")
+            .is_some());
     }
 }

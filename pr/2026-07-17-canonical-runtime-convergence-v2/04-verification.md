@@ -1,0 +1,236 @@
+# Verification Log
+
+## 2026-07-17
+
+- `cargo fmt --check`
+- `cargo check --lib --bins`
+- `cargo test --lib --no-run`
+- `cargo test --tests --no-run`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tools/scripts/check-sdk-canonical-public-api.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: all passed.
+
+## 2026-07-17 RF-6 Receipt Proof Facts
+
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+- `python3 -m py_compile sdk/python/easynet_axon/invocation/axiom.py sdk/python/easynet_axon/invocation/audit.py sdk/python/easynet_axon/invocation/fluent.py sdk/python/easynet_axon/invocation/local_runtime.py sdk/python/tests/test_audit.py sdk/python/tests/test_authority_idiomatic.py sdk/python/tests/test_authority_tail_parity.py sdk/python/tests/test_cross_language_verify.py`
+- `cd sdk/java && mvn -q -DskipTests compile`
+- `npm run check` from `sdk/node`
+- `go test ./easynet/invocation -run 'TestAuthorityAnchor|TestReceiptSignVerifyRoundtrip|TestReceiptVerbs|TestRuntimeReceipt'` from `sdk/go`
+- `swift test --package-path sdk/swift --filter AuthorityTailParityTests`
+- `swift test --package-path sdk/swift --filter BundleUsageTests`
+
+Result: focused RF-6 checks passed.
+
+Known unrelated suite failures observed while broad-checking EasyNet-Axon:
+
+- `go test ./easynet/invocation` failed in `TestGoBundleAcceptedByRustVerify`
+  with `invocation_inv-a_descriptor_binding_required`.
+- `swift test --package-path sdk/swift` failed in
+  `CrossLanguageVerifyTests.testSwiftBundleAcceptedByRustVerify` with
+  `invocation_inv-a_descriptor_binding_required`, and later in
+  `MessageInboxIdempotentTests.test_dup_id_delivers_once`.
+- `python3 -m pytest ...` could not run because the active Python interpreter
+  does not have `pytest` installed.
+
+## 2026-07-17 RF-9 Schema Source Derivation
+
+- `bash /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/scripts/proto/sync_axon_v1.sh --check`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: passed. The V2 convergence gate now verifies Axon's canonical
+`core/proto/axon/v1` proto source against its runtime client-sdk and Rust SDK
+mirrors through Axon's own syncer.
+
+## 2026-07-17 RF-9 Active URA Transport Classification
+
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: passed. The V2 convergence gate now rejects semantic URI naming in
+active CLI source/test/include roots while allowing HTTP/gRPC transport
+library `Uri` and `.uri()` APIs.
+
+## 2026-07-17 RF-1 Product Boundary Gates
+
+- `bash tools/scripts/check-sdk-product-neutrality.sh --self-test`
+- `bash tools/scripts/check-sdk-product-neutrality.sh`
+- `bash /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/scripts/checks/product_protocol_boundary.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: passed. The V2 convergence runner now includes EasyNet-Cli runtime SDK
+product-neutrality and Axon canonical proto/Rust product-protocol boundary
+checks. Non-Rust Axon product SDK extraction remains open.
+
+## 2026-07-17 RF-7/RF-8 Daemon Tuple Route Gate
+
+- `bash tools/scripts/check-daemon-invocation-migration.sh`
+- `bash tests/scripts/test_check_daemon_invocation_migration.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+- `cargo test --test script_checks daemon_invocation_migration_script_contract_holds`
+
+Result: passed. The canonical V2 runner now includes the daemon invocation
+migration guard for complete tuple builder usage, JSON control demotion, and
+runtime-record adapter boundaries.
+
+## 2026-07-17 RF-2/RF-8 Daemon Mission/EAL Boundary Gate
+
+- `bash tools/scripts/check-dispatch-mission-context-boundary.sh`
+- `bash tools/scripts/check-runtime-abilities-manifest-boundary.sh`
+- `bash tools/scripts/check-orchestration-service-boundary.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+- `cargo test --test script_checks dispatch_mission_context_boundary_script_holds`
+- `cargo test --test script_checks runtime_abilities_manifest_boundary_script_holds`
+- `cargo test --test script_checks orchestration_service_boundary_script_holds`
+
+Result: passed. The canonical V2 runner now treats daemon-owned Mission/EAL
+execution policy as part of the convergence acceptance surface: dispatch must
+hard-fail missing or forged mission context, runtime ability publication must
+consume committed manifests only, and orchestration state must remain owned by
+`OrchestrationService`.
+
+## 2026-07-17 RF-5 Key Custody Boundary Gate
+
+- `bash tools/scripts/check-daemon-key-service-boundary.sh`
+- `bash tools/scripts/check-product-key-custody-boundary.sh --self-test`
+- `bash tools/scripts/check-product-key-custody-boundary.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+- `cargo test --test script_checks daemon_key_service_boundary_script_contract_holds`
+- `cargo test --test script_checks product_key_custody_boundary_script_contract_holds`
+
+Result: passed. The canonical V2 runner now includes daemon and product
+key-custody gates, so process-local signing fallback cannot re-enter through
+daemon inventory paths, Go/Python SDK private signing material, backend process
+spawning, EasyRemote raw process/FFI imports, or key-service secret ownership.
+
+## 2026-07-17 RF-1 Go Product SDK Extraction
+
+- `rg -n "DefaultMCPToolStreamTimeoutMs|McpProtocolVersion|ToToolSpec\\(|ToolSpec|AbilityToolAdapter|NewToolAdapter|McpTool|StdioMcpServer|OpenMic|MicConfig|VoiceActivityDetector|ErrAudioUnavailable" sdk/go`
+- `git ls-files sdk/go | rg '(audio|voice|mcp|tool_adapter|presets/remote_control|presets/ability_dispatch)'`
+- `bash /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/scripts/checks/product_protocol_boundary.sh`
+- `cd /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/sdk/go && go test ./easynet`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: passed. The Axon Go SDK no longer tracks product-owned audio, voice,
+MCP, or tool-adapter packages in the staged index; the Go package tests pass;
+and the V2 runner now rejects Go product package reintroduction.
+
+## 2026-07-17 RF-1 Python Product SDK Extraction
+
+- `rg -n "from \\.mcp|import \\.mcp|from \\.tool_adapter|import \\.tool_adapter|from \\. import audio|easynet_axon\\.tool_adapter|easynet_axon\\.mcp|easynet_axon\\.audio|presets\\.remote_control|presets\\.ability_dispatch|presets\\.federation|AbilityToolAdapter|ToolSpec|StdioMcpServer|McpTool|RemoteControl|FederationCaseKit" sdk/python/easynet_axon sdk/python/tests --glob '!**/__pycache__/**'`
+- `git ls-files sdk/python | rg '(audio|mcp|tool_adapter|presets/remote_control|presets/ability_dispatch|presets/federation)'`
+- `python3 -m py_compile sdk/python/easynet_axon/__init__.py sdk/python/easynet_axon/ability_lifecycle.py sdk/python/tests/test_ability_lifecycle.py`
+- `PYTHONPATH=sdk/python python3 -m unittest discover -s sdk/python/tests -p test_ability_lifecycle.py`
+- `bash /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/scripts/checks/product_protocol_boundary.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: passed. The Axon Python SDK no longer tracks product-owned audio, MCP,
+tool-adapter, remote-control, ability-dispatch, or federation preset packages
+in the staged index; the focused Python compile and lifecycle tests pass; and
+the V2 runner now rejects Python product package reintroduction.
+
+## 2026-07-17 RF-1 Node Product SDK Extraction
+
+- `rg -n "tool_adapter|AbilityToolAdapter|StdioMcpServer|McpTool|MCP|mcp|audio|VoiceActivity|presets/remote_control|presets/ability_dispatch|remote_control_case" sdk/node/src sdk/node/README.md sdk/node/package.json --glob '!**/node_modules/**'`
+- `git ls-files sdk/node | rg '(audio|mcp|tool_adapter|presets/remote_control|presets/ability_dispatch|remote_control_case)'`
+- `npm run check` from `sdk/node`
+- `bash /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/scripts/checks/product_protocol_boundary.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: passed. The Axon Node SDK product packages for audio, MCP,
+tool-adapter, remote-control, and ability-dispatch have been removed from the
+canonical package surface; generic provider package descriptor construction and
+neutral `ToolSpec` now live in `ability_lifecycle.ts`; and the V2 runner now
+rejects Node product package reintroduction.
+
+## 2026-07-17 RF-1 Java Product SDK Extraction
+
+- `rg -n "VoiceBridge|VoiceService|Audio\\b|AbilityToolAdapter|StdioMcpServer|McpToolProvider|McpToolResult|McpToolStreamHandle|DeployMcpListDirRequest|UpdateMcpListDirRequest|RemoteControl|ability_dispatch|run\\.easynet\\.axon\\.mcp|run\\.easynet\\.axon\\.presets|AxonMcpException|MCP & A2A|Voice & Media" sdk/java/src/main sdk/java/src/test sdk/java/README.md --glob '!**/target/**'`
+- `git ls-files sdk/java | rg '(Audio|Voice|Mcp|MCP|ToolAdapter|RemoteControl|remote_control|ability_dispatch|mcp|audio|voice)'`
+- `mvn -q -DskipTests compile` from `sdk/java`
+- `bash /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/scripts/checks/product_protocol_boundary.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: passed. The Axon Java SDK product packages for audio, voice, MCP,
+tool-adapter, remote-control, and ability-dispatch case APIs have been removed
+from the canonical package surface; generic provider package descriptor
+construction now lives in `AbilityLifecycle`; and the V2 runner now rejects
+Java product package reintroduction.
+
+## 2026-07-17 RF-1 Swift Product SDK Extraction
+
+- `rg -n "Voice|Audio|Mcp|MCP|ToolAdapter|RemoteControl|remote_control|ability_dispatch|StdioMcp|McpTool|tool_adapter|Voice & Media" sdk/swift/Sources sdk/swift/Tests sdk/swift/Package.swift sdk/swift/README.md --glob '!**/.build/**'`
+- `git ls-files sdk/swift | rg '(Audio|Voice|Mcp|MCP|ToolAdapter|RemoteControl|remote_control|ability_dispatch|mcp|audio|voice|Stdio)'`
+- `swift build --package-path sdk/swift`
+- `bash /Users/macbook.silan.tech/Documents/GitHub/EasyNet-Axon/scripts/checks/product_protocol_boundary.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `cargo test --test script_checks canonical_runtime_convergence_v2_script_contract_holds`
+
+Result: passed. The Axon Swift SDK product packages for audio, MCP, and
+tool-adapter APIs have been removed from the canonical package surface; generic
+provider package descriptor construction and neutral `ToolSpec` now live in
+`AbilityLifecycle.swift`; and the V2 runner now rejects Swift product package
+reintroduction.
+
+## 2026-07-17 Current Worktree Closure
+
+- `cargo fmt --check`
+- `cargo check --lib --bins`
+- `cargo test --lib --no-run`
+- `cargo test --test script_checks`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh`
+- `bash tools/scripts/check-canonical-runtime-convergence-v2.sh --self-test`
+- `bash tools/scripts/check-sdk-canonical-public-api.sh`
+- `bash tools/scripts/check-sdk-product-neutrality.sh --self-test`
+- `bash tools/scripts/check-sdk-product-neutrality.sh`
+- `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
+- `bash tools/scripts/check-skill-list-managed-dir-boundary.sh`
+- `bash tests/scripts/test_check_skill_list_managed_dir_boundary.sh`
+- `python3 sdk/conformance/refresh_adapter_report_evidence.py --check`
+- `SDK_CONFORMANCE_RESULT_DIR=target/sdk-conformance-live-results.current bash tools/scripts/check-sdk-conformance-reports.sh`
+- `EASYNET_SDK_PARITY_RESULTS_DIR=target/sdk-conformance-live-results.current EASYNET_SDK_PARITY_ALLOW_SNAPSHOT_RESULTS=1 bash tools/scripts/check-sdk-parity-matrix.sh`
+- `cd sdk/go && go test ./...`
+- `cd sdk/python && python3 -m py_compile $(find easynet_sdk -name '*.py' | sort)`
+
+Result: passed. The current worktree is gate-clean after refreshing the Axon
+source revision in the public API manifest, rebinding the skill-list managed
+directory gate to `AgentSkillLayout`, requiring live SDK parity results in the
+parity test contract, and migrating Go result fixtures from the retired
+`receipt` alias to `terminal_receipt`.

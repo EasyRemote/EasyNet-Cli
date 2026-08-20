@@ -9,10 +9,10 @@
 // This module owns every path under `~/.easynet/` that the binary
 // reads or writes. It is the single authority for:
 //
-// - `state.json`       — runtime state (PID, endpoint, tenant label)
+// - `runtime.json`     — runtime session projection
 // - `credentials.json` — pairing secret produced by `device join`
 // - `device_settings.json` — per-device feature flags
-// - `heartbeat.pid`    — daemon PID file (written by start, read by stop)
+// - `easynet-daemon.pid` — daemon PID file (written by start, read by stop)
 // - mission run dirs   — path accessors only; write logic lives in
 //                         `cli::mission_runs` because the lifecycle
 //                         is driven from there
@@ -44,6 +44,9 @@
 // Public so integration tests + future external embedders can
 // construct `Credentials`. Inner field visibility on the struct
 // itself is already `pub`.
+pub mod access_control;
+pub(crate) mod agent_aggregate;
+pub(crate) mod agent_lifecycle;
 pub mod agent_registry;
 pub mod chat_sessions;
 pub mod config;
@@ -53,7 +56,9 @@ pub mod context_store;
 /// `pr-drafts/PR-0-spec-daemon-invocation-server.md §1` for the
 /// listener invariants this module enforces at load time.
 pub mod daemon_config;
+pub(crate) mod federation_revoke;
 pub(crate) mod file_lock;
+pub(crate) mod hosted_agent_publications;
 pub(crate) mod local_agents;
 pub(crate) mod owner_projections;
 /// Local resources registry — `~/.easynet/resources.json`. Maps a
@@ -67,3 +72,13 @@ pub(crate) mod owner_projections;
 pub mod resources;
 pub(crate) mod teach_grants;
 pub(crate) mod tenant_paths;
+pub mod voice_calls;
+
+/// Return the canonical Agent authority roots this daemon is currently
+/// configured to host. The daemon snapshots this lifecycle fact while it
+/// builds its authority context; callers do not receive the broader
+/// local-agents persistence shape.
+pub fn hosted_agent_authority_roots() -> anyhow::Result<Vec<String>> {
+    agent_aggregate::AgentAggregateRepository::load_hosted_identity_snapshot()?
+        .hosted_agent_authority_roots()
+}

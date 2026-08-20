@@ -61,10 +61,11 @@ pub struct CapabilityClaim {
     pub(crate) _v2_signed_bytes: Vec<u8>,
 }
 
-/// Trait implemented by every broker variant. v1 ships
-/// AllowAllBroker (default; preserves pre-PR behaviour) and
-/// SubscriberBroker (engages when an external observer is
-/// listening on `consent.subscribe`).
+/// Trait implemented by every broker variant. v1 has two explicit
+/// operator states:
+///
+/// - `HeadlessPermissionBroker` for daemons without an operator channel.
+/// - `SubscriberBroker` for daemons observed through `consent.subscribe`.
 ///
 /// `ask` is synchronous in v1 because the call site (mission
 /// dispatch) is sync. The SubscriberBroker turns the
@@ -74,21 +75,45 @@ pub trait PermissionBroker: Send + Sync {
     fn ask(&self, ctx: AskContext) -> PermissionDecision;
 }
 
-/// Default broker: every ask returns Allow. Preserves the
-/// behaviour the codebase had before PR-PERM, so a deployment that
-/// has not opted into the subscriber path keeps working unchanged.
-#[derive(Debug, Default)]
-pub struct AllowAllBroker;
+/// Policy applied when no operator is attached to the broker.
+///
+/// The policy is deliberately explicit because headless daemon
+/// operation is a product state, not a compatibility path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnobservedPermissionPolicy {
+    /// Keep unattended daemon execution non-blocking when no human
+    /// observer exists to make a decision.
+    #[default]
+    Allow,
+}
 
-impl AllowAllBroker {
-    pub fn new() -> Self {
-        Self
+impl UnobservedPermissionPolicy {
+    fn decide(self) -> PermissionDecision {
+        match self {
+            Self::Allow => PermissionDecision::Allow,
+        }
     }
 }
 
-impl PermissionBroker for AllowAllBroker {
+/// Headless broker: there is no operator channel and no pending
+/// queue. Every ask resolves through the configured unobserved
+/// policy.
+#[derive(Debug, Default)]
+pub struct HeadlessPermissionBroker {
+    unobserved_policy: UnobservedPermissionPolicy,
+}
+
+impl HeadlessPermissionBroker {
+    pub fn new() -> Self {
+        Self {
+            unobserved_policy: UnobservedPermissionPolicy::Allow,
+        }
+    }
+}
+
+impl PermissionBroker for HeadlessPermissionBroker {
     fn ask(&self, _ctx: AskContext) -> PermissionDecision {
-        PermissionDecision::Allow
+        self.unobserved_policy.decide()
     }
 }
 
@@ -102,12 +127,13 @@ impl PermissionBroker for AllowAllBroker {
 /// timeout (default 10 minutes); a request that times out resolves
 /// to `Deny` (fail-closed). The timeout is the v1 contract for
 /// "subscriber went away mid-request" — the subscriber dropping
-/// out leaves no decider, and a default-allow on timeout would
+/// out leaves no decider, and resolving timeout as Allow would
 /// invert the security posture.
 pub struct SubscriberBroker {
     pending: RwLock<BTreeMap<PermissionId, PendingState>>,
     publish: broadcast::Sender<PermissionRequest>,
     timeout: std::time::Duration,
+    unobserved_policy: UnobservedPermissionPolicy,
 }
 
 struct PendingState {
@@ -134,6 +160,7 @@ impl SubscriberBroker {
             pending: RwLock::new(BTreeMap::new()),
             publish: tx,
             timeout,
+            unobserved_policy: UnobservedPermissionPolicy::Allow,
         }
     }
 
@@ -150,12 +177,22 @@ impl SubscriberBroker {
     /// `consent.subscribe` handler emits this snapshot
     /// before tailing live updates so a Client sees the full
     /// queue on first connection.
-    pub fn pending_snapshot(&self) -> Vec<PermissionRequest> {
-        self.pending
+    pub fn pending_snapshot(&self) -> anyhow::Result<Vec<PermissionRequest>> {
+        Ok(self
+            .pending
             .read()
-            .ok()
-            .map(|g| g.values().map(|p| p.request.clone()).collect())
-            .unwrap_or_default()
+            .map_err(|_| anyhow::anyhow!("SubscriberBroker pending queue lock poisoned"))?
+            .values()
+            .map(|p| p.request.clone())
+            .collect())
+    }
+
+    #[cfg(test)]
+    pub fn poison_pending_for_test(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.pending.write().unwrap();
+            panic!("poison permission pending queue");
+        }));
     }
 
     /// Deliver a decision. Removes the pending state, sends the
@@ -179,9 +216,8 @@ impl SubscriberBroker {
     }
 
     /// True when at least one subscriber is currently connected.
-    /// The Kernel uses this to swap between SubscriberBroker and
-    /// AllowAllBroker behaviour: if no Client is listening, the
-    /// dispatch should not block.
+    /// Without an observer, the broker resolves through its
+    /// unobserved policy instead of entering the pending queue.
     pub fn has_subscribers(&self) -> bool {
         self.publish.receiver_count() > 0
     }
@@ -199,13 +235,11 @@ impl Default for SubscriberBroker {
 
 impl PermissionBroker for SubscriberBroker {
     fn ask(&self, ctx: AskContext) -> PermissionDecision {
-        // Fail-open to AllowAll when no subscriber is connected.
-        // Plan v10.5 explicitly opts for "AllowAllBroker behaviour"
-        // when there is no observer; turning the broker into a
-        // hard block under that condition would freeze every
-        // mission run on a daemon with no UI attached.
+        // No observer means no actor exists to resolve a pending
+        // request. Use the configured headless policy instead of
+        // creating a request that cannot terminate.
         if !self.has_subscribers() {
-            return PermissionDecision::Allow;
+            return self.unobserved_policy.decide();
         }
         let id = Self::fresh_id();
         let req = PermissionRequest {
@@ -282,8 +316,8 @@ fn wait_for_decision(
 }
 
 /// Permission sub-service handle. Owns the broker the Kernel
-/// installs at boot. v1 default is AllowAllBroker; the daemon bin
-/// swaps to SubscriberBroker when at least one subscriber wires up.
+/// installs at boot. The constructor names the product state:
+/// headless or interactive.
 pub struct PermissionService {
     broker: Arc<dyn PermissionBroker>,
     subscriber: Option<Arc<SubscriberBroker>>,
@@ -291,10 +325,7 @@ pub struct PermissionService {
 
 impl Default for PermissionService {
     fn default() -> Self {
-        Self {
-            broker: Arc::new(AllowAllBroker::new()),
-            subscriber: None,
-        }
+        Self::headless()
     }
 }
 
@@ -303,9 +334,18 @@ impl PermissionService {
         Self::default()
     }
 
-    /// Install the SubscriberBroker variant. The daemon bin calls
+    /// Install the headless broker variant. It has no pending
+    /// queue and resolves asks through its unobserved policy.
+    pub fn headless() -> Self {
+        Self {
+            broker: Arc::new(HeadlessPermissionBroker::new()),
+            subscriber: None,
+        }
+    }
+
+    /// Install the interactive broker variant. The daemon bin calls
     /// this at boot; tests may opt in for behaviour assertions.
-    pub fn with_subscriber_broker() -> Self {
+    pub fn interactive() -> Self {
         let s = Arc::new(SubscriberBroker::new());
         Self {
             broker: s.clone(),
@@ -329,25 +369,32 @@ impl PermissionService {
 
     /// PR-PERM `consent.decide` entry point. Forwards
     /// to the SubscriberBroker if installed; rejects with a clear
-    /// error otherwise (AllowAllBroker has no pending state to
+    /// error otherwise (headless policy has no pending state to
     /// decide on).
     pub fn decide(&self, id: &PermissionId, decision: PermissionDecision) -> anyhow::Result<()> {
         match &self.subscriber {
             Some(s) => s.decide(id, decision),
             None => anyhow::bail!(
                 "permission.decide called but no SubscriberBroker is installed; \
-                 default broker auto-allows every request and has no pending queue"
+                 headless permission policy has no pending queue"
             ),
         }
     }
 
-    /// Snapshot the pending queue (or empty when AllowAllBroker
-    /// is installed).
-    pub fn pending(&self) -> Vec<PermissionRequest> {
-        self.subscriber
-            .as_ref()
-            .map(|s| s.pending_snapshot())
-            .unwrap_or_default()
+    /// Snapshot the pending queue (or empty when the headless
+    /// broker is installed).
+    pub fn pending(&self) -> anyhow::Result<Vec<PermissionRequest>> {
+        match &self.subscriber {
+            Some(s) => s.pending_snapshot(),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn poison_pending_for_test(&self) {
+        if let Some(subscriber) = &self.subscriber {
+            subscriber.poison_pending_for_test();
+        }
     }
 }
 
@@ -374,20 +421,17 @@ mod tests {
     }
 
     #[test]
-    fn allow_all_broker_returns_allow_for_every_ask() {
-        // Pin the v1 default. Anything else would regress every
-        // pre-PR-PERM call site.
-        let b = AllowAllBroker::new();
+    fn headless_broker_resolves_every_ask_through_policy() {
+        let b = HeadlessPermissionBroker::new();
         assert_eq!(b.ask(ctx("anything")), PermissionDecision::Allow);
         assert_eq!(b.ask(ctx("dangerous")), PermissionDecision::Allow);
     }
 
     #[test]
-    fn subscriber_broker_falls_back_to_allow_when_no_observers() {
+    fn subscriber_broker_uses_unobserved_policy_when_no_observer_exists() {
         // A daemon that has no Client connected on
         // `consent.subscribe` must not block on every
-        // mission — that would freeze all autonomous runs. Falling
-        // back to Allow here matches AllowAllBroker behaviour.
+        // mission — that would freeze all autonomous runs.
         let b = SubscriberBroker::new();
         assert!(!b.has_subscribers());
         assert_eq!(b.ask(ctx("noobs")), PermissionDecision::Allow);
@@ -400,6 +444,30 @@ mod tests {
             .decide(&PermissionId::new("ghost"), PermissionDecision::Allow)
             .unwrap_err();
         assert!(format!("{err}").contains("unknown"));
+    }
+
+    #[test]
+    fn subscriber_pending_snapshot_rejects_poisoned_queue_instead_of_empty() {
+        let b = SubscriberBroker::new();
+        b.poison_pending_for_test();
+        let err = b
+            .pending_snapshot()
+            .expect_err("poisoned pending queue must fail");
+        assert!(
+            format!("{err:#}").contains("SubscriberBroker pending queue lock poisoned"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn permission_service_pending_rejects_poisoned_subscriber_queue() {
+        let s = PermissionService::interactive();
+        s.poison_pending_for_test();
+        let err = s.pending().expect_err("poisoned pending queue must fail");
+        assert!(
+            format!("{err:#}").contains("SubscriberBroker pending queue lock poisoned"),
+            "{err:#}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -441,10 +509,10 @@ mod tests {
     }
 
     #[test]
-    fn permission_service_default_uses_allow_all() {
+    fn permission_service_default_uses_headless_policy() {
         let s = PermissionService::new();
         assert!(s.subscriber().is_none());
-        // decide() must error because AllowAllBroker has no queue.
+        // decide() must error because headless policy has no queue.
         let err = s
             .decide(&PermissionId::new("x"), PermissionDecision::Allow)
             .unwrap_err();

@@ -88,22 +88,16 @@ impl ContextLoader for ScheduleLoader {
         let now = Utc::now();
         let horizon_end = now + chrono::Duration::from_std(self.horizon)?;
 
-        let mut upcoming: Vec<(DateTime<Utc>, String, Option<String>)> = Vec::new();
-        for entry in self.svc.list() {
+        let mut upcoming: Vec<(DateTime<Utc>, String, String)> = Vec::new();
+        for entry in self.svc.list()? {
             if !entry.enabled {
                 continue;
             }
             if entry.target_agent.as_str() != agent_name {
                 continue;
             }
-            // next_fire_after returns Result<Option<DateTime>>; the
-            // outer Err path is "schedule not found / unknown id" —
-            // race against a remove(); skip silently. The inner None
-            // means "cron has no future fire" (e.g. `@once` already
-            // past); skip too.
-            let next = match self.svc.next_fire_after(&entry.id, now) {
-                Ok(Some(t)) => t,
-                Ok(None) | Err(_) => continue,
+            let Some(next) = ScheduleService::next_fire_for_entry(&entry, now)? else {
+                continue;
             };
             if next > horizon_end {
                 continue;
@@ -133,13 +127,11 @@ impl ContextLoader for ScheduleLoader {
             // across daemon hosts; ISO UTC is unambiguous and the
             // LLM can convert if asked.
             out.push_str(&format!("- **{}** (cron `{}`)", when.to_rfc3339(), cron));
-            if let Some(p) = prompt {
-                let preview: String = p.chars().take(80).collect();
-                out.push_str(": ");
-                out.push_str(&preview);
-                if p.chars().count() > 80 {
-                    out.push('…');
-                }
+            let preview: String = prompt.chars().take(80).collect();
+            out.push_str(": ");
+            out.push_str(&preview);
+            if prompt.chars().count() > 80 {
+                out.push('…');
             }
             out.push('\n');
         }
@@ -158,7 +150,8 @@ impl ContextLoader for ScheduleLoader {
 mod tests {
     use super::*;
     use crate::core::domain::{
-        AgentId, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId, TenantId,
+        AgentId, DeferredInvocationAuthority, MisfirePolicy, NodeId, ScheduleEntry, ScheduleId,
+        TenantId,
     };
 
     fn make_entry(id: &str, agent: &str, cron: &str, enabled: bool) -> ScheduleEntry {
@@ -167,24 +160,42 @@ mod tests {
             tenant: TenantId::default_v1(),
             target_node: NodeId::new("self"),
             target_agent: AgentId::new(agent),
+            authority: DeferredInvocationAuthority {
+                accountable_user_ura: crate::core::ura::user_ura("default", "test-user"),
+                creator_invocation_id: "test-schedule-create".to_string(),
+                controller_callee_ura: crate::core::ura::device_agent_ura(
+                    "default",
+                    "self",
+                    crate::daemon::ability::names::automation::AUTOMATION_SYSTEM_AGENT_ID,
+                ),
+                target_callee_ura: crate::core::ura::agent_ura("default", "test-user", agent),
+                execution_host_ura: crate::core::ura::device_ura("default", "self"),
+            },
             cron_expr: cron.to_string(),
             misfire_policy: MisfirePolicy::Skip,
             catch_up_window_secs: None,
             enabled,
-            prompt: None,
+            prompt: "Summarize schedule {{schedule_id}}".to_string(),
+            fire_ledger: std::collections::BTreeMap::new(),
         }
+    }
+
+    fn bound_service() -> Arc<ScheduleService> {
+        let svc = Arc::new(ScheduleService::new());
+        svc.bind_memory_for_test(TenantId::new("tenant-a"));
+        svc
     }
 
     #[test]
     fn loader_returns_none_when_no_schedules_for_agent() {
-        let svc = Arc::new(ScheduleService::new());
+        let svc = bound_service();
         let loader = ScheduleLoader::new(svc);
         assert!(loader.load("alice", "s-1").unwrap().is_none());
     }
 
     #[test]
     fn loader_returns_none_when_only_other_agents_have_schedules() {
-        let svc = Arc::new(ScheduleService::new());
+        let svc = bound_service();
         svc.add(make_entry("s1", "bob", "0 * * * *", true)).unwrap();
         let loader = ScheduleLoader::new(svc);
         assert!(loader.load("alice", "s-1").unwrap().is_none());
@@ -192,7 +203,7 @@ mod tests {
 
     #[test]
     fn loader_returns_none_when_disabled_schedules_only() {
-        let svc = Arc::new(ScheduleService::new());
+        let svc = bound_service();
         svc.add(make_entry("s1", "alice", "0 * * * *", false))
             .unwrap();
         let loader = ScheduleLoader::new(svc);
@@ -201,7 +212,7 @@ mod tests {
 
     #[test]
     fn loader_renders_upcoming_schedule_block() {
-        let svc = Arc::new(ScheduleService::new());
+        let svc = bound_service();
         svc.add(make_entry("s1", "alice", "0 * * * *", true))
             .unwrap();
         let loader = ScheduleLoader::new(svc);
@@ -212,8 +223,22 @@ mod tests {
     }
 
     #[test]
+    fn loader_rejects_corrupt_schedule_instead_of_empty_context() {
+        let svc = bound_service();
+        svc.insert_cached_for_test(make_entry("s1", "alice", "not a cron", true));
+        let loader = ScheduleLoader::new(svc);
+
+        let err = loader
+            .load("alice", "s-1")
+            .expect_err("corrupt schedule must fail context loading");
+        let message = format!("{err:#}");
+        assert!(message.contains("s1"));
+        assert!(message.contains("invalid cron"));
+    }
+
+    #[test]
     fn loader_caps_at_max_entries_and_notes_truncation() {
-        let svc = Arc::new(ScheduleService::new());
+        let svc = bound_service();
         // Add more than the cap so truncation kicks in.
         for i in 0..(MAX_ENTRIES_RENDERED + 3) {
             svc.add(make_entry(&format!("s{i}"), "alice", "0 * * * *", true))

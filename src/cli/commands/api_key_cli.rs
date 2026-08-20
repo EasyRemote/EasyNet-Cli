@@ -15,11 +15,15 @@
 // Author: Silan Hu <silan.hu@u.nus.edu>
 // Copyright (c) 2026 EasyNet. All rights reserved.
 
+use anyhow::Context;
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
 
 use crate::daemon::ability::builtins::governance::api_key;
-use crate::support::platform::local_invoke::invoke_local_ability;
+use crate::daemon::ability::builtins::resources::pages::{PagesIdentity, PagesUserRootIdentity};
+use crate::support::platform::local_invoke::{
+    LocalDaemonSystemAbilityIssuer, LocalRuntimeApiKeyInventoryReadIssuer,
+};
 
 #[derive(Debug, Args)]
 pub struct ApiKeyArgs {
@@ -60,31 +64,51 @@ pub struct RevokeArgs {
     pub id_prefix: String,
 }
 
-fn current_user() -> anyhow::Result<String> {
-    // Production: read username from `EASYNET_PAGES_USER` env (e2e
-    // / multi-user dev rigs) or `credentials.json` (paired
-    // device). M5 of the system-namespace migration banned the
-    // `legacy self alias` placeholder — an unpaired daemon has no
-    // user-rooted ability surface, so the CLI MUST surface the
-    // missing-identity error rather than silently dialling
-    // `self.api_key.*` (which the registry no longer answers).
-    if let Some(v) = std::env::var("EASYNET_PAGES_USER")
-        .ok()
-        .filter(|s| !s.is_empty())
-    {
-        return Ok(v);
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ApiKeyPrincipal {
+    user: String,
+    subject_ura: String,
+}
+
+impl ApiKeyPrincipal {
+    const SUBJECT_RESOURCE_PATH: &'static str = "api-key/manage";
+
+    fn from_user_root_identity(identity: PagesUserRootIdentity) -> anyhow::Result<Self> {
+        let subject_ura = crate::core::ura::resource_dot_ura(
+            &identity.realm,
+            &format!("user.{}", identity.user),
+            Self::SUBJECT_RESOURCE_PATH,
+        );
+        crate::core::ura::parse_ura(&subject_ura)
+            .map_err(|error| anyhow::anyhow!("api-key subject URA is invalid: {error}"))?;
+        Ok(Self {
+            user: identity.user,
+            subject_ura,
+        })
     }
-    if let Some(v) = crate::daemon::persistence::config::load_credentials()
-        .ok()
-        .and_then(|c| c.username)
-        .filter(|s| !s.is_empty())
-    {
-        return Ok(v);
+
+    fn ability(&self, action: &str) -> String {
+        format!("{}.api_key.{action}", self.user)
+    }
+}
+
+fn current_api_key_principal() -> anyhow::Result<ApiKeyPrincipal> {
+    if let Some(identity) = PagesIdentity::try_from_env()?.user_root_identity()? {
+        return ApiKeyPrincipal::from_user_root_identity(identity);
     }
     anyhow::bail!(
         "no user identity bound to this daemon — run 'easynet device pair' first \
-         (or set EASYNET_PAGES_USER for dev rigs)"
+         (or set EASYNET_PAGES_USER and EASYNET_PAGES_REALM for dev rigs)"
     )
+}
+
+fn invoke_api_key_manage(
+    principal: &ApiKeyPrincipal,
+    ability: &str,
+    args: Value,
+) -> anyhow::Result<Value> {
+    LocalDaemonSystemAbilityIssuer::invoke_root_for_subject(ability, args, &principal.subject_ura)
+        .with_context(|| format!("invoke {ability}"))
 }
 
 pub fn run(args: ApiKeyArgs) -> anyhow::Result<()> {
@@ -96,13 +120,13 @@ pub fn run(args: ApiKeyArgs) -> anyhow::Result<()> {
 }
 
 fn run_create(a: CreateArgs) -> anyhow::Result<()> {
-    let user = current_user()?;
-    let ability = format!("{user}.api_key.create");
+    let principal = current_api_key_principal()?;
+    let ability = principal.ability("create");
     let mut args = json!({});
     if let Some(label) = a.label {
         args["label"] = json!(label);
     }
-    let result = invoke_local_ability(&ability, args)?;
+    let result = invoke_api_key_manage(&principal, &ability, args)?;
     let token = result
         .get("token")
         .and_then(Value::as_str)
@@ -128,9 +152,9 @@ fn run_create(a: CreateArgs) -> anyhow::Result<()> {
 }
 
 fn run_list(a: ListArgs) -> anyhow::Result<()> {
-    let user = current_user()?;
-    let ability = format!("{user}.api_key.list");
-    let result = invoke_local_ability(&ability, json!({}))?;
+    let principal = current_api_key_principal()?;
+    let ability = principal.ability("list");
+    let result = LocalRuntimeApiKeyInventoryReadIssuer::list_api_keys(&ability, json!({}))?;
     if a.json {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
@@ -165,13 +189,173 @@ fn run_list(a: ListArgs) -> anyhow::Result<()> {
 }
 
 fn run_revoke(a: RevokeArgs) -> anyhow::Result<()> {
-    let user = current_user()?;
-    let ability = format!("{user}.api_key.revoke");
-    let result = invoke_local_ability(&ability, json!({ "id_prefix": a.id_prefix }))?;
+    let principal = current_api_key_principal()?;
+    let ability = principal.ability("revoke");
+    let result = invoke_api_key_manage(&principal, &ability, json!({ "id_prefix": a.id_prefix }))?;
     let revoked = result
         .get("revoked")
         .and_then(Value::as_str)
         .unwrap_or(&a.id_prefix);
     println!("Revoked {revoked}.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::commands::test_support::HomeGuard;
+    use crate::daemon::persistence::config::{save_credentials, state_dir, Credentials};
+    use std::fs;
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::remove_var(key);
+            Self { key, previous }
+        }
+
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.previous.as_ref() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    fn paired_credentials(username: Option<&str>) -> Credentials {
+        Credentials {
+            node_id: "node".into(),
+            credential_token: "token".into(),
+            hub_endpoint: "axon://hub.example:7700".into(),
+            realm: "localhost".into(),
+            deploy_signature: String::new(),
+            hub_api_base: None,
+            username: username.map(str::to_string),
+            user_id: Some("user-alice".into()),
+            hub_pubkey_b64: None,
+            hub_tls_ca_pem_b64: None,
+            join_receipt_hash: None,
+        }
+    }
+
+    #[test]
+    fn current_api_key_principal_accepts_complete_dev_override() {
+        let _home = HomeGuard::new();
+        let _user = EnvGuard::set("EASYNET_PAGES_USER", " alice ");
+        let _realm = EnvGuard::set("EASYNET_PAGES_REALM", " localhost ");
+        save_credentials(&paired_credentials(Some("alice")))
+            .expect("dev override still requires an immutable runtime owner");
+
+        let principal = current_api_key_principal().expect("env override");
+
+        assert_eq!(principal.user, "alice");
+        assert_eq!(
+            principal.subject_ura,
+            "easynet:///r/localhost/resource/user.alice/api-key/manage"
+        );
+        assert_eq!(principal.ability("create"), "alice.api_key.create");
+    }
+
+    #[test]
+    fn current_api_key_principal_rejects_partial_dev_override() {
+        let _home = HomeGuard::new();
+        let _user = EnvGuard::set("EASYNET_PAGES_USER", " alice ");
+        let _realm = EnvGuard::remove("EASYNET_PAGES_REALM");
+
+        let error = current_api_key_principal().expect_err("partial env override");
+
+        assert!(
+            error.to_string().contains("requires an explicit realm"),
+            "partial env override must fail closed: {error:#}"
+        );
+    }
+
+    #[test]
+    fn current_api_key_principal_reads_valid_paired_credentials() {
+        let _home = HomeGuard::new();
+        let _user = EnvGuard::remove("EASYNET_PAGES_USER");
+        let _realm = EnvGuard::remove("EASYNET_PAGES_REALM");
+        save_credentials(&paired_credentials(Some("alice"))).expect("save credentials");
+
+        let principal = current_api_key_principal().expect("paired credentials");
+
+        assert_eq!(principal.user, "alice");
+        assert_eq!(
+            principal.subject_ura,
+            "easynet:///r/localhost/resource/user.alice/api-key/manage"
+        );
+    }
+
+    #[test]
+    fn current_api_key_principal_reports_unpaired_only_when_credentials_file_is_absent() {
+        let _home = HomeGuard::new();
+        let _user = EnvGuard::remove("EASYNET_PAGES_USER");
+        let _realm = EnvGuard::remove("EASYNET_PAGES_REALM");
+
+        let error = current_api_key_principal().expect_err("missing credentials");
+
+        assert!(
+            error.to_string().contains("no user identity bound"),
+            "unexpected missing-credential error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn current_api_key_principal_rejects_malformed_existing_credentials() {
+        let _home = HomeGuard::new();
+        let _user = EnvGuard::remove("EASYNET_PAGES_USER");
+        let _realm = EnvGuard::remove("EASYNET_PAGES_REALM");
+        let dir = state_dir();
+        fs::create_dir_all(&dir).expect("create state dir");
+        fs::write(dir.join("credentials.json"), "{").expect("write malformed credentials");
+
+        let error = current_api_key_principal().expect_err("malformed credentials");
+
+        assert!(
+            error.to_string().contains("parse credentials"),
+            "malformed credentials must fail closed instead of looking unpaired: {error:#}"
+        );
+    }
+
+    #[test]
+    fn current_api_key_principal_rejects_credentials_without_username() {
+        let _home = HomeGuard::new();
+        let _user = EnvGuard::remove("EASYNET_PAGES_USER");
+        let _realm = EnvGuard::remove("EASYNET_PAGES_REALM");
+        let dir = state_dir();
+        fs::create_dir_all(&dir).expect("create state dir");
+        fs::write(
+            dir.join("credentials.json"),
+            r#"{
+  "node_id": "node",
+  "credential_token": "token",
+  "hub_endpoint": "axon://hub.example:7700",
+  "realm": "localhost",
+  "deploy_signature": "",
+  "user_id": "user-alice"
+}
+"#,
+        )
+        .expect("write incomplete credentials");
+
+        let error = current_api_key_principal().expect_err("missing username");
+
+        assert!(
+            error.to_string().contains("missing username"),
+            "missing username must fail closed instead of looking unpaired: {error:#}"
+        );
+    }
 }

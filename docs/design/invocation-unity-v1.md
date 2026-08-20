@@ -1,125 +1,100 @@
-# Invocation Unity v1 — AXIOM §2 Mapping + U1
+# Invocation Unity
 
-> Plan v10.2–v10.3. Pins the invariant "every execution entry into
-> the daemon runtime is an Invocation routed through
-> `daemon::boot::kernel::Kernel::invoke` or daemon Invocation dispatch".
+**Status:** current architecture note.
+**Date:** 2026-07-11.
 
-## 1. AXIOM §2 seven-parameter mapping
+The retained file path is linked by architecture guards. Its contents describe
+the current model: every executable request is one complete, signed Invocation
+whose canonical semantics are owned by Axon.
 
-```
-Axon                     EasyNet-Cli (src/daemon/invocation/receipts/runtime_record.rs)
-────                     ─────────────────────────────────────────
-invoke(caller,           Invocation.caller           (URA)
-        callee,           Invocation.callee           (URA)
-        ability,          Invocation.ability          (AbilityUri)
-        subject,          Invocation.subject          (URA)
-        nonce,            Invocation.nonce_hex        (16 bytes hex)
-        causal_context,   Invocation.causal_context   (enum: Null|Scalar|List|Merkle)
-        args)             Invocation.args             (serde_json::Value in v1;
-                                                       proto-encoded bytes in v2)
-   → receipt             Receipt                     (terminal + events + prior + sig)
-```
+## 1. Single execution unit
 
-`invocation_id = sha256(canonical_bytes(inv))` is the single
-identifier across IPC, the boot Kernel, and Gateway. No layer reconstructs
-or re-hashes it; downstream layers receive the same bytes the
-Control layer stamped.
+An Invocation is the indivisible seven-tuple:
 
-## 2. Signature status (v1 vs v2)
+1. caller URA;
+2. callee URA;
+3. descriptor reference, including descriptor version;
+4. subject URA;
+5. nonce;
+6. causal context;
+7. arguments.
 
-| field                         | v1 state                        | v2 state |
-|-------------------------------|---------------------------------|----------|
-| `Invocation.caller_signature` | `None` (field present on wire)  | filled   |
-| `Receipt.callee_signature`    | `None` (field present on wire)  | filled   |
+Metadata, timeout, content metadata, authority material and signatures may bind
+the tuple, but they cannot replace a tuple member. `DaemonInvocation` is the
+daemon policy projection of this Axon-owned value; it is not a second canonical
+format.
 
-Setting either field in v1 has no runtime effect; the wire format
-tolerates both for forward-compat.
+## 2. Construction and transport
 
-## 3. In-process invariants delivered by v1
+Public callers construct the complete tuple through the generic SDK or C ABI
+v5 builder. Preparation freezes the tuple and returns Axon canonical signing
+material. Submission accepts either a caller-signed Invocation or the explicit
+local-daemon signing path. There is no unsigned product shortcut.
 
-| # | Invariant                             | Mechanism                                                                 |
-|---|---------------------------------------|---------------------------------------------------------------------------|
-| I1| Admission exactly once                | `daemon::boot::kernel::Kernel::invoke` nonce-dedup (5-minute local table, single-tenant) |
-| I2| Terminal monotonic                    | Receipt written once; no post-terminal `TimelineWriter::emit` is emitted   |
-| I3| Receipt integrity                     | events hashed; signature optional in v1                                    |
-| I4| Cancellation cooperative              | supervisor-coordinated Receipt `TerminalState::Cancelled`                  |
-| I5| Event total order                     | `TimelineWriter` assigns monotonic per-invocation `sequence`               |
+The same Invocation crosses:
 
-Across-process invariants P1–P6 are delivered by the existing
-`PersistentLog` (PR-7) and are unchanged by this plan.
+- `daemon.sock` ingress;
+- admission and authority verification;
+- route resolution;
+- local runtime dispatch or cross-shard `InvocationRelay`;
+- unary, server-stream or bidi execution;
+- terminal receipt projection.
 
-## 4. U1 — daemon Invocation is the unity entry point (v10.3 C*)
+Adapters must preserve caller, callee, descriptor reference, subject, nonce,
+causal context, arguments and admitted metadata. Reconstructing a call with a
+system caller, generating a new nonce, dropping causal context, or reducing the
+request to `tool + args` violates this boundary.
 
-Every execution entry into the runtime constructs an `Invocation`
-and calls `daemon::boot::kernel::Kernel::invoke` or the daemon
-Invocation dispatch path:
+## 3. Stage 1 / Stage 2 separation
 
-- **Client FFI** — the IPC layer seals the Client's
-  `InvocationPlan` into an Invocation (adds caller URA, nonce,
-  causal_context) and calls `daemon::boot::kernel::Kernel::invoke`.
-- **Schedule tick** — `execution::schedule::runner` builds an
-  Invocation with `subject = schedule_id URA`, `causal_context =
-  Scalar(last_receipt)` or `Null` on first fire, and calls
-  `daemon::boot::kernel::Kernel::invoke`. It does **not** call `run_mission_inproc`
-  directly.
-- **Loop controller** — `execution::loop_instance::runner` emits
-  one Invocation per iteration (body and verify are separate
-  Invocations) keyed by `subject = loop_instance URA`,
-  `causal_context = Scalar(previous_iter_receipt)`. It does
-  **not** drive `Session::subscribe` or the dispatch executor
-  directly.
-- **Permission admission** — the broker participates as an
-  admission hook inside `daemon::boot::kernel::Kernel::invoke`. A denied decision yields
-  `Receipt { terminal: Failed(PermissionDenied) }`; the
-  broker does not bypass Invocation construction.
+Stage 1 resolves the governed descriptor, authority, destination and transport
+mode. Stage 2 executes the resolved Invocation. Ability handlers consume the
+resolved target; they do not derive locality from node identifiers or rebuild
+identity from ability names.
 
-This is the property that makes the audit chain referable: one id
-per unit of execution, one entry point per unit of admission, one
-Receipt per unit of termination.
+`control.sock` owns process lifecycle and diagnostics only. `daemon.sock` owns
+canonical Invocation ingress, and admitted local calls execute directly in the
+daemon's embedded Axon `LocalRuntime`.
 
-## 5. Bypass detection
+## 4. Signing and receipts
 
-`tools/scripts/check-invocation-unity.sh` grep-enforces:
+Caller signature verification binds Axon's canonical descriptor-bound bytes.
+Admission and terminal receipts bind the descriptor version, authority proof,
+implementation facts, input/output hashes and causal predecessors. A receipt is
+an execution fact, not a substitute response model and not an SDK history
+profile.
 
-1. GatewayApi trait method signatures cannot take raw invocation
-   payload fragments. Invocation payloads are owned by daemon
-   invocation dispatch.
-2. The retired `crate::daemon::kernel` namespace cannot return; the
-   supported home is `crate::daemon::boot::kernel`.
-3. Sub-services may not bypass daemon invocation dispatch by reaching
-   for legacy mission/session paths:
-   - `execution/schedule/` cannot call `run_mission_inproc`
-     (the tick runner builds an Invocation and routes through
-     daemon invocation dispatch).
-   - `execution/loop_instance/` cannot call `Session::subscribe`,
-     `send_to_agent(...)`, or `run_mission_inproc`. The loop
-     controller emits one Invocation per body / verify step.
-   - `execution/permission/` cannot call `run_mission_inproc`.
-     The broker is an admission hook inside `daemon::boot::kernel::Kernel::invoke`,
-     not a side-channel from elsewhere in the dispatch path.
+Terminal state is monotonic. Success, failure and cancellation are mutually
+exclusive. Stream and bidi handles emit at most one terminal outcome, then
+close idempotently.
 
-## 6. What this plan explicitly does **not** deliver in v1
+## 5. Lifecycle invariants
 
-- **Scheduler policy.** v1 is tokio-backed FIFO best-effort
-  dispatch. No fairness, priority, quotas, or cost-aware
-  admission. `daemon::boot::kernel::Kernel::invoke`'s admission phase leaves a hook
-  position ahead of dispatch for a future scheduler layer; v1
-  runs no code there.
-- **Receipt-driven runtime.** `ReceiptSubscriber` is a trait
-  with an empty registry. No v1 code consumes Receipts. v2
-  `ReplayEngine` / `CausalScheduler` will populate the registry;
-  `invocation-unity` ships the extension point alone.
-- **Caller/callee signatures.** v1 wire format carries the
-  optional fields; no v1 code reads or writes them.
+- builders transition from building to frozen exactly once;
+- prepared values cannot execute directly;
+- signed values transition to submitted exactly once;
+- cancellation is explicit and cannot be reported as success;
+- route, catalog, admission or provider failure fails closed;
+- a multi-stage local registration rolls back completed stages in reverse
+  order.
 
-## 7. Reviewer checklist for a new PR
+These invariants are enforced by `check-daemon-invocation-migration.sh`,
+`check-invocation-unity.sh`, `check-dispatch-boundary.sh`, the complete-tuple
+round-trip tests and the generic ABI export allowlist.
 
-- [ ] Does the PR introduce a new execution entry into the
-      runtime? If yes, it must go through daemon invocation dispatch.
-- [ ] Does the PR add a new KernelApi method? If yes, the
-      signature must name domain objects — not `args_json`.
-- [ ] Does the PR add a new Execution sub-service? If yes, it
-      must be isolated per `tools/scripts/check-subservice-isolation.sh`.
-- [ ] Does the PR add a new handler under `src/daemon/ability/builtins/`? If
-      yes, it must not branch on `self.node_id` /
-      `target_node == self`.
+## 6. Scheduler and planner position
+
+Scheduling policy may run between admission and dispatch, but it consumes and
+returns the same complete Invocation. A planner is a caller of the governed
+runtime surface: it may produce downstream Invocations, never bypass admission
+with raw handler arguments or invent another execution record.
+
+## 7. Review checklist
+
+- Does every new execution entry accept a complete Invocation?
+- Does it preserve the seven-tuple and caller signature material?
+- Does routing reuse the descriptor's canonical transport mode?
+- Does the handler avoid locality and identity reconstruction?
+- Are terminal and cancellation transitions monotonic?
+- Is any newly introduced envelope, causal-context or call-mode type actually
+  a duplicate of the Axon/daemon canonical owner?

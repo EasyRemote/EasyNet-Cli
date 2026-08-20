@@ -1,0 +1,16 @@
+id: runtime/ability_restart_recover
+profile: runtime_core
+required_for:
+  - go
+  - python
+description: Runtime ability facades expose restart recovery only as a Runtime Core provider delegation and do not implement product-specific recovery policy.
+steps:
+  - action: submit_ability_recovery_request
+    schema: runtime-recovery-request.schema.json
+  - action: delegate_recovery_to_runtime_core
+  - action: observe_runtime_started_recovery_report
+expect:
+  result: ability_restart_recovery_observed
+  provider_owned_recovery: true
+  descriptor_bound_lowering_unchanged: true
+  product_specific_recovery_policy: false

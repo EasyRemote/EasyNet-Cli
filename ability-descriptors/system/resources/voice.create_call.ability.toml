@@ -1,10 +1,29 @@
-schema_version = "1"
+schema_version = "3"
 name = "voice.create_call"
-description = "Create a voice/video call signaling session. Returns the `call_id` (auto-generated when omitted) and the initial state. v1 stores call state in-process; persistence + federation fan-out land with the RFC-006 follow-up."
+descriptor_version = "1.0.0"
+description = "Create a realm Authority-owned voice/video call signaling session. Returns the `call_id` (auto-generated when omitted) and the initial state. The realm Authority persists the call aggregate before acknowledging creation."
+exposure = "task"
+dedicated_surface = "voice"
+subject_contract_kind = "dedicated-surface"
+call_mode = "rpc"
+capability_state = "seam"
+admission_action = "invoke"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{\"additionalProperties\":false,\"properties\":{\"call_id\":{\"type\":\"string\"},\"created_at_ms\":{\"minimum\":0,\"type\":\"integer\"},\"state\":{\"type\":\"string\"},\"state_code\":{\"type\":\"integer\"}},\"required\":[\"call_id\",\"state\",\"state_code\",\"created_at_ms\"],\"type\":\"object\"}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
 additionalProperties = false
 
 [input_schema.properties.call_id]
+type = "string"
+
+[input_schema.properties.participant_id]
 type = "string"

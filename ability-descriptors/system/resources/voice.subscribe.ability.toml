@@ -1,6 +1,22 @@
-schema_version = "1"
+schema_version = "3"
 name = "voice.subscribe"
-description = "Subscribe to an LLM voice profile. Returns a server-pushed stream of TTS audio BinaryChunk frames. Subject MUST be a voice resource_ura (one llm may expose multiple voice profiles)."
+descriptor_version = "1.0.0"
+description = "Subscribe to a realm Authority voice-synthesis resource. Returns a server-pushed stream of TTS audio BinaryChunk frames. Subject MUST be a voice resource_ura (one realm Authority may expose multiple voice profiles)."
+exposure = "task"
+dedicated_surface = "voice"
+subject_contract_kind = "dedicated-surface"
+call_mode = "stream"
+capability_state = "unsupported"
+admission_action = "stream"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "null"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":true,\"bidi_only\":false}"
+receipt_semantics = "operational"
 
 [input_schema]
 type = "object"
