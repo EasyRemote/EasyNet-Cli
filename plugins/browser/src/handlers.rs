@@ -342,23 +342,38 @@ async fn run_attachment(
         // consumers only ever observe frames. Bounded capture size — every
         // frame crosses bidi as one payload, so size caps effective rate.
         let session = Arc::clone(&session);
-        // Capture at the viewer's physical resolution (CSS px * DPR), bounded
-        // so one frame — which crosses bidi as a single base64 payload —
-        // stays within the effective rate budget. A 2x viewer therefore gets
-        // crisp frames instead of a 1x image upscaled in the <img>.
+        // Lock the layout viewport to the session's requested size so long
+        // pages compute the correct scroll extent regardless of the actual
+        // Chrome window size. deviceScaleFactor stays 1: Page.startScreencast
+        // emits a 1x compositor preview bitmap and ignores DPR entirely
+        // (empirically verified — a higher scale changes neither the frame
+        // resolution nor its byte size), so raising it here would only
+        // distort layout without improving clarity. Bound the screencast to
+        // the CSS viewport; quality is the only clarity lever this transport
+        // exposes.
         let vp = session.viewport();
-        let scale = vp.device_scale_factor.max(1.0);
-        let max_width = ((vp.width as f64) * scale).round().clamp(1.0, 3840.0) as u64;
-        let max_height = ((vp.height as f64) * scale).round().clamp(1.0, 2400.0) as u64;
+        let css_width = (vp.width as f64).round().clamp(1.0, 3840.0) as u64;
+        let css_height = (vp.height as f64).round().clamp(1.0, 2400.0) as u64;
         tokio::spawn(async move {
+            let _ = session
+                .command(
+                    "Emulation.setDeviceMetricsOverride",
+                    Some(json!({
+                        "width": css_width,
+                        "height": css_height,
+                        "deviceScaleFactor": 1,
+                        "mobile": false,
+                    })),
+                )
+                .await;
             let _ = session
                 .command(
                     "Page.startScreencast",
                     Some(json!({
                         "format": "jpeg",
-                        "quality": 60,
-                        "maxWidth": max_width,
-                        "maxHeight": max_height,
+                        "quality": 80,
+                        "maxWidth": css_width,
+                        "maxHeight": css_height,
                         "everyNthFrame": 1,
                     })),
                 )
