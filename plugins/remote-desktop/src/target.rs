@@ -553,7 +553,9 @@ impl AppWindowSetProof {
 
     fn from_entry(entry: &ResourceEntry, display_id: Option<u64>) -> Option<Self> {
         let display_id = display_id?;
-        let resolved_window_ids = metadata_u64_array(entry, "resolved_window_ids");
+        let mut resolved_window_ids = metadata_u64_array(entry, "resolved_window_ids");
+        resolved_window_ids.sort_unstable();
+        resolved_window_ids.dedup();
         if resolved_window_ids.is_empty() {
             return None;
         }
@@ -578,6 +580,24 @@ impl AppWindowSetProof {
 
     pub(in crate::daemon::plugins::remote_desktop) fn window_set_epoch(&self) -> u64 {
         self.window_set_epoch
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn contains_window_id(
+        &self,
+        window_id: u64,
+    ) -> bool {
+        self.resolved_window_ids.binary_search(&window_id).is_ok()
+    }
+
+    pub(in crate::daemon::plugins::remote_desktop) fn missing_window_ids(
+        &self,
+        observed_window_ids: &[u64],
+    ) -> Vec<u64> {
+        self.resolved_window_ids
+            .iter()
+            .copied()
+            .filter(|window_id| !observed_window_ids.contains(window_id))
+            .collect()
     }
 
     pub(in crate::daemon::plugins::remote_desktop) fn to_value(&self) -> Value {

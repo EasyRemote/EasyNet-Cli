@@ -442,15 +442,27 @@ fn select_application_window_set_for_binding(
             "application ScreenCaptureKit proof requires a display-scoped binding",
         )
     })?;
+    let committed_window_set = binding.committed_app_window_set().ok_or_else(|| {
+        RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::TargetMetadataIncomplete,
+            "application ScreenCaptureKit capture requires a committed display-scoped window set",
+        )
+    })?;
     let mut selected_windows = Vec::new();
     let mut window_ids = Vec::new();
     let mut off_display_window_ids = Vec::new();
+    let mut matched_application = false;
     for window in windows.iter() {
         let Some(app) = (unsafe { window.owningApplication() }) else {
             continue;
         };
         if sck_app_matches_binding(binding, &app) {
+            matched_application = true;
             let window_id = unsafe { window.windowID() as u64 };
+            if !committed_window_set.contains_window_id(window_id) {
+                continue;
+            }
             if sck_window_overlaps_display(&window, display) {
                 window_ids.push(window_id);
                 selected_windows.push(window);
@@ -472,19 +484,32 @@ fn select_application_window_set_for_binding(
             ),
         ));
     }
-    if window_ids.is_empty() {
+    if !matched_application {
         return Err(RemoteAppTargetError::new(
             ability,
             TargetResolutionError::TargetNotFound,
             "bound application has no ScreenCaptureKit windows in the current shareable content",
         ));
     }
-    let proof = AppWindowSetProof::new(
-        display_id,
-        locator.bundle_id().map(str::to_string),
-        locator.pid(),
-        window_ids,
-    );
+    let missing_window_ids = committed_window_set.missing_window_ids(&window_ids);
+    if !missing_window_ids.is_empty() {
+        return Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::TargetIdentityChanged,
+            format!(
+                "application ScreenCaptureKit window set no longer contains committed windows; \
+                missing_window_ids={missing_window_ids:?}"
+            ),
+        ));
+    }
+    if window_ids.is_empty() {
+        return Err(RemoteAppTargetError::new(
+            ability,
+            TargetResolutionError::TargetNotFound,
+            "bound application has no committed ScreenCaptureKit windows in the current shareable content",
+        ));
+    }
+    let proof = committed_window_set.clone();
     Ok(ApplicationWindowSetTarget {
         windows: selected_windows,
         proof,

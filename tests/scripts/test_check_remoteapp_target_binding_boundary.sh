@@ -74,6 +74,16 @@ impl RemoteAppTargetBinding {
     }
 }
 
+impl AppWindowSetProof {
+    fn contains_window_id(&self, window_id: u64) -> bool {
+        true
+    }
+
+    fn missing_window_ids(&self, observed_window_ids: &[u64]) -> Vec<u64> {
+        Vec::new()
+    }
+}
+
 impl ScopeAudit {
     fn to_value(&self) {
         json!({
@@ -339,12 +349,26 @@ fn select_application_for_binding(binding: &RemoteAppTargetBinding) {
 }
 
 fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
+    let committed_window_set = binding.committed_app_window_set()?;
     let off_display_window_ids = vec![10];
+    for window_id in [10] {
+        if !committed_window_set.contains_window_id(window_id) {
+            continue;
+        }
+    }
     if !off_display_window_ids.is_empty() {
         return Err(RemoteAppTargetError::new(
             "remote_desktop.create_session",
             TargetResolutionError::TargetMultiDisplayUnsupported,
             "application target requires MultiAppSurface support",
+        ));
+    }
+    let missing_window_ids = committed_window_set.missing_window_ids(&window_ids);
+    if !missing_window_ids.is_empty() {
+        return Err(RemoteAppTargetError::new(
+            "remote_desktop.create_session",
+            TargetResolutionError::TargetIdentityChanged,
+            "committed application window set changed",
         ));
     }
     Ok(())
@@ -843,12 +867,26 @@ fn select_application_for_binding(binding: &RemoteAppTargetBinding) {
 }
 
 fn select_application_window_set_for_binding() -> Result<(), RemoteAppTargetError> {
+    let committed_window_set = binding.committed_app_window_set()?;
     let off_display_window_ids = vec![10];
+    for window_id in [10] {
+        if !committed_window_set.contains_window_id(window_id) {
+            continue;
+        }
+    }
     if !off_display_window_ids.is_empty() {
         return Err(RemoteAppTargetError::new(
             "remote_desktop.create_session",
             TargetResolutionError::TargetMultiDisplayUnsupported,
             "application target requires MultiAppSurface support",
+        ));
+    }
+    let missing_window_ids = committed_window_set.missing_window_ids(&window_ids);
+    if !missing_window_ids.is_empty() {
+        return Err(RemoteAppTargetError::new(
+            "remote_desktop.create_session",
+            TargetResolutionError::TargetIdentityChanged,
+            "committed application window set changed",
         ));
     }
     Ok(())

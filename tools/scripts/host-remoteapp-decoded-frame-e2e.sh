@@ -499,8 +499,25 @@ require(inventory_ability in {"resource.refresh_remote_targets", "resource.watch
         "live inventory ability must be resource.refresh_remote_targets or resource.watch_remote_targets")
 require(isinstance(selected_resource_ura, str) and selected_resource_ura.startswith("easynet:///"),
         "selected_resource_ura must be an EasyNet URA")
+
+def redact_opaque_evidence_values(value):
+    if isinstance(value, dict):
+        redacted = {}
+        for key, child in value.items():
+            if key.endswith("_b64"):
+                redacted[key] = "<opaque-base64>"
+            else:
+                redacted[key] = redact_opaque_evidence_values(child)
+        return redacted
+    if isinstance(value, list):
+        return [redact_opaque_evidence_values(child) for child in value]
+    return value
+
 forbidden_address_term = "u" + "ri"
-require(forbidden_address_term not in json.dumps(evidence).lower(), "evidence must use URA vocabulary only")
+require(
+    forbidden_address_term not in json.dumps(redact_opaque_evidence_values(evidence)).lower(),
+    "evidence must use URA vocabulary only",
+)
 require(invocation_subject_ura == selected_resource_ura,
         "Invocation.subject must equal the selected resource_ura")
 require(get("invocation.ability") == "remote_desktop.create_session",

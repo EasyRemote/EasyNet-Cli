@@ -162,6 +162,24 @@ require 'binding\.validate_reverified_capture_proof\(ability, target\.capture_pr
 require 'fn capture_proof\(&self\) -> &ResolvedCaptureTargetProof' \
   "$SCK_CAPTURE" \
   'ScreenCaptureKit resolved target must expose a typed capture proof for binding revalidation'
+require 'binding\.committed_app_window_set\(\)' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit application capture must start from the committed AppWindowSetProof'
+require 'committed_window_set\.contains_window_id\(window_id\)' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit application capture must not include uncommitted same-app windows'
+require 'committed_window_set\.missing_window_ids\(&window_ids\)' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit application capture must fail closed when committed windows disappear'
+require 'TargetResolutionError::TargetIdentityChanged' \
+  "$SCK_CAPTURE" \
+  'ScreenCaptureKit application committed-window drift must remain a typed target-domain failure'
+require 'fn contains_window_id\(' \
+  "$TARGET_DOMAIN" \
+  'AppWindowSetProof must expose a read-only committed-window membership helper'
+require 'fn missing_window_ids\(' \
+  "$TARGET_DOMAIN" \
+  'AppWindowSetProof must expose committed-window disappearance evidence'
 require 'trait RemoteAppMediaSourceFactory' \
   "$REMOTE_ROOT/transport/media_source.rs" \
   'direct WebRTC media source selection must use the RemoteAppMediaSourceFactory boundary'
