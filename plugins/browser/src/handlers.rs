@@ -342,6 +342,14 @@ async fn run_attachment(
         // consumers only ever observe frames. Bounded capture size — every
         // frame crosses bidi as one payload, so size caps effective rate.
         let session = Arc::clone(&session);
+        // Capture at the viewer's physical resolution (CSS px * DPR), bounded
+        // so one frame — which crosses bidi as a single base64 payload —
+        // stays within the effective rate budget. A 2x viewer therefore gets
+        // crisp frames instead of a 1x image upscaled in the <img>.
+        let vp = session.viewport();
+        let scale = vp.device_scale_factor.max(1.0);
+        let max_width = ((vp.width as f64) * scale).round().clamp(1.0, 3840.0) as u64;
+        let max_height = ((vp.height as f64) * scale).round().clamp(1.0, 2400.0) as u64;
         tokio::spawn(async move {
             let _ = session
                 .command(
@@ -349,8 +357,8 @@ async fn run_attachment(
                     Some(json!({
                         "format": "jpeg",
                         "quality": 60,
-                        "maxWidth": 1440,
-                        "maxHeight": 900,
+                        "maxWidth": max_width,
+                        "maxHeight": max_height,
                         "everyNthFrame": 1,
                     })),
                 )
@@ -450,6 +458,7 @@ async fn run_attachment(
                             let number = |key: &str, fallback: f64| {
                                 metadata.get(key).and_then(Value::as_f64).unwrap_or(fallback)
                             };
+                            let session_vp = session.viewport();
                             let frame = json!({
                                 "type": "browser.render_frame",
                                 "sequence": render_sequence,
@@ -461,9 +470,12 @@ async fn run_attachment(
                                 "captured_at_ms": super::session::now_ms(),
                                 "interactive": true,
                                 "viewport": {
-                                    "width_px": number("deviceWidth", 1280.0),
-                                    "height_px": number("deviceHeight", 800.0),
-                                    "device_scale_factor": 1.0,
+                                    "width_px": number("deviceWidth", session_vp.width as f64),
+                                    "height_px": number("deviceHeight", session_vp.height as f64),
+                                    // Chrome's screencast metadata reports CSS-px
+                                    // device dimensions; the scale that ties them
+                                    // to the captured image is the session DPR.
+                                    "device_scale_factor": session_vp.device_scale_factor,
                                 },
                                 "scroll": {
                                     "x": number("scrollOffsetX", 0.0),

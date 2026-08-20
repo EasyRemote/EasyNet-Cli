@@ -136,6 +136,17 @@ impl SessionLifecycle {
     }
 }
 
+/// Viewer-supplied display geometry for a session. Width/height are CSS
+/// pixels; device_scale_factor is the viewer display's physical-pixel ratio.
+/// The screencast is captured at width*scale x height*scale so a HiDPI viewer
+/// receives native-resolution frames rather than an upscaled 1x image.
+#[derive(Debug, Clone, Copy)]
+pub struct SessionViewport {
+    pub width: u32,
+    pub height: u32,
+    pub device_scale_factor: f64,
+}
+
 pub struct BrowserSession {
     session_ura: String,
     creator_caller: String,
@@ -148,6 +159,7 @@ pub struct BrowserSession {
     opened_at_ms: u64,
     last_activity_ms: AtomicU64,
     idle_timeout_ms: u64,
+    viewport: SessionViewport,
     lifecycle: Mutex<SessionLifecycle>,
     client: Arc<CdpClient>,
     process: Mutex<Option<ChromeProcessLease>>,
@@ -168,6 +180,7 @@ impl BrowserSession {
         creator_caller: String,
         initial_url: String,
         idle_timeout_seconds: u64,
+        viewport: SessionViewport,
         opened: OpenedChromeTarget,
     ) -> BrowserResult<Arc<Self>> {
         let now = now_ms();
@@ -183,6 +196,7 @@ impl BrowserSession {
             opened_at_ms: now,
             last_activity_ms: AtomicU64::new(now),
             idle_timeout_ms: idle_timeout_seconds.saturating_mul(1000),
+            viewport,
             lifecycle: Mutex::new(SessionLifecycle::starting()),
             client: opened.client,
             process: Mutex::new(opened.process),
@@ -209,6 +223,10 @@ impl BrowserSession {
 
     pub fn session_ura(&self) -> &str {
         &self.session_ura
+    }
+
+    pub fn viewport(&self) -> SessionViewport {
+        self.viewport
     }
 
     pub fn cdp_session_id(&self) -> &str {

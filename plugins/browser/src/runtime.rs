@@ -35,7 +35,7 @@ use crate::support::async_bridge::{
 use super::chrome::{open_target, ChromeOpenOptions};
 use super::constants::*;
 use super::errors::{BrowserError, BrowserResult};
-use super::session::{now_ms, BrowserSession, BrowserSessionState, CloseOutcome};
+use super::session::{now_ms, BrowserSession, BrowserSessionState, CloseOutcome, SessionViewport};
 
 struct SessionEntry {
     session: Arc<BrowserSession>,
@@ -103,6 +103,11 @@ impl BrowserRuntime {
             env.caller().to_string(),
             request.url,
             request.idle_timeout_seconds,
+            SessionViewport {
+                width: request.viewport_width,
+                height: request.viewport_height,
+                device_scale_factor: request.device_scale_factor,
+            },
             opened,
         ) {
             Ok(session) => session,
@@ -360,6 +365,7 @@ struct OpenSessionRequest {
     profile: Option<String>,
     viewport_width: u32,
     viewport_height: u32,
+    device_scale_factor: f64,
     idle_timeout_seconds: u64,
 }
 
@@ -381,6 +387,7 @@ impl OpenSessionRequest {
                 "profile",
                 "viewport_width",
                 "viewport_height",
+                "device_scale_factor",
                 "idle_timeout_seconds",
             ],
         )?;
@@ -417,6 +424,16 @@ impl OpenSessionRequest {
                 DEFAULT_VIEWPORT_HEIGHT,
                 240,
                 2400,
+            )?,
+            // Physical-pixel ratio of the viewer's display. Screencast is
+            // captured at viewport * scale so a HiDPI viewer gets crisp
+            // frames instead of a 1x image upscaled in the browser.
+            device_scale_factor: optional_f64(
+                object,
+                "device_scale_factor",
+                1.0,
+                1.0,
+                4.0,
             )?,
             idle_timeout_seconds: optional_u64(
                 object,
@@ -544,6 +561,30 @@ fn optional_u64(
             detail: format!("`{key}` must be an integer"),
         })?;
     if (min..=max).contains(&value) {
+        Ok(value)
+    } else {
+        Err(BrowserError::InvalidArgument {
+            ability: ABILITY_OPEN_SESSION,
+            detail: format!("`{key}` must be between {min} and {max}"),
+        })
+    }
+}
+
+fn optional_f64(
+    object: &Map<String, Value>,
+    key: &str,
+    default: f64,
+    min: f64,
+    max: f64,
+) -> BrowserResult<f64> {
+    let Some(value) = object.get(key) else {
+        return Ok(default);
+    };
+    let value = value.as_f64().ok_or_else(|| BrowserError::InvalidArgument {
+        ability: ABILITY_OPEN_SESSION,
+        detail: format!("`{key}` must be a number"),
+    })?;
+    if value.is_finite() && (min..=max).contains(&value) {
         Ok(value)
     } else {
         Err(BrowserError::InvalidArgument {
