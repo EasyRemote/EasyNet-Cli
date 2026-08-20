@@ -67,10 +67,10 @@ func canonicalRuntimeReceiptFixture(
 			"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x71}, 64)),
 		},
 		"signer_binding":         map[string]any{"ura": runtimeTestCalleeURA, "profile": "axon-strict-v2"},
-		"authority_binding_kind": "self",
+		"authority_binding_kind": "self+identity",
 		"authority_binding": map[string]any{
-			"kind":          "self",
-			"principal_ura": runtimeTestCalleeURA,
+			"kind":          "self+identity",
+			"authority_ura": runtimeTestCalleeURA,
 		},
 		"ability_binding":         runtimeTestDescriptorRef,
 		"host_attestation_base64": "",
@@ -91,10 +91,10 @@ func canonicalRuntimeReceiptFixture(
 		"runtime_env":        "go-test",
 		"authority_proof": map[string]any{
 			"proof_type":   "self",
-			"binding_kind": "self",
+			"binding_kind": "self+identity",
 			"binding": map[string]any{
-				"kind":          "self",
-				"principal_ura": runtimeTestCalleeURA,
+				"kind":          "self+identity",
+				"authority_ura": runtimeTestCalleeURA,
 			},
 			"proof_payload_base64": base64.StdEncoding.EncodeToString(proofPayload),
 			"proof_hash_hex":       fmt.Sprintf("%x", proofHash),
@@ -446,7 +446,7 @@ func TestRuntimeReceiptProofFactsRequired(t *testing.T) {
 	if receipt.CausalBindingKind != "scalar" || receipt.CausalBinding["form"] != "scalar" {
 		t.Fatalf("causal binding not decoded: %#v", receipt.CausalBinding)
 	}
-	if receipt.AuthorityBindingKind != "self" || receipt.AuthorityBinding["kind"] != "self" {
+	if receipt.AuthorityBindingKind != "self+identity" || receipt.AuthorityBinding["kind"] != "self+identity" {
 		t.Fatalf("authority binding not decoded: %#v", receipt.AuthorityBinding)
 	}
 
@@ -562,7 +562,7 @@ func TestRuntimeReceiptRejectsMalformedCanonicalProofFacts(t *testing.T) {
 		},
 		"mismatched authority kind": func(receipt map[string]any) {
 			proof := receipt["authority_proof"].(map[string]any)
-			proof["binding_kind"] = "delegation"
+			proof["binding_kind"] = "bootstrap"
 		},
 		"missing proof binding": func(receipt map[string]any) {
 			proof := receipt["authority_proof"].(map[string]any)
@@ -571,8 +571,8 @@ func TestRuntimeReceiptRejectsMalformedCanonicalProofFacts(t *testing.T) {
 		"mismatched proof binding": func(receipt map[string]any) {
 			proof := receipt["authority_proof"].(map[string]any)
 			proof["binding"] = map[string]any{
-				"kind":          "self",
-				"principal_ura": "easynet:///r/example/device/other",
+				"kind":          "self+identity",
+				"authority_ura": "easynet:///r/example/device/other",
 			}
 		},
 		"missing admission hook": func(receipt map[string]any) {
@@ -648,10 +648,14 @@ func TestRuntimeReceiptAcceptsBindingHashProofWithoutPayload(t *testing.T) {
 }
 
 func TestRuntimeReceiptSessionAuthorityFacadeUsesGenericFields(t *testing.T) {
+	// "Generic fields" per the current RFC 001-authority-binding-relation-
+	// evidence.md shape: authority_ura (SessionOf's binding.authority,
+	// the session's accountable owner) + issuer_ura (evidence.issuer,
+	// who presents the session — envelope.caller).
 	sessionBinding := map[string]any{
-		"kind":             "session",
+		"kind":             "session_of+session",
+		"authority_ura":    "easynet:///r/example/agent/alice",
 		"issuer_ura":       "easynet:///r/example/agent/backend",
-		"subject_ura":      "easynet:///r/example/agent/alice",
 		"session_id":       "session-1",
 		"scopes":           []any{"invoke"},
 		"audiences":        []any{runtimeTestDescriptorRef},
@@ -660,50 +664,72 @@ func TestRuntimeReceiptSessionAuthorityFacadeUsesGenericFields(t *testing.T) {
 		"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x73}, 64)),
 	}
 	fixture := canonicalRuntimeReceiptFixture("inv-session-authority", "completed", "Completed", 1)
-	fixture["authority_binding_kind"] = "session"
+	fixture["authority_binding_kind"] = "session_of+session"
 	fixture["authority_binding"] = sessionBinding
 	proof := fixture["authority_proof"].(map[string]any)
 	proof["proof_type"] = "session"
-	proof["binding_kind"] = "session"
+	proof["binding_kind"] = "session_of+session"
 	proof["binding"] = sessionBinding
 	proof["proof_payload_base64"] = ""
-	proofHash := axoninv.AuthorityBindingProofHash(axoninv.SessionAuthority(axoninv.SessionAuthorityBody{
-		IssuerURA:   "easynet:///r/example/agent/backend",
-		SubjectURA:  "easynet:///r/example/agent/alice",
-		SessionID:   "session-1",
-		Scopes:      []string{"invoke"},
-		Audiences:   []string{runtimeTestDescriptorRef},
-		IssuedAtMs:  1,
-		ExpiresAtMs: 2,
-		Signature:   bytes.Repeat([]byte{0x73}, 64),
-	}))
+	proofHash := axoninv.AuthorityBindingProofHash(axoninv.SessionAuthority(
+		axoninv.NewAgentIdentity("easynet:///r/example/agent/alice", axoninv.ProfileStrictV2),
+		axoninv.SessionEvidence{
+			Issuer:      axoninv.NewAgentIdentity("easynet:///r/example/agent/backend", axoninv.ProfileStrictV2),
+			SessionID:   "session-1",
+			Scopes:      []string{"invoke"},
+			Audiences:   []string{runtimeTestDescriptorRef},
+			IssuedAtMs:  1,
+			ExpiresAtMs: 2,
+			Signature:   bytes.Repeat([]byte{0x73}, 64),
+		},
+	))
 	proof["proof_hash_hex"] = hex.EncodeToString(proofHash[:])
 
 	if _, err := NewRuntimeReceiptFromJSON(mustJSON(fixture)); err != nil {
 		t.Fatalf("NewRuntimeReceiptFromJSON accepted generic session authority fields: %v", err)
 	}
 
-	retiredBinding := map[string]any{
-		"kind":             "session",
-		"backend_ura":      "easynet:///r/example/agent/backend",
-		"user_ura":         "easynet:///r/example/agent/alice",
-		"session_id":       "session-1",
-		"scopes":           []any{"invoke"},
-		"audiences":        []any{runtimeTestDescriptorRef},
-		"issued_at_ms":     int64(1),
-		"expires_at_ms":    int64(2),
-		"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x73}, 64)),
-	}
-	retired := canonicalRuntimeReceiptFixture("inv-retired-session-authority", "completed", "Completed", 1)
-	retired["authority_binding_kind"] = "session"
-	retired["authority_binding"] = retiredBinding
-	retiredProof := retired["authority_proof"].(map[string]any)
-	retiredProof["proof_type"] = "session"
-	retiredProof["binding_kind"] = "session"
-	retiredProof["binding"] = retiredBinding
-	retiredProof["proof_payload_base64"] = ""
-	if _, err := NewRuntimeReceiptFromJSON(mustJSON(retired)); !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), "authority_binding contains noncanonical field") {
-		t.Fatalf("NewRuntimeReceiptFromJSON retired session fields error = %v, want noncanonical authority binding invalid argument", err)
+	// Retired field names from two earlier naming generations
+	// (backend_ura/user_ura pre-dates issuer_ura/subject_ura; subject_ura
+	// itself was retired by this session's relation/evidence redesign in
+	// favor of authority_ura) must still be rejected as noncanonical.
+	for name, retiredBinding := range map[string]map[string]any{
+		"backend_ura/user_ura": {
+			"kind":             "session_of+session",
+			"backend_ura":      "easynet:///r/example/agent/backend",
+			"user_ura":         "easynet:///r/example/agent/alice",
+			"session_id":       "session-1",
+			"scopes":           []any{"invoke"},
+			"audiences":        []any{runtimeTestDescriptorRef},
+			"issued_at_ms":     int64(1),
+			"expires_at_ms":    int64(2),
+			"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x73}, 64)),
+		},
+		"issuer_ura/subject_ura": {
+			"kind":             "session_of+session",
+			"issuer_ura":       "easynet:///r/example/agent/backend",
+			"subject_ura":      "easynet:///r/example/agent/alice",
+			"session_id":       "session-1",
+			"scopes":           []any{"invoke"},
+			"audiences":        []any{runtimeTestDescriptorRef},
+			"issued_at_ms":     int64(1),
+			"expires_at_ms":    int64(2),
+			"signature_base64": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x73}, 64)),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			retired := canonicalRuntimeReceiptFixture("inv-retired-session-authority", "completed", "Completed", 1)
+			retired["authority_binding_kind"] = "session_of+session"
+			retired["authority_binding"] = retiredBinding
+			retiredProof := retired["authority_proof"].(map[string]any)
+			retiredProof["proof_type"] = "session"
+			retiredProof["binding_kind"] = "session_of+session"
+			retiredProof["binding"] = retiredBinding
+			retiredProof["proof_payload_base64"] = ""
+			if _, err := NewRuntimeReceiptFromJSON(mustJSON(retired)); !IsCode(err, ErrInvalidArgument) || !strings.Contains(err.Error(), "authority_binding contains noncanonical field") {
+				t.Fatalf("NewRuntimeReceiptFromJSON retired session fields error = %v, want noncanonical authority binding invalid argument", err)
+			}
+		})
 	}
 }
 

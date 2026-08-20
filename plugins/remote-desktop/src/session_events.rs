@@ -293,7 +293,7 @@ pub(in crate::daemon::plugins::remote_desktop) fn input_channel_diagnostic(
 }
 
 /// Build a media-pipeline stats payload.
-#[cfg(target_os = "macos")]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(in crate::daemon::plugins::remote_desktop) fn media_pipeline_stats(
     media_transport_ready: bool,
     stats: Value,

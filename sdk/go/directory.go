@@ -33,6 +33,7 @@ type DirectoryResolveRequest struct {
 	QueryURA         string               `json:"query_ura"`
 	RealmHint        string               `json:"realm_hint,omitempty"`
 	AbilityName      string               `json:"ability_name,omitempty"`
+	CallMode         string               `json:"call_mode,omitempty"`
 	Kind             DirectoryResolveKind `json:"kind,omitempty"`
 	Limit            uint32               `json:"limit,omitempty"`
 	Cursor           string               `json:"cursor,omitempty"`

@@ -31,9 +31,10 @@ use crate::daemon::ability::{
     public_route_ability_from_descriptor_ref, AbilityControlPlaneAuthorityModeLookupError,
     AbilityControlPlaneError, AbilityControlPlaneLookupError, AbilityControlPlaneRecord,
     AbilityControlPlaneRegistration, AbilityControlPlaneRegistry, AbilityDescriptor,
-    AbilityImplSource, AuthorityScope, CallMode as DescriptorCallMode,
-    HostedAgentDelegationContext, HostedAgentDelegationEnvelopeBinding, ReceiptSemantics,
-    RuntimeEnv, HOSTED_AGENT_DELEGATION_METADATA_KEY,
+    AbilityImplBinding, AbilityImplSource, AuthorityBinding, AuthorityScope,
+    CallMode as DescriptorCallMode, HostedAgentDelegationContext,
+    HostedAgentDelegationEnvelopeBinding, ReceiptSemantics, RuntimeEnv,
+    HOSTED_AGENT_DELEGATION_METADATA_KEY,
 };
 #[cfg(test)]
 use crate::daemon::invocation::routing::target::TargetScope;
@@ -1632,8 +1633,76 @@ impl OwnerKind {
         )
     }
 
-    fn authority_projection(&self) -> String {
+    pub(crate) fn authority_projection(&self) -> String {
         owner_projection_for_kind(self).canonical()
+    }
+
+    pub(crate) fn matches_owner_ura(&self, owner_ura: &str) -> bool {
+        let Ok(parsed) = crate::core::ura::parse_ura(owner_ura) else {
+            return false;
+        };
+        match self {
+            OwnerKind::DeviceProfileProjection => parsed.kind == crate::core::ura::URAKind::Device,
+            OwnerKind::RealmAuthority => parsed.kind == crate::core::ura::URAKind::Authority,
+            OwnerKind::SystemAgent(agent_id) => {
+                parsed.kind == crate::core::ura::URAKind::Agent
+                    && parsed
+                        .device_agent_ids()
+                        .is_some_and(|(_, parsed_agent_id)| parsed_agent_id == agent_id)
+            }
+            OwnerKind::Service {
+                principal_id,
+                service_id,
+            } => {
+                parsed.kind == crate::core::ura::URAKind::Service
+                    && parsed.service_ids().is_some_and(
+                        |(parsed_principal_id, parsed_service_id)| {
+                            parsed_principal_id == principal_id && parsed_service_id == service_id
+                        },
+                    )
+            }
+            OwnerKind::Agent(agent_id) => {
+                parsed.kind == crate::core::ura::URAKind::Agent
+                    && parsed
+                        .agent_ids()
+                        .is_some_and(|(_, parsed_agent_id)| parsed_agent_id == agent_id)
+            }
+        }
+    }
+
+    pub(crate) fn execution_host_matches_owner_ura(
+        &self,
+        owner_ura: &str,
+        execution_host_ura: &str,
+    ) -> bool {
+        if !self.matches_owner_ura(owner_ura) {
+            return false;
+        }
+        let Ok(owner) = crate::core::ura::parse_ura(owner_ura) else {
+            return false;
+        };
+        let Ok(host) = crate::core::ura::parse_ura(execution_host_ura) else {
+            return false;
+        };
+        match self {
+            OwnerKind::DeviceProfileProjection => {
+                host.kind == crate::core::ura::URAKind::Device && execution_host_ura == owner_ura
+            }
+            OwnerKind::RealmAuthority => {
+                host.kind == crate::core::ura::URAKind::Authority && execution_host_ura == owner_ura
+            }
+            OwnerKind::SystemAgent(_) => {
+                let Some((owner_device_id, _)) = owner.device_agent_ids() else {
+                    return false;
+                };
+                host.kind == crate::core::ura::URAKind::Device
+                    && host.realm == owner.realm
+                    && host.device_id() == Some(owner_device_id)
+            }
+            OwnerKind::Service { .. } | OwnerKind::Agent(_) => {
+                host.kind == crate::core::ura::URAKind::Device && host.realm == owner.realm
+            }
+        }
     }
 
     fn authority_scope(
@@ -2847,6 +2916,18 @@ pub struct AuthorityAbilityCatalogSnapshotRow {
     /// reinterpreting the Invocation subject as an execution host.
     pub execution_host_ura: String,
     pub descriptor: AbilityDescriptor,
+    /// Governance binding from the same committed control-plane row.
+    ///
+    /// Publication readers must not reconstruct advertise/invoke authority
+    /// from the descriptor or owner projection; the binding is a distinct
+    /// facet of the same governed ability publication.
+    pub authority: AuthorityBinding,
+    /// Executable binding from the same committed control-plane row.
+    ///
+    /// Descriptor contract and implementation state intentionally remain
+    /// separate: descriptor-only rows may be visible while unbound rows must
+    /// not pretend they have an executable handler.
+    pub implementation: AbilityImplBinding,
     /// Non-descriptor execution evidence observed from the same committed
     /// control-plane transaction. Descriptor-only rows remain discoverable,
     /// but never report a bound runtime.
@@ -3017,18 +3098,68 @@ impl ExecutionIndexCounts {
 struct ExecutionIndexEntry {
     origin: ExecutionOrigin,
     handlers: RuntimeHandlerSet,
+    external_runtime_modes: AbilityCallModes,
 }
 
-/// Authority-keyed execution index for all daemon ability handlers.
+/// Authority-keyed execution binding index for daemon ability implementations.
 ///
-/// The index is deliberately not a metadata table. It stores only executable
-/// closures and their lifecycle origin. The authority key mirrors the Axon
-/// runtime binding boundary: one `(authority_root, ability)` row can carry RPC,
-/// stream, and bidi slots, while the control-plane registry remains the source
-/// for descriptor version, schema hash, owner, and call-mode proofs.
+/// The index is deliberately not a descriptor metadata table. Local ability
+/// handlers store executable closures and their lifecycle origin. Daemon
+/// Invocation exact routes store only an external runtime mode bit: their
+/// execution closure lives in `DaemonInvocationService`, but the catalog still
+/// needs an explicit implementation binding fact so publication reads do not
+/// report executable authority abilities as `unbound`.
+///
+/// The authority key mirrors the Axon runtime binding boundary: one
+/// `(authority_root, ability)` row can carry RPC, stream, and bidi bindings,
+/// while the control-plane registry remains the source for descriptor version,
+/// schema hash, owner, and call-mode proofs.
 #[derive(Default)]
 struct ExecutionIndex {
     entries: BTreeMap<ControlPlaneAbilityKey, ExecutionIndexEntry>,
+}
+
+fn empty_runtime_modes() -> AbilityCallModes {
+    AbilityCallModes {
+        rpc: false,
+        stream: false,
+        bidi: false,
+    }
+}
+
+fn runtime_modes_contain(modes: AbilityCallModes, call_mode: DescriptorCallMode) -> bool {
+    match call_mode {
+        DescriptorCallMode::Rpc => modes.rpc,
+        DescriptorCallMode::Stream => modes.stream,
+        DescriptorCallMode::Bidi => modes.bidi,
+    }
+}
+
+fn runtime_modes_insert(modes: &mut AbilityCallModes, call_mode: DescriptorCallMode) {
+    match call_mode {
+        DescriptorCallMode::Rpc => modes.rpc = true,
+        DescriptorCallMode::Stream => modes.stream = true,
+        DescriptorCallMode::Bidi => modes.bidi = true,
+    }
+}
+
+impl ExecutionIndexEntry {
+    fn has_handlers(&self) -> bool {
+        !self.handlers.is_empty()
+    }
+
+    fn bound_modes(&self) -> AbilityCallModes {
+        let handler_modes = self.handlers.modes();
+        AbilityCallModes {
+            rpc: handler_modes.rpc || self.external_runtime_modes.rpc,
+            stream: handler_modes.stream || self.external_runtime_modes.stream,
+            bidi: handler_modes.bidi || self.external_runtime_modes.bidi,
+        }
+    }
+
+    fn is_runtime_bound_for_mode(&self, call_mode: DescriptorCallMode) -> bool {
+        runtime_modes_contain(self.bound_modes(), call_mode)
+    }
 }
 
 impl ExecutionIndex {
@@ -3062,6 +3193,7 @@ impl ExecutionIndex {
                 ExecutionIndexEntry {
                     origin: ExecutionOrigin::Dynamic,
                     handlers: snapshot.into_handlers(),
+                    external_runtime_modes: empty_runtime_modes(),
                 },
             );
         }
@@ -3074,6 +3206,7 @@ impl ExecutionIndex {
             .or_insert_with(|| ExecutionIndexEntry {
                 origin: ExecutionOrigin::Static,
                 handlers: RuntimeHandlerSet::default(),
+                external_runtime_modes: empty_runtime_modes(),
             });
         assert_eq!(
             entry.origin,
@@ -3081,6 +3214,27 @@ impl ExecutionIndex {
             "static registration attempted to overwrite a dynamic execution row"
         );
         entry.handlers.install_static(handler);
+    }
+
+    fn install_external_static_binding(
+        &mut self,
+        key: ControlPlaneAbilityKey,
+        call_mode: DescriptorCallMode,
+    ) {
+        let entry = self
+            .entries
+            .entry(key)
+            .or_insert_with(|| ExecutionIndexEntry {
+                origin: ExecutionOrigin::Static,
+                handlers: RuntimeHandlerSet::default(),
+                external_runtime_modes: empty_runtime_modes(),
+            });
+        assert_eq!(
+            entry.origin,
+            ExecutionOrigin::Static,
+            "external daemon-invocation binding attempted to overwrite a dynamic execution row"
+        );
+        runtime_modes_insert(&mut entry.external_runtime_modes, call_mode);
     }
 
     fn install_dynamic(&mut self, key: ControlPlaneAbilityKey, registration: DynamicRegistration) {
@@ -3100,6 +3254,7 @@ impl ExecutionIndex {
             .or_insert_with(|| ExecutionIndexEntry {
                 origin: ExecutionOrigin::Dynamic,
                 handlers: RuntimeHandlerSet::default(),
+                external_runtime_modes: empty_runtime_modes(),
             });
         assert_eq!(
             entry.origin,
@@ -3122,7 +3277,7 @@ impl ExecutionIndex {
         let present = self
             .entries
             .get(key)
-            .map(|entry| entry.origin == origin && !entry.handlers.is_empty())
+            .map(|entry| entry.origin == origin && entry.has_handlers())
             .unwrap_or(false);
         if present {
             self.entries.remove(key);
@@ -3132,7 +3287,7 @@ impl ExecutionIndex {
 
     fn contains_origin_handler_by_name(&self, ability: &str, origin: ExecutionOrigin) -> bool {
         self.entries.iter().any(|(key, entry)| {
-            key.ability() == ability && entry.origin == origin && !entry.handlers.is_empty()
+            key.ability() == ability && entry.origin == origin && entry.has_handlers()
         })
     }
 
@@ -3145,7 +3300,7 @@ impl ExecutionIndex {
             .entries
             .iter()
             .filter(|(key, entry)| {
-                key.ability() == ability && entry.origin == origin && !entry.handlers.is_empty()
+                key.ability() == ability && entry.origin == origin && entry.has_handlers()
             })
             .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
@@ -3168,7 +3323,7 @@ impl ExecutionIndex {
     fn names(&self, origin: ExecutionOrigin) -> Vec<String> {
         let mut names = BTreeSet::new();
         for (key, entry) in &self.entries {
-            if entry.origin == origin && !entry.handlers.is_empty() {
+            if entry.origin == origin && entry.has_handlers() {
                 names.insert(key.ability().to_string());
             }
         }
@@ -3184,7 +3339,7 @@ impl ExecutionIndex {
             .filter(|(key, entry)| {
                 key.ability() == ability
                     && entry.origin == ExecutionOrigin::Static
-                    && !entry.handlers.is_empty()
+                    && entry.has_handlers()
             })
             .map(|(key, entry)| (key.clone(), entry.handlers.clone()))
             .collect()
@@ -3211,7 +3366,7 @@ impl ExecutionIndex {
         let mut matches = self
             .entries
             .iter()
-            .filter(|(key, entry)| key.ability() == ability && !entry.handlers.is_empty())
+            .filter(|(key, entry)| key.ability() == ability && entry.has_handlers())
             .filter_map(|(_, entry)| extract(&entry.handlers));
         let first = matches.next()?;
         if matches.next().is_some() {
@@ -3224,15 +3379,8 @@ impl ExecutionIndex {
         let mut matches = self
             .entries
             .iter()
-            .filter(|(key, entry)| key.ability() == ability && !entry.handlers.is_empty())
-            .filter(|(_, entry)| {
-                let modes = entry.handlers.modes();
-                match call_mode {
-                    DescriptorCallMode::Rpc => modes.rpc,
-                    DescriptorCallMode::Stream => modes.stream,
-                    DescriptorCallMode::Bidi => modes.bidi,
-                }
-            });
+            .filter(|(key, entry)| key.ability() == ability && entry.has_handlers())
+            .filter(|(_, entry)| runtime_modes_contain(entry.handlers.modes(), call_mode));
         matches.next().is_some() && matches.next().is_none()
     }
 
@@ -3247,20 +3395,15 @@ impl ExecutionIndex {
         call_mode: DescriptorCallMode,
     ) -> bool {
         let key = ControlPlaneAbilityKey::new(authority_root, ability);
-        self.entries.get(&key).is_some_and(|entry| {
-            let modes = entry.handlers.modes();
-            match call_mode {
-                DescriptorCallMode::Rpc => modes.rpc,
-                DescriptorCallMode::Stream => modes.stream,
-                DescriptorCallMode::Bidi => modes.bidi,
-            }
-        })
+        self.entries
+            .get(&key)
+            .is_some_and(|entry| entry.is_runtime_bound_for_mode(call_mode))
     }
 
     fn has_any_handler(&self, ability: &str) -> bool {
         self.entries
             .iter()
-            .any(|(key, entry)| key.ability() == ability && !entry.handlers.is_empty())
+            .any(|(key, entry)| key.ability() == ability && entry.has_handlers())
     }
 
     fn resolve_rpc(&self, ability: &str) -> Option<LocalRpcHandler> {
@@ -4547,15 +4690,19 @@ impl AxonAbilityCatalog {
                 )
             })?;
         let authority_scope = self.resolve_authority_scope_for_owner(ability, owner)?;
-        self.register_control_plane_with_scope_and_semantics_result(
+        let mode_key = self.register_control_plane_with_scope_and_semantics_result(
             ability,
             authority_scope,
             Some(manifest),
             call_mode,
             receipt_semantics,
             implementation,
-        )
-        .map(|_| ())
+        )?;
+        self.execution_index
+            .write()
+            .expect("execution_index RwLock poisoned")
+            .install_external_static_binding(mode_key.key, mode_key.call_mode);
+        Ok(())
     }
 
     fn register_dynamic_control_plane_with_scope_and_semantics_result(
@@ -6404,6 +6551,8 @@ impl AxonAbilityCatalog {
                         .execution_host_ura_for_owner(&owner, scope.authority_root()),
                     owner,
                     descriptor: record.descriptor().clone(),
+                    authority: record.authority().clone(),
+                    implementation: record.implementation().clone(),
                     runtime_binding: CatalogRuntimeBinding {
                         state: runtime_binding_state,
                         implementation_source: implementation.source().as_str().to_string(),
@@ -8423,6 +8572,58 @@ mod tests {
             .expect("runtime key derivation must validate only the device RPC tuple");
 
         assert_eq!(got, device_key);
+    }
+
+    #[test]
+    fn control_plane_only_daemon_invocation_descriptor_reports_external_runtime_binding() {
+        let hub_ura = crate::core::ura::hub_ura("test-realm");
+        let reg = AxonAbilityCatalog::new_with_runtime_and_authority_context(
+            crate::daemon::axon_bridge::runtime_factory::build_local_runtime(
+                crate::daemon::axon_bridge::runtime_factory::rejecting_test_key_resolver(),
+                None,
+            ),
+            AbilityAuthorityContext::for_realm_authority_root(&hub_ura)
+                .expect("realm authority context"),
+        );
+        reg.register_control_plane_descriptor_with_owner(
+            crate::daemon::ability::names::federation::IDENTITY_REGISTER_PUBKEY,
+            &OwnerKind::RealmAuthority,
+            &test_manifest(
+                crate::daemon::ability::names::federation::IDENTITY_REGISTER_PUBKEY,
+                "Register a trusted public key row in the daemon runtime trust anchor.",
+                serde_json::json!({"type": "object"}),
+            ),
+            DescriptorCallMode::Rpc,
+            ReceiptSemantics::Operational,
+            &ControlPlaneImplementation::native_daemon(),
+        )
+        .expect("daemon invocation descriptor registers with external runtime binding");
+
+        let row = reg
+            .authority_ability_catalog_snapshot()
+            .into_iter()
+            .find(|row| {
+                row.name == crate::daemon::ability::names::federation::IDENTITY_REGISTER_PUBKEY
+            })
+            .expect("identity.register_pubkey catalog row");
+
+        assert_eq!(row.owner, OwnerKind::RealmAuthority);
+        assert_eq!(row.descriptor.owner_ura, hub_ura);
+        assert_eq!(
+            row.runtime_binding.state,
+            CatalogRuntimeBindingState::Bound,
+            "daemon Invocation exact routes are executable through DaemonInvocationService and must not appear unbound"
+        );
+        assert!(
+            !reg.has_registered_handler(
+                crate::daemon::ability::names::federation::IDENTITY_REGISTER_PUBKEY
+            ),
+            "external daemon Invocation binding must not fabricate a local AxonAbilityCatalog handler"
+        );
+        assert!(
+            !reg.has_rpc(crate::daemon::ability::names::federation::IDENTITY_REGISTER_PUBKEY),
+            "local handler routeability must remain separate from external daemon Invocation binding"
+        );
     }
 
     #[test]

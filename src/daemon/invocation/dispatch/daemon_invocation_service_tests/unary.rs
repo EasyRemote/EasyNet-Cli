@@ -25,7 +25,7 @@ fn quota_meters_user_abilities_but_exempts_control_plane() {
 
 #[tokio::test]
 async fn signed_invocation_cancel_command_replay_is_rejected() {
-    let svc = make_service();
+    let svc = make_service_with_daemon_route_owner(TEST_DAEMON_URA);
     let arguments = serde_json::to_vec(
         &crate::daemon::invocation::dispatch::cancellation::InvocationCancelCommand::new(
             "ab".repeat(32),
@@ -686,7 +686,13 @@ async fn invoke_dispatches_namespace_resolve_to_typed_answer() {
     let owner_ura = test_dispatch_system_agent_ura();
     let ability_ura =
         crate::core::ura::owner_ability_ura(&owner_ura, "agent.list").expect("ability ura");
-    publish_test_projected_route(&svc, &owner_ura, "agent.list", TEST_DAEMON_URA);
+    publish_test_projected_route(
+        &svc,
+        &owner_ura,
+        "agent.list",
+        TEST_DAEMON_URA,
+        crate::daemon::ability::CallMode::Rpc,
+    );
 
     let resp = svc
         .invoke(invoke_request(

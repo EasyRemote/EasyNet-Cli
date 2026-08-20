@@ -127,7 +127,15 @@ impl SystemAbilityDescriptorGroup {
             | resources::MEDIA_SCREEN_SUBSCRIBE
             | resources::MEDIA_SCREEN_SNAPSHOT
             | resources::MEDIA_SPEAKER_PUBLISH
+            | "files.get"
+            | "files.list"
+            | "files.put"
             | resources::META_LIST_RESOURCES
+            | "pages.get"
+            | "pages.health"
+            | "pages.publish"
+            | "pages.unpublish"
+            | "project_list"
             | resources::RESOURCE_REFRESH_REMOTE_TARGETS
             | resources::RESOURCE_WATCH_REMOTE_TARGETS
             | resources::SKILL_INSTALL
@@ -256,6 +264,14 @@ impl SystemAbilityDescriptorGroup {
             | federation::IDENTITY_LIST_USER_PUBKEYS
             | federation::IDENTITY_REGISTER_PUBKEY
             | federation::IDENTITY_REVOKE_USER_PUBKEY => Ok(Self::Governance),
+
+            // Deterministic SystemInventory descriptors for the user-scoped
+            // API-key family. Do not match arbitrary `<user>.api_key.*` names
+            // here: live user-specific registrations are dynamic rows with an
+            // explicit admission action, not one TOML file per user id.
+            "catalog-pages-owner.api_key.create"
+            | "catalog-pages-owner.api_key.list"
+            | "catalog-pages-owner.api_key.revoke" => Ok(Self::Governance),
 
             other => Err(DescriptorPathError::UnknownSystemAbility(other.to_string())),
         }

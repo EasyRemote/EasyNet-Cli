@@ -1231,7 +1231,7 @@ mod tests {
             .ability_name("fs.read")
             .state(state)
             .started_unix_ms(0)
-            .authority_form("self")
+            .authority_form("self+identity")
             .args(axon_sdk::invocation::LedgerEventPayload::Digest {
                 content_type: "application/json".to_string(),
                 sha256: "00".to_string(),

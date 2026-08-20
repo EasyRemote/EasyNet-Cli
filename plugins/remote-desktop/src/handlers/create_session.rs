@@ -11,8 +11,6 @@ use crate::daemon::plugins::remote_desktop::constants::ABILITY_CREATE_SESSION;
 use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::session::{now_ms, RemoteDesktopSession};
-#[cfg(test)]
-use crate::daemon::plugins::remote_desktop::session_creation::RemoteAppTargetBindingVerifier;
 use crate::daemon::plugins::remote_desktop::session_creation::RemoteDesktopSessionCreationWorkflow;
 use crate::daemon::plugins::remote_desktop::session_lifecycle::prune_inactive_sessions;
 use crate::daemon::plugins::remote_desktop::view::serialize_session_with_token;
@@ -25,24 +23,10 @@ pub(in crate::daemon::plugins::remote_desktop) fn handle(
 ) -> anyhow::Result<Value> {
     let workflow = RemoteDesktopSessionCreationWorkflow::start(&env, &args)?;
     preflight_session_insert(&plugin, workflow.session_id())?;
+    let target_binding_verifier = plugin.target_binding_verifier();
     let workflow = workflow
         .consume_consent(&plugin.consent_registry(), &env)?
-        .resolve_target()?;
-    insert_created_session(plugin, workflow)
-}
-
-#[cfg(test)]
-pub(in crate::daemon::plugins::remote_desktop) fn handle_with_target_verifier(
-    plugin: Arc<RemoteDesktopPlugin>,
-    env: EnvelopeContext,
-    args: Value,
-    verifier: &impl RemoteAppTargetBindingVerifier,
-) -> anyhow::Result<Value> {
-    let workflow = RemoteDesktopSessionCreationWorkflow::start(&env, &args)?;
-    preflight_session_insert(&plugin, workflow.session_id())?;
-    let workflow = workflow
-        .consume_consent(&plugin.consent_registry(), &env)?
-        .resolve_target_with_verifier(verifier)?;
+        .resolve_target_with_verifier(target_binding_verifier.as_ref())?;
     insert_created_session(plugin, workflow)
 }
 

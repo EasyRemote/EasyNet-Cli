@@ -94,16 +94,19 @@ impl<'a> DirectWebRtcMediaExecution<'a> {
         self.stop_rx.has_changed().unwrap_or(false) && *self.stop_rx.borrow_and_update()
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn sessions(
         &self,
     ) -> &RemoteDesktopSessionStore {
         self.sessions
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn session_id(&self) -> &str {
         self.session_id
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn epoch(&self) -> TransportEpoch {
         self.epoch
     }
@@ -113,6 +116,7 @@ impl<'a> DirectWebRtcMediaExecution<'a> {
             .mark_direct_webrtc_media_ready(self.session_id, self.epoch);
     }
 
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::daemon::plugins::remote_desktop) fn record_pipeline_stats(&self, stats: Value) {
         self.sessions
             .record_media_pipeline_stats(self.session_id, self.epoch, stats);
@@ -302,6 +306,7 @@ fn direct_webrtc_target_failure_projection(
     }
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn direct_webrtc_native_failure_projection(
     err: &anyhow::Error,
     target_binding: &RemoteAppTargetBinding,

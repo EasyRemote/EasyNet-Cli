@@ -1282,7 +1282,7 @@ mod tests {
             .ability_name(ability)
             .state(state)
             .started_unix_ms(1_700_000_000_000_i64)
-            .authority_form("self")
+            .authority_form("self+identity")
             .args(axon_sdk::invocation::LedgerEventPayload::Digest {
                 content_type: "application/json".to_string(),
                 sha256: "0".repeat(64),

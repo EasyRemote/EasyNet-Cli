@@ -48,6 +48,8 @@ use crate::daemon::plugins::remote_desktop::errors::RemoteDesktopError;
 use crate::daemon::plugins::remote_desktop::handlers;
 use crate::daemon::plugins::remote_desktop::runtime::RemoteDesktopPlugin;
 use crate::daemon::plugins::remote_desktop::schema;
+#[cfg(test)]
+use crate::daemon::plugins::remote_desktop::session_creation::RemoteAppTargetBindingVerifier;
 use crate::daemon::plugins::remote_desktop::target::RemoteAppTargetError;
 use crate::daemon::plugins::{
     PluginAbilityLayer, PluginBidiWireKind, PluginContributionBuilder, PluginRuntimeLimits, Result,
@@ -452,8 +454,30 @@ pub(in crate::daemon::plugins::remote_desktop) fn contribute_with_screen_backend
     backend: Arc<dyn ScreenSnapshotBackend>,
     limits: PluginRuntimeLimits,
 ) -> Result<()> {
-    builder.set_public_owner(OwnerKind::remote_desktop_system());
     let plugin = RemoteDesktopPlugin::new(backend, limits.into());
+    contribute_with_plugin(builder, plugin)
+}
+
+#[cfg(test)]
+pub(in crate::daemon::plugins::remote_desktop) fn contribute_with_platform_services(
+    builder: &mut PluginContributionBuilder,
+    backend: Arc<dyn ScreenSnapshotBackend>,
+    target_binding_verifier: Arc<dyn RemoteAppTargetBindingVerifier>,
+    limits: PluginRuntimeLimits,
+) -> Result<()> {
+    let plugin = RemoteDesktopPlugin::with_target_binding_verifier(
+        backend,
+        target_binding_verifier,
+        limits.into(),
+    );
+    contribute_with_plugin(builder, plugin)
+}
+
+fn contribute_with_plugin(
+    builder: &mut PluginContributionBuilder,
+    plugin: Arc<RemoteDesktopPlugin>,
+) -> Result<()> {
+    builder.set_public_owner(OwnerKind::remote_desktop_system());
     for binding in compiled_ability_bindings() {
         binding
             .handler

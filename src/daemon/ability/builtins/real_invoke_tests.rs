@@ -3900,6 +3900,57 @@ fn real_meta_list_resources_returns_resources_array() {
     );
 }
 
+#[test]
+fn real_resource_refresh_remote_targets_returns_inventory_projection() {
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
+    let resp = dispatcher_for(reg)
+        .execute_rpc(target(
+            "resource.refresh_remote_targets",
+            json!({"types": ["display"]}),
+        ))
+        .expect("resource.refresh_remote_targets");
+    assert!(
+        resp.get("resources").and_then(Value::as_array).is_some(),
+        "resource.refresh_remote_targets receipt must carry `resources` array; got {resp}"
+    );
+    assert!(
+        resp.get("screen_target_discovery_available")
+            .and_then(Value::as_bool)
+            .is_some(),
+        "resource.refresh_remote_targets receipt must report discovery availability; got {resp}"
+    );
+}
+
+#[test]
+fn real_resource_watch_remote_targets_emits_bounded_snapshot_event() {
+    let _g = crate::cli::commands::test_support::HomeGuard::new();
+    let reg = build_registry_for_test_execution().expect("build executable test registry");
+    let mut watch = target(
+        "resource.watch_remote_targets",
+        json!({"types": ["display"], "max_events": 1, "poll_interval_ms": 250}),
+    );
+    watch.call_mode = CallMode::Stream;
+    let frames = dispatcher_for(reg)
+        .execute_stream(watch)
+        .expect("resource.watch_remote_targets")
+        .into_snapshot();
+    assert_eq!(
+        frames.len(),
+        1,
+        "bounded resource.watch_remote_targets must emit exactly one frame; got {frames:?}"
+    );
+    assert_eq!(frames[0]["event_type"], json!("target_inventory_snapshot"));
+    assert!(
+        frames[0]
+            .get("resources")
+            .and_then(Value::as_array)
+            .is_some(),
+        "resource.watch_remote_targets snapshot must carry `resources`; got {:?}",
+        frames[0]
+    );
+}
+
 // ── Joint-plan unified path: new published abilities ─────────────
 //
 // `every_published_ability_has_a_real_invoke_test` walks this file

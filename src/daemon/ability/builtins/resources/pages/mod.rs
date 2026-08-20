@@ -321,7 +321,11 @@ pub(crate) fn management_ability_specs() -> Vec<PagesAbilitySpec> {
         PagesAbilitySpec {
             relative_name: "project_list",
             description: "List the page projects this user currently publishes on this daemon.",
-            input_schema: serde_json::json!({ "type": "object", "properties": {} }),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+            }),
         },
         PagesAbilitySpec {
             relative_name: "pages.publish",

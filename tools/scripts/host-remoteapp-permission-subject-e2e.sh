@@ -42,6 +42,10 @@ Environment:
   EASYNET_REMOTEAPP_PERMISSION_USER_URA
                  Optional caller User URA override. Defaults to the unique
                  role="user" entry in ~/.easynet/realm-trust.toml.
+  EASYNET_REMOTEAPP_EASYNET_COMMAND_TIMEOUT_SEC
+                 Outer watchdog for each easynet CLI call. Defaults to 45
+                 seconds and prevents host permission/daemon preflights from
+                 hanging static gate self-tests or decoded-frame setup.
 USAGE
 }
 
@@ -84,14 +88,36 @@ need_cmd() {
 }
 
 run_easynet() {
+  local timeout_sec="${EASYNET_REMOTEAPP_EASYNET_COMMAND_TIMEOUT_SEC:-45}"
   if [[ -n "${EASYNET_REMOTEAPP_EASYNET_BIN:-}" ]]; then
-    "$EASYNET_REMOTEAPP_EASYNET_BIN" "$@"
+    run_with_timeout "$timeout_sec" "$EASYNET_REMOTEAPP_EASYNET_BIN" "$@"
   elif [[ -x "$REPO_ROOT/target/debug/easynet" ]]; then
-    "$REPO_ROOT/target/debug/easynet" "$@"
+    run_with_timeout "$timeout_sec" "$REPO_ROOT/target/debug/easynet" "$@"
   else
     need_cmd cargo
-    cargo run --quiet --bin easynet -- "$@"
+    run_with_timeout "$timeout_sec" cargo run --quiet --bin easynet -- "$@"
   fi
+}
+
+run_with_timeout() {
+  local timeout_sec="$1"
+  shift
+  python3 - "$timeout_sec" "$@" <<'PY'
+import subprocess
+import sys
+
+timeout_sec = float(sys.argv[1])
+cmd = sys.argv[2:]
+try:
+    completed = subprocess.run(cmd, timeout=timeout_sec)
+except subprocess.TimeoutExpired:
+    print(
+        f"command timed out after {timeout_sec:g}s: {' '.join(cmd)}",
+        file=sys.stderr,
+    )
+    raise SystemExit(124)
+raise SystemExit(completed.returncode)
+PY
 }
 
 random_nonce_hex() {
@@ -273,6 +299,69 @@ if errors:
 PY
 }
 
+write_preflight_failure() {
+  local reason="$1"
+  python3 - "$EVIDENCE_JSON" "$REPORT_JSON" "$REPORT_MD" "$RUNTIME_STATUS_JSON" "$reason" "$REQUIRE_SCREEN_CAPTURE_GRANTED" <<'PY'
+import json
+import pathlib
+import sys
+
+evidence_path, report_path, md_path, runtime_status_path, reason, require_screen_capture_granted = sys.argv[1:7]
+runtime_status = None
+runtime_path = pathlib.Path(runtime_status_path)
+if runtime_path.exists() and runtime_path.stat().st_size > 0:
+    try:
+        runtime_status = json.loads(runtime_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        runtime_status = {"decode_error": str(exc)}
+
+daemon = runtime_status.get("daemon", {}) if isinstance(runtime_status, dict) else {}
+connection = runtime_status.get("connection", {}) if isinstance(runtime_status, dict) else {}
+failure = connection.get("failure", {}) if isinstance(connection, dict) else {}
+evidence = {
+    "status": "failed",
+    "phase": "runtime_preflight",
+    "reason": reason,
+    "runtime_status_json": runtime_status_path,
+    "runtime_status": runtime_status,
+    "daemon_invocation_accepting": daemon.get("invocation_accepting") if isinstance(daemon, dict) else None,
+    "daemon_control_accepting": daemon.get("control_accepting") if isinstance(daemon, dict) else None,
+    "daemon_pid_alive": daemon.get("pid_alive") if isinstance(daemon, dict) else None,
+    "connection_state": connection.get("state") if isinstance(connection, dict) else None,
+    "connection_failure_code": failure.get("code") if isinstance(failure, dict) else None,
+    "connection_failure_message": failure.get("message") if isinstance(failure, dict) else None,
+    "screen_capture_permission_required": require_screen_capture_granted == "1",
+}
+report = {
+    "status": "failed",
+    "phase": "runtime_preflight",
+    "reason": reason,
+    "evidence_json": evidence_path,
+    "runtime_status_json": runtime_status_path,
+    "daemon_invocation_accepting": evidence["daemon_invocation_accepting"],
+    "daemon_control_accepting": evidence["daemon_control_accepting"],
+    "daemon_pid_alive": evidence["daemon_pid_alive"],
+    "connection_state": evidence["connection_state"],
+    "connection_failure_code": evidence["connection_failure_code"],
+    "connection_failure_message": evidence["connection_failure_message"],
+    "screen_capture_permission_required": evidence["screen_capture_permission_required"],
+}
+pathlib.Path(evidence_path).write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+pathlib.Path(report_path).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+with open(md_path, "w", encoding="utf-8") as f:
+    f.write("# RemoteApp permission subject E2E report\n\n")
+    f.write("- Status: `failed`\n")
+    f.write("- Phase: `runtime_preflight`\n")
+    f.write(f"- Reason: `{reason}`\n")
+    f.write(f"- Runtime status: `{runtime_status_path}`\n")
+    f.write(f"- Daemon invocation accepting: `{report['daemon_invocation_accepting']}`\n")
+    f.write(f"- Daemon control accepting: `{report['daemon_control_accepting']}`\n")
+    f.write(f"- Daemon PID alive: `{report['daemon_pid_alive']}`\n")
+    f.write(f"- Connection state: `{report['connection_state']}`\n")
+    f.write(f"- Connection failure: `{report['connection_failure_code']}` `{report['connection_failure_message']}`\n")
+PY
+}
+
 if [[ "$MODE" == "self-test" ]]; then
   python3 - "$EVIDENCE_JSON" "$HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA" <<'PY'
 import json
@@ -351,6 +440,26 @@ fi
 need_cmd python3
 
 run_easynet runtime status --json >"$RUNTIME_STATUS_JSON"
+if ! python3 - "$RUNTIME_STATUS_JSON" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    status = json.load(f)
+daemon = status.get("daemon") if isinstance(status, dict) else None
+raise SystemExit(
+    0
+    if isinstance(daemon, dict)
+    and daemon.get("invocation_accepting") is True
+    and daemon.get("control_accepting") is True
+    else 1
+)
+PY
+then
+  write_preflight_failure "daemon invocation/control endpoint is not accepting calls"
+  echo "daemon invocation/control endpoint is not accepting calls" >&2
+  exit 1
+fi
 run_easynet ability list --format json --pattern 'remote_desktop.*' >"$ABILITY_LIST_JSON"
 
 python3 - "$ABILITY_LIST_JSON" "$HOST_LOCAL_PERMISSION_SUBJECT_CONTRACT_URA" <<'PY' >"$OUT_DIR/ability-env.sh"

@@ -1,0 +1,36 @@
+schema_version = "3"
+name = "pages.publish"
+descriptor_version = "1.0.0"
+description = "Publish a folder of static bytes as a website under this user."
+exposure = "internal"
+dedicated_surface = "none"
+subject_contract_kind = "route-target"
+call_mode = "rpc"
+capability_state = "cutover_ready"
+admission_action = "invoke"
+visibility = "SCOPED"
+scope_subjects_kind = "any"
+scope_subjects_uras = []
+scope_agents_kind = "any"
+scope_agents_uras = []
+denied_agents = []
+output_receipt_schema_json = "{}"
+hints_json = "{\"read_only\":false,\"destructive\":false,\"idempotent\":false,\"streaming_only\":false,\"bidi_only\":false}"
+receipt_semantics = "operational"
+
+[input_schema]
+type = "object"
+required = ["project_id", "folder"]
+
+[input_schema.properties.folder]
+type = "string"
+description = "Absolute path to the folder to publish."
+
+[input_schema.properties.project_id]
+type = "string"
+description = "URA-safe project id (alnum + _ + -, max 64)."
+
+[input_schema.properties.visibility]
+type = "string"
+description = "Visibility; only `public` is supported in MVP."
+default = "public"

@@ -872,6 +872,7 @@ fn invoke_local_daemon_ability_with_tuple_plan_at_verified(
     let request = invocation.invoke_request()?;
     let submitted = SubmittedInvocationProjection::from_request(&request, &function_name)?;
     let thread_name = format!("easynet-receipt-key-resolve-{function_name}");
+    let receipt_key_endpoint = socket_path.clone();
     let response = std::thread::Builder::new()
         .name(thread_name)
         .spawn(move || {
@@ -899,7 +900,10 @@ fn invoke_local_daemon_ability_with_tuple_plan_at_verified(
         &submitted,
         &function_name,
     )?
-    .verify(&LocalKeyServiceReceiptResolver::new(), &function_name)?;
+    .verify(
+        &LocalKeyServiceReceiptResolver::for_daemon_endpoint(&receipt_key_endpoint),
+        &function_name,
+    )?;
     record_verified_causal_anchor(&terminal.causal_anchor)?;
     Ok(value)
 }
@@ -1121,6 +1125,17 @@ impl LocalKeyServiceReceiptResolver {
             key_service: crate::daemon::identity::self_identity::KeyringClient::default_path(),
         }
     }
+
+    pub(crate) fn for_daemon_endpoint(endpoint: impl AsRef<Path>) -> Self {
+        match daemon_state_root_child(endpoint.as_ref(), "keyring.sock") {
+            Some(socket_path) => Self {
+                key_service: crate::daemon::identity::self_identity::KeyringClient::new(
+                    socket_path,
+                ),
+            },
+            None => Self::new(),
+        }
+    }
 }
 
 #[cfg(feature = "axon-pb")]
@@ -1185,6 +1200,15 @@ impl RealmReceiptTrustSource {
                 path,
                 error: error.to_string(),
             },
+        }
+    }
+
+    fn load_for_daemon_endpoint(endpoint: &Path) -> Self {
+        match daemon_state_root_child(endpoint, "realm-trust.toml") {
+            Some(path) => Self::load(path),
+            None => {
+                Self::load(crate::daemon::trust::anchor::trust_anchor_path_from_env_or_default())
+            }
         }
     }
 
@@ -1416,11 +1440,10 @@ impl CanonicalRuntimeReceiptResolver {
     }
 
     pub(crate) fn for_daemon_endpoint(endpoint: PathBuf) -> Self {
-        Self::with_daemon_federated_trust(Some(Arc::new(DaemonFederatedReceiptResolver::new(
-            endpoint,
-        ))))
+        Self::with_daemon_endpoint_trust(endpoint)
     }
 
+    #[cfg(test)]
     fn with_daemon_federated_trust(
         daemon_federated_trust: Option<Arc<dyn axon_sdk::invocation::KeyResolver>>,
     ) -> Self {
@@ -1433,10 +1456,28 @@ impl CanonicalRuntimeReceiptResolver {
         }
     }
 
+    fn with_daemon_endpoint_trust(endpoint: PathBuf) -> Self {
+        Self {
+            realm_trust: RealmReceiptTrustSource::load_for_daemon_endpoint(&endpoint),
+            local_self_identity: LocalKeyServiceReceiptResolver::for_daemon_endpoint(&endpoint),
+            daemon_federated_trust: Some(Arc::new(DaemonFederatedReceiptResolver::new(endpoint))),
+        }
+    }
+
     #[cfg(test)]
     fn with_test_delegated_trust(delegated: Arc<dyn axon_sdk::invocation::KeyResolver>) -> Self {
         Self::with_daemon_federated_trust(Some(delegated))
     }
+}
+
+#[cfg(feature = "axon-pb")]
+fn daemon_state_root_child(endpoint: &Path, file_name: &str) -> Option<PathBuf> {
+    let endpoint = endpoint
+        .to_string_lossy()
+        .strip_prefix("unix://")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| endpoint.to_path_buf());
+    endpoint.parent().map(|parent| parent.join(file_name))
 }
 
 #[cfg(feature = "axon-pb")]
@@ -2374,7 +2415,8 @@ mod tests {
 
     use axon_sdk::invocation::axiom::authority_proof_expected_hash;
     use axon_sdk::invocation::{
-        AgentIdentity, AuthorityBinding, AxonError, CalleeSignature, CanonicalReceiptProvider,
+        AgentIdentity, AuthorityBinding, AuthorityEvidence, AuthorityOrBootstrap,
+        AuthorityRelation, AxonError, CalleeSignature, CanonicalReceiptProvider,
         DescriptorBoundEnvelope, InvocationAuthorityProof, ReceiptSigningAuthority, UraProfile,
         VerifiedAdmissionPolicy,
     };
@@ -2782,9 +2824,14 @@ mod tests {
             &self,
             envelope: &DescriptorBoundEnvelope,
         ) -> Result<VerifiedAdmissionPolicy, AxonError> {
-            let binding = AuthorityBinding::Self_ {
-                principal_ura: envelope.envelope().caller.ura.clone(),
-            };
+            let binding = AuthorityOrBootstrap::Binding(AuthorityBinding {
+                authority: AgentIdentity::new(
+                    envelope.envelope().caller.ura.clone(),
+                    UraProfile::StrictV2,
+                ),
+                relation: AuthorityRelation::Self_,
+                evidence: AuthorityEvidence::Identity,
+            });
             let mut proof = InvocationAuthorityProof::new(
                 "local-daemon-grpc-fixture-verified-admission",
                 Some(binding.clone()),
@@ -3159,6 +3206,39 @@ added_at_unix_ms = 1
         assert!(
             !message.contains("empty or unavailable"),
             "missing trust source must not collapse to legacy availability wording: {message}"
+        );
+    }
+
+    #[test]
+    fn attached_canonical_receipt_resolver_uses_daemon_state_root_trust() {
+        let _guard = crate::cli::commands::test_support::env_lock();
+        let previous = std::env::var_os("EASYNET_REALM_TRUST_PATH");
+        let env_dir = tempfile::tempdir().expect("env tempdir");
+        let state_root = tempfile::tempdir().expect("daemon state root");
+        let env_trust = env_dir.path().join("env-realm-trust.toml");
+        std::fs::write(&env_trust, "").expect("write env trust");
+        std::env::set_var("EASYNET_REALM_TRUST_PATH", &env_trust);
+
+        let endpoint = state_root.path().join("daemon.sock");
+        let expected_state_trust = state_root.path().join("realm-trust.toml");
+        let resolver = CanonicalRuntimeReceiptResolver::for_daemon_endpoint(endpoint);
+        let error =
+            axon_sdk::invocation::KeyResolver::resolve(&resolver, "easynet:///r/local/authority")
+                .expect_err("missing attached state-root trust source must fail closed");
+        let message = error.to_string();
+
+        match previous {
+            Some(value) => std::env::set_var("EASYNET_REALM_TRUST_PATH", value),
+            None => std::env::remove_var("EASYNET_REALM_TRUST_PATH"),
+        }
+
+        assert!(
+            message.contains(&expected_state_trust.display().to_string()),
+            "attached resolver must use daemon sibling realm-trust.toml, got: {message}"
+        );
+        assert!(
+            !message.contains(&env_trust.display().to_string()),
+            "attached resolver must not use process-default trust path, got: {message}"
         );
     }
 

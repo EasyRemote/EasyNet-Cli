@@ -61,11 +61,37 @@ use crate::daemon::resources::projection::PagesApiResponse;
 /// to dispatch requests directly through the in-process registry
 /// instead of round-tripping through the daemon's own IPC socket
 /// (which would self-deadlock).
+#[cfg(not(test))]
 static DISPATCH_HANDLE: Lazy<std::sync::OnceLock<Arc<OnceLock<Arc<AxonAbilityCatalog>>>>> =
     Lazy::new(std::sync::OnceLock::new);
 
+#[cfg(test)]
+static DISPATCH_HANDLE: Lazy<std::sync::RwLock<Option<Arc<OnceLock<Arc<AxonAbilityCatalog>>>>>> =
+    Lazy::new(|| std::sync::RwLock::new(None));
+
+#[cfg(not(test))]
 pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>) {
     let _ = DISPATCH_HANDLE.set(handle);
+}
+
+#[cfg(test)]
+pub(crate) fn set_dispatch_handle(handle: Arc<OnceLock<Arc<AxonAbilityCatalog>>>) {
+    *DISPATCH_HANDLE
+        .write()
+        .expect("pages dispatch handle test lock poisoned") = Some(handle);
+}
+
+#[cfg(not(test))]
+fn dispatch_handle() -> Option<Arc<OnceLock<Arc<AxonAbilityCatalog>>>> {
+    DISPATCH_HANDLE.get().cloned()
+}
+
+#[cfg(test)]
+fn dispatch_handle() -> Option<Arc<OnceLock<Arc<AxonAbilityCatalog>>>> {
+    DISPATCH_HANDLE
+        .read()
+        .expect("pages dispatch handle test lock poisoned")
+        .clone()
 }
 
 /// One TOML manifest under `<project>/api/<verb>.toml`.
@@ -225,7 +251,7 @@ pub fn handle_api(user: &str, project_id: &str, verb: &str, args: Value) -> anyh
             // Use the daemon's shared Axon LocalRuntime. We are
             // already inside the daemon process, so an IPC round trip
             // would self-deadlock the original request.
-            let handle = DISPATCH_HANDLE.get().ok_or_else(|| {
+            let handle = dispatch_handle().ok_or_else(|| {
                 anyhow::anyhow!("dispatch handle not set; pages::register must run at boot")
             })?;
             let registry = handle.get().ok_or_else(|| {

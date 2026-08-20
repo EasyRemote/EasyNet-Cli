@@ -9,7 +9,7 @@ fn request_frame() -> String {
         "call_id": "call-1",
         "invocation": {
             "caller_ura": "easynet:///r/hub/user/alice",
-            "callee_ura": "easynet:///r/hub/device/provider",
+            "callee_ura": "easynet:///r/hub/service/alice.provider",
             "ability_ura": "demo.echo",
             "subject_ura": "easynet:///r/hub/resource/demo",
             "invocation_nonce": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
@@ -28,7 +28,10 @@ fn sidecar_invocation_projects_runtime_frame() {
 
     assert_eq!(invocation.call_id, "call-1");
     assert_eq!(invocation.caller_ura, "easynet:///r/hub/user/alice");
-    assert_eq!(invocation.callee_ura, "easynet:///r/hub/device/provider");
+    assert_eq!(
+        invocation.callee_ura,
+        "easynet:///r/hub/service/alice.provider"
+    );
     assert_eq!(invocation.ability_ura, "demo.echo");
     assert_eq!(invocation.subject_ura, "easynet:///r/hub/resource/demo");
     assert_eq!(
@@ -93,7 +96,7 @@ fn serve_exec_plugin_preserves_call_id_for_protocol_failure() {
             "call_id": "call-1",
             "invocation": {
                 "caller_ura": "easynet:///r/hub/user/alice",
-                "callee_ura": "easynet:///r/hub/device/provider",
+                "callee_ura": "easynet:///r/hub/service/alice.provider",
                 "ability_ura": "demo.echo",
                 "subject_ura": "easynet:///r/hub/resource/demo",
                 "invocation_nonce": [1, 2, 3, 4],
@@ -142,7 +145,7 @@ fn sidecar_invocation_rejects_non_canonical_tuple_aliases() {
         "invocation": {
             "caller_ura": "easynet:///r/hub/user/alice",
             "caller": "easynet:///r/hub/user/bob",
-            "callee_ura": "easynet:///r/hub/device/provider",
+            "callee_ura": "easynet:///r/hub/service/alice.provider",
             "ability_ura": "demo.echo",
             "subject_ura": "easynet:///r/hub/resource/demo",
             "invocation_nonce": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
@@ -161,7 +164,7 @@ fn sidecar_invocation_rejects_unknown_invocation_fields() {
         "call_id": "call-1",
         "invocation": {
             "caller_ura": "easynet:///r/hub/user/alice",
-            "callee_ura": "easynet:///r/hub/device/provider",
+            "callee_ura": "easynet:///r/hub/service/alice.provider",
             "ability_ura": "demo.echo",
             "subject_ura": "easynet:///r/hub/resource/demo",
             "invocation_nonce": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
@@ -175,6 +178,83 @@ fn sidecar_invocation_rejects_unknown_invocation_fields() {
 }
 
 #[test]
+fn sidecar_invocation_rejects_device_callee() {
+    let mut frame: Value = serde_json::from_str(&request_frame()).expect("frame");
+    frame["invocation"]
+        .as_object_mut()
+        .expect("invocation object")
+        .insert(
+            "callee_ura".to_string(),
+            Value::String("easynet:///r/hub/device/provider".to_string()),
+        );
+
+    let error = SidecarInvocation::from_frame(frame).expect_err("Device callee");
+    assert!(
+        error.to_string().contains("Device is an execution host"),
+        "unexpected Device callee error: {error}"
+    );
+}
+
+#[test]
+fn sidecar_invocation_accepts_callable_callee_roles() {
+    for callee_ura in [
+        "easynet:///r/hub/agent/alice.provider",
+        "easynet:///r/hub/service/alice.provider",
+        "easynet:///r/hub/authority",
+    ] {
+        let mut frame: Value = serde_json::from_str(&request_frame()).expect("frame");
+        frame["invocation"]
+            .as_object_mut()
+            .expect("invocation object")
+            .insert(
+                "callee_ura".to_string(),
+                Value::String(callee_ura.to_string()),
+            );
+
+        let invocation = SidecarInvocation::from_frame(frame)
+            .unwrap_or_else(|error| panic!("{callee_ura} should be callable: {error}"));
+        assert_eq!(invocation.callee_ura, callee_ura);
+    }
+}
+
+#[test]
+fn sidecar_invocation_rejects_non_callable_callee_roles() {
+    for (callee_ura, expected) in [
+        (
+            "easynet:///r/hub/user/alice",
+            "User is a principal, not a callee",
+        ),
+        (
+            "easynet:///r/hub/ability/alice.provider.echo",
+            "not an Ability URA",
+        ),
+        (
+            "easynet:///r/hub/resource/alice.provider/data",
+            "not a Resource URA",
+        ),
+        ("https://example.invalid/device/provider", "canonical URA"),
+    ] {
+        let mut frame: Value = serde_json::from_str(&request_frame()).expect("frame");
+        frame["invocation"]
+            .as_object_mut()
+            .expect("invocation object")
+            .insert(
+                "callee_ura".to_string(),
+                Value::String(callee_ura.to_string()),
+            );
+
+        let error = match SidecarInvocation::from_frame(frame) {
+            Ok(_) => panic!("{callee_ura} must not be callable"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains(expected),
+            "unexpected callee role error for {callee_ura}: {error}"
+        );
+    }
+}
+
+#[test]
 fn sidecar_invocation_rejects_unknown_request_fields() {
     let frame = json!({
         "type": "invoke",
@@ -182,7 +262,7 @@ fn sidecar_invocation_rejects_unknown_request_fields() {
         "retired_mode": "json",
         "invocation": {
             "caller_ura": "easynet:///r/hub/user/alice",
-            "callee_ura": "easynet:///r/hub/device/provider",
+            "callee_ura": "easynet:///r/hub/service/alice.provider",
             "ability_ura": "demo.echo",
             "subject_ura": "easynet:///r/hub/resource/demo",
             "invocation_nonce": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
@@ -201,7 +281,7 @@ fn sidecar_invocation_rejects_non_canonical_nonce_length() {
         "call_id": "call-1",
         "invocation": {
             "caller_ura": "easynet:///r/hub/user/alice",
-            "callee_ura": "easynet:///r/hub/device/provider",
+            "callee_ura": "easynet:///r/hub/service/alice.provider",
             "ability_ura": "demo.echo",
             "subject_ura": "easynet:///r/hub/resource/demo",
             "invocation_nonce": [1, 2, 3, 4],

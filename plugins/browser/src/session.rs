@@ -317,7 +317,11 @@ impl BrowserSession {
             });
         }
         self.touch();
-        crate::op_event!(component = browser_plugin, kind = cdp_command_begin, method = method);
+        crate::op_event!(
+            component = browser_plugin,
+            kind = cdp_command_begin,
+            method = method
+        );
         let started = std::time::Instant::now();
         let result = self
             .client

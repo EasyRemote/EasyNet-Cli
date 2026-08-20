@@ -27,6 +27,7 @@ pub(in crate::daemon::plugins::remote_desktop) struct MediaStartRequest<'a> {
 /// Concrete media source selected for one direct WebRTC session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::daemon::plugins::remote_desktop) enum RemoteAppMediaSource {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     NativeProduction,
     DisplayBaseline,
 }

@@ -122,7 +122,7 @@ fn classify_error(error: super::errors::BrowserError) -> anyhow::Error {
     anyhow::Error::new(AbilityHandlerFailure::new(error.to_axon()))
 }
 
-fn compiled_abilities() -> [BrowserCompiledAbility; 6] {
+fn compiled_abilities() -> [BrowserCompiledAbility; 7] {
     [
         BrowserCompiledAbility {
             spec: BuiltinPluginAbilitySpec {
@@ -183,6 +183,21 @@ fn compiled_abilities() -> [BrowserCompiledAbility; 6] {
                 input_schema: schema::capture_viewport_input_schema,
             },
             handler: BrowserAbilityHandler::Stream(handlers::capture_viewport),
+        },
+        BrowserCompiledAbility {
+            spec: BuiltinPluginAbilitySpec {
+                name: ABILITY_CAPTURE_PAGE,
+                layer: PluginAbilityLayer::Observation,
+                call_mode: CallMode::Rpc,
+                admission_action: AdmissionAction::Read,
+                bidi_wire_kind: None,
+                subject_ura_kinds: SESSION_SUBJECT_KINDS,
+                hints: BuiltinPluginAbilityHints::READ_ONLY,
+                frontend_contract: BuiltinPluginFrontendContract::OPERATOR_BROWSER,
+                description: schema::capture_page_description,
+                input_schema: schema::capture_page_input_schema,
+            },
+            handler: BrowserAbilityHandler::Rpc(handlers::capture_page),
         },
         BrowserCompiledAbility {
             spec: BuiltinPluginAbilitySpec {

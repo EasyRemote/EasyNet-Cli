@@ -42,7 +42,7 @@ use webrtc::peer_connection::{
     PeerConnection, PeerConnectionBuilder, PeerConnectionEventHandler, RTCIceGatheringState,
     RTCPeerConnectionState,
 };
-use webrtc::runtime::{block_on, channel, default_runtime, sleep, Runtime, Sender};
+use webrtc::runtime::{channel, default_runtime, Runtime, Sender};
 
 const H264_PAYLOAD_TYPE: u8 = 102;
 const H264_CLOCK_RATE: u32 = 90_000;
@@ -58,7 +58,21 @@ const DEFAULT_MIN_SELECTED_PIXELS: usize = 8;
 const MAX_DECODE_ERRORS_BEFORE_FAILURE_OBSERVATION: usize = 64;
 
 fn main() -> Result<()> {
-    block_on(async_main())
+    let runtime = default_runtime().ok_or_else(|| anyhow!("no WebRTC async runtime available"))?;
+    let result_slot = Arc::new(Mutex::new(None));
+    let result_writer = Arc::clone(&result_slot);
+    runtime.block_on(Box::pin(async move {
+        let result = async_main().await;
+        *result_writer
+            .lock()
+            .expect("receiver result mutex poisoned") = Some(result);
+    }));
+    let result = result_slot
+        .lock()
+        .expect("receiver result mutex poisoned")
+        .take()
+        .unwrap_or_else(|| Err(anyhow!("receiver runtime returned without a result")));
+    result
 }
 
 async fn async_main() -> Result<()> {
@@ -399,9 +413,10 @@ impl PeerConnectionEventHandler for Handler {
             None => return,
         };
         let pli_track = Arc::clone(&track);
+        let runtime = Arc::clone(&self.runtime);
         self.runtime.spawn(Box::pin(async move {
             loop {
-                sleep(Duration::from_secs(3)).await;
+                runtime.sleep(Duration::from_secs(3)).await;
                 if pli_track
                     .write_rtcp(vec![Box::new(PictureLossIndication {
                         sender_ssrc: 0,
@@ -448,6 +463,7 @@ async fn run_receiver(config: &ReceiverConfig) -> Result<ReceiverObservation> {
     )?;
     let registry = register_default_interceptors(Registry::new(), &mut media_engine)?;
     let runtime = default_runtime().ok_or_else(|| anyhow!("no WebRTC async runtime available"))?;
+    let runtime_for_builder = Arc::clone(&runtime);
     let (gather_complete_tx, mut gather_complete_rx) = channel::<()>(1);
     let (done_tx, mut done_rx) = channel::<()>(1);
     let (observation_tx, observation_rx) = mpsc::channel::<FrameObservation>();
@@ -466,7 +482,7 @@ async fn run_receiver(config: &ReceiverConfig) -> Result<ReceiverObservation> {
         .with_media_engine(media_engine)
         .with_interceptor_registry(registry)
         .with_handler(handler as Arc<dyn PeerConnectionEventHandler>)
-        .with_runtime(runtime)
+        .with_runtime(runtime_for_builder)
         .with_udp_addrs(vec!["127.0.0.1:0".to_string()])
         .build()
         .await?;
@@ -483,7 +499,7 @@ async fn run_receiver(config: &ReceiverConfig) -> Result<ReceiverObservation> {
 
     let offer = peer_connection.create_offer(None).await?;
     peer_connection.set_local_description(offer).await?;
-    wait_for_local_ice_gathering(&mut gather_complete_rx).await;
+    wait_for_local_ice_gathering(runtime.as_ref(), &mut gather_complete_rx).await;
     let offer = peer_connection
         .local_description()
         .await
@@ -541,11 +557,14 @@ async fn run_receiver(config: &ReceiverConfig) -> Result<ReceiverObservation> {
             peer_connection.close().await?;
             bail!("WebRTC peer connection closed before decoded frame assertions passed");
         }
-        sleep(Duration::from_millis(100)).await;
+        runtime.sleep(Duration::from_millis(100)).await;
     }
 }
 
-async fn wait_for_local_ice_gathering(gather_complete_rx: &mut webrtc::runtime::Receiver<()>) {
+async fn wait_for_local_ice_gathering(
+    runtime: &dyn Runtime,
+    gather_complete_rx: &mut webrtc::runtime::Receiver<()>,
+) {
     let started = Instant::now();
     loop {
         if gather_complete_rx.try_recv().is_ok() {
@@ -558,7 +577,7 @@ async fn wait_for_local_ice_gathering(gather_complete_rx: &mut webrtc::runtime::
             );
             return;
         }
-        sleep(Duration::from_millis(25)).await;
+        runtime.sleep(Duration::from_millis(25)).await;
     }
 }
 

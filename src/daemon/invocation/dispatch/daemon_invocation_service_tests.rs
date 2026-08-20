@@ -621,7 +621,7 @@ fn publish_test_route_with_mode(
     call_mode: crate::daemon::ability::CallMode,
 ) {
     register_test_catalog_route(svc, owner_ura, public_name, call_mode);
-    publish_test_projected_route(svc, owner_ura, public_name, TEST_DAEMON_URA);
+    publish_test_projected_route(svc, owner_ura, public_name, TEST_DAEMON_URA, call_mode);
 }
 
 fn publish_test_route_hosted_by(
@@ -630,7 +630,13 @@ fn publish_test_route_hosted_by(
     public_name: &str,
     hosted_agent_host_ura: &str,
 ) {
-    publish_test_projected_route(svc, owner_ura, public_name, hosted_agent_host_ura);
+    publish_test_projected_route(
+        svc,
+        owner_ura,
+        public_name,
+        hosted_agent_host_ura,
+        crate::daemon::ability::CallMode::Rpc,
+    );
 }
 
 fn publish_test_projected_route(
@@ -638,6 +644,7 @@ fn publish_test_projected_route(
     callee_owner_ura: &str,
     public_name: &str,
     execution_host_ura: &str,
+    call_mode: crate::daemon::ability::CallMode,
 ) {
     let public_name = crate::core::ura::owner_local_ability_name(callee_owner_ura, public_name);
     let ability_ura = crate::core::ura::owner_ability_ura(callee_owner_ura, &public_name)
@@ -686,23 +693,82 @@ fn publish_test_projected_route(
             1,
             "sha256:test".to_string(),
             4_102_444_800_000,
-            vec![crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
-                ability_ura: ability_ura.clone(),
-                owner_ura: callee_owner_ura.to_string(),
-                namespace: namespace.to_string(),
-                local_name: local_name.to_string(),
-                descriptor_revision: "sha256:descriptor".to_string(),
-                schema_ref: None,
-                schema_hash: None,
-                policy_ref: "visibility:PUBLIC".to_string(),
-                route_summary_ref: Some(format!("route-ref::{ability_ura}")),
-                tags: vec!["class:unary".to_string()],
-                callable_summary: crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
-                    public_name.to_string(),
-                ),
-            }],
+            vec![
+                crate::daemon::federation::read_model::owner_projection::AbilityProjectionSummary {
+                    ability_ura: ability_ura.clone(),
+                    owner_ura: callee_owner_ura.to_string(),
+                    namespace: namespace.to_string(),
+                    local_name: local_name.to_string(),
+                    descriptor_revision: "sha256:descriptor".to_string(),
+                    schema_ref: None,
+                    schema_hash: None,
+                    policy_ref: "visibility:PUBLIC".to_string(),
+                    route_summary_ref: Some(format!("route-ref::{ability_ura}")),
+                    tags: vec![format!("class:{}", test_call_mode_class(call_mode))],
+                    callable_summary: test_callable_summary_for_mode(
+                        &public_name,
+                        &ability_ura,
+                        call_mode,
+                    ),
+                },
+            ],
         ),
     );
+}
+
+fn test_callable_summary_for_mode(
+    public_name: &str,
+    ability_ura: &str,
+    call_mode: crate::daemon::ability::CallMode,
+) -> crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary {
+    let descriptor_revision = format!("sha256:{}", "a".repeat(64));
+    let admission_action = test_admission_action_for_call_mode(call_mode);
+    let descriptor_ref = axon_sdk::invocation::canonical_ability_descriptor_ref(&format!(
+        "{ability_ura}@1.0.0#{}!{admission_action}",
+        "a".repeat(64)
+    ))
+    .expect("test descriptor_ref must be canonical");
+    let mut callable_summary =
+        crate::daemon::federation::read_model::owner_projection::AbilityCallableSummary::minimal(
+            public_name.to_string(),
+        );
+    callable_summary.mode_geometry.push(
+        crate::daemon::federation::read_model::owner_projection::AbilityCallModeGeometry {
+            call_mode,
+            descriptor_ref,
+            descriptor_version: "1.0.0".to_string(),
+            descriptor_revision,
+            admission_action: admission_action.to_string(),
+            schema_hash: format!("sha256:{}", "b".repeat(64)),
+            policy_ref: "visibility:PUBLIC".to_string(),
+            policy_hash: format!("sha256:{}", "c".repeat(64)),
+            description: public_name.to_string(),
+            receipt_semantics: crate::daemon::ability::ReceiptSemantics::Operational,
+            input_fields: Vec::new(),
+            flags: crate::daemon::federation::read_model::owner_projection::AbilityCallableFlags::default(),
+            tags: vec![format!("class:{}", test_call_mode_class(call_mode))],
+        },
+    );
+    callable_summary
+}
+
+fn test_admission_action_for_call_mode(
+    call_mode: crate::daemon::ability::CallMode,
+) -> &'static str {
+    match call_mode {
+        crate::daemon::ability::CallMode::Rpc => "invoke",
+        crate::daemon::ability::CallMode::Stream | crate::daemon::ability::CallMode::Bidi => {
+            "stream"
+        }
+    }
+}
+
+fn test_call_mode_class(call_mode: crate::daemon::ability::CallMode) -> &'static str {
+    match call_mode {
+        crate::daemon::ability::CallMode::Rpc => "unary",
+        crate::daemon::ability::CallMode::Stream => "stream",
+        crate::daemon::ability::CallMode::Bidi => "bidi",
+    }
 }
 
 fn publish_test_remote_system_agent_route(
@@ -741,8 +807,7 @@ fn publish_test_remote_system_agent_route_with_mode(
         _ => TEST_DISPATCH_SYSTEM_AGENT_ID,
     };
     let callee_ura = test_device_system_agent_ura(host_device_ura, system_agent_id);
-    let _ = call_mode;
-    publish_test_projected_route(svc, &callee_ura, public_name, host_device_ura);
+    publish_test_projected_route(svc, &callee_ura, public_name, host_device_ura, call_mode);
     callee_ura
 }
 
@@ -917,8 +982,27 @@ fn catalog_with_json_echo_on_runtime(
     marker_value: &'static str,
     runtime: Arc<axon_sdk::invocation::LocalRuntime>,
 ) -> Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog> {
+    catalog_with_json_echo_on_runtime_for_mode(
+        owner_ura,
+        ability,
+        marker_key,
+        marker_value,
+        runtime,
+        crate::daemon::ability::CallMode::Rpc,
+    )
+}
+
+fn catalog_with_json_echo_on_runtime_for_mode(
+    owner_ura: &str,
+    ability: &'static str,
+    marker_key: &'static str,
+    marker_value: &'static str,
+    runtime: Arc<axon_sdk::invocation::LocalRuntime>,
+    call_mode: crate::daemon::ability::CallMode,
+) -> Arc<crate::daemon::ability::dispatch::AxonAbilityCatalog> {
     use crate::daemon::ability::dispatch::{
-        AbilityAuthorityContext, AxonAbilityCatalog, LocalRpcHandler, OwnerKind,
+        AbilityAuthorityContext, AxonAbilityCatalog, LocalRpcHandler, LocalStreamHandler,
+        OwnerKind, StreamSource,
     };
     use crate::daemon::ability::{descriptors::AdmissionAction, manifest::AbilityManifest};
 
@@ -949,20 +1033,42 @@ fn catalog_with_json_echo_on_runtime(
             "echoed_args": args,
         }))
     });
+    let stream_handler: LocalStreamHandler = Arc::new(move |args| {
+        Ok(StreamSource::Snapshot(vec![serde_json::json!({
+            marker_key: marker_value,
+            "echoed_args": args,
+        })]))
+    });
+    let admission_action = match call_mode {
+        crate::daemon::ability::CallMode::Rpc => AdmissionAction::Invoke,
+        crate::daemon::ability::CallMode::Stream | crate::daemon::ability::CallMode::Bidi => {
+            AdmissionAction::Stream
+        }
+    };
     let manifest = AbilityManifest::new(
         ability.rsplit('.').next().unwrap_or(ability),
         "JSON echo fixture",
         serde_json::json!({"type": "object"}),
     )
-    .and_then(|manifest| manifest.with_admission_action(AdmissionAction::Invoke.as_str()))
+    .and_then(|manifest| manifest.with_admission_action(admission_action.as_str()))
     .expect("echo fixture manifest is well-formed");
-    catalog.register_rpc_with_spec_and_action(
-        ability,
-        owner_kind,
-        AdmissionAction::Invoke,
-        manifest,
-        handler,
-    );
+    match call_mode {
+        crate::daemon::ability::CallMode::Rpc => {
+            catalog.register_rpc_with_spec_and_action(
+                ability,
+                owner_kind,
+                admission_action,
+                manifest,
+                handler,
+            );
+        }
+        crate::daemon::ability::CallMode::Stream => {
+            catalog.register_stream_with_spec(ability, owner_kind, manifest, stream_handler);
+        }
+        crate::daemon::ability::CallMode::Bidi => {
+            panic!("JSON echo fixture does not implement bidi registration")
+        }
+    }
     Arc::new(catalog)
 }
 

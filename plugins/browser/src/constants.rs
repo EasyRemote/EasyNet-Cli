@@ -22,15 +22,22 @@ pub const ABILITY_SEND_INPUT: &str = "browser.send_input";
 pub const ABILITY_CAPTURE_VIEWPORT: &str = "browser.capture_viewport";
 pub const ABILITY_ATTACH_SESSION: &str = "browser.attach_session";
 pub const ABILITY_CLOSE_SESSION: &str = "browser.close_session";
+pub const ABILITY_CAPTURE_PAGE: &str = "browser.capture_page";
 #[cfg(test)]
-pub const PUBLIC_ABILITIES: [&str; 6] = [
+pub const PUBLIC_ABILITIES: [&str; 7] = [
     ABILITY_OPEN_SESSION,
     ABILITY_SHOW_SESSION,
     ABILITY_SEND_INPUT,
     ABILITY_CAPTURE_VIEWPORT,
     ABILITY_ATTACH_SESSION,
     ABILITY_CLOSE_SESSION,
+    ABILITY_CAPTURE_PAGE,
 ];
+
+/// Upper bound for one structural page snapshot. MHTML inlines every
+/// resource, so pathological pages can balloon; the cap keeps a single
+/// rpc payload bounded without truncating silently.
+pub const MAX_PAGE_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 
 pub const DEFAULT_VIEWPORT_WIDTH: u32 = 1280;
 pub const DEFAULT_VIEWPORT_HEIGHT: u32 = 800;

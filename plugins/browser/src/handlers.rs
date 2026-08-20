@@ -66,6 +66,52 @@ pub fn send_input(
     )
 }
 
+pub fn capture_page(
+    runtime: Arc<BrowserRuntime>,
+    env: EnvelopeContext,
+    args: Value,
+) -> BrowserResult<Value> {
+    let object = args.as_object();
+    if object.is_some_and(|object| !object.is_empty()) {
+        return Err(invalid(
+            ABILITY_CAPTURE_PAGE,
+            "capture_page takes no arguments",
+        ));
+    }
+    let session = runtime.require_session(ABILITY_CAPTURE_PAGE, &env)?;
+    crate::support::async_bridge::run_blocking(
+        async move {
+            let result = session
+                .command("Page.captureSnapshot", Some(json!({"format": "mhtml"})))
+                .await?;
+            let content = result.get("data").and_then(Value::as_str).ok_or_else(|| {
+                invalid(
+                    ABILITY_CAPTURE_PAGE,
+                    "Page.captureSnapshot returned no data",
+                )
+            })?;
+            if content.len() > MAX_PAGE_SNAPSHOT_BYTES {
+                return Err(invalid(
+                    ABILITY_CAPTURE_PAGE,
+                    format!(
+                        "page snapshot is {} bytes, above the {} byte bound; narrow the page before capturing",
+                        content.len(),
+                        MAX_PAGE_SNAPSHOT_BYTES
+                    ),
+                ));
+            }
+            Ok(json!({
+                "session_ura": session.session_ura(),
+                "format": "mhtml",
+                "content": content,
+                "content_bytes": content.len(),
+                "captured_at_ms": super::session::now_ms(),
+            }))
+        },
+        crate::support::async_bridge::SyncBridgeRuntimePolicy::BuildCurrentThreadTokio,
+    )
+}
+
 pub fn capture_viewport(
     runtime: Arc<BrowserRuntime>,
     env: EnvelopeContext,
@@ -272,8 +318,7 @@ async fn run_attachment(
     // single latest-frame slot plus a dedicated sender task, so a slow
     // consumer skips stale frames instead of accumulating perceptual
     // latency (frame_101..103 pending -> only 103 matters).
-    let latest_frame: Arc<std::sync::Mutex<Option<Value>>> =
-        Arc::new(std::sync::Mutex::new(None));
+    let latest_frame: Arc<std::sync::Mutex<Option<Value>>> = Arc::new(std::sync::Mutex::new(None));
     let frame_notify = Arc::new(tokio::sync::Notify::new());
     // Producer-side pacing (plugin QoS, not consumer backpressure): Chrome
     // keeps exactly one un-acked frame in flight, so the ack cadence IS the
@@ -282,10 +327,8 @@ async fn run_attachment(
     // pipeline-depth-old frames — worse perceived latency than the old
     // consumer-driven ack. Pace acks to a target frame interval instead so
     // at most one frame is ever in flight end to end.
-    const VIEWPORT_FRAME_INTERVAL: std::time::Duration =
-        std::time::Duration::from_millis(66);
-    let pending_ack: Arc<std::sync::Mutex<Option<Value>>> =
-        Arc::new(std::sync::Mutex::new(None));
+    const VIEWPORT_FRAME_INTERVAL: std::time::Duration = std::time::Duration::from_millis(66);
+    let pending_ack: Arc<std::sync::Mutex<Option<Value>>> = Arc::new(std::sync::Mutex::new(None));
     let ack_notify = Arc::new(tokio::sync::Notify::new());
     let ack_pacer = {
         let pending_ack = Arc::clone(&pending_ack);
@@ -637,11 +680,7 @@ fn coalesce_queued_input(queue: &mut VecDeque<Value>, frame: &Value) -> bool {
         let event = frame.get("event")?;
         match event.get("kind").and_then(Value::as_str)? {
             "scroll" => Some("scroll"),
-            "mouse"
-                if event.get("action").and_then(Value::as_str) == Some("move") =>
-            {
-                Some("move")
-            }
+            "mouse" if event.get("action").and_then(Value::as_str) == Some("move") => Some("move"),
             _ => None,
         }
     }

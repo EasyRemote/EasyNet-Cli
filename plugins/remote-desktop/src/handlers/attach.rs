@@ -117,7 +117,8 @@ mod tests {
     };
     use crate::daemon::plugins::remote_desktop::test_support::live_remote_target_metadata;
     use crate::daemon::plugins::remote_desktop::test_support::{
-        env_for, seed_display, test_consent_causal_context, test_lock, test_runtime_limits,
+        env_for, seed_display, test_consent_causal_context, test_lock, test_plugin,
+        test_runtime_limits, TestRemoteAppTargetBindingVerifier,
     };
     use crate::daemon::plugins::{
         DaemonPluginBinder, PluginContributionBuilder, PluginContributionSet, PluginKind,
@@ -155,9 +156,10 @@ mod tests {
             PluginRequirementSet::default(),
             Vec::new(),
         );
-        crate::daemon::plugins::remote_desktop::registration::contribute_with_screen_backend(
+        crate::daemon::plugins::remote_desktop::registration::contribute_with_platform_services(
             &mut builder,
             backend,
+            Arc::new(TestRemoteAppTargetBindingVerifier),
             limits,
         )
         .expect("remote desktop contribution");
@@ -300,10 +302,7 @@ mod tests {
         let _lock = test_lock();
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             let _g = crate::cli::commands::test_support::HomeGuard::new();
-            let plugin = RemoteDesktopPlugin::new(
-                Arc::new(SyntheticScreenBackend),
-                test_runtime_limits().into(),
-            );
+            let plugin = test_plugin();
             let mut file = ResourcesFile::default();
             let ura = seed_display(&mut file, "remote-desktop-close-detach-display");
             resources::save(&file).unwrap();
@@ -407,10 +406,7 @@ mod tests {
     fn attach_bidi_accepts_window_binding_before_frame_source_selection() {
         let _lock = test_lock();
         tokio::runtime::Runtime::new().unwrap().block_on(async {
-            let plugin = RemoteDesktopPlugin::new(
-                Arc::new(SyntheticScreenBackend),
-                test_runtime_limits().into(),
-            );
+            let plugin = test_plugin();
             let subject_ura = "easynet:///r/acme/resource/device.01DEV/streams/window.test";
             insert_window_session(&plugin, "rd-window-preview-accepted", subject_ura);
 
@@ -433,8 +429,9 @@ mod tests {
         let _lock = test_lock();
         tokio::runtime::Runtime::new().unwrap().block_on(async {
             let _g = crate::cli::commands::test_support::HomeGuard::new();
-            let plugin = RemoteDesktopPlugin::new(
+            let plugin = RemoteDesktopPlugin::with_target_binding_verifier(
                 Arc::new(FailingScreenBackend),
+                Arc::new(TestRemoteAppTargetBindingVerifier),
                 test_runtime_limits().into(),
             );
             let mut file = ResourcesFile::default();
