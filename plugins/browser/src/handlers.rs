@@ -447,7 +447,7 @@ async fn run_attachment(
                         input_lane.spawn(async move {
                             handle_attachment_frame(session, frame, command_permits).await
                         });
-                    } else {
+                    } else if !coalesce_queued_input(&mut queued_input, &frame) {
                         queued_input.push_back(frame);
                     }
                 } else {
@@ -621,6 +621,62 @@ fn handle_cdp_subscription_frame(
         "id": id,
         "subscribed": subscriptions.iter().collect::<Vec<_>>(),
     }))
+}
+
+/// Collapse continuous pointer input into the queue tail so a serial input
+/// lane cannot accumulate latency. The lane executes one frame at a time;
+/// without coalescing, a move/scroll flood queues linearly and every later
+/// click waits behind stale positions — perceived latency grows without
+/// bound. Ordering stays exact because only the TAIL is ever merged:
+///   new move  + tail move   -> replace the tail (latest position wins)
+///   new scroll + tail scroll -> accumulate deltas into the tail
+/// Discrete events (click, keys, navigate) are never merged and keep their
+/// position relative to everything already queued.
+fn coalesce_queued_input(queue: &mut VecDeque<Value>, frame: &Value) -> bool {
+    fn pointer_class(frame: &Value) -> Option<&'static str> {
+        let event = frame.get("event")?;
+        match event.get("kind").and_then(Value::as_str)? {
+            "scroll" => Some("scroll"),
+            "mouse"
+                if event.get("action").and_then(Value::as_str) == Some("move") =>
+            {
+                Some("move")
+            }
+            _ => None,
+        }
+    }
+    let Some(class) = pointer_class(frame) else {
+        return false;
+    };
+    let Some(tail) = queue.back_mut() else {
+        return false;
+    };
+    if pointer_class(tail) != Some(class) {
+        return false;
+    }
+    match class {
+        "move" => {
+            *tail = frame.clone();
+        }
+        "scroll" => {
+            let delta = |value: &Value, key: &str| {
+                value
+                    .get("event")
+                    .and_then(|event| event.get(key))
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0)
+            };
+            let dx = delta(tail, "delta_x") + delta(frame, "delta_x");
+            let dy = delta(tail, "delta_y") + delta(frame, "delta_y");
+            *tail = frame.clone();
+            if let Some(event) = tail.get_mut("event").and_then(Value::as_object_mut) {
+                event.insert("delta_x".into(), json!(dx));
+                event.insert("delta_y".into(), json!(dy));
+            }
+        }
+        _ => return false,
+    }
+    true
 }
 
 fn is_input_frame(frame: &Value) -> bool {
