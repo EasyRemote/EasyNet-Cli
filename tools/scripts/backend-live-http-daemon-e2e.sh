@@ -28,14 +28,31 @@ echo "[backend-live-http-daemon-e2e] rebuilding libeasynet_cli + daemon process 
 "$REPO_ROOT/tools/scripts/build-daemon-process-set.sh" --lib
 
 echo "[backend-live-http-daemon-e2e] running browser HTTP → live daemon E2E..."
-(
+set +e
+test_output="$(
   cd "$BACKEND_ROOT"
   CGO_ENABLED=1 \
   EASYNET_BACKEND_LIVE_DAEMON_LIB="$LIB_PATH" \
   EASYNET_BACKEND_LIVE_DAEMON_BIN="$DAEMON_BIN" \
-  go test -tags "runtime_cabi backend_live_daemon" ./internal/handler \
+  go test -tags "runtime_cabi easynet_cabi backend_live_daemon" ./internal/handler \
     -run '^TestBridgeHTTP_E2E_RegisteredBrowserInvokesHubAbilityThroughLiveDaemon$' \
     -count=1 -v
-)
+)"
+test_status=$?
+set -e
+printf '%s\n' "$test_output"
+
+if [[ "$test_status" -ne 0 ]]; then
+  echo "[backend-live-http-daemon-e2e] FAIL: selected live daemon E2E failed" >&2
+  exit "$test_status"
+fi
+if grep -q 'no tests to run' <<<"$test_output"; then
+  echo "[backend-live-http-daemon-e2e] FAIL: selected live daemon E2E did not run" >&2
+  exit 1
+fi
+if ! grep -q -- '--- PASS: TestBridgeHTTP_E2E_RegisteredBrowserInvokesHubAbilityThroughLiveDaemon' <<<"$test_output"; then
+  echo "[backend-live-http-daemon-e2e] FAIL: selected live daemon E2E did not report PASS" >&2
+  exit 1
+fi
 
 echo "[backend-live-http-daemon-e2e] PASS"
