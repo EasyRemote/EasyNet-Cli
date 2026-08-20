@@ -35,6 +35,13 @@ Close the remaining runtime authority/descriptor seams across EasyNet-Cli daemon
 - The parallel EasyNet-Axon dirty files are lifecycle conformance artifact refreshes plus the Rust lifecycle runner migration from the retired `AuthorityBinding::Self_` shape to `AuthorityOrBootstrap::Binding(AuthorityBinding { relation, evidence })`.
 - That Axon change is protocol evidence-model convergence, not a RemoteApp feature change.
 
+## RemoteApp live resource inventory seam
+
+- Live decoded-frame E2E proved serial window and application capture already route through RemoteApp as device-sponsored SystemAgent abilities, not raw device/plugin calls.
+- A parallel window+application run exposed a real daemon resource projection seam: one application resource selected by `resource.refresh_remote_targets` could disappear before `remote_desktop.grant_consent`, producing `resource_not_found`.
+- Root cause: `resource.refresh_remote_targets` performed `load -> prune/upsert -> save` without a single resources-table transaction, and stale auto-prune rows ignored the declared live target freshness lease.
+- Fix: resource-table mutations now use an exclusive local file transaction, and remote target prune keeps recently observed live-refresh rows until their freshness TTL expires. This keeps frontend-selected application/window subjects stable through consent and session creation while still pruning expired stale rows.
+
 ## Verification
 
 - `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
@@ -57,3 +64,12 @@ Close the remaining runtime authority/descriptor seams across EasyNet-Cli daemon
 - `node --test sdk/node/test/runtime-core.test.mjs`
 - `mvn test` in `sdk/java`
 - `swift test` in `sdk/swift`
+- `cargo test -q prune_stale_auto_screen_targets --features axon-pb`
+- `cargo test -q remote_target_refresh --features axon-pb`
+- `cargo test -q --test script_checks remoteapp`
+- `cargo build --bin easynet --bin easynet-daemon`
+- restarted local daemon with rebuilt binaries and confirmed `runtime_status=running`, `connection.state=FRONTEND_CONNECTED`, `product_presence.directory_status=online`, `session_admitted=true`
+- parallel live decoded-frame E2E:
+  - window: `target/e2e/manual-remoteapp-decoded-window-postfix-20260820-164620/report.md`
+  - application: `target/e2e/manual-remoteapp-decoded-application-postfix-20260820-164620/report.md`
+  - both passed with decoded frame count 1, selected content present, unrelated pixels 0, no display fallback, and no scope widening.

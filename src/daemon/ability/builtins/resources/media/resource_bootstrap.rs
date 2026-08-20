@@ -77,10 +77,17 @@ pub fn seed_default_device_resources(realm: &str, owner_agent: &str) -> anyhow::
     }
 
     let mut file = resources::load()?;
+    let observed_at_ms = unix_ms_now();
     let discovered = discover_default_resources();
     prune_retired_local_device_owner_rows(&mut file, owner_agent);
     if discovered.screen_target_discovery.permits_stale_prune() {
-        prune_stale_auto_screen_targets(&mut file, realm, owner_agent, &discovered.resources);
+        prune_stale_auto_screen_targets(
+            &mut file,
+            realm,
+            owner_agent,
+            &discovered.resources,
+            observed_at_ms,
+        );
     }
     for resource in discovered.resources {
         apply_discovered_resource(&mut file, realm, owner_agent, resource)?;
@@ -143,16 +150,16 @@ fn refresh_remote_targets_with_save_policy(
         });
     }
     let observed_at_ms = unix_ms_now();
-    let mut file = resources::load()?;
-    let before_signature = stable_remote_target_cache_signature(&file, realm, owner_agent);
     let discovered = discover_remote_target_resources();
-    let refresh =
-        apply_remote_target_refresh(&mut file, realm, owner_agent, discovered, observed_at_ms)?;
-    let after_signature = stable_remote_target_cache_signature(&file, realm, owner_agent);
-    if save_policy == RemoteTargetSavePolicy::Always || before_signature != after_signature {
-        resources::save(&file)?;
-    }
-    Ok(refresh)
+    resources::update(|file| {
+        let before_signature = stable_remote_target_cache_signature(file, realm, owner_agent);
+        let refresh =
+            apply_remote_target_refresh(file, realm, owner_agent, discovered, observed_at_ms)?;
+        let after_signature = stable_remote_target_cache_signature(file, realm, owner_agent);
+        let should_save =
+            save_policy == RemoteTargetSavePolicy::Always || before_signature != after_signature;
+        Ok((refresh, should_save))
+    })
 }
 
 fn stable_remote_target_cache_signature(
@@ -201,6 +208,7 @@ fn prune_stale_auto_screen_targets(
     realm: &str,
     owner_agent: &str,
     discovered: &[DiscoveredResource],
+    observed_at_ms: u64,
 ) {
     let live: HashSet<&str> = discovered
         .iter()
@@ -229,7 +237,29 @@ fn prune_stale_auto_screen_targets(
         !auto_prunable_screen_target
             || !owned_by_this_daemon
             || live.contains(resource.hardware_id.as_str())
+            || fresh_remote_target_lease_is_active(resource, observed_at_ms)
     });
+}
+
+fn fresh_remote_target_lease_is_active(resource: &ResourceEntry, observed_at_ms: u64) -> bool {
+    let observed = resource
+        .metadata
+        .get("observed_at_ms")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            resource
+                .metadata
+                .pointer("/freshness/observed_at_ms")
+                .and_then(Value::as_u64)
+        });
+    let ttl = resource
+        .metadata
+        .get("freshness_ttl_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(REMOTE_TARGET_FRESHNESS_TTL_MS);
+    observed
+        .and_then(|observed| observed.checked_add(ttl))
+        .is_some_and(|stale_after_ms| stale_after_ms >= observed_at_ms)
 }
 
 fn apply_remote_target_refresh(
@@ -252,7 +282,7 @@ fn apply_remote_target_refresh(
         .collect::<HashSet<_>>();
     let before_prune_count = file.resources.len();
     if discovered.screen_target_discovery.permits_stale_prune() {
-        prune_stale_auto_screen_targets(file, realm, owner_agent, &live_targets);
+        prune_stale_auto_screen_targets(file, realm, owner_agent, &live_targets, observed_at_ms);
     }
     let retired_count = before_prune_count.saturating_sub(file.resources.len());
     apply_discovered_resources_indexed(file, realm, owner_agent, live_targets)?;
@@ -1444,6 +1474,7 @@ mod tests {
                 display_name: "Live".into(),
                 metadata: json!({"backend": "xcap"}),
             }],
+            123_456,
         );
 
         assert_eq!(file.resources.len(), 1);
@@ -1482,6 +1513,7 @@ mod tests {
                 display_name: "display:xcap:live".into(),
                 metadata: json!({"backend": "xcap"}),
             }],
+            123_456,
         );
 
         assert_eq!(file.resources.len(), 1);
@@ -1509,6 +1541,7 @@ mod tests {
             "acme",
             "easynet:///r/acme/agent/device.node-1.media",
             &[],
+            123_456,
         );
 
         assert_eq!(file.resources.len(), 1);
@@ -1560,6 +1593,7 @@ mod tests {
             "acme",
             "easynet:///r/acme/agent/device.node-1.media",
             &[],
+            123_456,
         );
 
         assert_eq!(file.resources.len(), 2);
@@ -1599,6 +1633,7 @@ mod tests {
                 "acme",
                 "easynet:///r/acme/agent/device.node-1.media",
                 &discovered.resources,
+                123_456,
             );
         }
 
@@ -1776,12 +1811,91 @@ mod tests {
                 "acme",
                 "easynet:///r/acme/agent/device.node-1.media",
                 &discovered.resources,
+                123_456,
             );
         }
 
         assert!(
             file.resources.is_empty(),
             "authoritative empty scans should prune stale auto-bootstrap targets"
+        );
+    }
+
+    #[test]
+    fn prune_stale_auto_screen_targets_keeps_recent_live_refresh_lease() {
+        let mut file = ResourcesFile::default();
+        apply_discovered_resource(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.node-1.media",
+            DiscoveredResource {
+                kind: ResourceType::Application,
+                hardware_id: "application:xcap:42:com.example.Selected".into(),
+                display_name: "Selected App".into(),
+                metadata: json!({
+                    "backend": "xcap",
+                    "discovery_source": "resource.refresh_remote_targets",
+                    "auto_prune": true,
+                    "observed_at_ms": 1_000,
+                    "freshness_ttl_ms": REMOTE_TARGET_FRESHNESS_TTL_MS,
+                    "freshness": {
+                        "observed_at_ms": 1_000,
+                        "stale_after_ms": 1_000 + REMOTE_TARGET_FRESHNESS_TTL_MS,
+                        "source": "live_refresh"
+                    }
+                }),
+            },
+        )
+        .expect("seed selected application");
+
+        prune_stale_auto_screen_targets(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.node-1.media",
+            &[],
+            1_000 + REMOTE_TARGET_FRESHNESS_TTL_MS - 1,
+        );
+
+        assert_eq!(file.resources.len(), 1);
+        assert_eq!(
+            file.resources[0].hardware_id, "application:xcap:42:com.example.Selected",
+            "a freshly selected application resource must survive the session setup lease"
+        );
+    }
+
+    #[test]
+    fn prune_stale_auto_screen_targets_removes_expired_live_refresh_lease() {
+        let mut file = ResourcesFile::default();
+        apply_discovered_resource(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.node-1.media",
+            DiscoveredResource {
+                kind: ResourceType::Application,
+                hardware_id: "application:xcap:42:com.example.Closed".into(),
+                display_name: "Closed App".into(),
+                metadata: json!({
+                    "backend": "xcap",
+                    "discovery_source": "resource.refresh_remote_targets",
+                    "auto_prune": true,
+                    "observed_at_ms": 1_000,
+                    "freshness_ttl_ms": REMOTE_TARGET_FRESHNESS_TTL_MS
+                }),
+            },
+        )
+        .expect("seed expired application");
+
+        prune_stale_auto_screen_targets(
+            &mut file,
+            "acme",
+            "easynet:///r/acme/agent/device.node-1.media",
+            &[],
+            1_000 + REMOTE_TARGET_FRESHNESS_TTL_MS + 1,
+        );
+
+        assert!(
+            file.resources.is_empty(),
+            "expired live-refresh leases should not accumulate stale application rows"
         );
     }
 

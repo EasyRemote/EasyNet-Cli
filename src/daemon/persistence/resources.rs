@@ -59,6 +59,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::config::{atomic_write_with_permissions, state_dir, WritePermissions};
+use super::file_lock::ExclusiveFileLock;
 
 pub(crate) const FILE_NAME: &str = "resources.json";
 
@@ -258,6 +259,26 @@ pub fn save(file: &ResourcesFile) -> anyhow::Result<()> {
     let json = serde_json::to_string_pretty(file)?;
     atomic_write_with_permissions(&path(), json.as_bytes(), WritePermissions::OwnerReadWrite)
         .map_err(Into::into)
+}
+
+/// Execute one read-modify-write transaction against the resources table.
+///
+/// Callers that derive a new table from the current persisted table must use
+/// this instead of open-coding `load(); mutate; save();`. Atomic file writes
+/// protect readers from torn JSON, but they do not protect concurrent writers
+/// from lost updates; the adjacent `<resources.json>.lock` serializes those
+/// transactions across daemon/CLI processes sharing one local state directory.
+pub fn update<R>(
+    mutation: impl FnOnce(&mut ResourcesFile) -> anyhow::Result<(R, bool)>,
+) -> anyhow::Result<R> {
+    let data_path = path();
+    let _guard = ExclusiveFileLock::acquire_for_data_path(&data_path)?;
+    let mut file = load()?;
+    let (result, should_save) = mutation(&mut file)?;
+    if should_save {
+        save(&file)?;
+    }
+    Ok(result)
 }
 
 /// Build the generic resource URA for a given realm + id.
