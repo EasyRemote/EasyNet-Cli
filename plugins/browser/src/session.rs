@@ -154,6 +154,12 @@ pub struct BrowserSession {
     close_notify: Notify,
     attachment_active: AtomicBool,
     capture_active: AtomicBool,
+    /// Foreground guarantee state. Input dispatch needs the governed target
+    /// frontmost, but issuing Page.bringToFront per event costs one CDP
+    /// round-trip on every click/move. The flag is cleared whenever Chrome
+    /// reports the target lost visibility/attachment, so the guarantee is
+    /// repaired lazily instead of re-asserted unconditionally.
+    foreground: AtomicBool,
 }
 
 impl BrowserSession {
@@ -183,6 +189,7 @@ impl BrowserSession {
             close_notify: Notify::new(),
             attachment_active: AtomicBool::new(false),
             capture_active: AtomicBool::new(false),
+            foreground: AtomicBool::new(false),
         });
         let activation = session
             .lifecycle
@@ -378,6 +385,22 @@ impl BrowserSession {
             session: Arc::downgrade(self),
             kind,
         })
+    }
+
+    /// Ensure the governed target is frontmost, paying the CDP round-trip
+    /// only when the guarantee is not currently known to hold.
+    pub async fn ensure_foreground(&self) -> BrowserResult<()> {
+        if self.foreground.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        self.command("Page.bringToFront", None).await?;
+        self.foreground.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Drop the foreground guarantee; the next input repairs it.
+    pub fn clear_foreground(&self) {
+        self.foreground.store(false, Ordering::Relaxed);
     }
 
     pub fn is_idle_expired(&self, now_ms: u64) -> bool {

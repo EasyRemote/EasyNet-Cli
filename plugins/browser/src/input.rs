@@ -37,7 +37,7 @@ pub async fn apply_input(
     let kind = required_string(object, "kind", 32, ability)?;
     validate_event_fields(&kind, object, ability)?;
     session
-        .command("Page.bringToFront", None)
+        .ensure_foreground()
         .await
         .map_err(|error| remap_ability(error, ability))?;
 
