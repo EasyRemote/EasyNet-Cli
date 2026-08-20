@@ -50,12 +50,17 @@ impl SidecarInvocation {
         let causal_context =
             Value::Object(take_required_object(&mut invocation, "causal_context")?);
         let args = take_required_object(&mut invocation, "args")?;
+        let caller_ura = take_required_string(&mut invocation, "caller_ura")?;
+        let callee_ura = take_required_string(&mut invocation, "callee_ura")?;
+        validate_callable_callee_ura(&callee_ura)?;
+        let ability_ura = take_required_string(&mut invocation, "ability_ura")?;
+        let subject_ura = take_required_string(&mut invocation, "subject_ura")?;
         Ok(Self {
             call_id,
-            caller_ura: take_required_string(&mut invocation, "caller_ura")?,
-            callee_ura: take_required_string(&mut invocation, "callee_ura")?,
-            ability_ura: take_required_string(&mut invocation, "ability_ura")?,
-            subject_ura: take_required_string(&mut invocation, "subject_ura")?,
+            caller_ura,
+            callee_ura,
+            ability_ura,
+            subject_ura,
             invocation_nonce: nonce,
             causal_context,
             args,
@@ -284,6 +289,34 @@ fn take_required_string(
         _ => Err(SidecarProtocolError::new(format!(
             "sidecar frame field {field:?} must be a string"
         ))),
+    }
+}
+
+fn validate_callable_callee_ura(callee_ura: &str) -> Result<(), SidecarProtocolError> {
+    let parsed = axon_sdk::ura::parse_ura(callee_ura).map_err(|error| {
+        SidecarProtocolError::new(format!(
+            "sidecar frame field \"callee_ura\" must be a canonical URA: {error}"
+        ))
+    })?;
+    match parsed.kind {
+        axon_sdk::ura::URAKind::Agent
+        | axon_sdk::ura::URAKind::Service
+        | axon_sdk::ura::URAKind::Authority => Ok(()),
+        axon_sdk::ura::URAKind::Device => Err(SidecarProtocolError::new(
+            "sidecar frame field \"callee_ura\" must be a callable Agent, Service, or Authority URA; Device is an execution host, not a callee",
+        )),
+        axon_sdk::ura::URAKind::User => Err(SidecarProtocolError::new(
+            "sidecar frame field \"callee_ura\" must advertise AbilityDescriptors; User is a principal, not a callee",
+        )),
+        axon_sdk::ura::URAKind::Ability => Err(SidecarProtocolError::new(
+            "sidecar frame field \"callee_ura\" must be an owner identity, not an Ability URA",
+        )),
+        axon_sdk::ura::URAKind::Resource => Err(SidecarProtocolError::new(
+            "sidecar frame field \"callee_ura\" must be an owner identity, not a Resource URA",
+        )),
+        axon_sdk::ura::URAKind::Unknown => Err(SidecarProtocolError::new(
+            "sidecar frame field \"callee_ura\" has unknown URA role",
+        )),
     }
 }
 
