@@ -42,6 +42,55 @@ class ManagedSigningTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, ErrorCode.INVALID_ARGUMENT)
                 self.assertEqual(caught.exception.stage, "key_service")
 
+    def test_active_subject_signer_matches_daemon_rotation_selection(self) -> None:
+        subject_ura = "easynet:///r/acme/user/alice"
+        purpose = "user_signing.cli"
+        public_key_1 = bytes(range(32))
+        public_key_2 = bytes(reversed(range(32)))
+        responses = [
+            {
+                "result": "inventory_keys",
+                "entries": [
+                    _key(
+                        "key-z",
+                        public_key_2,
+                        "active",
+                        1,
+                        "key-a",
+                        subject_ura,
+                        purpose=purpose,
+                    ),
+                    _key(
+                        "key-a",
+                        public_key_1,
+                        "active",
+                        0,
+                        None,
+                        subject_ura,
+                        purpose=purpose,
+                    ),
+                ],
+                "next_cursor": None,
+            }
+        ]
+        with KeyServiceServer(responses) as server:
+            signer = ManagedSigningClient(
+                socket_path=server.socket_path
+            ).active_signer_for_subject(subject_ura, purpose=purpose)
+
+        self.assertEqual(signer.key_id, "key-a")
+        self.assertEqual(
+            server.requests,
+            [
+                {
+                    "method": "inventory.list",
+                    "purpose": purpose,
+                    "status": "active",
+                    "limit": 16,
+                }
+            ],
+        )
+
     def test_signature_verification_fails_closed_when_required_crypto_is_unavailable(
         self,
     ) -> None:
@@ -658,17 +707,19 @@ def _key(
     rotation_epoch: int,
     rotated_from: str | None,
     subject_ura: str | None,
+    *,
+    purpose: str = "invocation",
 ) -> dict[str, object]:
     revoked_unix_ms = 1700000000100 if status == "revoked" else None
     return {
         "key_id": key_id,
-        "purpose": "invocation",
+        "purpose": purpose,
         "public_key_b64": _b64(public_key),
         "status": status,
         "rotation_epoch": rotation_epoch,
         "bound_subject": subject_ura,
         "signer_policy_ref": (
-            _policy_ref("invocation", subject_ura, key_id, public_key)
+            _policy_ref(purpose, subject_ura, key_id, public_key)
             if subject_ura is not None
             else None
         ),

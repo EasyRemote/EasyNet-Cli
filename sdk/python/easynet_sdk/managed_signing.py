@@ -246,6 +246,54 @@ class ManagedSigningClient:
             timeout_seconds=self.timeout_seconds,
         )
 
+    def active_signer_for_subject(
+        self,
+        subject_ura: str,
+        *,
+        purpose: str,
+    ) -> "ManagedSigner":
+        """Resolve the daemon-canonical active signer for one subject.
+
+        Rotation can transiently leave multiple active projections. The daemon
+        selects the lexicographically first key id from the purpose-filtered
+        active set, so the SDK uses the same deterministic rule instead of
+        requiring an impossible global uniqueness invariant.
+        """
+
+        subject = _required_text("bound subject URA", subject_ura)
+        normalized_purpose = _required_text("purpose", purpose)
+        candidates = sorted(
+            (
+                key
+                for key in self.list(
+                    ManagedSigningKeyFilter(
+                        purpose=normalized_purpose,
+                        status=ManagedSigningStatus.ACTIVE,
+                    )
+                )
+                if key.bound_subject_ura == subject
+            ),
+            key=lambda key: key.key_id,
+        )
+        if not candidates:
+            raise SDKError(
+                code=ErrorCode.CALLER_SIGNER_UNAVAILABLE,
+                stage="managed_signing",
+                retry=RetryHint.NEVER,
+                retryable=False,
+                message=f"active managed signer is unavailable for {subject}",
+            )
+        key = candidates[0]
+        if key.signer_policy_ref is None:
+            raise _policy_error(
+                "active managed signing key has no signer policy reference"
+            )
+        return ManagedSigner(
+            key=key,
+            socket_path=self.socket_path,
+            timeout_seconds=self.timeout_seconds,
+        )
+
     def rotate(self, key_id: str) -> ManagedSigningKey:
         predecessor = _required_text("key ID", key_id)
         response = self._client.call(
