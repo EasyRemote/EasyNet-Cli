@@ -90155,11 +90155,7 @@
         },
         {
           "item": "CanonicalURABuildRequest",
-          "sha256": "2d429cd69fe2c08068ca8a3df291b41e22ca1502a8fe0bb8202725870345d4a6"
-        },
-        {
-          "item": "DeviceAbilityURA",
-          "sha256": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158"
+          "sha256": "e2263ca20b27eaf0494fe6497b6e770688774bcf0962d51e6cc7f1efe723168a"
         },
         {
           "item": "DeviceAgentURA",
@@ -90550,6 +90546,10 @@
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
         {
+          "item": "CanonicalURABuildRequest.ServiceID",
+          "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+        },
+        {
           "item": "CanonicalURABuildRequest.UserID",
           "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
         },
@@ -90714,11 +90714,7 @@
             },
             {
               "item": "CanonicalURABuildRequest",
-              "sha256": "2d429cd69fe2c08068ca8a3df291b41e22ca1502a8fe0bb8202725870345d4a6"
-            },
-            {
-              "item": "DeviceAbilityURA",
-              "sha256": "0e0a6fbece9ff8bd87fec0c16b2604416ac65684fa0c46e64ab3f748abaac158"
+              "sha256": "e2263ca20b27eaf0494fe6497b6e770688774bcf0962d51e6cc7f1efe723168a"
             },
             {
               "item": "DeviceAgentURA",
@@ -91109,6 +91105,10 @@
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
             {
+              "item": "CanonicalURABuildRequest.ServiceID",
+              "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
+            },
+            {
               "item": "CanonicalURABuildRequest.UserID",
               "sha256": "473287f8298dba7163a897908958f7c0eae733e25d2e027992ea2edc9bed2fa8"
             },
@@ -91238,7 +91238,7 @@
         },
         {
           "item": "AddressingClient",
-          "sha256": "f02d26e1c9c6a4f7aaaee8e9dbe72cf772ba578f9c78504fb45492fceb28b063"
+          "sha256": "ab5409b92cf4ba73ea67e877b5f43bc8c4e7fe4310152b4195d91594f757798a"
         },
         {
           "item": "AddressingProjection",
@@ -91250,7 +91250,7 @@
         },
         {
           "item": "AxonAddressingTransport",
-          "sha256": "d0b5d3f6a646da76191c334cb93ddabb06bc6851657df3f9b249829401da8eda"
+          "sha256": "6af0198803e22e79303d06af35f224a3624041650e6817b486e1d5b1f2e78d8b"
         },
         {
           "item": "agent_ura",
@@ -91259,10 +91259,6 @@
         {
           "item": "canonical_ability_descriptor_ref",
           "sha256": "76caefcea46521862e4f12a3a55dd843f85657bb89b8cb997be2a2936c5ba958"
-        },
-        {
-          "item": "device_ability_ura",
-          "sha256": "12678b9119540fab65243e0f589444d4e478046588a36bc30a17aa312fb8a454"
         },
         {
           "item": "device_agent_ura",
@@ -91373,10 +91369,6 @@
           "sha256": "ed0d9f152800f4157a383d9e59e36b0be05905c82dfc2d4dae3b72377d30fdb3"
         },
         {
-          "item": "AddressingClient.device_ability_ura",
-          "sha256": "a872c348e7112db5b0487b14288a83c8e791d04bfd85de6034fb8c62cd76d61a"
-        },
-        {
           "item": "AddressingClient.device_agent_ura",
           "sha256": "c62a6852a59f54958a2ff2347995e66cd5d121fc62fc218f49d811dfdd56a26a"
         },
@@ -91390,7 +91382,7 @@
         },
         {
           "item": "AddressingClient.owner_ability_ura",
-          "sha256": "45e7f1b45f156ea3c079af68dc783732179d52b97f005831b26c4f30337a2124"
+          "sha256": "7971a9ccbab1a071470c788043a5ce785e222377670b77391e610e9e10577c2d"
         },
         {
           "item": "AddressingClient.owner_ura_for_ability",
@@ -91541,7 +91533,7 @@
             },
             {
               "item": "AddressingClient",
-              "sha256": "f02d26e1c9c6a4f7aaaee8e9dbe72cf772ba578f9c78504fb45492fceb28b063"
+              "sha256": "ab5409b92cf4ba73ea67e877b5f43bc8c4e7fe4310152b4195d91594f757798a"
             },
             {
               "item": "AddressingProjection",
@@ -91553,7 +91545,7 @@
             },
             {
               "item": "AxonAddressingTransport",
-              "sha256": "d0b5d3f6a646da76191c334cb93ddabb06bc6851657df3f9b249829401da8eda"
+              "sha256": "6af0198803e22e79303d06af35f224a3624041650e6817b486e1d5b1f2e78d8b"
             },
             {
               "item": "agent_ura",
@@ -91562,10 +91554,6 @@
             {
               "item": "canonical_ability_descriptor_ref",
               "sha256": "76caefcea46521862e4f12a3a55dd843f85657bb89b8cb997be2a2936c5ba958"
-            },
-            {
-              "item": "device_ability_ura",
-              "sha256": "12678b9119540fab65243e0f589444d4e478046588a36bc30a17aa312fb8a454"
             },
             {
               "item": "device_agent_ura",
@@ -91676,10 +91664,6 @@
               "sha256": "ed0d9f152800f4157a383d9e59e36b0be05905c82dfc2d4dae3b72377d30fdb3"
             },
             {
-              "item": "AddressingClient.device_ability_ura",
-              "sha256": "a872c348e7112db5b0487b14288a83c8e791d04bfd85de6034fb8c62cd76d61a"
-            },
-            {
               "item": "AddressingClient.device_agent_ura",
               "sha256": "c62a6852a59f54958a2ff2347995e66cd5d121fc62fc218f49d811dfdd56a26a"
             },
@@ -91693,7 +91677,7 @@
             },
             {
               "item": "AddressingClient.owner_ability_ura",
-              "sha256": "45e7f1b45f156ea3c079af68dc783732179d52b97f005831b26c4f30337a2124"
+              "sha256": "7971a9ccbab1a071470c788043a5ce785e222377670b77391e610e9e10577c2d"
             },
             {
               "item": "AddressingClient.owner_ura_for_ability",
@@ -140835,7 +140819,7 @@
         },
         {
           "item": "runtime_governance_read_subject_ura",
-          "sha256": "59cc3fbf9f4464028958dd19a223d5172eeaac8ced1346088f3d09330216ca2d"
+          "sha256": "46ea4c5f3934db8d9d5e224244669693d76a31b38d95b7b78c8af55daec94890"
         },
         {
           "item": "runtime_state_read_subject_ura",
@@ -141022,7 +141006,7 @@
             },
             {
               "item": "runtime_governance_read_subject_ura",
-              "sha256": "59cc3fbf9f4464028958dd19a223d5172eeaac8ced1346088f3d09330216ca2d"
+              "sha256": "46ea4c5f3934db8d9d5e224244669693d76a31b38d95b7b78c8af55daec94890"
             },
             {
               "item": "runtime_state_read_subject_ura",
@@ -141209,7 +141193,7 @@
             },
             {
               "item": "runtime_governance_read_subject_ura",
-              "sha256": "59cc3fbf9f4464028958dd19a223d5172eeaac8ced1346088f3d09330216ca2d"
+              "sha256": "46ea4c5f3934db8d9d5e224244669693d76a31b38d95b7b78c8af55daec94890"
             },
             {
               "item": "runtime_state_read_subject_ura",
@@ -141396,7 +141380,7 @@
             },
             {
               "item": "runtime_governance_read_subject_ura",
-              "sha256": "59cc3fbf9f4464028958dd19a223d5172eeaac8ced1346088f3d09330216ca2d"
+              "sha256": "46ea4c5f3934db8d9d5e224244669693d76a31b38d95b7b78c8af55daec94890"
             },
             {
               "item": "runtime_state_read_subject_ura",
@@ -141583,7 +141567,7 @@
             },
             {
               "item": "runtime_governance_read_subject_ura",
-              "sha256": "59cc3fbf9f4464028958dd19a223d5172eeaac8ced1346088f3d09330216ca2d"
+              "sha256": "46ea4c5f3934db8d9d5e224244669693d76a31b38d95b7b78c8af55daec94890"
             },
             {
               "item": "runtime_state_read_subject_ura",
@@ -141770,7 +141754,7 @@
             },
             {
               "item": "runtime_governance_read_subject_ura",
-              "sha256": "59cc3fbf9f4464028958dd19a223d5172eeaac8ced1346088f3d09330216ca2d"
+              "sha256": "46ea4c5f3934db8d9d5e224244669693d76a31b38d95b7b78c8af55daec94890"
             },
             {
               "item": "runtime_state_read_subject_ura",
@@ -141957,7 +141941,7 @@
             },
             {
               "item": "runtime_governance_read_subject_ura",
-              "sha256": "59cc3fbf9f4464028958dd19a223d5172eeaac8ced1346088f3d09330216ca2d"
+              "sha256": "46ea4c5f3934db8d9d5e224244669693d76a31b38d95b7b78c8af55daec94890"
             },
             {
               "item": "runtime_state_read_subject_ura",
@@ -142144,7 +142128,7 @@
             },
             {
               "item": "runtime_governance_read_subject_ura",
-              "sha256": "59cc3fbf9f4464028958dd19a223d5172eeaac8ced1346088f3d09330216ca2d"
+              "sha256": "46ea4c5f3934db8d9d5e224244669693d76a31b38d95b7b78c8af55daec94890"
             },
             {
               "item": "runtime_state_read_subject_ura",
@@ -142331,7 +142315,7 @@
             },
             {
               "item": "runtime_governance_read_subject_ura",
-              "sha256": "59cc3fbf9f4464028958dd19a223d5172eeaac8ced1346088f3d09330216ca2d"
+              "sha256": "46ea4c5f3934db8d9d5e224244669693d76a31b38d95b7b78c8af55daec94890"
             },
             {
               "item": "runtime_state_read_subject_ura",

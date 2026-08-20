@@ -185,7 +185,7 @@ func TestRuntimeReceiptProviderAcceptsMatchingDeviceOwnerSubject(t *testing.T) {
 	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
 	provider, _ := NewRuntimeReceiptProvider(ability)
 	call := runtimeReceiptHistoryTestContext(t)
-	call.SubjectURA = call.CalleeURA
+	call.SubjectURA = "easynet:///r/example/device/dev-a"
 	delegation, err := NewDelegationProofFromMetadata(authorityMetadataFixture(t, map[string]any{
 		"issuer_ura":    call.CallerURA,
 		"subject_ura":   call.SubjectURA,
@@ -203,7 +203,7 @@ func TestRuntimeReceiptProviderAcceptsMatchingDeviceOwnerSubject(t *testing.T) {
 	if _, err := provider.List(context.Background(), ReceiptListRequest{Call: call}); err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(descriptorRequests) != 1 || descriptorRequests[0].SubjectURA != call.CalleeURA {
+	if len(descriptorRequests) != 1 || descriptorRequests[0].SubjectURA != call.SubjectURA {
 		t.Fatalf("descriptor requests = %#v, want device-owner subject", descriptorRequests)
 	}
 }
@@ -219,7 +219,7 @@ func TestRuntimeReceiptProviderRejectsDeviceOwnerSubjectWithSessionAuthority(t *
 	ability, _ := NewRuntimeAbilityClient(runtime, NewCanonicalAddressing())
 	provider, _ := NewRuntimeReceiptProvider(ability)
 	call := runtimeReceiptHistoryTestContext(t)
-	call.SubjectURA = call.CalleeURA
+	call.SubjectURA = "easynet:///r/example/device/dev-a"
 
 	_, err := provider.List(context.Background(), ReceiptListRequest{Call: call})
 	if err == nil ||
@@ -233,12 +233,14 @@ func TestNewReceiptReadCallContextDerivesSessionRuntimeStateSubject(t *testing.T
 	authority := sessionAuthorityFixture(t, map[string]any{
 		"issuer_ura":                 "easynet:///r/example/agent/alice.backend",
 		"creator_principal_id":       "easynet:///r/example/agent/alice.backend",
+		"callee_ura":                 "easynet:///r/example/agent/device.dev-a.runtime-governance",
+		"audience":                   "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		"scopes":                     []string{"invocation.history.*"},
 		"allowed_followup_abilities": []string{"invocation.history.list"},
 	})
 	call, err := NewReceiptReadCallContext(ReceiptReadCallContextRequest{
 		CallerURA:     "easynet:///r/example/agent/alice.backend",
-		CalleeURA:     "easynet:///r/example/device/dev-a",
+		CalleeURA:     "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 		CausalContext: map[string]any{"form": "none"},
 		Authority:     authority,
@@ -253,7 +255,7 @@ func TestNewReceiptReadCallContextDerivesSessionRuntimeStateSubject(t *testing.T
 	if call.SubjectURA != wantSubject {
 		t.Fatalf("SubjectURA = %q, want %q", call.SubjectURA, wantSubject)
 	}
-	if call.CalleeURA != "easynet:///r/example/device/dev-a" || call.CallerURA != "easynet:///r/example/agent/alice.backend" {
+	if call.CalleeURA != "easynet:///r/example/agent/device.dev-a.runtime-governance" || call.CallerURA != "easynet:///r/example/agent/alice.backend" {
 		t.Fatalf("call tuple = %#v", call)
 	}
 }
@@ -263,7 +265,7 @@ func TestNewReceiptReadCallContextKeepsDelegationSubjectExact(t *testing.T) {
 		"issuer_ura":    "easynet:///r/example/agent/alice.backend",
 		"subject_ura":   "easynet:///r/example/device/dev-a",
 		"caller_ura":    "easynet:///r/example/agent/alice.backend",
-		"audience":      "easynet:///r/example/device/dev-a",
+		"audience":      "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		"scopes":        []string{"invocation.history.*"},
 		"issued_at_ms":  1000,
 		"expires_at_ms": 2000,
@@ -273,7 +275,7 @@ func TestNewReceiptReadCallContextKeepsDelegationSubjectExact(t *testing.T) {
 	}
 	call, err := NewReceiptReadCallContext(ReceiptReadCallContextRequest{
 		CallerURA:   "easynet:///r/example/agent/alice.backend",
-		CalleeURA:   "easynet:///r/example/device/dev-a",
+		CalleeURA:   "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		NonceBase64: "AQIDBAUGBwgJCgsMDQ4PEA==",
 		Authority:   delegation,
 	})
@@ -297,12 +299,14 @@ func runtimeReceiptHistoryTestContextWithScope(t *testing.T, scope string) Runti
 	}
 	return RuntimeCallContext{
 		CallerURA:     "easynet:///r/example/agent/backend",
-		CalleeURA:     "easynet:///r/example/device/dev-a",
+		CalleeURA:     "easynet:///r/example/agent/device.dev-a.runtime-governance",
 		SubjectURA:    subject,
 		NonceBase64:   "AQIDBAUGBwgJCgsMDQ4PEA==",
 		CausalContext: map[string]any{"form": "none"},
 		Metadata:      map[string]any{"request_id": "call-1"},
 		Authority: sessionAuthorityFixture(t, map[string]any{
+			"callee_ura":                 "easynet:///r/example/agent/device.dev-a.runtime-governance",
+			"audience":                   "easynet:///r/example/agent/device.dev-a.runtime-governance",
 			"scopes":                     []string{scope},
 			"allowed_followup_abilities": []string{scope},
 		}),

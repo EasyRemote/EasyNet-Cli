@@ -115,7 +115,10 @@ def _ability_owner_prefix(callee_ura: str) -> str:
     if "/authority" in callee_ura:
         return "authority"
     if "/agent/" in callee_ura:
-        return callee_ura.rsplit("/agent/", 1)[1].strip()
+        owner = callee_ura.rsplit("/agent/", 1)[1].strip()
+        if owner.startswith("device."):
+            return f"system-agent.{owner.removeprefix('device.')}"
+        return owner
     if "/device/" in callee_ura:
         return f"device.{callee_ura.rsplit('/device/', 1)[1].strip()}"
     if "/user/" in callee_ura:
@@ -367,10 +370,11 @@ def test_runtime_receipt_provider_rejects_wrong_device_owner_subject_before_desc
 def test_runtime_receipt_provider_accepts_matching_device_owner_subject() -> None:
     provider, transport = _provider()
     device_ura = "easynet:///r/example/device/dev-a"
-    call = _history_call(callee_ura=device_ura)
+    governance_ura = "easynet:///r/example/agent/device.dev-a.runtime-governance"
+    call = _history_call(callee_ura=governance_ura)
     device_call = RuntimeCallContext(
         caller_ura=call.caller_ura,
-        callee_ura=device_ura,
+        callee_ura=governance_ura,
         subject_ura=device_ura,
         nonce_base64=call.nonce_base64,
         causal_context=call.causal_context,
@@ -382,7 +386,7 @@ def test_runtime_receipt_provider_accepts_matching_device_owner_subject() -> Non
                     "issuer_ura": call.caller_ura,
                     "subject_ura": device_ura,
                     "caller_ura": call.caller_ura,
-                    "audience": device_ura,
+                    "audience": governance_ura,
                     "scopes": ["invocation.history.*"],
                     "issued_at_ms": 1000,
                     "expires_at_ms": 2000,
@@ -397,7 +401,7 @@ def test_runtime_receipt_provider_accepts_matching_device_owner_subject() -> Non
 
     assert transport.descriptor_requests == [
         {
-            "callee_ura": device_ura,
+            "callee_ura": governance_ura,
             "ability": "invocation.history.list",
             "call_mode": "rpc",
             "caller_ura": call.caller_ura,
@@ -410,10 +414,11 @@ def test_runtime_receipt_provider_accepts_matching_device_owner_subject() -> Non
 def test_runtime_receipt_provider_rejects_device_owner_subject_with_session_authority() -> None:
     provider, transport = _provider()
     device_ura = "easynet:///r/example/device/dev-a"
-    call = _history_call(callee_ura=device_ura)
+    governance_ura = "easynet:///r/example/agent/device.dev-a.runtime-governance"
+    call = _history_call(callee_ura=governance_ura)
     device_call = RuntimeCallContext(
         caller_ura=call.caller_ura,
-        callee_ura=device_ura,
+        callee_ura=governance_ura,
         subject_ura=device_ura,
         nonce_base64=call.nonce_base64,
         causal_context=call.causal_context,

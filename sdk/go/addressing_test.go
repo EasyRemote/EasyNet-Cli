@@ -89,6 +89,13 @@ func TestCanonicalAddressingRejectsNonPublisherAndMalformedDescriptor(t *testing
 	); !IsCode(err, ErrInvalidArgument) {
 		t.Fatalf("user owner error = %v, want %s", err, ErrInvalidArgument)
 	}
+	if _, err := addressing.OwnerAbilityURA(
+		ctx,
+		"easynet:///r/example/device/dev-a",
+		"observe.health",
+	); !IsCode(err, ErrInvalidArgument) {
+		t.Fatalf("device owner error = %v, want %s", err, ErrInvalidArgument)
+	}
 	if _, err := addressing.ProjectDescriptorRef(
 		ctx,
 		CanonicalDescriptorRefRequest{DescriptorRef: "not-a-descriptor"},

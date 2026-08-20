@@ -5687,7 +5687,7 @@ if py:
         "sdk_python_runtime_state_read_subject_all_zero_guard_missing",
     )
     for token in (
-        "from .axon_addressing import parse_ura, resource_ura, user_ura",
+        "from .axon_addressing import device_ura, parse_ura, resource_ura, user_ura",
         "owner_ura = user_ura(clean_realm, clean_user_id)",
         "subject = resource_ura(owner_ura, RUNTIME_STATE_READ_SUBJECT_PATH)",
     ):
@@ -5713,6 +5713,14 @@ if py:
     ):
         if token not in py_helper:
             raise SystemExit(f"sdk_python_authority_subject_structured_owner_missing:{token}")
+    for token in (
+        'subject.kind == "device"',
+        'callee.kind == "agent"',
+        'subject.components.get("device_id") == callee.components.get("device_id")',
+        "return device_ura(subject.realm, clean_device_id)",
+    ):
+        if token not in py_subjects:
+            raise SystemExit(f"sdk_python_system_agent_runtime_owner_subject_missing:{token}")
     for token in (
         "def canonical_session_authority_id(",
         "session authority session_id is not canonical",

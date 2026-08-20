@@ -33,6 +33,12 @@ class AxonAddressingProviderTests(unittest.TestCase):
                     built = addressing.device_ura(
                         request["realm"], request["device_id"]
                     )
+                elif kind == "service":
+                    built = addressing.service_ura(
+                        request["realm"],
+                        request["user_id"],
+                        request["service_id"],
+                    )
                 elif kind == "agent":
                     if request["owner_kind"] == "device":
                         built = addressing.device_agent_ura(
@@ -193,6 +199,13 @@ class AxonAddressingProviderTests(unittest.TestCase):
         with self.assertRaises(SDKError) as caught:
             addressing.owner_ability_ura(
                 "easynet:///r/example/user/alice",
+                "observe.health",
+            )
+
+        self.assertTrue(is_code(caught.exception, ErrorCode.INVALID_ARGUMENT))
+        with self.assertRaises(SDKError) as caught:
+            addressing.owner_ability_ura(
+                "easynet:///r/example/device/dev-a",
                 "observe.health",
             )
 

@@ -42,6 +42,7 @@ type CanonicalURABuildRequest struct {
 	UserID      string         `json:"user_id,omitempty"`
 	DeviceID    string         `json:"device_id,omitempty"`
 	AgentID     string         `json:"agent_id,omitempty"`
+	ServiceID   string         `json:"service_id,omitempty"`
 	OwnerKind   string         `json:"owner_kind,omitempty"`
 	OwnerURA    string         `json:"owner_ura,omitempty"`
 	AbilityName string         `json:"ability_name,omitempty"`
@@ -120,6 +121,13 @@ func (a *CanonicalAddressing) ProjectIdentity(ctx context.Context, req URAProjec
 		Metadata:   addressingMetadata(),
 	}
 	if parts.Kind == URAKindAbility {
+		if parts.AbilityOwner.Kind == abilityOwnerDevice {
+			return AddressingProjection{}, invalidProfilePayload(
+				addressingProfile,
+				"Device-owned Ability URAs are migration read-models only; use a device-sponsored SystemAgent or Service owner",
+				nil,
+			)
+		}
 		projection.AbilityURA = parts.Raw
 	}
 	return projection, nil
@@ -152,9 +160,22 @@ func (a *CanonicalAddressing) BuildURA(ctx context.Context, req CanonicalURABuil
 				nil,
 			)
 		}
+	case "service":
+		raw = ServiceURA(req.Realm, req.UserID, req.ServiceID)
 	case "authority":
 		raw = AuthorityURA(req.Realm)
 	case "ability":
+		ownerKind, err := canonicalAbilityOwnerKind(req.OwnerURA)
+		if err != nil {
+			return AddressingProjection{}, err
+		}
+		if ownerKind == abilityOwnerDevice {
+			return AddressingProjection{}, invalidProfilePayload(
+				addressingProfile,
+				"Device-owned Ability URAs are migration read-models only; use a device-sponsored SystemAgent or Service owner",
+				nil,
+			)
+		}
 		raw = OwnerAbilityURA(req.OwnerURA, req.AbilityName)
 	case "resource":
 		var err error
@@ -360,6 +381,28 @@ func ownerURAFromAbilityParts(parts ParsedURA) string {
 		return AuthorityURA(parts.Realm)
 	default:
 		return ""
+	}
+}
+
+func canonicalAbilityOwnerKind(ownerURA string) (AbilityOwnerKind, error) {
+	parts, err := ParseURAParts(strings.TrimSpace(ownerURA))
+	if err != nil {
+		return "", invalidProfilePayload(addressingProfile, fmt.Sprintf("parse ability owner_ura: %v", err), err)
+	}
+	switch parts.Kind {
+	case URAKindAgent:
+		if parts.DeviceID != "" {
+			return abilityOwnerSystemAgent, nil
+		}
+		return AbilityOwnerAgent, nil
+	case URAKindService:
+		return AbilityOwnerService, nil
+	case URAKindAuthority:
+		return abilityOwnerAuthority, nil
+	case URAKindDevice:
+		return abilityOwnerDevice, nil
+	default:
+		return "", invalidProfilePayload(addressingProfile, fmt.Sprintf("owner_ura kind %q cannot own Ability URAs", parts.Kind), nil)
 	}
 }
 

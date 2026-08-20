@@ -193,24 +193,16 @@ class AddressingClient:
         return self.resource_ura(owner_ura, path)
 
     def owner_ability_ura(self, owner_ura: str, ability_name: str) -> str:
+        owner_projection = self.parse_ura(owner_ura)
+        if owner_projection.kind == "device":
+            _invalid_addressing(
+                "Device-owned Ability URAs are migration read-models only; use a device-sponsored SystemAgent or Service owner"
+            )
         return self._build(
             "ability",
             owner_ura=_clean(owner_ura, "owner_ura"),
             ability_name=_clean(ability_name, "ability_name"),
         )
-
-    def device_ability_ura(
-        self, realm: str, device_id: str, namespace: str, local_name: str
-    ) -> str:
-        name = ".".join(
-            part
-            for part in (
-                _clean(namespace, "namespace"),
-                _clean(local_name, "local_name"),
-            )
-            if part
-        )
-        return self.owner_ability_ura(self.device_ura(realm, device_id), name)
 
     def service_ability_ura(
         self, realm: str, user_id: str, service_id: str, ability_name: str
@@ -352,16 +344,6 @@ def resource_ura(owner_ura: str, path: str) -> str:
 def owner_ability_ura(owner_ura: str, ability_name: str) -> str:
     return _with_client(
         lambda client: client.owner_ability_ura(owner_ura, ability_name)
-    )
-
-
-def device_ability_ura(
-    realm: str, device_id: str, namespace: str, local_name: str
-) -> str:
-    return _with_client(
-        lambda client: client.device_ability_ura(
-            realm, device_id, namespace, local_name
-        )
     )
 
 
@@ -511,6 +493,11 @@ class AxonAddressingTransport:
                 str, self._addressing.authority_ura(_required_string(request, "realm"))
             )
         if kind == "ability":
+            owner = self._addressing.parse_ura(_required_string(request, "owner_ura"))
+            if owner.kind == "device":
+                raise ParseError(
+                    "Device-owned Ability URAs are migration read-models only; use a device-sponsored SystemAgent or Service owner"
+                )
             return cast(
                 str,
                 self._addressing.owner_ability_ura(
@@ -579,6 +566,10 @@ def _ura_projection(addressing: CanonicalUraFacade, parsed: ParsedURA) -> bytes:
     }
     if parsed.kind == "ability":
         ability = _required_ability(parsed)
+        if ability.owner.kind == "device":
+            _invalid_addressing(
+                "Device-owned Ability URAs are migration read-models only; use a device-sponsored SystemAgent or Service owner"
+            )
         public_name = _public_ability_name(parsed)
         components.update(
             {
@@ -610,7 +601,8 @@ def _ura_projection(addressing: CanonicalUraFacade, parsed: ParsedURA) -> bytes:
     elif parsed.kind == "service":
         components.update(
             {
-                "user_id": parsed.user_id or "",
+                "owner_kind": "service",
+                "principal_id": parsed.user_id or "",
                 "service_id": parsed.service_id or "",
             }
         )

@@ -33,6 +33,11 @@ Close the remaining runtime authority/descriptor seams across EasyNet-Cli daemon
   - descriptor refs are resolved through `runtime_resolve_descriptor_ref` instead of hand-built ability URAs.
 - Updated FFI smoke for generic C ABI v7 lifecycle inputs (`edge`, `runtime_instance_id`, `runtime_bin`) and canonical stream frame projections.
 - Updated FFI `fs.transfer` bidi smoke to construct ResourceRefs against the daemon's actual `tmp` virtual root instead of smuggling host absolute paths.
+- Retired canonical SDK construction/projection of Device-owned Ability URAs:
+  - shared addressing corpus now treats `ability/device.<id>.*` as an invalid public SDK address, not a success case;
+  - Python/Go SDK addressing reject Device owners for public ability construction;
+  - Python/Go public convenience helpers no longer expose `device_ability_ura` / `DeviceAbilityURA`;
+  - Service URA and Service-owned ability cases are now covered by the shared addressing corpus, matching Pages/service-owner ontology.
 
 ## RemoteApp/parallel dirty-file review
 
@@ -64,10 +69,19 @@ Close the remaining runtime authority/descriptor seams across EasyNet-Cli daemon
   - descriptor refs resolved from the committed runtime catalog.
   - `fs.transfer` ResourceRefs scoped through the daemon-local `tmp` virtual root.
 
+## SDK addressing owner seam
+
+- Additional SDK corpus review found the canonical addressing fixture still treated `ability/device.<id>.<ability>` as a successful public SDK projection while runtime routing already described Device-owned Ability URAs as "migration read-models only".
+- This contradicted the target ontology: Device is an execution substrate and may sponsor SystemAgents, but it must not be a public Ability owner.
+- Fix: SDK canonical addressing now fails closed for Device-owned Ability URAs and directs callers to SystemAgent or Service owners. Low-level runtime parsing/migration behavior is not removed here; only the public SDK construction/projection seam is retired.
+- The same fixture now covers Service URA and Service-owned ability projection, so Pages-style `service.<principal>.pages.project.list` remains a first-class callable owner path.
+
 ## Verification
 
 - `bash tests/scripts/test_check_canonical_runtime_convergence_v2.sh`
 - `bash tools/scripts/check-sdk-product-neutrality.sh`
+- `cd sdk/go && go test ./... -run 'TestCanonicalAddressing'`
+- `cd sdk/python && python -m pytest -q tests/test_axon_addressing.py`
 - `bash tools/scripts/check-sdk-canonical-public-api.sh`
 - `bash tools/scripts/check-sdk-package-metadata.sh`
 - `bash tools/scripts/python-sdk-live-smoke.sh --self-test`
